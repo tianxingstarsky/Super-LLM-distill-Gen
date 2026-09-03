@@ -76,7 +76,8 @@ python -m tests.mock_llm_server &          # 127.0.0.1:8765 的 mock OpenAI 服�
 - [x] M0 验证 2：Magpie 链（无种子指令生成，API 适配版）✅
 - [x] M0 验证 3：OpenCUA 蒸馏链适配器（chatlog→traj + 文本化三角色，离线）✅
 - [x] M0 spike 报告：见 docs/spike-report.md
-- [ ] M0（依赖你）：真实数据 spike——需 API key/本地端点 + 日志小样本
+- [x] M0 真实数据 spike：DeepSeek V4 Flash 实测（Magpie 配方变更/蒸馏链跑通）
+- [x] rollout 导入器：model-io JSONL → 闭环多轮样本（含思考+工具调用+isError 标记）+ manifest 查重
 - [ ] M1：最小闭环（CLI + 三闸门 + 偏好 v1 + 导出 + Argilla/Langfuse）
 - [ ] M2：dsh 插件、其余闸门、多模态/DPO 增强/翻译/GUI 管线
 
