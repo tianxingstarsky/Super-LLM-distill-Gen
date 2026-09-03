@@ -207,6 +207,15 @@ DEFAULT_CASES: List[EvalCase] = [
         "goal": "查找资料",
         "trajectory": "[调用] web_search(query) → [观察] 结果摘要",
     }, [("JSON 键", _json_keys("valid", "issues", "keep"))]),
+    EvalCase("stylefix.polish 风格改写", "stylefix.polish", {
+        "text": "首先，过拟合是模型过度拟合训练数据噪声的现象。其次，它会导致泛化能力下降。最后，可以用正则化缓解。",
+        "rules": "- 不用模板词\n- 直接说事",
+        "exemplars": "（无示例）",
+    }, [("JSON 键", _json_keys("corrected", "changes"))]),
+    EvalCase("stylefix.check 风格判定", "stylefix.check", {
+        "text": "首先，过拟合是模型过度拟合训练数据噪声的现象。",
+        "rules": "- 不用模板词",
+    }, [("JSON 键", _json_keys("adherence", "violations", "keep"))]),
 ]
 
 

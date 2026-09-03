@@ -203,12 +203,17 @@ def load_backend(
     backend: str | None = None,
     model: str | None = None,
     judge: bool = False,
+    base_url: str | None = None,
+    role: str | None = None,
 ) -> tuple[ChatClient, str]:
     """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
 
-    backend/model 显式指定优先；judge=True 时默认走 judge_backend/judge_model。
-    预算：backends.yaml 的 budget（max_total_usd/hard_stop）+ 各后端 prices 生效，
-    超限抛 BudgetExceeded。"""
+    解析优先级：显式 backend/model/base_url > role 槽位（model_roles）>
+    judge_backend/judge_model > default_backend/default_model。
+    role ∈ {generation, judge, vision, refine, simulate, translation}；
+    judge=True 等价 role='judge'。base_url 自定义端点（本地 Ollama/llama.cpp 等）
+    时 api_key 走 OPENAI_API_KEY 环境变量。
+    预算：backends.yaml 的 budget + 各后端 prices 生效，超限抛 BudgetExceeded。"""
     local = root / "configs" / "backends.local.yaml"
     base = root / "configs" / "backends.yaml"
     cfg: Dict[str, Any] = {}
@@ -219,13 +224,26 @@ def load_backend(
         cfg["backends"] = {**cfg.get("backends", {}), **local_cfg.get("backends", {})}
         cfg.update({k: v for k, v in local_cfg.items() if k != "backends"})
 
-    if judge and backend is None:
+    if judge and role is None:
+        role = "judge"
+    if role and backend is None and model is None and base_url is None:
+        slot = (cfg.get("model_roles") or {}).get(role) or {}
+        backend = backend or slot.get("backend") or (cfg.get("judge_backend") if role == "judge" else None)
+        model = model or slot.get("model") or (cfg.get("judge_model") if role == "judge" else None)
+    if judge and backend is None and base_url is None:
         backend = cfg.get("judge_backend")
         model = model or cfg.get("judge_model")
-    name = backend or cfg.get("default_backend", "deepseek")
-    b = (cfg.get("backends") or {}).get(name) or {}
+    if base_url:
+        # 自定义端点：无配置条目，key 走 OPENAI_API_KEY 环境变量
+        b = {"base_url": base_url, "api_key_env": "OPENAI_API_KEY", "models": []}
+    else:
+        name = backend or cfg.get("default_backend", "deepseek")
+        b = (cfg.get("backends") or {}).get(name) or {}
+    # 环境变量级全局覆盖（任意命令的临时操作空间，无需加 CLI 参数）
+    if not base_url and os.environ.get("LLM_BASE_URL"):
+        b = {"base_url": os.environ["LLM_BASE_URL"], "api_key_env": "OPENAI_API_KEY", "models": []}
     api_key = b.get("api_key") or os.environ.get(b.get("api_key_env") or "", "")
-    model = model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
+    model = model or os.environ.get("LLM_MODEL") or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
 
     budget_cfg = cfg.get("budget") or {}
     guard = None

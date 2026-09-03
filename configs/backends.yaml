@@ -33,6 +33,15 @@ default_model: deepseek-chat
 judge_backend: deepseek
 judge_model: deepseek-v4-pro
 
+# 角色槽位（操作空间）：各角色默认模型，单次运行可用 --backend/--model/--base-url 覆盖
+model_roles:
+  generation:    { backend: deepseek, model: deepseek-v4-flash }          # 大批量生成：快、省
+  judge:         { backend: deepseek, model: deepseek-v4-pro }            # 判定/打分/质检：稳
+  vision:        { backend: deepseek, model: deepseek-v4-flash-vision-exp }  # 视觉
+  refine:        { backend: deepseek, model: deepseek-v4-pro }            # 精炼/风格矫正：文笔要求高
+  simulate:      { backend: deepseek, model: deepseek-v4-flash }          # agent 模拟器：量大
+  translation:   { backend: deepseek, model: deepseek-v4-flash }          # 互译：稳定 JSON
+
 # 分阶段预算（G0 闸门依据；超限硬停）
 budget:
   max_total_usd: 5.0

@@ -38,15 +38,18 @@ def _gates() -> GateKeeper:
     return GateKeeper(GATES_YAML, GATES_STATE)
 
 
-def _client(args, judge: bool = False):
-    """按 CLI 参数加载后端（--backend/--model 显式优先，judge 角色走 judge_backend）。"""
+def _client(args, judge: bool = False, role: str = "generation"):
+    """按 CLI 参数加载后端：--backend/--model/--base-url 显式优先，
+    否则按角色槽位（model_roles）解析；judge=True 等价 role='judge'。"""
     from lib.llm_client import load_backend
 
     return load_backend(
         ROOT,
         backend=getattr(args, "backend", None) or None,
         model=getattr(args, "model", None) or None,
+        base_url=getattr(args, "base_url", None) or None,
         judge=judge,
+        role=role,
     )
 
 
@@ -298,7 +301,7 @@ def cmd_translate(args) -> int:
     from lib.translator import run_translation
 
     cfg = _pipeline("translation")
-    client, model = _client(args)
+    client, model = _client(args, role="translation")
     lines = pathlib.Path(args.input).read_text(encoding="utf-8").splitlines()
     print(f"翻译管线（模型 {model}）：{len(lines)} 行 → 取 {min(args.limit, len(lines))} 条")
     pairs = run_translation(
@@ -326,10 +329,17 @@ def cmd_identity_gen(args) -> int:
     """身份问答零参考训练集：多样化"你是谁"问题 + 固定事实回答 + 事实校验（G0 闸门）。"""
     _gates().require("G0")
     from lib.identity_gen import load_config, run
+    from lib.length import length_note, load_profiles, sample_length
 
     client, model = _client(args)
     cfg = load_config(args.config)
-    print(f"身份问答生成（模型 {model}，公司={cfg['company']} 模型={cfg['model_name']}，目标 {cfg['n_questions']} 条）…")
+    # 长度控制：--length 固定档或 mixed 配比（注入回答风格要求；0=不注入）
+    profiles = load_profiles(ROOT / "configs" / "pipelines" / "length_profiles.yaml")
+    target = sample_length(profiles, args.length) if args.length != "off" else 0
+    if target:
+        cfg["style"] = f"{cfg['style']}；{length_note(target)}"
+    print(f"身份问答生成（模型 {model}，公司={cfg['company']} 模型={cfg['model_name']}，"
+          f"目标 {cfg['n_questions']} 条，长度={args.length}" + (f"({target} tokens)" if target else "") + "）…")
     result = run(client, cfg)
     stats = result["stats"]
     out = OUT_DIR / "identity_samples.jsonl"
@@ -430,7 +440,7 @@ def cmd_vision(args) -> int:
     _gates().require("G0")
     import lib.multimodal as mm
 
-    client, model = _client(args)
+    client, model = _client(args, role="vision")
     print(f"多模态管线（视觉引擎 {model}，目录 {args.input}）…")
     result = mm.run(client, args.input, qa_per_image=args.qa_per_image, limit=args.n)
     out = OUT_DIR / "vision_samples.jsonl"
@@ -597,6 +607,56 @@ def cmd_gui_cot(args) -> int:
     return 0
 
 
+def cmd_models(args) -> int:
+    """列出指定后端/自定义端点的可用模型（models 网关 /v1/models 自动获取）。"""
+    import yaml
+    from openai import OpenAI
+
+    if args.base_url:
+        base_url = args.base_url
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+    else:
+        local_cfg = yaml.safe_load((ROOT / "configs" / "backends.local.yaml").read_text(encoding="utf-8"))
+        b = local_cfg.get("backends", {}).get(args.backend or "deepseek", {})
+        base_url, api_key = b.get("base_url", ""), b.get("api_key", "")
+    if not base_url:
+        print("未找到后端配置（--backend 指定或 --base-url 自定义）")
+        return 6
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        models = [m.id for m in client.models.list().data]
+        print(f"{base_url} 可用模型（{len(models)}）：")
+        for m in sorted(models):
+            print(f"  - {m}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[网关不可用] {str(e)[:200]}")
+        return 6
+    return 0
+
+
+def cmd_style_correct(args) -> int:
+    """语言风格强矫正（多轮去 AI 味；用户注入规则/示例；G0 闸门；refine 角色）。"""
+    _gates().require("G0")
+    import lib.style_fix as sf
+
+    client, model = _client(args, role="refine")  # 精炼角色：文笔要求高
+    cfg = sf.load_rules(args.rules)
+    samples = [
+        json.loads(l)
+        for l in pathlib.Path(args.input).read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
+    print(f"风格强矫正（模型 {model}，{len(samples[:args.n])} 样本，规则 {len(cfg['rules'])} 条，示例 {len(cfg['exemplars'])} 对）…")
+    result = sf.run(client, samples, cfg, rounds=args.rounds, threshold=args.threshold, limit=args.n)
+    out = OUT_DIR / "style_corrected_samples.jsonl"
+    dpo_out = OUT_DIR / "stylefix_dpo.jsonl"
+    out.write_text("\n".join(json.dumps(s, ensure_ascii=False) for s in result["samples"]) + "\n", encoding="utf-8")
+    dpo_out.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in result["dpo_pairs"]) + "\n", encoding="utf-8")
+    print(json.dumps(result["stats"], ensure_ascii=False, indent=1))
+    print(f"矫正样本 → {out}；矫正前后 DPO 对 → {dpo_out}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -666,6 +726,9 @@ def main() -> int:
 
     p_identity = sub.add_parser("identity-gen", help="身份问答零参考训练集（G0 闸门）")
     p_identity.add_argument("--config", default=str(ROOT / "configs" / "identity.example.yaml"))
+    p_identity.add_argument("--length", default="off",
+                            choices=["off", "short", "medium", "long", "xlong", "mixed"],
+                            help="回答目标长度（mixed=按 configs/pipelines/length_profiles.yaml 配比混合）")
     p_identity.add_argument("--backend")
     p_identity.add_argument("--model")
     p_identity.set_defaults(func=cmd_identity_gen)
@@ -735,6 +798,21 @@ def main() -> int:
     p_gate.add_argument("action", choices=["propose", "approve", "reject", "status"])
     p_gate.add_argument("gate_id", nargs="?", default="")
     p_gate.set_defaults(func=cmd_gate)
+
+    p_models = sub.add_parser("models", help="列出可用模型（models 网关自动获取）")
+    p_models.add_argument("--backend", help="配置中的后端名（缺省 deepseek）")
+    p_models.add_argument("--base-url", help="自定义端点 URL（如 http://localhost:11434/v1）")
+    p_models.set_defaults(func=cmd_models)
+
+    p_stylefix = sub.add_parser("style-correct", help="语言风格强矫正（多轮去 AI 味，G0 闸门）")
+    p_stylefix.add_argument("--input", required=True, help="统一样本 JSONL")
+    p_stylefix.add_argument("--rules", default=str(ROOT / "configs" / "style_rules.example.yaml"))
+    p_stylefix.add_argument("--rounds", type=int, default=3)
+    p_stylefix.add_argument("--threshold", type=int, default=4)
+    p_stylefix.add_argument("--n", type=int, default=20)
+    p_stylefix.add_argument("--backend")
+    p_stylefix.add_argument("--model")
+    p_stylefix.set_defaults(func=cmd_style_correct)
 
     args = parser.parse_args()
     try:

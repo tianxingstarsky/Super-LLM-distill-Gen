@@ -1,0 +1,2 @@
+{"id":"ai1","source":"demo","type":"sft","messages":[{"role":"user","content":"解释什么是过拟合"},{"role":"assistant","content":"首先，过拟合是机器学习中的常见问题。其次，它表现为模型在训练集上表现优异但在测试集上性能显著下降。最后，综上所述，我们可以通过正则化、数据增强等方法来有效缓解过拟合现象。"}]}
+{"id":"ai2","source":"demo","type":"sft","messages":[{"role":"user","content":"写一段产品介绍"},{"role":"assistant","content":"值得注意的是，本产品采用了先进的技术架构。此外，它还具有出色的用户体验。总的来说，我们相信它将为您带来非凡的价值。"}]}

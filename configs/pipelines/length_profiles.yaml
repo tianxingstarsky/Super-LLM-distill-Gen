@@ -1,0 +1,13 @@
+# 训练数据长度 profile（df identity-gen --length 等使用）
+profiles:
+  short: 200      # 短回答
+  medium: 800     # 中长回答
+  long: 3000      # 长回答（接近单次生成上限）
+  xlong: 8000     # 超长（多轮拼接方向，单次生成质量会衰减）
+
+# mixed 模式的长度配比（按权重随机采样，模拟真实用户提问的长度分布）
+mix:
+  short: 0.3
+  medium: 0.4
+  long: 0.2
+  xlong: 0.1
