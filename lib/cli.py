@@ -207,15 +207,43 @@ def cmd_review(args) -> int:
             print(f"未达放行条件（需 ≥10 条且通过率 ≥0.9）；如需手动放行: df gate approve G3")
         return 0
 
+    if args.action == "app":
+        # 轻量本地审核+监控应用（无 Docker）：streamlit run lib/webapp.py
+        import subprocess
+
+        print("启动本地审核应用: http://localhost:8501（Ctrl+C 退出）")
+        return subprocess.call(
+            [sys.executable, "-m", "streamlit", "run", str(ROOT / "lib" / "webapp.py"),
+             "--server.port", "8501", "--server.headless", "true"]
+        )
+
     if args.action == "summary":
         review_path = OUT_DIR / "review.jsonl"
         if not review_path.exists():
-            print("暂无审核记录（先 df review push / pull）")
+            print("暂无审核记录（先 df review app 审核或 df review push/pull）")
             return 0
         decisions = [json.loads(l) for l in review_path.read_text(encoding="utf-8").splitlines() if l.strip()]
         print(json.dumps(review_mod.decide_gate(decisions), ensure_ascii=False, indent=1))
         return 0
     return 1
+
+
+def cmd_monitor(args) -> int:
+    """监控摘要：本地 runs.jsonl（Langfuse 未配置时的兜底审计）。"""
+    runs_path = OUT_DIR / "runs.jsonl"
+    if not runs_path.exists():
+        print("暂无运行记录（执行 df import / df distill / df export 后生成）")
+        return 0
+    runs = [json.loads(l) for l in runs_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    print(f"本地运行审计 {len(runs)} 条（最近 {min(len(runs), args.n)} 条）：")
+    for r in runs[-args.n :]:
+        usage = r.get("usage") or {}
+        extra = ""
+        if usage:
+            extra = f" calls={usage.get('calls', '')} prompt={usage.get('prompt_tokens', '')} completion={usage.get('completion_tokens', '')}"
+        print(f"  [{str(r.get('at', ''))[11:19]}] {r.get('kind', '')}{extra}")
+    print("图形化查看: df review app → 侧边栏选「监控」")
+    return 0
 
 
 def cmd_gate(args) -> int:
@@ -264,10 +292,14 @@ def main() -> int:
     p_distill.add_argument("--llm-check", type=int, default=0, help="LLM 打分条数（>0 需 G0 闸门）")
     p_distill.set_defaults(func=cmd_distill)
 
-    p_review = sub.add_parser("review", help="Argilla 人工审核（G3 放行依据）")
-    p_review.add_argument("action", choices=["push", "pull", "summary"])
+    p_review = sub.add_parser("review", help="人工审核（app=本地轻量应用，push/pull=Argilla 可选）")
+    p_review.add_argument("action", choices=["app", "push", "pull", "summary"])
     p_review.add_argument("--n", type=int, default=20, help="push 条数")
     p_review.set_defaults(func=cmd_review)
+
+    p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
+    p_monitor.add_argument("--n", type=int, default=10)
+    p_monitor.set_defaults(func=cmd_monitor)
 
     p_gate = sub.add_parser("gate", help="闸门管理")
     p_gate.add_argument("action", choices=["propose", "approve", "reject", "status"])

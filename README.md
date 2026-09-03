@@ -90,15 +90,25 @@ python -m lib.cli gate status          # 查看闸门状态（G0/G1/G3）
 python -m lib.cli gate approve G1      # 过数据源闸
 python -m lib.cli import --cot separated  # 导入 rollout（思考与正文分字段）
 python -m lib.cli stats                # 导入统计
-python -m lib.cli preview --n 10       # 人工过目样例
-python -m lib.cli gate approve G3      # 过放量闸（否则 --bulk 导出被拦截）
+python -m lib.cli preview --html --n 20   # 静态 HTML 美化预览（人工过目）
+python -m lib.cli distill --llm-check 5   # 蒸馏质检 + judge 打分（G0 闸门）
+python -m lib.cli review app           # 本地轻量审核+监控应用（无 Docker，端口 8501）
+python -m lib.cli review summary       # 审核通过率（≥90% 且 ≥10 条可放行 G3）
+python -m lib.cli gate approve G3      # 过放量闸（或审核达标后应用内一键放行）
 python -m lib.cli export --format chat --bulk          # DeepSeek/Qwen messages
 python -m lib.cli export --format llamafactory --bulk  # LLaMA-Factory sharegpt
+python -m lib.cli monitor              # 运行监控摘要（本地审计，Langfuse 可选）
 ```
 
 思考处理：`separated`（默认，推理存 `reasoning_content` 字段，由官方 chat template
 注入原生思考 token）/ `tags`（配置原生 token 包裹）/ `plain` / `drop`，见
 configs/preferences.yaml。
+
+人工审核（HITL）有两条路径：
+- **轻量（推荐，无 Docker）**：`df review app` —— Streamlit 单进程本地应用，
+  逐条"保留/驳回/跳过"，决定写本地 review.jsonl，达标一键放行 G3。
+- **重型（可选）**：Argilla 容器（docker/argilla.yml）+ Langfuse 容器
+  （docker/langfuse.yml，映射 3210），见 docker/README.md。
 
 ⚠️ 本机使用注意：httpx 会把 localhost 请求送进系统代理导致 LLM 调用静默失败，
 运行前需 `NO_PROXY=127.0.0.1,localhost`（详见 docs/spike-report.md F2）。

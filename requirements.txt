@@ -4,3 +4,4 @@ beautifulsoup4
 pytest
 argilla==2.8.0
 langfuse
+streamlit==1.63.0
