@@ -45,6 +45,17 @@ docker compose -f docker/langfuse.yml up -d
    或 Settings → Docker Engine 增加 registry-mirrors 后 Restart。
    （重启会中断正在运行的容器，请自行选择时机。）
 
+## 🌏 全中文界面（已内置）
+
+上游 Argilla 2.8 仅带 de/en/es/ja 语言包。我们已自建中文包并重建前端：
+- 中文语言包：`scripts/assets/zh.js`（en.js 全量 300+ 文案翻译 + 上游漏译键 Workspaces 补译）
+- 构建替换脚本：`bash scripts/build_argilla_zh.sh`（克隆 v2.8.0 前端源码 → 注入 zh →
+  Nuxt2 构建（Node≥18 需 NODE_OPTIONS=--openssl-legacy-provider）→ 备份原 static →
+  替换 → 重启服务；含回滚命令）
+- 默认语言 = 中文；页面右上角用户菜单 → 我的设置 → 语言 可切回英文。
+- 注意：构建产物替换的是当前 venv 内的 static，重装 argilla-server 后需重跑脚本。
+- 原版英文界面备份在 F:\无项目工作文件夹\tools\argilla-static-backup-orig。
+
 ## ⚠️ 磁盘纪律（C 盘满的教训，2026-09-03）
 
 - 所有数据/缓存必须在 F 盘：`source scripts/env_redirect.sh`（PIP_CACHE_DIR、HF_HOME
