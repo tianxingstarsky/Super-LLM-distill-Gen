@@ -1,0 +1,11 @@
+# 文档→问答 SFT 参数（df doc2data）
+doc2data:
+  qa_per_chunk: 3
+  max_chunks: 5
+  chunk_size: 2000
+  min_chunk: 40
+  ground_check: true        # 事实依据校验（防幻觉质量门）
+  temperature: 0.8          # QA 生成温度（高=问题多样）
+llm:
+  thinking: false
+  json_mode: true

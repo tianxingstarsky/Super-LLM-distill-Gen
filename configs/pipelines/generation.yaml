@@ -1,0 +1,5 @@
+# 生成类管线默认参数（身份问答/无种子生成等开放式生成）
+llm:
+  temperature: 1.0          # 高温度=多样性
+  thinking: false
+  json_mode: true

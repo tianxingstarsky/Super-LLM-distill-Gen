@@ -74,15 +74,57 @@ def chat_json(
     raise RuntimeError(f"JSON 调用失败（{retries} 次重试后）: {last_err}")
 
 
+class BudgetExceeded(RuntimeError):
+    """累计成本超过配置上限（budget.hard_stop 时抛出）。"""
+
+
+class BudgetGuard:
+    """预算守卫：按 token 价格累计成本，持久化到 data/output/budget.json。"""
+
+    def __init__(self, root: pathlib.Path, limit_usd: float, hard_stop: bool = True):
+        self.path = pathlib.Path(root) / "data" / "output" / "budget.json"
+        self.limit = float(limit_usd)
+        self.hard_stop = hard_stop
+        self.spent = 0.0
+        if self.path.exists():
+            try:
+                self.spent = float(json.loads(self.path.read_text(encoding="utf-8")).get("spent_usd", 0.0))
+            except (json.JSONDecodeError, OSError):
+                self.spent = 0.0
+
+    def add_usd(self, amount: float) -> None:
+        self.spent += amount
+        self.save()
+        if self.hard_stop and self.spent >= self.limit:
+            raise BudgetExceeded(
+                f"预算上限已到：累计 ${self.spent:.4f} ≥ ${self.limit}（data/output/budget.json 可查看/清零）"
+            )
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"spent_usd": round(self.spent, 6), "limit_usd": self.limit}, indent=1), encoding="utf-8")
+
+
 class ChatClient:
     """带空回复重试的 OpenAI 兼容客户端（DeepSeek V4 Flash 实测 ~20% 空 completion）。"""
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        price_input_per_1m: float = 0.0,
+        price_output_per_1m: float = 0.0,
+        budget: BudgetGuard | None = None,
+    ):
         from openai import OpenAI  # 延迟导入：离线测试无需该依赖路径
 
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+        self.price_input = price_input_per_1m
+        self.price_output = price_output_per_1m
+        self.budget = budget
         # response_format 能力探测结果：None=未知 / True=支持 / False=不支持。
         # 首次 json_mode 调用被 API 拒绝后置 False，同会话后续自动降级为
         # "提示词要求 JSON + 容错解析"路径，不再硬重试（分层降级 L1→L3）。
@@ -118,6 +160,12 @@ class ChatClient:
                 if resp.usage:
                     self.usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
                     self.usage["completion_tokens"] += resp.usage.completion_tokens or 0
+                    if self.budget and (self.price_input or self.price_output):
+                        cost = (
+                            (resp.usage.prompt_tokens or 0) / 1e6 * self.price_input
+                            + (resp.usage.completion_tokens or 0) / 1e6 * self.price_output
+                        )
+                        self.budget.add_usd(cost)
                 msg = resp.choices[0].message
                 content = (msg.content or "").strip()
                 # 思考型模型（v4-pro 等）长输入时思考可能吃满 max_tokens 导致 content 空；
@@ -152,13 +200,15 @@ def _is_format_unsupported(err: Exception) -> bool:
 
 def load_backend(
     root: pathlib.Path,
-    backend: str = "deepseek",
+    backend: str | None = None,
     model: str | None = None,
     judge: bool = False,
 ) -> tuple[ChatClient, str]:
     """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
 
-    judge=True 时使用 judge_backend/judge_model（打分角色用更稳的模型）。"""
+    backend/model 显式指定优先；judge=True 时默认走 judge_backend/judge_model。
+    预算：backends.yaml 的 budget（max_total_usd/hard_stop）+ 各后端 prices 生效，
+    超限抛 BudgetExceeded。"""
     local = root / "configs" / "backends.local.yaml"
     base = root / "configs" / "backends.yaml"
     cfg: Dict[str, Any] = {}
@@ -169,14 +219,27 @@ def load_backend(
         cfg["backends"] = {**cfg.get("backends", {}), **local_cfg.get("backends", {})}
         cfg.update({k: v for k, v in local_cfg.items() if k != "backends"})
 
-    if judge:
-        backend = cfg.get("judge_backend", backend)
+    if judge and backend is None:
+        backend = cfg.get("judge_backend")
         model = model or cfg.get("judge_model")
-    name = backend
+    name = backend or cfg.get("default_backend", "deepseek")
     b = (cfg.get("backends") or {}).get(name) or {}
     api_key = b.get("api_key") or os.environ.get(b.get("api_key_env") or "", "")
     model = model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
-    client = ChatClient(base_url=b.get("base_url", ""), api_key=api_key, model=model)
+
+    budget_cfg = cfg.get("budget") or {}
+    guard = None
+    if budget_cfg.get("max_total_usd"):
+        guard = BudgetGuard(root, budget_cfg["max_total_usd"], bool(budget_cfg.get("hard_stop", True)))
+    prices = b.get("prices") or {}
+    client = ChatClient(
+        base_url=b.get("base_url", ""),
+        api_key=api_key,
+        model=model,
+        price_input_per_1m=float(prices.get("input_per_1m_usd", 0.0)),
+        price_output_per_1m=float(prices.get("output_per_1m_usd", 0.0)),
+        budget=guard,
+    )
 
     # 本地端点绕代理（spike 报告 F2）
     os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)

@@ -1,0 +1,4 @@
+# 人工审核放行参数（df review pull）
+review:
+  pass_threshold: 0.9       # keep 占比 ≥ 该值可放行
+  min_reviewed: 10          # 至少审核条数

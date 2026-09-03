@@ -7,6 +7,8 @@ backends:
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
     models: [deepseek-chat, deepseek-reasoner]
+    # 美元/百万 token（估算值，按官网价格自行修正；预算守卫据此累计成本）
+    prices: { input_per_1m_usd: 0.28, output_per_1m_usd: 0.42 }
   openai:
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY

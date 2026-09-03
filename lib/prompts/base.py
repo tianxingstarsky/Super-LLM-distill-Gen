@@ -41,19 +41,30 @@ def render(spec: PromptSpec, **kwargs) -> str:
 
 def registry() -> Dict[str, PromptSpec]:
     """全量提示词注册表（id → 最新版 spec）。"""
-    from lib.prompts import distill, document, identity, judge, magpie, translation
+    return {pid: versions[sorted(versions)[-1]] for pid, versions in registry_versions().items()}
 
-    specs: Dict[str, PromptSpec] = {}
-    for mod in (magpie, distill, judge, translation, identity, document):
+
+def registry_versions() -> Dict[str, Dict[str, PromptSpec]]:
+    """全量提示词注册表（id → {version → spec}），支持运行时版本寻址/A/B 对比。"""
+    from lib.prompts import distill, document, identity, judge, magpie, translation, tuning
+
+    all_specs: Dict[str, Dict[str, PromptSpec]] = {}
+    for mod in (magpie, distill, judge, translation, identity, document, tuning):
         for name in dir(mod):
             spec = getattr(mod, name)
             if isinstance(spec, PromptSpec):
-                specs[spec.id] = spec
-    return specs
+                all_specs.setdefault(spec.id, {})[spec.version] = spec
+    return all_specs
 
 
-def get(prompt_id: str) -> PromptSpec:
-    specs = registry()
-    if prompt_id not in specs:
-        raise KeyError(f"未注册的提示词: {prompt_id}；已注册: {sorted(specs)}")
-    return specs[prompt_id]
+def get(prompt_id: str, version: str | None = None) -> PromptSpec:
+    """按 id（可选 version）取提示词；version=None 取最新版。"""
+    all_specs = registry_versions()
+    if prompt_id not in all_specs:
+        raise KeyError(f"未注册的提示词: {prompt_id}；已注册: {sorted(all_specs)}")
+    versions = all_specs[prompt_id]
+    if version is not None:
+        if version not in versions:
+            raise KeyError(f"提示词 {prompt_id} 无版本 {version}；可用: {sorted(versions)}")
+        return versions[version]
+    return versions[sorted(versions)[-1]]

@@ -28,6 +28,7 @@ class GateDef:
     trigger: str
     prompt: str
     requires: List[str] = field(default_factory=list)
+    auto_approve: bool = False  # 用户显式声明自动通过（批量/cron 场景的审计式豁免）
 
 
 @dataclass
@@ -49,6 +50,7 @@ class GateKeeper:
             g["id"]: GateDef(
                 id=g["id"], title=g.get("title", ""), trigger=g.get("trigger", ""),
                 prompt=g.get("prompt", ""), requires=g.get("requires", []),
+                auto_approve=bool(g.get("auto_approve", False)),
             )
             for g in raw.get("gates", [])
         }
@@ -68,6 +70,9 @@ class GateKeeper:
         self.state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def status(self, gate_id: str) -> str:
+        gate = self.defs.get(gate_id)
+        if gate and gate.auto_approve:
+            return "approved"  # 显式声明豁免（可审计：gates.yaml 中可见）
         return self.records.get(gate_id, GateRecord(gate_id, "pending")).status
 
     def propose(self, gate_id: str, context: Optional[Dict[str, Any]] = None, note: str = "") -> None:

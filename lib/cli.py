@@ -30,11 +30,30 @@ from lib.gates import GateBlocked, GateKeeper  # noqa: E402
 GATES_YAML = ROOT / "configs" / "gates.yaml"
 GATES_STATE = ROOT / "data" / "output" / "gates_state.json"
 OUT_DIR = ROOT / "data" / "output"
+# 兼容占位：实际数据源路径见 configs/pipelines/rollout.yaml（或环境变量 ROLLOUT_DIR）
 ROLLOUT_DIR = pathlib.Path(r"C:\Users\tianx\.zcode\cli\rollout")
 
 
 def _gates() -> GateKeeper:
     return GateKeeper(GATES_YAML, GATES_STATE)
+
+
+def _client(args, judge: bool = False):
+    """按 CLI 参数加载后端（--backend/--model 显式优先，judge 角色走 judge_backend）。"""
+    from lib.llm_client import load_backend
+
+    return load_backend(
+        ROOT,
+        backend=getattr(args, "backend", None) or None,
+        model=getattr(args, "model", None) or None,
+        judge=judge,
+    )
+
+
+def _pipeline(name: str):
+    from lib.pipeline_config import load_pipeline_config
+
+    return load_pipeline_config(name, ROOT)
 
 
 def cmd_import(args) -> int:
@@ -117,20 +136,21 @@ def cmd_distill(args) -> int:
     report["n_samples"] = len(samples)
 
     pairs = []
-    for f in sorted(ROLLOUT_DIR.glob("model-io-sess_*.jsonl")):
+    _rcfg = _pipeline("rollout")["rollout"]
+    rollout_dir = pathlib.Path(os.environ.get("ROLLOUT_DIR", _rcfg["dir"]))
+    for f in sorted(rollout_dir.glob(_rcfg["pattern"])):
         pairs.extend(distill_mod.extract_dpo_pairs(str(f), "separated"))
     report["n_dpo_pairs"] = len(pairs)
 
     llm_scores = []
-    if args.llm_check > 0:
+    check_n = args.llm_check if args.llm_check is not None else _pipeline("distill")["distill"]["llm_check_n"]
+    if check_n > 0:
         _gates().require("G0")  # 调用云端 API 前必须过预算/模型闸
-        from lib.llm_client import load_backend
-
-        client, model = load_backend(ROOT, judge=True)  # judge 角色：更稳的模型（默认 v4-pro）
+        client, model = _client(args, judge=True)  # judge 角色：更稳的模型（默认 v4-pro）
         candidates = sorted(
             samples,
             key=lambda s: (distill_mod.classify_sample(s)["tag"] != "recovery", -s["error_tool_steps"]),
-        )[: args.llm_check]
+        )[: check_n]
         print(f"LLM 打分 {len(candidates)} 条（模型 {model}）…")
         for s in candidates:
             last = s["messages"][-1]
@@ -198,7 +218,10 @@ def cmd_review(args) -> int:
             print(f"[Argilla 不可用] {str(e)[:200]}")
             return 4
         review_mod.write_review_log(decisions, OUT_DIR / "review.jsonl")
-        result = review_mod.decide_gate(decisions)
+        rcfg = _pipeline("review")["review"]
+        result = review_mod.decide_gate(
+            decisions, threshold=rcfg["pass_threshold"], minimum=rcfg["min_reviewed"]
+        )
         print(json.dumps(result, ensure_ascii=False, indent=1))
         if result["release"]:
             gate.decide("G3", True, note=f"Argilla 审核通过率 {result['pass_rate']}")
@@ -247,14 +270,15 @@ def cmd_monitor(args) -> int:
 
 
 def cmd_prompt_eval(args) -> int:
-    """提示词真机评测：全部用例跑 judge 模型 + 结构检查，写报告。"""
+    """提示词真机评测：全部用例跑 judge 模型 + 结构检查，写报告。支持 --ids 过滤与自定义用例文件。"""
     _gates().require("G0")
-    from lib.llm_client import load_backend
-    from lib.prompt_eval import run_all
+    from lib.prompt_eval import load_cases, run_all
 
-    client, model = load_backend(ROOT, judge=True)
-    print(f"评测模型 {model}，共 {len(__import__('lib.prompt_eval', fromlist=['DEFAULT_CASES']).DEFAULT_CASES)} 个用例…")
-    report = run_all(client)
+    client, model = _client(args, judge=True)
+    cases = load_cases(args.cases_file) if args.cases_file else None
+    ids = [x.strip() for x in args.ids.split(",")] if args.ids else None
+    report = run_all(client, cases, ids)
+    print(f"评测模型 {model}，共 {len(report)} 个用例…")
     for r in report:
         mark = "✔" if r["passed"] else "✘"
         failed = [c["name"] for c in r["checks"] if not c["ok"]]
@@ -269,15 +293,19 @@ def cmd_prompt_eval(args) -> int:
 
 
 def cmd_translate(args) -> int:
-    """翻译管线：互译 + 回译校验（提示词驱动，需 G0 闸门）。"""
+    """翻译管线：互译 + 回译校验（提示词驱动，需 G0 闸门）。参数来自 configs/pipelines/translation.yaml。"""
     _gates().require("G0")
-    from lib.llm_client import load_backend
     from lib.translator import run_translation
 
-    client, model = load_backend(ROOT)
+    cfg = _pipeline("translation")
+    client, model = _client(args)
     lines = pathlib.Path(args.input).read_text(encoding="utf-8").splitlines()
     print(f"翻译管线（模型 {model}）：{len(lines)} 行 → 取 {min(args.limit, len(lines))} 条")
-    pairs = run_translation(client, lines, args.limit)
+    pairs = run_translation(
+        client, lines, args.limit,
+        faithful_threshold=cfg["translation"]["faithful_threshold"],
+        temperature=cfg["translation"]["temperature"],
+    )
     out = OUT_DIR / "translation_pairs.jsonl"
     out.write_text(
         "\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8"
@@ -298,9 +326,8 @@ def cmd_identity_gen(args) -> int:
     """身份问答零参考训练集：多样化"你是谁"问题 + 固定事实回答 + 事实校验（G0 闸门）。"""
     _gates().require("G0")
     from lib.identity_gen import load_config, run
-    from lib.llm_client import load_backend
 
-    client, model = load_backend(ROOT)
+    client, model = _client(args)
     cfg = load_config(args.config)
     print(f"身份问答生成（模型 {model}，公司={cfg['company']} 模型={cfg['model_name']}，目标 {cfg['n_questions']} 条）…")
     result = run(client, cfg)
@@ -317,9 +344,10 @@ def cmd_identity_gen(args) -> int:
 
 
 def cmd_doc2corpus(args) -> int:
-    """文档 → CPT 语料（知识注入层，零 LLM 成本，无闸门）。"""
+    """文档 → CPT 语料（知识注入层，零 LLM 成本，无闸门）。参数来自 configs/pipelines/rollout 同级的默认。"""
     import lib.doc2corpus as d2c
 
+    cfg = _pipeline("doc2corpus")["doc2corpus"] if "doc2corpus" in _pipeline("doc2corpus") else {}
     path = pathlib.Path(args.input)
     files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.suffix.lower() in d2c.SUPPORTED_EXTS)
     out = pathlib.Path(args.out)
@@ -327,11 +355,13 @@ def cmd_doc2corpus(args) -> int:
     if out.exists():
         out.unlink()  # 全量重写（manifest 保证内容级去重）
 
+    chunk_size = args.chunk_size or cfg.get("chunk_size", 2000)
+    overlap = args.overlap if args.overlap is not None else cfg.get("overlap", 0)
     manifest: set[str] = set()
     total_kept = 0
     for f in files:
         try:
-            result = d2c.doc_to_corpus(f, target_chars=args.chunk_size, overlap=args.overlap, manifest=manifest)
+            result = d2c.doc_to_corpus(f, target_chars=chunk_size, overlap=overlap, manifest=manifest)
         except Exception as e:  # noqa: BLE001 —— 单文件失败不阻断
             print(f" ✘ {f.name}: {str(e)[:120]}")
             continue
@@ -344,15 +374,17 @@ def cmd_doc2corpus(args) -> int:
 
 
 def cmd_doc2data(args) -> int:
-    """文档 → 问答 SFT（表达层，含事实依据校验；需 G0 闸门）。"""
+    """文档 → 问答 SFT（表达层，含事实依据校验；需 G0 闸门）。参数来自 configs/pipelines/doc2data.yaml。"""
     _gates().require("G0")
     import lib.doc2data as d2d
-    from lib.llm_client import load_backend
 
-    client, model = load_backend(ROOT)
+    cfg = _pipeline("doc2data")["doc2data"]
+    client, model = _client(args)
     result = d2d.doc_to_samples(
-        client, args.input, qa_per_chunk=args.qa_per_chunk,
-        max_chunks=args.max_chunks, chunk_size=args.chunk_size,
+        client, args.input,
+        qa_per_chunk=args.qa_per_chunk or cfg["qa_per_chunk"],
+        max_chunks=args.max_chunks or cfg["max_chunks"],
+        chunk_size=args.chunk_size or cfg["chunk_size"],
     )
     stats = result["stats"]
     out = OUT_DIR / "doc_samples.jsonl"
@@ -403,14 +435,16 @@ def main() -> int:
     p_preview.set_defaults(func=cmd_preview)
 
     p_export = sub.add_parser("export", help="导出训练格式")
-    p_export.add_argument("--format", default="chat", choices=["llamafactory", "chat"])
+    p_export.add_argument("--format", default="chat", choices=["llamafactory", "chat", "all"])
     p_export.add_argument("--input", default=str(OUT_DIR / "rollout_samples.jsonl"))
     p_export.add_argument("--out", default=str(OUT_DIR / "export" / "sft.jsonl"))
     p_export.add_argument("--bulk", action="store_true", help="放量导出（需 G3 闸门）")
     p_export.set_defaults(func=cmd_export)
 
     p_distill = sub.add_parser("distill", help="蒸馏质检：分类+DPO负样本+可选LLM打分")
-    p_distill.add_argument("--llm-check", type=int, default=0, help="LLM 打分条数（>0 需 G0 闸门）")
+    p_distill.add_argument("--llm-check", type=int, default=None, help="LLM 打分条数（>0 需 G0 闸门；缺省取 pipelines/distill.yaml）")
+    p_distill.add_argument("--backend")
+    p_distill.add_argument("--model")
     p_distill.set_defaults(func=cmd_distill)
 
     p_review = sub.add_parser("review", help="人工审核（app=本地轻量应用，push/pull=Argilla 可选）")
@@ -419,29 +453,39 @@ def main() -> int:
     p_review.set_defaults(func=cmd_review)
 
     p_peval = sub.add_parser("prompt-eval", help="提示词真机评测（G0 闸门）")
+    p_peval.add_argument("--backend")
+    p_peval.add_argument("--model")
+    p_peval.add_argument("--ids", help="只评测这些提示词 id/用例名（逗号分隔）")
+    p_peval.add_argument("--cases-file", help="自定义用例文件（YAML，格式见 lib/prompt_eval.load_cases）")
     p_peval.set_defaults(func=cmd_prompt_eval)
 
     p_translate = sub.add_parser("translate", help="翻译管线：互译+回译校验（G0 闸门）")
     p_translate.add_argument("--input", default=str(ROOT / "data" / "seeds" / "topics.txt"))
     p_translate.add_argument("--limit", type=int, default=5)
+    p_translate.add_argument("--backend")
+    p_translate.add_argument("--model")
     p_translate.set_defaults(func=cmd_translate)
 
     p_identity = sub.add_parser("identity-gen", help="身份问答零参考训练集（G0 闸门）")
     p_identity.add_argument("--config", default=str(ROOT / "configs" / "identity.example.yaml"))
+    p_identity.add_argument("--backend")
+    p_identity.add_argument("--model")
     p_identity.set_defaults(func=cmd_identity_gen)
 
     p_doc2corpus = sub.add_parser("doc2corpus", help="文档→CPT 语料（知识注入层，零 LLM）")
     p_doc2corpus.add_argument("--input", required=True, help="文件或目录（md/txt/pdf/docx）")
     p_doc2corpus.add_argument("--out", default=str(OUT_DIR / "corpus" / "docs.jsonl"))
-    p_doc2corpus.add_argument("--chunk-size", type=int, default=2000)
-    p_doc2corpus.add_argument("--overlap", type=int, default=0)
+    p_doc2corpus.add_argument("--chunk-size", type=int, default=None)
+    p_doc2corpus.add_argument("--overlap", type=int, default=None)
     p_doc2corpus.set_defaults(func=cmd_doc2corpus)
 
     p_doc2data = sub.add_parser("doc2data", help="文档→问答 SFT（表达层+事实校验，G0 闸门）")
     p_doc2data.add_argument("--input", required=True)
-    p_doc2data.add_argument("--qa-per-chunk", type=int, default=3)
-    p_doc2data.add_argument("--max-chunks", type=int, default=5)
-    p_doc2data.add_argument("--chunk-size", type=int, default=2000)
+    p_doc2data.add_argument("--qa-per-chunk", type=int, default=None)
+    p_doc2data.add_argument("--max-chunks", type=int, default=None)
+    p_doc2data.add_argument("--chunk-size", type=int, default=None)
+    p_doc2data.add_argument("--backend")
+    p_doc2data.add_argument("--model")
     p_doc2data.set_defaults(func=cmd_doc2data)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
@@ -459,6 +503,11 @@ def main() -> int:
     except GateBlocked as e:
         print(f"[闸门拦截] {e}")
         return 3
+    except Exception as e:
+        if e.__class__.__name__ == "BudgetExceeded":
+            print(f"[预算硬停] {e}")
+            return 5
+        raise
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 from collections import Counter
@@ -27,15 +28,19 @@ from lib.adapters.rollout_import import (  # noqa: E402
     record_status,
     record_to_sample,
 )
+from lib.pipeline_config import load_pipeline_config  # noqa: E402
 
-ROLLOUT_DIR = pathlib.Path(r"C:\Users\tianx\.zcode\cli\rollout")
+_rcfg = load_pipeline_config("rollout", ROOT)["rollout"]
+# 数据源可配：configs/pipelines/rollout.yaml 或环境变量 ROLLOUT_DIR
+ROLLOUT_DIR = pathlib.Path(os.environ.get("ROLLOUT_DIR", _rcfg["dir"]))
+ROLLOUT_PATTERN = _rcfg["pattern"]
 OUT_DIR = ROOT / "data" / "output"
 COT_STYLE = "separated"
 
 
 def run(limit: int = 0, export_limit: int = 200, cot: str = COT_STYLE) -> None:
     """核心导入流程（CLI 与脚本共用）。"""
-    files = sorted(ROLLOUT_DIR.glob("model-io-sess_*.jsonl"))
+    files = sorted(ROLLOUT_DIR.glob(ROLLOUT_PATTERN))
     manifest = ManifestDedup(OUT_DIR / "manifest_rollout.txt")
     stats_all = {}
     samples_written = 0

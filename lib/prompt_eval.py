@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Tuple
@@ -192,5 +193,43 @@ def run_case(client: Any, case: EvalCase) -> Dict[str, Any]:
     }
 
 
-def run_all(client: Any, cases: List[EvalCase] | None = None) -> List[Dict[str, Any]]:
-    return [run_case(client, c) for c in (cases or DEFAULT_CASES)]
+def run_all(client: Any, cases: List[EvalCase] | None = None, ids: List[str] | None = None) -> List[Dict[str, Any]]:
+    cases = cases or DEFAULT_CASES
+    if ids:
+        wanted = set(ids)
+        cases = [c for c in cases if c.prompt_id in wanted or c.name in wanted]
+    return [run_case(client, c) for c in cases]
+
+
+CHECK_TYPES = {
+    "json_keys": lambda *keys: _json_keys(*keys),
+    "contains": lambda text, name=None: _contains(text, name or text),
+    "list_len": lambda field, n: _json_list_len(field, int(n)),
+    "cjk_field": lambda field, threshold, greater: _json_field_cjk(field, float(threshold), str(greater).lower() == "true"),
+}
+
+
+def load_cases(path: str) -> List[EvalCase]:
+    """从 YAML/JSON 用例文件加载自定义评测用例。
+
+    用例格式: [{name, prompt_id, variables: {...},
+                 checks: [{type: json_keys, args: [a, b]} | {type: contains, args: [text]}]}]
+    """
+    import yaml
+
+    raw = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
+    if isinstance(raw, dict):  # 单用例文件也接受（dict → [dict]）
+        raw = [raw]
+    cases = []
+    for item in raw:
+        checks = []
+        for ch in item.get("checks", []):
+            fn = CHECK_TYPES.get(ch["type"])
+            if fn is None:
+                raise ValueError(f"未知检查类型: {ch['type']}（可用: {sorted(CHECK_TYPES)}）")
+            checks.append((ch.get("name", ch["type"]), fn(*ch.get("args", []))))
+        cases.append(EvalCase(
+            name=item["name"], prompt_id=item["prompt_id"],
+            variables=item.get("variables", {}), checks=checks,
+        ))
+    return cases

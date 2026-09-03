@@ -1,0 +1,7 @@
+# 翻译管线参数（df translate）
+translation:
+  faithful_threshold: 4     # 回译忠实度保留线（score ≥ 该值保留）
+  temperature: 0.3          # 翻译温度（低=稳定直译，高=意译多变）
+llm:
+  thinking: false           # 严格 JSON 任务禁用思考
+  json_mode: true

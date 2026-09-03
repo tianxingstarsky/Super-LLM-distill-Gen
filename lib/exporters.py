@@ -91,23 +91,23 @@ def export_samples(
     out_path: str | Path,
     dpo_pairs: Iterable[Dict[str, Any]] = (),
 ) -> Dict[str, int]:
-    """写训练格式 JSONL，返回计数。fmt: llamafactory | chat。"""
+    """写训练格式 JSONL，返回计数。fmt: llamafactory | chat | all。"""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with open(out_path, "w", encoding="utf-8") as f:
-        if fmt == "llamafactory":
+    formats = ["llamafactory", "chat"] if fmt == "all" else [fmt]
+    counts: Dict[str, int] = {"sft": 0, "dpo": 0}
+    samples = list(samples)  # 物化：多格式导出需多次遍历
+    for f in formats:
+        target = out_path if fmt != "all" else out_path.with_name(out_path.stem + f"_{f}.jsonl")
+        n = 0
+        with open(target, "w", encoding="utf-8") as fh:
             for s in samples:
-                conv = to_sharegpt_sample(s)
-                if conv:
-                    f.write(json.dumps(conv, ensure_ascii=False) + "\n")
-                    count += 1
-        else:  # chat
-            for s in samples:
-                msg = to_chat_sample(s)
-                if msg:
-                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-                    count += 1
+                converted = to_sharegpt_sample(s) if f == "llamafactory" else to_chat_sample(s)
+                if converted:
+                    fh.write(json.dumps(converted, ensure_ascii=False) + "\n")
+                    n += 1
+        counts[f] = n
+    counts["sft"] = max(counts.get("llamafactory", 0), counts.get("chat", 0))
     dpo_count = 0
     if dpo_pairs:
         dpo_path = out_path.with_name(out_path.stem + "_dpo.jsonl")
@@ -115,4 +115,5 @@ def export_samples(
             for pair in dpo_pairs:
                 f.write(json.dumps(pair, ensure_ascii=False) + "\n")
                 dpo_count += 1
-    return {"sft": count, "dpo": dpo_count}
+    counts["dpo"] = dpo_count
+    return counts

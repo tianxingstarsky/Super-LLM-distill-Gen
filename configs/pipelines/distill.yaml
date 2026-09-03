@@ -1,0 +1,7 @@
+# 蒸馏质检参数（df distill）
+distill:
+  llm_check_n: 5            # LLM 打分条数
+  judge_temperature: 0.2
+llm:
+  thinking: false           # judge 打分严格 JSON
+  json_mode: true

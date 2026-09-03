@@ -1,0 +1,5 @@
+# rollout 数据源配置（df import）
+rollout:
+  dir: C:\Users\tianx\.zcode\cli\rollout
+  pattern: model-io-sess_*.jsonl
+  truncate_chars: 8000      # 超长轮次截断阈值（上下文防爆 L0）
