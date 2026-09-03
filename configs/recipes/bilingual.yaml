@@ -1,0 +1,15 @@
+# bilingual 维度 recipe 池：中英互译 / 知识桥接
+# 出处：Bactrian-X（arXiv 2305.15011）翻译扩展思想、SeaLLMs（arXiv 2312.00738）知识桥接。
+templates:
+  - id: bi_zh2en
+    source: bactrian_x_style
+    task: 给出一段中文技术文本，要求翻译为英文并保留专业术语准确性。
+  - id: bi_en2zh
+    source: bactrian_x_style
+    task: 给出一段英文新闻片段，要求翻译为中文并附 3 个关键术语解释。
+  - id: bi_knowledge_bridge_zh2en
+    source: seallms_style
+    task: 给出一个中文领域知识问答，要求先用英文完整作答，再给出中文要点（强化中英文知识关联）。
+  - id: bi_knowledge_bridge_en2zh
+    source: seallms_style
+    task: 给出一个英文领域知识问答，要求先用中文完整作答，再给出英文要点。

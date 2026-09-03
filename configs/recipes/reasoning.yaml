@@ -1,0 +1,16 @@
+# reasoning 维度 recipe 池（每条=一个生成任务模板，批内轮换防骨架重复）
+# 出处：Magpie 官方 pre-query 模板（components/magpie/configs/model_configs.json）、
+#       Evol-Instruct（WizardLM, arXiv 2304.12244）演化提示思想、自拟双语变体。
+templates:
+  - id: reasoning_math
+    source: magpie-pre_query_template_math
+    task: 给出一个需要分步骤推导的数学问题（中英文随机），要求最终答案前展示逐步推理。
+  - id: reasoning_logic
+    source: evolved_wizardlm_style
+    task: 给出一个逻辑谜题或脑筋急转弯（中文），要求先给出假设检验过程再给结论。
+  - id: reasoning_code_debug
+    source: evolved_wizardlm_style
+    task: 给出一个带 bug 的代码片段（英文注释），要求解释错误根因并给出修正后的正确代码。
+  - id: reasoning_compare
+    source: self_drafted_bilingual
+    task: 给出一个需要对比两种方案优劣并给出取舍理由的开放问题（中英混合）。

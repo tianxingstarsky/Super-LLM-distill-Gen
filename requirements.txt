@@ -1,0 +1,4 @@
+distilabel==1.5.3
+openai
+beautifulsoup4
+pytest

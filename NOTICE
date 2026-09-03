@@ -1,0 +1,23 @@
+# Third-Party Notices
+
+本项目（Super-LLM-distill-Gen，Apache-2.0）通过 git submodule 与 pip 依赖引用以下第三方开源组件。
+各组件的完整许可证文本以其仓库内的 LICENSE 文件为准（submodule 内保留原件）。
+
+## Git Submodules（components/，提交已锁定）
+
+| 组件 | 路径 | 许可证 | 锁定提交 | 上游仓库 |
+|---|---|---|---|---|
+| Magpie | components/magpie | MIT | b734a36818e4ba7ef7f0f582fc55f7e860407d26 | https://github.com/magpie-align/magpie |
+| OpenCUA | components/opencua | MIT | dfc91ba89f700d10f26ec50362d308571482ab8b | https://github.com/xlang-ai/OpenCUA |
+
+说明：submodule 内源代码一律不改动；本项目仅通过适配层（lib/adapters）调用其脚本、模板与数据格式。
+
+## pip 依赖（声明于 pyproject.toml / requirements）
+
+- distilabel 1.5.3（Apache-2.0）— 管线引擎
+- 其余依赖见各包自身的许可证元数据。
+
+## 参考但未引入本仓库的项目
+
+- LLaMA-Factory / MS-Swift（Apache-2.0）：仅作为最终数据格式规范参照。
+- UltraFeedback / Evol-Instruct / AgentInstruct：仅借用其公开提示词模板思想（在 configs/recipes 中注明出处）。

@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# 用户私有数据（聊天记录/图片/截图/密钥）一律不入库
+data/seeds/chatlogs/*
+data/seeds/images/*
+data/seeds/screenshots/*
+!data/seeds/chatlogs/.gitkeep
+!data/seeds/images/.gitkeep
+!data/seeds/screenshots/.gitkeep
+
+# 生成产物与运行状态
+data/output/*
+!data/output/.gitkeep
+*.log
+
+# 密钥
+.env
+configs/backends.local.yaml

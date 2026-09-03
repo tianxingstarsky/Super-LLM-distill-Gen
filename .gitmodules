@@ -1,0 +1,6 @@
+[submodule "components/magpie"]
+	path = components/magpie
+	url = https://github.com/magpie-align/magpie.git
+[submodule "components/opencua"]
+	path = components/opencua
+	url = https://github.com/xlang-ai/OpenCUA.git

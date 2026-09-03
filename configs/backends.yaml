@@ -1,0 +1,34 @@
+# 模型后端配置（OpenAI 兼容协议）
+# API key 一律通过环境变量注入，不写入本文件（本文件可提交）。
+# 本地覆盖：configs/backends.local.yaml（已被 .gitignore 忽略）
+
+backends:
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    models: [deepseek-chat, deepseek-reasoner]
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    models: [gpt-4o, gpt-4o-mini]
+  dashscope:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+    models: [qwen-vl-max, qwen-max]
+  ollama:
+    base_url: http://localhost:11434/v1
+    api_key_env: ""        # 本地服务无需 key
+    models: [qwen2.5vl:7b]
+  lmstudio:
+    base_url: http://localhost:1234/v1
+    api_key_env: ""
+    models: []
+
+default_backend: deepseek
+default_model: deepseek-chat
+
+# 分阶段预算（G0 闸门依据；超限硬停）
+budget:
+  max_total_usd: 5.0
+  per_batch_usd: 1.0
+  hard_stop: true

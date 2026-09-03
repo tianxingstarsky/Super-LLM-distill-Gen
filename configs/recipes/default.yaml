@@ -1,0 +1,14 @@
+# default 维度 recipe 池：无偏好注入的默认混合（防风格坍缩的兜底）
+templates:
+  - id: def_open_qa
+    source: magpie_style
+    task: 给出一个任意领域的开放知识问题（中英文随机）。
+  - id: def_writing
+    source: magpie_style
+    task: 给出一个写作任务：邮件/总结/文案/短文（随机题材与语言）。
+  - id: def_chitchat
+    source: self_drafted
+    task: 给出一个日常闲聊话题并自然地延展到具体建议。
+  - id: def_creative
+    source: self_drafted
+    task: 给出一个创意任务：故事开头续写/比喻解释/角色扮演对话（语言随机）。

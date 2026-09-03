@@ -1,0 +1,15 @@
+# tool_use 维度 recipe 池：工具调用 / 命令行 / GUI 操作
+# 出处：AgentInstruct（arXiv 2407.03502）Tool Use 任务定义思想、OpenCUA 轨迹格式。
+templates:
+  - id: tool_func_call
+    source: agentinstruct_tool_use_style
+    task: 给出一个需要调用 2+ 个函数（先查再算）的任务，要求输出 JSON function_call 并解释每步选参理由。
+  - id: tool_cli
+    source: agentinstruct_tool_use_style
+    task: 给出一个 Linux 命令行任务：用户描述目标，助手需给出命令序列、预检步骤与失败处理。
+  - id: tool_gui_click
+    source: opencua_traj_style
+    task: 给出一个桌面 GUI 操作任务（中文）：描述目标界面状态，要求输出 点击/输入 动作序列与坐标。
+  - id: tool_api_troubleshoot
+    source: self_drafted
+    task: 给出一个 API 调用失败场景（英文报错信息），要求分析根因、给出修复步骤并验证方法。

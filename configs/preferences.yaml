@@ -1,0 +1,23 @@
+# 用户偏好中心 v1 —— 偏好=软配比，绝不写入指令文本
+# 用法：按你的期望改权重；default 兜底不可归零（防风格坍缩/重复输出）。
+preferences:
+  reasoning: 0.30      # 深度思考 / CoT / 反思（recipe: recipes/reasoning.yaml）
+  context_use: 0.20    # 长上下文利用 / 多轮信息整合（recipes/context_use.yaml）
+  tool_use: 0.25       # 工具调用 / 操作轨迹（recipes/tool_use.yaml）
+  bilingual: 0.10      # 中英混合 / 互译 / 知识桥接（recipes/bilingual.yaml）
+  default: 0.15        # 无偏好注入的默认混合（不可归零）
+
+sampling:
+  default_floor: 0.15        # default 最低占比
+  templates_per_dim: 4       # 每维度轮换模板数（recipe 池）
+  shuffle_per_batch: true    # 批内随机打乱 recipe 顺序
+
+# 后验校正：unitag 打标 → 批次实际 vs 目标占比 → 偏差维度下批加权（不硬过滤）
+correction:
+  enabled: true
+  threshold: 0.05            # 偏差超过该值触发加权
+  tagger: unitag             # 打标来源：unitag（Magpie）| ultrafeedback
+
+# 思维链风格（数据侧格式，非提示注入）
+cot:
+  style: r1                  # r1: `…` 思考块 | qwen3: Qwen3 思考块 | plain: 自然语言递进

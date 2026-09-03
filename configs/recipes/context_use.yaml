@@ -1,0 +1,15 @@
+# context_use 维度 recipe 池：长上下文利用 / 多轮信息整合
+# 出处：Magpie multi-turn 脚本思想（components/magpie/exp/gen_mt.py）、自拟变体。
+templates:
+  - id: ctx_summarize_compare
+    source: self_drafted
+    task: 给出两段长文摘要任务：用户提供两篇文档要点，要求先分别归纳再对比异同。
+  - id: ctx_multiturn_followup
+    source: magpie_multi_turn_style
+    task: 设计一个 3 轮追问场景：第一轮泛问，后续轮要求结合前文信息补细节、纠偏或反问。
+  - id: ctx_doc_qa
+    source: self_drafted
+    task: 给定一份长文档（中文），提出一个只能在文中特定段落找到答案的细节问题。
+  - id: ctx_cross_ref
+    source: self_drafted
+    task: 要求把多段分散信息（列表+段落+表格）整合成单一结论的问题（英文）。
