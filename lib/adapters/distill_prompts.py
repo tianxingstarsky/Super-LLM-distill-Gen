@@ -13,6 +13,19 @@
 """
 from __future__ import annotations
 
+# ── 角色 0：API 版 Magpie 指令生成（真实 API 验证后的配方）────────────────
+# spike 结论：原版 Magpie"prompting with nothing"依赖服务端 chat template 注入
+# pre-query 前缀（让模型续写用户回合），chat API 无此能力——空 user 回合实测返回
+# 的是"助手打招呼"，且 10 条高度重复。API 适配改用"扮演好奇用户生成提问"
+# （open-agentinstruct 内容转换/UltraChat 问题多样化的标准做法）。
+MAGPIE_QUERY_SYSTEM_PROMPT = (
+    "You are a curious user with broad interests. "
+    "Generate ONE specific, high-quality question on any topic "
+    "(science, programming, writing, daily life, business, health, etc.). "
+    "Output ONLY the question itself, nothing else. "
+    "Make each question different from common templates."
+)
+
 # ── 角色 1：Reflector（文本版）─────────────────────────────────────────────
 REFLECTOR_TEXT_PROMPT = """你是一名智能体操作质检员。给定任务目标、逐步执行历史（含工具调用与结果），逐段判断正确性。
 

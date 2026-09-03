@@ -22,19 +22,14 @@ from distilabel.models import OpenAILLM
 from distilabel.pipeline import Pipeline
 from distilabel.steps.tasks import TextGeneration
 
+from lib.adapters.distill_prompts import MAGPIE_QUERY_SYSTEM_PROMPT
 from lib.adapters.repeat import RepeatGenerator
 
 OUT = ROOT / "pipelines" / "01_magpie.yaml"
 
-# Magpie 官方 system 模板文本（上游 configs/model_configs.json）
-MAGPIE_SYSTEM_PROMPT = (
-    "A chat between a curious user and an artificial intelligence assistant. "
-    "The assistant gives helpful, detailed, and polite answers to the user's questions."
-)
-
 with Pipeline(
     name="magpie_instructions",
-    description="Magpie 链：无种子指令生成（内置 TextGeneration + 官方 system 模板 + 空 user 回合）",
+    description="Magpie 链（API 适配版）：扮演好奇用户生成提问（空 user 回合经真实 API 验证不可行）",
 ) as pipeline:
     gen = RepeatGenerator(
         name="magpie_seed",
@@ -43,9 +38,9 @@ with Pipeline(
     )
     respond = TextGeneration(
         name="magpie_gen",
-        system_prompt=MAGPIE_SYSTEM_PROMPT,
+        system_prompt=MAGPIE_QUERY_SYSTEM_PROMPT,
         llm=OpenAILLM(
-            base_url="http://127.0.0.1:8765/v1",
+            base_url="http://127.0.0.1:18765/v1",  # mock 端口（避开本机 llama.cpp bridge 8765）
             api_key="sk-mock",
             model="mock-model",
         ),

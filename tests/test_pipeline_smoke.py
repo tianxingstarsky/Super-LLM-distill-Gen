@@ -8,8 +8,6 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
-import threading
-import time
 
 import pytest
 
@@ -17,19 +15,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import mock_llm_server  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-PORT = 8765
+PORT = 18765
 
 # 秘密字段不序列化进 YAML；distilabel 从环境变量读取（与 backends.yaml 的 api_key_env 一致）
 os.environ.setdefault("OPENAI_API_KEY", "sk-mock")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def mock_server():
-    thread = threading.Thread(target=mock_llm_server.serve, args=(PORT,), daemon=True)
-    thread.start()
-    time.sleep(0.6)
-    yield
-    # 守护线程随测试进程退出；无需显式停机
 
 
 def _fresh_pipeline(tmp_path: pathlib.Path, tag: str):

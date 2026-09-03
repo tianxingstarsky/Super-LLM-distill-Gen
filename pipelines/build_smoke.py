@@ -30,7 +30,7 @@ with Pipeline(name="smoke", description="最小管线冒烟：LoadDataFromJSONL 
     gen = TextGeneration(
         name="generate",
         llm=OpenAILLM(
-            base_url="http://127.0.0.1:8765/v1",
+            base_url="http://127.0.0.1:18765/v1",  # mock 端口（避开本机 llama.cpp bridge 8765）
             api_key="sk-mock",
             model="mock-model",
         ),
