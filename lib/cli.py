@@ -106,7 +106,7 @@ def cmd_export(args) -> int:
 def cmd_distill(args) -> int:
     """蒸馏质检：分类（免费）→ DPO 负样本提取（免费）→ 可选 LLM 打分（需 G0 闸门）。"""
     import lib.adapters.distill as distill_mod
-    from lib.adapters.distill_prompts import SUMMARIZER_TEXT_PROMPT
+    from lib.prompts import get, render
 
     samples = [
         json.loads(l)
@@ -137,12 +137,12 @@ def cmd_distill(args) -> int:
             goal = next((m["content"] for m in reversed(s["messages"]) if m["role"] == "user"), "")
             try:
                 out = client.chat(
-                    [{"role": "user", "content": SUMMARIZER_TEXT_PROMPT.format(
+                    [{"role": "user", "content": render(get("distill.summarizer"),
                         goal=goal[:800],
                         thinking=str(last.get("reasoning_content", ""))[:1500],
                         final_answer=str(last.get("content", ""))[:1500],
                     )}],
-                    max_tokens=None, temperature=0.2,  # 思考允许无限长度（用户确认）
+                    max_tokens=None, temperature=0.2, thinking=False,  # 严格 JSON：禁用思考
                 )
                 llm_scores.append({"id": s["id"], "score": out})
             except Exception as e:  # noqa: BLE001
@@ -246,6 +246,54 @@ def cmd_monitor(args) -> int:
     return 0
 
 
+def cmd_prompt_eval(args) -> int:
+    """提示词真机评测：全部用例跑 judge 模型 + 结构检查，写报告。"""
+    _gates().require("G0")
+    from lib.llm_client import load_backend
+    from lib.prompt_eval import run_all
+
+    client, model = load_backend(ROOT, judge=True)
+    print(f"评测模型 {model}，共 {len(__import__('lib.prompt_eval', fromlist=['DEFAULT_CASES']).DEFAULT_CASES)} 个用例…")
+    report = run_all(client)
+    for r in report:
+        mark = "✔" if r["passed"] else "✘"
+        failed = [c["name"] for c in r["checks"] if not c["ok"]]
+        print(f" {mark} {r['case']}" + (f"（未过: {', '.join(failed)}）" if failed else ""))
+    (OUT_DIR / "prompt_eval_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+    passed = sum(1 for r in report if r["passed"])
+    print(f"通过 {passed}/{len(report)}；用量 {client.usage}")
+    print(f"报告 → {OUT_DIR / 'prompt_eval_report.json'}（含输出样例，供人工抽检语义质量）")
+    return 0
+
+
+def cmd_translate(args) -> int:
+    """翻译管线：互译 + 回译校验（提示词驱动，需 G0 闸门）。"""
+    _gates().require("G0")
+    from lib.llm_client import load_backend
+    from lib.translator import run_translation
+
+    client, model = load_backend(ROOT)
+    lines = pathlib.Path(args.input).read_text(encoding="utf-8").splitlines()
+    print(f"翻译管线（模型 {model}）：{len(lines)} 行 → 取 {min(args.limit, len(lines))} 条")
+    pairs = run_translation(client, lines, args.limit)
+    out = OUT_DIR / "translation_pairs.jsonl"
+    out.write_text(
+        "\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8"
+    )
+    kept = [p for p in pairs if p.get("keep")]
+    for p in pairs:
+        if "error" in p:
+            print(f" ✘ {p['source'][:40]} → 失败: {p['error'][:60]}")
+        else:
+            mark = "✔" if p["keep"] else "✘"
+            print(f" {mark} [{p['source_lang']}] {p['source'][:36]} → {p['target'][:36]} (回译忠实度 {p['score']})")
+    print(f"保留 {len(kept)}/{len(pairs)}（score≥4）；用量 {client.usage}")
+    print(f"平行语料 → {out}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -296,6 +344,14 @@ def main() -> int:
     p_review.add_argument("action", choices=["app", "push", "pull", "summary"])
     p_review.add_argument("--n", type=int, default=20, help="push 条数")
     p_review.set_defaults(func=cmd_review)
+
+    p_peval = sub.add_parser("prompt-eval", help="提示词真机评测（G0 闸门）")
+    p_peval.set_defaults(func=cmd_prompt_eval)
+
+    p_translate = sub.add_parser("translate", help="翻译管线：互译+回译校验（G0 闸门）")
+    p_translate.add_argument("--input", default=str(ROOT / "data" / "seeds" / "topics.txt"))
+    p_translate.add_argument("--limit", type=int, default=5)
+    p_translate.set_defaults(func=cmd_translate)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)

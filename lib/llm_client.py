@@ -27,14 +27,20 @@ class ChatClient:
         max_tokens: int | None = 1024,
         temperature: float = 0.7,
         retries: int = 3,
+        thinking: bool = True,
     ) -> str:
-        """max_tokens=None 时不限制输出长度（思考允许无限长度；正文在思考后输出）。"""
+        """max_tokens=None 时不限制输出长度（思考允许无限长度；正文在思考后输出）。
+        thinking=False 时请求 API 禁用思考（thinking: {type: disabled}）——
+        严格 JSON 输出类任务必须关闭思考，否则答案会进 reasoning 而 content 为空
+        （v4-pro 实测，见 prompt-eval 迭代记录）。"""
         last_err: Exception | None = None
         for _ in range(retries):
             try:
                 kwargs: Dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature}
                 if max_tokens is not None:
                     kwargs["max_tokens"] = max_tokens
+                if not thinking:
+                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
                 resp = self.client.chat.completions.create(**kwargs)
                 self.usage["calls"] += 1
                 if resp.usage:
