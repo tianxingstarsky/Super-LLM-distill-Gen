@@ -30,16 +30,11 @@ from lib.adapters.rollout_import import (  # noqa: E402
 
 ROLLOUT_DIR = pathlib.Path(r"C:\Users\tianx\.zcode\cli\rollout")
 OUT_DIR = ROOT / "data" / "output"
-COT_STYLE = "r1"
+COT_STYLE = "separated"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=0, help="每文件最多处理的记录数（0=全部）")
-    parser.add_argument("--export-limit", type=int, default=200, help="最多导出的样本数")
-    parser.add_argument("--cot", default=COT_STYLE, choices=["r1", "qwen3", "raw"])
-    args = parser.parse_args()
-
+def run(limit: int = 0, export_limit: int = 200, cot: str = COT_STYLE) -> None:
+    """核心导入流程（CLI 与脚本共用）。"""
     files = sorted(ROLLOUT_DIR.glob("model-io-sess_*.jsonl"))
     manifest = ManifestDedup(OUT_DIR / "manifest_rollout.txt")
     stats_all = {}
@@ -54,16 +49,16 @@ def main() -> None:
             err_tool_steps = 0
             ok, err = 0, 0
             for i, rec in enumerate(iter_records(path)):
-                if args.limit and i >= args.limit:
+                if limit and i >= limit:
                     break
                 status = record_status(rec)
                 if status == "ok":
                     ok += 1
                     fin[(rec.get("response") or {}).get("finishReason") or "?"] += 1
                     models[(rec.get("model") or {}).get("modelId", "?")] += 1
-                    sample = record_to_sample(rec, args.cot)
+                    sample = record_to_sample(rec, cot)
                     err_tool_steps += sample["error_tool_steps"]
-                    if samples_written < args.export_limit and not manifest.seen(sample["id"]):
+                    if samples_written < export_limit and not manifest.seen(sample["id"]):
                         fs.write(json.dumps(sample, ensure_ascii=False) + "\n")
                         samples_written += 1
                     manifest.add(sample["id"])
@@ -89,6 +84,15 @@ def main() -> None:
     )
     print(f"\n导出样本 {samples_written} 条；manifest 新增 {manifest.new}、命中重复 {manifest.hits}")
     print(f"统计/样本/拒绝归档/清单 → {OUT_DIR}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=0, help="每文件最多处理的记录数（0=全部）")
+    parser.add_argument("--export-limit", type=int, default=200, help="最多导出的样本数")
+    parser.add_argument("--cot", default=COT_STYLE, choices=["separated", "tags", "plain", "drop"])
+    args = parser.parse_args()
+    run(args.limit, args.export_limit, args.cot)
 
 
 if __name__ == "__main__":

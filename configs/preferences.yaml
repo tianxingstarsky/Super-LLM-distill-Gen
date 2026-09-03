@@ -18,6 +18,11 @@ correction:
   threshold: 0.05            # 偏差超过该值触发加权
   tagger: unitag             # 打标来源：unitag（Magpie）| ultrafeedback
 
-# 思维链风格（数据侧格式，非提示注入）
+# 思维链风格（思考是模型原生能力：原生特殊 token + 官方 chat template 注入；
+# 数据侧只做"推理与正文分字段"或"原生 token 包裹"，不用字面标签模拟）
 cot:
-  style: r1                  # r1: `…` 思考块 | qwen3: Qwen3 思考块 | plain: 自然语言递进
+  style: separated        # separated: 推理存 reasoning_content 字段，模板注入原生 token
+                          # tags: 用原生思考 token 包裹进 content（R1 蒸馏数据路径）
+                          # plain: 合并为普通文本（无原生思考的模型）
+                          # drop: 丢弃推理仅保留正文
+  think_tokens: ["", ""]  # style=tags 时的原生思考起止 token（按模型家族填，见模型卡）

@@ -1,0 +1,21 @@
+# HITL 确认闸门定义（M1：G0/G1/G3；其余 M2 起逐条加）
+# 机制：propose → awaiting（任务挂起）→ approve/reject → resume
+# agent 只提议与执行已确认动作；未过门任务绝不继续。
+gates:
+  - id: G0
+    title: 预算与模型闸
+    trigger: 首次生成/蒸馏前（df-run、df-distill）
+    prompt: "确认模型与预算：默认 {default_model}（{default_backend}），总预算上限 {max_total_usd} 美元，超限硬停。确认后继续。"
+    requires: [default_model, max_total_usd]
+
+  - id: G1
+    title: 数据源闸
+    trigger: 导入前（df-import）
+    prompt: "确认数据源：将导入 {rollout_dir} 下的 rollout 记录（含你的私有会话内容），并调用 {default_backend} 云端 API。确认数据路径与上传许可。"
+    requires: [rollout_dir]
+
+  - id: G3
+    title: 小批量放量闸
+    trigger: 批量导出前（df-export --bulk / 放量生成）
+    prompt: "小批量预览报告已生成（df-preview 查看）。确认质量后放量；否则将只保留候选池。"
+    requires: []

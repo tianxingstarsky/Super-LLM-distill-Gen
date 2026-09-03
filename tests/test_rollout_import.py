@@ -25,32 +25,45 @@ def test_assistant_msg_cot_styles():
     from lib.adapters.rollout_import import assistant_msg_from_response
 
     rec2 = _load()[1]
-    r1 = assistant_msg_from_response(rec2, "r1")
-    assert "<思考>" in r1["content"] and "先列出文件" in r1["content"]
-    assert r1["toolCalls"][0]["name"] == "Bash"
+    # separated（默认）：推理在 reasoning_content 字段，正文在 content
+    sep = assistant_msg_from_response(rec2, "separated")
+    assert sep["reasoning_content"] == "用户想查看目录，先列出文件。"
+    assert sep["content"] == ""  # 纯工具调用轮无正文
+    assert sep["toolCalls"][0]["name"] == "Bash"
 
-    raw = assistant_msg_from_response(rec2, "raw")
-    assert raw["content"] == ""  # 纯工具调用轮无正文
-    assert raw["toolCalls"][0]["id"] == "call-1"
+    # tags：用配置的原生 token 包裹（默认空 token=前后直接拼接）
+    tagged = assistant_msg_from_response(rec2, "tags", ("", ""))
+    assert "先列出文件" in tagged["content"]
 
+    # plain：合并为普通文本，无标记
+    plain = assistant_msg_from_response(rec2, "plain")
+    assert plain["content"] == "用户想查看目录，先列出文件。"
+
+    # drop：丢弃推理
+    dropped = assistant_msg_from_response(rec2, "drop")
+    assert dropped["content"] == ""
+    assert dropped["toolCalls"][0]["id"] == "call-1"
+
+    # 无推理的轮次不产生 reasoning_content 字段
     rec1 = _load()[0]
-    assert "<思考>" not in assistant_msg_from_response(rec1, "r1")["content"]
+    assert "reasoning_content" not in assistant_msg_from_response(rec1, "separated")
 
 
 def test_record_to_sample_and_error_steps():
     from lib.adapters.rollout_import import record_to_sample
 
     rec3 = _load()[2]
-    sample = record_to_sample(rec3, "r1")
+    sample = record_to_sample(rec3, "separated")
     assert sample["type"] == "sft"
     assert sample["finish_reason"] == "stop"
     assert sample["error_tool_steps"] == 1  # isError 计入并剥离
     for m in sample["messages"]:
         assert "isError" not in m
         assert "modelRef" not in m  # 内部字段被丢弃
-    # 尾轮：反思含"改用 pwd"，正文只含正确结论
+    # 尾轮（separated 风格）：反思在 reasoning_content，正文只含正确结论
     final = sample["messages"][-1]
-    assert "改用 pwd" in final["content"] and "当前目录为" in final["content"]
+    assert "改用 pwd" in final["reasoning_content"]
+    assert final["content"] == "当前目录为 F:\\work"
     # 历史里的工具结果保留（toolCallId 关联）
     tool_msgs = [m for m in sample["messages"] if m["role"] == "tool"]
     assert tool_msgs and "No such file" in tool_msgs[0]["content"]

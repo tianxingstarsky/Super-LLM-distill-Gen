@@ -42,6 +42,16 @@ def record_status(rec: Dict[str, Any]) -> str:
 
 
 # ── 消息重建 ────────────────────────────────────────────────────────────────
+# 思考风格（cot_style）：
+#   separated —— 推理与正文分字段（默认）：assistant 消息带 reasoning_content 字段，
+#                训练框架官方 chat template 按 enable_thinking 注入原生思考 token
+#                （Qwen3 路径，DeepSeek API 亦以 reasoning_content 命名该字段）。
+#   tags      —— 用模型原生思考特殊 token 包裹进 content（R1 蒸馏数据路径），
+#                具体 token 串从配置读（各模型家族不同，见 configs/preferences.yaml）。
+#   plain     —— 推理与正文合并为普通文本，无任何标记（无原生思考的模型）。
+#   drop      —— 丢弃推理，仅保留正文。
+# 注：不再使用字面 "<思考>…</思考>" 文本模拟（会让带原生思考 token 的模型
+#     学会输出字面标签而非激活原生思考模式，M1 起废弃）。
 def _content_to_str(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -54,31 +64,43 @@ def _content_to_str(content: Any) -> str:
     return ""
 
 
-def assistant_msg_from_response(rec: Dict[str, Any], cot_style: str = "r1") -> Optional[Dict[str, Any]]:
-    """把 response 组装为 assistant 消息（cot_style: r1|qwen3|raw，见配置）。"""
+def assistant_msg_from_response(
+    rec: Dict[str, Any],
+    cot_style: str = "separated",
+    think_tokens: tuple[str, str] = ("", ""),
+) -> Optional[Dict[str, Any]]:
+    """把 response 组装为 assistant 消息（cot_style: separated|tags|plain|drop）。"""
     resp = rec.get("response") or {}
     reasoning = (resp.get("reasoningText") or "").strip()
     text = (resp.get("text") or "").strip()
     tool_calls = resp.get("toolCalls") or []
 
-    if cot_style == "r1":
+    if cot_style == "separated":
+        content: Any = text
+        msg: Dict[str, Any] = {"role": "assistant", "content": content}
+        if reasoning:
+            msg["reasoning_content"] = reasoning  # 分字段：模板注入原生 token
+    elif cot_style == "tags":
+        start, end = think_tokens
         content = ""
         if reasoning:
-            content += f"<思考>\n{reasoning}\n</思考>"
+            content += f"{start}{reasoning}{end}"
         if text:
             content += ("\n" if content else "") + text
-    elif cot_style == "qwen3":
-        content = [
-            *([{"type": "reasoning", "text": reasoning}] if reasoning else []),
-            *([{"type": "text", "text": text}] if text else []),
-        ]
-    else:  # raw
-        content = text
+        msg = {"role": "assistant", "content": content}
+    elif cot_style == "drop":
+        msg = {"role": "assistant", "content": text}
+    else:  # plain
+        content = ""
+        if reasoning:
+            content += reasoning
+        if text:
+            content += ("\n" if content else "") + text
+        msg = {"role": "assistant", "content": content}
 
-    msg: Dict[str, Any] = {"role": "assistant", "content": content}
     if tool_calls:
         msg["toolCalls"] = tool_calls
-    return msg if (content or tool_calls) else None
+    return msg if (msg.get("content") or msg.get("reasoning_content") or tool_calls) else None
 
 
 def normalize_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -112,14 +134,15 @@ def normalize_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, An
 
 def record_to_sample(
     rec: Dict[str, Any],
-    cot_style: str = "r1",
+    cot_style: str = "separated",
+    think_tokens: tuple[str, str] = ("", ""),
     max_messages: int = 0,
 ) -> Dict[str, Any]:
     """成功记录 → SFT 样本（闭环多轮）。max_messages>0 时只保留尾部 N 条消息。"""
     history = normalize_tool_messages(rec.get("request", {}).get("messages", []))
     if max_messages > 0:
         history = history[-max_messages:]
-    final = assistant_msg_from_response(rec, cot_style)
+    final = assistant_msg_from_response(rec, cot_style, think_tokens)
     messages = history + ([final] if final else [])
 
     error_tool_steps = sum(1 for m in history if m.pop("isError", False))

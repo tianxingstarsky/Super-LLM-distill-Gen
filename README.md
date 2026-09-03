@@ -78,8 +78,27 @@ python -m tests.mock_llm_server &          # 127.0.0.1:8765 的 mock OpenAI 服�
 - [x] M0 spike 报告：见 docs/spike-report.md
 - [x] M0 真实数据 spike：DeepSeek V4 Flash 实测（Magpie 配方变更/蒸馏链跑通）
 - [x] rollout 导入器：model-io JSONL → 闭环多轮样本（含思考+工具调用+isError 标记）+ manifest 查重
-- [ ] M1：最小闭环（CLI + 三闸门 + 偏好 v1 + 导出 + Argilla/Langfuse）
+- [x] M1 第一批：df-* CLI（import/stats/preview/export/gate）+ G0/G1/G3 闸门 + 导出器（LLaMA-Factory sharegpt / DeepSeek-Qwen messages，思考默认 separated 分字段）
+- [ ] M1 第二批：蒸馏质检管线（Reflector → 只留正确 + DPO 负样本 → Summarizer 打分）
+- [ ] M1 第三批：偏好中心 v1 采样器 + Argilla/Langfuse 接入
 - [ ] M2：dsh 插件、其余闸门、多模态/DPO 增强/翻译/GUI 管线
+
+### CLI 快速上手（M1）
+
+```bash
+python -m lib.cli gate status          # 查看闸门状态（G0/G1/G3）
+python -m lib.cli gate approve G1      # 过数据源闸
+python -m lib.cli import --cot separated  # 导入 rollout（思考与正文分字段）
+python -m lib.cli stats                # 导入统计
+python -m lib.cli preview --n 10       # 人工过目样例
+python -m lib.cli gate approve G3      # 过放量闸（否则 --bulk 导出被拦截）
+python -m lib.cli export --format chat --bulk          # DeepSeek/Qwen messages
+python -m lib.cli export --format llamafactory --bulk  # LLaMA-Factory sharegpt
+```
+
+思考处理：`separated`（默认，推理存 `reasoning_content` 字段，由官方 chat template
+注入原生思考 token）/ `tags`（配置原生 token 包裹）/ `plain` / `drop`，见
+configs/preferences.yaml。
 
 ⚠️ 本机使用注意：httpx 会把 localhost 请求送进系统代理导致 LLM 调用静默失败，
 运行前需 `NO_PROXY=127.0.0.1,localhost`（详见 docs/spike-report.md F2）。
