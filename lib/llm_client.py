@@ -15,8 +15,12 @@ DEFAULT_NO_PROXY = "127.0.0.1,localhost"
 def parse_json_robust(output: str) -> Dict[str, Any]:
     """容错 JSON 解析：剥代码围栏 → 取首个平衡对象 → 尾部截断重试。"""
     text = output.strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[-1].strip() if text.count("```") >= 2 else text.replace("```", "").strip()
+    if text.count("```") >= 2:
+        # 取首对围栏之间的内容（split 后中间段），并去掉可能的语言标签行
+        text = text.split("```", 2)[1].strip()
+        first_line = text.split("\n", 1)[0].strip()
+        if first_line and first_line.isalpha() and "\n" in text:
+            text = text.split("\n", 1)[1].strip()
     for candidate in (text,):
         try:
             return json.loads(candidate)
@@ -79,6 +83,10 @@ class ChatClient:
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+        # response_format 能力探测结果：None=未知 / True=支持 / False=不支持。
+        # 首次 json_mode 调用被 API 拒绝后置 False，同会话后续自动降级为
+        # "提示词要求 JSON + 容错解析"路径，不再硬重试（分层降级 L1→L3）。
+        self.json_supported: bool | None = None
 
     def chat(
         self,
@@ -90,22 +98,22 @@ class ChatClient:
         json_mode: bool = False,
     ) -> str:
         """max_tokens=None 时不限制输出长度（思考允许无限长度；正文在思考后输出）。
-        thinking=False 时请求 API 禁用思考（thinking: {type: disabled}）——
-        严格 JSON 输出类任务必须关闭思考，否则答案会进 reasoning 而 content 为空
-        （v4-pro 实测，见 prompt-eval 迭代记录）。
-        json_mode=True 时用 response_format json_object 在解码层强制合法 JSON
-        （DeepSeek V4 实测支持；提示词需含 "json" 字样——本库 JSON 提示词均已满足）。"""
+        thinking=False 时请求 API 禁用思考（thinking: {type: disabled}）。
+        json_mode=True 时优先用 response_format json_object 解码层强制合法 JSON；
+        若 API 不支持（本实例已探测为 False 或调用被拒）则自动降级为纯提示词约束。"""
         last_err: Exception | None = None
         for _ in range(retries):
             try:
                 kwargs: Dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature}
                 if max_tokens is not None:
                     kwargs["max_tokens"] = max_tokens
-                if json_mode:
+                if json_mode and self.json_supported is not False:
                     kwargs["response_format"] = {"type": "json_object"}
                 if not thinking:
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
                 resp = self.client.chat.completions.create(**kwargs)
+                if json_mode and self.json_supported is None:
+                    self.json_supported = True  # 首次成功即确认能力
                 self.usage["calls"] += 1
                 if resp.usage:
                     self.usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
@@ -122,9 +130,24 @@ class ChatClient:
                     return content
                 last_err = ValueError("empty completion")
             except Exception as e:  # noqa: BLE001
+                # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
+                # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
+                if json_mode and self.json_supported is not False and _is_format_unsupported(e):
+                    self.json_supported = False
+                    continue
                 last_err = e
             time.sleep(1.0)
         raise RuntimeError(f"chat failed after {retries} retries: {last_err}")
+
+
+def _is_format_unsupported(err: Exception) -> bool:
+    """判断异常是否为 'response_format 不支持' 类（400/BadRequest + 关键字）。"""
+    text = str(err).lower()
+    if "response_format" in text:
+        return True
+    if "badrequest" in text and ("unsupported" in text or "unavailable" in text or "not supported" in text):
+        return True
+    return False
 
 
 def load_backend(
