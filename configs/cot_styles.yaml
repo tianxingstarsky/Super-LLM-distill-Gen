@@ -1,0 +1,21 @@
+# CoT 思考风格偏好画像：自然语言偏好 → 结构化风格清单 + 软采样权重
+# 用法：按你的偏好改 styles 的描述与 profiles 的权重；生成期按权重软采样
+# （recipe 轮换防重复），绝不把风格硬塞进每条样本。风格调教数据由
+# df cot-style 管线产出（含风格 DPO 对，让模型长期习得风格）。
+profiles:
+  default:
+    weights:
+      concise: 0.30     # 简洁思考
+      structured: 0.25  # 结构化要点
+      skeptical: 0.20   # 先质疑后确认
+      chinese: 0.25     # 中文思考
+
+styles:
+  concise:
+    description: 思考极简：只写关键判断与转折点，不展开背景与无关细节，控制在 80 字内
+  structured:
+    description: 思考用编号要点组织（1/2/3），每点一句话，最后一行是结论
+  skeptical:
+    description: 先列出可能的坑、反例或失败模式，再给出最终判断
+  chinese:
+    description: 思考过程使用中文（最终回答语言跟随任务）

@@ -47,20 +47,21 @@ REFLECTOR = PromptSpec(
 
 GENERATOR = PromptSpec(
     id="distill.generator",
-    version="1.1.0",
-    purpose="把经质检的执行过程改写成反思式思维链 SFT 样本（错误只进教训、最终只留正确操作）",
+    version="1.2.0",
+    purpose="把经质检的执行过程改写成反思式思维链 SFT 样本（错误只进教训、最终只留正确操作；支持风格注入）",
     source="OpenCUA cot-generator Generator 文本化改编（xlang-ai/OpenCUA, MIT, arXiv 2508.09123）",
-    variables=("goal", "annotated_steps"),
+    variables=("goal", "annotated_steps", "style_guide"),
     constraints=(
         "只输出一个 JSON 对象（以 { 开头、以 } 结尾），禁止任何其他文本、Markdown 围栏或前缀",
         "JSON 键：thinking/final_answer",
         "错误只允许以一句话教训形式出现在 thinking 中，占比 ≤20%，禁止展开错误细节",
         "final_answer 只包含正确操作与正确工具调用",
         "思维链格式：原计划 A → 发现会导致 X → 改用 B → B 成功",
+        "thinking 必须遵守 style_guide 中的风格要求（style_guide 为默认时不受限）",
     ),
     notes=(
-        "v1.1.0：真机评测（df prompt-eval）发现 v4-pro 在 v1.0.0 下偶发输出 '-zh:/final-answer:' "
-        "乱格式而非 JSON；补强 JSON 唯一输出死命令。"
+        "v1.1.0：真机评测（df prompt-eval）发现 v4-pro 偶发输出乱格式；补强 JSON 唯一输出死命令。"
+        "v1.2.0：新增 style_guide 变量（CoT 风格偏好调教注入块，df cot-style 管线使用）。"
     ),
     template="""你是训练数据撰写助手。把下面经过质检的智能体执行过程改写成一条带思维链的 SFT 样本。
 
@@ -69,6 +70,9 @@ GENERATOR = PromptSpec(
 
 # 步骤与质检结论（错误步骤已标记）:
 {annotated_steps}
+
+# 思考风格要求（必须遵守；显示"默认风格"时按常规反思式写作）:
+{style_guide}
 
 写作规则（必须严格遵守）:
 1. 思维链采用反思式：格式为"原计划 A → 发现会导致 X → 改用 B → B 成功"。

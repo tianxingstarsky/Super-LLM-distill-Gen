@@ -113,6 +113,7 @@ DEFAULT_CASES: List[EvalCase] = [
     EvalCase("distill.generator 反思", "distill.generator", {
         "goal": "写一个不额外分配空间的回文判断函数",
         "annotated_steps": "- assistant_answer(切片反转) [错误]\n- assistant_answer(双指针实现) [正确]",
+        "style_guide": "默认风格",
     }, [
         ("JSON 键", _json_keys("thinking", "final_answer")),
         ("反思结构", _contains("改用", "改用")),

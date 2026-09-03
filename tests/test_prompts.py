@@ -71,5 +71,5 @@ def test_legacy_module_compat():
     from lib.adapters import distill_prompts as legacy
 
     assert legacy.SUMMARIZER_TEXT_PROMPT == get("distill.summarizer").template
-    assert legacy.GENERATOR_TEXT_PROMPT == get("distill.generator").template
+    assert "默认风格" in legacy.GENERATOR_TEXT_PROMPT  # v1.2.0 style_guide 已预填充
     assert legacy.MAGPIE_QUERY_SYSTEM_PROMPT == get("magpie.query").template

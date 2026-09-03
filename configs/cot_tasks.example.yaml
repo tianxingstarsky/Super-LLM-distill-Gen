@@ -1,0 +1,12 @@
+# CoT 风格调教任务示例（df cot-style --tasks 的输入）
+# goal：任务描述；annotated_steps：质检后的步骤（错误步骤标记 [错误]）
+- goal: 写一个不额外分配空间的回文判断函数
+  annotated_steps: "- assistant_answer(切片反转) [错误]\n- assistant_answer(双指针实现) [正确]"
+- goal: 把当前目录下最大的三个文件列出来
+  annotated_steps: "- run_shell(ls) [错误：目录无匹配文件]\n- run_shell(ls -la) [正确]\n- run_shell(ls -lS | head -3) [正确]"
+- goal: 解释什么是过拟合并给出避免方法
+  annotated_steps: "- assistant_answer(初步解释) [正确]"
+- goal: 比较 Python 列表与元组的适用场景
+  annotated_steps: "- assistant_answer(对比说明) [正确]"
+- goal: 排查一个 Web 服务偶发 504 超时的问题
+  annotated_steps: "- run_shell(curl 请求) [错误：未设置超时参数]\n- run_shell(带超时重试) [正确]"

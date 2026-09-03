@@ -399,6 +399,32 @@ def cmd_doc2data(args) -> int:
     return 0
 
 
+def cmd_cot_style(args) -> int:
+    """CoT 风格偏好调教：风格画像→软采样注入→风格校验→SFT 样本+风格 DPO 对（G0 闸门）。"""
+    _gates().require("G0")
+    import lib.cot_style as cot
+    import yaml
+
+    client, model = _client(args)
+    styles_cfg = cot.load_styles(ROOT / "configs" / "cot_styles.yaml", args.profile)
+    tasks_raw = yaml.safe_load(pathlib.Path(args.tasks).read_text(encoding="utf-8"))
+    tasks = [{"goal": t["goal"], "annotated_steps": t.get("annotated_steps", "")} for t in tasks_raw][: args.n]
+    print(f"CoT 风格调教（模型 {model}，画像 {args.profile}，{len(tasks)} 个任务）…")
+    result = cot.run(client, tasks, styles_cfg)
+
+    samples_out = OUT_DIR / "cot_styled_samples.jsonl"
+    dpo_out = OUT_DIR / "cot_style_dpo.jsonl"
+    samples_out.write_text(
+        "\n".join(json.dumps(s, ensure_ascii=False) for s in result["samples"]) + "\n", encoding="utf-8"
+    )
+    dpo_out.write_text(
+        "\n".join(json.dumps(p, ensure_ascii=False) for p in result["dpo_pairs"]) + "\n", encoding="utf-8"
+    )
+    print(json.dumps(result["stats"], ensure_ascii=False, indent=1))
+    print(f"SFT 样本 → {samples_out}；风格 DPO 对 → {dpo_out}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -487,6 +513,14 @@ def main() -> int:
     p_doc2data.add_argument("--backend")
     p_doc2data.add_argument("--model")
     p_doc2data.set_defaults(func=cmd_doc2data)
+
+    p_cotstyle = sub.add_parser("cot-style", help="CoT 风格偏好调教（G0 闸门）")
+    p_cotstyle.add_argument("--tasks", default=str(ROOT / "configs" / "cot_tasks.example.yaml"))
+    p_cotstyle.add_argument("--profile", default="default")
+    p_cotstyle.add_argument("--n", type=int, default=5)
+    p_cotstyle.add_argument("--backend")
+    p_cotstyle.add_argument("--model")
+    p_cotstyle.set_defaults(func=cmd_cot_style)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)
