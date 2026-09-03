@@ -4,3 +4,6 @@
 [submodule "components/opencua"]
 	path = components/opencua
 	url = https://github.com/xlang-ai/OpenCUA.git
+[submodule "components/deepseek-harness"]
+	path = components/deepseek-harness
+	url = https://github.com/deepseek-ai/deepseek-harness.git

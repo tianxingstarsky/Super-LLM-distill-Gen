@@ -9,8 +9,10 @@
 |---|---|---|---|---|
 | Magpie | components/magpie | MIT | b734a36818e4ba7ef7f0f582fc55f7e860407d26 | https://github.com/magpie-align/magpie |
 | OpenCUA | components/opencua | MIT | dfc91ba89f700d10f26ec50362d308571482ab8b | https://github.com/xlang-ai/OpenCUA |
+| deepseek-harness | components/deepseek-harness | MIT | 76fda729799fe9b3848dbe2c211d4b231032b81e | https://github.com/deepseek-ai/deepseek-harness |
 
 说明：submodule 内源代码一律不改动；本项目仅通过适配层（lib/adapters）调用其脚本、模板与数据格式。
+唯一例外见 PATCHES.md（OpenCUA cot-generator 新增 deepseek 端点路由的最小补丁，可 git apply 复现）。
 
 ## pip 依赖（声明于 pyproject.toml / requirements）
 

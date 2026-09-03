@@ -1,0 +1,4 @@
+# cordis.yml 模板（make_dsh_patch.py 生成实际文件，绝对路径因机器而异，不入库）
+- insert:
+    - id: dataforge
+      name: '{{DF_ROOT}}/plugins/dsh-dataforge/src/dataforge.ts'

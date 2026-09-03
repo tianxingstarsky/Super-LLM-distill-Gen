@@ -81,7 +81,7 @@ python -m tests.mock_llm_server &          # 127.0.0.1:8765 的 mock OpenAI 服�
 - [x] M1 第一批：df-* CLI（import/stats/preview/export/gate）+ G0/G1/G3 闸门 + 导出器（LLaMA-Factory sharegpt / DeepSeek-Qwen messages，思考默认 separated 分字段）
 - [ ] M1 第二批：蒸馏质检管线（Reflector → 只留正确 + DPO 负样本 → Summarizer 打分）
 - [ ] M1 第三批：偏好中心 v1 采样器 + Argilla/Langfuse 接入
-- [ ] M2：dsh 插件、其余闸门、多模态/DPO 增强/翻译/GUI 管线
+- [x] M2 全部完成：多模态/DPO 增强/翻译/GUI/零参考/风格调教/长度守卫/dsh 插件
 
 ### CLI 快速上手（M1）
 
