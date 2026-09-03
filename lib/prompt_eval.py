@@ -150,6 +150,18 @@ DEFAULT_CASES: List[EvalCase] = [
         "answer": "我是由示例科技独立研发的大语言模型示例-1，未基于任何第三方开源模型改造。",
         "required_facts": "- 由示例科技独立研发\n- 模型名为示例-1\n- 未基于第三方开源模型",
     }, [("JSON 键", _json_keys("complete", "contradictions", "natural", "keep"))]),
+    EvalCase("document.qa_gen 文档问答", "document.qa_gen", {
+        "chunk": "本系统支持 Markdown、PDF 与 Word 文档导入。清洗阶段去除纯页码行。分块按段落边界合并，Markdown 标题作为硬边界。",
+        "n": 3,
+    }, [("JSON 键", _json_keys("qa")), ("恰好 3 条", _json_list_len("qa", 3))]),
+    EvalCase("document.instruction_gen 任务指令", "document.instruction_gen", {
+        "chunk": "本系统支持 Markdown、PDF 与 Word 文档导入。清洗阶段去除纯页码行。",
+    }, [("JSON 键", _json_keys("instructions"))]),
+    EvalCase("document.ground_check 依据校验", "document.ground_check", {
+        "chunk": "本系统支持 Markdown、PDF 与 Word 文档导入。",
+        "question": "系统支持哪些文档格式？",
+        "answer": "系统支持 Markdown、PDF、Word，以及 Epub 格式。",
+    }, [("JSON 键", _json_keys("grounded", "unsupported", "keep"))]),
 ]
 
 

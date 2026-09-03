@@ -343,6 +343,30 @@ def cmd_doc2corpus(args) -> int:
     return 0
 
 
+def cmd_doc2data(args) -> int:
+    """文档 → 问答 SFT（表达层，含事实依据校验；需 G0 闸门）。"""
+    _gates().require("G0")
+    import lib.doc2data as d2d
+    from lib.llm_client import load_backend
+
+    client, model = load_backend(ROOT)
+    result = d2d.doc_to_samples(
+        client, args.input, qa_per_chunk=args.qa_per_chunk,
+        max_chunks=args.max_chunks, chunk_size=args.chunk_size,
+    )
+    stats = result["stats"]
+    out = OUT_DIR / "doc_samples.jsonl"
+    with open(out, "w", encoding="utf-8") as f:
+        for s in result["samples"]:
+            f.write(json.dumps(s, ensure_ascii=False) + "\n")
+    print(f"模型 {model}；文档 {args.input}")
+    print(json.dumps(stats, ensure_ascii=False, indent=1))
+    print(f"样本 → {out}；事实校验驳回率 {stats['ground_reject_rate']}（防幻觉质量门）")
+    for r in result["rejected"][:3]:
+        print(f" 驳回示例: {r.get('question', r.get('chunk', ''))} → {r.get('unsupported', r.get('error', ''))}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -412,6 +436,13 @@ def main() -> int:
     p_doc2corpus.add_argument("--chunk-size", type=int, default=2000)
     p_doc2corpus.add_argument("--overlap", type=int, default=0)
     p_doc2corpus.set_defaults(func=cmd_doc2corpus)
+
+    p_doc2data = sub.add_parser("doc2data", help="文档→问答 SFT（表达层+事实校验，G0 闸门）")
+    p_doc2data.add_argument("--input", required=True)
+    p_doc2data.add_argument("--qa-per-chunk", type=int, default=3)
+    p_doc2data.add_argument("--max-chunks", type=int, default=5)
+    p_doc2data.add_argument("--chunk-size", type=int, default=2000)
+    p_doc2data.set_defaults(func=cmd_doc2data)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)

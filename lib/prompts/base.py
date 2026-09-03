@@ -41,10 +41,10 @@ def render(spec: PromptSpec, **kwargs) -> str:
 
 def registry() -> Dict[str, PromptSpec]:
     """全量提示词注册表（id → 最新版 spec）。"""
-    from lib.prompts import distill, identity, judge, magpie, translation
+    from lib.prompts import distill, document, identity, judge, magpie, translation
 
     specs: Dict[str, PromptSpec] = {}
-    for mod in (magpie, distill, judge, translation, identity):
+    for mod in (magpie, distill, judge, translation, identity, document):
         for name in dir(mod):
             spec = getattr(mod, name)
             if isinstance(spec, PromptSpec):
