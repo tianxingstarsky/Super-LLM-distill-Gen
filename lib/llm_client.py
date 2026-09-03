@@ -21,18 +21,33 @@ class ChatClient:
         self.model = model
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
 
-    def chat(self, messages: List[Dict[str, Any]], max_tokens: int = 1024, temperature: float = 0.7, retries: int = 3) -> str:
+    def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        max_tokens: int | None = 1024,
+        temperature: float = 0.7,
+        retries: int = 3,
+    ) -> str:
+        """max_tokens=None 时不限制输出长度（思考允许无限长度；正文在思考后输出）。"""
         last_err: Exception | None = None
         for _ in range(retries):
             try:
-                resp = self.client.chat.completions.create(
-                    model=self.model, messages=messages, max_tokens=max_tokens, temperature=temperature
-                )
+                kwargs: Dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature}
+                if max_tokens is not None:
+                    kwargs["max_tokens"] = max_tokens
+                resp = self.client.chat.completions.create(**kwargs)
                 self.usage["calls"] += 1
                 if resp.usage:
                     self.usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
                     self.usage["completion_tokens"] += resp.usage.completion_tokens or 0
-                content = (resp.choices[0].message.content or "").strip()
+                msg = resp.choices[0].message
+                content = (msg.content or "").strip()
+                # 思考型模型（v4-pro 等）长输入时思考可能吃满 max_tokens 导致 content 空；
+                # 兜底取 reasoning_content 作为输出
+                if not content:
+                    rc = getattr(msg, "reasoning_content", None)
+                    if rc:
+                        content = rc.strip()
                 if content:
                     return content
                 last_err = ValueError("empty completion")
@@ -42,8 +57,15 @@ class ChatClient:
         raise RuntimeError(f"chat failed after {retries} retries: {last_err}")
 
 
-def load_backend(root: pathlib.Path, backend: str = "deepseek") -> tuple[ChatClient, str]:
-    """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。"""
+def load_backend(
+    root: pathlib.Path,
+    backend: str = "deepseek",
+    model: str | None = None,
+    judge: bool = False,
+) -> tuple[ChatClient, str]:
+    """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
+
+    judge=True 时使用 judge_backend/judge_model（打分角色用更稳的模型）。"""
     local = root / "configs" / "backends.local.yaml"
     base = root / "configs" / "backends.yaml"
     cfg: Dict[str, Any] = {}
@@ -54,9 +76,13 @@ def load_backend(root: pathlib.Path, backend: str = "deepseek") -> tuple[ChatCli
         cfg["backends"] = {**cfg.get("backends", {}), **local_cfg.get("backends", {})}
         cfg.update({k: v for k, v in local_cfg.items() if k != "backends"})
 
-    b = (cfg.get("backends") or {}).get(backend) or {}
+    if judge:
+        backend = cfg.get("judge_backend", backend)
+        model = model or cfg.get("judge_model")
+    name = backend
+    b = (cfg.get("backends") or {}).get(name) or {}
     api_key = b.get("api_key") or os.environ.get(b.get("api_key_env") or "", "")
-    model = b.get("models", [""])[0] if b.get("models") else cfg.get("default_model", "")
+    model = model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
     client = ChatClient(base_url=b.get("base_url", ""), api_key=api_key, model=model)
 
     # 本地端点绕代理（spike 报告 F2）

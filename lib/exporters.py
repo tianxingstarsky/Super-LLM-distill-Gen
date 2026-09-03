@@ -62,12 +62,21 @@ def to_sharegpt_sample(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 # ── DeepSeek/Qwen messages（OpenAI 兼容） ───────────────────────────────────
+def _strip_internal(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """剥离内部元数据（isError 等），输出标准训练字段。"""
+    out = []
+    for m in messages:
+        item = {k: v for k, v in m.items() if k not in ("isError",)}
+        out.append(item)
+    return out
+
+
 def to_chat_sample(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """统一样本 → {"messages": [...]}（含 reasoning_content 分字段与 toolCalls）。"""
     messages = sample.get("messages") or []
     if not any(m.get("role") == "assistant" for m in messages):
         return None
-    return {"messages": messages}
+    return {"messages": _strip_internal(messages)}
 
 
 def to_dpo_sample(prompt: List[Dict[str, Any]], chosen: List[Dict[str, Any]], rejected: List[Dict[str, Any]]) -> Dict[str, Any]:

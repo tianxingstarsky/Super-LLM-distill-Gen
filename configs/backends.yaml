@@ -27,6 +27,10 @@ backends:
 default_backend: deepseek
 default_model: deepseek-chat
 
+# judge/打分角色：flash 在低温度 JSON 场景空回复率高（spike 实测），judge 用更稳的模型
+judge_backend: deepseek
+judge_model: deepseek-v4-pro
+
 # 分阶段预算（G0 闸门依据；超限硬停）
 budget:
   max_total_usd: 5.0

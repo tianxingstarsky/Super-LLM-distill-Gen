@@ -46,6 +46,8 @@ def test_to_chat_sample_keeps_reasoning_field():
     # toolCalls 保留标准 OpenAI 结构
     fc = [m for m in out["messages"] if m.get("toolCalls")]
     assert fc and fc[0]["toolCalls"][0]["name"] == "Bash"
+    # 内部元数据（isError）不进入训练格式
+    assert all("isError" not in m for m in out["messages"])
 
 
 def test_to_dpo_sample():

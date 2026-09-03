@@ -138,16 +138,21 @@ def record_to_sample(
     think_tokens: tuple[str, str] = ("", ""),
     max_messages: int = 0,
 ) -> Dict[str, Any]:
-    """成功记录 → SFT 样本（闭环多轮）。max_messages>0 时只保留尾部 N 条消息。"""
+    """成功记录 → SFT 样本（闭环多轮）。max_messages>0 时只保留尾部 N 条消息。
+
+    注意：isError 保留在样本消息里（渲染/质检/DPO 提取需要），
+    导出训练格式时由 exporters 统一剥离（非标准训练字段）。"""
     history = normalize_tool_messages(rec.get("request", {}).get("messages", []))
     if max_messages > 0:
         history = history[-max_messages:]
     final = assistant_msg_from_response(rec, cot_style, think_tokens)
     messages = history + ([final] if final else [])
 
-    error_tool_steps = sum(1 for m in history if m.pop("isError", False))
+    error_tool_steps = sum(1 for m in history if m.get("isError"))
     return {
-        "id": sample_id(messages, "rollout"),
+        # id 基于记录原始内容（与 cot_style 无关）：同一条记录换风格重导 = 同一个样本 id，
+        # manifest 才能正确实现"跨风格增量零重复"
+        "id": record_id(rec),
         "source": "rollout",
         "type": "sft",
         "session_id": rec.get("sessionId", ""),
@@ -159,6 +164,22 @@ def record_to_sample(
         "usage": (rec.get("response") or {}).get("usage", {}),
         "messages": messages,
     }
+
+
+def record_id(rec: Dict[str, Any]) -> str:
+    """风格无关的记录身份：requestId + 原始输出内容哈希。"""
+    resp = rec.get("response") or {}
+    raw = json.dumps(
+        [
+            rec.get("requestId", ""),
+            resp.get("reasoningText") or "",
+            resp.get("text") or "",
+            resp.get("toolCalls") or [],
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return f"rollout-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
 # ── 样本级全局查重（manifest） ──────────────────────────────────────────────

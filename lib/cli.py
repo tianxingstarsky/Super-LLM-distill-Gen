@@ -58,8 +58,20 @@ def cmd_stats(args) -> int:
 def cmd_preview(args) -> int:
     path = pathlib.Path(args.file)
     lines = path.read_text(encoding="utf-8").splitlines()
-    for line in lines[: args.n]:
-        sample = json.loads(line)
+    samples = [json.loads(l) for l in lines if l.strip()]
+
+    if args.html:
+        report = None
+        report_path = OUT_DIR / "distill_report.json"
+        if report_path.exists():
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        from lib.render import render_preview_html
+
+        out = render_preview_html(samples, report, OUT_DIR / "preview.html", max_samples=args.n)
+        print(f"HTML 预览已生成（{min(args.n, len(samples))} 条）: {out}")
+        return 0
+
+    for sample in samples[: args.n]:
         last = sample["messages"][-1]
         content = str(last.get("content", ""))[:200]
         reasoning = str(last.get("reasoning_content", ""))[:120]
@@ -69,7 +81,7 @@ def cmd_preview(args) -> int:
             print(f"    思考: {reasoning}…" if len(reasoning) == 120 else f"    思考: {reasoning}")
         print(f"    正文: {content}")
         print()
-    print(f"（共 {len(lines)} 条，展示前 {min(args.n, len(lines))} 条）")
+    print(f"（共 {len(samples)} 条，展示前 {min(args.n, len(samples))} 条）")
     return 0
 
 
@@ -107,7 +119,7 @@ def cmd_distill(args) -> int:
         _gates().require("G0")  # 调用云端 API 前必须过预算/模型闸
         from lib.llm_client import load_backend
 
-        client, model = load_backend(ROOT)
+        client, model = load_backend(ROOT, judge=True)  # judge 角色：更稳的模型（默认 v4-pro）
         candidates = sorted(
             samples,
             key=lambda s: (distill_mod.classify_sample(s)["tag"] != "recovery", -s["error_tool_steps"]),
@@ -123,7 +135,7 @@ def cmd_distill(args) -> int:
                         thinking=str(last.get("reasoning_content", ""))[:1500],
                         final_answer=str(last.get("content", ""))[:1500],
                     )}],
-                    max_tokens=256, temperature=0.2,
+                    max_tokens=None, temperature=0.2,  # 思考允许无限长度（用户确认）
                 )
                 llm_scores.append({"id": s["id"], "score": out})
             except Exception as e:  # noqa: BLE001
@@ -173,9 +185,10 @@ def main() -> int:
 
     sub.add_parser("stats", help="查看导入统计").set_defaults(func=cmd_stats)
 
-    p_preview = sub.add_parser("preview", help="预览样本")
+    p_preview = sub.add_parser("preview", help="预览样本（--html 生成美化渲染页）")
     p_preview.add_argument("--n", type=int, default=10)
     p_preview.add_argument("--file", default=str(OUT_DIR / "rollout_samples.jsonl"))
+    p_preview.add_argument("--html", action="store_true", help="生成静态 HTML 预览页（人工过目）")
     p_preview.set_defaults(func=cmd_preview)
 
     p_export = sub.add_parser("export", help="导出训练格式")

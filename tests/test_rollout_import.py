@@ -56,17 +56,17 @@ def test_record_to_sample_and_error_steps():
     sample = record_to_sample(rec3, "separated")
     assert sample["type"] == "sft"
     assert sample["finish_reason"] == "stop"
-    assert sample["error_tool_steps"] == 1  # isError 计入并剥离
+    assert sample["error_tool_steps"] == 1  # isError 计入统计并保留在消息里（渲染/质检用）
     for m in sample["messages"]:
-        assert "isError" not in m
         assert "modelRef" not in m  # 内部字段被丢弃
     # 尾轮（separated 风格）：反思在 reasoning_content，正文只含正确结论
     final = sample["messages"][-1]
     assert "改用 pwd" in final["reasoning_content"]
     assert final["content"] == "当前目录为 F:\\work"
-    # 历史里的工具结果保留（toolCallId 关联）
+    # 历史里的工具结果保留（toolCallId 关联）；运行时事实信号保留
     tool_msgs = [m for m in sample["messages"] if m["role"] == "tool"]
     assert tool_msgs and "No such file" in tool_msgs[0]["content"]
+    assert tool_msgs[0].get("isError") is True
 
 
 def test_sample_id_deterministic():
@@ -76,6 +76,15 @@ def test_sample_id_deterministic():
     a = sample_id(record_to_sample(rec1)["messages"], "rollout")
     b = sample_id(record_to_sample(rec1)["messages"], "rollout")
     assert a == b and a.startswith("rollout-")
+
+
+def test_record_id_style_independent():
+    from lib.adapters.rollout_import import record_to_sample
+
+    rec3 = _load()[2]
+    # 同一记录换 CoT 风格 → 同一样本 id（manifest 跨风格零重复的前提）
+    ids = {record_to_sample(rec3, style)["id"] for style in ("separated", "tags", "plain", "drop")}
+    assert len(ids) == 1
 
 
 def test_manifest_dedup(tmp_path):
