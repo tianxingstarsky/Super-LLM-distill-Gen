@@ -185,6 +185,28 @@ DEFAULT_CASES: List[EvalCase] = [
         "prompt": "水的沸点是多少？",
         "facts": "标准大气压下水的沸点是 100 摄氏度。",
     }, [("JSON 键", _json_keys("answer"))]),
+    EvalCase("agent.task_gen 任务生成", "agent.task_gen", {
+        "tools_desc": "- web_search(query: string): 联网搜索\n- run_code(code: string, language: string): 执行代码",
+        "scenario": "在线资料查找与分析",
+        "n": 2,
+        "seen": "（无）",
+    }, [("JSON 键", _json_keys("tasks")), ("恰好 2 条", _json_list_len("tasks", 2))]),
+    EvalCase("agent.act 执行步", "agent.act", {
+        "tools_desc": "- web_search(query: string): 联网搜索",
+        "goal": "查找今年诺贝尔物理学奖得主",
+        "history": "（无）",
+    }, [("JSON 键", _json_keys("thought", "tool_call"))]),
+    EvalCase("agent.simulate 模拟器", "agent.simulate", {
+        "tools_desc": "- web_search(query: string): 联网搜索",
+        "goal": "查找今年诺贝尔物理学奖得主",
+        "tool_name": "web_search",
+        "tool_args": '{"query": "2026 诺贝尔物理学奖"}',
+        "history": "（无）",
+    }, [("JSON 键", _json_keys("observation"))]),
+    EvalCase("agent.check 轨迹质检", "agent.check", {
+        "goal": "查找资料",
+        "trajectory": "[调用] web_search(query) → [观察] 结果摘要",
+    }, [("JSON 键", _json_keys("valid", "issues", "keep"))]),
 ]
 
 

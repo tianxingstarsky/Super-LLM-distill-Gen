@@ -500,6 +500,35 @@ def cmd_dpo_merge(args) -> int:
     return 0
 
 
+def cmd_agent_gen(args) -> int:
+    """Agent 工具使用零参考数据（联网查找/代码审查编辑/间接联网；G0 闸门）。"""
+    _gates().require("G0")
+    import lib.agent_gen as ag
+
+    client, model = _client(args)
+    tools = ag.load_tools(ROOT / "configs" / "agent_tools.yaml")
+    scenario_keys = list(tools["scenarios"].keys())
+    scenarios = [args.scenario] if args.scenario != "all" else scenario_keys
+    print(f"agent 零参考生成（模型 {model}，场景 {scenarios}，每场景 {args.n} 任务）…")
+    out = OUT_DIR / "agent_samples.jsonl"
+    # 跨运行查重：已有样本的 goal 哈希进 manifest（追加模式不产生重复）
+    manifest: set = set()
+    if out.exists():
+        for line in out.read_text(encoding="utf-8").splitlines():
+            try:
+                sample_id = json.loads(line).get("id", "")
+                manifest.add(sample_id.split("-")[-1])
+            except json.JSONDecodeError:
+                continue
+    result = ag.run(client, tools["tools"], scenarios, n_per_scenario=args.n, manifest=manifest)
+    with open(out, "a", encoding="utf-8") as f:
+        for s in result["samples"]:
+            f.write(json.dumps(s, ensure_ascii=False) + "\n")
+    print(json.dumps(result["stats"], ensure_ascii=False, indent=1))
+    print(f"轨迹样本 → {out}（与 rollout 蒸馏同构，可合并导出）")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -615,6 +644,13 @@ def main() -> int:
 
     p_dpom = sub.add_parser("dpo-merge", help="统一汇集各来源 DPO 对并去重")
     p_dpom.set_defaults(func=cmd_dpo_merge)
+
+    p_agent = sub.add_parser("agent-gen", help="Agent 工具使用零参考数据（G0 闸门）")
+    p_agent.add_argument("--scenario", default="all", choices=["all", "web", "code", "indirect_web"])
+    p_agent.add_argument("--n", type=int, default=2, help="每场景任务数")
+    p_agent.add_argument("--backend")
+    p_agent.add_argument("--model")
+    p_agent.set_defaults(func=cmd_agent_gen)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)

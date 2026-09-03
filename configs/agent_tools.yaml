@@ -1,0 +1,22 @@
+# Agent 工具集定义（df agent-gen 使用；将来与 deepseek-harness 插件工具 schema 对齐）
+tools:
+  web_search:
+    description: 联网搜索，输入查询词，返回结果摘要列表与来源链接
+    parameters: {query: string}
+  fetch_page:
+    description: 抓取指定网页的正文内容（需要 URL）
+    parameters: {url: string}
+  read_file:
+    description: 读取本地文件的文本内容
+    parameters: {path: string}
+  edit_file:
+    description: 覆写本地文件内容（用于代码审查后的修改）
+    parameters: {path: string, content: string}
+  run_code:
+    description: 在沙箱中执行代码（python/bash），返回标准输出/报错
+    parameters: {code: string, language: string}
+
+scenarios:
+  web: 在线资料查找与分析（先搜索、再抓取、最后综合分析）
+  code: 代码审查与编辑（读文件、找问题、修改并验证）
+  indirect_web: 通过编写代码间接联网获取数据（如 curl/requests 脚本）
