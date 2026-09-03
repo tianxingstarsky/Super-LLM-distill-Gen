@@ -20,3 +20,4 @@ data/output/*
 # 密钥
 .env
 configs/backends.local.yaml
+PIP_CACHE_DIR=F:/无项目工作文件夹/tools/pip-cache

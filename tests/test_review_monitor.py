@@ -32,14 +32,15 @@ def test_build_records_plain_text_no_json_noise():
     recs = list(iter_records(ROOT / "tests" / "fixtures" / "rollout_sample.jsonl"))
     samples = [record_to_sample(r, "separated") for r in recs if not r.get("error")]
     records = build_records(samples, scores={})
-    conv = records[2]["fields"]["conversation"]
-    # 人类可读：无 JSON 引号/花括号噪声，工具调用为"名称（k = v）"形式
+    # Argilla 2.x 扁平记录格式：字段名直接作键
+    conv = records[2]["conversation"]
     assert "【工具调用】Bash（" in conv
     assert "【工具结果❌】" in conv  # isError → 失败标记
     assert "{" not in conv and '"' not in conv.replace("【", "").replace("】", "")
-    # judge 建议注入
+    assert records[2]["sample_id"] == samples[2]["id"]
+    # judge 建议注入（<问题名>.suggestion 键）
     with_scores = build_records(samples, scores={samples[0]["id"]: '"keep": true'})
-    assert with_scores[0]["suggestions"][0]["value"] == "keep"
+    assert with_scores[0]["keep_label"] == "keep"
 
 
 def test_monitor_local_fallback(tmp_path, monkeypatch):

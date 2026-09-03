@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 from typing import Any, Dict, List, Optional
 
 ARGILLA_URL = "http://localhost:6900"
-ARGILLA_API_KEY = "admin.apikey"  # quickstart 镜像默认
+# 原生自建服务默认 key 为 argilla.apikey（Docker quickstart 镜像为 admin.apikey）；
+# 可用环境变量覆盖
+ARGILLA_API_KEY = os.environ.get("ARGILLA_API_KEY", "argilla.apikey")
 DATASET_NAME = "rollout_review"
 PASS_THRESHOLD = 0.9
 MIN_REVIEWED = 10
@@ -50,18 +53,22 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
 
 
 def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List[Dict[str, Any]]:
-    """样本 → Argilla 记录（suggestion=judge 评分，供人工参考）。"""
+    """样本 → Argilla 记录（id=样本 ID；suggestion=judge 评分，供人工参考）。"""
     records = []
     for s in samples:
-        fields: Dict[str, Any] = {
+        instruction = _first_user_content(s) or "（无用户指令，工具型样本）"
+        conversation = _plain_messages(s) or "（空对话）"
+        # Argilla 2.x SDK flat 记录：字段名作键；问题名裸键 = 该问题的建议值
+        # （mapping 的 suggestion 默认目标，见 SDK _mapper.py）
+        rec: Dict[str, Any] = {
+            "id": s.get("id", ""),
             "sample_id": s.get("id", ""),
-            "instruction": _first_user_content(s),
-            "conversation": _plain_messages(s),
+            "instruction": instruction,
+            "conversation": conversation,
             "meta": f"model={s.get('model')} finish={s.get('finish_reason')} 错误步骤={s.get('error_tool_steps', 0)}",
         }
-        rec: Dict[str, Any] = {"fields": fields}
         if s.get("id") in scores:
-            rec["suggestions"] = [{"question_name": "keep_label", "value": "keep" if "true" in str(scores[s["id"]]) else "reject"}]
+            rec["keep_label"] = "keep" if "true" in str(scores[s["id"]]) else "reject"
         records.append(rec)
     return records
 
@@ -82,12 +89,19 @@ def push_samples(samples: List[Dict[str, Any]], scores: Dict[str, str], client: 
         questions=[rg.LabelQuestion(name="keep_label", title="保留/驳回", labels=["keep", "reject"])],
     )
     dataset = rg.Dataset(name=DATASET_NAME, settings=settings)
-    dataset.create()
+    try:
+        dataset.create()  # 幂等：已存在则复用
+    except Exception:  # noqa: BLE001 —— ConflictError（数据集已存在）
+        dataset = client.datasets(name=DATASET_NAME)
     dataset.records.log(records=build_records(samples, scores))
     return len(samples)
 
 
 def pull_decisions(client: Any = None, dataset_name: str = DATASET_NAME) -> List[Dict[str, str]]:
+    """拉回人工标注：读 responses（人工提交的回答，非 suggestions 建议）。
+
+    Argilla 2.x SDK：record.responses 是 RecordResponses 容器，经 .to_dict()
+    得到 {问题名: [{value, status?, ...}]}；status 为 submitted（UI 提交）或缺失时计为有效。"""
     import argilla as rg
 
     if client is None:
@@ -95,11 +109,14 @@ def pull_decisions(client: Any = None, dataset_name: str = DATASET_NAME) -> List
     ds = client.datasets(name=dataset_name)
     decisions = []
     for rec in ds.records:
-        if rec.status == "completed" and rec.suggestions:
-            value = None
-            for resp in rec.suggestions:
-                value = resp.value
-            decisions.append({"sample_id": rec.fields["sample_id"], "decision": str(value)})
+        try:
+            raw = rec.responses.to_dict() if rec.responses is not None else {}
+        except AttributeError:
+            raw = {}
+        for entry in raw.get("keep_label", []):
+            status = entry.get("status", "submitted")
+            if status in ("submitted", None):
+                decisions.append({"sample_id": rec.fields["sample_id"], "decision": str(entry.get("value"))})
     return decisions
 
 

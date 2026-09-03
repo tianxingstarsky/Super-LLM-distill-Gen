@@ -187,7 +187,7 @@ def cmd_review(args) -> int:
             print("标注完 keep/reject 后运行: df review pull")
         except Exception as e:  # noqa: BLE001
             print(f"[Argilla 不可用] {str(e)[:200]}")
-            print("启动服务: docker compose -f docker/argilla.yml up -d")
+            print("启动服务: bash scripts/start_argilla_native.sh")
             return 4
         return 0
 
