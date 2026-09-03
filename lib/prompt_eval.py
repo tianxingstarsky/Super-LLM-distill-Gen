@@ -210,8 +210,11 @@ def run_case(client: Any, case: EvalCase) -> Dict[str, Any]:
 def run_all(client: Any, cases: List[EvalCase] | None = None, ids: List[str] | None = None) -> List[Dict[str, Any]]:
     cases = cases or DEFAULT_CASES
     if ids:
-        wanted = set(ids)
-        cases = [c for c in cases if c.prompt_id in wanted or c.name in wanted]
+        # 前缀匹配：'--ids vision' 命中 vision.*；完整 id 精确命中；用例名包含也命中
+        cases = [
+            c for c in cases
+            if any(c.prompt_id == w or c.prompt_id.startswith(w + ".") or w in c.name for w in ids)
+        ]
     return [run_case(client, c) for c in cases]
 
 
