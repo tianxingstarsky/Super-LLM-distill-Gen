@@ -19,6 +19,9 @@ open-agentinstruct/UltraChat 指令多样化的标准做法）→ 实测 8/10 �
 ### 实测发现 R2：DeepSeek V4 Flash 偶发空 completion（约 20%，temperature=1.0 时）
 部分请求重试 3 次仍为空回复。**M1 必须内置**：空回复重试 + 失败条数记账 + 降温度兜底。
 （脚本 `scripts/real_spike.py` 的 `chat()` 已示范重试逻辑。）
+**M1 第二批实测补充**：judge 打分场景（低温度+要求 JSON）空回复率更高（5 条中 4 条
+三次重试仍空）。**judge/打分角色建议配置 deepseek-v4-pro**（`backends.yaml` 加
+`judge_backend`），生成角色继续用 flash 控制成本。
 
 ### 实测发现 R3：文本化三角色蒸馏在真实 API 上跑通
 demo-chat-001 的 Generator 输出（节选）：

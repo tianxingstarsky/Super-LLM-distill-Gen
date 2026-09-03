@@ -84,6 +84,66 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_distill(args) -> int:
+    """蒸馏质检：分类（免费）→ DPO 负样本提取（免费）→ 可选 LLM 打分（需 G0 闸门）。"""
+    import lib.adapters.distill as distill_mod
+    from lib.adapters.distill_prompts import SUMMARIZER_TEXT_PROMPT
+
+    samples = [
+        json.loads(l)
+        for l in pathlib.Path(OUT_DIR / "rollout_samples.jsonl").read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
+    report = distill_mod.classify_report(samples)
+    report["n_samples"] = len(samples)
+
+    pairs = []
+    for f in sorted(ROLLOUT_DIR.glob("model-io-sess_*.jsonl")):
+        pairs.extend(distill_mod.extract_dpo_pairs(str(f), "separated"))
+    report["n_dpo_pairs"] = len(pairs)
+
+    llm_scores = []
+    if args.llm_check > 0:
+        _gates().require("G0")  # 调用云端 API 前必须过预算/模型闸
+        from lib.llm_client import load_backend
+
+        client, model = load_backend(ROOT)
+        candidates = sorted(
+            samples,
+            key=lambda s: (distill_mod.classify_sample(s)["tag"] != "recovery", -s["error_tool_steps"]),
+        )[: args.llm_check]
+        print(f"LLM 打分 {len(candidates)} 条（模型 {model}）…")
+        for s in candidates:
+            last = s["messages"][-1]
+            goal = next((m["content"] for m in reversed(s["messages"]) if m["role"] == "user"), "")
+            try:
+                out = client.chat(
+                    [{"role": "user", "content": SUMMARIZER_TEXT_PROMPT.format(
+                        goal=goal[:800],
+                        thinking=str(last.get("reasoning_content", ""))[:1500],
+                        final_answer=str(last.get("content", ""))[:1500],
+                    )}],
+                    max_tokens=256, temperature=0.2,
+                )
+                llm_scores.append({"id": s["id"], "score": out})
+            except Exception as e:  # noqa: BLE001
+                llm_scores.append({"id": s["id"], "error": str(e)[:200]})
+        report["llm_scores"] = llm_scores
+        report["llm_usage"] = client.usage
+
+    # 产物落盘
+    (OUT_DIR / "distill_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+    if pairs:
+        (OUT_DIR / "dpo_pairs.jsonl").write_text(
+            "\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8"
+        )
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+    print(f"报告/DPO 对 → {OUT_DIR}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -124,6 +184,10 @@ def main() -> int:
     p_export.add_argument("--out", default=str(OUT_DIR / "export" / "sft.jsonl"))
     p_export.add_argument("--bulk", action="store_true", help="放量导出（需 G3 闸门）")
     p_export.set_defaults(func=cmd_export)
+
+    p_distill = sub.add_parser("distill", help="蒸馏质检：分类+DPO负样本+可选LLM打分")
+    p_distill.add_argument("--llm-check", type=int, default=0, help="LLM 打分条数（>0 需 G0 闸门）")
+    p_distill.set_defaults(func=cmd_distill)
 
     p_gate = sub.add_parser("gate", help="闸门管理")
     p_gate.add_argument("action", choices=["propose", "approve", "reject", "status"])
