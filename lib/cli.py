@@ -316,6 +316,33 @@ def cmd_identity_gen(args) -> int:
     return 0
 
 
+def cmd_doc2corpus(args) -> int:
+    """文档 → CPT 语料（知识注入层，零 LLM 成本，无闸门）。"""
+    import lib.doc2corpus as d2c
+
+    path = pathlib.Path(args.input)
+    files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.suffix.lower() in d2c.SUPPORTED_EXTS)
+    out = pathlib.Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        out.unlink()  # 全量重写（manifest 保证内容级去重）
+
+    manifest: set[str] = set()
+    total_kept = 0
+    for f in files:
+        try:
+            result = d2c.doc_to_corpus(f, target_chars=args.chunk_size, overlap=args.overlap, manifest=manifest)
+        except Exception as e:  # noqa: BLE001 —— 单文件失败不阻断
+            print(f" ✘ {f.name}: {str(e)[:120]}")
+            continue
+        total_kept += d2c.write_corpus_jsonl(result["entries"], out)
+        s = result["stats"]
+        print(f" ✔ {s['file']}: {s['chars']} 字符 → {s['kept']} 块（去重 {s['dups']}）")
+    print(f"共 {total_kept} 块 → {out}")
+    print("对接训练：minimind pretrain_t2t.jsonl 或 LLaMA-Factory --stage pt 直接可消费")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -378,6 +405,13 @@ def main() -> int:
     p_identity = sub.add_parser("identity-gen", help="身份问答零参考训练集（G0 闸门）")
     p_identity.add_argument("--config", default=str(ROOT / "configs" / "identity.example.yaml"))
     p_identity.set_defaults(func=cmd_identity_gen)
+
+    p_doc2corpus = sub.add_parser("doc2corpus", help="文档→CPT 语料（知识注入层，零 LLM）")
+    p_doc2corpus.add_argument("--input", required=True, help="文件或目录（md/txt/pdf/docx）")
+    p_doc2corpus.add_argument("--out", default=str(OUT_DIR / "corpus" / "docs.jsonl"))
+    p_doc2corpus.add_argument("--chunk-size", type=int, default=2000)
+    p_doc2corpus.add_argument("--overlap", type=int, default=0)
+    p_doc2corpus.set_defaults(func=cmd_doc2corpus)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)
