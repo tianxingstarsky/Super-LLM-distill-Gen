@@ -164,6 +164,19 @@ DEFAULT_CASES: List[EvalCase] = [
         "question": "系统支持哪些文档格式？",
         "answer": "系统支持 Markdown、PDF、Word，以及 Epub 格式。",
     }, [("JSON 键", _json_keys("grounded", "unsupported", "keep"))]),
+    EvalCase("vision.caption 图片描述", "vision.caption", {},
+             [("JSON 键", _json_keys("caption", "objects", "text_content", "scene"))]),
+    EvalCase("vision.qa_gen 图文问答", "vision.qa_gen", {
+        "caption": "图片中有一张木质书桌，桌上放着一台银色笔记本电脑和一杯咖啡，背景是书架。",
+        "n": 2,
+    }, [("JSON 键", _json_keys("qa")), ("恰好 2 条", _json_list_len("qa", 2))]),
+    EvalCase("vision.chat_gen 图文多轮", "vision.chat_gen", {
+        "caption": "图片中有一张木质书桌，桌上放着一台银色笔记本电脑和一杯咖啡，背景是书架。",
+    }, [("JSON 键", _json_keys("turns")), ("恰好 3 轮", _json_list_len("turns", 3))]),
+    EvalCase("vision.consistency 一致性校验", "vision.consistency", {
+        "question": "桌上有什么？",
+        "answer": "桌上有一台笔记本电脑、一杯咖啡和一台打印机。",
+    }, [("JSON 键", _json_keys("consistent", "hallucinated", "keep"))]),
 ]
 
 

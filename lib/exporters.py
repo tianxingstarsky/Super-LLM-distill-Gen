@@ -76,7 +76,10 @@ def to_chat_sample(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     messages = sample.get("messages") or []
     if not any(m.get("role") == "assistant" for m in messages):
         return None
-    return {"messages": _strip_internal(messages)}
+    out: Dict[str, Any] = {"messages": _strip_internal(messages)}
+    if sample.get("images"):
+        out["images"] = sample["images"]  # 多模态：图片路径列表（框架侧解析）
+    return out
 
 
 def to_dpo_sample(prompt: List[Dict[str, Any]], chosen: List[Dict[str, Any]], rejected: List[Dict[str, Any]]) -> Dict[str, Any]:

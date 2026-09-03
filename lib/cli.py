@@ -425,6 +425,25 @@ def cmd_cot_style(args) -> int:
     return 0
 
 
+def cmd_vision(args) -> int:
+    """多模态图文数据管线：图片→VL描述→问答/多轮对话→一致性校验（G0 闸门）。"""
+    _gates().require("G0")
+    import lib.multimodal as mm
+
+    client, model = _client(args)
+    print(f"多模态管线（视觉引擎 {model}，目录 {args.input}）…")
+    result = mm.run(client, args.input, qa_per_image=args.qa_per_image, limit=args.n)
+    out = OUT_DIR / "vision_samples.jsonl"
+    out.write_text(
+        "\n".join(json.dumps(s, ensure_ascii=False) for s in result["samples"]) + "\n", encoding="utf-8"
+    )
+    print(json.dumps(result["stats"], ensure_ascii=False, indent=1))
+    print(f"图文样本 → {out}；一致性校验驳回 {result['stats']['qa_rejected']} 条 QA（防幻觉质量门）")
+    for r in result["rejected"][:2]:
+        print(f" 驳回示例: {r.get('question', r.get('error', ''))[:60]} → {r.get('hallucinated', '')}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -521,6 +540,14 @@ def main() -> int:
     p_cotstyle.add_argument("--backend")
     p_cotstyle.add_argument("--model")
     p_cotstyle.set_defaults(func=cmd_cot_style)
+
+    p_vision = sub.add_parser("vision", help="多模态图文数据管线（G0 闸门）")
+    p_vision.add_argument("--input", required=True, help="图片目录")
+    p_vision.add_argument("--n", type=int, default=5)
+    p_vision.add_argument("--qa-per-image", type=int, default=2)
+    p_vision.add_argument("--backend")
+    p_vision.add_argument("--model")
+    p_vision.set_defaults(func=cmd_vision)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)
