@@ -444,6 +444,62 @@ def cmd_vision(args) -> int:
     return 0
 
 
+def cmd_dpo_enhance(args) -> int:
+    """DPO 偏好对增强（G0 闸门）：candidates 多候选判分 / refine 自精炼 / hallucinate 幻觉负样本。"""
+    _gates().require("G0")
+    import lib.dpo_enhance as dpe
+
+    client, model = _client(args)
+    prompts = [json.loads(l)["prompt"] for l in pathlib.Path(args.input).read_text(encoding="utf-8").splitlines() if l.strip()][: args.n]
+    print(f"DPO 增强（模型 {model}，模式 {args.mode}，{len(prompts)} 条 prompt）…")
+    if args.mode == "candidates":
+        # 多模型采样（UltraFeedback 式）：默认模型 + judge 模型两个生成源，制造真实分差
+        extra = [c for c in [_client(args, judge=True)[0]] if c.model != client.model]
+        pairs = dpe.candidates(client, prompts, n_per_prompt=3, extra_clients=extra)
+    elif args.mode == "refine":
+        pairs = dpe.refine(client, prompts)
+    else:  # hallucinate：输入含 answer/facts
+        items = [
+            {"prompt": json.loads(l)["prompt"], "answer": json.loads(l).get("answer", ""), "facts": json.loads(l).get("facts", "")}
+            for l in pathlib.Path(args.input).read_text(encoding="utf-8").splitlines() if l.strip()
+        ][: args.n]
+        pairs = dpe.hallucinate(client, items)
+
+    out = OUT_DIR / f"dpo_enhanced_{args.mode}.jsonl"
+    out.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8")
+    print(f"生成偏好对 {len(pairs)} 条（分差门槛 candidates≥2 / 其余≥1）→ {out}")
+    return 0
+
+
+def cmd_dpo_merge(args) -> int:
+    """统一汇集各来源 DPO 对：rollout 错误对 + 风格对 + 增强对 → 去重合并导出。"""
+    import lib.dpo_enhance as dpe
+
+    sources = {
+        "distill": OUT_DIR / "dpo_pairs.jsonl",
+        "cotstyle": OUT_DIR / "cot_style_dpo.jsonl",
+        "candidates": OUT_DIR / "dpo_enhanced_candidates.jsonl",
+        "refine": OUT_DIR / "dpo_enhanced_refine.jsonl",
+        "hallucinate": OUT_DIR / "dpo_enhanced_hallucinate.jsonl",
+        "enhanced_legacy": OUT_DIR / "dpo_enhanced.jsonl",
+    }
+    entries: list = []
+    for name, path in sources.items():
+        if not path.exists():
+            continue
+        try:
+            loaded = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        except json.JSONDecodeError:
+            continue
+        entries.extend(loaded)
+        print(f" {name}: {len(loaded)} 对")
+    merged = dpe.merge_pairs(entries)
+    out = OUT_DIR / "dpo_all.jsonl"
+    out.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in merged) + "\n", encoding="utf-8")
+    print(f"合并去重后 {len(merged)} 对 → {out}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -548,6 +604,17 @@ def main() -> int:
     p_vision.add_argument("--backend")
     p_vision.add_argument("--model")
     p_vision.set_defaults(func=cmd_vision)
+
+    p_dpo = sub.add_parser("dpo-enhance", help="DPO 偏好对增强（G0 闸门）")
+    p_dpo.add_argument("--mode", choices=["candidates", "refine", "hallucinate"], required=True)
+    p_dpo.add_argument("--input", required=True, help="prompts JSONL（hallucinate 模式需含 answer/facts）")
+    p_dpo.add_argument("--n", type=int, default=5)
+    p_dpo.add_argument("--backend")
+    p_dpo.add_argument("--model")
+    p_dpo.set_defaults(func=cmd_dpo_enhance)
+
+    p_dpom = sub.add_parser("dpo-merge", help="统一汇集各来源 DPO 对并去重")
+    p_dpom.set_defaults(func=cmd_dpo_merge)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)

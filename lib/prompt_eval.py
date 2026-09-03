@@ -177,6 +177,14 @@ DEFAULT_CASES: List[EvalCase] = [
         "question": "桌上有什么？",
         "answer": "桌上有一台笔记本电脑、一杯咖啡和一台打印机。",
     }, [("JSON 键", _json_keys("consistent", "hallucinated", "keep"))]),
+    EvalCase("dpo.refine 自精炼", "dpo.refine", {
+        "prompt": "解释什么是过拟合",
+        "answer": "过拟合就是模型记住了数据。",
+    }, [("JSON 键", _json_keys("critique", "refined"))]),
+    EvalCase("dpo.hallucinate 幻觉负样本", "dpo.hallucinate", {
+        "prompt": "水的沸点是多少？",
+        "facts": "标准大气压下水的沸点是 100 摄氏度。",
+    }, [("JSON 键", _json_keys("answer"))]),
 ]
 
 
