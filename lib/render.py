@@ -17,17 +17,18 @@ from typing import Any, Dict, List, Optional
 _CSS = """
 :root { color-scheme: light dark; }
 body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-       max-width: 980px; margin: 0 auto; padding: 24px; background: #f6f7f9; color: #1c1e21; }
+       max-width: 980px; margin: 0 auto; padding: 24px; background: #f6f7f9; color: #1c1e21;
+       font-size: 16px; line-height: 1.7; }
 @media (prefers-color-scheme: dark) { body { background: #14161a; color: #e6e6e6; } }
-h1 { font-size: 22px; } h1 small { color: #8a8f98; font-weight: normal; }
+h1 { font-size: 26px; } h1 small { color: #8a8f98; font-weight: normal; font-size: 16px; }
 .stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0 20px; }
-.chip { background: #e8ecf1; color: #1c1e21; border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+.chip { background: #e8ecf1; color: #1c1e21; border-radius: 999px; padding: 6px 14px; font-size: 14px; }
 @media (prefers-color-scheme: dark) { .chip { background: #2a2f38; color: #e6e6e6; } }
-.card { background: #fff; color: #1c1e21; border-radius: 12px; padding: 16px; margin-bottom: 18px;
+.card { background: #fff; color: #1c1e21; border-radius: 12px; padding: 18px; margin-bottom: 18px;
         box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 @media (prefers-color-scheme: dark) { .card { background: #1d2025; color: #e6e6e6; } }
 .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
-.badge { font-size: 12px; padding: 2px 10px; border-radius: 999px; color: #1c1e21; }
+.badge { font-size: 13px; padding: 3px 12px; border-radius: 999px; color: #1c1e21; }
 .b-model { background: #dbeafe; } .b-finish { background: #dcfce7; } .b-err { background: #fee2e2; }
 .b-score { background: #fef9c3; font-weight: 600; }
 @media (prefers-color-scheme: dark) {
@@ -35,16 +36,15 @@ h1 { font-size: 22px; } h1 small { color: #8a8f98; font-weight: normal; }
   .b-model { background: #1e3a5f; } .b-finish { background: #14532d; }
   .b-err { background: #7f1d1d; } .b-score { background: #713f12; }
 }
-.msg { border-radius: 10px; padding: 8px 12px; margin: 8px 0; white-space: pre-wrap; word-break: break-word; }
+.msg { border-radius: 10px; padding: 10px 14px; margin: 8px 0; white-space: pre-wrap; word-break: break-word;
+       font-size: 16px; line-height: 1.7; }
 .m-user { background: #eef4ff; color: #1c1e21; border-left: 4px solid #3b82f6; }
 .m-assistant { background: #ecfdf3; color: #1c1e21; border-left: 4px solid #16a34a; }
-.m-tool { background: #f5f3ff; color: #1c1e21; border-left: 4px solid #8b5cf6;
-          font-family: Consolas, monospace; font-size: 13px; }
-.m-tool-err { background: #fef2f2; color: #1c1e21; border-left: 4px solid #dc2626;
-              font-family: Consolas, monospace; font-size: 13px; }
-.m-system { background: #f1f2f4; color: #6b7280; border-left: 4px solid #9ca3af; font-size: 13px; }
-.role-tag { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-            color: #6b7280; margin-bottom: 2px; }
+.m-tool { background: #f5f3ff; color: #1c1e21; border-left: 4px solid #8b5cf6; font-size: 15px; }
+.m-tool-err { background: #fef2f2; color: #1c1e21; border-left: 4px solid #dc2626; font-size: 15px; }
+.m-system { background: #f1f2f4; color: #6b7280; border-left: 4px solid #9ca3af; font-size: 15px; }
+.role-tag { font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em;
+            color: #6b7280; margin-bottom: 3px; }
 @media (prefers-color-scheme: dark) {
   .m-user { background: #172554; color: #dbeafe; border-left-color: #60a5fa; }
   .m-assistant { background: #052e16; color: #bbf7d0; border-left-color: #22c55e; }
@@ -54,25 +54,61 @@ h1 { font-size: 22px; } h1 small { color: #8a8f98; font-weight: normal; }
   .role-tag { color: #9ca3af; }
 }
 details.think { background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 10px;
-                padding: 6px 12px; margin: 8px 0; }
-details.think summary { cursor: pointer; color: #b45309; font-size: 13px; }
-details.think pre { white-space: pre-wrap; font-family: inherit; font-size: 14px; margin: 6px 0 2px; color: #1c1e21; }
+                padding: 8px 14px; margin: 8px 0; }
+details.think summary { cursor: pointer; color: #b45309; font-size: 15px; }
+details.think pre { white-space: pre-wrap; font-family: inherit; font-size: 16px; line-height: 1.7;
+                    margin: 8px 0 2px; color: #1c1e21; }
 @media (prefers-color-scheme: dark) {
   details.think { background: #2a2008; }
   details.think summary { color: #fbbf24; }
   details.think pre { color: #fde68a; }
 }
-code.json { background: #f8fafc; color: #1c1e21; border-radius: 8px; padding: 8px 10px; display: block;
-            font-family: Consolas, monospace; font-size: 12.5px; overflow-x: auto;
-            white-space: pre-wrap; word-break: break-word; }
-@media (prefers-color-scheme: dark) { code.json { background: #11151a; color: #e5e7eb; } }
-.err-note { color: #dc2626; font-size: 12px; }
+.tool-call { margin: 4px 0; font-size: 15px; line-height: 1.6; }
+.tc-name { font-weight: 700; }
+.tc-key { color: #7c3aed; }
+.tc-val { color: #1c1e21; word-break: break-word; }
+@media (prefers-color-scheme: dark) {
+  .tc-key { color: #c4b5fd; }
+  .tc-val { color: #e6e6e6; }
+}
+.err-note { color: #dc2626; font-size: 13px; }
 @media (prefers-color-scheme: dark) { .err-note { color: #f87171; } }
 """
 
 
 def _esc(text: Any) -> str:
     return html.escape(str(text))
+
+
+def _human_value(v: Any, depth: int = 0) -> str:
+    """把 JSON 值渲染为无引号/无花括号噪声的人类可读形式（嵌套递归，超长截断）。"""
+    if depth > 2:
+        return "…"
+    if isinstance(v, str):
+        return v[:400] + ("…" if len(v) > 400 else "")
+    if isinstance(v, dict):
+        inner = ", ".join(f"{k}: {_human_value(val, depth + 1)}" for k, val in list(v.items())[:8])
+        if len(v) > 8:
+            inner += ", …"
+        return f"[{inner}]"
+    if isinstance(v, list):
+        inner = ", ".join(_human_value(x, depth + 1) for x in v[:8])
+        if len(v) > 8:
+            inner += ", …"
+        return f"({inner})"
+    return str(v)
+
+
+def _render_tool_call(tc: Dict[str, Any]) -> str:
+    """工具调用渲染为可读行：🔧 名称 + 参数（无 JSON 符号）。"""
+    lines = [f'<span class="tc-name">🔧 {_esc(tc.get("name", "call"))}</span>']
+    args = tc.get("input") or {}
+    if isinstance(args, dict):
+        for k, v in list(args.items())[:10]:
+            lines.append(f'<span class="tc-key">{_esc(str(k))}</span> = <span class="tc-val">{_esc(_human_value(v))}</span>')
+    elif args:
+        lines.append(_esc(_human_value(args)))
+    return f'<div class="tool-call">{"<br>".join(lines)}</div>'
 
 
 def _render_message(m: Dict[str, Any]) -> str:
@@ -90,17 +126,19 @@ def _render_message(m: Dict[str, Any]) -> str:
         if content:
             parts.append(f'<div class="msg m-assistant"><div class="role-tag">assistant</div>{_esc(content)}</div>')
         for tc in m.get("toolCalls", []):
-            payload = {"name": tc.get("name"), "arguments": tc.get("input", {})}
             parts.append(
                 f'<div class="msg m-assistant"><div class="role-tag">tool call</div>'
-                f'<code class="json">{_esc(json.dumps(payload, ensure_ascii=False, indent=1))}</code></div>'
+                f"{_render_tool_call(tc)}</div>"
             )
     elif role == "tool":
         cls = "m-tool m-tool-err" if m.get("isError") else "m-tool"
-        note = ' <span class="err-note">⚠ isError</span>' if m.get("isError") else ""
+        note = ' <span class="err-note">⚠ 执行失败</span>' if m.get("isError") else ""
+        content = str(m.get("content", ""))
+        if len(content) > 1200:
+            content = content[:1200] + "…[截断]"
         parts.append(
-            f'<div class="msg {cls}"><div class="role-tag">tool {m.get("toolCallId", "")[:12]}{note}</div>'
-            f"{_esc(m.get('content', ''))}</div>"
+            f'<div class="msg {cls}"><div class="role-tag">tool{m.get("toolCallId", "")[:12]}{note}</div>'
+            f"{_esc(content)}</div>"
         )
     elif role == "system":
         parts.append(f'<div class="msg m-system"><div class="role-tag">system</div>{_esc(m.get("content", ""))}</div>')

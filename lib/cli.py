@@ -46,6 +46,10 @@ def cmd_import(args) -> int:
     from import_rollout import run  # type: ignore
 
     run(limit=args.limit, export_limit=args.export_limit, cot=args.cot)
+    from lib.monitor import trace_run
+
+    stats = json.loads((OUT_DIR / "rollout_stats.json").read_text(encoding="utf-8"))
+    trace_run(ROOT, "import", {"cot": args.cot, "stats": stats})
     return 0
 
 
@@ -92,6 +96,9 @@ def cmd_export(args) -> int:
         _gates().require("G3")  # 放量前须过小批量预览闸
     samples = (json.loads(l) for l in pathlib.Path(args.input).read_text(encoding="utf-8").splitlines() if l.strip())
     counts = export_samples(samples, args.format, args.out)
+    from lib.monitor import trace_run
+
+    trace_run(ROOT, "export", {"format": args.format, "counts": counts, "bulk": args.bulk})
     print(f"导出完成: {counts}（{args.format} → {args.out}）")
     return 0
 
@@ -151,9 +158,64 @@ def cmd_distill(args) -> int:
         (OUT_DIR / "dpo_pairs.jsonl").write_text(
             "\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8"
         )
+    from lib.monitor import trace_run
+
+    trace_run(ROOT, "distill", {"report": report})
     print(json.dumps(report, ensure_ascii=False, indent=1))
     print(f"报告/DPO 对 → {OUT_DIR}")
     return 0
+
+
+def cmd_review(args) -> int:
+    """Argilla 人工审核：push（推送+评分建议）/ pull（拉回标注+按通过率放行 G3）/ summary。"""
+    import lib.review as review_mod
+
+    gate = _gates()
+    if args.action == "push":
+        samples = [
+            json.loads(l)
+            for l in pathlib.Path(OUT_DIR / "rollout_samples.jsonl").read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ][: args.n]
+        report_path = OUT_DIR / "distill_report.json"
+        scores = {}
+        if report_path.exists():
+            scores = {s.get("id"): s.get("score", "") for s in json.loads(report_path.read_text(encoding="utf-8")).get("llm_scores", [])}
+        try:
+            n = review_mod.push_samples(samples, scores)
+            print(f"已推送 {n} 条到 Argilla（http://localhost:6900，admin/distill123456）")
+            print("标注完 keep/reject 后运行: df review pull")
+        except Exception as e:  # noqa: BLE001
+            print(f"[Argilla 不可用] {str(e)[:200]}")
+            print("启动服务: docker compose -f docker/argilla.yml up -d")
+            return 4
+        return 0
+
+    if args.action == "pull":
+        try:
+            decisions = review_mod.pull_decisions()
+        except Exception as e:  # noqa: BLE001
+            print(f"[Argilla 不可用] {str(e)[:200]}")
+            return 4
+        review_mod.write_review_log(decisions, OUT_DIR / "review.jsonl")
+        result = review_mod.decide_gate(decisions)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        if result["release"]:
+            gate.decide("G3", True, note=f"Argilla 审核通过率 {result['pass_rate']}")
+            print("✔ G3 放量闸已自动放行")
+        else:
+            print(f"未达放行条件（需 ≥10 条且通过率 ≥0.9）；如需手动放行: df gate approve G3")
+        return 0
+
+    if args.action == "summary":
+        review_path = OUT_DIR / "review.jsonl"
+        if not review_path.exists():
+            print("暂无审核记录（先 df review push / pull）")
+            return 0
+        decisions = [json.loads(l) for l in review_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        print(json.dumps(review_mod.decide_gate(decisions), ensure_ascii=False, indent=1))
+        return 0
+    return 1
 
 
 def cmd_gate(args) -> int:
@@ -201,6 +263,11 @@ def main() -> int:
     p_distill = sub.add_parser("distill", help="蒸馏质检：分类+DPO负样本+可选LLM打分")
     p_distill.add_argument("--llm-check", type=int, default=0, help="LLM 打分条数（>0 需 G0 闸门）")
     p_distill.set_defaults(func=cmd_distill)
+
+    p_review = sub.add_parser("review", help="Argilla 人工审核（G3 放行依据）")
+    p_review.add_argument("action", choices=["push", "pull", "summary"])
+    p_review.add_argument("--n", type=int, default=20, help="push 条数")
+    p_review.set_defaults(func=cmd_review)
 
     p_gate = sub.add_parser("gate", help="闸门管理")
     p_gate.add_argument("action", choices=["propose", "approve", "reject", "status"])

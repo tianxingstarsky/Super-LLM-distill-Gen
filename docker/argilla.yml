@@ -1,0 +1,20 @@
+# Argilla 人工审核服务（HITL 闸门的审核界面）
+# 官方 quickstart 精简版：https://docs.argilla.io/latest/getting_started/quickstart/
+# 使用：docker compose -f docker/argilla.yml up -d
+services:
+  argilla:
+    image: argilla/argilla-quickstart:latest
+    container_name: argilla
+    environment:
+      ARGILLA_API_URL: http://localhost:6900
+      ARGILLA_AUTH_SECRET_KEY: "change-me-super-llm-distill-gen"
+      ARGILLA_WORKSPACE: admin
+      USERNAME: admin
+      PASSWORD: "distill123456"
+      REINDEX_DATASETS: "0"
+    ports:
+      - "6900:6900"
+    volumes:
+      - argilladata:/data
+volumes:
+  argilladata:

@@ -2,3 +2,5 @@ distilabel==1.5.3
 openai
 beautifulsoup4
 pytest
+argilla==2.8.0
+langfuse
