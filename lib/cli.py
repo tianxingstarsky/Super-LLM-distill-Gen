@@ -529,6 +529,74 @@ def cmd_agent_gen(args) -> int:
     return 0
 
 
+def cmd_gui_cot(args) -> int:
+    """GUI 轨迹 CoT 蒸馏：调用 OpenCUA cot-generator 上游成品（需 G0 闸门）。"""
+    _gates().require("G0")
+    import subprocess
+
+    import yaml
+
+    from lib.adapters.chatlog_to_traj import validate_gui_traj_line
+    from lib.adapters.opencua_out import merged_to_samples
+
+    # 1) 输入校验（OpenCUA traj 格式）
+    bad = 0
+    for line in pathlib.Path(args.traj).read_text(encoding="utf-8").splitlines():
+        err = validate_gui_traj_line(line)
+        if err:
+            print(f"输入格式错误: {err[:120]}")
+            bad += 1
+    if bad:
+        return 6
+
+    # 2) 上游成品整链（subprocess，env API_KEY；模型默认 vision-exp）
+    local_cfg = yaml.safe_load((ROOT / "configs" / "backends.local.yaml").read_text(encoding="utf-8"))
+    api_key = local_cfg["backends"]["deepseek"]["api_key"]
+    upstream_dir = ROOT / "components" / "opencua" / "data" / "cot-generate"
+    out_dir = pathlib.Path(args.out)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    # 上游按步骤断点缓存（已处理步骤跳过）；重复运行必须清空，否则回放旧结果
+    import shutil
+
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    merged_old = out_dir.parent / "task_with_cot.jsonl"
+    if merged_old.exists():
+        merged_old.unlink()
+    print(f"运行上游 OpenCUA cot-generator（模型 {args.model}）…")
+    proc = subprocess.run(
+        [
+            sys.executable, "-W", "ignore", "gen_cot.py",
+            "--traj_path", str(pathlib.Path(args.traj).resolve()),
+            "--image_folder", str(pathlib.Path(args.images).resolve()),
+            "--output_dir", str(out_dir.resolve()),
+            "--model", args.model,
+        ],
+        cwd=str(upstream_dir),
+        env={**os.environ, "API_KEY": api_key, "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"},
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        print(f"[上游失败] {proc.stderr[-300:]}")
+        return proc.returncode
+
+    # 3) 适配为统一格式（上游自动 merge 到 output_dir 父目录）
+    merged = out_dir.parent / "task_with_cot.jsonl"
+    if not merged.exists():
+        merged = out_dir.parent / "gui_cot" / "task_with_cot.jsonl"
+    if not merged.exists():
+        print("[上游成功但未找到合并产物] 请检查上游输出")
+        return 6
+    result = merged_to_samples(str(merged))
+    out = OUT_DIR / "gui_samples.jsonl"
+    with open(out, "a", encoding="utf-8") as f:
+        for s in result["samples"]:
+            f.write(json.dumps(s, ensure_ascii=False) + "\n")
+    print(json.dumps(result["stats"], ensure_ascii=False, indent=1))
+    print(f"GUI 轨迹样本 → {out}（与 rollout 蒸馏同构）")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -651,6 +719,13 @@ def main() -> int:
     p_agent.add_argument("--backend")
     p_agent.add_argument("--model")
     p_agent.set_defaults(func=cmd_agent_gen)
+
+    p_gui = sub.add_parser("gui-cot", help="GUI 轨迹 CoT 蒸馏（上游 OpenCUA 成品，G0 闸门）")
+    p_gui.add_argument("--traj", required=True, help="OpenCUA traj JSONL（task_id/instruction/traj[{image,value.code}]）")
+    p_gui.add_argument("--images", required=True, help="截图目录")
+    p_gui.add_argument("--out", default=str(OUT_DIR / "gui_cot"))
+    p_gui.add_argument("--model", default="deepseek-v4-flash-vision-exp")
+    p_gui.set_defaults(func=cmd_gui_cot)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)
