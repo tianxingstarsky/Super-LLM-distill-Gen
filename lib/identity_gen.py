@@ -107,8 +107,10 @@ def fact_check(client: Any, question: str, answer: str, required_facts: str) -> 
         temperature=0.2, thinking=False)
 
 
-def run(client: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """主流程：生成问题 → 回答 → 事实校验 → 样本 + 多样性统计。"""
+def run(client: Any, cfg: Dict[str, Any], answer_cap: int = 0) -> Dict[str, Any]:
+    """主流程：生成问题 → 回答 → 事实校验 → 样本 + 多样性统计。answer_cap 为保护性截断上限。"""
+    from lib.length import truncate_to_max
+
     manifest = QuestionManifest(cfg["dedup_file"])
     questions = gen_questions(client, cfg, manifest, cfg["n_questions"])
 
@@ -117,6 +119,8 @@ def run(client: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
     for q in questions:
         try:
             answer = gen_answer(client, cfg, q)
+            if answer_cap > 0:
+                answer = truncate_to_max(answer, answer_cap)
             check = fact_check(client, q, answer, cfg["required_facts"]) if cfg["fact_check"] else {"keep": True}
         except Exception as e:  # noqa: BLE001
             rejected.append({"question": q[:80], "error": str(e)[:200]})

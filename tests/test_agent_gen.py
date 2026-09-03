@@ -72,3 +72,26 @@ def test_tools_desc_contains_all_tools():
     desc = tools_desc(_tools()["tools"])
     for name in ("web_search", "fetch_page", "read_file", "edit_file", "run_code"):
         assert name in desc
+
+
+def test_prune_redundant_removes_repeated_calls():
+    from lib.agent_gen import prune_redundant
+
+    call = lambda cid, name, args: {"role": "assistant", "content": "t",
+                                    "toolCalls": [{"id": cid, "name": name, "input": args}]}
+    obs = lambda cid, text: {"role": "tool", "content": text, "toolCallId": cid}
+    messages = [
+        {"role": "user", "content": "goal"},
+        call("c0", "web_search", {"query": "X"}),
+        obs("c0", "结果1"),
+        call("c1", "web_search", {"query": "X"}),  # 冗余：同名同参
+        obs("c1", "结果1"),
+        call("c2", "fetch_page", {"url": "u"}),
+        obs("c2", "页面内容"),
+        {"role": "assistant", "content": "最终回答"},
+    ]
+    pruned, removed = prune_redundant(messages)
+    assert removed == 1
+    ids = [m.get("toolCalls", [{}])[0].get("id") for m in pruned if m["role"] == "assistant" and m.get("toolCalls")]
+    assert ids == ["c0", "c2"]  # c1 及其观察被剪掉
+    assert pruned[-1]["role"] == "assistant"  # 结尾结构保持

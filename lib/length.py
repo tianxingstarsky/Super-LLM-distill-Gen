@@ -1,14 +1,14 @@
-"""长度控制：token 估算 + 长度 profile（合成数据的目标长度与混合配比）。
+"""长度控制（上限守卫语义）：只做截断保护，不做目标长度注入。
 
-诚实边界（docs/length-guide.md）：合成数据单次输出数千 token（模型上限），
-多轮拼接可到数万但质量衰减；百万上下文级样本只能来自真实 agent 长对话
-（rollout 蒸馏正是该来源）。本模块负责"短中长"目标长度的受控生成。
+设计（用户确认）：长度不是生成目标——解决问题操作越少越好、无用输出越少越好。
+长数据靠任务性质自然长：知识学习（文档/文章/代码综合分析）、真实 agent 长对话
+（rollout）、多步轨迹；本模块只提供 max_tokens 截断上限作为工程保护。
 """
 from __future__ import annotations
 
 import pathlib
 import re
-from typing import Any, Dict, List
+from typing import Dict
 
 import yaml
 
@@ -23,25 +23,23 @@ def estimate_tokens(text: str) -> int:
     return int(cjk + words * 1.3)
 
 
-def load_profiles(path: str | pathlib.Path) -> Dict[str, Any]:
+def truncate_to_max(text: str, max_tokens: int) -> str:
+    """按估算 token 数截断（保护性上限；截断处加省略标记，后缀预算预留）。"""
+    if max_tokens <= 0 or estimate_tokens(text) <= max_tokens:
+        return text
+    suffix = "…[截断]"
+    budget = max_tokens - estimate_tokens(suffix)  # 后缀预留
+    if budget <= 0:
+        return suffix
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_tokens(text[:mid]) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + suffix
+
+
+def load_profiles(path: str | pathlib.Path) -> Dict:
     return yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
-
-
-def length_note(tokens: int) -> str:
-    """注入到生成提示词的长度要求（追加式，不改变提示词结构）。"""
-    return f"（回答长度要求：约 {tokens} tokens，按需展开细节但不得注水）"
-
-
-def sample_length(profiles: Dict[str, Any], profile: str) -> int:
-    """按 profile 取目标长度：固定档直接返回；mixed 按权重随机采样。"""
-    fixed = profiles.get("profiles", {}).get(profile)
-    if fixed is not None:
-        return int(fixed)
-    mix = profiles.get("mix", {})
-    if profile == "mixed" and mix:
-        import random
-
-        keys, weights = zip(*[(k, v) for k, v in mix.items()])
-        picked = random.choices(keys, weights=weights, k=1)[0]
-        return int(profiles["profiles"][picked])
-    return 0  # 0 = 不注入长度要求

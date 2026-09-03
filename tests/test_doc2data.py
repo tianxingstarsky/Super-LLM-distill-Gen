@@ -66,3 +66,24 @@ def test_doc_to_samples_global_dedup(tmp_path):
     r2 = doc_to_samples(FakeClient(True), FIXTURE, qa_per_chunk=2, max_chunks=2, chunk_size=250, manifest=manifest)
     assert r2["stats"]["kept"] == 0
     assert r2["stats"]["dups"] == 4  # 跨运行零重复
+
+
+class CrossFakeClient:
+    """cross 模式：qa 返回跨块综合问题；ground 全通过。"""
+
+    def chat(self, messages, **kwargs):
+        content = messages[0]["content"]
+        if "综合分析" in content or "必须通读" in content:
+            return json.dumps({"qa": [
+                {"question": "综合各段内容，系统的整体流程是什么？", "answer": "导入→清洗→分块→去重→导出，知识注入走 CPT，表达走 SFT。"},
+            ]}, ensure_ascii=False)
+        return json.dumps({"grounded": True, "unsupported": [], "keep": True}, ensure_ascii=False)
+
+
+def test_doc_to_samples_cross_chunk_mode(tmp_path):
+    from lib.doc2data import doc_to_samples
+
+    result = doc_to_samples(CrossFakeClient(), FIXTURE, qa_per_chunk=1, max_chunks=5, chunk_size=250, mode="cross")
+    assert result["stats"]["mode"] == "cross"
+    assert result["stats"]["kept"] >= 1
+    assert all(s["source"] == "document_cross" for s in result["samples"])

@@ -62,6 +62,32 @@ INSTRUCTION_GEN = PromptSpec(
 {{"instructions": ["指令 1", "指令 2", "..."]}}""",
 )
 
+CROSS_CHUNK_QA = PromptSpec(
+    id="document.cross_chunk_qa",
+    version="1.0.0",
+    purpose="跨块综合分析问答：需要通读多块才能回答的对比/归纳/因果/综述问题（知识学习自然长数据）",
+    source="open-agentinstruct 内容转换（arXiv 2407.03502）+ 长文档 QA 惯例",
+    variables=("chunks", "n"),
+    constraints=(
+        "输出必须是合法 JSON，键：qa（数组，恰好 {n} 条，每条含 question/answer）",
+        "问题必须要求整合 chunks 中多处信息才能完整回答（对比/归纳/因果/综述类），单块可答的问题不合格",
+        "答案必须完全基于 chunks 中的事实，禁止编造；答案按需充分展开",
+    ),
+    template="""你是数据生成专家。基于下面的多段文档内容（来自同一份文档的不同部分），
+生成 {n} 条必须通读全部段落才能完整回答的综合分析问答。
+
+# 文档多段内容:
+{chunks}
+
+生成要求:
+1. 问题类型：跨段对比、整体归纳、因果关系、综合综述——任何一段单独都无法完整回答；
+2. 答案必须完全基于文段事实，禁止编造；答案按问题需要充分展开（这是自然的长回答）；
+3. 问题像真实读者通读全文后会问的样子。
+
+只输出 JSON（不要输出其他内容）:
+{{"qa": [{{"question": "综合分析问题 1", "answer": "综合答案 1"}}, "…共 {n} 条"]}}""",
+)
+
 GROUND_CHECK = PromptSpec(
     id="document.ground_check",
     version="1.0.0",

@@ -112,15 +112,17 @@ SIMULATE = PromptSpec(
 
 CHECK = PromptSpec(
     id="agent.check",
-    version="1.0.0",
-    purpose="轨迹质检：格式合法、参数合法、最终回答有观察依据（agent 数据质量门）",
-    source="本项目质量门设计（与 distill.reflector 同构）",
+    version="1.1.0",
+    purpose="轨迹质检：格式合法、参数合法、最终回答有观察依据、无冗余绕弯子调用（agent 数据质量门）",
+    source="本项目质量门设计（与 distill.reflector 同构）+ 效率守卫强化",
     variables=("goal", "trajectory"),
     constraints=(
         "输出必须是合法 JSON，键：valid/issues/keep",
         "工具名不在工具集内、参数不合定义、最终回答捏造未观察内容 → valid=false 且 keep=false",
-        "只检查形式与依据，不评价策略优劣",
+        "存在冗余/重复/绕弯子调用（对任务无推进的工具调用）→ valid=false 且 keep=false",
+        "只检查形式、依据与效率，不评价策略优劣之外的风格",
     ),
+    notes="v1.1.0：新增效率守卫——冗余/绕弯子调用判 invalid（用户要求：长度向上赶但所有操作不绕弯子）。",
     template="""你是 agent 轨迹质检员。检查下面的执行轨迹是否合格。
 
 # 任务目标:
@@ -132,7 +134,9 @@ CHECK = PromptSpec(
 检查项:
 1. 每个工具调用格式合法（name/args 齐全、args 符合工具定义）；
 2. 最终回答的每条结论都能在执行历史的观察中找到依据（无捏造）；
-3. 轨迹在合理步数内完成或合理中断。
+3. **效率守卫：任何对任务没有推进作用的冗余/重复/绕弯子调用（如重复搜索同一查询、
+   明知空结果仍重试、与目标无关的调用）→ valid=false**；
+4. 轨迹在合理步数内完成或合理中断。
 
 只输出 JSON（不要输出其他内容）:
 {{

@@ -29,6 +29,34 @@ def _last_call_repeated(messages: List[Dict[str, Any]]) -> bool:
     return len(calls) >= 2 and calls[-1] == calls[-2]
 
 
+def prune_redundant(messages: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], int]:
+    """冗余修剪器（效率守卫）：删除与上一次完全相同的工具调用及其观察（绕弯子=零推进）。
+
+    返回 (修剪后 messages, 剪掉的调用数)。不改变首尾结构：user 开头、最终 assistant 结尾。
+    """
+    pruned: List[Dict[str, Any]] = []
+    removed = 0
+    last_call = None
+    for i, m in enumerate(messages):
+        if m.get("role") == "assistant" and m.get("toolCalls"):
+            call = m["toolCalls"][0]
+            sig = (call["name"], json.dumps(call.get("args", call.get("input", {})), ensure_ascii=False, sort_keys=True))
+            if sig == last_call:
+                # 冗余：跳过本调用；其后的 tool 观察一并跳过
+                removed += 1
+                skip_next_tool = True
+                continue
+            last_call = sig
+            skip_next_tool = False
+            pruned.append(m)
+        elif m.get("role") == "tool" and skip_next_tool:
+            skip_next_tool = False
+            continue
+        else:
+            pruned.append(m)
+    return pruned, removed
+
+
 def load_tools(path: str | pathlib.Path) -> Dict[str, Any]:
     return yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
 
@@ -102,7 +130,7 @@ def run(
 ) -> Dict[str, Any]:
     manifest = manifest if manifest is not None else set()
     samples: List[Dict[str, Any]] = []
-    stats: Dict[str, Any] = {"generated": 0, "kept": 0, "rejected": 0}
+    stats: Dict[str, Any] = {"generated": 0, "kept": 0, "rejected": 0, "pruned_calls": 0}
     idx = 0
     for scenario in scenarios:
         seen: List[str] = []
@@ -113,6 +141,10 @@ def run(
             seen.append(goal)
             idx += 1
             traj = run_trajectory(client, tools, goal, idx)
+            # 效率守卫：冗余修剪（同名同参的重复调用=绕弯子，直接剪掉）
+            pruned_msgs, removed = prune_redundant(traj["messages"])
+            traj["messages"] = pruned_msgs
+            stats["pruned_calls"] += removed
             stats["generated"] += 1
             if not traj["completed"]:
                 stats["rejected"] += 1

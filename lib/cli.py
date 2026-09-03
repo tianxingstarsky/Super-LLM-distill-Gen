@@ -329,18 +329,18 @@ def cmd_identity_gen(args) -> int:
     """身份问答零参考训练集：多样化"你是谁"问题 + 固定事实回答 + 事实校验（G0 闸门）。"""
     _gates().require("G0")
     from lib.identity_gen import load_config, run
-    from lib.length import length_note, load_profiles, sample_length
+    from lib.length import load_profiles, truncate_to_max
 
     client, model = _client(args)
     cfg = load_config(args.config)
-    # 长度控制：--length 固定档或 mixed 配比（注入回答风格要求；0=不注入）
-    profiles = load_profiles(ROOT / "configs" / "pipelines" / "length_profiles.yaml")
-    target = sample_length(profiles, args.length) if args.length != "off" else 0
-    if target:
-        cfg["style"] = f"{cfg['style']}；{length_note(target)}"
+    # 上限守卫：仅截断保护（不做目标长度注入——长靠任务性质，不靠注水）
+    max_tokens = args.max_answer_tokens
+    if max_tokens is None:
+        profiles = load_profiles(ROOT / "configs" / "pipelines" / "length_profiles.yaml")
+        max_tokens = int(profiles.get("max_context", {}).get("answer_tokens", 0) or 0)
     print(f"身份问答生成（模型 {model}，公司={cfg['company']} 模型={cfg['model_name']}，"
-          f"目标 {cfg['n_questions']} 条，长度={args.length}" + (f"({target} tokens)" if target else "") + "）…")
-    result = run(client, cfg)
+          f"目标 {cfg['n_questions']} 条，回答上限={max_tokens or '不限'} tokens）…")
+    result = run(client, cfg, answer_cap=max_tokens)
     stats = result["stats"]
     out = OUT_DIR / "identity_samples.jsonl"
     out.write_text(
@@ -395,6 +395,7 @@ def cmd_doc2data(args) -> int:
         qa_per_chunk=args.qa_per_chunk or cfg["qa_per_chunk"],
         max_chunks=args.max_chunks or cfg["max_chunks"],
         chunk_size=args.chunk_size or cfg["chunk_size"],
+        mode=args.mode,
     )
     stats = result["stats"]
     out = OUT_DIR / "doc_samples.jsonl"
@@ -726,9 +727,8 @@ def main() -> int:
 
     p_identity = sub.add_parser("identity-gen", help="身份问答零参考训练集（G0 闸门）")
     p_identity.add_argument("--config", default=str(ROOT / "configs" / "identity.example.yaml"))
-    p_identity.add_argument("--length", default="off",
-                            choices=["off", "short", "medium", "long", "xlong", "mixed"],
-                            help="回答目标长度（mixed=按 configs/pipelines/length_profiles.yaml 配比混合）")
+    p_identity.add_argument("--max-answer-tokens", type=int, default=None,
+                            help="回答截断上限（保护性；缺省取 length_profiles.yaml）")
     p_identity.add_argument("--backend")
     p_identity.add_argument("--model")
     p_identity.set_defaults(func=cmd_identity_gen)
@@ -744,6 +744,8 @@ def main() -> int:
     p_doc2data.add_argument("--input", required=True)
     p_doc2data.add_argument("--qa-per-chunk", type=int, default=None)
     p_doc2data.add_argument("--max-chunks", type=int, default=None)
+    p_doc2data.add_argument("--mode", choices=["single", "cross"], default="single",
+                            help="single=逐块问答；cross=跨块综合分析（知识学习自然长数据）")
     p_doc2data.add_argument("--chunk-size", type=int, default=None)
     p_doc2data.add_argument("--backend")
     p_doc2data.add_argument("--model")

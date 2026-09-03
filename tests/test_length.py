@@ -1,4 +1,4 @@
-"""长度控制离线测试：token 估算 + profile 采样 + 注入格式。"""
+"""长度控制（上限守卫语义）离线测试。"""
 from __future__ import annotations
 
 import pathlib
@@ -15,19 +15,21 @@ def test_estimate_tokens_mixed_language():
     assert 5 <= en <= 12
 
 
-def test_sample_length_fixed_and_mixed():
-    from lib.length import load_profiles, sample_length
+def test_truncate_to_max_guard_only():
+    from lib.length import estimate_tokens, truncate_to_max
+
+    short = "这是一段很短的文本。"
+    assert truncate_to_max(short, 100) == short  # 未超上限不动
+    long_text = "这是一个很长很长的回答。" * 500  # 估算远超上限
+    capped = truncate_to_max(long_text, 100)
+    assert estimate_tokens(capped) <= 100
+    assert capped.endswith("…[截断]")
+    assert truncate_to_max(long_text, 0) == long_text  # 0=不限
+
+
+def test_profiles_are_limits_not_targets():
+    from lib.length import load_profiles
 
     profiles = load_profiles(ROOT / "configs" / "pipelines" / "length_profiles.yaml")
-    assert sample_length(profiles, "short") == 200
-    assert sample_length(profiles, "xlong") == 8000
-    for _ in range(30):
-        n = sample_length(profiles, "mixed")
-        assert n in (200, 800, 3000, 8000)  # 配比内采样
-
-
-def test_length_note_format():
-    from lib.length import length_note
-
-    note = length_note(800)
-    assert "800 tokens" in note and "注水" in note
+    mc = profiles["max_context"]
+    assert mc["answer_tokens"] > 0 and mc["sample_tokens"] > mc["answer_tokens"]

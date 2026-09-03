@@ -21,15 +21,68 @@ def doc_to_samples(
     max_chunks: int = 5,
     chunk_size: int = 2000,
     manifest: set[str] | None = None,
+    mode: str = "single",
 ) -> Dict[str, Any]:
-    """单文档 → 经事实校验的问答样本 + 统计。manifest 为跨文档/跨运行全局查重。"""
+    """单文档 → 经事实校验的问答样本 + 统计。manifest 为跨文档/跨运行全局查重。
+
+    mode=single：逐块问答；mode=cross：跨块综合分析问答（多块合并→需通读才能答的
+    对比/归纳/综述问题——知识学习的自然长数据，不做长度注水）。"""
     manifest = manifest if manifest is not None else set()
     raw = clean_text(import_text(path))
-    chunks = chunk_text(raw, chunk_size)[:max_chunks]
+    chunks = [c for c in chunk_text(raw, chunk_size) if len(c) >= 40][:max_chunks]
 
     samples: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
-    stats = {"chunks": len(chunks), "qa_generated": 0, "kept": 0, "ground_rejected": 0, "dups": 0}
+    stats = {"chunks": len(chunks), "qa_generated": 0, "kept": 0, "ground_rejected": 0, "dups": 0, "mode": mode}
+
+    if mode == "cross":
+        windows = [chunks[i : i + 3] for i in range(0, max(len(chunks) - 2, 1), 2)]
+        for wi, window in enumerate(windows):
+            if not window:
+                continue
+            combined = "\n\n".join(window)
+            try:
+                qa = chat_json(client, [{"role": "user", "content": render(
+                    get("document.cross_chunk_qa"), chunks=combined, n=qa_per_chunk)}], temperature=0.8)["qa"]
+            except Exception as e:  # noqa: BLE001
+                rejected.append({"chunk": wi, "error": str(e)[:200]})
+                continue
+            for pair in qa:
+                question = str(pair.get("question", "")).strip()
+                answer = str(pair.get("answer", "")).strip()
+                if not question or not answer:
+                    continue
+                stats["qa_generated"] += 1
+                qid = f"{chunk_hash(combined)}:{chunk_hash(question)}"
+                if qid in manifest:
+                    stats["dups"] += 1
+                    continue
+                manifest.add(qid)
+                try:
+                    check = chat_json(client, [{"role": "user", "content": render(
+                        get("document.ground_check"), chunk=combined, question=question, answer=answer)},
+                    ], temperature=0.2)
+                except Exception as e:  # noqa: BLE001
+                    rejected.append({"question": question[:80], "error": str(e)[:200]})
+                    continue
+                if not check.get("keep", False):
+                    stats["ground_rejected"] += 1
+                    rejected.append({"question": question[:80], "unsupported": check.get("unsupported", [])})
+                    continue
+                stats["kept"] += 1
+                samples.append({
+                    "id": f"docx-{qid}",
+                    "source": "document_cross",
+                    "type": "sft",
+                    "doc_file": pathlib.Path(path).name,
+                    "messages": [
+                        {"role": "user", "content": question},
+                        {"role": "assistant", "content": answer},
+                    ],
+                    "ground_check": check,
+                })
+        stats["ground_reject_rate"] = round(stats["ground_rejected"] / max(stats["qa_generated"], 1), 3)
+        return {"samples": samples, "rejected": rejected, "stats": stats}
 
     for ci, chunk in enumerate(chunks):
         if len(chunk) < 40:  # 过短片段无问答价值（低于 60 字符跳过）
