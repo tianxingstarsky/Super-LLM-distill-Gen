@@ -294,6 +294,28 @@ def cmd_translate(args) -> int:
     return 0
 
 
+def cmd_identity_gen(args) -> int:
+    """身份问答零参考训练集：多样化"你是谁"问题 + 固定事实回答 + 事实校验（G0 闸门）。"""
+    _gates().require("G0")
+    from lib.identity_gen import load_config, run
+    from lib.llm_client import load_backend
+
+    client, model = load_backend(ROOT)
+    cfg = load_config(args.config)
+    print(f"身份问答生成（模型 {model}，公司={cfg['company']} 模型={cfg['model_name']}，目标 {cfg['n_questions']} 条）…")
+    result = run(client, cfg)
+    stats = result["stats"]
+    out = OUT_DIR / "identity_samples.jsonl"
+    out.write_text(
+        "\n".join(json.dumps(s, ensure_ascii=False) for s in result["samples"]) + "\n", encoding="utf-8"
+    )
+    print(json.dumps(stats, ensure_ascii=False, indent=1))
+    if result["rejected"]:
+        print(f"被事实校验驳回 {len(result['rejected'])} 条（见 samples 缺省）")
+    print(f"样本 → {out}；开篇多样性 {stats['opening_diversity']}（1.0=无重复开篇）")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -352,6 +374,10 @@ def main() -> int:
     p_translate.add_argument("--input", default=str(ROOT / "data" / "seeds" / "topics.txt"))
     p_translate.add_argument("--limit", type=int, default=5)
     p_translate.set_defaults(func=cmd_translate)
+
+    p_identity = sub.add_parser("identity-gen", help="身份问答零参考训练集（G0 闸门）")
+    p_identity.add_argument("--config", default=str(ROOT / "configs" / "identity.example.yaml"))
+    p_identity.set_defaults(func=cmd_identity_gen)
 
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)

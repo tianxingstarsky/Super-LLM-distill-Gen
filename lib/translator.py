@@ -10,6 +10,7 @@ import json
 import re
 from typing import Any, Dict, List
 
+from lib.llm_client import chat_json
 from lib.prompts import get, render
 
 FAITHFUL_THRESHOLD = 4  # backcheck score ≥ 4 保留
@@ -21,32 +22,19 @@ def detect_lang(text: str) -> str:
     return "zh" if cjk / max(len(text), 1) > 0.15 else "en"
 
 
-def _parse_json(output: str) -> Dict[str, Any]:
-    return json.loads(output.strip())
-
-
 def translate_one(client: Any, text: str) -> Dict[str, Any]:
-    """单条互译 + 回译校验。"""
+    """单条互译 + 回译校验（全部走 response_format 强制 JSON）。"""
     lang = detect_lang(text)
     fwd_id = "translation.zh2en" if lang == "zh" else "translation.en2zh"
     back_id = "translation.en2zh" if lang == "zh" else "translation.zh2en"
 
-    fwd = _parse_json(client.chat(
-        [{"role": "user", "content": render(get(fwd_id), text=text)}],
-        max_tokens=None, temperature=0.3, thinking=False,  # 严格 JSON：禁用思考
-    ))
+    fwd = chat_json(client, [{"role": "user", "content": render(get(fwd_id), text=text)}], temperature=0.3)
     target = fwd["translation"]
 
-    back = _parse_json(client.chat(
-        [{"role": "user", "content": render(get(back_id), text=target)}],
-        max_tokens=None, temperature=0.3, thinking=False,
-    ))
+    back = chat_json(client, [{"role": "user", "content": render(get(back_id), text=target)}], temperature=0.3)
 
-    check = _parse_json(client.chat(
-        [{"role": "user", "content": render(get("translation.backcheck"),
-            original=text, back_translation=back["translation"])}],
-        max_tokens=None, temperature=0.2, thinking=False,
-    ))
+    check = chat_json(client, [{"role": "user", "content": render(get("translation.backcheck"),
+        original=text, back_translation=back["translation"])}], temperature=0.2)
     return {
         "source_lang": lang,
         "source": text,

@@ -66,6 +66,17 @@ def _json_field_cjk(field: str, threshold: float, greater: bool) -> Callable[[st
     return check
 
 
+def _json_list_len(field: str, expected: int) -> Callable[[str], Tuple[bool, str]]:
+    def check(output: str) -> Tuple[bool, str]:
+        try:
+            obj = json.loads(output.strip())
+            n = len(obj.get(field, []))
+        except (json.JSONDecodeError, TypeError) as e:
+            return False, f"解析失败: {e}"
+        return (n == expected, f"{field} 数量 {n}")
+    return check
+
+
 def _len_between(lo: int, hi: int) -> Callable[[str], Tuple[bool, str]]:
     def check(output: str) -> Tuple[bool, str]:
         ok = lo <= len(output.strip()) <= hi
@@ -123,12 +134,36 @@ DEFAULT_CASES: List[EvalCase] = [
         "original": "模型在训练集上表现很好但在测试集上很差。",
         "back_translation": "The model performs well on training but poorly on test.",
     }, [("JSON 键", _json_keys("faithful", "score", "issues"))]),
+    EvalCase("identity.question_variants 问题变体", "identity.question_variants", {
+        "identity_brief": "AI 助手『示例-1』由示例科技独立研发",
+        "count": 5,
+        "seen_questions": "（无）",
+    }, [("JSON 键", _json_keys("questions")), ("恰好 5 条", _json_list_len("questions", 5))]),
+    EvalCase("identity.answer 身份回答", "identity.answer", {
+        "question": "你是谁？谁开发的？",
+        "facts": "- 我是由示例科技独立研发的大语言模型示例-1。\n- 未基于任何第三方开源模型改造。",
+        "required_facts": "- 由示例科技独立研发\n- 模型名为示例-1\n- 未基于第三方开源模型",
+        "style": "专业、简洁、真诚",
+    }, [("JSON 键", _json_keys("answer"))]),
+    EvalCase("identity.fact_check 事实校验", "identity.fact_check", {
+        "question": "你是谁？",
+        "answer": "我是由示例科技独立研发的大语言模型示例-1，未基于任何第三方开源模型改造。",
+        "required_facts": "- 由示例科技独立研发\n- 模型名为示例-1\n- 未基于第三方开源模型",
+    }, [("JSON 键", _json_keys("complete", "contradictions", "natural", "keep"))]),
 ]
 
 
 def run_case(client: Any, case: EvalCase) -> Dict[str, Any]:
     prompt = render(get(case.prompt_id), **case.variables)
-    output = client.chat([{"role": "user", "content": prompt}], max_tokens=None, temperature=0.2, thinking=False)
+    # 与生产路径一致：json_mode 解码层强制 JSON + 容错解析
+    from lib.llm_client import parse_json_robust
+
+    output = client.chat([{"role": "user", "content": prompt}],
+                         max_tokens=None, temperature=0.2, thinking=False, json_mode=True)
+    try:
+        output = json.dumps(parse_json_robust(output), ensure_ascii=False)
+    except Exception:  # noqa: BLE001 —— 保留原始输出供检查报告诊断
+        pass
     results = []
     for name, check in case.checks:
         try:
