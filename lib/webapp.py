@@ -8,10 +8,16 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
 import threading
+
+# 本机服务探测必须绕代理（控制台是独立进程，不继承 CLI 的环境设置）；
+# 否则系统代理开启时健康检查会把 localhost 请求劫走导致误报 ❌
+os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
+os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
