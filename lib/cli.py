@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import pathlib
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -234,7 +235,7 @@ def cmd_review(args) -> int:
         return 0
 
     if args.action == "app":
-        # 轻量本地审核+监控应用（无 Docker）：streamlit run lib/webapp.py
+        # 统一运营控制台（无 Docker）：streamlit run lib/webapp.py（七页）
         import subprocess
 
         print("启动本地审核应用: http://localhost:8501（Ctrl+C 退出）")
@@ -706,10 +707,16 @@ def main() -> int:
     p_distill.add_argument("--model")
     p_distill.set_defaults(func=cmd_distill)
 
-    p_review = sub.add_parser("review", help="人工审核（app=本地轻量应用，push/pull=Argilla 可选）")
+    p_review = sub.add_parser("review", help="人工审核（app=统一控制台，push/pull=Argilla 可选）")
     p_review.add_argument("action", choices=["app", "push", "pull", "summary"])
     p_review.add_argument("--n", type=int, default=20, help="push 条数")
     p_review.set_defaults(func=cmd_review)
+
+    p_console = sub.add_parser("console", help="统一运营控制台（七页：总览/预览/运行/审核/监控/闸门/偏好）")
+    p_console.set_defaults(func=lambda args: subprocess.call(
+        [sys.executable, "-m", "streamlit", "run", str(ROOT / "lib" / "webapp.py"),
+         "--server.port", "8501", "--server.headless", "true"]
+    ))
 
     p_peval = sub.add_parser("prompt-eval", help="提示词真机评测（G0 闸门）")
     p_peval.add_argument("--backend")
