@@ -33,6 +33,8 @@ def test_plugin_commands_match_cli_subcommands():
     block = df_help.stdout.split("usage:", 1)[-1].split("\n\n", 1)[0]
     noise = {"df", "h", "error", "unrecognized", "arguments", "usage"}
     cli_commands = set(re.findall(r"\b[a-z][a-z0-9-]+\b", block)) - noise
+    # 本地 UI 启动器类命令不暴露给 agent（插件命令表不含它们是预期）
+    cli_commands -= {"console"}
     plugin_commands = set(re.findall(r"^  '?([a-z][a-z0-9-]*)'?:", PLUGIN_TS.read_text(encoding="utf-8"), re.M))
     assert plugin_commands == cli_commands, f"漂移：插件多 {plugin_commands - cli_commands}，CLI 多 {cli_commands - plugin_commands}"
 
