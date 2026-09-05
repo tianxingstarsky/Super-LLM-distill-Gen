@@ -51,28 +51,18 @@ def _gate() -> object:
 
 
 def _service_health() -> dict[str, bool]:
-    import urllib.request
+    """模式感知：只展示当前引擎模式（light/share/collab）下的活跃服务。"""
+    from lib import services as S
 
-    checks = {
-        "Argilla 审核平台 (6900)": "http://127.0.0.1:6900/api/v1/version",
-        "Streamlit 控制台 (8501)": "http://127.0.0.1:8501/",
-        "静态预览 (18700)": "http://127.0.0.1:18700/preview.html",
-        "Elasticsearch (9200)": "http://127.0.0.1:9200/",
-    }
-    result = {}
-    for name, url in checks.items():
-        try:
-            with urllib.request.urlopen(url, timeout=2) as r:
-                result[name] = 100 <= r.status < 400
-        except Exception:  # noqa: BLE001
-            result[name] = False
-    try:
-        import redis
+    status = S.health_snapshot()
+    return {f"{name} ({svc['port']})": svc["up"] for name, svc in status.get("services", {}).items()}
 
-        result["Redis (6379)"] = bool(redis.Redis(host="127.0.0.1", port=6379).ping())
-    except Exception:  # noqa: BLE001
-        result["Redis (6379)"] = False
-    return result
+
+def _engine_mode_info() -> tuple[str, str]:
+    from lib import services as S
+
+    mode = S.load_mode()
+    return mode, S.MEMORY_HINT.get(mode, "")
 
 
 def _inventory() -> dict[str, int]:
@@ -91,7 +81,10 @@ def _inventory() -> dict[str, int]:
 # ── 页面：总览 ──────────────────────────────────────────────────────────────
 def page_overview() -> None:
     st.title("总览")
-    st.caption("服务与数据资产一览；其他页面进行具体操作。")
+    mode, mem = _engine_mode_info()
+    st.caption(f"引擎模式：**{mode}**（{mem}）。全部数据操作/审核/监控/资产都在本控制台内完成。")
+    st.caption("协作模式（Argilla 多人审核）需额外进程：`python -m lib.services mode collab` 后重启看门狗；"
+               "单进程 mode=light 时不开 ES/Redis/Argilla，系统占用最小。")
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**服务健康**")
