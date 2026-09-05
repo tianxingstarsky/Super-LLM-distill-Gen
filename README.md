@@ -82,6 +82,8 @@ python -m tests.mock_llm_server &          # 127.0.0.1:8765 的 mock OpenAI 服�
 - [ ] M1 第二批：蒸馏质检管线（Reflector → 只留正确 + DPO 负样本 → Summarizer 打分）
 - [ ] M1 第三批：偏好中心 v1 采样器 + Argilla/Langfuse 接入
 - [x] M2 全部完成：多模态/DPO 增强/翻译/GUI/零参考/风格调教/长度守卫/dsh 插件
+- [x] 协作收官：服务三档模式（collab 默认全栈 + 看门狗防崩）+ Argilla 中文平台
+      + `review-remote` 分布式多人审核（协作者自有 agent 在自己主机审，身份+理由可审计）
 
 ### CLI 快速上手（M1）
 
@@ -94,6 +96,9 @@ python -m lib.cli preview --html --n 20   # 静态 HTML 美化预览（人工过
 python -m lib.cli distill --llm-check 5   # 蒸馏质检 + judge 打分（G0 闸门）
 python -m lib.cli review app           # 本地轻量审核+监控应用（无 Docker，端口 8501）
 python -m lib.cli review summary       # 审核通过率（≥90% 且 ≥10 条可放行 G3）
+python -m lib.cli review-remote pull   # 分布式审核：拉取待审批次（协作者在自己主机）
+python -m lib.cli review-remote auto   # 协作者自有 agent 判定（用自己配置的 judge 模型）
+python -m lib.cli review-remote submit # 以协作者身份提交回中心（带理由，可审计）
 python -m lib.cli gate approve G3      # 过放量闸（或审核达标后应用内一键放行）
 python -m lib.cli export --format chat --bulk          # DeepSeek/Qwen messages
 python -m lib.cli export --format llamafactory --bulk  # LLaMA-Factory sharegpt
@@ -104,10 +109,14 @@ python -m lib.cli monitor              # 运行监控摘要（本地审计，Lan
 注入原生思考 token）/ `tags`（配置原生 token 包裹）/ `plain` / `drop`，见
 configs/preferences.yaml。
 
-人工审核（HITL）有两条路径：
-- **轻量（推荐，无 Docker）**：`df review app` —— Streamlit 单进程本地应用，
+人工审核（HITL）有三条路径：
+- **轻量（单机，无 Docker）**：`df review app` —— Streamlit 单进程本地应用，
   逐条"保留/驳回/跳过"，决定写本地 review.jsonl，达标一键放行 G3。
-- **重型（可选）**：Argilla 容器（docker/argilla.yml）+ Langfuse 容器
+- **协作平台（商业级默认，多机多人）**：中心机 `mode collab` 起 Argilla 中文平台
+  （原生栈：Redis+ES+Argilla，非容器）；协作者各自在自己主机上跑自己的 agent，
+  `df review-remote pull → auto/human → submit`，提交带身份与理由、中心可审计——
+  见 docs/collaboration.md。
+- **重型（可选，容器）**：Argilla 容器（docker/argilla.yml）+ Langfuse 容器
   （docker/langfuse.yml，映射 3210），见 docker/README.md。
 
 ⚠️ 本机使用注意：httpx 会把 localhost 请求送进系统代理导致 LLM 调用静默失败，

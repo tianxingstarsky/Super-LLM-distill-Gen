@@ -27,6 +27,7 @@ const COMMAND_HELP: Record<string, string> = {
   export: '导出训练格式（--format chat|llamafactory|all；--bulk 放量需 G3 闸门）',
   distill: '蒸馏质检：分类+DPO 负样本提取+可选 judge 打分（--llm-check N 需 G0 闸门）',
   review: '人工审核（app=本地轻量应用；push/pull 对接 Argilla）',
+  'review-remote': '分布式人工审核（协作者在自己主机 pull/auto/human/submit，提交带身份与理由可审计）',
   'prompt-eval': '提示词真机评测（G0 闸门；--ids 按前缀过滤）',
   translate: '中英互译+回译校验（G0 闸门）',
   'identity-gen': '身份问答零参考训练集（G0 闸门；--max-answer-tokens 上限守卫）',

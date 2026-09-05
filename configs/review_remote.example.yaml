@@ -1,0 +1,9 @@
+# 分布式评审客户端配置（协作者在自己主机上使用；复制为 review_remote.yaml）
+# server：中心机地址（协作者通过网络访问；本机测试= http://127.0.0.1:6900）
+# api_key：中心管理员用 setup_argilla_user.py --create-user 发放的唯一密钥
+# model：你自己的评审模型（agent 模式用；留空则取 lib.services judge 槽位/LLM_MODEL）
+server: http://127.0.0.1:6900
+api_key: ""          # 换成你的密钥（中心管理员用 setup_argilla_user.py --create-user 发放；直接编辑本文件）
+dataset: rollout_review
+batch_size: 10
+model: ""            # 例：deepseek-v4-pro（不填=用控制台 judge 槽位）

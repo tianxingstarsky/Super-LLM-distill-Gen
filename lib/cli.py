@@ -207,7 +207,7 @@ def cmd_review(args) -> int:
             scores = {s.get("id"): s.get("score", "") for s in json.loads(report_path.read_text(encoding="utf-8")).get("llm_scores", [])}
         try:
             n = review_mod.push_samples(samples, scores)
-            print(f"已推送 {n} 条到 Argilla（http://localhost:6900，admin/distill123456）")
+            print(f"已推送 {n} 条到 Argilla（http://127.0.0.1:6900，admin/distill123456）")
             print("标注完 keep/reject 后运行: df review pull")
         except Exception as e:  # noqa: BLE001
             print(f"[Argilla 不可用] {str(e)[:200]}")
@@ -673,6 +673,51 @@ def cmd_commands(args) -> int:
     return 0
 
 
+def cmd_review_remote(args) -> int:
+    """分布式评审客户端：协作者在自己主机拉取→（本地 agent 自动或人工）→提交回中心机。"""
+    import lib.review_remote as rr
+    from lib.llm_client import load_backend
+
+    cfg = rr.load_config(args.config)
+    client = rr.get_client(cfg)
+
+    if args.action == "pull":
+        inbox = rr.pull(cfg, batch=args.batch, client=client)
+        print(f"拉取待审 {len(inbox)} 条 → {rr.INBOX_PATH}")
+        for r in inbox:
+            print(f"  {r['sample_id']}: {r['instruction'][:50]}")
+        return 0
+
+    decisions = [json.loads(l) for l in rr.INBOX_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
+    if not decisions:
+        print("本地无待审缓存：先 df review remote pull")
+        return 0
+
+    def _persist(decisions_):
+        rr.INBOX_PATH.write_text(
+            chr(10).join(json.dumps(d, ensure_ascii=False) for d in decisions_) + chr(10),
+            encoding="utf-8",
+        )
+
+    if args.action == "auto":
+        # 协作者的 AGENT：用自己的模型判（--model 或 review_remote.yaml model 或 judge 槽位）
+        from lib.prompts import registry
+
+        model = cfg.get("model") or None
+        judge, judge_model = load_backend(ROOT, model=model, role="judge")
+        decisions = rr._judge_answers(decisions, judge, judge_model)
+        keeps = sum(1 for d in decisions if d["decision"] == "keep")
+        _persist(decisions)
+        print(f"本地 agent（{judge_model}）判定完成 {len(decisions)} 条（keep {keeps} / reject {len(decisions) - keeps}）")
+    elif args.action == "human":
+        decisions = rr.human_loop(decisions, cfg)
+        _persist(decisions)
+
+    n = rr.submit(decisions, cfg, client=client)
+    print(f"已以我的身份提交 {n} 条到中心机（含理由，可审计）")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -816,6 +861,13 @@ def main() -> int:
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)
     p_monitor.set_defaults(func=cmd_monitor)
+
+    p_remote = sub.add_parser("review-remote", help="分布式评审客户端（协作者主机端）")
+    p_remote.add_argument("action", choices=["pull", "auto", "human", "submit"])
+    p_remote.add_argument("--config", default=str(ROOT / "configs" / "review_remote.yaml"))
+    p_remote.add_argument("--batch", type=int, default=10)
+    p_remote.add_argument("--model")
+    p_remote.set_defaults(func=cmd_review_remote)
 
     p_cmds = sub.add_parser("commands", help="列出命令注册表（单一事实源）")
     p_cmds.set_defaults(func=cmd_commands)

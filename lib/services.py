@@ -72,9 +72,9 @@ SERVICES = [
 #   share  = light + 静态预览页（分享链接用，+30MB）
 #   collab = share + Argilla 协作审核栈（Redis+ES(JVM 2GB)+Argilla，多人协作用）
 MODES = {
-    "light": ["console"],
+    "light": ["console"],   # 单进程（资源受限场景）
     "share": ["console", "preview"],
-    "collab": ["console", "preview", "redis", "elasticsearch", "argilla"],
+    "collab": ["console", "preview", "redis", "elasticsearch", "argilla"],  # 商业级默认
 }
 MODE_PATH = OUT_DIR / "services_mode.json"
 MEMORY_HINT = {"light": "单进程 ~300MB，全部操作在控制台内完成",
@@ -88,7 +88,7 @@ def load_mode() -> str:
             return json.loads(MODE_PATH.read_text(encoding="utf-8")).get("mode", "light")
         except json.JSONDecodeError:
             pass
-    return "light"
+    return "collab"  # 商业级默认：多人协作审核是标配；light 为资源受限场景的单进程选项
 
 
 def set_mode(mode: str) -> None:

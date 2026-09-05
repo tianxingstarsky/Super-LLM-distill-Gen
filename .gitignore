@@ -22,3 +22,4 @@ data/output/*
 configs/backends.local.yaml
 PIP_CACHE_DIR=F:/无项目工作文件夹/tools/pip-cache
 plugins/dsh-dataforge/cordis.yml
+configs/review_remote.yaml

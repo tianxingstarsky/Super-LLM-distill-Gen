@@ -11,10 +11,9 @@ import os
 import pathlib
 from typing import Any, Dict, List, Optional
 
-ARGILLA_URL = "http://localhost:6900"
-# 原生自建服务默认 key 为 argilla.apikey（Docker quickstart 镜像为 admin.apikey）；
-# 可用环境变量覆盖
-ARGILLA_API_KEY = os.environ.get("ARGILLA_API_KEY", "argilla.apikey")
+ARGILLA_URL = "http://127.0.0.1:6900"
+# 与 scripts/setup_argilla_user.py 创建的默认管理员一致；中心机可环境变量覆盖
+ARGILLA_API_KEY = os.environ.get("ARGILLA_API_KEY", "distill.apikey")
 DATASET_NAME = "rollout_review"
 PASS_THRESHOLD = 0.9
 MIN_REVIEWED = 10
@@ -86,7 +85,10 @@ def push_samples(samples: List[Dict[str, Any]], scores: Dict[str, str], client: 
             rg.TextField(name="conversation", title="对话内容（纯文本）", use_markdown=True),
             rg.TextField(name="meta", title="元数据"),
         ],
-        questions=[rg.LabelQuestion(name="keep_label", title="保留/驳回", labels=["keep", "reject"])],
+        questions=[
+            rg.LabelQuestion(name="keep_label", title="保留/驳回", labels=["keep", "reject"]),
+            rg.TextQuestion(name="reason", title="判定理由/模型", required=False, client=client),
+        ],
     )
     dataset = rg.Dataset(name=DATASET_NAME, settings=settings)
     try:
@@ -116,7 +118,11 @@ def pull_decisions(client: Any = None, dataset_name: str = DATASET_NAME) -> List
         for entry in raw.get("keep_label", []):
             status = entry.get("status", "submitted")
             if status in ("submitted", None):
-                decisions.append({"sample_id": rec.fields["sample_id"], "decision": str(entry.get("value"))})
+                decisions.append({
+                    "sample_id": rec.fields["sample_id"],
+                    "decision": str(entry.get("value")),
+                    "reason": (raw.get("reason") or [{}])[0].get("value", "") or "",
+                })
     return decisions
 
 

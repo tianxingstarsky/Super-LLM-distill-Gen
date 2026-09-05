@@ -22,9 +22,11 @@ def test_mode_persistence(tmp_path, monkeypatch):
     from lib import services as S
 
     monkeypatch.setattr(S, "MODE_PATH", tmp_path / "m.json")
-    assert S.load_mode() == "light"  # 默认单进程
+    assert S.load_mode() == "collab"  # 商业级默认：多人协作审核是标配
+    S.set_mode("light")
+    assert S.load_mode() == "light"
+    assert {s["name"] for s in S.active_services()} == {"console"}
     S.set_mode("collab")
-    assert S.load_mode() == "collab"
     assert {s["name"] for s in S.active_services()} == {"console", "preview", "redis", "elasticsearch", "argilla"}
     with pytest.raises(ValueError):
         S.set_mode("nope")
