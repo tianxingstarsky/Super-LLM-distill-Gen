@@ -99,8 +99,10 @@ def page_overview() -> None:
             st.write(("✅" if ok else "❌") + " " + name)
     with c2:
         st.markdown("**数据资产（data/output）**")
-        for name, n in _inventory().items():
+        inv = _inventory()
+        for name, n in sorted(inv.items(), key=lambda x: x[1], reverse=True):
             st.write(f"· {name}: {n} 行")
+        st.caption("分组/搜索/下载 → 「资产管理」页面")
     budget = ""
     if BUDGET_PATH.exists():
         budget = BUDGET_PATH.read_text(encoding="utf-8")
@@ -138,36 +140,41 @@ def page_preview() -> None:
 
 
 # ── 页面：管线运行 ──────────────────────────────────────────────────────────
-COMMAND_HELP = {
-    "import": "导入 rollout 真实会话数据（G1 闸门）",
-    "distill": "蒸馏质检：分类+DPO 提取+可选打分（--llm-check N，G0 闸门）",
-    "identity-gen": "身份问答零参考训练集（G0 闸门）",
-    "doc2corpus": "文档→CPT 语料（零 LLM）",
-    "doc2data": "文档→问答 SFT（G0 闸门；--mode cross 跨块综合）",
-    "translate": "中英互译+回译校验（G0 闸门）",
-    "cot-style": "CoT 风格调教（G0 闸门）",
-    "vision": "多模态图文数据（G0 闸门）",
-    "dpo-enhance": "DPO 偏好对增强（G0 闸门）",
-    "dpo-merge": "合并各来源 DPO 对",
-    "agent-gen": "Agent 零参考轨迹（G0 闸门）",
-    "gui-cot": "GUI 轨迹蒸馏（G0 闸门）",
-    "style-correct": "语言风格强矫正（G0 闸门）",
-    "export": "导出训练格式（--bulk 需 G3 闸门）",
-    "stats": "查看导入统计",
-    "monitor": "运行审计摘要",
-}
+def _command_meta() -> dict:
+    """从命令注册表（单一事实源）加载；与 CLI 实际子命令交叉校验，防漂移。"""
+    import re
+    import subprocess as _sp
 
-G0_COMMANDS = {"distill", "identity-gen", "doc2data", "translate", "cot-style", "vision",
-               "dpo-enhance", "agent-gen", "gui-cot", "style-correct", "prompt-eval"}
+    from lib.extensions import load_commands
+
+    cmds = load_commands(ROOT)
+    df_help = _sp.run(
+        [sys.executable, "-m", "lib.cli", "-h"], cwd=str(ROOT),
+        capture_output=True, text=True, timeout=60,
+    ).stdout
+    block = df_help.split("usage:", 1)[-1].split(chr(10) * 2, 1)[0]
+    cli_commands = set(re.findall(r"(?<![a-z0-9])[a-z][a-z0-9-]+(?![a-z0-9])", block)) - {"df", "h"}
+    actual = {c for c in cli_commands if c in cmds}
+    unknown = set(cmds) - cli_commands
+    if unknown:
+        st.session_state["cmd_drift"] = f"注册表存在但 CLI 未注册：{sorted(unknown)}"
+    return cmds
+
+
+def _g0_commands(cmds) -> set:
+    return {n for n, m in cmds.items() if m.get("g0")}
 
 
 def page_run() -> None:
     st.title("管线运行")
-    cmd = st.selectbox("命令", list(COMMAND_HELP.keys()), format_func=lambda c: f"{c} — {COMMAND_HELP[c]}")
-    st.caption(COMMAND_HELP[cmd])
+    cmds = _command_meta()
+    if st.session_state.get("cmd_drift"):
+        st.warning(st.session_state["cmd_drift"])
+    cmd = st.selectbox("命令", list(cmds.keys()), format_func=lambda c: f"{c} — {cmds[c]['help']}")
+    st.caption(cmds[cmd]["help"])
     gate = _gate()
     gate_hint = []
-    if cmd in G0_COMMANDS and gate.status("G0") != "approved":
+    if cmd in _g0_commands(cmds) and gate.status("G0") != "approved":
         gate_hint.append("⚠ 此命令调用付费 API，需 G0 闸门通过")
     if cmd == "import" and gate.status("G1") != "approved":
         gate_hint.append("⚠ 导入私有数据，需 G1 闸门通过")
@@ -334,6 +341,48 @@ def page_gates() -> None:
             "单次运行可 --backend/--model/环境变量 LLM_MODEL 覆盖")
 
 
+
+def _asset_categories() -> dict:
+    """按文件名模式分类资产。"""
+    rules = [
+        ("样本", lambda n: ("samples.jsonl" in n) or "combined_preview" in n),
+        ("DPO 偏好对", lambda n: n.startswith("dpo") or "stylefix_dpo" in n or "cot_style_dpo" in n),
+        ("语料", lambda n: "corpus" in n and n.endswith(".jsonl")),
+        ("报告与状态", lambda n: n.endswith(".json") or n.endswith(".txt") or n == "runs.jsonl"),
+    ]
+    cats: dict[str, dict] = {}
+    for path in sorted(OUT_DIR.glob("*")):
+        if not path.is_file():
+            continue
+        cat = next((c for c, fn in rules if fn(path.name)), "其他")
+        try:
+            n_rows = sum(1 for _ in open(path, encoding="utf-8")) if not path.name.endswith(".txt") else len(path.read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeDecodeError):
+            n_rows = -1
+        size = path.stat().st_size
+        cats.setdefault(cat, {})[path.name] = {"rows": n_rows, "size": size}
+    return cats
+
+
+def page_assets() -> None:
+    st.title("资产管理")
+    st.caption("全部产物按类别分组；搜索过滤；每项可下载。输入侧资产（rollout 原始记录/图片）不在 data/output，见 data/seeds。")
+    search = st.text_input("搜索文件名", "")
+    cats = _asset_categories()
+    total = sum(len(files) for files in cats.values())
+    st.write(f"共 {total} 个资产文件")
+    for cat, files in cats.items():
+        with st.expander(f"{cat}（{len(files)}）", expanded=cat == "样本"):
+            for name, meta in sorted(files.items()):
+                if search and search.lower() not in name.lower():
+                    continue
+                c1, c2, c3 = st.columns([4, 2, 1])
+                c1.write(f"· {name}")
+                c2.caption(f"{meta['rows']} 行 / {meta['size'] / 1024:.0f} KB" if meta['rows'] >= 0 else f"{meta['size'] / 1024:.0f} KB")
+                c3.download_button("下载", open(OUT_DIR / name, "rb").read(), file_name=name,
+                                   key=f"dl_{name}", use_container_width=True)
+
+
 # ── 页面：偏好设置 ──────────────────────────────────────────────────────────
 PREF_FILES = {
     "生成偏好（preferences.yaml）": ROOT / "configs" / "preferences.yaml",
@@ -362,6 +411,7 @@ def page_prefs() -> None:
 
 PAGES = {
     "总览": page_overview,
+    "资产管理": page_assets,
     "数据预览": page_preview,
     "管线运行": page_run,
     "人工审核": page_review,

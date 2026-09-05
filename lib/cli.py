@@ -659,6 +659,20 @@ def cmd_style_correct(args) -> int:
     return 0
 
 
+def cmd_commands(args) -> int:
+    """列出命令注册表（单一事实源）：分组展示，附闸门标注。"""
+    from lib.extensions import groups, load_commands
+
+    cmds = load_commands(ROOT)
+    for group, names in groups(cmds).items():
+        print(f"== {group} ==")
+        for n in names:
+            m = cmds[n]
+            gates = "/".join(m.get("gates", [])) or "-"
+            print(f"  {n:<15} 闸门:{gates:<6} {m['help']}")
+    return 0
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -802,6 +816,9 @@ def main() -> int:
     p_monitor = sub.add_parser("monitor", help="运行监控摘要（本地审计）")
     p_monitor.add_argument("--n", type=int, default=10)
     p_monitor.set_defaults(func=cmd_monitor)
+
+    p_cmds = sub.add_parser("commands", help="列出命令注册表（单一事实源）")
+    p_cmds.set_defaults(func=cmd_commands)
 
     p_gate = sub.add_parser("gate", help="闸门管理")
     p_gate.add_argument("action", choices=["propose", "approve", "reject", "status"])

@@ -1,0 +1,25 @@
+# df 命令注册表（单一事实源）：CLI 帮助 / 控制台 / dsh 插件 / 契约测试 四方引用。
+# 新增管线 = 本文件加一行 + lib/cli.py 加子命令 + lib 模块实现（见 docs/extensibility.md）。
+# gates 标注该命令需过的闸门；g0=true 表示调用付费 API。
+commands:
+  import:        { help: 导入 rollout 真实会话数据 → 多轮 SFT 样本, gates: [G1], g0: false, group: 数据源 }
+  stats:         { help: 查看导入统计, gates: [], g0: false, group: 数据源 }
+  preview:       { help: 预览样本（--html 生成美化渲染页）, gates: [], g0: false, group: 数据源 }
+  doc2corpus:    { help: 文档→CPT 语料（知识注入层，零 LLM）, gates: [], g0: false, group: 知识注入 }
+  doc2data:      { help: 文档→问答 SFT（--mode cross 跨块综合）, gates: [G0], g0: true, group: 知识注入 }
+  identity-gen:  { help: 身份问答零参考训练集, gates: [G0], g0: true, group: 生成管线 }
+  translate:     { help: 中英互译+回译校验, gates: [G0], g0: true, group: 生成管线 }
+  vision:        { help: 多模态图文数据管线, gates: [G0], g0: true, group: 生成管线 }
+  agent-gen:     { help: Agent 工具使用零参考轨迹, gates: [G0], g0: true, group: 生成管线 }
+  gui-cot:       { help: GUI 轨迹 CoT 蒸馏（OpenCUA 成品）, gates: [G0], g0: true, group: 生成管线 }
+  cot-style:     { help: CoT 风格偏好调教, gates: [G0], g0: true, group: 生成管线 }
+  style-correct: { help: 语言风格强矫正（去 AI 味）, gates: [G0], g0: true, group: 生成管线 }
+  distill:       { help: 蒸馏质检：分类+DPO 提取+可选打分, gates: [G0], g0: true, group: 质检与审核 }
+  prompt-eval:   { help: 提示词真机评测, gates: [G0], g0: true, group: 质检与审核 }
+  review:        { help: 人工审核（控制台/Argilla）, gates: [], g0: false, group: 质检与审核 }
+  dpo-enhance:   { help: DPO 偏好对增强, gates: [G0], g0: true, group: 偏好数据 }
+  dpo-merge:     { help: 合并各来源 DPO 对, gates: [], g0: false, group: 偏好数据 }
+  export:        { help: 导出训练格式（--bulk 需 G3）, gates: [G3], g0: false, group: 导出与监控 }
+  monitor:       { help: 运行监控摘要, gates: [], g0: false, group: 导出与监控 }
+  models:        { help: 列出可用模型（网关自动获取）, gates: [], g0: false, group: 系统 }
+  gate:          { help: 闸门管理, gates: [], g0: false, group: 系统 }
