@@ -99,11 +99,15 @@ python -m lib.cli review summary       # 审核通过率（≥90% 且 ≥10 条�
 python -m lib.cli review-remote pull   # 分布式审核：拉取待审批次（协作者在自己主机）
 python -m lib.cli review-remote auto   # 协作者自有 agent 判定（用自己配置的 judge 模型）
 python -m lib.cli review-remote submit # 以协作者身份提交回中心（带理由，可审计）
+python -m lib.cli workspace list       # 工作区（数据按区分流；--ws 跟随）
 python -m lib.cli gate approve G3      # 过放量闸（或审核达标后应用内一键放行）
 python -m lib.cli export --format chat --bulk          # DeepSeek/Qwen messages
 python -m lib.cli export --format llamafactory --bulk  # LLaMA-Factory sharegpt
+python -m lib.cli export --format minimind             # minimind 三件套（sft_t2t/pretrain_t2t/dpo）
 python -m lib.cli monitor              # 运行监控摘要（本地审计，Langfuse 可选）
 ```
+
+工作区与 minimind 格式详见 docs/workspaces.md；多人协作审核见 docs/collaboration.md。
 
 思考处理：`separated`（默认，推理存 `reasoning_content` 字段，由官方 chat template
 注入原生思考 token）/ `tags`（配置原生 token 包裹）/ `plain` / `drop`，见

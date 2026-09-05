@@ -20,7 +20,8 @@ commands:
   review-remote: { help: 分布式人工审核（pull/auto/human/submit，协作者自有 agent 在自己主机审）, gates: [], g0: false, group: 质检与审核 }
   dpo-enhance:   { help: DPO 偏好对增强, gates: [G0], g0: true, group: 偏好数据 }
   dpo-merge:     { help: 合并各来源 DPO 对, gates: [], g0: false, group: 偏好数据 }
-  export:        { help: 导出训练格式（--bulk 需 G3）, gates: [G3], g0: false, group: 导出与监控 }
+  export:        { help: 导出训练格式（minimind=三件套；--bulk 需 G3）, gates: [G3], g0: false, group: 导出与监控 }
   monitor:       { help: 运行监控摘要, gates: [], g0: false, group: 导出与监控 }
-  models:        { help: 列出可用模型（网关自动获取）, gates: [], g0: false, group: 系统 }
+  models:        { help: 列出可用模型（models 网关自动获取）, gates: [], g0: false, group: 系统 }
   gate:          { help: 闸门管理, gates: [], g0: false, group: 系统 }
+  workspace:     { help: 工作区管理（数据按区分流：list/status/use）, gates: [], g0: false, group: 系统 }

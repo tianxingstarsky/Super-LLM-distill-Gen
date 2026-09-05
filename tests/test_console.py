@@ -53,7 +53,7 @@ def test_command_registry_single_source_of_truth():
     import re as _re
 
     cli_commands = set(_re.findall(r"(?<![a-z0-9])[a-z][a-z0-9-]+(?![a-z0-9])", block))
-    cli_commands -= {"df", "h", "console", "commands"}
+    cli_commands -= {"df", "h", "console", "commands", "ws"}  # ws=全局 --ws 选项非子命令
     assert cli_commands <= set(cmds), f"CLI 有但注册表缺: {cli_commands - set(cmds)}"
 
     # dsh 插件命令表 == 注册表（插件暴露全部数据命令）

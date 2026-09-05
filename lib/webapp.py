@@ -26,28 +26,49 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 
 from lib.render import _CSS, _render_message  # noqa: E402
-
-OUT_DIR = ROOT / "data" / "output"
-SAMPLES_PATH = OUT_DIR / "combined_preview.jsonl"
-REPORT_PATH = OUT_DIR / "distill_report.json"
-REVIEW_PATH = OUT_DIR / "review.jsonl"
-RUNS_PATH = OUT_DIR / "runs.jsonl"
-BUDGET_PATH = OUT_DIR / "budget.json"
+from lib import workspace as WS  # noqa: E402
 
 st.set_page_config(page_title="DataForge 运营控制台", layout="wide")
 st.html(f"<style>{_CSS} body {{ max-width: none; padding: 12px; }}</style>")
 
+
+# ── 工作区（数据按区分流；default=原 data/output） ─────────────────────────
+def _ws_choice() -> str:
+    """侧栏工作区选择（会话级记忆；default 恒在列表）。"""
+    from lib import workspace as _w
+
+    options = _w.list_all()
+    if "ws" not in st.session_state or st.session_state["ws"] not in options:
+        st.session_state["ws"] = _w.current() if _w.current() in options else _w.DEFAULT
+    picked = st.sidebar.selectbox("工作区", options, index=options.index(st.session_state["ws"]),
+                                  help="数据按工作区隔离：样本/审核/导出/闸门状态互不混流")
+    st.session_state["ws"] = picked
+    if picked != _w.DEFAULT:
+        os.environ["DF_WORKSPACE"] = picked  # 本进程内文件读取与子进程调用都按工作区走
+    return picked
+
+
+def _ws_out() -> "pathlib.Path":
+    """当前工作区输出目录（页面文件读取入口）。"""
+    return WS.out(st.session_state.get("ws"))
+
+
+def _OUT(name: str) -> "pathlib.Path":
+    """工作区输出目录下拼路径（替代模块级 OUT_DIR 常量的运行时取值）。"""
+    return _ws_out() / name
+
 # ── 通用数据加载 ────────────────────────────────────────────────────────────
 def _load_samples() -> list[dict]:
-    if not SAMPLES_PATH.exists():
+    p = _OUT("combined_preview.jsonl")
+    if not p.exists():
         return []
-    return [json.loads(l) for l in SAMPLES_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def _gate() -> object:
     from lib.gates import GateKeeper
 
-    return GateKeeper(ROOT / "configs" / "gates.yaml", OUT_DIR / "gates_state.json")
+    return GateKeeper(ROOT / "configs" / "gates.yaml", _OUT("gates_state.json"))
 
 
 def _service_health() -> dict[str, bool]:
@@ -67,7 +88,7 @@ def _engine_mode_info() -> tuple[str, str]:
 
 def _inventory() -> dict[str, int]:
     counts = {}
-    for path in sorted(OUT_DIR.glob("*.jsonl")):
+    for path in sorted(_ws_out().glob("*.jsonl")):
         name = path.name
         try:
             n = sum(1 for _ in open(path, encoding="utf-8"))
@@ -97,8 +118,10 @@ def page_overview() -> None:
             st.write(f"· {name}: {n} 行")
         st.caption("分组/搜索/下载 → 「资产管理」页面")
     budget = ""
-    if BUDGET_PATH.exists():
-        budget = BUDGET_PATH.read_text(encoding="utf-8")
+    # 预算是全局的（BudgetGuard 硬停在 default 输出目录，不随工作区切换）
+    _budget_path = ROOT / "data" / "output" / "budget.json"
+    if _budget_path.exists():
+        budget = _budget_path.read_text(encoding="utf-8")
     st.markdown("**预算**")
     st.code(budget or "（无预算记录）")
     gate = _gate()
@@ -200,6 +223,9 @@ def page_run() -> None:
             import os
 
             env = {**os.environ, "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
+            # 子进程按当前工作区跑（df CLI 读 DF_WORKSPACE）
+            if st.session_state.get("ws") and st.session_state["ws"] != WS.DEFAULT:
+                env["DF_WORKSPACE"] = st.session_state["ws"]
             proc = subprocess.Popen(
                 argv, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", env=env,
@@ -268,13 +294,14 @@ def page_review() -> None:
 
 
 def _load_decisions() -> list[dict]:
-    if not REVIEW_PATH.exists():
+    p = _OUT("review.jsonl")
+    if not p.exists():
         return []
-    return [json.loads(l) for l in REVIEW_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def _append_decision(sample_id: str, decision: str) -> None:
-    with open(REVIEW_PATH, "a", encoding="utf-8") as f:
+    with open(_OUT("review.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps({"sample_id": sample_id, "decision": decision}, ensure_ascii=False) + "\n")
 
 
@@ -282,8 +309,8 @@ def _append_decision(sample_id: str, decision: str) -> None:
 def page_monitor() -> None:
     st.title("运行监控")
     runs: list[dict] = []
-    if RUNS_PATH.exists():
-        runs = [json.loads(l) for l in RUNS_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
+    if _OUT("runs.jsonl").exists():
+        runs = [json.loads(l) for l in _OUT("runs.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     st.caption(f"本地运行审计共 {len(runs)} 条（Langfuse 未配置时的兜底记录）")
     if runs:
         rows = []
@@ -295,9 +322,10 @@ def page_monitor() -> None:
                 "completion": usage.get("completion_tokens", ""),
             })
         st.dataframe(rows, use_container_width=True)
-    if BUDGET_PATH.exists():
-        st.markdown("**预算**")
-        st.code(BUDGET_PATH.read_text(encoding="utf-8"))
+    _budget_path = ROOT / "data" / "output" / "budget.json"  # 预算全局
+    if _budget_path.exists():
+        st.markdown("**预算（全局）**")
+        st.code(_budget_path.read_text(encoding="utf-8"))
 
 
 # ── 页面：模型与闸门 ────────────────────────────────────────────────────────
@@ -344,7 +372,7 @@ def _asset_categories() -> dict:
         ("报告与状态", lambda n: n.endswith(".json") or n.endswith(".txt") or n == "runs.jsonl"),
     ]
     cats: dict[str, dict] = {}
-    for path in sorted(OUT_DIR.glob("*")):
+    for path in sorted(_ws_out().glob("*")):
         if not path.is_file():
             continue
         cat = next((c for c, fn in rules if fn(path.name)), "其他")
@@ -359,7 +387,7 @@ def _asset_categories() -> dict:
 
 def page_assets() -> None:
     st.title("资产管理")
-    st.caption("全部产物按类别分组；搜索过滤；每项可下载。输入侧资产（rollout 原始记录/图片）不在 data/output，见 data/seeds。")
+    st.caption("当前工作区的全部产物按类别分组；搜索过滤；每项可下载。输入侧资产（rollout 原始记录/图片）不在输出目录，见 data/seeds。")
     search = st.text_input("搜索文件名", "")
     cats = _asset_categories()
     total = sum(len(files) for files in cats.values())
@@ -372,7 +400,7 @@ def page_assets() -> None:
                 c1, c2, c3 = st.columns([4, 2, 1])
                 c1.write(f"· {name}")
                 c2.caption(f"{meta['rows']} 行 / {meta['size'] / 1024:.0f} KB" if meta['rows'] >= 0 else f"{meta['size'] / 1024:.0f} KB")
-                c3.download_button("下载", open(OUT_DIR / name, "rb").read(), file_name=name,
+                c3.download_button("下载", open(_ws_out() / name, "rb").read(), file_name=name,
                                    key=f"dl_{name}", use_container_width=True)
 
 
@@ -413,5 +441,6 @@ PAGES = {
     "偏好设置": page_prefs,
 }
 
+_ws_choice()  # 工作区选择器（侧栏最上方；先于导航与页面读取路径）
 page = st.sidebar.radio("DataForge 控制台", list(PAGES.keys()))
 PAGES[page]()

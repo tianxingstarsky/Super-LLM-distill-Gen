@@ -18,6 +18,7 @@ data/seeds/screenshots/*
 # 生成产物与运行状态
 data/output/*
 !data/output/.gitkeep
+data/workspaces/
 *.log
 
 # 密钥

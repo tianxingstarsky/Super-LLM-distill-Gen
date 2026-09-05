@@ -74,3 +74,84 @@ def test_export_samples_writes_files(tmp_path):
     counts2 = export_samples(samples, "llamafactory", out2)
     assert counts2["sft"] == 3
     assert all("conversations" in json.loads(l) for l in out2.read_text(encoding="utf-8").splitlines())
+
+
+# ── minimind（格式规范：dataset/lm_dataset.py 加载侧实证） ───────────────────
+def test_to_minimind_sft_shape():
+    """conversations[role/content]，assistant 保留 reasoning_content，tool_calls 为 JSON 字符串。"""
+    from lib.exporters import to_minimind_sft
+
+    sample = {
+        "messages": [
+            {"role": "user", "content": "帮我查一下天气"},
+            {"role": "assistant", "content": "", "reasoning_content": "需要调用天气工具",
+             "toolCalls": [{"name": "get_weather", "input": {"city": "北京"}}]},
+            {"role": "tool", "content": "晴 25℃", "toolCallId": "call_1"},
+            {"role": "assistant", "content": "北京今天晴，25 度。", "reasoning_content": "读数正常"},
+        ],
+    }
+    out = to_minimind_sft(sample)
+    conv = out["conversations"]
+    assert [c["role"] for c in conv] == ["user", "assistant", "tool", "assistant"]
+    # reasoning_content 逐消息保留（minimind 加载侧 .get() 读取）
+    assert conv[1]["reasoning_content"] == "需要调用天气工具"
+    # tool_calls 必须是 JSON 字符串（minimind 侧 json.loads 还原）
+    import json as _j
+
+    assert isinstance(conv[1]["tool_calls"], str)
+    assert _j.loads(conv[1]["tool_calls"]) == [{"name": "get_weather", "arguments": {"city": "北京"}}]
+    # 内部元数据剥离
+    assert "toolCallId" not in conv[2] and "isError" not in str(conv)
+
+
+def test_to_minimind_dpo_full_dialogues():
+    """chosen/rejected = 含 prompt 前缀的完整消息列表（minimind 直接 apply_chat_template）。"""
+    from lib.exporters import to_minimind_dpo
+
+    pair = {
+        "prompt": [{"role": "user", "content": "问题"}],
+        "chosen": [{"role": "assistant", "content": "正确", "reasoning_content": "思路好"}],
+        "rejected": [{"role": "assistant", "content": "错误"}],
+    }
+    out = to_minimind_dpo(pair)
+    assert [m["role"] for m in out["chosen"]] == ["user", "assistant"]
+    assert out["chosen"][1]["reasoning_content"] == "思路好"
+    assert [m["role"] for m in out["rejected"]] == ["user", "assistant"]
+    assert out["rejected"][1]["content"] == "错误"
+
+
+def test_export_minimind_three_files(tmp_path):
+    """三件套：sft_t2t.jsonl / pretrain_t2t.jsonl（语料存在才写）/ dpo.jsonl（对存在才写）。"""
+    from lib.exporters import export_minimind, to_dpo_sample
+
+    samples = [
+        {"messages": [{"role": "user", "content": "你好"}, {"role": "assistant", "content": "你好！"}]},
+        {"messages": [{"role": "user", "content": "无回答"}]},  # 无 assistant 输出 → 被过滤
+    ]
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text(
+        json.dumps({"text": "预训练语料一", "source": "a.md", "chunk_id": "a#0"}, ensure_ascii=False) + "\n"
+        + json.dumps({"text": "", "chunk_id": "b#0"}, ensure_ascii=False) + "\n",  # 空文本 → 过滤
+        encoding="utf-8",
+    )
+    dpo = tmp_path / "dpo.jsonl.src"
+    dpo.write_text(json.dumps(
+        to_dpo_sample([{"role": "user", "content": "q"}],
+                      [{"role": "assistant", "content": "好"}],
+                      [{"role": "assistant", "content": "差"}]), ensure_ascii=False) + "\n", encoding="utf-8")
+
+    counts = export_minimind(samples, tmp_path / "export" / "sft.jsonl",
+                             corpus_path=corpus, dpo_path=dpo)
+    assert counts == {"sft": 1, "pretrain": 1, "dpo": 1}
+
+    sft = [json.loads(l) for l in (tmp_path / "export" / "sft_t2t.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert sft[0]["conversations"][0]["role"] == "user"
+    pre = [json.loads(l) for l in (tmp_path / "export" / "pretrain_t2t.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert pre == [{"text": "预训练语料一"}]  # 仅 text 字段，source/chunk_id 剥离
+    dpo_out = [json.loads(l) for l in (tmp_path / "export" / "dpo.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert dpo_out[0]["chosen"][-1]["content"] == "好" and dpo_out[0]["rejected"][-1]["content"] == "差"
+
+    # 语料/DPO 源缺失 → 对应文件不写、不报错
+    counts2 = export_minimind(samples, tmp_path / "e2" / "sft.jsonl")
+    assert counts2["pretrain"] == 0 and counts2["dpo"] == 0
+    assert not (tmp_path / "e2" / "pretrain_t2t.jsonl").exists()

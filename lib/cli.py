@@ -27,6 +27,7 @@ os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
 os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 
 from lib.gates import GateBlocked, GateKeeper  # noqa: E402
+from lib import workspace as WS  # noqa: E402
 
 GATES_YAML = ROOT / "configs" / "gates.yaml"
 GATES_STATE = ROOT / "data" / "output" / "gates_state.json"
@@ -83,7 +84,7 @@ def cmd_stats(args) -> int:
 
 
 def cmd_preview(args) -> int:
-    path = pathlib.Path(args.file)
+    path = pathlib.Path(args.file or (OUT_DIR / "rollout_samples.jsonl"))
     lines = path.read_text(encoding="utf-8").splitlines()
     samples = [json.loads(l) for l in lines if l.strip()]
 
@@ -115,9 +116,29 @@ def cmd_preview(args) -> int:
 def cmd_export(args) -> int:
     from lib.exporters import export_samples
 
+    args.input = args.input or str(OUT_DIR / "rollout_samples.jsonl")
+    args.out = args.out or str(OUT_DIR / "export" / "sft.jsonl")
+    if not pathlib.Path(args.input).exists():
+        ws = WS.resolve(getattr(args, "ws", None))
+        print(f"[工作区 {ws}] 无样本文件 {args.input}")
+        print("先在该工作区生成样本（import/doc2data/vision/agent-gen…），或用 --input 指定路径")
+        return 1
     if args.bulk:
         _gates().require("G3")  # 放量前须过小批量预览闸
     samples = (json.loads(l) for l in pathlib.Path(args.input).read_text(encoding="utf-8").splitlines() if l.strip())
+    if args.format == "minimind":
+        # minimind 三件套：sft_t2t（SFT）/ pretrain_t2t（语料）/ dpo（偏好对，存在才写）
+        from lib.exporters import export_minimind
+        from lib.monitor import trace_run
+
+        counts = export_minimind(
+            samples, args.out,
+            corpus_path=OUT_DIR / "corpus" / "docs.jsonl",
+            dpo_path=OUT_DIR / "dpo_pairs.jsonl",
+        )
+        trace_run(ROOT, "export", {"format": "minimind", "counts": counts, "bulk": args.bulk})
+        print(f"导出完成（minimind 三件套）: {counts} → {pathlib.Path(args.out).parent}")
+        return 0
     counts = export_samples(samples, args.format, args.out)
     from lib.monitor import trace_run
 
@@ -205,8 +226,9 @@ def cmd_review(args) -> int:
         scores = {}
         if report_path.exists():
             scores = {s.get("id"): s.get("score", "") for s in json.loads(report_path.read_text(encoding="utf-8")).get("llm_scores", [])}
+        dataset = WS.dataset_name(getattr(args, "ws", None))
         try:
-            n = review_mod.push_samples(samples, scores)
+            n = review_mod.push_samples(samples, scores, dataset_name=dataset)
             print(f"已推送 {n} 条到 Argilla（http://127.0.0.1:6900，admin/distill123456）")
             print("标注完 keep/reject 后运行: df review pull")
         except Exception as e:  # noqa: BLE001
@@ -217,7 +239,7 @@ def cmd_review(args) -> int:
 
     if args.action == "pull":
         try:
-            decisions = review_mod.pull_decisions()
+            decisions = review_mod.pull_decisions(dataset_name=WS.dataset_name(getattr(args, "ws", None)))
         except Exception as e:  # noqa: BLE001
             print(f"[Argilla 不可用] {str(e)[:200]}")
             return 4
@@ -361,7 +383,7 @@ def cmd_doc2corpus(args) -> int:
     cfg = _pipeline("doc2corpus")["doc2corpus"] if "doc2corpus" in _pipeline("doc2corpus") else {}
     path = pathlib.Path(args.input)
     files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.suffix.lower() in d2c.SUPPORTED_EXTS)
-    out = pathlib.Path(args.out)
+    out = pathlib.Path(args.out or (OUT_DIR / "corpus" / "docs.jsonl"))
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         out.unlink()  # 全量重写（manifest 保证内容级去重）
@@ -565,7 +587,7 @@ def cmd_gui_cot(args) -> int:
     local_cfg = yaml.safe_load((ROOT / "configs" / "backends.local.yaml").read_text(encoding="utf-8"))
     api_key = local_cfg["backends"]["deepseek"]["api_key"]
     upstream_dir = ROOT / "components" / "opencua" / "data" / "cot-generate"
-    out_dir = pathlib.Path(args.out)
+    out_dir = pathlib.Path(args.out or (OUT_DIR / "gui_cot"))
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     # 上游按步骤断点缓存（已处理步骤跳过）；重复运行必须清空，否则回放旧结果
     import shutil
@@ -679,6 +701,12 @@ def cmd_review_remote(args) -> int:
     from lib.llm_client import load_backend
 
     cfg = rr.load_config(args.config)
+    # 工作区分流：非 default 工作区 → 数据集加后缀 + 待审缓存放各自输出目录
+    ws_name = WS.resolve(getattr(args, "ws", None))
+    if ws_name != WS.DEFAULT:
+        base_ds = cfg.get("dataset", "rollout_review")
+        cfg["dataset"] = f"{base_ds}_{ws_name}"
+        rr.INBOX_PATH = WS.out(ws_name) / "remote_inbox.jsonl"
     client = rr.get_client(cfg)
 
     if args.action == "pull":
@@ -718,6 +746,28 @@ def cmd_review_remote(args) -> int:
     return 0
 
 
+def cmd_workspace(args) -> int:
+    """工作区管理：数据按区分流（list/status/use）。"""
+    if args.action == "list":
+        cur = WS.current()
+        for name in WS.list_all():
+            mark = "（当前）" if name == cur else ""
+            print(f"  {name}{mark}")
+        return 0
+    if args.action == "status":
+        info = WS.status(getattr(args, "ws", None))
+        print(json.dumps(info, ensure_ascii=False, indent=1))
+        return 0
+    if args.action == "use":
+        if not args.name:
+            print("用法: df workspace use <名字>")
+            return 1
+        name = WS.set_current(args.name)
+        print(f"当前工作区 → {name}（输出目录 {WS.out(name)}）")
+        return 0
+    return 1
+
+
 def cmd_gate(args) -> int:
     gate = _gates()
     if args.action == "status":
@@ -736,6 +786,7 @@ def cmd_gate(args) -> int:
 
 
 def main() -> int:
+    global OUT_DIR, GATES_STATE  # 工作区解析后按区重绑（对全部 cmd_* 生效）
     parser = argparse.ArgumentParser(prog="df", description="Super-LLM-distill-Gen CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -749,14 +800,14 @@ def main() -> int:
 
     p_preview = sub.add_parser("preview", help="预览样本（--html 生成美化渲染页）")
     p_preview.add_argument("--n", type=int, default=10)
-    p_preview.add_argument("--file", default=str(OUT_DIR / "rollout_samples.jsonl"))
+    p_preview.add_argument("--file", default=None, help="缺省=当前工作区 rollout_samples.jsonl")
     p_preview.add_argument("--html", action="store_true", help="生成静态 HTML 预览页（人工过目）")
     p_preview.set_defaults(func=cmd_preview)
 
-    p_export = sub.add_parser("export", help="导出训练格式")
-    p_export.add_argument("--format", default="chat", choices=["llamafactory", "chat", "all"])
-    p_export.add_argument("--input", default=str(OUT_DIR / "rollout_samples.jsonl"))
-    p_export.add_argument("--out", default=str(OUT_DIR / "export" / "sft.jsonl"))
+    p_export = sub.add_parser("export", help="导出训练格式（minimind=三件套 sft_t2t/pretrain_t2t/dpo）")
+    p_export.add_argument("--format", default="chat", choices=["llamafactory", "chat", "minimind", "all"])
+    p_export.add_argument("--input", default=None, help="缺省=当前工作区 rollout_samples.jsonl")
+    p_export.add_argument("--out", default=None, help="缺省=当前工作区 export/sft.jsonl")
     p_export.add_argument("--bulk", action="store_true", help="放量导出（需 G3 闸门）")
     p_export.set_defaults(func=cmd_export)
 
@@ -801,7 +852,7 @@ def main() -> int:
 
     p_doc2corpus = sub.add_parser("doc2corpus", help="文档→CPT 语料（知识注入层，零 LLM）")
     p_doc2corpus.add_argument("--input", required=True, help="文件或目录（md/txt/pdf/docx）")
-    p_doc2corpus.add_argument("--out", default=str(OUT_DIR / "corpus" / "docs.jsonl"))
+    p_doc2corpus.add_argument("--out", default=None, help="缺省=当前工作区 corpus/docs.jsonl")
     p_doc2corpus.add_argument("--chunk-size", type=int, default=None)
     p_doc2corpus.add_argument("--overlap", type=int, default=None)
     p_doc2corpus.set_defaults(func=cmd_doc2corpus)
@@ -854,7 +905,7 @@ def main() -> int:
     p_gui = sub.add_parser("gui-cot", help="GUI 轨迹 CoT 蒸馏（上游 OpenCUA 成品，G0 闸门）")
     p_gui.add_argument("--traj", required=True, help="OpenCUA traj JSONL（task_id/instruction/traj[{image,value.code}]）")
     p_gui.add_argument("--images", required=True, help="截图目录")
-    p_gui.add_argument("--out", default=str(OUT_DIR / "gui_cot"))
+    p_gui.add_argument("--out", default=None, help="缺省=当前工作区 gui_cot")
     p_gui.add_argument("--model", default="deepseek-v4-flash-vision-exp")
     p_gui.set_defaults(func=cmd_gui_cot)
 
@@ -892,7 +943,22 @@ def main() -> int:
     p_stylefix.add_argument("--model")
     p_stylefix.set_defaults(func=cmd_style_correct)
 
+    p_workspace = sub.add_parser("workspace", help="工作区管理（数据按区分流：list/status/use）")
+    p_workspace.add_argument("action", choices=["list", "status", "use"])
+    p_workspace.add_argument("name", nargs="?", default="", help="工作区名（use 时必填）")
+    p_workspace.set_defaults(func=cmd_workspace)
+
+    # 全局 --ws：所有子命令可用（df import --ws docs）；default 工作区=原 data/output
+    for p in sub.choices.values():
+        p.add_argument("--ws", help="工作区名（缺省=当前工作区，见 df workspace list）")
+
     args = parser.parse_args()
+    # 工作区解析在分发前完成：重绑本模块常量即对全部 cmd_* 生效
+    ws_name = WS.resolve(getattr(args, "ws", None))
+    if ws_name != WS.DEFAULT:
+        OUT_DIR = WS.out(ws_name)
+        GATES_STATE = OUT_DIR / "gates_state.json"
+        os.environ["DF_WORKSPACE"] = ws_name  # 子进程/下游模块感知
     try:
         return args.func(args)
     except GateBlocked as e:

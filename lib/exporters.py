@@ -7,6 +7,10 @@
   DeepSeek/Qwen messages（OpenAI 兼容）：
     SFT  {"messages": [{"role","content"[, "reasoning_content"][, "toolCalls"][, "toolCallId"]}]}
     DPO  {"prompt": [...], "chosen": [...], "rejected": [...]}
+  minimind（jingyaogong/minimind，dataset/lm_dataset.py 实证）：
+    预训练  {"text": "..."}
+    SFT     {"conversations": [{"role","content"[,"reasoning_content"][,"tool_calls"(JSON 字符串)][,"tools"]}]}
+    DPO     {"chosen": [完整消息列表], "rejected": [完整消息列表]}（含 prompt 前缀）
 """
 from __future__ import annotations
 
@@ -85,6 +89,88 @@ def to_chat_sample(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def to_dpo_sample(prompt: List[Dict[str, Any]], chosen: List[Dict[str, Any]], rejected: List[Dict[str, Any]]) -> Dict[str, Any]:
     """DPO 三元组（prompt/chosen/rejected 均为消息列表）。"""
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+
+
+# ── minimind ─────────────────────────────────────────────────────────────────
+def _minimind_msg(m: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """统一消息 → minimind 消息：role/content；assistant 保留 reasoning_content；
+    toolCalls → tool_calls（JSON 字符串，minimind 加载侧 json.loads 还原）；
+    剥离内部元数据（isError/toolCallId）。"""
+    role = m.get("role")
+    if role not in ("system", "user", "assistant", "tool"):
+        return None
+    item: Dict[str, str] = {"role": role, "content": m.get("content", "") or ""}
+    if role == "assistant" and m.get("reasoning_content"):
+        item["reasoning_content"] = m["reasoning_content"]
+    if role == "assistant" and m.get("toolCalls"):
+        item["tool_calls"] = json.dumps(
+            [{"name": tc.get("name"), "arguments": tc.get("input", {})} for tc in m["toolCalls"]],
+            ensure_ascii=False,
+        )
+    return item
+
+
+def to_minimind_sft(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """统一样本 → minimind SFT：{"conversations": [{"role","content",…}]}。"""
+    messages = sample.get("messages") or []
+    conversations = [c for c in (_minimind_msg(m) for m in messages) if c]
+    if not any(c["role"] == "assistant" and c["content"] for c in conversations):
+        return None  # 无助手输出，不成样本
+    return {"conversations": conversations}
+
+
+def to_minimind_dpo(pair: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """统一 DPO 对（prompt/chosen/rejected）→ minimind：chosen/rejected 为含 prompt 的完整消息列表。"""
+    prompt = [c for c in (_minimind_msg(m) for m in pair.get("prompt", [])) if c]
+    chosen = [c for c in (_minimind_msg(m) for m in pair.get("chosen", [])) if c]
+    rejected = [c for c in (_minimind_msg(m) for m in pair.get("rejected", [])) if c]
+    if not chosen or not rejected:
+        return None
+    return {"chosen": prompt + chosen, "rejected": prompt + rejected}
+
+
+def export_minimind(
+    samples: Iterable[Dict[str, Any]],
+    out_path: str | Path,
+    corpus_path: str | Path | None = None,
+    dpo_path: str | Path | None = None,
+) -> Dict[str, int]:
+    """导出 minimind 三件套：sft_t2t.jsonl（SFT）、pretrain_t2t.jsonl（语料，存在才写）、
+    dpo.jsonl（偏好对，存在才写）。out_path 只决定输出目录，文件名固定对齐 minimind 习惯。"""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    counts: Dict[str, int] = {"sft": 0, "pretrain": 0, "dpo": 0}
+
+    sft_target = out_path.parent / "sft_t2t.jsonl"
+    with open(sft_target, "w", encoding="utf-8") as fh:
+        for s in samples:
+            converted = to_minimind_sft(s)
+            if converted:
+                fh.write(json.dumps(converted, ensure_ascii=False) + "\n")
+                counts["sft"] += 1
+
+    if corpus_path and Path(corpus_path).exists():
+        with open(corpus_path, encoding="utf-8") as src, \
+             open(out_path.parent / "pretrain_t2t.jsonl", "w", encoding="utf-8") as fh:
+            for line in src:
+                if not line.strip():
+                    continue
+                text = json.loads(line).get("text", "")
+                if text.strip():
+                    fh.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
+                    counts["pretrain"] += 1
+
+    if dpo_path and Path(dpo_path).exists():
+        with open(dpo_path, encoding="utf-8") as src, \
+             open(out_path.parent / "dpo.jsonl", "w", encoding="utf-8") as fh:
+            for line in src:
+                if not line.strip():
+                    continue
+                converted = to_minimind_dpo(json.loads(line))
+                if converted:
+                    fh.write(json.dumps(converted, ensure_ascii=False) + "\n")
+                    counts["dpo"] += 1
+    return counts
 
 
 # ── 导出主入口 ──────────────────────────────────────────────────────────────

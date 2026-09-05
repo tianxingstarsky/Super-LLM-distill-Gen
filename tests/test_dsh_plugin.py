@@ -31,7 +31,7 @@ def test_plugin_commands_match_cli_subcommands():
     )
     # usage 行可能换行：取 "usage:" 到首个空行之间的块，提取全部小写命令 token
     block = df_help.stdout.split("usage:", 1)[-1].split("\n\n", 1)[0]
-    noise = {"df", "h", "error", "unrecognized", "arguments", "usage"}
+    noise = {"df", "h", "error", "unrecognized", "arguments", "usage", "ws"}  # ws=全局 --ws 选项
     cli_commands = set(re.findall(r"\b[a-z][a-z0-9-]+\b", block)) - noise
     # 本地 UI 启动器类命令不暴露给 agent（插件命令表不含它们是预期）
     cli_commands -= {"console", "commands"}

@@ -72,7 +72,8 @@ def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List
     return records
 
 
-def push_samples(samples: List[Dict[str, Any]], scores: Dict[str, str], client: Any = None) -> int:
+def push_samples(samples: List[Dict[str, Any]], scores: Dict[str, str], client: Any = None,
+                 dataset_name: str = DATASET_NAME) -> int:
     import argilla as rg
 
     if client is None:
@@ -90,11 +91,11 @@ def push_samples(samples: List[Dict[str, Any]], scores: Dict[str, str], client: 
             rg.TextQuestion(name="reason", title="判定理由/模型", required=False, client=client),
         ],
     )
-    dataset = rg.Dataset(name=DATASET_NAME, settings=settings)
+    dataset = rg.Dataset(name=dataset_name, settings=settings)
     try:
         dataset.create()  # 幂等：已存在则复用
     except Exception:  # noqa: BLE001 —— ConflictError（数据集已存在）
-        dataset = client.datasets(name=DATASET_NAME)
+        dataset = client.datasets(name=dataset_name)
     dataset.records.log(records=build_records(samples, scores))
     return len(samples)
 

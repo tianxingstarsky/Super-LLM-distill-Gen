@@ -24,7 +24,7 @@ const COMMAND_HELP: Record<string, string> = {
   import: '导入 rollout 真实会话数据 → 多轮 SFT 样本（需 G1 数据源闸门已过）',
   stats: '查看导入统计（各会话文件 ok/error/模型分布）',
   preview: '预览样本（--html 生成美化渲染页供人工过目）',
-  export: '导出训练格式（--format chat|llamafactory|all；--bulk 放量需 G3 闸门）',
+  export: '导出训练格式（--format chat|llamafactory|minimind|all；--bulk 放量需 G3 闸门）',
   distill: '蒸馏质检：分类+DPO 负样本提取+可选 judge 打分（--llm-check N 需 G0 闸门）',
   review: '人工审核（app=本地轻量应用；push/pull 对接 Argilla）',
   'review-remote': '分布式人工审核（协作者在自己主机 pull/auto/human/submit，提交带身份与理由可审计）',
@@ -43,6 +43,7 @@ const COMMAND_HELP: Record<string, string> = {
   monitor: '运行监控摘要（本地审计）',
   models: '列出可用模型（models 网关自动获取）',
   gate: '闸门管理（action=status|approve|reject|propose，gate_id 可选）',
+  workspace: '工作区管理（action=list|status|use + 工作区名；--ws 全局选择工作区，数据按区隔离）',
 }
 
 // 位置参数命令：options 中的这些键按"值"顺序拼接，不加 --前缀（与 lib/cli.py argparse 对齐）
@@ -50,6 +51,7 @@ const POSITIONAL_OPS: Record<string, string[]> = {
   gate: ['action', 'gate_id'],
   review: ['action'],
   'review-remote': ['action'],
+  workspace: ['action', 'name'],
 }
 
 export function apply(ctx: Context) {
