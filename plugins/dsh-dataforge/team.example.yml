@@ -1,0 +1,37 @@
+# 审核小队补丁模板（随仓库分发；实际运行用 make_dsh_patch.py 生成的 team.yml，
+# 其插件名是 file:// URL 绝对路径——按包名挂载会被 plugin-package-inventory-deepseek
+# 拒绝（无法解析包身份，DeepSeek 请求扩展直接失败，实测确认）。
+# 内容对齐官方 agent-team-profile/cordis.patch.yml 的组装语义。
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: one-shot
+
+- id: tool-subagent-fork
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: one-shot
+
+- insert:
+    - id: agent-team
+      name: '{{AGENT_TEAM_URI}}'
+      config:
+        maxMembers: 8
+        maxTasks: 256
+        maxPendingMessagesPerMember: 64
+        maxMessageBytes: 65536
+        disposalTimeoutMs: 5000
+
+    - id: tool-agent-team
+      name: '{{TOOL_AGENT_TEAM_URI}}'
+      config:
+        freshProvider: spawn
+        forkProvider: fork

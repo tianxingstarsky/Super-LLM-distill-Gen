@@ -57,6 +57,19 @@ fi
 # .ts 插件加载：与源码入口一致（node --import tsx/esm）
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import tsx/esm"
 
+# 技能发现（用户级根，skill-filesystem 监视，无需重启）：
+# $DSH_AGENTS_HOME/skills → 项目 skills 目录（dataforge + review-team）
+AGENTS_SKILLS="$DSH_AGENTS_HOME/skills"
+if [ ! -e "$AGENTS_SKILLS" ]; then
+  mkdir -p "$DSH_AGENTS_HOME"
+  node -e "
+const fs = require('fs');
+const [src, dst] = process.argv.slice(1);
+fs.symlinkSync(src, dst, 'junction');
+" "$DF_ROOT/plugins/dsh-dataforge/skills" "$AGENTS_SKILLS"
+  echo "已联接技能目录 → $AGENTS_SKILLS" >&2
+fi
+
 # 补丁：本机绝对路径（make_dsh_patch.py 生成，gitignored）
 PATCH="$DF_ROOT/plugins/dsh-dataforge/cordis.yml"
 if [ ! -f "$PATCH" ]; then
@@ -65,4 +78,10 @@ fi
 
 cd "$HARNESS"
 # 根脚本 dsh = node --import tsx/esm apps/cli/src/bin.ts（源码启动器，自带 .ts 加载）
+# 第 2 个可选参数=团队补丁（审核小队/多个子智能体协作用）
+TEAM_PATCH="${2:-}"
+if [ -n "$TEAM_PATCH" ]; then
+  exec corepack pnpm@11.7.0 run dsh --profile headless \
+    --patch "$PATCH" --patch "$TEAM_PATCH" "$1"
+fi
 exec corepack pnpm@11.7.0 run dsh --profile headless --patch "$PATCH" "$1"

@@ -86,7 +86,34 @@ python -m lib.cli review-remote submit             # 3) 确认后以我的身份
 - `submit` 以我的账号提交（决策+理由），中心唯一约束防重复提交；
 - 提交后 `pull` 会跳过已 submitted 记录——不可重复，判定即终稿。
 
-## 四、中心汇总与放行
+## 四、AI 审核小队（dsh 派子智能体审核）
+
+AI 审核早就内置（每个评审者的 `review-remote auto` 用自己的模型按 judge.score 判定）；
+dsh 可以把这变成**子智能体流水线**——Lead 读完 skill 后，按"角色↔配置对照表"给每个
+子智能体下发它自己的评审账号/配置，各角色独立拉取、判定、提交，中心审计追到子智能体：
+
+```bash
+cd components/deepseek-harness
+# 1) 中心建评审账号（一次性）
+python -m lib.cli user create judge_quality && python -m lib.cli user create judge_safety
+# 2) 每角色一份配置（gitignored）：configs/review_remote.judge_*.yaml（各自 api_key）
+# 3) 生成补丁（file:// URL；team.example.yml 为模板）：python scripts/make_dsh_patch.py
+# 4) dsh headless 发起审核小队（skills/review-team 已联接进 $DSH_AGENTS_HOME/skills）
+bash scripts/dsh_smoke.sh "你是审核小队的 Lead，先读取 review-team 技能，
+然后创建 teammate quality 与 safety，让它们各用自己角色的配置
+pull 3 条 → auto 判定 → submit，完成后汇总中心通过率告诉我。" \
+  "$(pwd)/plugins/dsh-dataforge/team.yml"
+```
+
+- 已真机验证：Lead 创建两个 teammate，quality/safety 各用独立配置（独立评审账号+模型）
+  审 3 条并显式提交；中心合计 26 条响应、五个身份（admin/zhang/wang/judge_quality/
+  judge_safety），每个子智能体的判定带理由可审计；
+- 机制说明：两个角色**审同一批**是刻意的多维度视角（质量+安全），中心按身份分别记账；
+- 团队包为 harness `experimental` 组件（agent-team 标注实验性、需持久会话存储，
+  headless 自带）；补丁必须**按 file:// URL 挂团队插件**——按包名挂载会被
+  DeepSeek 请求扩展（plugin-package-inventory-deepseek）拒绝，真机实测确认。
+
+## 五、中心汇总与放行
 
 ```bash
 python -m lib.cli review pull        # 拉全部评审响应（按身份/决策/理由统计）

@@ -57,6 +57,22 @@ def test_skill_has_required_workflow_rules():
     assert "gate status" in text and "G0" in text and "G3" in text
 
 
+def test_team_patch_generation(tmp_path):
+    """审核小队补丁：模板占位符 + 生成器产出 file:// URL（包名挂载会被
+    plugin-package-inventory-deepseek 拒绝，必须按路径挂载——真机踩坑固化）。"""
+    import subprocess
+
+    template = (ROOT / "plugins" / "dsh-dataforge" / "team.example.yml").read_text(encoding="utf-8")
+    assert "{{AGENT_TEAM_URI}}" in template and "{{TOOL_AGENT_TEAM_URI}}" in template
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "make_dsh_patch.py")],
+                       cwd=str(ROOT), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    team = (ROOT / "plugins" / "dsh-dataforge" / "team.yml").read_text(encoding="utf-8")
+    assert "file:///" in team
+    assert "experimental/agent-team/src/index.ts" in team
+    assert "experimental/tool-agent-team/src/index.ts" in team
+
+
 def test_harness_submodule_pinned():
     gitmodules = (ROOT / ".gitmodules").read_text(encoding="utf-8")
     assert "components/deepseek-harness" in gitmodules
