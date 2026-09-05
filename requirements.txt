@@ -2,8 +2,7 @@ distilabel==1.5.3
 openai
 beautifulsoup4
 pytest
-argilla==2.8.0
-argilla-server==2.8.0
-redis==4.6.0   # RESP2：Windows 原生 Redis 5.0 不支持 RESP3（HELLO 命令）
+# 审核中心已融合为单进程（SQLite+内置 HTTP，见 lib/review_center.py）；
+# 不再依赖 argilla/argilla-server/redis（旧协作栈已下线）
 langfuse
 streamlit==1.63.0

@@ -9,7 +9,7 @@
 | 项 | default | 其他（如 docs） |
 |---|---|---|
 | 输出目录 | `data/output/` | `data/workspaces/docs/output/` |
-| Argilla 审核数据集 | `rollout_review` | `rollout_review_docs` |
+| 审核中心数据集 | `rollout_review` | `rollout_review_docs` |
 | 闸门状态 G1/G3 | `data/output/gates_state.json` | `data/workspaces/docs/output/gates_state.json` |
 | 协作审核收件箱 | `data/output/remote_inbox.jsonl` | `data/workspaces/docs/output/remote_inbox.jsonl` |
 | **预算（G0 硬停）** | **全局**：`data/output/budget.json`，不随工作区切换 | 同左 |
@@ -54,7 +54,7 @@ df export --format minimind --ws docs         # 按工作区导出（语料/DPO 
 
 ## 三、与协作流程的关系
 
-- 每个工作区有独立的 Argilla 数据集与协作审核收件箱；协作者拉审/提交前带
+- 每个工作区有独立的审核中心数据集与协作审核收件箱；协作者拉审/提交前带
   `--ws <工作区>` 即可（数据结构上的"评审批次隔离"）。
 - 放量（G3）按工作区独立：A 工作区审核达标放量不影响 B 工作区未达标状态；
   预算（花钱）不按工作区分——这是刻意的全局硬停。

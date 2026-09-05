@@ -212,7 +212,7 @@ def cmd_distill(args) -> int:
 
 
 def cmd_review(args) -> int:
-    """Argilla 人工审核：push（推送+评分建议）/ pull（拉回标注+按通过率放行 G3）/ summary。"""
+    """审核中心人工审核（单进程融合）：push（推送+评分建议）/ pull（拉回标注+按通过率放行 G3）/ summary。"""
     import lib.review as review_mod
 
     gate = _gates()
@@ -227,22 +227,13 @@ def cmd_review(args) -> int:
         if report_path.exists():
             scores = {s.get("id"): s.get("score", "") for s in json.loads(report_path.read_text(encoding="utf-8")).get("llm_scores", [])}
         dataset = WS.dataset_name(getattr(args, "ws", None))
-        try:
-            n = review_mod.push_samples(samples, scores, dataset_name=dataset)
-            print(f"已推送 {n} 条到 Argilla（http://127.0.0.1:6900，admin/distill123456）")
-            print("标注完 keep/reject 后运行: df review pull")
-        except Exception as e:  # noqa: BLE001
-            print(f"[Argilla 不可用] {str(e)[:200]}")
-            print("启动服务: bash scripts/start_argilla_native.sh")
-            return 4
+        n = review_mod.push_samples(samples, scores, dataset_name=dataset)
+        print(f"已推送 {n} 条到审核中心（数据集 {dataset}，控制台「人工审核」页过目）")
+        print("标注完 keep/reject 后运行: df review pull")
         return 0
 
     if args.action == "pull":
-        try:
-            decisions = review_mod.pull_decisions(dataset_name=WS.dataset_name(getattr(args, "ws", None)))
-        except Exception as e:  # noqa: BLE001
-            print(f"[Argilla 不可用] {str(e)[:200]}")
-            return 4
+        decisions = review_mod.pull_decisions(dataset_name=WS.dataset_name(getattr(args, "ws", None)))
         review_mod.write_review_log(decisions, OUT_DIR / "review.jsonl")
         rcfg = _pipeline("review")["review"]
         result = review_mod.decide_gate(
@@ -250,21 +241,14 @@ def cmd_review(args) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, indent=1))
         if result["release"]:
-            gate.decide("G3", True, note=f"Argilla 审核通过率 {result['pass_rate']}")
+            gate.decide("G3", True, note=f"审核通过率 {result['pass_rate']}")
             print("✔ G3 放量闸已自动放行")
         else:
             print(f"未达放行条件（需 ≥10 条且通过率 ≥0.9）；如需手动放行: df gate approve G3")
         return 0
 
     if args.action == "app":
-        # 统一运营控制台（无 Docker）：streamlit run lib/webapp.py（七页）
-        import subprocess
-
-        print("启动本地审核应用: http://localhost:8501（Ctrl+C 退出）")
-        return subprocess.call(
-            [sys.executable, "-m", "streamlit", "run", str(ROOT / "lib" / "webapp.py"),
-             "--server.port", "8501", "--server.headless", "true"]
-        )
+        return _launch_console()
 
     if args.action == "summary":
         review_path = OUT_DIR / "review.jsonl"
@@ -729,17 +713,19 @@ def cmd_review_remote(args) -> int:
 
     if args.action == "auto":
         # 协作者的 AGENT：用自己的模型判（--model 或 review_remote.yaml model 或 judge 槽位）
-        from lib.prompts import registry
-
         model = cfg.get("model") or None
         judge, judge_model = load_backend(ROOT, model=model, role="judge")
         decisions = rr._judge_answers(decisions, judge, judge_model)
         keeps = sum(1 for d in decisions if d["decision"] == "keep")
         _persist(decisions)
         print(f"本地 agent（{judge_model}）判定完成 {len(decisions)} 条（keep {keeps} / reject {len(decisions) - keeps}）")
-    elif args.action == "human":
+        print("确认无误后运行: df review-remote submit")
+        return 0
+    if args.action == "human":
         decisions = rr.human_loop(decisions, cfg)
         _persist(decisions)
+        print("确认无误后运行: df review-remote submit")
+        return 0
 
     n = rr.submit(decisions, cfg, client=client)
     print(f"已以我的身份提交 {n} 条到中心机（含理由，可审计）")
@@ -766,6 +752,56 @@ def cmd_workspace(args) -> int:
         print(f"当前工作区 → {name}（输出目录 {WS.out(name)}）")
         return 0
     return 1
+
+
+def cmd_user(args) -> int:
+    """协作者账号管理（审核中心内置；替代原 Argilla 建号脚本）。"""
+    from lib import review_center as rc
+
+    if args.action == "create":
+        if not args.name:
+            print("用法: df user create <用户名> [--role admin|annotator]")
+            return 1
+        try:
+            key = rc.create_user(args.name, role=getattr(args, "role", "annotator") or "annotator")
+        except ValueError as e:
+            print(f"[创建失败] {e}")
+            return 1
+        print(f"协作者 {args.name}（{getattr(args, 'role', 'annotator')}）已创建，api_key={key}")
+        print("把 api_key 离线发给协作者，配进其 configs/review_remote.yaml（server=中心机地址）")
+        return 0
+    if args.action == "list":
+        rows = rc.user_rows()
+        print(f"共 {len(rows)} 个账号：")
+        for r in rows:
+            print(f"  {r['username']}（{r['role']}）key={r['api_key']} 创建于 {r['created_at']}")
+        return 0
+    return 1
+
+
+def _launch_console() -> int:
+    """统一运营控制台（单进程融合）：streamlit UI + 审核中心 API（6900，本进程线程托管）。
+
+    审核 API 必须在启动器进程起线程：streamlit 只有浏览器会话连入才执行页面脚本，
+    若等页面加载再起 API，协作者会在没人打开页面时连不上中心。"""
+    from lib import review_center as rc
+
+    rc.start_in_thread()  # 幂等；端口被占（如独立 review-server）也不阻塞控制台
+    import subprocess
+
+    print("启动控制台: http://localhost:8501（审核中心 API: http://127.0.0.1:6900）")
+    return subprocess.call(
+        [sys.executable, "-m", "streamlit", "run", str(ROOT / "lib" / "webapp.py"),
+         "--server.port", "8501", "--server.headless", "true"]
+    )
+
+
+def cmd_review_server(args) -> int:
+    """独立运行审核中心 HTTP 服务（无 UI 的中心机/协作者自建中心；控制台进程会自动内置）。"""
+    from lib import review_center as rc
+
+    rc.serve(port=args.port)
+    return 0
 
 
 def cmd_gate(args) -> int:
@@ -823,10 +859,7 @@ def main() -> int:
     p_review.set_defaults(func=cmd_review)
 
     p_console = sub.add_parser("console", help="统一运营控制台（七页：总览/预览/运行/审核/监控/闸门/偏好）")
-    p_console.set_defaults(func=lambda args: subprocess.call(
-        [sys.executable, "-m", "streamlit", "run", str(ROOT / "lib" / "webapp.py"),
-         "--server.port", "8501", "--server.headless", "true"]
-    ))
+    p_console.set_defaults(func=lambda args: _launch_console())
 
     p_peval = sub.add_parser("prompt-eval", help="提示词真机评测（G0 闸门）")
     p_peval.add_argument("--backend")
@@ -947,6 +980,16 @@ def main() -> int:
     p_workspace.add_argument("action", choices=["list", "status", "use"])
     p_workspace.add_argument("name", nargs="?", default="", help="工作区名（use 时必填）")
     p_workspace.set_defaults(func=cmd_workspace)
+
+    p_user = sub.add_parser("user", help="协作者账号管理（审核中心内置）")
+    p_user.add_argument("action", choices=["create", "list"])
+    p_user.add_argument("name", nargs="?", default="", help="用户名（create 时必填）")
+    p_user.add_argument("--role", choices=["admin", "annotator"], default="annotator")
+    p_user.set_defaults(func=cmd_user)
+
+    p_rserver = sub.add_parser("review-server", help="审核中心 HTTP 服务（独立模式；控制台进程内置同款）")
+    p_rserver.add_argument("--port", type=int, default=6900)
+    p_rserver.set_defaults(func=cmd_review_server)
 
     # 全局 --ws：所有子命令可用（df import --ws docs）；default 工作区=原 data/output
     for p in sub.choices.values():

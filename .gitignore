@@ -17,6 +17,9 @@ data/seeds/screenshots/*
 
 # 生成产物与运行状态
 data/output/*
+data/review_center.db*
+# 旧协作栈（已下线，保留文件仅作归档）
+data/output/argilla.db*
 !data/output/.gitkeep
 data/workspaces/
 *.log

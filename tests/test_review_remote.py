@@ -1,78 +1,52 @@
-"""分布式评审客户端离线测试（fake Argilla SDK 全流程）。"""
+"""分布式评审客户端测试：真实本地 HTTP 审核中心 E2E + agent 判定离线用例。"""
 from __future__ import annotations
 
 import json
 import pathlib
+import socket
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
-class FakeArgilla:
-    """模拟中心机 SDK：records 迭代、Response 提交记录。"""
-
-    def __init__(self):
-        self.me = type("Me", (), {"id": "user-666"})()
-        self.submitted = []
-        self._records = [
-            type("Rec", (), {
-                "id": "rec-1",
-                "fields": {"sample_id": "s1", "instruction": "解释过拟合", "conversation": "过拟合是…", "meta": "m"},
-                "suggestions": {},
-                "responses": {},
-                "status": "pending",
-            })(),
-            type("Rec", (), {
-                "id": "rec-2",
-                "fields": {"sample_id": "s2", "instruction": "写代码", "conversation": "def f…", "meta": "m"},
-                "suggestions": {},
-                "responses": {},
-                "status": "pending",
-            })(),
-        ]
-
-    class Datasets:
-        def __init__(self, owner): self._owner = owner
-        def __call__(self, name=None): return self
-        def records(self, **kw):
-            return self._owner._records if not kw else (self._owner._records[0] if kw.get("record_id") == "rec-1" else None)
-
-    def datasets(self, name=None):
-        self.added_questions = []
-        self.logged = []
-        class _Records:
-            def __init__(self, owner):
-                self.owner = owner
-            def __iter__(self):
-                return iter(self.owner._records)
-            def log(self, records=None, **kw):
-                self.owner.logged = records or []
-        class _Questions:
-            def __init__(self, owner):
-                self.owner = owner
-            def add(self, q):
-                self.owner.added_questions.append(q)
-        return type("", (), {
-            "records": _Records(self),
-            "questions": _Questions(self),
-        })()
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
-def test_pull_skips_submitted():
+def _start_center(tmp_path, monkeypatch, dataset="rollout_review"):
+    """起一个真实审核中心（线程内），返回 (base_url, collaborator_key)。"""
+    from lib import review_center as rc
+
+    monkeypatch.setattr(rc, "DB_PATH", tmp_path / "rc.db")
+    monkeypatch.setattr(rc, "OUT_ROOT", tmp_path / "out")
+    rc.init_db()
+    rc.ensure_admin("k-admin")
+    key = rc.create_user("collaborator_test")
+    rc.add_records(dataset, [
+        {"sample_id": "s1", "instruction": "解释过拟合", "conversation": "过拟合是…", "meta": "m"},
+        {"sample_id": "s2", "instruction": "写代码", "conversation": "def f…", "meta": "m"},
+    ])
+    port = _free_port()
+    monkeypatch.setattr(rc, '_thread', None)  # 跨测试重置线程单例
+    assert rc.start_in_thread(port=port) is True
+    return f"http://127.0.0.1:{port}", key
+
+
+def test_pull_auto_submit_full_flow(tmp_path, monkeypatch):
+    """协作者全链：pull（跳过已提交）→ auto 判定 → 以身份提交 → 中心可审计。"""
     from lib import review_remote as rr
 
-    cfg = {"server": "http://x", "api_key": "k", "dataset": "rollout_review"}
-    inbox = rr.pull(cfg, batch=5, client=FakeArgilla())
+    base, key = _start_center(tmp_path, monkeypatch)
+    monkeypatch.setattr(rr, "INBOX_PATH", tmp_path / "inbox.jsonl")
+    cfg = {"server": base, "api_key": key, "dataset": "rollout_review"}
+
+    inbox = rr.pull(cfg, batch=5)
     assert len(inbox) == 2
-    inbox_text = (ROOT / "data" / "output" / "remote_inbox.jsonl").read_text(encoding="utf-8")
-    # 缓存文件可回读
-    cached = [json.loads(l) for l in inbox_text.splitlines() if l.strip()]
+    cached = [json.loads(l) for l in rr.INBOX_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
     assert cached[0]["sample_id"] == "s1"
 
-
-def test_agent_model_override_passed_to_judge(monkeypatch):
-    """agent 模式：模型来自配置/--model，不是中心机决定（自己的 AGENT 用自己的模型）。"""
-    import lib.review_remote as rr
-
+    # 判定（离线 FakeJudger，模型=协作者自己的模型名）
     seen = {}
 
     class FakeJudger:
@@ -80,38 +54,47 @@ def test_agent_model_override_passed_to_judge(monkeypatch):
             seen["touched"] = True
             return '{"correctness": 5, "keep": true}'
 
-    decisions = [{"record_id": "r1", "sample_id": "s1", "instruction": "q", "conversation": "a", "meta": ""}]
-    out = rr._judge_answers(decisions, FakeJudger(), "my-local-model")
+    out = rr._judge_answers(inbox, FakeJudger(), "my-local-model")
     assert seen.get("touched")
-    assert out[0]["model"] == "my-local-model"
-    assert out[0]["decision"] == "keep"
+    assert out[0]["model"] == "my-local-model" and out[0]["decision"] == "keep"
     assert "correctness=5" in out[0]["reason"]
 
+    # 以我的身份提交（含理由）
+    n = rr.submit(out, cfg)
+    assert n == 2
+    # 再拉：全部已提交 → 空
+    assert rr.pull(cfg, batch=5) == []
 
-def test_submit_carries_reason_and_audit_identity(monkeypatch):
-    """提交必须带身份（我的 user_id）+ 判定理由；理由题缺失时幂等补建。"""
+    # 中心侧：身份+理由可审计
+    from lib import review_center as rc
+
+    resp = rc.responses("rollout_review")
+    assert len(resp) == 2
+    assert all(r["username"] == "collaborator_test" for r in resp)
+    assert all(r["reason"].startswith("本地 agent 判定") for r in resp)
+
+
+def test_submit_idempotent(tmp_path, monkeypatch):
+    """重复提交被中心唯一约束忽略（返回实际写入数）。"""
     from lib import review_remote as rr
 
-    class _DummyQ:
-        """离线场景没有真 Argilla server，替换 TextQuestion 构造（参数照收）。"""
-        def __init__(self, *args, **kwargs):
-            self.name = kwargs.get("name") or (args[0] if args else None)
+    base, key = _start_center(tmp_path, monkeypatch)
+    monkeypatch.setattr(rr, "INBOX_PATH", tmp_path / "inbox.jsonl")
+    cfg = {"server": base, "api_key": key, "dataset": "rollout_review"}
+    inbox = rr.pull(cfg, batch=5)
+    decisions = [{**d, "decision": "keep", "reason": "r", "model": "m"} for d in inbox]
+    assert rr.submit(decisions, cfg) == 2
+    assert rr.submit(decisions, cfg) == 0  # 幂等
 
-    monkeypatch.setattr("argilla.TextQuestion", _DummyQ)
 
-    cfg = {"server": "http://x", "api_key": "k", "dataset": "rollout_review"}
-    fake = FakeArgilla()
-    decisions = [{
-        "record_id": "rec-1", "sample_id": "s1", "instruction": "q",
-        "conversation": "a", "meta": "m", "decision": "reject",
-        "reason": "本地 agent 判定: correctness=2 (幻觉)", "model": "my-model",
-    }]
-    n = rr.submit(decisions, cfg, client=fake)
-    assert n == 1
-    assert len(fake.added_questions) == 1  # reason 题幂等补建
-    rec = fake.logged[0]
-    assert rec.id == "rec-1" and rec.fields["sample_id"] == "s1"
-    resps = {r.question_name: r for r in rec.responses}
-    assert resps["keep_label"].value == "reject"
-    assert resps["reason"].value.startswith("本地 agent 判定")
-    assert all(r.user_id == "user-666" for r in rec.responses)  # 身份=我的账号
+def test_bad_key_rejected(tmp_path, monkeypatch):
+    """无效密钥：拉取立即失败并带明确信息。"""
+    from lib import review_remote as rr
+
+    base, _ = _start_center(tmp_path, monkeypatch)
+    monkeypatch.setattr(rr, "INBOX_PATH", tmp_path / "inbox.jsonl")
+    cfg = {"server": base, "api_key": "agent.bad-key", "dataset": "rollout_review"}
+    import pytest
+
+    with pytest.raises(ConnectionError):
+        rr.pull(cfg, batch=5)

@@ -1,29 +1,45 @@
-# 服务运行模式（系统资源与功能的取舍）
+# 单进程融合架构（无 Redis/ES/Argilla/看门狗）
 
-## 三档模式（`python -m lib.services mode <模式>`）
+曾经的 collab 栈（Redis + Elasticsearch + Argilla + 静态预览 + 控制台 + 看门狗，
+~2.5GB+，看门狗 20 秒一轮探测、服务冷启动被打断时黑窗频闪）已全部下线，
+**全部能力融合进一个进程**：
 
-| 模式 | 运行进程 | 内存 | 功能 |
-|---|---|---|---|
-| **collab（默认）** | share + Redis + ES(JVM) + Argilla | ~2.5GB+ | Argilla 多人协作审核平台（中文界面，团队/多人审核标配） |
-| **share** | light + 静态预览页 | ~330MB | 额外：可分享的只读预览链接 |
-| **light** | 控制台（Streamlit 单进程） | ~300MB | **全部**：数据操作/审核/监控/资产/偏好/闸门——都在控制台内（资源受限机器用） |
-
-```bash
-python -m lib.services mode collab   # 切换到完整协作栈（默认）
-python -m lib.services mode light    # 切换到单进程模式
-python -m lib.services start         # 启动看门狗（守护当前模式的服务，自动重启下线者）
-python -m lib.services status        # 查看模式/内存提示/健康状态
+```
+python -m lib.cli console          # 双击 scripts/start_all.bat 同效
+├── Streamlit 控制台 (8501)        # 全部页面：总览/资产/预览/运行/审核/监控/闸门/偏好
+└── 审核中心线程 (6900)            # SQLite 存储 + 协作 HTTP API + /files/ 静态预览
+    （协作者在自己主机：df review-remote pull/auto/human/submit）
 ```
 
-## 为什么默认 collab（商业级标准）
+| 原组件 | 融合后的归宿 |
+|---|---|
+| Redis / Elasticsearch (JVM) | 删除——审核数据存 SQLite（`data/review_center.db`，WAL 并发） |
+| Argilla 服务端 | 删除——`lib/review_center.py`：用户/记录/响应 + 内置 HTTP API（纯标准库） |
+| 静态预览 http.server | 融合——审核中心 `/files/<path>` 直接服务 data/output |
+| 看门狗（黑窗元凶） | 删除——单进程无需守护；服务随控制台启停 |
+| 建号脚本 setup_argilla_user.py | 删除——`df user create <用户名> [--role admin|annotator]` |
 
-- 交付标准是商业级数据制作：**多人协作审核是标配**，不是单人流程的可选项；
-- 中心机运行 collab 全栈，协作者各自在自己主机上跑自己的 agent 审核（见 docs/collaboration.md）；
-- 单人/资源受限场景降级 `mode light`——控制台仍包含全部数据操作与审核流程，只是没有 Argilla 平台；
-- 看门狗按模式只守护对应服务，轻量模式下**不会**自动拉起重型栈。
+## 为什么这样更商业
 
-## 服务护栏
+- **运维面最小**：一个进程、一个 SQLite 文件，备份=拷贝一个文件；没有 JVM/双数据库
+  的版本与内存问题（原栈 ~2.5GB+，现在一个 python 进程 ~300-400MB）；
+- **没有重启风暴**：没有看门狗就没有"20 秒打断冷启动→黑窗频闪"这类故障模式；
+  控制台挂了自己重启（`start_all.bat`）即可；
+- **协作者协议不变**：`df review-remote` 三步（pull/auto/human/submit）与身份+理由
+  审计全部保留，只是底层从 Argilla SDK 换成标准库 HTTP（`lib/review_center.py`）；
+- **边界诚实**：中心机单点=控制台进程（如需 7×24 独立 API，`df review-server --port 6900`
+  独立跑，同款代码同款 SQLite）；SQLite 适合中小规模批次（数千条记录级），
+  若未来单批审核规模到十万级再评估专用评审平台。
 
-- 看门狗以 pythonw 分离进程运行（脱离会话存活），每 20 秒探测→下挂自动重启；
-- 单个服务每小时最多自动重启 3 次（防止崩溃循环烧资源）；
-- 完整协作栈初始化为幂等（迁移/建号均可重复执行，见 scripts/start_services.sh）。
+## 常用命令
+
+```bash
+python -m lib.cli console              # 一键全栈（UI+API）
+python -m lib.cli review-server        # 仅审核中心 API（无 UI 的部署）
+python -m lib.cli user create zhang    # 发协作者账号（每人唯一 api_key）
+python -m lib.cli user list
+df review-remote pull/auto/submit      # 协作者端（见 docs/collaboration.md）
+```
+
+审核数据与工作区关系：`records/responses` 表带 dataset 列（`rollout_review` /
+`rollout_review_<工作区>`），与 docs/workspaces.md 的分区语义完全一致。

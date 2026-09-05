@@ -1,20 +1,22 @@
-"""分布式评审客户端（协作者主机端）：拉取中心机待审批次 → 本地审（人工或自有 AGENT）→ 提交回中心。
+"""分布式评审客户端（协作者主机端）：HTTP 直连中心机审核中心 → 本地审（人工或自有 AGENT）→ 提交回中心。
 
-部署模型：中心机跑完整协作栈（Argilla 服务端），协作者在自己的主机上：
+部署模型：中心机一个进程（控制台或 df review-server）同时提供 UI 与审核中心 API；
+协作者在自己的主机上：
   1. 配置 configs/review_remote.yaml（server/api_key 用中心管理员发放的账号）
   2. df review-remote pull    —— 拉取我的待审记录（身份=我的账号）
   3. df review-remote auto    —— 用【自己的模型】自动判 keep/reject（judge 槽位，
                                 LLM_MODEL/--model 即可换模型：谁开谁是自己的 agent）
      或 df review-remote human —— 本地人工逐条过目
   4. df review-remote submit  —— 以我的身份提交标注回中心（含理由，可审计）
+纯标准库（urllib），无 SDK 依赖。
 """
 from __future__ import annotations
 
 import json
 import pathlib
+import urllib.error
+import urllib.request
 from typing import Any, Dict, List
-
-import argilla as rg
 
 import yaml
 
@@ -31,31 +33,59 @@ def load_config(path: str | pathlib.Path | None = None) -> Dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def get_client(cfg: Dict[str, Any]):
-    import argilla as rg
+class AuthClient:
+    """中心机审核中心 HTTP 客户端（Bearer agent.<key> 身份认证）。"""
 
-    return rg.Argilla(api_url=cfg["server"], api_key=cfg["api_key"])
+    def __init__(self, server: str, api_key: str, timeout: float = 30.0):
+        self.server = server.rstrip("/")
+        self.api_key = api_key
+        self.timeout = timeout
+        self.me: Dict[str, str] = self._get("/api/me")
+
+    def _req(self, method: str, path: str, body: Any = None) -> Any:
+        url = f"{self.server}{path}"
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method, headers={
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:200]
+            raise ConnectionError(f"审核中心返回 {e.code}: {detail}") from e
+
+    def _get(self, path: str) -> Any:
+        return self._req("GET", path)
+
+    def pending(self, dataset: str, batch: int = 10) -> List[Dict[str, Any]]:
+        from urllib.parse import urlencode
+
+        out = self._get(f"/api/pending?{urlencode({'dataset': dataset, 'batch': batch})}")
+        return list(out.get("records", []))
+
+    def submit(self, dataset: str, decisions: List[Dict[str, Any]]) -> int:
+        out = self._req("POST", "/api/submit", {"dataset": dataset, "records": decisions})
+        return int(out.get("submitted", 0))
+
+
+def get_client(cfg: Dict[str, Any]):
+    return AuthClient(cfg["server"], cfg["api_key"])
 
 
 def pull(cfg: Dict[str, Any], batch: int = 10, client: Any = None) -> List[Dict[str, Any]]:
-    """拉取我的待审记录（本人账号有权限的记录），缓存到本地 remote_inbox。"""
+    """拉取我的待审记录（身份=我的账号，已提交者被中心过滤），缓存到本地 remote_inbox。"""
     client = client or get_client(cfg)
-    ds = client.datasets(name=cfg.get("dataset", "rollout_review"))
-    out = []
-    for rec in ds.records:
-        if len(out) >= batch:
-            break
-        submitted = any(getattr(r, "status", None) == "submitted" for r in (rec.responses or {}).values()) if hasattr(rec.responses, "values") else False
-        if submitted:
-            continue
-        out.append({
-            "record_id": rec.id,
-            "sample_id": rec.fields["sample_id"],
-            "instruction": rec.fields.get("instruction", ""),
-            "conversation": rec.fields.get("conversation", ""),
-            "meta": rec.fields.get("meta", ""),
-            "suggestion": str(next(iter(rec.suggestions.values()), "") if hasattr(rec.suggestions, "values") else ""),
-        })
+    rows = client.pending(cfg.get("dataset", "rollout_review"), batch)
+    out = [{
+        "record_id": r["record_id"],
+        "sample_id": r["sample_id"],
+        "instruction": r.get("instruction", ""),
+        "conversation": r.get("conversation", ""),
+        "meta": r.get("meta", ""),
+        "suggestion": r.get("suggestion", ""),
+    } for r in rows]
     INBOX_PATH.write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in out) + "\n", encoding="utf-8"
     )
@@ -86,36 +116,15 @@ def _judge_answers(inbox: List[Dict[str, Any]], judge: Any, model: str) -> List[
 
 
 def submit(decisions: List[Dict[str, Any]], cfg: Dict[str, Any], client: Any = None) -> int:
-    """以我的身份提交标注（keep/reject + 理由 → Response，可直接进中心审核统计）。"""
+    """以我的身份提交标注（keep/reject + 理由 → 中心可审计）。"""
     client = client or get_client(cfg)
-    me = client.me
-    ds = client.datasets(name=cfg.get("dataset", "rollout_review"))
-    # 保证理由题存在（旧数据集幂等补加；已存在则忽略）
-    try:
-        ds.questions.add(rg.TextQuestion(name="reason", title="判定理由/模型", required=False,
-                                         client=client))
-    except Exception:  # noqa: BLE001 —— 已存在/Server 兼容，不阻断提交
-        pass
-    updates = []
-    for d in decisions:
-        fields = {
-            "sample_id": d["sample_id"],
-            "instruction": d["instruction"],
-            "conversation": d["conversation"],
-            "meta": d.get("meta", ""),
-        }
-        updates.append(rg.Record(
-            id=d["record_id"],
-            fields=fields,
-            responses=[
-                rg.Response(question_name="keep_label", value=d["decision"],
-                            user_id=me.id),
-                rg.Response(question_name="reason", value=str(d.get("reason", ""))[:500],
-                            user_id=me.id),
-            ],
-        ))
-    ds.records.log(records=updates)
-    return len(updates)
+    payload = [{
+        "record_id": d["record_id"],
+        "decision": d["decision"],
+        "reason": str(d.get("reason", ""))[:500],
+        "model": d.get("model", ""),
+    } for d in decisions]
+    return client.submit(cfg.get("dataset", "rollout_review"), payload)
 
 
 def human_loop(decisions: List[Dict[str, Any]], cfg: Dict[str, Any]) -> List[Dict[str, Any]]:

@@ -6,7 +6,7 @@
 
 1. **不发明智能体**：所有智能功能来自上游已发布组件（submodule 锁版本）；本项目只写适配器（格式转换）、闸门状态机与配置。
 2. **HITL（人在回路）**：所有可变操作（预算/数据源/偏好/放量/导出…）经用户确认，agent 只提议与执行已确认动作。
-3. **不写界面**：人工审核界面用 Argilla，监控用 Langfuse，交互基底用 deepseek-harness（插件后置）。
+3. **不写界面**：人工审核界面用控制台内置审核页（SQLite 审核中心），监控用本地审计（Langfuse 可选），交互基底用 deepseek-harness（插件已接入）。
 4. **偏好=软配比**：用户偏好作用于数据配比与 recipe 采样，绝不硬注入指令文本（防重复输出）。
 5. **版本化与审计**：清洗/增强只写新版本不覆盖；回流前审计日志前置；跑批前 spotcheck 预检。
 
@@ -22,8 +22,8 @@
 | distilabel 1.5.3 | 管线引擎：YAML DAG、步骤缓存/断点、UltraFeedback 判分、分组 chosen/rejected、MinHash/embedding 去重、Magpie 任务、OpenAI 兼容+Ollama/vLLM/LiteLLM | UltraFeedback 2310.01377（ICML 2024） |
 | components/magpie（MIT, b734a36） | 无种子指令生成模板、FAISS 去重、unitag 打标、多轮对话 | Magpie 2406.08464（ICLR 2025）；去重 2107.06499（ACL 2022）；SemDeDup 2303.09540 |
 | components/opencua（MIT, dfc91ba） | 聊天蒸馏主链：data-processor（动作规约/状态匹配）+ cot-generator（Reflector 标错→Generator 反思 CoT→Summarizer 打分）；逐窗口生成防爆上下文 | OpenCUA/AgentNet 2508.09123；Reflexion 2303.11366（NeurIPS 2023）；STaR 2203.14465（NeurIPS 2022）；Lost in the Middle 2307.03172（TACL 2024） |
-| Langfuse（自托管，M2） | 监控：trace/token 成本/dashboard | —（LLM 原生可观测，替代 MLflow） |
-| Argilla 2.8（Docker，M1 审核用） | HITL 人工审核界面（distilabel 判分建议自动注入） | MT-Bench judge 偏差 2306.05685（NeurIPS 2023，人工门控依据） |
+| Langfuse（自托管，可选） | 监控：trace/token 成本/dashboard | —（LLM 原生可观测，替代 MLflow；本地审计兜底） |
+| 内置审核中心（lib/review_center.py） | HITL 人工审核 + 协作 API：SQLite 存储、多用户身份+理由审计、/files/ 静态预览 | MT-Bench judge 偏差 2306.05685（NeurIPS 2023，人工门控依据） |
 | deepseek-harness（M2 插件接入） | 交互基底：CLI/TUI、会话、工具权限 | — |
 | LLaMA-Factory / MS-Swift | 最终数据格式规范（sharegpt+images、chosen/rejected、messages+images） | — |
 
@@ -44,7 +44,7 @@ Super-LLM-distill-Gen/
 │   └── cli.py             # df-* 命令
 ├── configs/               # backends.yaml / preferences.yaml / recipes/ / gates.yaml
 ├── data/                  # seeds/(chatlogs, images, screenshots, topics.txt)  output/(shards, reports, manifest.jsonl)
-├── docker/                # Langfuse / Argilla 自托管说明（M1 起）
+├── scripts/               # start_all.bat（一键单进程）、dsh 冒烟、导入/迁移工具
 ├── plugins/dsh-dataforge/ # deepseek-harness 插件（M2）
 └── tests/                 # 离线单测（fixture=组件公开样例）
 ```
@@ -80,48 +80,50 @@ python -m tests.mock_llm_server &          # 127.0.0.1:8765 的 mock OpenAI 服�
 - [x] rollout 导入器：model-io JSONL → 闭环多轮样本（含思考+工具调用+isError 标记）+ manifest 查重
 - [x] M1 第一批：df-* CLI（import/stats/preview/export/gate）+ G0/G1/G3 闸门 + 导出器（LLaMA-Factory sharegpt / DeepSeek-Qwen messages，思考默认 separated 分字段）
 - [ ] M1 第二批：蒸馏质检管线（Reflector → 只留正确 + DPO 负样本 → Summarizer 打分）
-- [ ] M1 第三批：偏好中心 v1 采样器 + Argilla/Langfuse 接入
+- [x] M1 第三批：偏好中心 v1 采样器 + 审核中心接入（自建 SQLite，Langfuse 可选）
 - [x] M2 全部完成：多模态/DPO 增强/翻译/GUI/零参考/风格调教/长度守卫/dsh 插件
-- [x] 协作收官：服务三档模式（collab 默认全栈 + 看门狗防崩）+ Argilla 中文平台
-      + `review-remote` 分布式多人审核（协作者自有 agent 在自己主机审，身份+理由可审计）
+- [x] 协作收官：`review-remote` 分布式多人审核（协作者自有 agent 在自己主机审，身份+理由可审计）
+- [x] 单进程融合：Redis/ES/Argilla/看门狗全部下线——SQLite 审核中心 + 内置 HTTP API
+      （`df console` 一个进程 = UI 8501 + 协作 API 6900；`df user`/`df review-server` 随行）
 
 ### CLI 快速上手（M1）
 
 ```bash
-python -m lib.cli gate status          # 查看闸门状态（G0/G1/G3）
-python -m lib.cli gate approve G1      # 过数据源闸
+python -m lib.cli console               # 一键全栈：控制台 UI + 审核中心 API（单进程融合）
+python -m lib.cli gate status           # 查看闸门状态（G0/G1/G3）
+python -m lib.cli gate approve G1       # 过数据源闸
 python -m lib.cli import --cot separated  # 导入 rollout（思考与正文分字段）
-python -m lib.cli stats                # 导入统计
-python -m lib.cli preview --html --n 20   # 静态 HTML 美化预览（人工过目）
-python -m lib.cli distill --llm-check 5   # 蒸馏质检 + judge 打分（G0 闸门）
-python -m lib.cli review app           # 本地轻量审核+监控应用（无 Docker，端口 8501）
-python -m lib.cli review summary       # 审核通过率（≥90% 且 ≥10 条可放行 G3）
-python -m lib.cli review-remote pull   # 分布式审核：拉取待审批次（协作者在自己主机）
-python -m lib.cli review-remote auto   # 协作者自有 agent 判定（用自己配置的 judge 模型）
-python -m lib.cli review-remote submit # 以协作者身份提交回中心（带理由，可审计）
-python -m lib.cli workspace list       # 工作区（数据按区分流；--ws 跟随）
-python -m lib.cli gate approve G3      # 过放量闸（或审核达标后应用内一键放行）
+python -m lib.cli stats                 # 导入统计
+python -m lib.cli preview --html --n 20    # 静态 HTML 美化预览（人工过目）
+python -m lib.cli distill --llm-check 5    # 蒸馏质检 + judge 打分（G0 闸门）
+python -m lib.cli review app            # 本地轻量审核应用（端口 8501）
+python -m lib.cli review summary        # 审核通过率（≥90% 且 ≥10 条可放行 G3）
+python -m lib.cli review-remote pull    # 分布式审核：拉取待审批次（协作者在自己主机）
+python -m lib.cli review-remote auto    # 协作者自有 agent 判定（用自己配置的 judge 模型）
+python -m lib.cli review-remote submit  # 以协作者身份提交回中心（带理由，可审计）
+python -m lib.cli user create zhang     # 发协作者账号（审核中心内置）
+python -m lib.cli workspace list        # 工作区（数据按区分流；--ws 跟随）
+python -m lib.cli gate approve G3       # 过放量闸（或审核达标后应用内一键放行）
 python -m lib.cli export --format chat --bulk          # DeepSeek/Qwen messages
 python -m lib.cli export --format llamafactory --bulk  # LLaMA-Factory sharegpt
 python -m lib.cli export --format minimind             # minimind 三件套（sft_t2t/pretrain_t2t/dpo）
-python -m lib.cli monitor              # 运行监控摘要（本地审计，Langfuse 可选）
+python -m lib.cli monitor               # 运行监控摘要（本地审计，Langfuse 可选）
 ```
 
-工作区与 minimind 格式详见 docs/workspaces.md；多人协作审核见 docs/collaboration.md。
+工作区与 minimind 格式详见 docs/workspaces.md；多人协作审核见 docs/collaboration.md；
+单进程融合架构见 docs/services-mode.md。
 
 思考处理：`separated`（默认，推理存 `reasoning_content` 字段，由官方 chat template
 注入原生思考 token）/ `tags`（配置原生 token 包裹）/ `plain` / `drop`，见
 configs/preferences.yaml。
 
-人工审核（HITL）有三条路径：
-- **轻量（单机，无 Docker）**：`df review app` —— Streamlit 单进程本地应用，
-  逐条"保留/驳回/跳过"，决定写本地 review.jsonl，达标一键放行 G3。
-- **协作平台（商业级默认，多机多人）**：中心机 `mode collab` 起 Argilla 中文平台
-  （原生栈：Redis+ES+Argilla，非容器）；协作者各自在自己主机上跑自己的 agent，
-  `df review-remote pull → auto/human → submit`，提交带身份与理由、中心可审计——
-  见 docs/collaboration.md。
-- **重型（可选，容器）**：Argilla 容器（docker/argilla.yml）+ Langfuse 容器
-  （docker/langfuse.yml，映射 3210），见 docker/README.md。
+人工审核（HITL）有两条路径：
+- **轻量（单机）**：`df review app` —— 控制台内置审核页，逐条"保留/驳回/跳过"，
+  决定写本地 review.jsonl，达标一键放行 G3。
+- **协作（商业级默认，多机多人）**：中心机 `df console`（或 `df review-server`）
+  一个进程 = 控制台 + SQLite 审核中心 + 协作 API（6900）；协作者各自在自己主机上
+  跑自己的 agent，`df review-remote pull → auto/human → submit`，提交带身份与理由、
+  中心可审计——见 docs/collaboration.md。
 
 ⚠️ 本机使用注意：httpx 会把 localhost 请求送进系统代理导致 LLM 调用静默失败，
 运行前需 `NO_PROXY=127.0.0.1,localhost`（详见 docs/spike-report.md F2）。

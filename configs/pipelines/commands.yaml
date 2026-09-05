@@ -25,3 +25,5 @@ commands:
   models:        { help: 列出可用模型（models 网关自动获取）, gates: [], g0: false, group: 系统 }
   gate:          { help: 闸门管理, gates: [], g0: false, group: 系统 }
   workspace:     { help: 工作区管理（数据按区分流：list/status/use）, gates: [], g0: false, group: 系统 }
+  user:          { help: 协作者账号管理（审核中心内置 create/list）, gates: [], g0: false, group: 系统 }
+  review-server: { help: 审核中心 HTTP 服务（独立模式；控制台进程内置同款）, gates: [], g0: false, group: 系统 }

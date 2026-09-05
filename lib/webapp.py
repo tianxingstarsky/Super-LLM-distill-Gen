@@ -31,6 +31,14 @@ from lib import workspace as WS  # noqa: E402
 st.set_page_config(page_title="DataForge 运营控制台", layout="wide")
 st.html(f"<style>{_CSS} body {{ max-width: none; padding: 12px; }}</style>")
 
+# 融合：控制台进程即审核中心——进程启动即托管 6900 协作 API（幂等；端口被占不阻塞控制台）
+try:
+    from lib import review_center as _rc
+
+    _rc.start_in_thread()
+except Exception:  # noqa: BLE001 —— API 失败不影响控制台页面
+    pass
+
 
 # ── 工作区（数据按区分流；default=原 data/output） ─────────────────────────
 def _ws_choice() -> str:
@@ -72,18 +80,23 @@ def _gate() -> object:
 
 
 def _service_health() -> dict[str, bool]:
-    """模式感知：只展示当前引擎模式（light/share/collab）下的活跃服务。"""
-    from lib import services as S
+    """单进程融合：控制台自带审核中心（线程内 HTTP API，协作者远程审核用）。"""
+    from lib import review_center as rc
 
-    status = S.health_snapshot()
-    return {f"{name} ({svc['port']})": svc["up"] for name, svc in status.get("services", {}).items()}
+    rc.start_in_thread()  # 幂等：本控制台进程内托管 6900 审核 API
+    api_up = False
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen("http://127.0.0.1:6900/health", timeout=2) as r:
+            api_up = bool(json.loads(r.read()).get("ok"))
+    except Exception:  # noqa: BLE001
+        api_up = False
+    return {"控制台 (8501)": True, "审核中心 API (6900)": api_up}
 
 
 def _engine_mode_info() -> tuple[str, str]:
-    from lib import services as S
-
-    mode = S.load_mode()
-    return mode, S.MEMORY_HINT.get(mode, "")
+    return ("单进程融合", "控制台 UI + SQLite 审核中心 + 协作 API 共一个进程（无 Redis/ES/Argilla/看门狗）")
 
 
 def _inventory() -> dict[str, int]:
@@ -103,9 +116,7 @@ def _inventory() -> dict[str, int]:
 def page_overview() -> None:
     st.title("总览")
     mode, mem = _engine_mode_info()
-    st.caption(f"引擎模式：**{mode}**（{mem}）。全部数据操作/审核/监控/资产都在本控制台内完成。")
-    st.caption("协作模式（Argilla 多人审核）需额外进程：`python -m lib.services mode collab` 后重启看门狗；"
-               "单进程 mode=light 时不开 ES/Redis/Argilla，系统占用最小。")
+    st.caption(f"引擎模式：**{mode}**（{mem}）。")
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**服务健康**")

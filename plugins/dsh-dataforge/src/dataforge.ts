@@ -44,6 +44,8 @@ const COMMAND_HELP: Record<string, string> = {
   models: '列出可用模型（models 网关自动获取）',
   gate: '闸门管理（action=status|approve|reject|propose，gate_id 可选）',
   workspace: '工作区管理（action=list|status|use + 工作区名；--ws 全局选择工作区，数据按区隔离）',
+  user: '协作者账号管理（action=create+用户名 或 list；审核中心内置，key 发给协作者离线配置）',
+  'review-server': '审核中心 HTTP 服务（独立模式；控制台进程内置同款 API）',
 }
 
 // 位置参数命令：options 中的这些键按"值"顺序拼接，不加 --前缀（与 lib/cli.py argparse 对齐）
@@ -52,6 +54,7 @@ const POSITIONAL_OPS: Record<string, string[]> = {
   review: ['action'],
   'review-remote': ['action'],
   workspace: ['action', 'name'],
+  user: ['action', 'name'],
 }
 
 export function apply(ctx: Context) {

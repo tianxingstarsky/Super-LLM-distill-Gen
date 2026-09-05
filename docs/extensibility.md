@@ -29,6 +29,6 @@
 
 ## 怎样加新审核维度
 
-审核页与 Argilla 的"标签问题"在各自代码中定义（webapp 的 keep/reject 为一对）；
+审核页与审核中心的"标签问题"在各自代码中定义（webapp 的 keep/reject 为一对）；
 扩展为多标签时同步改 `lib/review.py` 的 build_records/dataset settings 与
 `pull_decisions` 的响应解析即可。
