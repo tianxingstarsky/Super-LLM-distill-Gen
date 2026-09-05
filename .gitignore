@@ -4,6 +4,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# Node（dsh 插件运行环境：node_modules 指向 harness 的 junction，本机私有）
+node_modules/
+
 # 用户私有数据（聊天记录/图片/截图/密钥）一律不入库
 data/seeds/chatlogs/*
 data/seeds/images/*

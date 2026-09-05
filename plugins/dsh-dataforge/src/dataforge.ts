@@ -42,7 +42,14 @@ const COMMAND_HELP: Record<string, string> = {
   'style-correct': '语言风格强矫正（多轮去 AI 味；用户注入规则/示例；G0 闸门）',
   monitor: '运行监控摘要（本地审计）',
   models: '列出可用模型（models 网关自动获取）',
-  gate: '闸门管理（status/approve/reject/propose）',
+  gate: '闸门管理（action=status|approve|reject|propose，gate_id 可选）',
+}
+
+// 位置参数命令：options 中的这些键按"值"顺序拼接，不加 --前缀（与 lib/cli.py argparse 对齐）
+const POSITIONAL_OPS: Record<string, string[]> = {
+  gate: ['action', 'gate_id'],
+  review: ['action'],
+  'review-remote': ['action'],
 }
 
 export function apply(ctx: Context) {
@@ -87,11 +94,15 @@ export function apply(ctx: Context) {
       }
       const python = process.env.DF_PYTHON || 'python'
       const argv = ['-m', 'lib.cli', args.command]
+      const positional = POSITIONAL_OPS[args.command] ?? []
       for (const [key, value] of Object.entries(args.options ?? {})) {
-        argv.push(`--${key}`)
-        if (value !== true && value !== false && value !== null) {
-          argv.push(String(value))
+        const skipFlag = value === true || value === false || value === null
+        if (positional.includes(key)) {
+          if (!skipFlag) argv.push(String(value))
+          continue
         }
+        argv.push(`--${key}`)
+        if (!skipFlag) argv.push(String(value))
       }
       const { stdout, stderr } = await execFileAsync(python, argv, {
         cwd: root,

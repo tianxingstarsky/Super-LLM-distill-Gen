@@ -39,6 +39,16 @@ def test_plugin_commands_match_cli_subcommands():
     assert plugin_commands == cli_commands, f"漂移：插件多 {plugin_commands - cli_commands}，CLI 多 {cli_commands - plugin_commands}"
 
 
+def test_plugin_positional_mapping_present():
+    """位置参数映射必须覆盖 CLI 的位置参数命令（gate/review/review-remote 是 action 位置参数，
+    不是 --action 选项；错传会像真机联调那样直接报 '--action 不是可识别参数'）。"""
+    text = PLUGIN_TS.read_text(encoding="utf-8")
+    assert "POSITIONAL_OPS" in text
+    assert re.search(r"gate: \['action', 'gate_id'\]", text)
+    assert re.search(r"review: \['action'\]", text)
+    assert re.search(r"'review-remote': \['action'\]", text)
+
+
 def test_skill_has_required_workflow_rules():
     text = SKILL.read_text(encoding="utf-8")
     assert text.startswith("---")  # frontmatter
