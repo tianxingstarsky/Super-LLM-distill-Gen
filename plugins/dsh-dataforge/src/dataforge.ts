@@ -46,6 +46,8 @@ const COMMAND_HELP: Record<string, string> = {
   workspace: '工作区管理（action=list|status|use + 工作区名；--ws 全局选择工作区，数据按区隔离）',
   user: '协作者账号管理（action=create+用户名 或 list；审核中心内置，key 发给协作者离线配置）',
   'review-server': '审核中心 HTTP 服务（独立模式；控制台进程内置同款 API）',
+  doctor: '只读环境自检，不运行测试、不修改配置',
+  'quality-report': '检查当前输入的结构、重复、审核覆盖与分歧（options.input 可指定）',
 }
 
 // 位置参数命令：options 中的这些键按"值"顺序拼接，不加 --前缀（与 lib/cli.py argparse 对齐）
@@ -100,19 +102,27 @@ export function apply(ctx: Context) {
       const python = process.env.DF_PYTHON || 'python'
       const argv = ['-m', 'lib.cli', args.command]
       const positional = POSITIONAL_OPS[args.command] ?? []
-      for (const [key, value] of Object.entries(args.options ?? {})) {
-        const skipFlag = value === true || value === false || value === null
-        if (positional.includes(key)) {
-          if (!skipFlag) argv.push(String(value))
-          continue
-        }
-        argv.push(`--${key}`)
-        if (!skipFlag) argv.push(String(value))
+      const options = args.options ?? {}
+      for (const key of positional) {
+        if (options[key] !== undefined && options[key] !== null) argv.push(String(options[key]))
+      }
+      for (const [key, value] of Object.entries(options)) {
+        if (positional.includes(key) || value === false || value === null || value === undefined) continue
+        if (!/^[a-z][a-z0-9_-]*$/.test(key)) throw new Error(`Invalid option: ${key}`)
+        argv.push(`--${key.replaceAll('_', '-')}`)
+        if (value !== true) argv.push(String(value))
+      }
+      if (args.command === 'gate' && ['approve', 'reject'].includes(String(options.action))) {
+        throw new Error('Gate decisions require explicit human confirmation in the console or CLI')
+      }
+      if (args.command === 'user' || args.command === 'review-server') {
+        throw new Error('Administrative/lifecycle commands must be run by the operator, not by the agent')
       }
       const { stdout, stderr } = await execFileAsync(python, argv, {
         cwd: root,
         signal: exec.signal,
         maxBuffer: 8 * 1024 * 1024,
+        windowsHide: true,
       })
       return { exitCode: 0, stdout, stderr }
     },

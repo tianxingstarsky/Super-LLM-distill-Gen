@@ -102,6 +102,9 @@ def _minimind_msg(m: Dict[str, Any]) -> Optional[Dict[str, str]]:
     item: Dict[str, str] = {"role": role, "content": m.get("content", "") or ""}
     if role == "assistant" and m.get("reasoning_content"):
         item["reasoning_content"] = m["reasoning_content"]
+    for key in ("tools", "tool_calls"):
+        if m.get(key):
+            item[key] = m[key] if isinstance(m[key], str) else json.dumps(m[key], ensure_ascii=False)
     if role == "assistant" and m.get("toolCalls"):
         item["tool_calls"] = json.dumps(
             [{"name": tc.get("name"), "arguments": tc.get("input", {})} for tc in m["toolCalls"]],
@@ -112,9 +115,11 @@ def _minimind_msg(m: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
 def to_minimind_sft(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """统一样本 → minimind SFT：{"conversations": [{"role","content",…}]}。"""
+    if sample.get("images"):
+        raise ValueError("MiniMind text export cannot silently drop images; use a vision-compatible trainer/exporter")
     messages = sample.get("messages") or []
     conversations = [c for c in (_minimind_msg(m) for m in messages) if c]
-    if not any(c["role"] == "assistant" and c["content"] for c in conversations):
+    if not any(c["role"] == "assistant" and (c["content"] or c.get("tool_calls")) for c in conversations):
         return None  # 无助手输出，不成样本
     return {"conversations": conversations}
 

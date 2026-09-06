@@ -42,7 +42,8 @@ def set_current(name: str) -> str:
     name = validate(name)
     out(name)  # 顺带建目录
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
-    CURRENT_PATH.write_text(json.dumps({"workspace": name}, ensure_ascii=False, indent=1), encoding="utf-8")
+    from lib.io_utils import atomic_json
+    atomic_json(CURRENT_PATH, {"workspace": name})
     return name
 
 
@@ -69,6 +70,12 @@ def out(ws: str | None = None) -> pathlib.Path:
 # 别名：与 lib.cli 的 OUT_DIR 语义对齐
 def out_dir(ws: str | None = None) -> pathlib.Path:
     return out(ws)
+
+
+def output_at(root: pathlib.Path, ws: str | None = None) -> pathlib.Path:
+    name = resolve(ws)
+    return (root / "data" / "output" if name == DEFAULT
+            else root / "data" / "workspaces" / name / "output")
 
 
 def dataset_name(ws: str | None = None) -> str:

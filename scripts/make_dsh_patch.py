@@ -13,6 +13,8 @@ def main() -> None:
     # 插件名必须是 file:// URL（Windows 绝对路径原生 import 不认；相对路径 loader 才会自动转）
     uri = ts_path.as_uri()
     content = f"# 由 make_dsh_patch.py 生成（本机绝对路径，勿提交）\n- insert:\n    - id: dataforge\n      name: '{uri}'\n"
+    import json
+    content += "- id: skill-filesystem\n  config:\n    customSkillDirs:\n      - " + json.dumps(str(PLUGIN / "skills"), ensure_ascii=False) + "\n"
     (PLUGIN / "cordis.yml").write_text(content, encoding="utf-8")
     print(f"written: {PLUGIN / 'cordis.yml'}")
 

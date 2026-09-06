@@ -2,6 +2,8 @@ distilabel==1.5.3
 openai
 beautifulsoup4
 pytest
+filelock>=3.16,<4
+PyYAML>=6,<7
 # 审核中心已融合为单进程（SQLite+内置 HTTP，见 lib/review_center.py）；
 # 不再依赖 argilla/argilla-server/redis（旧协作栈已下线）
 langfuse

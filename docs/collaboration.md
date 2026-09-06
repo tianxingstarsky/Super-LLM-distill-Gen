@@ -1,134 +1,52 @@
-# 多人协作审核（分布式评审，单进程融合版）
+# 协作审核与 dsh 子智能体
 
-> 交付标准是商业级数据制作：**多人协作审核是标配**。中心机一个进程（控制台或
-> `df review-server`）提供 SQLite 审核中心 + 协作 HTTP API；
-> 每一位协作者在自己主机上开自己的 agent（自己配置模型）完成评审，提交回中心可审计。
->
-> 已真机验证：三人协作——admin 10 条 + collaborator_zhang 5 条 + collaborator_wang 5 条，
-> 中心共 20 条响应（keep 12 / reject 8，未达 90% 放行线），每条可追到人。
+## 中心机
 
-## 部署模型
-
-```
-            中心机（一个进程：df console 或 df review-server）
-  ┌─────────────────────────────────────────────────┐
-  │ 控制台 UI(8501) + SQLite 审核中心 + HTTP API(6900) │  ← 无 Redis/ES/Argilla
-  │ /files/ 静态预览                                │
-  └─────────────────────────────────────────────────┘
-        ▲ pull（拉我的待审）        · api_key 每人唯一
-        │ submit（提交我的判定）     · 响应带身份+理由
-  ┌──────────────────┐      ┌──────────────────┐
-  │ 协作者 A 主机      │      │ 协作者 B 主机      │
-  │ 自己的 agent/模型  │      │ 自己的 agent/模型  │
-  └──────────────────┘      └──────────────────┘
-```
-
-- 协作者**不需要**中心机账号的 UI，只需要：中心机可达的 `http://<中心>:6900`、
-  管理员发放的 api_key、以及自己的模型端点（`LLM_BASE_URL`/`LLM_MODEL` 或
-  `configs/backends.local.yaml`，任何 OpenAI 兼容端点）；
-- "谁开 agent 谁就是评审 agent"：auto 模式用**协作者自己的模型**判定，中心只收结果+理由。
-
-## 一、中心机部署（管理员）
+从项目根启动 `python -m lib.cli console`，或 Windows 双击 `scripts/start_all.vbs`。
+UI 与协作 API 共用一个服务进程，默认仅监听本机 8501/6900，没有看门狗。
 
 ```bash
-cd Super-LLM-distill-Gen
-
-# 1. 一键启动（控制台 UI + 审核中心 API 共一个进程；无看门狗/无后台服务）
-bash scripts/start_all.bat            # 或 python -m lib.cli console
-#    仅要 API 不要 UI 的部署：python -m lib.cli review-server --port 6900
-
-# 2. 管理员账号首次使用自动创建（api_key=distill.apikey；环境变量 REVIEW_ADMIN_KEY 可换）
-
-# 3. 为每位协作者发放账号（每人唯一 api_key，审计链条的锚点）
-python -m lib.cli user create collaborator_zhang --role admin
-#   → 协作者 zhang: api_key=agent.xxxxxxxx   （离线发给协作者本人，勿外泄/勿提交）
+python -m lib.cli user create reviewer_a
+python -m lib.cli user grant reviewer_a --ws docs
+python -m lib.cli review push --ws docs
 ```
 
-- 审核中心 API `http://127.0.0.1:6900`（`/health`、`/api/me`、`/api/pending`、
-  `/api/submit`、`/api/responses`、`/files/<path>`）；
-- 数据集 `rollout_review`（按工作区自动变 `rollout_review_<工作区>`），
-  由 `df review push` 自动建（幂等）；
-- v1 协作者统一 `--role admin`（角色细粒度权限留后续版本）；
-- 备份=拷贝 `data/review_center.db` 一个文件。
+创建时密钥只显示一次。重复创建同名账号不轮换密钥。`user list` 不列密钥。
+管理员具有全部数据集访问权；普通审核员默认允许 legacy/default 数据集，其他工作区必须显式授权。
+外机连接使用受控 SSH/TLS 隧道，不要直接公开控制台。
 
-## 二、协作者接入（在自己主机）
+## 协作者
+
+在自己的主机设置自己的模型后端，审核中心只接收判定结果。
+控制台「人工审核 → 协作者接入配置」可验证并保存配置；CLI 同样支持：
 
 ```bash
-git clone <仓库> && cd Super-LLM-distill-Gen
-python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
-git submodule update --init --depth 1        # 仅跑评审无需 submodule，保险起见拉全
-
-# 配置：服务器地址 + 管理员发放的密钥 + 我自己的评审模型
-cp configs/review_remote.example.yaml configs/review_remote.yaml
-#   server: http://<中心机>:6900        ← 协作者能访问的中心机地址
-#   api_key: agent.xxxxxxxx             ← 管理员发放的密钥
-#   model: deepseek-v4-pro              ← 我自己的模型（不填=judge 槽位/LLM_MODEL）
-
-# 我的模型端点（任意 OpenAI 兼容，如 DeepSeek/本地 vLLM/Ollama）
-export LLM_BASE_URL=https://api.deepseek.com/v1
-export LLM_MODEL=deepseek-v4-pro
-export NO_PROXY=127.0.0.1,localhost      # 本机 localhost 调用不走系统代理
+python -m lib.cli review-remote setup --server http://127.0.0.1:6900 --key-env REVIEW_KEY --config configs/review_remote.reviewer_a.yaml --ws docs
+python -m lib.cli review-remote pull --config configs/review_remote.reviewer_a.yaml --ws docs --batch 3
+python -m lib.cli review-remote auto --config configs/review_remote.reviewer_a.yaml --ws docs --policy quality
+python -m lib.cli review-remote submit --config configs/review_remote.reviewer_a.yaml --ws docs
 ```
 
-## 三、评审三步（任意协作者）
+`REVIEW_KEY` 是本机环境变量，不要把密钥放进命令行或版本库。
+`auto` 需要该工作区的 G0 审核预算授权；判定只落本地，确认后才 submit。
+缓存按中心地址、数据集、账号分别存放于工作区 `review_batches/`，原子写入并加文件锁。
+未提交批次重复 pull 会复用原批次，不覆盖；提交可安全重试，不重复计票。
+
+## dsh 读取 Skill 后派发配置
 
 ```bash
-python -m lib.cli review-remote pull --batch 10    # 1) 拉我的待审（跳过已提交者）
-python -m lib.cli review-remote auto --model my-model  # 2a) 我的 agent 自动判（判定完不提交）
-python -m lib.cli review-remote human              # 2b) 我本地逐条过目（理由必填）
-python -m lib.cli review-remote submit             # 3) 确认后以我的身份提交回中心
+python -m lib.cli dsh --team --ws docs --review-config quality=configs/review_remote.quality.yaml --review-config safety=configs/review_remote.safety.yaml "按 review-team 技能审核 3 条，先给候选结果，不提交"
 ```
 
-- `pull` 把待审记录缓存到 `data/output/remote_inbox.jsonl`（再次 pull 覆盖缓存；
-  加 `--ws <工作区>` 时按工作区分流）；
-- `auto` 用 `--model` > `review_remote.yaml model` > judge 槽位解析我的模型，
-  **只用我的 LLM 密钥**——中心不产生我的费用；判定完成只落本地，`submit` 才提交；
-- `submit` 以我的账号提交（决策+理由），中心唯一约束防重复提交；
-- 提交后 `pull` 会跳过已 submitted 记录——不可重复，判定即终稿。
+该入口自动准备文件 URL 补丁、插件依赖和自定义 skill 根目录。无需拼长 shell 命令或接管用户全局技能目录。
+Lead 读取 review-team skill，再把角色、工作区、配置路径和用户授权范围下发给子智能体。配置不硬编码机器路径，也不让 Lead 读取或传播密钥。
+quality 与 safety 使用不同审核规则。超长输入、视觉样本、网络错误或缺少证据的输出明确为“未完成”，不得伪装为 reject 或成功提交。
+Agent Teams 是上游实验性功能，不等于工业级调度服务；本轮未追加付费团队模型实测。
 
-## 四、AI 审核小队（dsh 派子智能体审核）
+## 汇总与导出
 
-AI 审核早就内置（每个评审者的 `review-remote auto` 用自己的模型按 judge.score 判定）；
-dsh 可以把这变成**子智能体流水线**——Lead 读完 skill 后，按"角色↔配置对照表"给每个
-子智能体下发它自己的评审账号/配置，各角色独立拉取、判定、提交，中心审计追到子智能体：
+`review summary` 查询中心最新数据，不依赖旧缓存。响应按唯一样本聚合，存在分歧的样本不计通过。
+`review pull` 只同步与统计，不再自动放行 G3。人工确认 G3 后，bulk 导出仍检查当前内容哈希、结构、重复、审核覆盖率和一致通过率。
 
-```bash
-cd components/deepseek-harness
-# 1) 中心建评审账号（一次性）
-python -m lib.cli user create judge_quality && python -m lib.cli user create judge_safety
-# 2) 每角色一份配置（gitignored）：configs/review_remote.judge_*.yaml（各自 api_key）
-# 3) 生成补丁（file:// URL；team.example.yml 为模板）：python scripts/make_dsh_patch.py
-# 4) dsh headless 发起审核小队（skills/review-team 已联接进 $DSH_AGENTS_HOME/skills）
-bash scripts/dsh_smoke.sh "你是审核小队的 Lead，先读取 review-team 技能，
-然后创建 teammate quality 与 safety，让它们各用自己角色的配置
-pull 3 条 → auto 判定 → submit，完成后汇总中心通过率告诉我。" \
-  "$(pwd)/plugins/dsh-dataforge/team.yml"
-```
-
-- 已真机验证：Lead 创建两个 teammate，quality/safety 各用独立配置（独立评审账号+模型）
-  审 3 条并显式提交；中心合计 26 条响应、五个身份（admin/zhang/wang/judge_quality/
-  judge_safety），每个子智能体的判定带理由可审计；
-- 机制说明：两个角色**审同一批**是刻意的多维度视角（质量+安全），中心按身份分别记账；
-- 团队包为 harness `experimental` 组件（agent-team 标注实验性、需持久会话存储，
-  headless 自带）；补丁必须**按 file:// URL 挂团队插件**——按包名挂载会被
-  DeepSeek 请求扩展（plugin-package-inventory-deepseek）拒绝，真机实测确认。
-
-## 五、中心汇总与放行
-
-```bash
-python -m lib.cli review pull        # 拉全部评审响应（按身份/决策/理由统计）
-python -m lib.cli review summary     # 通过率 ≥90% 且 ≥10 条 → 建议放行 G3
-python -m lib.cli gate approve G3    # 人工确认后放量导出
-```
-
-审计依据：SQLite 中每条响应 = 身份（username）+ 决策（keep/reject）+ 理由
-（模型名/分数或人工理由），`responses` 表带时间戳。
-
-## 五、安全与运维约定
-
-- `configs/review_remote.yaml` 在 `.gitignore` 中（含服务器地址与密钥），**绝不提交**；
-  `review_remote.example.yaml` 为模板随仓库分发；
-- `df user create` 只在中心机执行；`api_key` 通过离线渠道发给协作者；
-- 协作者经内网/公网访问中心机：防火墙放通 6900（仅评审 API 端口），
-  建议只对评审参与者的 IP 开放，或经 SSH 隧道/内网穿透访问；
-- 中心机单点=控制台进程：重启即恢复（SQLite 落盘无损）；`start_all.bat` 双击即起。
+历史 26 条演示响应保留；旧响应未记录内容哈希，不能作为修改后样本的有效放量证据。
+完整门槛与已知限制见 [操作与质量保障](quality-and-operations.md)。

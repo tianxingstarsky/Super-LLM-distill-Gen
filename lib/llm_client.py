@@ -92,9 +92,20 @@ class BudgetGuard:
             except (json.JSONDecodeError, OSError):
                 self.spent = 0.0
 
+    def check(self) -> None:
+        if self.path.exists():
+            self.spent = float(json.loads(self.path.read_text(encoding="utf-8")).get("spent_usd", 0))
+        if self.hard_stop and self.spent >= self.limit:
+            raise BudgetExceeded("Budget exhausted; no request sent")
+
     def add_usd(self, amount: float) -> None:
-        self.spent += amount
-        self.save()
+        from filelock import FileLock
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self.path) + '.lock', timeout=30):
+            if self.path.exists():
+                self.spent = float(json.loads(self.path.read_text(encoding="utf-8")).get("spent_usd", 0))
+            self.spent += amount
+            self.save()
         if self.hard_stop and self.spent >= self.limit:
             raise BudgetExceeded(
                 f"预算上限已到：累计 ${self.spent:.4f} ≥ ${self.limit}（data/output/budget.json 可查看/清零）"
@@ -102,7 +113,8 @@ class BudgetGuard:
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({"spent_usd": round(self.spent, 6), "limit_usd": self.limit}, indent=1), encoding="utf-8")
+        from lib.io_utils import atomic_json
+        atomic_json(self.path, {"spent_usd": round(self.spent, 6), "limit_usd": self.limit})
 
 
 class ChatClient:
@@ -146,6 +158,8 @@ class ChatClient:
         last_err: Exception | None = None
         for _ in range(retries):
             try:
+                if self.budget:
+                    self.budget.check()
                 kwargs: Dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature}
                 if max_tokens is not None:
                     kwargs["max_tokens"] = max_tokens
@@ -177,6 +191,8 @@ class ChatClient:
                 if content:
                     return content
                 last_err = ValueError("empty completion")
+            except BudgetExceeded:
+                raise
             except Exception as e:  # noqa: BLE001
                 # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
                 # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
@@ -221,15 +237,19 @@ def load_backend(
         cfg = yaml.safe_load(base.read_text(encoding="utf-8")) or {}
     if local.exists():
         local_cfg = yaml.safe_load(local.read_text(encoding="utf-8")) or {}
-        cfg["backends"] = {**cfg.get("backends", {}), **local_cfg.get("backends", {})}
+        merged = dict(cfg.get("backends", {}))
+        for key, value in local_cfg.get("backends", {}).items():
+            base_backend = merged.get(key, {})
+            merged[key] = {**base_backend, **value, "prices": {**base_backend.get("prices", {}), **value.get("prices", {})}}
+        cfg["backends"] = merged
         cfg.update({k: v for k, v in local_cfg.items() if k != "backends"})
 
     if judge and role is None:
         role = "judge"
-    if role and backend is None and model is None and base_url is None:
+    if role and base_url is None:
         slot = (cfg.get("model_roles") or {}).get(role) or {}
         backend = backend or slot.get("backend") or (cfg.get("judge_backend") if role == "judge" else None)
-        model = model or slot.get("model") or (cfg.get("judge_model") if role == "judge" else None)
+        model = model or os.environ.get("LLM_MODEL") or slot.get("model") or (cfg.get("judge_model") if role == "judge" else None)
     if judge and backend is None and base_url is None:
         backend = cfg.get("judge_backend")
         model = model or cfg.get("judge_model")

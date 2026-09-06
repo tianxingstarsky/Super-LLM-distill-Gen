@@ -116,10 +116,12 @@ def test_files_serving_and_traversal_guard(tmp_path, monkeypatch):
     assert rc.start_in_thread(port=port) is True
     base = f"http://127.0.0.1:{port}"
 
-    with urllib.request.urlopen(f"{base}/files/preview.html", timeout=5) as r:
+    key = rc.create_user("file_admin", role="admin")
+    headers = {"Authorization": f"Bearer {key}"}
+    with urllib.request.urlopen(urllib.request.Request(f"{base}/files/preview.html", headers=headers), timeout=5) as r:
         assert b"ok" in r.read()
     try:
-        urllib.request.urlopen(f"{base}/files/../secret.txt", timeout=5)
+        urllib.request.urlopen(urllib.request.Request(f"{base}/files/../secret.txt", headers=headers), timeout=5)
         raise AssertionError("穿越应被拒")
     except urllib.error.HTTPError as e:
         assert e.code == 404

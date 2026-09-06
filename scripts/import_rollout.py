@@ -38,16 +38,33 @@ OUT_DIR = ROOT / "data" / "output"
 COT_STYLE = "separated"
 
 
-def run(limit: int = 0, export_limit: int = 200, cot: str = COT_STYLE) -> None:
-    """核心导入流程（CLI 与脚本共用）。"""
+def run(limit: int = 0, export_limit: int = 200, cot: str = COT_STYLE,
+        out_dir: pathlib.Path | None = None) -> None:
+    """Incremental import; only records actually written enter the manifest."""
+    from lib.workspace import output_at
+    from filelock import FileLock
+
+    destination = pathlib.Path(out_dir) if out_dir else output_at(ROOT)
+    destination.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(destination / "import.lock"), timeout=1):
+        _run_locked(destination, limit, export_limit, cot)
+
+
+def _run_locked(OUT_DIR, limit, export_limit, cot):
     files = sorted(ROLLOUT_DIR.glob(ROLLOUT_PATTERN))
+    if not files:
+        raise ValueError(f"No source files: {ROLLOUT_DIR / ROLLOUT_PATTERN}")
     manifest = ManifestDedup(OUT_DIR / "manifest_rollout.txt")
+    samples_path = OUT_DIR / "rollout_samples.jsonl"
+    existing = set()
+    if samples_path.exists():
+        existing = {json.loads(line)["id"] for line in samples_path.read_text(encoding="utf-8").splitlines() if line.strip()}
     stats_all = {}
     samples_written = 0
     rejected_written = 0
 
-    with open(OUT_DIR / "rollout_samples.jsonl", "w", encoding="utf-8") as fs, \
-         open(OUT_DIR / "rollout_rejected.jsonl", "w", encoding="utf-8") as fr:
+    with open(OUT_DIR / "rollout_samples.jsonl", "a", encoding="utf-8") as fs, \
+         open(OUT_DIR / "rollout_rejected.jsonl", "a", encoding="utf-8") as fr:
         for path in files:
             fin = Counter()
             models = Counter()
@@ -63,10 +80,11 @@ def run(limit: int = 0, export_limit: int = 200, cot: str = COT_STYLE) -> None:
                     models[(rec.get("model") or {}).get("modelId", "?")] += 1
                     sample = record_to_sample(rec, cot)
                     err_tool_steps += sample["error_tool_steps"]
-                    if samples_written < export_limit and not manifest.seen(sample["id"]):
+                    if samples_written < export_limit and sample["id"] not in existing:
                         fs.write(json.dumps(sample, ensure_ascii=False) + "\n")
                         samples_written += 1
-                    manifest.add(sample["id"])
+                        existing.add(sample["id"])
+                        manifest.add(sample["id"])
                 else:
                     err += 1
                     if rejected_written < 100:

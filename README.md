@@ -2,13 +2,25 @@
 
 面向 LLM 大模型训练集生成的超级简化工具：**基于已发布的开源组件组合，把"聊天记录 / 图片 / 截图 / 主题种子"蒸馏成 SFT、DPO、多模态、翻译与操作智能体训练数据。**
 
+## 常用入口
+
+- Windows 双击 `scripts/start_all.vbs`；无看门狗，不弹后台命令行窗口。
+- 控制台按工作区操作，常用管线使用表单，不需要手写 JSON 参数。
+- `python -m lib.cli doctor`：只读自检。
+- `python -m lib.cli quality-report`：检查当前输入的结构、重复与审核证据。
+- `python -m lib.cli export --format minimind --tag pilot-v1`：独立版本草稿，不覆盖旧版。
+- `python -m lib.cli dsh --team --review-config quality=配置路径 "按 review-team 技能审核"`：由 dsh 读技能并派发配置。
+
+**质量检查不等于生成内容已通过验收。** 当前放量需要人工 G3 加本次样本实时质量检查；历史审核票不自动认证新内容。
+详见 [操作、质量门槛与限制](docs/quality-and-operations.md)。
+
 ## 原则
 
 1. **不发明智能体**：所有智能功能来自上游已发布组件（submodule 锁版本）；本项目只写适配器（格式转换）、闸门状态机与配置。
 2. **HITL（人在回路）**：所有可变操作（预算/数据源/偏好/放量/导出…）经用户确认，agent 只提议与执行已确认动作。
-3. **不写界面**：人工审核界面用控制台内置审核页（SQLite 审核中心），监控用本地审计（Langfuse 可选），交互基底用 deepseek-harness（插件已接入）。
+3. **统一操作入口**：人工审核界面用控制台内置审核页（SQLite 审核中心），监控用本地审计（Langfuse 可选），交互基底用 deepseek-harness（插件已接入）。
 4. **偏好=软配比**：用户偏好作用于数据配比与 recipe 采样，绝不硬注入指令文本（防重复输出）。
-5. **版本化与审计**：清洗/增强只写新版本不覆盖；回流前审计日志前置；跑批前 spotcheck 预检。
+5. **版本化与审计**：CLI 导出创建独立版本和校验清单；导入增量保留已有样本；放量前检查本次输入，不仅依赖历史闸门状态。
 
 ## 流程对齐（商用验证）
 
@@ -119,7 +131,7 @@ configs/preferences.yaml。
 
 人工审核（HITL）有两条路径：
 - **轻量（单机）**：`df review app` —— 控制台内置审核页，逐条"保留/驳回/跳过"，
-  决定写本地 review.jsonl，达标一键放行 G3。
+  决定写审核中心并绑定内容哈希；G3 需独立人工确认。
 - **协作（商业级默认，多机多人）**：中心机 `df console`（或 `df review-server`）
   一个进程 = 控制台 + SQLite 审核中心 + 协作 API（6900）；协作者各自在自己主机上
   跑自己的 agent，`df review-remote pull → auto/human → submit`，提交带身份与理由、

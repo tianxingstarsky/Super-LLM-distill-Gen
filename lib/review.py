@@ -19,7 +19,7 @@ MIN_REVIEWED = 10
 def _first_user_content(sample: Dict[str, Any]) -> str:
     for m in sample.get("messages", []):
         if m.get("role") == "user" and m.get("content"):
-            return str(m["content"])[:500]
+            return str(m["content"])
     return ""
 
 
@@ -36,13 +36,13 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
             for tc in m.get("toolCalls", []):
                 args = tc.get("input") or {}
                 if isinstance(args, dict):
-                    argstr = "，".join(f"{k} = {v}" for k, v in list(args.items())[:6])
+                    argstr = "，".join(f"{k} = {v}" for k, v in args.items())
                 else:
                     argstr = str(args)
                 lines.append(f"【工具调用】{tc.get('name')}（{argstr}）")
         elif role == "tool":
             mark = "❌" if m.get("isError") else "✔"
-            lines.append(f"【工具结果{mark}】{str(m.get('content', ''))[:800]}")
+            lines.append(f"【工具结果{mark}】{str(m.get('content', ''))}")
         else:
             lines.append(f"【{role}】{m.get('content', '')}")
     return "\n\n".join(lines)
@@ -50,6 +50,7 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
 
 def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List[Dict[str, Any]]:
     """样本 → 审核中心记录（id=样本 ID；suggestion=judge 评分，供人工参考）。"""
+    from lib.quality import sample_hash
     records = []
     for s in samples:
         instruction = _first_user_content(s) or "（无用户指令，工具型样本）"
@@ -57,9 +58,10 @@ def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List
         rec: Dict[str, Any] = {
             "id": s.get("id", ""),
             "sample_id": s.get("id", ""),
+            "sample_hash": sample_hash(s),
             "instruction": instruction,
             "conversation": conversation,
-            "meta": f"model={s.get('model')} finish={s.get('finish_reason')} 错误步骤={s.get('error_tool_steps', 0)}",
+            "meta": f"model={s.get('model')} finish={s.get('finish_reason')} 错误步骤={s.get('error_tool_steps', 0)} images={len(s.get('images') or [])}",
         }
         if s.get("id") in scores:
             rec["suggestion"] = "keep" if "true" in str(scores[s["id"]]) else "reject"
@@ -79,17 +81,21 @@ def pull_decisions(client: Any = None, dataset_name: str = DATASET_NAME) -> List
     """拉回全部人工标注（含身份与理由，供 G3 汇总统计）。"""
     from lib import review_center as rc
 
-    return [{"sample_id": r["sample_id"], "decision": r["decision"], "reason": r["reason"],
-             "username": r["username"]} for r in rc.responses(dataset_name)]
+    return rc.responses(dataset_name)
 
 
 def decide_gate(decisions: List[Dict[str, str]], threshold: float = PASS_THRESHOLD, minimum: int = MIN_REVIEWED) -> Dict[str, Any]:
     """标注统计 + 是否放行 G3（通过率 ≥ 阈值且条数 ≥ 下限）。"""
-    total = len(decisions)
-    keeps = sum(1 for d in decisions if d["decision"] == "keep")
+    by_sample = {}
+    for d in decisions:
+        by_sample.setdefault(d["sample_id"], set()).add(d["decision"])
+    total = len(by_sample)
+    keeps = sum(values == {"keep"} for values in by_sample.values())
     rate = keeps / total if total else 0.0
     return {
         "reviewed": total,
+        "responses": len(decisions),
+        "conflicts": sum(len(values) > 1 for values in by_sample.values()),
         "keep": keeps,
         "reject": total - keeps,
         "pass_rate": round(rate, 3),

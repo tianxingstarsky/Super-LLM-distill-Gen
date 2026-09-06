@@ -33,7 +33,9 @@ def _langfuse_config(root: pathlib.Path) -> Optional[Dict[str, str]]:
 def trace_run(root: pathlib.Path, kind: str, payload: Dict[str, Any]) -> None:
     """记录一次管线运行：Langfuse trace（如配置）+ 本地 runs.jsonl（永远写入）。"""
     entry: Dict[str, Any] = {"kind": kind, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **payload}
-    local_path = root / LOCAL_RUNS
+    from lib.workspace import output_at, resolve
+    entry["workspace"] = resolve()
+    local_path = output_at(root) / "runs.jsonl"
     local_path.parent.mkdir(parents=True, exist_ok=True)
     with open(local_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")

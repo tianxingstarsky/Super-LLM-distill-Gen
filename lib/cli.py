@@ -69,7 +69,7 @@ def cmd_import(args) -> int:
     sys.path.insert(0, str(ROOT / "scripts"))
     from import_rollout import run  # type: ignore
 
-    run(limit=args.limit, export_limit=args.export_limit, cot=args.cot)
+    run(limit=args.limit, export_limit=args.export_limit, cot=args.cot, out_dir=OUT_DIR)
     from lib.monitor import trace_run
 
     stats = json.loads((OUT_DIR / "rollout_stats.json").read_text(encoding="utf-8"))
@@ -114,36 +114,24 @@ def cmd_preview(args) -> int:
 
 
 def cmd_export(args) -> int:
-    from lib.exporters import export_samples
-
-    args.input = args.input or str(OUT_DIR / "rollout_samples.jsonl")
-    args.out = args.out or str(OUT_DIR / "export" / "sft.jsonl")
-    if not pathlib.Path(args.input).exists():
-        ws = WS.resolve(getattr(args, "ws", None))
-        print(f"[工作区 {ws}] 无样本文件 {args.input}")
-        print("先在该工作区生成样本（import/doc2data/vision/agent-gen…），或用 --input 指定路径")
-        return 1
-    if args.bulk:
-        _gates().require("G3")  # 放量前须过小批量预览闸
-    samples = (json.loads(l) for l in pathlib.Path(args.input).read_text(encoding="utf-8").splitlines() if l.strip())
-    if args.format == "minimind":
-        # minimind 三件套：sft_t2t（SFT）/ pretrain_t2t（语料）/ dpo（偏好对，存在才写）
-        from lib.exporters import export_minimind
-        from lib.monitor import trace_run
-
-        counts = export_minimind(
-            samples, args.out,
-            corpus_path=OUT_DIR / "corpus" / "docs.jsonl",
-            dpo_path=OUT_DIR / "dpo_pairs.jsonl",
-        )
-        trace_run(ROOT, "export", {"format": "minimind", "counts": counts, "bulk": args.bulk})
-        print(f"导出完成（minimind 三件套）: {counts} → {pathlib.Path(args.out).parent}")
-        return 0
-    counts = export_samples(samples, args.format, args.out)
+    from lib.quality import read_samples, export_release
+    from lib.review import pull_decisions
     from lib.monitor import trace_run
 
-    trace_run(ROOT, "export", {"format": args.format, "counts": counts, "bulk": args.bulk})
-    print(f"导出完成: {counts}（{args.format} → {args.out}）")
+    source = pathlib.Path(args.input) if args.input else OUT_DIR / "rollout_samples.jsonl"
+    samples = read_samples(source)
+    if args.bulk:
+        _gates().require("G3")
+    parent = pathlib.Path(args.out) if args.out else OUT_DIR / "export"
+    if parent.suffix == ".jsonl":
+        parent = parent.parent
+    decisions = pull_decisions(dataset_name=WS.dataset_name())
+    # Unreviewed DPO/corpus sidecars are draft-only; bulk approval applies to this SFT input.
+    destination, counts = export_release(samples, args.format, parent, decisions,
+        corpus_path=None if args.bulk else OUT_DIR / "corpus" / "docs.jsonl",
+        dpo_path=None if args.bulk else OUT_DIR / "dpo_pairs.jsonl", tag=args.tag, bulk=args.bulk)
+    trace_run(ROOT, "export", {"format": args.format, "counts": counts, "bulk": args.bulk, "path": str(destination)})
+    print(f"导出完成: {counts} → {destination}")
     return 0
 
 
@@ -240,22 +228,14 @@ def cmd_review(args) -> int:
             decisions, threshold=rcfg["pass_threshold"], minimum=rcfg["min_reviewed"]
         )
         print(json.dumps(result, ensure_ascii=False, indent=1))
-        if result["release"]:
-            gate.decide("G3", True, note=f"审核通过率 {result['pass_rate']}")
-            print("✔ G3 放量闸已自动放行")
-        else:
-            print(f"未达放行条件（需 ≥10 条且通过率 ≥0.9）；如需手动放行: df gate approve G3")
+        print("汇总不自动放行；G3 需人工确认，bulk 导出还会校验当前样本的审核覆盖率。")
         return 0
 
     if args.action == "app":
         return _launch_console()
 
     if args.action == "summary":
-        review_path = OUT_DIR / "review.jsonl"
-        if not review_path.exists():
-            print("暂无审核记录（先 df review app 审核或 df review push/pull）")
-            return 0
-        decisions = [json.loads(l) for l in review_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        decisions = review_mod.pull_decisions(dataset_name=WS.dataset_name())
         print(json.dumps(review_mod.decide_gate(decisions), ensure_ascii=False, indent=1))
         return 0
     return 1
@@ -340,6 +320,9 @@ def cmd_identity_gen(args) -> int:
 
     client, model = _client(args)
     cfg = load_config(args.config)
+    manifest = pathlib.Path(cfg['dedup_file'])
+    if not manifest.is_absolute():
+        cfg['dedup_file'] = str(OUT_DIR / manifest.name)
     # 上限守卫：仅截断保护（不做目标长度注入——长靠任务性质，不靠注水）
     max_tokens = args.max_answer_tokens
     if max_tokens is None:
@@ -367,26 +350,36 @@ def cmd_doc2corpus(args) -> int:
     cfg = _pipeline("doc2corpus")["doc2corpus"] if "doc2corpus" in _pipeline("doc2corpus") else {}
     path = pathlib.Path(args.input)
     files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.suffix.lower() in d2c.SUPPORTED_EXTS)
-    out = pathlib.Path(args.out or (OUT_DIR / "corpus" / "docs.jsonl"))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
-        out.unlink()  # 全量重写（manifest 保证内容级去重）
-
+    target = pathlib.Path(args.out or (OUT_DIR / "corpus" / "docs.jsonl"))
+    if not files:
+        raise ValueError(f"没有可导入的文档：{path}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    import uuid
+    out = target.with_name('.pending-' + uuid.uuid4().hex + '.jsonl')
     chunk_size = args.chunk_size or cfg.get("chunk_size", 2000)
     overlap = args.overlap if args.overlap is not None else cfg.get("overlap", 0)
     manifest: set[str] = set()
     total_kept = 0
+    failed = []
     for f in files:
         try:
             result = d2c.doc_to_corpus(f, target_chars=chunk_size, overlap=overlap, manifest=manifest)
         except Exception as e:  # noqa: BLE001 —— 单文件失败不阻断
             print(f" ✘ {f.name}: {str(e)[:120]}")
+            failed.append(str(f))
             continue
         total_kept += d2c.write_corpus_jsonl(result["entries"], out)
         s = result["stats"]
         print(f" ✔ {s['file']}: {s['chars']} 字符 → {s['kept']} 块（去重 {s['dups']}）")
-    print(f"共 {total_kept} 块 → {out}")
-    print("对接训练：minimind pretrain_t2t.jsonl 或 LLaMA-Factory --stage pt 直接可消费")
+    if failed or not total_kept:
+        out.unlink(missing_ok=True)
+        raise ValueError(f"导入未完成：{len(failed)} 个文件失败；旧语料未覆盖")
+    if target.exists():
+        import shutil
+        shutil.copy2(target, target.with_name(target.name + '.' + uuid.uuid4().hex + '.bak'))
+    os.replace(out, target)
+    print(f"共 {total_kept} 块 → {target}")
+    print("语料草稿已生成；导出前仍需检查原文质量。")
     return 0
 
 
@@ -684,52 +677,83 @@ def cmd_review_remote(args) -> int:
     import lib.review_remote as rr
     from lib.llm_client import load_backend
 
+    if args.action == "setup":
+        return _setup_review_remote(args)
+
+    from lib.io_utils import atomic_json
     cfg = rr.load_config(args.config)
-    # 工作区分流：非 default 工作区 → 数据集加后缀 + 待审缓存放各自输出目录
     ws_name = WS.resolve(getattr(args, "ws", None))
-    if ws_name != WS.DEFAULT:
-        base_ds = cfg.get("dataset", "rollout_review")
-        cfg["dataset"] = f"{base_ds}_{ws_name}"
-        rr.INBOX_PATH = WS.out(ws_name) / "remote_inbox.jsonl"
+    if ws_name != WS.DEFAULT and cfg.get("dataset", "rollout_review") == "rollout_review":
+        cfg["dataset"] = WS.dataset_name(ws_name)
     client = rr.get_client(cfg)
-
-    if args.action == "pull":
-        inbox = rr.pull(cfg, batch=args.batch, client=client)
-        print(f"拉取待审 {len(inbox)} 条 → {rr.INBOX_PATH}")
-        for r in inbox:
-            print(f"  {r['sample_id']}: {r['instruction'][:50]}")
+    path = rr.inbox_path(cfg, client, OUT_DIR)
+    with rr.batch_lock(path):
+        if args.action == "pull":
+            rows = rr.pull(cfg, batch=args.batch or cfg.get("batch_size", 10), client=client, path=path)
+            print(f"待审 {len(rows)} 条；账号 {client.me['username']}；批次 {path}")
+            return 0
+        batch = rr.load_batch(path)
+        if batch.get("submitted"):
+            print("该批已提交；pull 获取下一批。")
+            return 0
+        decisions = batch["records"]
+        if args.action == "auto":
+            _gates().require("G0")
+            judge, model = load_backend(ROOT, model=args.model or cfg.get("model") or None,
+                                        backend=cfg.get("backend"), base_url=cfg.get("base_url"), role="judge")
+            decisions = rr._judge_answers(decisions, judge, model, policy=args.policy or cfg.get("policy", "quality"),
+                                         max_chars=cfg.get("max_review_chars", 60000))
+            batch["records"] = decisions
+            atomic_json(path, batch)
+            errors = sum(bool(d.get("review_error")) for d in decisions)
+            print(f"判定 {len(decisions)} 条；keep={sum(d.get('decision') == 'keep' for d in decisions)}；未完成={errors}。确认后显式 submit。")
+            return 4 if errors else 0
+        if args.action == "human":
+            batch["records"] = rr.human_loop(decisions, cfg)
+            atomic_json(path, batch)
+            return 0
+        n = rr.submit(decisions, cfg, client=client)
+        batch["submitted"] = True
+        atomic_json(path, batch)
+        print(f"账号 {client.me['username']} 提交 {n} 条（可安全重试，不重复计票）")
         return 0
 
-    decisions = [json.loads(l) for l in rr.INBOX_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
-    if not decisions:
-        print("本地无待审缓存：先 df review remote pull")
-        return 0
 
-    def _persist(decisions_):
-        rr.INBOX_PATH.write_text(
-            chr(10).join(json.dumps(d, ensure_ascii=False) for d in decisions_) + chr(10),
-            encoding="utf-8",
-        )
-
-    if args.action == "auto":
-        # 协作者的 AGENT：用自己的模型判（--model 或 review_remote.yaml model 或 judge 槽位）
-        model = cfg.get("model") or None
-        judge, judge_model = load_backend(ROOT, model=model, role="judge")
-        decisions = rr._judge_answers(decisions, judge, judge_model)
-        keeps = sum(1 for d in decisions if d["decision"] == "keep")
-        _persist(decisions)
-        print(f"本地 agent（{judge_model}）判定完成 {len(decisions)} 条（keep {keeps} / reject {len(decisions) - keeps}）")
-        print("确认无误后运行: df review-remote submit")
-        return 0
-    if args.action == "human":
-        decisions = rr.human_loop(decisions, cfg)
-        _persist(decisions)
-        print("确认无误后运行: df review-remote submit")
-        return 0
-
-    n = rr.submit(decisions, cfg, client=client)
-    print(f"已以我的身份提交 {n} 条到中心机（含理由，可审计）")
+def cmd_quality_report(args) -> int:
+    from lib.quality import read_samples, report
+    from lib.review import pull_decisions
+    source = pathlib.Path(args.input) if args.input else OUT_DIR / "rollout_samples.jsonl"
+    result = report(read_samples(source), pull_decisions(dataset_name=WS.dataset_name()))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
+
+
+def cmd_doctor(args) -> int:
+    """环境全项自检（df doctor）：把真机踩过的坑固化为检查，一键确认可开工。"""
+    from lib.doctor import main as doctor_main
+
+    return doctor_main()
+
+
+def cmd_dsh(args) -> int:
+    """一键进 dsh：任务直跑（--team 挂审核小队补丁）。补丁/技能联接/环境全自动。"""
+    from lib.dsh_env import run
+    task = args.task or "读取 review-team 技能并组织审核。"
+    if args.review_config:
+        if not args.team:
+            raise ValueError("--review-config requires --team")
+        mappings = []
+        for assignment in args.review_config:
+            policy, separator, filename = assignment.partition("=")
+            if not separator or policy not in ("quality", "safety"):
+                raise ValueError("Use --review-config quality=PATH or safety=PATH")
+            path = pathlib.Path(filename).resolve()
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            mappings.append({"policy": policy, "config": str(path)})
+        task += "\n审核配置分配（只传路径，不读取或回显密钥）：" + json.dumps(mappings, ensure_ascii=False)
+    task += f"\n所有 dataforge 调用显式传 ws={WS.resolve()}；不得自行批准闸门。"
+    return run(task, args.team, ROOT)
 
 
 def cmd_workspace(args) -> int:
@@ -749,6 +773,8 @@ def cmd_workspace(args) -> int:
             print("用法: df workspace use <名字>")
             return 1
         name = WS.set_current(args.name)
+        from lib.monitor import trace_run
+        trace_run(ROOT, "workspace_selected", {"selected_workspace": name})
         print(f"当前工作区 → {name}（输出目录 {WS.out(name)}）")
         return 0
     return 1
@@ -758,6 +784,10 @@ def cmd_user(args) -> int:
     """协作者账号管理（审核中心内置；替代原 Argilla 建号脚本）。"""
     from lib import review_center as rc
 
+    if args.action == "grant":
+        rc.grant(args.name, WS.dataset_name(getattr(args, "ws", None)))
+        print("已授予所选工作区访问权限")
+        return 0
     if args.action == "create":
         if not args.name:
             print("用法: df user create <用户名> [--role admin|annotator]")
@@ -767,6 +797,8 @@ def cmd_user(args) -> int:
         except ValueError as e:
             print(f"[创建失败] {e}")
             return 1
+        from lib.monitor import trace_run
+        trace_run(ROOT, "review_user_created", {"username": args.name, "role": args.role})
         print(f"协作者 {args.name}（{getattr(args, 'role', 'annotator')}）已创建，api_key={key}")
         print("把 api_key 离线发给协作者，配进其 configs/review_remote.yaml（server=中心机地址）")
         return 0
@@ -774,7 +806,7 @@ def cmd_user(args) -> int:
         rows = rc.user_rows()
         print(f"共 {len(rows)} 个账号：")
         for r in rows:
-            print(f"  {r['username']}（{r['role']}）key={r['api_key']} 创建于 {r['created_at']}")
+            print(f"  {r['username']}（{r['role']}）创建于 {r['created_at']}")
         return 0
     return 1
 
@@ -790,10 +822,13 @@ def _launch_console() -> int:
     import subprocess
 
     print("启动控制台: http://localhost:8501（审核中心 API: http://127.0.0.1:6900）")
-    return subprocess.call(
-        [sys.executable, "-m", "streamlit", "run", str(ROOT / "lib" / "webapp.py"),
-         "--server.port", "8501", "--server.headless", "true"]
-    )
+    from streamlit.web import bootstrap
+    try:
+        bootstrap.run(str(ROOT / "lib" / "webapp.py"), False, [],
+                      {"server.port": 8501, "server.headless": True, "server.address": "127.0.0.1"})
+    finally:
+        rc.stop_thread()
+    return 0
 
 
 def cmd_review_server(args) -> int:
@@ -801,6 +836,40 @@ def cmd_review_server(args) -> int:
     from lib import review_center as rc
 
     rc.serve(port=args.port)
+    return 0
+
+
+def _setup_review_remote(args) -> int:
+    """交互式生成协作者评审配置（免手编 yaml），写文件后立即与中心机握手验证。"""
+    import yaml
+
+    import lib.review_remote as rr
+
+    cfg_path = pathlib.Path(args.config)
+    print("生成协作者评审配置（回车用默认值）")
+    if cfg_path.exists():
+        raise FileExistsError(f"配置已存在，未覆盖：{cfg_path}")
+    import getpass
+    server = args.server or (input("中心机地址 [http://127.0.0.1:6900]: ").strip() or "http://127.0.0.1:6900")
+    api_key = os.environ.get(args.key_env, "") if args.key_env else getpass.getpass("审核 API key: ").strip()
+    if not api_key:
+        print("未输入 api_key，放弃（先找中心机管理员要一份）")
+        return 1
+    dataset = WS.dataset_name()
+    model = args.model or ("" if args.server else input("评审模型（留空=judge 槽位）: ").strip())
+    cfg = {"server": server, "api_key": api_key, "dataset": dataset,
+           "batch_size": 10, "model": model or ""}
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with cfg_path.open("x", encoding="utf-8") as handle:
+        yaml.safe_dump(cfg, handle, allow_unicode=True, sort_keys=False)
+    print(f"已写入 {cfg_path}")
+    try:
+        me = rr.get_client(cfg).me
+        print(f"✔ 与中心机握手成功：我是 {me.get('username')}（可以 df review-remote pull 开工）")
+    except Exception as e:  # noqa: BLE001
+        print(f"[注意] 中心机暂不可达：{str(e)[:160]}")
+        print("配置已保存；中心机可达后直接 df review-remote pull 即可")
+        return 2
     return 0
 
 
@@ -821,8 +890,7 @@ def cmd_gate(args) -> int:
     return 1
 
 
-def main() -> int:
-    global OUT_DIR, GATES_STATE  # 工作区解析后按区重绑（对全部 cmd_* 生效）
+def build_parser():
     parser = argparse.ArgumentParser(prog="df", description="Super-LLM-distill-Gen CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -844,7 +912,8 @@ def main() -> int:
     p_export.add_argument("--format", default="chat", choices=["llamafactory", "chat", "minimind", "all"])
     p_export.add_argument("--input", default=None, help="缺省=当前工作区 rollout_samples.jsonl")
     p_export.add_argument("--out", default=None, help="缺省=当前工作区 export/sft.jsonl")
-    p_export.add_argument("--bulk", action="store_true", help="放量导出（需 G3 闸门）")
+    p_export.add_argument("--tag", help="新版本标签；重复标签拒绝覆盖，缺省为 UTC 时间戳")
+    p_export.add_argument("--bulk", action="store_true", help="G3 + 当前样本质量和审核覆盖校验")
     p_export.set_defaults(func=cmd_export)
 
     p_distill = sub.add_parser("distill", help="蒸馏质检：分类+DPO负样本+可选LLM打分")
@@ -947,10 +1016,13 @@ def main() -> int:
     p_monitor.set_defaults(func=cmd_monitor)
 
     p_remote = sub.add_parser("review-remote", help="分布式评审客户端（协作者主机端）")
-    p_remote.add_argument("action", choices=["pull", "auto", "human", "submit"])
+    p_remote.add_argument("action", choices=["pull", "auto", "human", "submit", "setup"])
     p_remote.add_argument("--config", default=str(ROOT / "configs" / "review_remote.yaml"))
-    p_remote.add_argument("--batch", type=int, default=10)
+    p_remote.add_argument("--batch", type=int, default=None)
     p_remote.add_argument("--model")
+    p_remote.add_argument("--policy", choices=["quality", "safety"])
+    p_remote.add_argument("--server")
+    p_remote.add_argument("--key-env", help="Environment variable containing the review API key")
     p_remote.set_defaults(func=cmd_review_remote)
 
     p_cmds = sub.add_parser("commands", help="列出命令注册表（单一事实源）")
@@ -982,7 +1054,7 @@ def main() -> int:
     p_workspace.set_defaults(func=cmd_workspace)
 
     p_user = sub.add_parser("user", help="协作者账号管理（审核中心内置）")
-    p_user.add_argument("action", choices=["create", "list"])
+    p_user.add_argument("action", choices=["create", "list", "grant"])
     p_user.add_argument("name", nargs="?", default="", help="用户名（create 时必填）")
     p_user.add_argument("--role", choices=["admin", "annotator"], default="annotator")
     p_user.set_defaults(func=cmd_user)
@@ -991,22 +1063,45 @@ def main() -> int:
     p_rserver.add_argument("--port", type=int, default=6900)
     p_rserver.set_defaults(func=cmd_review_server)
 
+    p_dsh = sub.add_parser("dsh", help="一键进 dsh：任务直跑（--team 挂审核小队补丁，环境全自动）")
+    p_dsh.add_argument("task", nargs="?", help="给 harness agent 的任务文本")
+    p_dsh.add_argument("--review-config", action="append", help="可重复：quality=配置路径 或 safety=配置路径")
+    p_dsh.add_argument("--team", action="store_true", help="挂载审核小队补丁（子智能体协作用）")
+    p_dsh.set_defaults(func=cmd_dsh)
+
+    p_doctor = sub.add_parser("doctor", help="环境全项自检（一键确认可开工）")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    p_quality = sub.add_parser("quality-report", help="当前样本结构、重复和审核覆盖报告")
+    p_quality.add_argument("--input")
+    p_quality.set_defaults(func=cmd_quality_report)
+
     # 全局 --ws：所有子命令可用（df import --ws docs）；default 工作区=原 data/output
     for p in sub.choices.values():
         p.add_argument("--ws", help="工作区名（缺省=当前工作区，见 df workspace list）")
 
+    return parser
+
+
+def main() -> int:
+    global OUT_DIR, GATES_STATE
+    parser = build_parser()
     args = parser.parse_args()
     # 工作区解析在分发前完成：重绑本模块常量即对全部 cmd_* 生效
     ws_name = WS.resolve(getattr(args, "ws", None))
-    if ws_name != WS.DEFAULT:
-        OUT_DIR = WS.out(ws_name)
-        GATES_STATE = OUT_DIR / "gates_state.json"
-        os.environ["DF_WORKSPACE"] = ws_name  # 子进程/下游模块感知
+    OUT_DIR = WS.output_at(ROOT, ws_name)
+    if args.cmd not in ("doctor", "quality-report"):
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+    GATES_STATE = OUT_DIR / "gates_state.json"
+    os.environ["DF_WORKSPACE"] = ws_name
     try:
         return args.func(args)
     except GateBlocked as e:
         print(f"[闸门拦截] {e}")
         return 3
+    except (ValueError, FileNotFoundError, FileExistsError, PermissionError, ConnectionError) as e:
+        print(f"[未完成] {e}", file=sys.stderr)
+        return 2
     except Exception as e:
         if e.__class__.__name__ == "BudgetExceeded":
             print(f"[预算硬停] {e}")

@@ -61,13 +61,15 @@ class GateKeeper:
             for gid, r in data.get("gates", {}).items():
                 self.records[gid] = GateRecord(**r)
 
-    def _save(self) -> None:
+    def _save(self, changed: str) -> None:
+        from filelock import FileLock
+        from lib.io_utils import atomic_json
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "gates": {gid: r.__dict__ for gid, r in self.records.items()},
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self.state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        with FileLock(str(self.state_path) + '.lock', timeout=10):
+            latest = json.loads(self.state_path.read_text(encoding='utf-8')) if self.state_path.exists() else {'gates': {}}
+            latest['gates'][changed] = self.records[changed].__dict__
+            latest['updated_at'] = datetime.now(timezone.utc).isoformat()
+            atomic_json(self.state_path, latest)
 
     def status(self, gate_id: str) -> str:
         gate = self.defs.get(gate_id)
@@ -82,9 +84,11 @@ class GateKeeper:
             proposed_at=datetime.now(timezone.utc).isoformat(),
             context=context or {}, note=note,
         )
-        self._save()
+        self._save(gate_id)
 
     def decide(self, gate_id: str, approve: bool, note: str = "") -> None:
+        if gate_id not in self.defs:
+            raise ValueError(f"Unknown gate: {gate_id}")
         self.records[gate_id] = GateRecord(
             gate_id=gate_id, status="approved" if approve else "rejected",
             proposed_at=self.records.get(gate_id, GateRecord(gate_id, "pending")).proposed_at,
@@ -92,7 +96,11 @@ class GateKeeper:
             context=self.records.get(gate_id, GateRecord(gate_id, "pending")).context,
             note=note,
         )
-        self._save()
+        self._save(gate_id)
+        from lib.io_utils import atomic_json
+        audit = self.state_path.parent / "gate_audit"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        atomic_json(audit / f"{stamp}-{gate_id}.json", self.records[gate_id].__dict__)
 
     def require(self, gate_id: str) -> None:
         """通过才继续；未通过抛 GateBlocked。"""

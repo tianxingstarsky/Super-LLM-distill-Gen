@@ -71,6 +71,8 @@ def test_cli_ws_flag_routes_output(tmp_path):
     import subprocess
     import sys
 
+    state = ROOT / "data" / "output" / "gates_state.json"
+    before = state.read_bytes() if state.exists() else None
     r = subprocess.run(
         [sys.executable, "-m", "lib.cli", "workspace", "status", "--ws", "docs_test"],
         cwd=str(ROOT), capture_output=True, text=True, timeout=120,
@@ -80,4 +82,4 @@ def test_cli_ws_flag_routes_output(tmp_path):
     assert info["workspace"] == "docs_test"
     assert info["dataset"] == "rollout_review_docs_test"
     assert "workspaces" in info["out_dir"] and "docs_test" in info["out_dir"]
-    assert not (ROOT / "data" / "output" / "gates_state.json").exists() or True  # default 区状态不受影响
+    assert (state.read_bytes() if state.exists() else None) == before

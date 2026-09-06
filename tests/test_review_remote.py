@@ -43,8 +43,10 @@ def test_pull_auto_submit_full_flow(tmp_path, monkeypatch):
 
     inbox = rr.pull(cfg, batch=5)
     assert len(inbox) == 2
-    cached = [json.loads(l) for l in rr.INBOX_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert cached[0]["sample_id"] == "s1"
+    client = rr.get_client(cfg)
+    path = rr.inbox_path(cfg, client, tmp_path)
+    cached = rr.load_batch(path)
+    assert cached["records"][0]["sample_id"] == "s1"
 
     # 判定（离线 FakeJudger，模型=协作者自己的模型名）
     seen = {}
@@ -52,7 +54,7 @@ def test_pull_auto_submit_full_flow(tmp_path, monkeypatch):
     class FakeJudger:
         def chat(self, messages, **kw):
             seen["touched"] = True
-            return '{"correctness": 5, "keep": true}'
+            return '{"correctness": 5, "keep": true, "reason": "The answer matches the provided definition"}'
 
     out = rr._judge_answers(inbox, FakeJudger(), "my-local-model")
     assert seen.get("touched")
@@ -62,7 +64,10 @@ def test_pull_auto_submit_full_flow(tmp_path, monkeypatch):
     # 以我的身份提交（含理由）
     n = rr.submit(out, cfg)
     assert n == 2
-    # 再拉：全部已提交 → 空
+    # The CLI marks its batch submitted after the idempotent server response.
+    from lib.io_utils import atomic_json
+    cached["submitted"] = True
+    atomic_json(path, cached)
     assert rr.pull(cfg, batch=5) == []
 
     # 中心侧：身份+理由可审计
@@ -71,7 +76,7 @@ def test_pull_auto_submit_full_flow(tmp_path, monkeypatch):
     resp = rc.responses("rollout_review")
     assert len(resp) == 2
     assert all(r["username"] == "collaborator_test" for r in resp)
-    assert all(r["reason"].startswith("本地 agent 判定") for r in resp)
+    assert all(r["reason"].startswith("[quality]") for r in resp)
 
 
 def test_submit_idempotent(tmp_path, monkeypatch):
