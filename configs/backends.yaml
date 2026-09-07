@@ -21,6 +21,14 @@ backends:
     base_url: http://localhost:11434/v1
     api_key_env: ""        # 本地服务无需 key
     models: [qwen2.5vl:7b]
+  # 本地 CUDA 推理（Ollama/vLLM 等任何 OpenAI 兼容端点）。
+  # 接入规则（见 docs/gpu.md）：本机 GPU 显存占用 ≥90% 时禁止在此机启动本地模型；
+  # 审核/精炼等角色切本地 GPU 省预算 → 把 model_roles.judge 的 backend 指到这里即可。
+  local_gpu:
+    base_url: http://localhost:11434/v1   # vLLM 默认 http://localhost:8000/v1
+    api_key_env: ""                       # 本地服务无需 key
+    models: []                            # 例：[qwen2.5:7b-instruct, qwen2.5vl:7b]
+    prices: { input_per_1m_usd: 0.0, output_per_1m_usd: 0.0 }  # 本地=零成本；预算守卫不计费
   lmstudio:
     base_url: http://localhost:1234/v1
     api_key_env: ""

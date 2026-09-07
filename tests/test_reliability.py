@@ -153,10 +153,13 @@ def test_export_versions_immutable_and_current_evidence_required(tmp_path):
 def test_doctor_does_not_run_tests_or_modify_state(tmp_path, monkeypatch):
     from lib import doctor
     monkeypatch.setattr(doctor, "ROOT", tmp_path)
-    import subprocess
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("doctor spawned a command"))
-    doctor.checks(tmp_path)
+    monkeypatch.setattr(doctor, "subprocess", object())  # nvidia-smi 探测失败应优雅降级，不抛错
+    import subprocess as real_subprocess
+    monkeypatch.setattr(real_subprocess, "run", lambda *a, **k: pytest.fail("doctor spawned a command"))
+    rows = doctor.checks(tmp_path)
     assert list(tmp_path.iterdir()) == []
+    assert any("GPU" in r["check"] for r in rows)
+    assert rows[-1]["check"].startswith("DSH_HOME")
 
 
 def test_incremental_import_preserves_samples_and_does_not_skip_capped_rows(tmp_path, monkeypatch):

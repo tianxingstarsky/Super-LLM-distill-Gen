@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import urllib.request
 import yaml
 
@@ -28,6 +29,41 @@ def checks(root=None):
                 add("Backend YAML", False, "Invalid YAML", True)
     configured = bool(os.environ.get("OPENAI_API_KEY")) or any(b.get("api_key") or os.environ.get(b.get("api_key_env", "")) for b in cfg.get("backends", {}).values())
     add("Model credentials", configured, "Configure an environment credential or backends.local.yaml")
+    # ── GPU 与本地推理（CUDA 接入点） ────────────────────────────────────
+    gpu = {}
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.run([shutil.which("nvidia-smi"), "--query-gpu=name,memory.total,memory.used",
+                                  "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=15).stdout
+            for line in out.strip().splitlines():
+                name, total, used = [x.strip() for x in line.split(",")]
+                gpu = {"name": name, "total_mb": int(total), "used_mb": int(used)}
+        except Exception:  # noqa: BLE001
+            gpu = {}
+    if gpu:
+        pressure = gpu["used_mb"] / max(gpu["total_mb"], 1)
+        add(f"CUDA GPU: {gpu['name']}（{gpu['used_mb']}/{gpu['total_mb']} MiB）",
+            pressure < 0.9,
+            "显存占用 ≥90%：不要在此机器启动本地模型（本地推理会抢占训练任务显存）" if pressure >= 0.9 else "")
+    else:
+        add("CUDA GPU", False, "未检测到 nvidia-smi/GPU；本地推理需在有 GPU 的机器开启")
+    torch_cuda = False
+    try:
+        import torch
+        torch_cuda = bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001
+        torch_cuda = False
+    add("torch+cuda（vLLM/嵌入等 CUDA 依赖）", torch_cuda,
+        "安装 torch 的 CUDA 版：pip install torch --index-url https://download.pytorch.org/whl/cu129")
+    for port, label in ((11434, "Ollama"), (8765, "llama.cpp 桥"), (8000, "vLLM")):
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(f"http://127.0.0.1:{port}/", timeout=2) as response:
+                up = response.status == 200
+        except OSError:
+            up = False
+        if up:
+            add(f"本地推理端点：{label}（:{port}）", True)
     for port, path in ((8501, "/_stcore/health"), (6900, "/health")):
         try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
