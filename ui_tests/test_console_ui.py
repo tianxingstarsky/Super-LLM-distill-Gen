@@ -49,3 +49,12 @@ def test_sessions_choose_independent_workspaces(tmp_path, monkeypatch):
     assert a.session_state["ws"] == "default"
     assert not a.exception and not b.exception
 
+
+
+def test_backends_page_renders_without_exception():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=30).run()
+    app.sidebar.radio[0].set_value("模型与密钥").run()
+    assert not app.exception
+    assert any(w.label == "后端名" for w in app.text_input)
+    assert any("密钥来源" in [str(c) for c in w.value.columns] for w in app.dataframe)

@@ -756,6 +756,48 @@ def cmd_dsh(args) -> int:
     return run(task, args.team, ROOT)
 
 
+def cmd_backend(args) -> int:
+    """模型后端与密钥管理（密钥掩码显示；写 gitignored 本地覆盖）。"""
+    from lib import backend_manager as bm
+
+    if args.action == "list":
+        info = bm.list_backends()
+        print(f"默认后端 {info['default_backend']}（模型 {info['default_model']}）；预算上限 ${info['budget'].get('max_total_usd', 0)}，已用 ${info['spent']:.4f}")
+        for row in info["backends"]:
+            roles = ",".join(row["roles"]) or "-"
+            print(f"  [{row['name']}] {row['base_url']}  models={row['models']}")
+            print(f"      密钥: {row['api_key']['source']}（{row['api_key']['status']}）  角色: {roles}" + ("  ←默认" if row["is_default"] else ""))
+        return 0
+
+    if args.action == "test":
+        out = bm.test_backend(args.name)
+        print(f"✔ {out['backend']}（{out['base_url']}）模型 {len(out['models'])} 个：{', '.join(out['models'][:8])}")
+        return 0
+
+    if args.action == "add":
+        models = [m.strip() for m in (args.models or "").split(",") if m.strip()]
+        prices = None
+        if args.prices:
+            try:
+                prices = json.loads(args.prices)
+            except json.JSONDecodeError as e:
+                print(f"[未完成] --prices 不是合法 JSON：{e}", file=sys.stderr)
+                return 2
+        try:
+            name = bm.save_endpoint(args.name, args.base_url, models,
+                                    api_key=args.api_key or "", api_key_env=args.api_key_env or "",
+                                    prices=args.prices, explicit_replace=args.overwrite)
+        except (ValueError, FileExistsError) as e:
+            print(f"[未完成] {e}", file=sys.stderr)
+            return 2
+        print(f"已保存后端 {name} → configs/backends.local.yaml（原文件已备份）")
+        if args.test:
+            out = bm.test_backend(name)
+            print(f"连接测试：✔ {len(out['models'])} 个模型可达")
+        return 0
+    return 1
+
+
 def cmd_workspace(args) -> int:
     """工作区管理：数据按区分流（list/status/use）。"""
     if args.action == "list":
@@ -1047,6 +1089,18 @@ def build_parser():
     p_stylefix.add_argument("--backend")
     p_stylefix.add_argument("--model")
     p_stylefix.set_defaults(func=cmd_style_correct)
+
+    p_backend = sub.add_parser("backend", help="模型后端与密钥管理（list/add/test；密钥掩码显示）")
+    p_backend.add_argument("action", choices=["list", "add", "test"])
+    p_backend.add_argument("--name", default="local_gpu", help="后端名（add/test 用）")
+    p_backend.add_argument("--base-url", help="OpenAI 兼容端点（add 必填）")
+    p_backend.add_argument("--api-key", help="密钥明文写入 gitignored 的本地覆盖（与 --api-key-env 二选一）")
+    p_backend.add_argument("--api-key-env", help="密钥所在环境变量名（推荐）")
+    p_backend.add_argument("--models", help="逗号分隔模型名（add 必填）")
+    p_backend.add_argument("--prices", help='JSON 价格如 %s' % '{"input_per_1m_usd": 0}')
+    p_backend.add_argument("--overwrite", action="store_true", help="覆盖同名后端")
+    p_backend.add_argument("--test", action="store_true", help="add 后立即连接测试")
+    p_backend.set_defaults(func=cmd_backend)
 
     p_workspace = sub.add_parser("workspace", help="工作区管理（数据按区分流：list/status/use）")
     p_workspace.add_argument("action", choices=["list", "status", "use"])

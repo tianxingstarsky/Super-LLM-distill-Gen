@@ -280,19 +280,87 @@ def page_monitor():
     _job_status()
 
 
+def page_backends():
+    st.title("模型与密钥")
+    from lib import backend_manager as bm
+    info = bm.list_backends()
+    st.markdown("**后端清单**（密钥只显示掩码）")
+    rows = [{"名称": r["name"], "地址": r["base_url"], "模型": "、".join(r["models"]),
+             "密钥来源": r["api_key"]["source"], "密钥": r["api_key"]["status"],
+             "角色": "、".join(r["roles"]) or "-", "默认": "是" if r["is_default"] else ""}
+            for r in info["backends"]]
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+    with st.expander("新增 / 覆盖端点（写入 gitignored configs/backends.local.yaml，自动备份）"):
+        with st.form("backend-add"):
+            name = st.text_input("后端名", "local_gpu")
+            base_url = st.text_input("OpenAI 兼容地址", "http://127.0.0.1:11434/v1")
+            models = st.text_input("模型名（逗号分隔）", "qwen2.5:7b-instruct")
+            mode = st.radio("密钥来源", ["环境变量（推荐）", "写入本地配置"], horizontal=True)
+            secret = st.text_input("密钥（环境变量名 或 密钥值）", type="password")
+            prices = st.text_input("价格 JSON（可选，如 {\"input_per_1m_usd\": 0}）")
+            overwrite = st.checkbox("覆盖同名后端")
+            submit = st.form_submit_button("保存", type="primary")
+        if submit:
+            try:
+                import json as _json
+                prices_obj = _json.loads(prices) if prices.strip() else None
+                if mode.startswith("环境变量"):
+                    bm.save_endpoint(name, base_url, [m.strip() for m in models.split(",") if m.strip()],
+                                     api_key_env=secret or "OPENAI_API_KEY", prices=prices_obj, explicit_replace=overwrite)
+                else:
+                    bm.save_endpoint(name, base_url, [m.strip() for m in models.split(",") if m.strip()],
+                                     api_key=secret, prices=prices_obj, explicit_replace=overwrite)
+                st.success(f"已保存 {name}（原文件备份）")
+            except (ValueError, FileExistsError) as e:
+                st.error(str(e))
+    with st.expander("连接测试（models.list，不产生 token 费用）"):
+        names = [r["name"] for r in info["backends"]]
+        target = st.selectbox("选择后端", names, key="backend-test-name")
+        if st.button("测试连接"):
+            try:
+                out = bm.test_backend(target)
+                st.success(f"{target} 可达：{', '.join(out['models'][:12])}")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"连接失败：{str(e)[:200]}")
+    st.markdown("**角色槽位**（各角色的默认后端+模型；覆盖写入本地配置）")
+    roles = info["roles"]
+    for role in ("generation", "judge", "vision", "refine", "simulate", "translation"):
+        slot = roles.get(role, {})
+        local_key = f"role-slot:{role}"
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            st.write(f"{role}：{slot.get('backend', '（未配）')} / {slot.get('model', '')}")
+        with c2:
+            with st.form("role-form:" + role):
+                backend = st.selectbox("后端", names, key=local_key + ":b", index=names.index(slot["backend"]) if slot.get("backend") in names else 0)
+                model = st.text_input("模型", slot.get("model", ""), key=local_key + ":m")
+                if st.form_submit_button("保存角色"):
+                    try:
+                        bm.set_role(role, backend, model)
+                        st.success("角色槽位已更新")
+                    except ValueError as e:
+                        st.error(str(e))
+    st.markdown("**预算（全局）**")
+    b1, b2 = st.columns(2)
+    b1.metric("上限", f"${info['budget'].get('max_total_usd', 0)}")
+    b2.metric("已花费（当前会话进程之外以文件为准）", f"${info['spent']:.4f}")
+    confirm = st.checkbox("我确认清零预算（审计记录本次操作）", key="budget-reset-confirm")
+    if st.button("清零预算", disabled=not confirm):
+        spent = bm.reset_budget("console")
+        st.success(f"预算已清零（原已用 ${spent:.4f}，已记审计）")
+
+
 def page_gates():
-    st.title("模型与闸门")
+    st.title("闸门（HITL）")
     gate = _gate()
     for gid, definition in gate.defs.items():
-        st.subheader(f"{gid} · {definition.title}")
-        st.write(gate.status(gid))
+        st.subheader(f"{gid} · {definition.title}（{gate.status(gid)}）")
+        st.write(definition.trigger)
         confirmation = st.checkbox("已阅读并确认：" + definition.prompt, key="confirm:" + st.session_state["ws"] + ":" + gid)
         if st.button("确认通过 " + gid, disabled=not confirmation):
             gate.decide(gid, True, note="控制台人工确认")
             st.rerun()
-    if st.button("刷新可用模型"):
-        _begin(["models"])
-    _job_status()
+    st.caption("注意：审核汇总不会自动放行 G3；bulk 导出还会校验当前样本的审核覆盖。")
 
 
 def _asset_categories():
@@ -347,7 +415,8 @@ def page_prefs():
 
 PAGES = {"总览": page_overview, "资产管理": page_assets, "数据预览": page_preview,
          "管线运行": page_run, "人工审核": page_review, "质量报告": page_quality,
-         "监控": page_monitor, "模型与闸门": page_gates, "偏好设置": page_prefs}
+         "监控": page_monitor, "模型与密钥": page_backends, "闸门": page_gates,
+         "偏好设置": page_prefs}
 _ws_choice()
 page = st.sidebar.radio("DataForge 控制台", list(PAGES))
 try:

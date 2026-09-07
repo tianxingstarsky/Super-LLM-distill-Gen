@@ -16,7 +16,7 @@ def test_webapp_compiles():
 
 def test_console_pages_cover_all_operations():
     text = WEBAPP.read_text(encoding="utf-8")
-    pages = ["总览", "数据预览", "管线运行", "人工审核", "监控", "模型与闸门", "偏好设置"]
+    pages = ["总览", "资产管理", "数据预览", "管线运行", "人工审核", "质量报告", "监控", "模型与密钥", "闸门", "偏好设置"]
     for page in pages:
         assert page in text, f"缺页面 {page}"
     # 灵活性：管线运行页面必须覆盖主要命令、审核页面复用 render、偏好页面可编辑 yaml

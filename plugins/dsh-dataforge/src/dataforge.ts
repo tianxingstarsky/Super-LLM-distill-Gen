@@ -48,11 +48,13 @@ const COMMAND_HELP: Record<string, string> = {
   'review-server': '审核中心 HTTP 服务（独立模式；控制台进程内置同款 API）',
   doctor: '只读环境自检，不运行测试、不修改配置',
   'quality-report': '检查当前输入的结构、重复、审核覆盖与分歧（options.input 可指定）',
+  backend: '模型后端与密钥管理（list 只读；add/test 由操作人员自行为之，agent 不写密钥）',
 }
 
 // 位置参数命令：options 中的这些键按"值"顺序拼接，不加 --前缀（与 lib/cli.py argparse 对齐）
 const POSITIONAL_OPS: Record<string, string[]> = {
   gate: ['action', 'gate_id'],
+  backend: ['action'],
   review: ['action'],
   'review-remote': ['action'],
   workspace: ['action', 'name'],

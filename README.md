@@ -8,6 +8,7 @@
 - 控制台按工作区操作，常用管线使用表单，不需要手写 JSON 参数。
 - `python -m lib.cli doctor`：只读自检。
 - `python -m lib.cli quality-report`：检查当前输入的结构、重复与审核证据。
+- 模型与密钥：控制台「模型与密钥」页，或 `df backend list/add/test`（密钥只显示掩码，本地配置自动备份）。
 - `python -m lib.cli export --format minimind --tag pilot-v1`：独立版本草稿，不覆盖旧版。
 - `python -m lib.cli dsh --team --review-config quality=配置路径 "按 review-team 技能审核"`：由 dsh 读技能并派发配置。
 
