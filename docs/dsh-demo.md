@@ -1,5 +1,13 @@
 # dsh 正式接入演示（实测记录）
 
+两种展示方式：
+- **dsh 本体 Web UI（现场可见）**：`bash scripts/dsh_web.sh [端口]` 启动后按日志打印的
+  带 token 地址打开（浏览器信任栅栏要求 `?token=…`）。实测在 dsh 对话里发
+  "用 dataforge 工具执行 models 命令…"，界面出现 **1 次工具调用**，返回 3 个模型
+  （deepseek-v4-flash / flash-vision-exp / pro，5 秒 / 75.3K tok），左侧会话列表可见
+  历史 dataforge 会话。
+- **headless 全链（可复现）**：`bash scripts/dsh_demo.sh [tag] [config]`（见下）。
+
 `bash scripts/dsh_demo.sh [tag] [config]` —— 一条完整链，费用封顶 2 条样本评审，全程可复现。
 
 ## 演示链路（dsh 操作员按 dataforge 技能执行）
