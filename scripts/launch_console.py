@@ -1,8 +1,11 @@
-"""Single-instance, windowless console entry. No restart loop or watchdog."""
+"""Single-instance, windowless console entry. No restart loop or watchdog.
+
+单实例语义：拿不到锁说明已有一个控制台在跑——直接退出（只记日志），
+**不要**在这里调 webbrowser.open（分离进程里会挂死并留下僵尸进程，实测教训）。
+"""
 from pathlib import Path
 import os
 import sys
-import webbrowser
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -14,7 +17,8 @@ lock = FileLock(str(output / "console.lock"), timeout=0)
 try:
     lock.acquire()
 except Timeout:
-    webbrowser.open("http://127.0.0.1:8501")
+    with (output / "console.log").open("a", encoding="utf-8", buffering=1) as log:
+        log.write("[launch] 已有控制台在运行（单实例），本次启动跳过。若页面打不开，先关闭残留进程再重试。\n")
     raise SystemExit(0)
 with (output / "console.log").open("a", encoding="utf-8", buffering=1) as log:
     sys.stdout = sys.stderr = log

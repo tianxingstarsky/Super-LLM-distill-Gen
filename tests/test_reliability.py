@@ -184,6 +184,13 @@ def test_budget_updates_from_independent_instances_accumulate(tmp_path):
     assert BudgetGuard(tmp_path, 10).spent == 3
 
 
+def test_launcher_never_opens_browser_or_loops(tmp_path):
+    """启动器回归：单实例抢锁失败必须静默退出，禁止 webbrowser.open（分离进程挂死留僵尸）。"""
+    source = (Path(__file__).resolve().parent.parent / "scripts" / "launch_console.py").read_text(encoding="utf-8")
+    assert "import webbrowser" not in source and "webbrowser.open(" not in source
+    assert "while True" not in source  # 无看门狗/无重启循环
+
+
 def test_minimind_rejects_lossy_image_export():
     from lib.exporters import to_minimind_sft
     with pytest.raises(ValueError, match="images"):
