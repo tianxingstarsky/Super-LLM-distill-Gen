@@ -54,7 +54,22 @@ def test_skill_has_required_workflow_rules():
     assert text.startswith("---")  # frontmatter
     assert "name: dataforge" in text
     # 闸门铁律必须写进 skill（agent 不得擅自花 token/放量）
-    assert "gate status" in text and "G0" in text and "G3" in text
+    assert ("gate status" in text or "action=status" in text) and "G0" in text and "G3" in text
+
+
+def test_skills_carry_contract_sections_and_hard_rules():
+    """两份技能必须含三块合同：硬约束 / 注意要点 / 任务分布示范，并固化关键禁令。"""
+    review = ROOT / "plugins" / "dsh-dataforge" / "skills" / "review-team" / "SKILL.md"
+    for skill in (SKILL, review):
+        text = skill.read_text(encoding="utf-8")
+        for section in ("硬约束", "注意要点", "示范"):
+            assert section in text, f"{skill.name} 缺章节：{section}"
+        assert "NEVER" in text, f"{skill.name} 缺 NEVER 级禁令"
+    df = SKILL.read_text(encoding="utf-8")
+    assert "gate approve" in df and "未完成" in df and "密钥" in df
+    rt = review.read_text(encoding="utf-8")
+    assert "分歧" in rt and "context_limit" in rt and "幂等" in rt
+    assert "回报格式" in df and "回报格式" in rt
 
 
 def test_team_patch_generation(tmp_path):
