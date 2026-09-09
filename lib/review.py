@@ -59,6 +59,7 @@ def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List
             "id": s.get("id", ""),
             "sample_id": s.get("id", ""),
             "sample_hash": sample_hash(s),
+            "payload": json.dumps(s.get("messages") or [], ensure_ascii=False),
             "instruction": instruction,
             "conversation": conversation,
             "meta": f"model={s.get('model')} finish={s.get('finish_reason')} 错误步骤={s.get('error_tool_steps', 0)} images={len(s.get('images') or [])}",
@@ -101,6 +102,27 @@ def decide_gate(decisions: List[Dict[str, str]], threshold: float = PASS_THRESHO
         "pass_rate": round(rate, 3),
         "release": total >= minimum and rate >= threshold,
     }
+
+
+def revise_sample(dataset: str, record: Dict[str, Any], messages: List[Dict[str, Any]],
+                  reviewer: str = "human") -> str:
+    """把人工编辑后的消息保存为**新版本样本**（新 sample_id，原记录不动）。
+
+    与内容哈希绑定一致：编辑产生新内容=新版本，旧审核票不会错误地套用到新内容。
+    返回新 sample_id。"""
+    from lib import review_center as rc
+
+    base = record["sample_id"]
+    existing = rc.sample_ids_like(dataset, base + "-r")
+    numbers = [int(m.split("-r")[-1]) for m in existing
+               if m.startswith(base + "-r") and m[len(base) + 2:].isdigit()]
+    new_id = f"{base}-r{max(numbers, default=0) + 1}"
+    sample = {"id": new_id, "messages": messages, "source": "human-edit",
+              "model": "human-edit", "finish_reason": "edited"}
+    rec = build_records([sample], {})[0]
+    rec["meta"] = (f"{record.get('meta', '')} | 修订自 {base}（{reviewer}）").strip(" |")
+    rc.add_records(dataset, [rec])
+    return new_id
 
 
 def write_review_log(decisions: List[Dict[str, str]], out_path: pathlib.Path) -> None:

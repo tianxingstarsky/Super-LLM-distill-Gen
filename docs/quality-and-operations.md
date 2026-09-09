@@ -21,6 +21,12 @@ python -m lib.cli dsh --team --review-config quality=configs/review_remote.quali
 ## 协作审核
 
 - 「人工审核」页面内可验证并保存协作配置，密钥输入框隐藏内容，新配置不覆盖同名文件。
+- 审核视图按**聊天气泡**渲染（user 右蓝 / assistant 左绿 / tool 紫 / system 居中灰），
+  正文走 **Markdown**（粗体、列表、代码块、表格）；样本内容是**不可信数据**，原始 HTML 一律转义。
+- **逐条编辑**：每条气泡下可展开编辑正文（assistant 另可编辑 reasoning_content），
+  保存后生成**新版本样本**（新 sample_id `xxx-r1`，原记录保留待判）——与内容哈希绑定一致，
+  旧审核票不会套用到新内容。历史无结构化 payload 的记录只能纯文本审阅（提示重新 push）。
+- 深链分享：`/?page=人工审核&record=<sample_id>` 直接定位到某条待审记录（协作者交接用）。
 - CLI 也支持 `review-remote setup --server URL --key-env REVIEW_KEY --config 新文件路径`。密钥从环境变量或隐藏输入读取，不放在命令行参数中。
 - 工作区授权：`user grant USER --ws WORKSPACE`。新账号默认只能访问 legacy/default 数据集；其他工作区必须授权。
 - 每个批次缓存按 **中心地址 + 数据集 + 审核账号** 分文件，操作加文件锁、写入原子替换。未提交的批次再次 pull 会复用，不覆盖。

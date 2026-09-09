@@ -58,3 +58,18 @@ def test_backends_page_renders_without_exception():
     assert not app.exception
     assert any(w.label == "后端名" for w in app.text_input)
     assert any("密钥来源" in [str(c) for c in w.value.columns] for w in app.dataframe)
+
+
+def test_review_page_renders_bubbles_and_editor():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=30).run()
+    app.sidebar.radio[0].set_value("人工审核").run()
+    assert not app.exception
+    # 选最新一条待审（带结构化 payload 的记录在队尾）
+    selector = next(w for w in app.selectbox if w.label == "待审样本")
+    selector.set_value(selector.options[-1]).run()
+    assert not app.exception
+    html = "\n".join(str(el.value) for el in app.get("html"))
+    assert "bub-" in html                                    # 气泡渲染
+    assert "<strong>" in html or "<table>" in html            # Markdown 生效
+    assert any("编辑第" in w.label for w in app.expander)      # 逐条编辑入口

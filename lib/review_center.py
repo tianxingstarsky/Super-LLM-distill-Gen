@@ -51,6 +51,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT, dataset TEXT NOT NULL,
                 sample_id TEXT NOT NULL, instruction TEXT, conversation TEXT,
                 meta TEXT, suggestion TEXT, sample_hash TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '',
                 UNIQUE(dataset, sample_id));
             CREATE TABLE IF NOT EXISTS responses(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, dataset TEXT NOT NULL,
@@ -67,6 +68,8 @@ def init_db():
             columns = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
             if "sample_hash" not in columns:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN sample_hash TEXT NOT NULL DEFAULT ''")
+        if "payload" not in {r[1] for r in con.execute("PRAGMA table_info(records)")}:
+            con.execute("ALTER TABLE records ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
         # Legacy rows stay intact. Migration must never discard historical responses.
         try:
             con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_resp_user ON responses(record_id, username)")
@@ -154,11 +157,12 @@ def add_records(dataset, records):
                 # A legacy unbound response must not acquire approval of a new content hash.
                 if con.execute("SELECT 1 FROM responses WHERE record_id=?", (existing[0],)).fetchone():
                     continue
-            con.execute("""INSERT INTO records(dataset,sample_id,instruction,conversation,meta,suggestion,sample_hash)
-                VALUES(?,?,?,?,?,?,?) ON CONFLICT(dataset,sample_id) DO UPDATE SET
+            con.execute("""INSERT INTO records(dataset,sample_id,instruction,conversation,meta,suggestion,sample_hash,payload)
+                VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(dataset,sample_id) DO UPDATE SET
                 instruction=excluded.instruction,conversation=excluded.conversation,meta=excluded.meta,
-                suggestion=excluded.suggestion,sample_hash=excluded.sample_hash""",
-                (dataset,row["sample_id"],row.get("instruction",""),row.get("conversation",""),row.get("meta",""),row.get("suggestion",""),row.get("sample_hash","")))
+                suggestion=excluded.suggestion,sample_hash=excluded.sample_hash,payload=excluded.payload""",
+                (dataset,row["sample_id"],row.get("instruction",""),row.get("conversation",""),row.get("meta",""),
+                 row.get("suggestion",""),row.get("sample_hash",""),row.get("payload","")))
     return len(records)
 
 
@@ -169,12 +173,21 @@ def pending(dataset, username, batch=10):
     init_db()
     with _conn() as con:
         _authorize(con, username, dataset)
-        rows = con.execute("""SELECT r.id,r.sample_id,r.instruction,r.conversation,r.meta,r.suggestion,r.sample_hash
+        rows = con.execute("""SELECT r.id,r.sample_id,r.instruction,r.conversation,r.meta,r.suggestion,r.sample_hash,r.payload
             FROM records r WHERE dataset=? AND NOT EXISTS(
             SELECT 1 FROM responses x WHERE x.record_id=r.id AND x.username=?) ORDER BY r.id LIMIT ?""",
             (dataset, username, batch)).fetchall()
-    keys = ("record_id", "sample_id", "instruction", "conversation", "meta", "suggestion", "sample_hash")
+    keys = ("record_id", "sample_id", "instruction", "conversation", "meta", "suggestion", "sample_hash", "payload")
     return [dict(zip(keys, r)) for r in rows]
+
+
+def sample_ids_like(dataset: str, prefix: str) -> List[str]:
+    """列出 dataset 下 sample_id 以 prefix 开头的全部 id（修订号计算用）。"""
+    init_db()
+    with _conn() as con:
+        rows = con.execute("SELECT sample_id FROM records WHERE dataset=? AND sample_id LIKE ?",
+                           (dataset, prefix + "%")).fetchall()
+    return [r[0] for r in rows]
 
 
 def submit(dataset, username, decisions):

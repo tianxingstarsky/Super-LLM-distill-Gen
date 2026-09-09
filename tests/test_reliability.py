@@ -184,6 +184,25 @@ def test_budget_updates_from_independent_instances_accumulate(tmp_path):
     assert BudgetGuard(tmp_path, 10).spent == 3
 
 
+def test_human_edit_creates_new_version(center):
+    """审核页逐条编辑：保存为新版本（新 ID），原记录保留，内容哈希不同。"""
+    from lib.review import build_records, revise_sample
+    center.add_records("rollout_review", build_records([sample()], {}))
+    row = center.pending("rollout_review", "admin")[0]
+    assert row["payload"] and '"messages"' not in row["payload"]  # payload 是消息数组
+    edited = json.loads(row["payload"])
+    edited[-1]["content"] = "修正后的答案"
+    new_id = revise_sample("rollout_review", row, edited, reviewer="tester")
+    assert new_id == row["sample_id"] + "-r1"
+    new_row = next(r for r in center.pending("rollout_review", "admin", 50) if r["sample_id"] == new_id)
+    assert json.loads(new_row["payload"])[-1]["content"] == "修正后的答案"
+    assert new_row["sample_hash"] != row["sample_hash"]
+    assert "修订自" in new_row["meta"]
+    # 再修订一次 → 序号递增；原记录仍在
+    assert revise_sample("rollout_review", row, edited, "tester") == row["sample_id"] + "-r2"
+    assert any(r["sample_id"] == row["sample_id"] for r in center.pending("rollout_review", "admin", 50))
+
+
 def test_launcher_never_opens_browser_or_loops(tmp_path):
     """启动器回归：单实例抢锁失败必须静默退出，禁止 webbrowser.open（分离进程挂死留僵尸）。"""
     source = (Path(__file__).resolve().parent.parent / "scripts" / "launch_console.py").read_text(encoding="utf-8")

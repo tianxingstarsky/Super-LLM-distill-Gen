@@ -235,9 +235,43 @@ def page_review():
     if not rows:
         st.info("当前工作区没有待审记录")
     else:
-        row = st.selectbox("待审样本", rows, format_func=lambda r: r["sample_id"])
-        st.markdown(row["instruction"])
-        st.text(row["conversation"])
+        row = st.selectbox("待审样本", rows, format_func=lambda r: r["sample_id"],
+                           index=next((i for i, r in enumerate(rows)
+                                       if r["sample_id"] == st.query_params.get("record")), 0))
+        messages = None
+        if row.get("payload"):
+            try:
+                messages = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                messages = None
+        if messages:
+            st.html('<div class="bubbles">' + "\n".join(_render_message(m) for m in messages) + "</div>")
+            st.caption("逐条编辑：保存后生成**新版本样本**（新 ID，原记录保留待判），符合内容哈希绑定。")
+            for index, message in enumerate(messages):
+                role = message.get("role", "?")
+                with st.expander(f"✏️ 编辑第 {index + 1} 条（{role}）"):
+                    with st.form(f"edit-msg:{row['record_id']}:{index}"):
+                        content = st.text_area("正文（Markdown 可渲染）", message.get("content", ""), height=160,
+                                               key=f"content:{row['record_id']}:{index}")
+                        reasoning = None
+                        if role == "assistant":
+                            reasoning = st.text_area("思考（reasoning_content）",
+                                                     message.get("reasoning_content", ""), height=120,
+                                                     key=f"reason:{row['record_id']}:{index}")
+                        if st.form_submit_button("保存为新版本"):
+                            edited = [dict(m) for m in messages]
+                            edited[index]["content"] = content
+                            if reasoning is not None:
+                                edited[index]["reasoning_content"] = reasoning
+                            try:
+                                from lib.review import revise_sample
+                                new_id = revise_sample(dataset, row, edited, reviewer="admin")
+                                st.success(f"已保存新版本：{new_id}（原记录 {row['sample_id']} 仍待判）")
+                            except ValueError as error:
+                                st.error(str(error))
+        else:
+            st.warning("该记录没有结构化内容（历史数据），只能按纯文本审阅；重新 push 后可逐条编辑。")
+            st.text(row["conversation"])
         with st.form("review-decision:" + str(row["record_id"])):
             decision = st.radio("判定", ["keep", "reject"], format_func=lambda v: "保留" if v == "keep" else "驳回", horizontal=True)
             reason = st.text_area("判定理由")
@@ -418,7 +452,11 @@ PAGES = {"总览": page_overview, "资产管理": page_assets, "数据预览": p
          "监控": page_monitor, "模型与密钥": page_backends, "闸门": page_gates,
          "偏好设置": page_prefs}
 _ws_choice()
-page = st.sidebar.radio("DataForge 控制台", list(PAGES))
+# 深链：?page=人工审核&record=<sample_id>（协作者可直接分享定位链接）
+_qp_page = st.query_params.get("page")
+if _qp_page in PAGES and "nav" not in st.session_state:
+    st.session_state["nav"] = _qp_page
+page = st.sidebar.radio("DataForge 控制台", list(PAGES), key="nav")
 try:
     PAGES[page]()
 except (ValueError, OSError) as error:
