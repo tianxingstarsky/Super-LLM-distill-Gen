@@ -119,11 +119,11 @@ python -m lib.cli workspace list        # 工作区（数据按区分流；--ws 
 python -m lib.cli gate approve G3       # 过放量闸（或审核达标后应用内一键放行）
 python -m lib.cli export --format chat --bulk          # DeepSeek/Qwen messages
 python -m lib.cli export --format llamafactory --bulk  # LLaMA-Factory sharegpt
-python -m lib.cli export --format minimind             # minimind 三件套（sft_t2t/pretrain_t2t/dpo）
+python -m lib.cli export --format minimind             # minimind 兼容格式（三文件：sft_t2t/pretrain_t2t/dpo）
 python -m lib.cli monitor               # 运行监控摘要（本地审计，Langfuse 可选）
 ```
 
-工作区与 minimind 格式详见 docs/workspaces.md；多人协作审核见 docs/collaboration.md；
+工作区与导出格式（minimind 兼容，仅格式参照）详见 docs/workspaces.md；多人协作审核见 docs/collaboration.md；
 单进程融合架构见 docs/services-mode.md。
 
 思考处理：`separated`（默认，推理存 `reasoning_content` 字段，由官方 chat template

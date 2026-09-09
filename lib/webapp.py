@@ -125,7 +125,7 @@ def page_preview():
 def page_run():
     st.title("管线运行")
     presets = {
-        "MiniMind 草稿导出": ("export", {"format": "minimind", "bulk": False}),
+        "minimind 兼容草稿导出": ("export", {"format": "minimind", "bulk": False}),
         "文档语料整理": ("doc2corpus", {}),
         "文档问答生成": ("doc2data", {}),
         "质量报告": ("quality-report", {}),

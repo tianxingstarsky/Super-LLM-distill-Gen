@@ -1,4 +1,9 @@
-# 工作区与 minimind 导出
+# 工作区与导出格式（minimind 兼容）
+
+> 说明：本项目与 minimind（jingyaogong/minimind）**无任何关联、合作或依赖**。
+> minimind 只是一个**输出格式参照**（和 LLaMA-Factory 一样属于"格式规范来源"）：
+> 我们按用户要求产出与之加载侧字段一致的文件，方便直接喂对应训练脚本。
+
 
 ## 一、工作区：数据按区分流，不挤一锅
 
@@ -33,9 +38,9 @@ df review-remote pull --ws docs       # 协作者端同款：pull/submit 按工�
 控制台（8501）侧栏顶部有**工作区选择器**：总览/资产/预览/运行/审核/监控各页的
 读取路径与"管线运行"页的子进程调用都会跟随所选工作区；预算页恒显示全局预算。
 
-## 二、minimind 数据集（可直接喂 jingyaogong/minimind 训练）
+## 二、minimind 兼容格式（格式参照，非关联项目）
 
-格式以 minimind `dataset/lm_dataset.py` 加载侧为准（逐字段核对）：
+字段以 minimind `dataset/lm_dataset.py` 加载侧为准（逐字段核对，仅为格式对齐）：
 
 | 文件 | 每行结构 | 说明 |
 |---|---|---|
@@ -44,13 +49,13 @@ df review-remote pull --ws docs       # 协作者端同款：pull/submit 按工�
 | `dpo.jsonl` | `{"chosen": [消息列表], "rejected": [消息列表]}` | chosen/rejected 为**含 prompt 前缀的完整对话**（minimind 直接 apply_chat_template） |
 
 ```bash
-df export --format minimind                    # 三件套 → data/output/export/
+df export --format minimind                    # 兼容格式三文件 → data/output/export/
 df export --format minimind --ws docs         # 按工作区导出（语料/DPO 源取各自工作区）
 # 产物：sft_t2t.jsonl / pretrain_t2t.jsonl（有语料才写）/ dpo.jsonl（有 DPO 对才写）
 ```
 
 真机验证（default 工作区，2026-09）：sft 250 行 / pretrain 17 行 / dpo 526 行，
-中文正常、字段结构与 minimind 加载代码逐条对上。
+中文正常、字段结构与其加载代码逐条对上（格式参照）。
 
 ## 三、与协作流程的关系
 

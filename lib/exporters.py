@@ -7,7 +7,8 @@
   DeepSeek/Qwen messages（OpenAI 兼容）：
     SFT  {"messages": [{"role","content"[, "reasoning_content"][, "toolCalls"][, "toolCallId"]}]}
     DPO  {"prompt": [...], "chosen": [...], "rejected": [...]}
-  minimind（jingyaogong/minimind，dataset/lm_dataset.py 实证）：
+  minimind 兼容格式（仅格式参照，无关联/依赖）：字段对齐 jingyaogong/minimind
+    的 dataset/lm_dataset.py 加载侧
     预训练  {"text": "..."}
     SFT     {"conversations": [{"role","content"[,"reasoning_content"][,"tool_calls"(JSON 字符串)][,"tools"]}]}
     DPO     {"chosen": [完整消息列表], "rejected": [完整消息列表]}（含 prompt 前缀）
@@ -91,7 +92,7 @@ def to_dpo_sample(prompt: List[Dict[str, Any]], chosen: List[Dict[str, Any]], re
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
 
-# ── minimind ─────────────────────────────────────────────────────────────────
+# ── minimind 兼容格式（格式参照） ────────────────────────────────────────────
 def _minimind_msg(m: Dict[str, Any]) -> Optional[Dict[str, str]]:
     """统一消息 → minimind 消息：role/content；assistant 保留 reasoning_content；
     toolCalls → tool_calls（JSON 字符串，minimind 加载侧 json.loads 还原）；
@@ -140,7 +141,7 @@ def export_minimind(
     corpus_path: str | Path | None = None,
     dpo_path: str | Path | None = None,
 ) -> Dict[str, int]:
-    """导出 minimind 三件套：sft_t2t.jsonl（SFT）、pretrain_t2t.jsonl（语料，存在才写）、
+    """导出 minimind 兼容格式（三文件）：sft_t2t.jsonl（SFT）、pretrain_t2t.jsonl（语料，存在才写）、
     dpo.jsonl（偏好对，存在才写）。out_path 只决定输出目录，文件名固定对齐 minimind 习惯。"""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

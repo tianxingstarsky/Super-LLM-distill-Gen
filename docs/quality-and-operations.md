@@ -6,7 +6,7 @@ Windows 双击 `scripts/start_all.vbs`，不打开命令行窗口。`start_all.b
 启动器使用文件锁防止重复启动，没有看门狗、自动重启或 JVM 服务。
 Streamlit UI（8501）与审核 API（6900）在同一个服务进程；后台生成任务会有独立子进程，Windows 下禁止创建窗口。
 
-控制台侧栏选择工作区；「管线运行」选择 MiniMind 导出、文档语料、文档问答、质量报告、AI 审核小队等预设。参数表单直接读取 CLI 定义，不再手写 JSON。
+控制台侧栏选择工作区；「管线运行」选择 minimind 兼容导出、文档语料、文档问答、质量报告、AI 审核小队等预设。参数表单直接读取 CLI 定义，不再手写 JSON。
 任务日志与退出码由任务对象保存，不从后台线程访问 Streamlit 会话状态。不同会话的工作区选择不修改共享环境变量。
 
 ```bash
@@ -46,7 +46,7 @@ python -m lib.cli dsh --team --review-config quality=configs/review_remote.quali
 审核汇总不自动批准 G3；旧 G3 通过也不能绕过上述实时检查。无强制跳过参数。
 普通 export 是 **草稿**，仍生成质量报告。每次写独立版本目录，包含 `quality.json`、`manifest.json`、每个输出文件的 SHA-256 和源样本哈希；同名 tag 拒绝覆盖。转换异常留下 `status=writing` 的不完整版本，不冒充成功。
 
-MiniMind 文本导出保留 reasoning_content / tools / tool_calls，不允许静默丢弃 images。bulk 当前仅批准 SFT 输入，未审核的 corpus/DPO 不作为附带文件偷偷放量；草稿可导出已有语料与偏好对。
+minimind 兼容格式导出保留 reasoning_content / tools / tool_calls，不允许静默丢弃 images。bulk 当前仅批准 SFT 输入，未审核的 corpus/DPO 不作为附带文件偷偷放量；草稿可导出已有语料与偏好对。
 
 ## 仍需明确的限制
 

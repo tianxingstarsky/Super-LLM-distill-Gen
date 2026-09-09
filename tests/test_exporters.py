@@ -121,7 +121,7 @@ def test_to_minimind_dpo_full_dialogues():
 
 
 def test_export_minimind_three_files(tmp_path):
-    """三件套：sft_t2t.jsonl / pretrain_t2t.jsonl（语料存在才写）/ dpo.jsonl（对存在才写）。"""
+    """兼容格式三文件：sft_t2t.jsonl / pretrain_t2t.jsonl（语料存在才写）/ dpo.jsonl（对存在才写）。"""
     from lib.exporters import export_minimind, to_dpo_sample
 
     samples = [

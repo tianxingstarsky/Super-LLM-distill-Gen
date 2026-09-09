@@ -950,7 +950,7 @@ def build_parser():
     p_preview.add_argument("--html", action="store_true", help="生成静态 HTML 预览页（人工过目）")
     p_preview.set_defaults(func=cmd_preview)
 
-    p_export = sub.add_parser("export", help="导出训练格式（minimind=三件套 sft_t2t/pretrain_t2t/dpo）")
+    p_export = sub.add_parser("export", help="导出训练格式（minimind=兼容格式三文件 sft_t2t/pretrain_t2t/dpo）")
     p_export.add_argument("--format", default="chat", choices=["llamafactory", "chat", "minimind", "all"])
     p_export.add_argument("--input", default=None, help="缺省=当前工作区 rollout_samples.jsonl")
     p_export.add_argument("--out", default=None, help="缺省=当前工作区 export/sft.jsonl")
