@@ -47,12 +47,12 @@ def registry() -> Dict[str, PromptSpec]:
 def registry_versions() -> Dict[str, Dict[str, PromptSpec]]:
     """全量提示词注册表（id → {version → spec}），支持运行时版本寻址/A/B 对比。"""
     from lib.prompts import (
-        agent, distill, document, dpo, identity, judge, magpie, multimodal, style,
+        agent, distill, document, dpo, identity, judge, magpie, multimodal, revise, style,
         stylefix, translation, tuning,
     )
 
     all_specs: Dict[str, Dict[str, PromptSpec]] = {}
-    for mod in (magpie, distill, judge, translation, identity, document, tuning, style, multimodal, dpo, agent, stylefix):
+    for mod in (magpie, distill, judge, translation, identity, document, tuning, style, multimodal, dpo, agent, stylefix, revise):
         for name in dir(mod):
             spec = getattr(mod, name)
             if isinstance(spec, PromptSpec):

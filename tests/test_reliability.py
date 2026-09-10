@@ -203,6 +203,56 @@ def test_human_edit_creates_new_version(center):
     assert any(r["sample_id"] == row["sample_id"] for r in center.pending("rollout_review", "admin", 50))
 
 
+def test_propose_revision_contract_and_scope_enforcement():
+    """AI 临时修订：JSON 契约校验 + 服务端强制 scope（不信任模型越权改动）。"""
+    from lib.review import propose_revision
+
+    base = [
+        {"role": "user", "content": "问题"},
+        {"role": "assistant", "content": "答案", "reasoning_content": "思考"},
+    ]
+
+    class Fake:
+        def __init__(self, payload): self.payload = payload
+        def chat(self, *a, **k): return self.payload
+
+    good = json.dumps({"messages": [
+        {"role": "user", "content": "问题"},
+        {"role": "assistant", "content": "精简后的答案", "reasoning_content": "被模型改动的思考"},
+    ]}, ensure_ascii=False)
+    # scope=assistant：只允许改 content，思考必须保持原样
+    out = propose_revision(base, "压缩到一句", "assistant", Fake(good))
+    assert out[1]["content"] == "精简后的答案"
+    assert out[1]["reasoning_content"] == "思考"
+    # scope=thinking：只允许改思考，正文保持原样
+    out2 = propose_revision(base, "重写思考", "thinking", Fake(good))
+    assert out2[1]["content"] == "答案"
+    assert out2[1]["reasoning_content"] == "被模型改动的思考"
+    # scope=all：两者都可改
+    out3 = propose_revision(base, "全改", "all", Fake(good))
+    assert out3[1]["content"] == "精简后的答案"
+
+    # 契约违规：长度不一致 / role 不一致 / 空指令 / 超长输入
+    with pytest.raises(ValueError, match="消息数不一致"):
+        propose_revision(base, "x", "all", Fake('{"messages": []}'))
+    with pytest.raises(ValueError, match="role 顺序"):
+        propose_revision(base, "x", "all", Fake(json.dumps({"messages": [
+            {"role": "assistant", "content": "a"}, {"role": "user", "content": "b"}]}, ensure_ascii=False)))
+    with pytest.raises(ValueError, match="不能为空"):
+        propose_revision(base, "   ", "all", Fake(good))
+    with pytest.raises(ValueError, match="过大"):
+        propose_revision(base, "x", "all", Fake(good), max_input_chars=10)
+    with pytest.raises(ValueError, match="未知改动范围"):
+        propose_revision(base, "x", "nope", Fake(good))
+
+
+def test_revise_prompt_registered():
+    from lib.prompts import get, render
+    spec = get("revise.instruction")
+    text = render(spec, scope="全部", instruction="压缩", messages="[]")
+    assert '"messages"' in text and "不可信数据" in text
+
+
 def test_launcher_never_opens_browser_or_loops(tmp_path):
     """启动器回归：单实例抢锁失败必须静默退出，禁止 webbrowser.open（分离进程挂死留僵尸）。"""
     source = (Path(__file__).resolve().parent.parent / "scripts" / "launch_console.py").read_text(encoding="utf-8")

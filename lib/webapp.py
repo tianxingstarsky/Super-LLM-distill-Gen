@@ -221,6 +221,7 @@ def page_review():
                 except (OSError, ValueError, ConnectionError) as error:
                     st.error(str(error))
     from lib import review_center as rc
+    from lib.review import REVISE_SCOPES
     dataset = WS.dataset_name(st.session_state["ws"])
     rc.ensure_admin()
     _, samples = _selected_samples("review-source")
@@ -245,20 +246,28 @@ def page_review():
             except json.JSONDecodeError:
                 messages = None
         if messages:
-            st.html('<div class="bubbles">' + "\n".join(_render_message(m) for m in messages) + "</div>")
-            st.caption("逐条编辑：保存后生成**新版本样本**（新 ID，原记录保留待判），符合内容哈希绑定。")
+            rid = row["record_id"]
+            st.caption("每条消息可直接点「✏️ 编辑」修改（正文与思考均可）；保存后生成**新版本样本**"
+                       "（新 ID，原记录保留待判），符合内容哈希绑定。")
             for index, message in enumerate(messages):
                 role = message.get("role", "?")
-                with st.expander(f"✏️ 编辑第 {index + 1} 条（{role}）"):
-                    with st.form(f"edit-msg:{row['record_id']}:{index}"):
-                        content = st.text_area("正文（Markdown 可渲染）", message.get("content", ""), height=160,
-                                               key=f"content:{row['record_id']}:{index}")
+                key_base = f"m:{rid}:{index}"
+                st.html('<div class="bubbles">' + _render_message(message) + "</div>")
+                if st.session_state.get("editing") != key_base:
+                    if st.button(f"✏️ 编辑第 {index + 1} 条（{role}）", key=f"editbtn:{key_base}"):
+                        st.session_state["editing"] = key_base
+                        st.rerun()
+                else:
+                    with st.container(border=True):
+                        content = st.text_area("正文（Markdown 可渲染）", message.get("content", ""),
+                                               height=180, key=f"c:{key_base}")
                         reasoning = None
                         if role == "assistant":
                             reasoning = st.text_area("思考（reasoning_content）",
-                                                     message.get("reasoning_content", ""), height=120,
-                                                     key=f"reason:{row['record_id']}:{index}")
-                        if st.form_submit_button("保存为新版本"):
+                                                     message.get("reasoning_content", ""),
+                                                     height=140, key=f"r:{key_base}")
+                        c1, c2 = st.columns(2)
+                        if c1.button("保存为新版本", key=f"save:{key_base}", type="primary"):
                             edited = [dict(m) for m in messages]
                             edited[index]["content"] = content
                             if reasoning is not None:
@@ -266,9 +275,56 @@ def page_review():
                             try:
                                 from lib.review import revise_sample
                                 new_id = revise_sample(dataset, row, edited, reviewer="admin")
-                                st.success(f"已保存新版本：{new_id}（原记录 {row['sample_id']} 仍待判）")
+                                st.session_state.pop("editing", None)
+                                st.query_params["record"] = new_id
+                                st.rerun()
                             except ValueError as error:
                                 st.error(str(error))
+                        if c2.button("取消", key=f"cancel:{key_base}"):
+                            st.session_state.pop("editing", None)
+                            st.rerun()
+            with st.expander("🤖 让 AI 按指令修改（G0 计费；结果保存为新版本）"):
+                scope_label = st.selectbox("改动范围", list(REVISE_SCOPES.values()), key=f"ai-scope:{rid}")
+                ai_prompt = st.text_input("修改要求（例：把回答压缩到三句，并修正事实错误）", key=f"ai-prompt:{rid}")
+                if st.button("生成修改建议", key=f"ai-run:{rid}"):
+                    scope = {v: k for k, v in REVISE_SCOPES.items()}[scope_label]
+                    if not ai_prompt.strip():
+                        st.error("请先填写修改要求")
+                    elif _gate().status("G0") != "approved":
+                        st.error("需要 G0（预算与模型闸）已通过才能调用付费 API")
+                    else:
+                        from lib.length import estimate_tokens
+                        size = estimate_tokens(json.dumps(messages, ensure_ascii=False))
+                        if size > 30000:
+                            st.error(f"样本约 {size} tokens，超出临时修订窗口（30k）；请改用逐条手工编辑")
+                        else:
+                            try:
+                                from lib.llm_client import load_backend
+                                from lib.review import propose_revision
+                                client, model = load_backend(ROOT, role="refine")
+                                edited = propose_revision(messages, ai_prompt, scope, client)
+                                st.session_state[f"ai-edit:{rid}"] = (edited, model)
+                                st.success(f"已生成建议（模型 {model}，scope={scope_label}）")
+                            except Exception as error:  # noqa: BLE001
+                                st.error(f"修订失败：{str(error)[:200]}")
+                suggestion = st.session_state.get(f"ai-edit:{rid}")
+                if suggestion:
+                    edited, model = suggestion
+                    st.caption(f"建议预览（{model}）——采用后保存为新版本：")
+                    st.html('<div class="bubbles">' + "\n".join(_render_message(m) for m in edited) + "</div>")
+                    d1, d2 = st.columns(2)
+                    if d1.button("✅ 采用并保存为新版本", key=f"ai-adopt:{rid}", type="primary"):
+                        try:
+                            from lib.review import revise_sample
+                            new_id = revise_sample(dataset, row, edited, reviewer="admin+ai")
+                            st.session_state.pop(f"ai-edit:{rid}", None)
+                            st.query_params["record"] = new_id
+                            st.rerun()
+                        except ValueError as error:
+                            st.error(str(error))
+                    if d2.button("丢弃建议", key=f"ai-drop:{rid}"):
+                        st.session_state.pop(f"ai-edit:{rid}", None)
+                        st.rerun()
         else:
             st.warning("该记录没有结构化内容（历史数据），只能按纯文本审阅；重新 push 后可逐条编辑。")
             st.text(row["conversation"])

@@ -72,4 +72,6 @@ def test_review_page_renders_bubbles_and_editor():
     html = "\n".join(str(el.value) for el in app.get("html"))
     assert "bub-" in html                                    # 气泡渲染
     assert "<strong>" in html or "<table>" in html            # Markdown 生效
-    assert any("编辑第" in w.label for w in app.expander)      # 逐条编辑入口
+    labels = [w.label for w in app.button] + [w.label for w in app.expander]
+    assert any("编辑第" in l for l in labels)                  # 每条消息可直接编辑
+    assert any("AI 按指令修改" in l for l in labels)           # AI 临时修订面板

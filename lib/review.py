@@ -125,6 +125,43 @@ def revise_sample(dataset: str, record: Dict[str, Any], messages: List[Dict[str,
     return new_id
 
 
+REVISE_SCOPES = {"all": "全部消息", "assistant": "仅助手回答（content）", "thinking": "仅助手思考（reasoning_content）"}
+
+
+def propose_revision(messages: List[Dict[str, Any]], instruction: str, scope: str,
+                     client: Any, max_input_chars: int = 200000) -> List[Dict[str, Any]]:
+    """审核台临时修订：LLM 按指令产出候选 messages，**服务端强制 scope**（不信任模型）。
+
+    校验要点：JSON 契约、等长同 role、scope 外消息原样保留；任何不符抛 ValueError。"""
+    from lib.llm_client import chat_json
+    from lib.prompts import get, render
+
+    if scope not in REVISE_SCOPES:
+        raise ValueError(f"未知改动范围：{scope!r}（可用 {sorted(REVISE_SCOPES)}）")
+    if not (instruction or "").strip():
+        raise ValueError("修改要求不能为空")
+    payload = json.dumps(messages, ensure_ascii=False)
+    if len(payload) > max_input_chars:
+        raise ValueError(f"样本过大（{len(payload)} 字符 > {max_input_chars}），请改用逐条手工编辑")
+    out = chat_json(client, [{"role": "user", "content": render(
+        get("revise.instruction"), scope=REVISE_SCOPES[scope], instruction=instruction.strip(),
+        messages=payload)}], temperature=0.2)
+    edited = out.get("messages")
+    if not isinstance(edited, list) or len(edited) != len(messages):
+        raise ValueError("修订输出与输入消息数不一致")
+    fixed: List[Dict[str, Any]] = []
+    for src, dst in zip(messages, edited):
+        if not isinstance(dst, dict) or dst.get("role") != src.get("role"):
+            raise ValueError("修订输出 role 顺序与输入不一致")
+        merged = dict(src)
+        if scope in ("all", "assistant"):
+            merged["content"] = dst.get("content", src.get("content", ""))
+        if scope in ("all", "thinking") and src.get("role") == "assistant":
+            merged["reasoning_content"] = dst.get("reasoning_content", src.get("reasoning_content", ""))
+        fixed.append(merged)
+    return fixed
+
+
 def write_review_log(decisions: List[Dict[str, str]], out_path: pathlib.Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
