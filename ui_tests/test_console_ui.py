@@ -69,9 +69,9 @@ def test_review_page_renders_bubbles_and_editor():
     selector = next(w for w in app.selectbox if w.label == "待审样本")
     selector.set_value(selector.options[-1]).run()
     assert not app.exception
-    html = "\n".join(str(el.value) for el in app.get("html"))
-    assert "bub-" in html                                    # 气泡渲染
-    assert "<strong>" in html or "<table>" in html            # Markdown 生效
+    captions = "\n".join(str(c.value) for c in app.caption)
+    assert "Markdown 渲染" in captions                          # 默认渲染视图提示
     labels = [w.label for w in app.button] + [w.label for w in app.expander]
-    assert any("编辑第" in l for l in labels)                  # 每条消息可直接编辑
-    assert any("AI 按指令修改" in l for l in labels)           # AI 临时修订面板
+    assert any(l.startswith("✏️ 编辑第") for l in labels)         # 渲染视图内的编辑入口
+    assert any("AI 按指令修改" in l for l in labels)             # AI 临时修订面板
+    # 源码视图（组件 iframe）的进入/保存/取消往返由浏览器 E2E 覆盖

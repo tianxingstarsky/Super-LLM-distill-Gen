@@ -194,6 +194,19 @@ def page_run():
     _job_status()
 
 
+def _editable_chat():
+    """可编辑会话组件（自定义组件，零构建）：气泡本身就是编辑框，改完整页一次保存。"""
+    global _EDIT_CHAT
+    if _EDIT_CHAT is None:
+        from streamlit.components.v1 import declare_component
+        _EDIT_CHAT = declare_component("df_editable_chat",
+                                       path=str(ROOT / "lib" / "components" / "editable_chat"))
+    return _EDIT_CHAT
+
+
+_EDIT_CHAT = None
+
+
 def page_review():
     st.title("人工审核")
     with st.expander("协作者接入配置"):
@@ -238,7 +251,8 @@ def page_review():
     else:
         row = st.selectbox("待审样本", rows, format_func=lambda r: r["sample_id"],
                            index=next((i for i, r in enumerate(rows)
-                                       if r["sample_id"] == st.query_params.get("record")), 0))
+                                       if r["sample_id"] == st.query_params.get("record")), 0),
+                           key=f"review-record:{st.session_state['ws']}:{st.query_params.get('record', '')}")
         messages = None
         if row.get("payload"):
             try:
@@ -247,42 +261,40 @@ def page_review():
                 messages = None
         if messages:
             rid = row["record_id"]
-            st.caption("每条消息可直接点「✏️ 编辑」修改（正文与思考均可）；保存后生成**新版本样本**"
-                       "（新 ID，原记录保留待判），符合内容哈希绑定。")
-            for index, message in enumerate(messages):
-                role = message.get("role", "?")
-                key_base = f"m:{rid}:{index}"
-                st.html('<div class="bubbles">' + _render_message(message) + "</div>")
-                if st.session_state.get("editing") != key_base:
-                    if st.button(f"✏️ 编辑第 {index + 1} 条（{role}）", key=f"editbtn:{key_base}"):
-                        st.session_state["editing"] = key_base
+            edit_key = f"editing:{rid}"
+            if not st.session_state.get(edit_key):
+                st.caption("默认按 **Markdown 渲染** 阅读（与 dsh 一致）；点某条消息下方的「✏️ 编辑」才进入"
+                           "**源码视图**（解除渲染）修改，保存后自动回到渲染视图。")
+                for index, message in enumerate(messages):
+                    st.html('<div class="bubbles">' + _render_message(message) + "</div>")
+                    if st.button(f"✏️ 编辑第 {index + 1} 条（{message.get('role', '?')}）",
+                                 key=f"editbtn:{rid}:{index}"):
+                        st.session_state[edit_key] = True
+                        st.session_state[f"focus:{rid}"] = index
                         st.rerun()
-                else:
-                    with st.container(border=True):
-                        content = st.text_area("正文（Markdown 可渲染）", message.get("content", ""),
-                                               height=180, key=f"c:{key_base}")
-                        reasoning = None
-                        if role == "assistant":
-                            reasoning = st.text_area("思考（reasoning_content）",
-                                                     message.get("reasoning_content", ""),
-                                                     height=140, key=f"r:{key_base}")
-                        c1, c2 = st.columns(2)
-                        if c1.button("保存为新版本", key=f"save:{key_base}", type="primary"):
-                            edited = [dict(m) for m in messages]
-                            edited[index]["content"] = content
-                            if reasoning is not None:
-                                edited[index]["reasoning_content"] = reasoning
-                            try:
-                                from lib.review import revise_sample
-                                new_id = revise_sample(dataset, row, edited, reviewer="admin")
-                                st.session_state.pop("editing", None)
-                                st.query_params["record"] = new_id
-                                st.rerun()
-                            except ValueError as error:
-                                st.error(str(error))
-                        if c2.button("取消", key=f"cancel:{key_base}"):
-                            st.session_state.pop("editing", None)
+            else:
+                st.info("源码视图：Markdown 已解除渲染，直接改正文/思考；「保存为新版本」或「取消编辑」。")
+                value = _editable_chat()(
+                    messages=messages,
+                    focus_index=st.session_state.get(f"focus:{rid}", -1),
+                    key=f"editchat:{rid}:{st.session_state.get(f'round:{rid}', 0)}",
+                    default=None)
+                if isinstance(value, dict) and value.get("nonce") != st.session_state.get(f"editchat-nonce:{rid}"):
+                    st.session_state[f"editchat-nonce:{rid}"] = value.get("nonce")
+                    if value.get("cancel"):
+                        st.session_state.pop(edit_key, None)
+                        st.session_state.pop(f"focus:{rid}", None)
+                        st.rerun()
+                    elif value.get("messages"):
+                        try:
+                            from lib.review import revise_sample
+                            new_id = revise_sample(dataset, row, value["messages"], reviewer="admin")
+                            st.session_state.pop(edit_key, None)
+                            st.session_state.pop(f"focus:{rid}", None)
+                            st.query_params["record"] = new_id
                             st.rerun()
+                        except ValueError as error:
+                            st.error(str(error))
             with st.expander("🤖 让 AI 按指令修改（G0 计费；结果保存为新版本）"):
                 scope_label = st.selectbox("改动范围", list(REVISE_SCOPES.values()), key=f"ai-scope:{rid}")
                 ai_prompt = st.text_input("修改要求（例：把回答压缩到三句，并修正事实错误）", key=f"ai-prompt:{rid}")

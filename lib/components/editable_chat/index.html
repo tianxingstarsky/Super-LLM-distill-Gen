@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark;
+    --df-bg:#FFFFFF; --df-layer1:#FFFFFF; --df-layer2:#FFFFFF; --df-bubble:#EDF3FE;
+    --df-text:#0F1115; --df-text2:#61666B; --df-text3:#81858C;
+    --df-border:rgba(0,0,0,.04); --df-border2:rgba(0,0,0,.10); --df-brand:#4176E6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --df-bg:#151517; --df-layer1:#232324; --df-layer2:#2C2C2E; --df-bubble:#2C2C2E;
+      --df-text:#F9FAFB; --df-text2:#CFD3D6; --df-text3:#ADB2B8;
+      --df-border:rgba(255,255,255,.06); --df-border2:rgba(255,255,255,.12); --df-brand:#5686FE; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 2px 0 6px; background: var(--df-bg); color: var(--df-text);
+         font-family: "Segoe UI","Microsoft YaHei",system-ui,sans-serif; font-size: 14px; line-height: 22px; }
+  .bubbles { display: flex; flex-direction: column; gap: 14px; }
+  .row { display: flex; flex-direction: column; }
+  .row.user { align-items: flex-end; }
+  .row.assistant, .row.tool, .row.system { align-items: stretch; }
+  .bubble { outline: none; white-space: pre-wrap; word-break: break-word; }
+  .bubble:focus { box-shadow: 0 0 0 2px var(--df-brand); border-radius: 12px; }
+  .row.user .bubble { max-width: min(477px,82%); background: var(--df-bubble); color: var(--df-text);
+                      border-radius: 22px; padding: 10px 16px; }
+  .row.assistant .bubble, .row.system .bubble { background: transparent; padding: 0; }
+  .row.tool .bubble { background: var(--df-layer1); border: 1px solid var(--df-border2);
+                      border-radius: 16px; padding: 10px 14px; color: var(--df-text2);
+                      font-family: ui-monospace,Consolas,monospace; font-size: 13px; line-height: 20px; }
+  .row.system .bubble { align-self: center; background: var(--df-layer1); border: 1px solid var(--df-border);
+                        border-radius: 999px; padding: 6px 14px; color: var(--df-text3); font-size: 13px; }
+  .tag { font-size: 11px; font-family: ui-monospace,Consolas,monospace; color: var(--df-text3); margin: 0 0 4px; }
+  .think { border: 1px solid var(--df-border2); border-radius: 16px; padding: 10px 14px; margin-bottom: 8px; }
+  .think .bubble { color: var(--df-text2); font-size: 13px; line-height: 20px; }
+  .hint { color: var(--df-text3); font-size: 12px; margin: 0 0 10px; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+  button { font: inherit; border-radius: 10px; padding: 6px 14px; cursor: pointer;
+           border: 1px solid var(--df-border2); background: var(--df-layer1); color: var(--df-text); }
+  button.primary { background: var(--df-brand); border-color: var(--df-brand); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { color: var(--df-text3); font-size: 12px; }
+  .dirty { color: #d97706; }
+</style>
+</head>
+<body>
+<p class="hint">源码视图（Markdown 已解除渲染）：直接改正文与思考；「保存为新版本」后自动回到渲染视图。</p>
+<div class="bubbles" id="root"></div>
+<div class="bar">
+  <button class="primary" id="save" disabled>保存为新版本</button>
+  <button id="reset" disabled>重置改动</button>
+  <button id="cancel">取消编辑</button>
+  <span class="status" id="status"></span>
+</div>
+<script>
+  const root = document.getElementById('root');
+  const saveBtn = document.getElementById('save');
+  const resetBtn = document.getElementById('reset');
+  const cancelBtn = document.getElementById('cancel');
+  const statusEl = document.getElementById('status');
+  let original = [];
+  let focusIndex = -1;
+  let dirty = false;
+
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), '*');
+  }
+  function resize() { send('streamlit:setFrameHeight', { height: document.body.scrollHeight + 16 }); }
+  function plainText(el) { return el.innerText.replace(/\u00a0/g, ' '); }
+  function esc(s) { return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function markDirty() {
+    dirty = true; saveBtn.disabled = false; resetBtn.disabled = false;
+    statusEl.textContent = '有未保存的改动'; statusEl.className = 'status dirty'; resize();
+  }
+
+  function render(messages, focus) {
+    original = JSON.parse(JSON.stringify(messages));
+    focusIndex = (typeof focus === 'number' && focus >= 0) ? focus : -1;
+    root.innerHTML = '';
+    messages.forEach((m, i) => {
+      const role = m.role || 'user';
+      const row = document.createElement('div');
+      row.className = 'row ' + role;
+      let inner = '';
+      if (role === 'assistant' && (m.reasoning_content || m.reasoning_content === '')) {
+        inner += '<div class="think"><div class="tag">思考 · reasoning_content</div>' +
+                 '<div class="bubble" contenteditable="true" data-field="reasoning_content" data-i="' + i + '">' +
+                 esc(m.reasoning_content || '') + '</div></div>';
+      }
+      inner += '<div class="bubble" contenteditable="true" data-field="content" data-i="' + i + '">' +
+               esc(m.content || '') + '</div>';
+      row.innerHTML = inner;
+      root.appendChild(row);
+    });
+    dirty = false; saveBtn.disabled = true; resetBtn.disabled = true;
+    statusEl.textContent = ''; statusEl.className = 'status';
+    if (focusIndex >= 0) {
+      const el = root.querySelector('[data-i="' + focusIndex + '"][data-field="content"]');
+      if (el) {
+        el.scrollIntoView({ block: 'center' });
+        el.focus();
+        const sel = window.getSelection();
+        sel.selectAllChildren(el); sel.collapseToEnd();
+      }
+    }
+    resize();
+  }
+
+  root.addEventListener('input', e => { if (e.target.isContentEditable) markDirty(); });
+  root.addEventListener('paste', e => {
+    if (!e.target.isContentEditable) return;
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, text);
+  });
+
+  saveBtn.addEventListener('click', () => {
+    const out = JSON.parse(JSON.stringify(original));
+    root.querySelectorAll('[contenteditable]').forEach(el => {
+      out[Number(el.dataset.i)][el.dataset.field] = plainText(el);
+    });
+    send('streamlit:setComponentValue', { value: { messages: out, nonce: Date.now() }, dataType: 'json' });
+    statusEl.textContent = '已提交，正在保存…';
+  });
+  resetBtn.addEventListener('click', () => render(original, focusIndex));
+  cancelBtn.addEventListener('click', () => {
+    send('streamlit:setComponentValue', { value: { cancel: true, nonce: Date.now() }, dataType: 'json' });
+  });
+  window.addEventListener('resize', resize);
+
+  send('streamlit:componentReady', { apiVersion: 1 });
+  window.addEventListener('message', e => {
+    const d = e.data;
+    if (!d || d.type !== 'streamlit:render') return;
+    const a = d.args || {};
+    render(a.messages || [], a.focus_index);
+  });
+  resize();
+</script>
+</body>
+</html>
