@@ -190,6 +190,44 @@ def sample_ids_like(dataset: str, prefix: str) -> List[str]:
     return [r[0] for r in rows]
 
 
+def add_revision(dataset, base_sample_id, build_record, marker="-r"):
+    """原子分配下一个 ``<base>-rN`` 并插入修订记录（并发安全，绝不覆盖同 id）。
+
+    与 add_records 的关键区别：序号分配与插入在同一个 BEGIN IMMEDIATE 事务内完成，
+    并发调用被 SQLite 写锁串行化，各自拿到唯一序号；插入用普通 INSERT（不 upsert），
+    任何同 id 冲突（含历史评审内容）直接报错而不是静默覆盖。
+    ``build_record(new_id)`` 必须返回与 add_records 同形的记录 dict 且 sample_id=new_id。
+    返回新 sample_id。
+    """
+    _validate_dataset(dataset)
+    if not isinstance(base_sample_id, str) or not base_sample_id:
+        raise ValueError("base_sample_id required")
+    init_db()
+    with _lock, _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        prefix = base_sample_id + marker
+        rows = con.execute(
+            "SELECT sample_id FROM records WHERE dataset=? AND substr(sample_id,1,?)=?",
+            (dataset, len(prefix), prefix)).fetchall()
+        numbers = []
+        for (sample_id,) in rows:
+            tail = sample_id[len(prefix):]
+            if tail.isdigit():
+                numbers.append(int(tail))
+        new_id = f"{prefix}{max(numbers, default=0) + 1}"
+        record = build_record(new_id)
+        if not isinstance(record, dict) or record.get("sample_id") != new_id:
+            raise ValueError("build_record must return a record with the allocated sample_id")
+        if con.execute("SELECT 1 FROM records WHERE dataset=? AND sample_id=?", (dataset, new_id)).fetchone():
+            raise ValueError(f"Revision id already exists: {new_id}")
+        con.execute("""INSERT INTO records(dataset,sample_id,instruction,conversation,meta,suggestion,sample_hash,payload)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            (dataset, new_id, record.get("instruction", ""), record.get("conversation", ""),
+             record.get("meta", ""), record.get("suggestion", ""), record.get("sample_hash", ""),
+             record.get("payload", "")))
+    return new_id
+
+
 def submit(dataset, username, decisions):
     _validate_dataset(dataset)
     if not isinstance(decisions, list) or len(decisions) > 100:

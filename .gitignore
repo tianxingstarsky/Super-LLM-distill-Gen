@@ -22,11 +22,17 @@ data/review_center.db*
 data/output/argilla.db*
 !data/output/.gitkeep
 data/workspaces/
+# 文件夹注册表：机器私有（含本机绝对路径）＋并发锁，勿提交/手改
+data/workspaces.json
+data/workspaces.json.lock
+# 打开文件夹内的生成产物（任何位置的 .dataforge/ 都不入库；也是只读枚举的排除项）
+.dataforge/
 *.log
 
 # 密钥
 .env
 configs/backends.local.yaml
+configs/backends.local.yaml.*.bak
 PIP_CACHE_DIR=F:/无项目工作文件夹/tools/pip-cache
 plugins/dsh-dataforge/cordis.yml
 configs/review_remote.yaml

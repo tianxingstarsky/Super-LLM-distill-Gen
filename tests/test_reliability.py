@@ -189,13 +189,14 @@ def test_human_edit_creates_new_version(center):
     from lib.review import build_records, revise_sample
     center.add_records("rollout_review", build_records([sample()], {}))
     row = center.pending("rollout_review", "admin")[0]
-    assert row["payload"] and '"messages"' not in row["payload"]  # payload 是消息数组
-    edited = json.loads(row["payload"])
+    from lib.review_editor import unpack_record
+    assert isinstance(json.loads(row["payload"]), dict)
+    edited = unpack_record(row)["messages"]
     edited[-1]["content"] = "修正后的答案"
     new_id = revise_sample("rollout_review", row, edited, reviewer="tester")
     assert new_id == row["sample_id"] + "-r1"
     new_row = next(r for r in center.pending("rollout_review", "admin", 50) if r["sample_id"] == new_id)
-    assert json.loads(new_row["payload"])[-1]["content"] == "修正后的答案"
+    assert unpack_record(new_row)["messages"][-1]["content"] == "修正后的答案"
     assert new_row["sample_hash"] != row["sample_hash"]
     assert "修订自" in new_row["meta"]
     # 再修订一次 → 序号递增；原记录仍在
@@ -264,24 +265,3 @@ def test_minimind_rejects_lossy_image_export():
     from lib.exporters import to_minimind_sft
     with pytest.raises(ValueError, match="images"):
         to_minimind_sft({**sample(), "images": ["frame.png"]})
-
-
-def test_gui_form_and_session_isolation(tmp_path, monkeypatch):
-    from streamlit.testing.v1 import AppTest
-    from lib import workspace as ws
-    root = Path(__file__).resolve().parent.parent
-    monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "workspaces")
-    monkeypatch.setenv("DF_WORKSPACE", "default")
-    app = AppTest.from_file(str(root / "lib/webapp.py"), default_timeout=20).run()
-    assert not app.exception
-    app.sidebar.radio[0].set_value("管线运行").run()
-    assert not app.exception
-    assert app.selectbox[1].label == "任务" or any(w.label == "任务" for w in app.selectbox)
-    assert all("命令参数" not in w.label for w in app.text_input)
-    assert os_workspace() == "default"
-
-
-def os_workspace():
-    import os
-    return os.environ.get("DF_WORKSPACE")

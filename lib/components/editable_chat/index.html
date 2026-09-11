@@ -59,6 +59,7 @@
   let original = [];
   let focusIndex = -1;
   let dirty = false;
+  let renderedMessages = null;
 
   function send(type, data) {
     window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), '*');
@@ -85,8 +86,10 @@
                  '<div class="bubble" contenteditable="true" data-field="reasoning_content" data-i="' + i + '">' +
                  esc(m.reasoning_content || '') + '</div></div>';
       }
-      inner += '<div class="bubble" contenteditable="true" data-field="content" data-i="' + i + '">' +
-               esc(m.content || '') + '</div>';
+      const textContent = typeof m.content === 'string' || m.content == null;
+      inner += '<div class="bubble" contenteditable="' + textContent + '" data-field="content" data-i="' + i + '">' +
+               esc(textContent ? (m.content || '') : JSON.stringify(m.content, null, 2)) + '</div>';
+      if (!textContent) inner += '<div class="hint">结构化内容只读，保存时原样保留。</div>';
       row.innerHTML = inner;
       root.appendChild(row);
     });
@@ -104,7 +107,10 @@
     resize();
   }
 
-  root.addEventListener('input', e => { if (e.target.isContentEditable) markDirty(); });
+  root.addEventListener('input', e => {
+    const field = e.target.closest('[contenteditable="true"]');
+    if (field) { field.dataset.dirty = 'true'; markDirty(); }
+  });
   root.addEventListener('paste', e => {
     if (!e.target.isContentEditable) return;
     e.preventDefault();
@@ -114,7 +120,7 @@
 
   saveBtn.addEventListener('click', () => {
     const out = JSON.parse(JSON.stringify(original));
-    root.querySelectorAll('[contenteditable]').forEach(el => {
+    root.querySelectorAll('[contenteditable="true"][data-dirty="true"]').forEach(el => {
       out[Number(el.dataset.i)][el.dataset.field] = plainText(el);
     });
     send('streamlit:setComponentValue', { value: { messages: out, nonce: Date.now() }, dataType: 'json' });
@@ -131,7 +137,11 @@
     const d = e.data;
     if (!d || d.type !== 'streamlit:render') return;
     const a = d.args || {};
-    render(a.messages || [], a.focus_index);
+    const signature = JSON.stringify(a.messages || []);
+    if (signature !== renderedMessages) {
+      renderedMessages = signature;
+      render(a.messages || [], a.focus_index);
+    }
   });
   resize();
 </script>

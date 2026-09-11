@@ -17,7 +17,8 @@ from lib.render import _CSS, _render_message
 from lib.console_jobs import Job
 
 st.set_page_config(page_title="DataForge 运营控制台", layout="wide")
-st.html(f"<style>{_CSS} body {{max-width:none}} .stMarkdown p {{font-size:17px}}</style>")
+from lib.console_theme import CSS as CHROME_CSS
+st.html(f"<style>{_CSS}\n{CHROME_CSS}</style>")
 
 
 def _ws_out():
@@ -28,25 +29,67 @@ def _OUT(name):
     return _ws_out() / name
 
 
+def _request_folder_dialog():
+    st.session_state['open-folder-dialog'] = True
+
+
+def _close_folder_dialog():
+    st.session_state.pop('open-folder-dialog', None)
+
+
+@st.dialog("打开已有文件夹", width="large", on_dismiss=_close_folder_dialog)
+def _open_folder_dialog():
+    st.write("选择你已经准备好的目录。不会复制、搬走或重命名原文件。")
+    if st.button("浏览本机文件夹…", use_container_width=True):
+        try:
+            from lib.folder_picker import choose_existing
+            selected = choose_existing()
+            if selected:
+                st.session_state['open-folder-path'] = selected
+        except Exception:
+            st.warning("当前环境没有本机目录选择器，请粘贴目录路径。")
+    with st.form("open-folder"):
+        path = st.text_input("已有文件夹路径", key="open-folder-path", placeholder="F:\\资料\\我的数据集")
+        submitted = st.form_submit_button("打开文件夹", type="primary", use_container_width=True)
+    if submitted:
+        try:
+            identifier = WS.add_folder(path)
+            st.session_state['folder-to-open'] = identifier
+            _close_folder_dialog()
+            st.rerun()
+        except (ValueError, OSError) as error:
+            st.error(str(error))
+
+
 def _ws_choice():
+    st.sidebar.html('<div class="df-brand">DataForge</div><div class="df-kicker">DATA REVIEW STUDIO</div>')
+    st.sidebar.button("打开文件夹…", type="primary", use_container_width=True, on_click=_request_folder_dialog)
     options = WS.list_all()
-    current = st.session_state.get("ws", WS.current())
-    st.sidebar.selectbox("工作区", options, index=options.index(current) if current in options else 0, key="ws")
-    with st.sidebar.expander("新建工作区"):
-        with st.form("new-workspace"):
-            name = st.text_input("工作区名称")
-            create = st.form_submit_button("创建")
-        if create:
-            try:
-                WS.out(WS.validate(name))
-                st.success("已创建")
-                st.rerun()
-            except ValueError as error:
-                st.error(str(error))
+    if 'folder-to-open' in st.session_state:
+        st.session_state['ws'] = st.session_state.pop('folder-to-open')
+    if 'ws' not in st.session_state:
+        st.session_state['ws'] = st.query_params.get('ws') or WS.resolve()
+    if st.session_state['ws'] not in options:
+        st.sidebar.warning("链接中的文件夹尚未在本机打开，请选择已有目录。")
+        st.session_state['ws'] = WS.DEFAULT
+    previous = st.session_state.get('last-workspace', st.session_state['ws'])
+    st.sidebar.selectbox("最近打开", options, format_func=lambda ws: f"{WS.label(ws)} · {ws[-6:]}" if ws != WS.DEFAULT else WS.label(ws), key="ws")
+    st.query_params['ws'] = st.session_state['ws']
+    if st.session_state['ws'] != previous:
+        st.query_params.pop('record', None)
+    st.session_state['last-workspace'] = st.session_state['ws']
+    try:
+        st.sidebar.text(WS.folder(st.session_state['ws']).as_posix())
+    except FileNotFoundError as error:
+        st.sidebar.warning(str(error))
+    st.sidebar.divider()
 
 
 def _sample_files():
-    return sorted(p for p in _ws_out().glob("*.jsonl") if "samples" in p.name or "combined_preview" in p.name)
+    candidates = {p.resolve() for p in _ws_out().glob("*.jsonl") if "samples" in p.name or "combined_preview" in p.name}
+    if st.session_state['ws'] != WS.DEFAULT:
+        candidates.update(p.resolve() for p in WS.source_files(st.session_state['ws'], suffixes=('.jsonl',)))
+    return sorted(candidates)
 
 
 def _selected_samples(key):
@@ -54,9 +97,12 @@ def _selected_samples(key):
     if not files:
         st.info("当前工作区暂无样本")
         return None, []
-    source = st.selectbox("样本文件", files, format_func=lambda p: p.name, key=key)
+    source = st.selectbox("样本文件", files, format_func=lambda p: str(p.relative_to(WS.folder(st.session_state['ws']))) if p.is_relative_to(WS.folder(st.session_state['ws'])) else p.name,
+                          key=f"{key}:{st.session_state['ws']}")
     from lib.quality import read_samples
-    return source, read_samples(source)
+    raw = read_samples(source)
+    from lib.review_editor import normalize_sample
+    return source, [normalize_sample(row) for row in raw]
 
 
 def _gate():
@@ -97,16 +143,29 @@ def _job_status():
 
 
 def page_overview():
-    st.title("总览")
-    st.write(f"工作区：**{st.session_state['ws']}**")
-    files = _sample_files()
-    left, middle, right = st.columns(3)
-    left.metric("样本文件", len(files))
-    middle.metric("导出版本", len(list(_OUT("export").glob("*/manifest.json"))))
-    right.metric("G3 放量确认", _gate().status("G3"))
-    from lib.doctor import checks
-    with st.expander("环境诊断"):
-        st.dataframe(checks(), hide_index=True, use_container_width=True)
+    st.caption("文件夹 → 整理 → 审核 → 导出")
+    st.title("从你的文件夹开始")
+    st.write("不必在软件里创建项目。打开已有目录，直接查看数据、修改样本与生成导出版本。")
+    st.button("打开已有文件夹", type="primary", on_click=_request_folder_dialog)
+    source = WS.folder(st.session_state['ws'])
+    st.text(f"当前目录 · {source.as_posix()}")
+    st.text(f"产物目录 · {_ws_out().as_posix()}（仅运行任务时写入）")
+    inventory = WS.source_files(st.session_state['ws'], limit=501)
+    a,b,c = st.columns(3)
+    a.metric("源文件", "500+" if len(inventory) > 500 else len(inventory))
+    b.metric("JSONL 文件（格式待检查）", len(_sample_files()))
+    c.metric("已导出版本", len(list(_OUT('export').glob('*/manifest.json'))))
+    left,right = st.columns([3,2], gap='large')
+    with left:
+        st.subheader("文件夹内容")
+        st.dataframe([{'文件':str(p.relative_to(source)), '类型':p.suffix or '—'} for p in inventory[:500]], hide_index=True, use_container_width=True, height=320)
+        if len(inventory) > 500:
+            st.caption("仅展示前 500 个源文件；已排除 .dataforge 产物与依赖目录。")
+    with right:
+        st.subheader("开始工作")
+        st.write("**1. 查看数据**  阅读原始样本，不会改动源文件。")
+        st.write("**2. 审核修订**  Markdown 阅读、原位编辑、指定 AI 修改。")
+        st.write("**3. 导出版本**  输出写入当前目录的 `.dataforge/output/`，历史数据路径保留。")
     _job_status()
 
 
@@ -256,9 +315,10 @@ def page_review():
         messages = None
         if row.get("payload"):
             try:
-                messages = json.loads(row["payload"])
-            except json.JSONDecodeError:
-                messages = None
+                from lib.review_editor import unpack_record
+                messages = unpack_record(row)['messages']
+            except ValueError as error:
+                st.warning(str(error))
         if messages:
             rid = row["record_id"]
             edit_key = f"editing:{rid}"
@@ -519,13 +579,20 @@ PAGES = {"总览": page_overview, "资产管理": page_assets, "数据预览": p
          "管线运行": page_run, "人工审核": page_review, "质量报告": page_quality,
          "监控": page_monitor, "模型与密钥": page_backends, "闸门": page_gates,
          "偏好设置": page_prefs}
-_ws_choice()
+try:
+    _ws_choice()
+except (ValueError, OSError) as error:
+    st.error(str(error))
+    st.stop()
 # 深链：?page=人工审核&record=<sample_id>（协作者可直接分享定位链接）
 _qp_page = st.query_params.get("page")
 if _qp_page in PAGES and "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page
 page = st.sidebar.radio("DataForge 控制台", list(PAGES), key="nav")
+st.query_params['page'] = page
 try:
     PAGES[page]()
 except (ValueError, OSError) as error:
     st.error(str(error))
+if st.session_state.get('open-folder-dialog'):
+    _open_folder_dialog()

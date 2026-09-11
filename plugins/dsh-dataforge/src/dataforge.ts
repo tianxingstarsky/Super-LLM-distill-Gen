@@ -43,7 +43,7 @@ const COMMAND_HELP: Record<string, string> = {
   monitor: '运行监控摘要（本地审计）',
   models: '列出可用模型（models 网关自动获取）',
   gate: '闸门管理（action=status|approve|reject|propose，gate_id 可选）',
-  workspace: '工作区管理（action=list|status|use + 工作区名；--ws 全局选择工作区，数据按区隔离）',
+  workspace: '工作区=用户准备的数据文件夹（action=list|status|use|add + 名称/路径；add 注册外部文件夹）',
   user: '协作者账号管理（action=create+用户名 或 list；审核中心内置，key 发给协作者离线配置）',
   'review-server': '审核中心 HTTP 服务（独立模式；控制台进程内置同款 API）',
   doctor: '只读环境自检，不运行测试、不修改配置',

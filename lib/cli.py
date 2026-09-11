@@ -32,8 +32,6 @@ from lib import workspace as WS  # noqa: E402
 GATES_YAML = ROOT / "configs" / "gates.yaml"
 GATES_STATE = ROOT / "data" / "output" / "gates_state.json"
 OUT_DIR = ROOT / "data" / "output"
-# 兼容占位：实际数据源路径见 configs/pipelines/rollout.yaml（或环境变量 ROLLOUT_DIR）
-ROLLOUT_DIR = pathlib.Path(r"C:\Users\tianx\.zcode\cli\rollout")
 
 
 def _gates() -> GateKeeper:
@@ -61,15 +59,34 @@ def _pipeline(name: str):
     return load_pipeline_config(name, ROOT)
 
 
+def _rollout_source(args) -> pathlib.Path | None:
+    """rollout 输入路由：显式 --rollout-dir > 已打开文件夹（WS.folder）> 历史默认。
+
+    非 default 文件夹返回所选文件夹自身（枚举时排除 .dataforge 产物，不自我摄取）；
+    default 返回 None，由 scripts.import_rollout 按 ROLLOUT_DIR/配置解析（向后兼容）。"""
+    explicit = getattr(args, "rollout_dir", None)
+    if explicit:
+        path = pathlib.Path(explicit).expanduser()
+        if not path.is_dir():
+            raise ValueError(f"数据源目录不存在：{path}")
+        return path
+    ws_name = WS.resolve(getattr(args, "ws", None))
+    if ws_name != WS.DEFAULT:
+        return WS.folder(ws_name)
+    return None
+
+
 def cmd_import(args) -> int:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from import_rollout import run, source_label  # type: ignore
+
+    source = _rollout_source(args)
     gate = _gates()
     if gate.status("G1") != "approved":
-        gate.propose("G1", {"rollout_dir": str(ROLLOUT_DIR)})
+        gate.propose("G1", {"rollout_dir": str(source_label(source))})
         raise GateBlocked("数据源闸 G1 待确认：df gate approve G1（确认导入私有会话数据与云端上传）")
-    sys.path.insert(0, str(ROOT / "scripts"))
-    from import_rollout import run  # type: ignore
 
-    run(limit=args.limit, export_limit=args.export_limit, cot=args.cot, out_dir=OUT_DIR)
+    run(limit=args.limit, export_limit=args.export_limit, cot=args.cot, out_dir=OUT_DIR, source=source)
     from lib.monitor import trace_run
 
     stats = json.loads((OUT_DIR / "rollout_stats.json").read_text(encoding="utf-8"))
@@ -148,10 +165,11 @@ def cmd_distill(args) -> int:
     report = distill_mod.classify_report(samples)
     report["n_samples"] = len(samples)
 
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from import_rollout import source_files  # type: ignore  # 与 import 同源路由
+
     pairs = []
-    _rcfg = _pipeline("rollout")["rollout"]
-    rollout_dir = pathlib.Path(os.environ.get("ROLLOUT_DIR", _rcfg["dir"]))
-    for f in sorted(rollout_dir.glob(_rcfg["pattern"])):
+    for f in source_files(_rollout_source(args)):
         pairs.extend(distill_mod.extract_dpo_pairs(str(f), "separated"))
     report["n_dpo_pairs"] = len(pairs)
 
@@ -289,7 +307,15 @@ def cmd_translate(args) -> int:
 
     cfg = _pipeline("translation")
     client, model = _client(args, role="translation")
-    lines = pathlib.Path(args.input).read_text(encoding="utf-8").splitlines()
+    explicit = getattr(args, "input", None)
+    if explicit:
+        source = pathlib.Path(explicit)
+    else:
+        # 缺省=所选文件夹/topics.txt；default 工作区即 data/seeds/topics.txt（历史默认不变）
+        source = WS.folder(WS.resolve(getattr(args, "ws", None))) / "topics.txt"
+    if not source.is_file():
+        raise FileNotFoundError(f"输入文件不存在：{source}（可用 --input 显式指定）")
+    lines = source.read_text(encoding="utf-8").splitlines()
     print(f"翻译管线（模型 {model}）：{len(lines)} 行 → 取 {min(args.limit, len(lines))} 条")
     pairs = run_translation(
         client, lines, args.limit,
@@ -799,25 +825,43 @@ def cmd_backend(args) -> int:
 
 
 def cmd_workspace(args) -> int:
-    """工作区管理：数据按区分流（list/status/use）。"""
+    """工作区管理：工作区=用户准备好的数据文件夹（add/list/status/use）。"""
     if args.action == "list":
         cur = WS.current()
         for name in WS.list_all():
+            try:
+                where = f"  ← {WS.folder(name)}"
+            except FileNotFoundError as error:
+                where = f"  [不可用] {error}"
             mark = "（当前）" if name == cur else ""
-            print(f"  {name}{mark}")
+            print(f"  {name}{mark}{where}")
         return 0
     if args.action == "status":
         info = WS.status(getattr(args, "ws", None))
         print(json.dumps(info, ensure_ascii=False, indent=1))
         return 0
+    if args.action == "add":
+        if not args.name:
+            print("用法: df workspace add <数据文件夹路径>")
+            return 1
+        try:
+            name = WS.add_folder(args.name)
+        except ValueError as e:
+            print(f"[未完成] {e}", file=sys.stderr)
+            return 2
+        print(f"已注册数据文件夹：{name} → {WS.folder(name)}")
+        print(f"产物目录：{WS.out(name)}（运行管线时才写入）；切换：df workspace use {name}")
+        return 0
     if args.action == "use":
         if not args.name:
-            print("用法: df workspace use <名字>")
+            print("用法: df workspace use <名字>（见 df workspace list）")
             return 1
-        name = WS.set_current(args.name)
-        from lib.monitor import trace_run
-        trace_run(ROOT, "workspace_selected", {"selected_workspace": name})
-        print(f"当前工作区 → {name}（输出目录 {WS.out(name)}）")
+        try:
+            name = WS.set_current(args.name)
+        except ValueError as e:
+            print(f"[未完成] {e}", file=sys.stderr)
+            return 2
+        print(f"当前工作区 → {name}（数据 {WS.folder(name)}；产物 {WS.out(name)}）")
         return 0
     return 1
 
@@ -940,6 +984,8 @@ def build_parser():
     p_import.add_argument("--limit", type=int, default=0)
     p_import.add_argument("--export-limit", type=int, default=200)
     p_import.add_argument("--cot", default="separated", choices=["separated", "tags", "plain", "drop"])
+    p_import.add_argument("--rollout-dir", default=None,
+                          help="显式 rollout 数据源目录；缺省=当前文件夹（default 工作区回退 ROLLOUT_DIR/配置）")
     p_import.set_defaults(func=cmd_import)
 
     sub.add_parser("stats", help="查看导入统计").set_defaults(func=cmd_stats)
@@ -960,6 +1006,8 @@ def build_parser():
 
     p_distill = sub.add_parser("distill", help="蒸馏质检：分类+DPO负样本+可选LLM打分")
     p_distill.add_argument("--llm-check", type=int, default=None, help="LLM 打分条数（>0 需 G0 闸门；缺省取 pipelines/distill.yaml）")
+    p_distill.add_argument("--rollout-dir", default=None,
+                           help="显式 rollout 数据源目录（DPO 负样本提取）；缺省=当前文件夹（default 回退 ROLLOUT_DIR/配置）")
     p_distill.add_argument("--backend")
     p_distill.add_argument("--model")
     p_distill.set_defaults(func=cmd_distill)
@@ -980,7 +1028,8 @@ def build_parser():
     p_peval.set_defaults(func=cmd_prompt_eval)
 
     p_translate = sub.add_parser("translate", help="翻译管线：互译+回译校验（G0 闸门）")
-    p_translate.add_argument("--input", default=str(ROOT / "data" / "seeds" / "topics.txt"))
+    p_translate.add_argument("--input", default=None,
+                             help="缺省=当前文件夹/topics.txt（default 工作区为 data/seeds/topics.txt）")
     p_translate.add_argument("--limit", type=int, default=5)
     p_translate.add_argument("--backend")
     p_translate.add_argument("--model")
@@ -1102,9 +1151,9 @@ def build_parser():
     p_backend.add_argument("--test", action="store_true", help="add 后立即连接测试")
     p_backend.set_defaults(func=cmd_backend)
 
-    p_workspace = sub.add_parser("workspace", help="工作区管理（数据按区分流：list/status/use）")
-    p_workspace.add_argument("action", choices=["list", "status", "use"])
-    p_workspace.add_argument("name", nargs="?", default="", help="工作区名（use 时必填）")
+    p_workspace = sub.add_parser("workspace", help="打开已有文件夹（add <路径>/list/status/use）")
+    p_workspace.add_argument("action", choices=["list", "status", "use", "add"])
+    p_workspace.add_argument("name", nargs="?", default="", help="已有目录路径（add）或文件夹标识（use）")
     p_workspace.set_defaults(func=cmd_workspace)
 
     p_user = sub.add_parser("user", help="协作者账号管理（审核中心内置）")
@@ -1132,7 +1181,7 @@ def build_parser():
 
     # 全局 --ws：所有子命令可用（df import --ws docs）；default 工作区=原 data/output
     for p in sub.choices.values():
-        p.add_argument("--ws", help="工作区名（缺省=当前工作区，见 df workspace list）")
+        p.add_argument("--ws", help="已打开文件夹的标识（缺省=当前工作区，见 df workspace list）")
 
     return parser
 
@@ -1141,14 +1190,15 @@ def main() -> int:
     global OUT_DIR, GATES_STATE
     parser = build_parser()
     args = parser.parse_args()
-    # 工作区解析在分发前完成：重绑本模块常量即对全部 cmd_* 生效
-    ws_name = WS.resolve(getattr(args, "ws", None))
-    OUT_DIR = WS.output_at(ROOT, ws_name)
-    if args.cmd not in ("doctor", "quality-report"):
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
-    GATES_STATE = OUT_DIR / "gates_state.json"
-    os.environ["DF_WORKSPACE"] = ws_name
     try:
+        if args.cmd == "workspace":
+            return args.func(args)
+        ws_name = WS.resolve(getattr(args, "ws", None))
+        OUT_DIR = WS.output_at(ROOT, ws_name)
+        if args.cmd not in ("workspace", "doctor", "quality-report"):
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+        GATES_STATE = OUT_DIR / "gates_state.json"
+        os.environ["DF_WORKSPACE"] = ws_name
         return args.func(args)
     except GateBlocked as e:
         print(f"[闸门拦截] {e}")
