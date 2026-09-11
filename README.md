@@ -6,6 +6,7 @@
 
 - Windows 双击 `scripts/start_all.vbs`；无看门狗，不弹后台命令行窗口。
 - 控制台按工作区操作，常用管线使用表单，不需要手写 JSON 参数。
+- 人工审核使用固定队列、Markdown 阅读区和判定区；只编辑选中字段，保存为新修订。见 [审核工作台使用说明](docs/review-workspace.md) 与 [本轮验收记录及限制](docs/review-workspace-acceptance.md)。
 - `python -m lib.cli doctor`：只读自检。
 - `python -m lib.cli quality-report`：检查当前输入的结构、重复与审核证据。
 - 模型与密钥：控制台「模型与密钥」页，或 `df backend list/add/test`（密钥只显示掩码，本地配置自动备份）。

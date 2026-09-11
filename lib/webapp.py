@@ -13,12 +13,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import streamlit as st
 from lib import workspace as WS
-from lib.render import _CSS, _render_message
+from lib.render import MESSAGE_CSS, _render_message
 from lib.console_jobs import Job
 
 st.set_page_config(page_title="DataForge 运营控制台", layout="wide")
 from lib.console_theme import CSS as CHROME_CSS
-st.html(f"<style>{_CSS}\n{CHROME_CSS}</style>")
+st.html(f"<style>{MESSAGE_CSS}\n{CHROME_CSS}</style>")
 
 
 def _ws_out():
@@ -178,7 +178,7 @@ def page_preview():
     sample = samples[index - 1]
     st.caption(f"ID: {sample.get('id', index)} / {len(sample.get('messages', []))} 条消息")
     for message in sample.get("messages", []):
-        st.html(_render_message(message))
+        st.html('<div class="bubbles">' + _render_message(message) + '</div>')
 
 
 def page_run():
@@ -253,166 +253,28 @@ def page_run():
     _job_status()
 
 
-def _editable_chat():
-    """可编辑会话组件（自定义组件，零构建）：气泡本身就是编辑框，改完整页一次保存。"""
-    global _EDIT_CHAT
-    if _EDIT_CHAT is None:
-        from streamlit.components.v1 import declare_component
-        _EDIT_CHAT = declare_component("df_editable_chat",
-                                       path=str(ROOT / "lib" / "components" / "editable_chat"))
-    return _EDIT_CHAT
-
-
-_EDIT_CHAT = None
-
-
 def page_review():
-    st.title("人工审核")
-    with st.expander("协作者接入配置"):
-        with st.form("collaborator-setup"):
-            config_name = st.text_input("配置名称", "review_remote.local")
-            server = st.text_input("中心地址", "http://127.0.0.1:6900")
-            key = st.text_input("API 密钥", type="password")
-            model = st.text_input("评审模型（可留空）")
-            policy = st.selectbox("审核规则", ["quality", "safety"])
-            save = st.form_submit_button("验证并保存配置")
-        if save:
-            import re
-            from lib.review_remote import AuthClient
-            if not re.fullmatch(r"review_remote\.[a-zA-Z0-9_-]+", config_name):
-                st.error("名称格式：review_remote.自定义名称")
-            else:
-                target = ROOT / "configs" / (config_name + ".yaml")
-                try:
-                    client = AuthClient(server, key)
-                    import yaml
-                    with target.open("x", encoding="utf-8") as handle:
-                        yaml.safe_dump({"server": server, "api_key": key, "model": model,
-                            "policy": policy, "dataset": WS.dataset_name(st.session_state["ws"])}, handle, allow_unicode=True)
-                    st.success(f"已连接账号 {client.me['username']}，保存为 {target.name}")
-                except (OSError, ValueError, ConnectionError) as error:
-                    st.error(str(error))
-    from lib import review_center as rc
-    from lib.review import REVISE_SCOPES
-    dataset = WS.dataset_name(st.session_state["ws"])
-    rc.ensure_admin()
-    _, samples = _selected_samples("review-source")
-    if samples and st.button("将所选样本加入待审"):
-        from lib.review import push_samples
-        try:
-            push_samples(samples, {}, dataset_name=dataset)
-            st.success("样本已加入待审")
-        except ValueError as error:
-            st.error(str(error))
-    rows = rc.pending(dataset, "admin", 100)
-    if not rows:
-        st.info("当前工作区没有待审记录")
-    else:
-        row = st.selectbox("待审样本", rows, format_func=lambda r: r["sample_id"],
-                           index=next((i for i, r in enumerate(rows)
-                                       if r["sample_id"] == st.query_params.get("record")), 0),
-                           key=f"review-record:{st.session_state['ws']}:{st.query_params.get('record', '')}")
-        messages = None
-        if row.get("payload"):
-            try:
-                from lib.review_editor import unpack_record
-                messages = unpack_record(row)['messages']
-            except ValueError as error:
-                st.warning(str(error))
-        if messages:
-            rid = row["record_id"]
-            edit_key = f"editing:{rid}"
-            if not st.session_state.get(edit_key):
-                st.caption("默认按 **Markdown 渲染** 阅读（与 dsh 一致）；点某条消息下方的「✏️ 编辑」才进入"
-                           "**源码视图**（解除渲染）修改，保存后自动回到渲染视图。")
-                for index, message in enumerate(messages):
-                    st.html('<div class="bubbles">' + _render_message(message) + "</div>")
-                    if st.button(f"✏️ 编辑第 {index + 1} 条（{message.get('role', '?')}）",
-                                 key=f"editbtn:{rid}:{index}"):
-                        st.session_state[edit_key] = True
-                        st.session_state[f"focus:{rid}"] = index
-                        st.rerun()
-            else:
-                st.info("源码视图：Markdown 已解除渲染，直接改正文/思考；「保存为新版本」或「取消编辑」。")
-                value = _editable_chat()(
-                    messages=messages,
-                    focus_index=st.session_state.get(f"focus:{rid}", -1),
-                    key=f"editchat:{rid}:{st.session_state.get(f'round:{rid}', 0)}",
-                    default=None)
-                if isinstance(value, dict) and value.get("nonce") != st.session_state.get(f"editchat-nonce:{rid}"):
-                    st.session_state[f"editchat-nonce:{rid}"] = value.get("nonce")
-                    if value.get("cancel"):
-                        st.session_state.pop(edit_key, None)
-                        st.session_state.pop(f"focus:{rid}", None)
-                        st.rerun()
-                    elif value.get("messages"):
-                        try:
-                            from lib.review import revise_sample
-                            new_id = revise_sample(dataset, row, value["messages"], reviewer="admin")
-                            st.session_state.pop(edit_key, None)
-                            st.session_state.pop(f"focus:{rid}", None)
-                            st.query_params["record"] = new_id
-                            st.rerun()
-                        except ValueError as error:
-                            st.error(str(error))
-            with st.expander("🤖 让 AI 按指令修改（G0 计费；结果保存为新版本）"):
-                scope_label = st.selectbox("改动范围", list(REVISE_SCOPES.values()), key=f"ai-scope:{rid}")
-                ai_prompt = st.text_input("修改要求（例：把回答压缩到三句，并修正事实错误）", key=f"ai-prompt:{rid}")
-                if st.button("生成修改建议", key=f"ai-run:{rid}"):
-                    scope = {v: k for k, v in REVISE_SCOPES.items()}[scope_label]
-                    if not ai_prompt.strip():
-                        st.error("请先填写修改要求")
-                    elif _gate().status("G0") != "approved":
-                        st.error("需要 G0（预算与模型闸）已通过才能调用付费 API")
-                    else:
-                        from lib.length import estimate_tokens
-                        size = estimate_tokens(json.dumps(messages, ensure_ascii=False))
-                        if size > 30000:
-                            st.error(f"样本约 {size} tokens，超出临时修订窗口（30k）；请改用逐条手工编辑")
-                        else:
-                            try:
-                                from lib.llm_client import load_backend
-                                from lib.review import propose_revision
-                                client, model = load_backend(ROOT, role="refine")
-                                edited = propose_revision(messages, ai_prompt, scope, client)
-                                st.session_state[f"ai-edit:{rid}"] = (edited, model)
-                                st.success(f"已生成建议（模型 {model}，scope={scope_label}）")
-                            except Exception as error:  # noqa: BLE001
-                                st.error(f"修订失败：{str(error)[:200]}")
-                suggestion = st.session_state.get(f"ai-edit:{rid}")
-                if suggestion:
-                    edited, model = suggestion
-                    st.caption(f"建议预览（{model}）——采用后保存为新版本：")
-                    st.html('<div class="bubbles">' + "\n".join(_render_message(m) for m in edited) + "</div>")
-                    d1, d2 = st.columns(2)
-                    if d1.button("✅ 采用并保存为新版本", key=f"ai-adopt:{rid}", type="primary"):
-                        try:
-                            from lib.review import revise_sample
-                            new_id = revise_sample(dataset, row, edited, reviewer="admin+ai")
-                            st.session_state.pop(f"ai-edit:{rid}", None)
-                            st.query_params["record"] = new_id
-                            st.rerun()
-                        except ValueError as error:
-                            st.error(str(error))
-                    if d2.button("丢弃建议", key=f"ai-drop:{rid}"):
-                        st.session_state.pop(f"ai-edit:{rid}", None)
-                        st.rerun()
-        else:
-            st.warning("该记录没有结构化内容（历史数据），只能按纯文本审阅；重新 push 后可逐条编辑。")
-            st.text(row["conversation"])
-        with st.form("review-decision:" + str(row["record_id"])):
-            decision = st.radio("判定", ["keep", "reject"], format_func=lambda v: "保留" if v == "keep" else "驳回", horizontal=True)
-            reason = st.text_area("判定理由")
-            send = st.form_submit_button("提交审核")
-        if send:
-            try:
-                rc.submit(dataset, "admin", [{**row, "decision": decision, "reason": reason, "model": "human"}])
-                st.rerun()
-            except ValueError as error:
-                st.error(str(error))
-    from lib.review import decide_gate
-    summary = decide_gate(rc.responses(dataset))
-    st.dataframe([summary], hide_index=True)
+    from lib.review_management import render_management, reviewer_identity
+    from lib.review_workspace import render_workspace
+
+    dataset = WS.dataset_name(st.session_state['ws'])
+    mode = st.session_state.get('review-management')
+    if mode:
+        render_management(mode, dataset, _selected_samples)
+        return
+
+    def navigate(target):
+        st.session_state['review-management'] = target
+
+    try:
+        username = reviewer_identity()
+        render_workspace(dataset, username, st.session_state['ws'],
+                         gate=_gate(), on_navigate=navigate)
+    except PermissionError:
+        st.error('当前身份没有此数据集的权限，请切换身份或由管理员授予权限。')
+        if st.button('审核身份与接入'):
+            navigate('settings')
+            st.rerun()
 
 
 def page_quality():

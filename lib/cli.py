@@ -909,9 +909,12 @@ def _launch_console() -> int:
 
     print("启动控制台: http://localhost:8501（审核中心 API: http://127.0.0.1:6900）")
     from streamlit.web import bootstrap
+    flags = {"server.port": 8501, "server.headless": True,
+             "server.address": "127.0.0.1", "server.fileWatcherType": "none"}
+    # bootstrap.run does not apply initial flag options when called outside Streamlit's CLI.
+    bootstrap.load_config_options(flag_options=flags)
     try:
-        bootstrap.run(str(ROOT / "lib" / "webapp.py"), False, [],
-                      {"server.port": 8501, "server.headless": True, "server.address": "127.0.0.1"})
+        bootstrap.run(str(ROOT / "lib" / "webapp.py"), False, [], flags)
     finally:
         rc.stop_thread()
     return 0

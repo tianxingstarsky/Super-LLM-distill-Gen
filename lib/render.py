@@ -13,7 +13,10 @@ from __future__ import annotations
 import html
 import json
 from pathlib import Path
+from string import Template
 from typing import Any, Dict, List, Optional
+
+from lib.console_theme import DARK_TOKENS, dark_var_block
 
 try:  # Streamlit 自带依赖；缺失时降级为纯文本（换行保留）
     from markdown_it import MarkdownIt
@@ -28,7 +31,12 @@ except Exception:  # noqa: BLE001
     def render_md(text: str) -> str:
         return f"<p>{html.escape(str(text)).replace(chr(10), '<br>')}</p>"
 
-_CSS = """
+_FONT = '"Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif'
+_MONO = 'ui-monospace, "Cascadia Code", Consolas, monospace'
+
+# 独立预览页（df preview --html）样式：保留系统亮/暗两套（向后兼容）。
+# 暗色块由 console_theme.DARK_TOKENS 生成，与控制台/消息色板保持同一事实源。
+_CSS_TEMPLATE = Template("""
 /* 视觉规范取自 dsh（DeepSeek Harness）Web UI 的设计令牌，亮/暗两套对齐：
    用户气泡 --dsw-specific-bubble（亮 #EDF3FE / 暗 #2C2C2E）、22px 圆角、10×16 padding、
    14px/22px 行高、max-width min(477px,82%)；助手为纯文本（无气泡）；层次色 --dsw-alias-bg-layer-1/2。 */
@@ -36,13 +44,13 @@ _CSS = """
   --df-bg: #FFFFFF; --df-layer1: #FFFFFF; --df-layer2: #FFFFFF; --df-bubble: #EDF3FE;
   --df-text: #0F1115; --df-text2: #61666B; --df-text3: #81858C;
   --df-border: rgba(0,0,0,.04); --df-border2: rgba(0,0,0,.1); --df-brand: #4176E6;
-  --df-font: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
-  --df-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --df-font: $font;
+  --df-mono: $mono;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --df-bg: #151517; --df-layer1: #232324; --df-layer2: #2C2C2E; --df-bubble: #2C2C2E;
-          --df-text: #F9FAFB; --df-text2: #CFD3D6; --df-text3: #ADB2B8;
-          --df-border: rgba(255,255,255,.06); --df-border2: rgba(255,255,255,.12); --df-brand: #5686FE; }
+  :root {
+$dark_vars
+  }
 }
 body { font-family: var(--df-font); max-width: 980px; margin: 0 auto; padding: 24px;
        background: var(--df-bg); color: var(--df-text); font-size: 14px; line-height: 22px; }
@@ -97,7 +105,66 @@ details.think .md { margin-top: 8px; }
 .tc-key { color: var(--df-brand); }
 .tc-val { color: var(--df-text2); word-break: break-word; }
 .err-note { color: #ef4444; font-size: 12px; }
-"""
+""")
+
+_CSS = _CSS_TEMPLATE.substitute(font=_FONT, mono=_MONO, dark_vars=dark_var_block("    "))
+
+# 嵌入 Streamlit 控制台用的消息区样式：仅 .bubbles 作用域、强制暗色，
+# 不含 :root/body/裸 h1，避免影响宿主页面；与 console_theme.CSS 共用 DARK_TOKENS。
+# 用法：<style>{MESSAGE_CSS}</style> + <div class="bubbles">{_render_message(...)}</div>
+_MESSAGE_TEMPLATE = Template("""
+/* 消息区（仅 .bubbles 内生效）：强制暗色，不随系统/浏览器偏好切换。 */
+.bubbles {
+$dark_vars
+  --df-font: $font;
+  --df-mono: $mono;
+  display: flex; flex-direction: column; gap: 16px;
+  font-family: var(--df-font); font-size: 14px; line-height: 22px; color: var(--df-text);
+}
+.bubbles .bubble { font-size: 14px; line-height: 22px; word-break: break-word; }
+.bubbles .bub-user { align-self: flex-end; max-width: min(477px, 82%); background: var(--df-bubble);
+            color: var(--df-text); border-radius: 22px; padding: 10px 16px; }
+.bubbles .bub-assistant { align-self: stretch; max-width: 100%; background: transparent; padding: 0; }
+.bubbles .bub-tool { align-self: stretch; background: var(--df-layer1); border: 1px solid var(--df-border2);
+            border-radius: 16px; padding: 10px 14px; color: var(--df-text2);
+            font-family: var(--df-mono); font-size: 13px; line-height: 20px; }
+.bubbles .bub-tool.err { border-color: rgba(248,113,113,.45); color: var(--df-danger); }
+.bubbles .bub-system { align-self: center; background: var(--df-layer1); border: 1px solid var(--df-border);
+              border-radius: 999px; padding: 6px 14px; color: var(--df-text3); font-size: 13px; }
+.bubbles .bub-think { align-self: stretch; max-width: 100%; background: transparent; padding: 0; }
+.bubbles .bub-user .role-tag, .bubbles .bub-assistant .role-tag { display: none; }  /* dsh 靠气泡/对齐区分角色 */
+.bubbles .role-tag { font-size: 11px; letter-spacing: .05em; color: var(--df-text3); margin-bottom: 4px;
+            font-family: var(--df-mono); }
+/* Markdown 排版 */
+.bubbles .md > :first-child { margin-top: 0; }
+.bubbles .md > :last-child { margin-bottom: 0; }
+.bubbles .md p { margin: 6px 0; }
+.bubbles .md ul, .bubbles .md ol { padding-left: 22px; margin: 6px 0; }
+.bubbles .md li { margin: 2px 0; }
+.bubbles .md h1, .bubbles .md h2, .bubbles .md h3, .bubbles .md h4 { margin: 10px 0 6px; line-height: 1.4; }
+.bubbles .md pre { background: var(--df-layer2); border-radius: 12px; padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+.bubbles .md code { background: var(--df-layer2); border-radius: 6px; padding: 1px 5px;
+           font-size: .92em; font-family: var(--df-mono); }
+.bubbles .md pre code { background: none; padding: 0; }
+.bubbles .md blockquote { border-left: 3px solid var(--df-border2); margin: 8px 0; padding: 2px 12px;
+                 color: var(--df-text2); }
+.bubbles .md table { border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; }
+.bubbles .md th, .bubbles .md td { border: 1px solid var(--df-border2); padding: 4px 10px; }
+.bubbles .md a { color: var(--df-brand); }
+.bubbles .md hr { border: none; border-top: 1px solid var(--df-border); margin: 10px 0; }
+.bubbles .md img, .bubbles .md video { max-width: 100%; height: auto; border-radius: 8px; }  /* 多模态安全显示，不改变渲染逻辑 */
+.bubbles details.think { border: 1px solid var(--df-border2); border-radius: 16px; padding: 10px 14px;
+                color: var(--df-text2); }
+.bubbles details.think summary { cursor: pointer; color: var(--df-text2); font-size: 13px; }
+.bubbles details.think .md { margin-top: 8px; }
+.bubbles .tool-call { margin: 2px 0; font-size: 13px; line-height: 20px; }
+.bubbles .tc-name { font-weight: 600; color: var(--df-text); }
+.bubbles .tc-key { color: var(--df-brand); }
+.bubbles .tc-val { color: var(--df-text2); word-break: break-word; }
+.bubbles .err-note { color: var(--df-danger); font-size: 12px; }
+""")
+
+MESSAGE_CSS = _MESSAGE_TEMPLATE.substitute(font=_FONT, mono=_MONO, dark_vars=dark_var_block("  "))
 
 
 def _esc(text: Any) -> str:

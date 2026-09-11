@@ -1,0 +1,14 @@
+{
+  "name": "super-llm-distill-gen-tests",
+  "private": true,
+  "description": "Development-only DOM regression tests; the review workspace adds no Node runtime dependency.",
+  "scripts": {
+    "test:review-component": "node tests/review_component_harness.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1"
+  },
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
+  }
+}
