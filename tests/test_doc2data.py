@@ -87,3 +87,35 @@ def test_doc_to_samples_cross_chunk_mode(tmp_path):
     assert result["stats"]["mode"] == "cross"
     assert result["stats"]["kept"] >= 1
     assert all(s["source"] == "document_cross" for s in result["samples"])
+
+
+class EchoCrossClient:
+    """cross 模式：answer 回显窗口内全部块文本，便于核对窗口覆盖。"""
+
+    def chat(self, messages, **kwargs):
+        content = messages[0]["content"]
+        if "必须通读全部段落" in content:
+            window = content.split("# 文档多段内容:")[-1].split("生成要求:")[0]
+            return json.dumps({"qa": [{"question": f"综合问题 {len(window)}", "answer": window}]},
+                              ensure_ascii=False)
+        return json.dumps({"grounded": True, "unsupported": [], "keep": True}, ensure_ascii=False)
+
+
+def test_cross_mode_covers_tail_chunk(tmp_path):
+    """偶数块数时最后一块也必须进入窗口（旧实现 n=4 丢第 4 块）。"""
+    from lib.doc2corpus import chunk_text, clean_text, import_text
+    from lib.doc2data import doc_to_samples
+
+    text = "\n\n".join(f"mark{i}：" + "知识内容" * 60 for i in range(4))
+    doc = tmp_path / "doc.md"
+    doc.write_text(text, encoding="utf-8")
+    chunks = chunk_text(clean_text(import_text(doc)), 200)
+    assert len(chunks) == 4  # 前置条件：恰好 4 块（偶数）
+
+    result = doc_to_samples(EchoCrossClient(), doc, qa_per_chunk=1, max_chunks=4,
+                            chunk_size=200, mode="cross")
+    assert result["stats"]["windows"] == 2  # 首窗(0,1,2) + 尾窗(1,2,3)
+    assert result["stats"]["kept"] == 2
+    combined = "\n".join(s["messages"][1]["content"] for s in result["samples"])
+    assert "mark3" in combined  # 尾块不再静默丢失
+    assert "mark0" in combined

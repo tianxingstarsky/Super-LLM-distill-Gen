@@ -47,6 +47,11 @@ def test_save_endpoint_merge_backup_and_validation(manager):
     row = next(r for r in info["backends"] if r["name"] == "local_gpu")
     assert row["models"] == ["qwen:7b", "vl:7b"]
     assert (manager.ROOT / "configs").exists() and list((manager.ROOT / "configs").glob("backends.local.yaml.*.bak"))
+    # 本地覆盖文件必须是合法 YAML（旧实现写成 JSON，破坏该文件的 YAML 惯例）
+    import yaml
+    local = manager.ROOT / "configs" / "backends.local.yaml"
+    written = yaml.safe_load(local.read_text(encoding="utf-8"))
+    assert written["backends"]["local_gpu"]["base_url"] == "http://127.0.0.1:11434/v1"
     # 校验
     with pytest.raises(ValueError):
         manager.save_endpoint("bad name", "http://x/v1", ["m"])

@@ -137,7 +137,7 @@ def run(client: Any, cfg: Dict[str, Any], answer_cap: int = 0) -> Dict[str, Any]
             ],
             "fact_check": check,
         }
-        if check.get("keep", True):
+        if check.get("keep") is True:  # 缺 keep 的响应不得冒充通过（fail closed）
             samples.append(sample)
         else:
             rejected.append({"question": q[:80], "check": check})

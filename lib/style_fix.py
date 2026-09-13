@@ -58,15 +58,19 @@ def check_style(client: Any, text: str, cfg: Dict[str, Any]) -> int:
 
 
 def _assistant_texts(sample: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """样本中所有 assistant 文本（含 reasoning_content 与 content 合并的完整文本）。"""
+    """样本中所有 assistant 文本（含 reasoning_content 与 content 合并的完整文本）。
+
+    附带 ``index``（在 messages 中的下标）：DPO prompt 只能取该条之前的历史，
+    不能把后面的用户轮次当成前文（未来信息泄漏）。
+    """
     texts = []
-    for m in sample.get("messages", []):
+    for index, m in enumerate(sample.get("messages", [])):
         if m.get("role") != "assistant":
             continue
         parts = [m.get("reasoning_content", ""), m.get("content", "")]
         full = "\n".join(p for p in parts if p).strip()
         if full:
-            texts.append({"msg": m, "full": full})
+            texts.append({"index": index, "msg": m, "full": full})
     return texts
 
 
@@ -90,10 +94,11 @@ def run(
         for item in _assistant_texts(sample):
             stats["texts"] += 1
             current = item["full"]
-            if check_style(client, current, cfg) >= threshold:
+            base_score = check_style(client, current, cfg)
+            if base_score >= threshold:
                 new_texts.append(item["msg"])
                 continue
-            best, best_score = current, 0
+            best, best_score = current, base_score  # 基准分：不能把原文换成更差的改写
             for _ in range(rounds):
                 stats["total_rounds"] += 1
                 current = polish_round(client, current, cfg)
@@ -104,15 +109,19 @@ def run(
                     best, best_score = current, score
                 if score >= threshold:
                     break
-            if best_score > 0 and best != item["full"]:
+            if best_score > base_score and best != item["full"]:
                 stats["improved"] += 1
                 msg = dict(item["msg"])
-                msg["content"] = best  # 矫正文本放回 content
+                # best 是 reasoning+content 的合并文本；有分字段思考时只更新 content，
+                # 并清掉旧思考，避免同一段思考同时留在 content 与 reasoning_content。
+                if msg.get("reasoning_content"):
+                    msg["reasoning_content"] = ""
+                msg["content"] = best
                 new_texts.append(msg)
                 dpo_pairs.append({
                     "id": "style-" + hashlib.sha256(best.encode("utf-8")).hexdigest()[:16],
                     "source": "stylefix",
-                    "prompt": [m for m in sample["messages"] if m.get("role") == "user"],
+                    "prompt": [m for m in sample["messages"][: item["index"]] if m.get("role") == "user"],
                     "chosen": [{"role": "assistant", "content": best}],
                     "rejected": [{"role": "assistant", "content": item["full"]}],
                 })

@@ -1,6 +1,7 @@
 """统一管线配置层：configs/pipelines/*.yaml 集中参数，CLI 参数 > yaml > 内置默认。"""
 from __future__ import annotations
 
+import copy
 import pathlib
 from typing import Any, Dict
 
@@ -23,7 +24,9 @@ DEFAULTS: Dict[str, Any] = {
 def load_pipeline_config(name: str, root: pathlib.Path | None = None, overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """加载 configs/pipelines/{name}.yaml，合并内置默认与调用方覆盖。"""
     root = root or ROOT
-    cfg = dict(DEFAULTS)
+    # 深拷贝：_deep_merge 递归写嵌套 dict，浅拷贝会把 yaml/overrides 永久写进
+    # 模块级 DEFAULTS，污染同进程后续所有管线。
+    cfg = copy.deepcopy(DEFAULTS)
     path = root / "configs" / "pipelines" / f"{name}.yaml"
     if path.exists():
         loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

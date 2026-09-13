@@ -7,7 +7,6 @@ from pathlib import Path
 import streamlit as st
 
 from lib import review_center as rc
-from lib import workspace as WS
 
 ROOT = Path(__file__).resolve().parent.parent
 

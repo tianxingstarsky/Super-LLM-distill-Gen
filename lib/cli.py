@@ -342,7 +342,7 @@ def cmd_identity_gen(args) -> int:
     """身份问答零参考训练集：多样化"你是谁"问题 + 固定事实回答 + 事实校验（G0 闸门）。"""
     _gates().require("G0")
     from lib.identity_gen import load_config, run
-    from lib.length import load_profiles, truncate_to_max
+    from lib.length import load_profiles
 
     client, model = _client(args)
     cfg = load_config(args.config)

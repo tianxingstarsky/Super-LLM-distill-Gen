@@ -36,7 +36,12 @@ def doc_to_samples(
     stats = {"chunks": len(chunks), "qa_generated": 0, "kept": 0, "ground_rejected": 0, "dups": 0, "mode": mode}
 
     if mode == "cross":
+        # 步长 2、窗口 3 块；末尾若未被任何窗口覆盖则补一个尾窗，避免偶数块数时
+        # 最后一块静默不参与问答（旧实现 n=4/6 时丢失第 4/6 块且统计不可见）。
         windows = [chunks[i : i + 3] for i in range(0, max(len(chunks) - 2, 1), 2)]
+        if chunks and windows and windows[-1][-1] != chunks[-1]:
+            windows.append(chunks[-3:])
+        stats["windows"] = len(windows)
         for wi, window in enumerate(windows):
             if not window:
                 continue

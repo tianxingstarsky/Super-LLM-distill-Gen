@@ -20,13 +20,27 @@ PAGE_NUMBER_RE = re.compile(r"^\s*\d{1,4}\s*$")  # 纯页码行（PDF 提取常�
 
 
 # ── 导入层 ──────────────────────────────────────────────────────────────────
+def _decode_text(data: bytes) -> str:
+    """UTF-8 优先；失败再按 GB18030（中文 Windows 常见）解码。
+
+    旧实现用 ``errors="replace"``：GBK 文档会被静默替换成 U+FFFD 乱码并写进
+    "无损" CPT 语料。这里改为显式解码，两种编码都不成立时抛错而不是产出坏数据。
+    """
+    for encoding in ("utf-8", "gb18030"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")  # 兜底：保证不崩，但不静默吞掉可解码的编码
+
+
 def import_text(path: str | pathlib.Path) -> str:
     path = pathlib.Path(path)
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXTS:
         raise ValueError(f"不支持的文件类型 {ext}（支持 {sorted(SUPPORTED_EXTS)}）")
     if ext in (".md", ".txt"):
-        return path.read_text(encoding="utf-8", errors="replace")
+        return _decode_text(path.read_bytes())
     if ext == ".pdf":
         from pypdf import PdfReader
 

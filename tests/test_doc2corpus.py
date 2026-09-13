@@ -47,3 +47,12 @@ def test_doc_to_corpus_with_global_dedup(tmp_path):
 
 def test_chunk_hash_normalizes_whitespace():
     assert chunk_hash("你好 世界") == chunk_hash("你好\n世界")
+
+
+def test_import_text_decodes_non_utf8_chinese(tmp_path):
+    """GB18030 中文文档不再被 errors=replace 静默转成 U+FFFD 乱码。"""
+    target = tmp_path / "gbk.txt"
+    target.write_bytes("中文知识：分块与去重。".encode("gb18030"))
+    raw = import_text(target)
+    assert "中文知识" in raw
+    assert "\ufffd" not in raw

@@ -24,7 +24,8 @@ def normalize_sample(row):
     if not isinstance(row, dict):
         raise ValueError("样本必须是 JSON 对象")
     sample = deepcopy(row)
-    messages = sample.get('messages', sample.get('conversations'))
+    # messages 为 None/[] 时同样回退到 conversations（旧逻辑 null 会顶掉有效回退键）
+    messages = sample.get('messages') or sample.get('conversations')
     if not isinstance(messages, list) or not messages:
         raise ValueError("当前文件不是对话样本：需要 messages 或 conversations 数组")
     normalized = []

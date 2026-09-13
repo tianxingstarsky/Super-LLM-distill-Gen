@@ -151,7 +151,7 @@ def run(
                 continue
             check = chat_json(client, [{"role": "user", "content": render(
                 get("agent.check"), goal=goal, trajectory=_hist_text(traj["messages"]))}], temperature=0.2)
-            if not check.get("keep", True):
+            if check.get("keep") is not True:  # 缺 keep 的响应不得冒充通过（fail closed）
                 stats["rejected"] += 1
                 continue
             gid = hashlib.sha256(goal.encode("utf-8")).hexdigest()[:16]

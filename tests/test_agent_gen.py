@@ -66,6 +66,23 @@ def test_run_rejects_unknown_tool_call():
     assert result["stats"]["rejected"] == 1
 
 
+def test_run_rejects_missing_keep():
+    """质检响应缺 keep 字段时必须驳回（fail closed）。"""
+
+    class MissingKeepClient(FakeClient):
+        def chat(self, messages, **kwargs):
+            if "agent 轨迹质检员" in messages[0]["content"]:
+                return json.dumps({"valid": True, "issues": []}, ensure_ascii=False)
+            return super().chat(messages, **kwargs)
+
+    from lib.agent_gen import run
+
+    result = run(MissingKeepClient(), _tools()["tools"], ["web"], n_per_scenario=1)
+    assert result["stats"]["kept"] == 0
+    assert result["stats"]["rejected"] == 1
+    assert result["samples"] == []
+
+
 def test_tools_desc_contains_all_tools():
     from lib.agent_gen import tools_desc
 

@@ -15,6 +15,7 @@ class PreferenceSampler:
     """按维度权重抽样 recipe 维度；支持按批次实际占比做软校正。"""
 
     def __init__(self, weights: Dict[str, float], default_floor: float = DEFAULT_FLOOR, seed: Optional[int] = None):
+        self.default_floor = default_floor  # 校正阶段沿用构造时的下限（不能回退到全局默认）
         if "default" not in weights:
             weights = {**weights, "default": 0.0}
         if weights["default"] < default_floor:
@@ -42,7 +43,7 @@ class PreferenceSampler:
         total = sum(corrected.values()) or 1.0
         out = {k: v / total for k, v in corrected.items()}
         # default 下限：抬高 default 后其余维度按比例压缩（不会再次稀释下限）
-        floor = DEFAULT_FLOOR
+        floor = self.default_floor
         if "default" in out and out["default"] < floor:
             rest_total = 1.0 - floor
             other_total = sum(v for k, v in out.items() if k != "default") or 1.0

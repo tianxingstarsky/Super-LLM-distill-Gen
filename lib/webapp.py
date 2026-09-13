@@ -40,7 +40,7 @@ def _close_folder_dialog():
 @st.dialog("打开已有文件夹", width="large", on_dismiss=_close_folder_dialog)
 def _open_folder_dialog():
     st.write("选择你已经准备好的目录。不会复制、搬走或重命名原文件。")
-    if st.button("浏览本机文件夹…", use_container_width=True):
+    if st.button("浏览本机文件夹…", width="stretch"):
         try:
             from lib.folder_picker import choose_existing
             selected = choose_existing()
@@ -50,7 +50,7 @@ def _open_folder_dialog():
             st.warning("当前环境没有本机目录选择器，请粘贴目录路径。")
     with st.form("open-folder"):
         path = st.text_input("已有文件夹路径", key="open-folder-path", placeholder="F:\\资料\\我的数据集")
-        submitted = st.form_submit_button("打开文件夹", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("打开文件夹", type="primary", width="stretch")
     if submitted:
         try:
             identifier = WS.add_folder(path)
@@ -63,7 +63,7 @@ def _open_folder_dialog():
 
 def _ws_choice():
     st.sidebar.html('<div class="df-brand">DataForge</div><div class="df-kicker">DATA REVIEW STUDIO</div>')
-    st.sidebar.button("打开文件夹…", type="primary", use_container_width=True, on_click=_request_folder_dialog)
+    st.sidebar.button("打开文件夹…", type="primary", width="stretch", on_click=_request_folder_dialog)
     options = WS.list_all()
     if 'folder-to-open' in st.session_state:
         st.session_state['ws'] = st.session_state.pop('folder-to-open')
@@ -158,7 +158,7 @@ def page_overview():
     left,right = st.columns([3,2], gap='large')
     with left:
         st.subheader("文件夹内容")
-        st.dataframe([{'文件':str(p.relative_to(source)), '类型':p.suffix or '—'} for p in inventory[:500]], hide_index=True, use_container_width=True, height=320)
+        st.dataframe([{'文件':str(p.relative_to(source)), '类型':p.suffix or '—'} for p in inventory[:500]], hide_index=True, width="stretch", height=320)
         if len(inventory) > 500:
             st.caption("仅展示前 500 个源文件；已排除 .dataforge 产物与依赖目录。")
     with right:
@@ -293,14 +293,14 @@ def page_quality():
         st.success("达到当前放量检查条件；仍需人工确认 G3")
     else:
         st.warning("未达到放量条件：" + ", ".join(data["block_reasons"]))
-    st.dataframe(data["issues"], hide_index=True, use_container_width=True)
+    st.dataframe(data["issues"], hide_index=True, width="stretch")
 
 
 def page_monitor():
     st.title("运行监控")
     path = _OUT("runs.jsonl")
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
-    st.dataframe(rows[-100:], hide_index=True, use_container_width=True)
+    st.dataframe(rows[-100:], hide_index=True, width="stretch")
     _job_status()
 
 
@@ -313,7 +313,7 @@ def page_backends():
              "密钥来源": r["api_key"]["source"], "密钥": r["api_key"]["status"],
              "角色": "、".join(r["roles"]) or "-", "默认": "是" if r["is_default"] else ""}
             for r in info["backends"]]
-    st.dataframe(rows, hide_index=True, use_container_width=True)
+    st.dataframe(rows, hide_index=True, width="stretch")
     with st.expander("新增 / 覆盖端点（写入 gitignored configs/backends.local.yaml，自动备份）"):
         with st.form("backend-add"):
             name = st.text_input("后端名", "local_gpu")

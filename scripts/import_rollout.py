@@ -111,10 +111,21 @@ def _run_locked(OUT_DIR, limit, export_limit, cot, source=None):
     samples_path = OUT_DIR / "rollout_samples.jsonl"
     existing = set()
     if samples_path.exists():
-        existing = {json.loads(line)["id"] for line in samples_path.read_text(encoding="utf-8").splitlines() if line.strip()}
+        # 容错解析：追加写的文件可能因中断留下截断行/缺 id 行；单行损坏不能让
+        # 整个导入永久失败（旧实现 json.loads(line)["id"] 直接 KeyError/JSONDecodeError）。
+        for line in samples_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(record, dict) and record.get("id"):
+                existing.add(record["id"])
     stats_all = {}
     samples_written = 0
     rejected_written = 0
+    manifest_skipped = 0
 
     with open(OUT_DIR / "rollout_samples.jsonl", "a", encoding="utf-8") as fs, \
          open(OUT_DIR / "rollout_rejected.jsonl", "a", encoding="utf-8") as fr:
@@ -134,11 +145,15 @@ def _run_locked(OUT_DIR, limit, export_limit, cot, source=None):
                     models[(rec.get("model") or {}).get("modelId", "?")] += 1
                     sample = record_to_sample(rec, cot)
                     err_tool_steps += sample["error_tool_steps"]
+                    # manifest 是全局去重清单：即使样本文件被删/轮转，已导入过的 id 也不再重复写入
                     if samples_written < export_limit and sample["id"] not in existing:
-                        fs.write(json.dumps(sample, ensure_ascii=False) + "\n")
-                        samples_written += 1
-                        existing.add(sample["id"])
-                        manifest.add(sample["id"])
+                        if manifest.seen(sample["id"]):
+                            manifest_skipped += 1
+                        else:
+                            fs.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                            samples_written += 1
+                            existing.add(sample["id"])
+                            manifest.add(sample["id"])
                 else:
                     err += 1
                     if rejected_written < 100:
@@ -159,7 +174,8 @@ def _run_locked(OUT_DIR, limit, export_limit, cot, source=None):
     (OUT_DIR / "rollout_stats.json").write_text(
         json.dumps(stats_all, ensure_ascii=False, indent=1), encoding="utf-8"
     )
-    print(f"\n导出样本 {samples_written} 条；manifest 新增 {manifest.new}、命中重复 {manifest.hits}")
+    print(f"\n导出样本 {samples_written} 条；manifest 新增 {manifest.new}、命中重复 {manifest.hits}"
+          + (f"、历史清单跳过 {manifest_skipped}" if manifest_skipped else ""))
     print(f"统计/样本/拒绝归档/清单 → {OUT_DIR}")
 
 

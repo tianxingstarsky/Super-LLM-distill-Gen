@@ -185,10 +185,21 @@ def set_role(role: str, backend: str, model: str) -> None:
 
 
 def _write_local(cfg: Dict[str, Any]) -> None:
+    """YAML 原子写（先备份）。文件扩展名是 .yaml：用 yaml 序列化而不是 JSON，
+    避免 JSON 语法破坏该文件的 YAML 惯例/注释（旧实现 atomic_json 写 JSON）。"""
+    import tempfile
+
     target = ROOT / "configs" / "backends.local.yaml"
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         backup = target.with_name(f"{target.name}.{time.strftime('%Y%m%dT%H%M%S')}.bak")
         shutil.copy2(target, backup)
-    from lib.io_utils import atomic_json
-    atomic_json(target, cfg)
+    fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".pending-", suffix=".yaml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(cfg, handle, allow_unicode=True, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)

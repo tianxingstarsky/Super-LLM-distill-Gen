@@ -31,13 +31,19 @@ def trace_run(root: pathlib.Path, kind: str, payload: Dict[str, Any]) -> None:
     """记录一次管线运行：Langfuse trace（如配置）+ 本地 runs.jsonl（永远写入）。"""
     entry: Dict[str, Any] = {"kind": kind, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **payload}
     from lib.workspace import output_at, resolve
-    entry["workspace"] = resolve(root=root)
-    local_path = output_at(root, entry["workspace"]) / "runs.jsonl"
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(local_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    try:
+        entry["workspace"] = resolve(root=root)
+        local_path = output_at(root, entry["workspace"]) / "runs.jsonl"
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(local_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 —— 本地审计失败不影响主流程（docstring 承诺）
+        pass
 
-    cfg = _langfuse_config(root)
+    try:  # 监控配置损坏/不可读也不能让已完成的管线命令报错
+        cfg = _langfuse_config(root)
+    except Exception:  # noqa: BLE001
+        return
     if not cfg:
         return
     try:

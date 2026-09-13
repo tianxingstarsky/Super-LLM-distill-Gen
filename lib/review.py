@@ -47,6 +47,41 @@ def _first_user_content(sample: Dict[str, Any]) -> str:
     return ""
 
 
+def _judge_suggestion(score: Any) -> Optional[str]:
+    """judge 评分 → keep/reject 建议；失败或无法解析时不给建议。
+
+    cmd_distill 对失败调用写 ``error`` 而没有 ``score``（默认空串），旧逻辑
+    ``"true" in str(...)`` 会把每个失败样本标成 reject——虚假的负面建议会误导
+    人工审核。这里只接受可解析出布尔 keep（或明确的 true/false 文本）。
+    """
+    if score is None:
+        return None
+    value = score
+    if isinstance(score, str):
+        text = score.strip()
+        if not text:
+            return None
+        try:
+            value = json.loads(text)
+        except (ValueError, TypeError):
+            # 兼容被截断/片段化的 judge 输出（如 '"keep": true'）；只有以布尔值
+            # 结尾才判定，报错文本/空响应不会产生建议。
+            lowered = text.lower().rstrip("}").strip().rstrip(",").strip()
+            if lowered.endswith("true") or lowered in ("keep", "1"):
+                return "keep"
+            if lowered.endswith("false") or lowered in ("reject", "0"):
+                return "reject"
+            return None
+    if isinstance(value, dict):
+        for key in ("keep", "pass", "valid"):
+            if key in value:
+                return "keep" if value[key] is True else "reject" if value[key] is False else None
+        return None
+    if isinstance(value, bool):
+        return "keep" if value else "reject"
+    return None
+
+
 def _plain_messages(sample: Dict[str, Any]) -> str:
     """把样本转成便于人工阅读的纯文本（无 JSON 符号；多模态只取文本并标注结构部分）。"""
     lines = []
@@ -57,8 +92,10 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
                 lines.append(f"【思考】{m['reasoning_content']}")
             if m.get("content"):
                 lines.append(f"【回答】{_content_text(m['content'])}")
-            for tc in m.get("toolCalls", []):
-                args = tc.get("input") or {}
+            for tc in (m.get("toolCalls") or m.get("tool_calls") or []):
+                if not isinstance(tc, dict):
+                    continue
+                args = tc.get("input") or tc.get("arguments") or {}
                 if isinstance(args, dict):
                     argstr = "，".join(f"{k} = {v}" for k, v in args.items())
                 else:
@@ -89,8 +126,9 @@ def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List
             "conversation": conversation,
             "meta": f"model={s.get('model')} finish={s.get('finish_reason')} 错误步骤={s.get('error_tool_steps', 0)} images={len(s.get('images') or [])}",
         }
-        if s.get("id") in scores:
-            rec["suggestion"] = "keep" if "true" in str(scores[s["id"]]) else "reject"
+        suggestion = _judge_suggestion(scores.get(s.get("id")))
+        if suggestion:
+            rec["suggestion"] = suggestion
         records.append(rec)
     return records
 

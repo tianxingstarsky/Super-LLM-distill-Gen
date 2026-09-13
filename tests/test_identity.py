@@ -72,6 +72,23 @@ def test_run_full_pipeline_offline(tmp_path):
     assert result["stats"]["unique_openings"] == 1  # fake 回答同开篇 → 多样性指标如实统计
 
 
+def test_run_rejects_missing_keep(tmp_path):
+    """事实校验响应缺 keep 字段时必须驳回（fail closed），不能静默放行。"""
+
+    class MissingKeepClient(FakeClient):
+        def chat(self, messages, **kwargs):
+            if "contradictions" in messages[0]["content"]:
+                return json.dumps({"complete": False, "contradictions": ["缺少关键事实"]}, ensure_ascii=False)
+            return super().chat(messages, **kwargs)
+
+    from lib.identity_gen import run
+
+    result = run(MissingKeepClient(4), _cfg(tmp_path))
+    assert result["stats"]["kept"] == 0
+    assert result["stats"]["rejected"] == 4
+    assert result["samples"] == []
+
+
 def test_run_skips_duplicate_questions(tmp_path):
     from lib.identity_gen import QuestionManifest, run
 
