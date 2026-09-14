@@ -70,6 +70,31 @@ def test_dedup_and_empty_turns():
     assert rec["instruction"] == "你好"
 
 
+def test_explicit_instruction_keeps_first_user_turn_as_feedback():
+    """任务显式带 instruction 时，首条用户轮是纠正而非任务指令，不得被吞掉。"""
+    from lib.adapters.chatlog_to_traj import turns_to_traj
+
+    task = {
+        "task_id": "t-explicit",
+        "instruction": "把报告导出为 PDF",
+        "turns": [
+            {"role": "user", "content": "不要用在线转换，本地导出"},
+            {"role": "assistant", "content": "已改用本地导出。"},
+        ],
+    }
+    rec = turns_to_traj(task)
+    assert rec["instruction"] == "把报告导出为 PDF"
+    codes = [s["value"]["code"] for s in rec["traj"]]
+    assert len(rec["traj"]) == 2  # 纠正轮 + 回答轮都在
+    assert "不要用在线转换" in codes[0]
+    assert rec["traj"][0]["meta"]["feedback"] is True
+
+    # 无显式 instruction：沿用原语义（首条用户轮作指令，不进 traj）
+    derived = turns_to_traj({"turns": task["turns"]})
+    assert derived["instruction"] == "不要用在线转换，本地导出"
+    assert len(derived["traj"]) == 1
+
+
 def test_gui_passthrough_validation():
     from lib.adapters.chatlog_to_traj import validate_gui_traj_line
 

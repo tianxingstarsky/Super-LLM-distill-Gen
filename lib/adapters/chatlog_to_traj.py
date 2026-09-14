@@ -76,14 +76,19 @@ def turns_to_traj(task: Dict[str, Any]) -> Dict[str, Any]:
     """
     turns = _dedup_turns([t for t in task.get("turns", []) if t.get("content") or t.get("role") == "tool"])
     user_turns = [t for t in turns if t.get("role") == "user"]
-    instruction = task.get("instruction") or (user_turns[0].get("content", "") if user_turns else "")
+    instruction = task.get("instruction") or ""
+    # 只有"首条用户轮被取作指令"时才跳过它；显式 instruction 提供时该轮是纠正/追问，
+    # 必须进入 traj（旧实现无条件跳过 → 首条纠正静默丢失）。
+    first_user_is_instruction = not instruction and bool(user_turns)
+    if first_user_is_instruction:
+        instruction = user_turns[0].get("content", "")
     instruction = _truncate(instruction)
 
     traj = []
     first_user_seen = False
     for turn in turns:
         if turn.get("role") == "user":
-            if not first_user_seen:
+            if first_user_is_instruction and not first_user_seen:
                 first_user_seen = True
                 continue  # 首条用户轮是任务指令，已进入 instruction
         code, meta = _turn_to_code(turn)
