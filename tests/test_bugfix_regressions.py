@@ -132,3 +132,17 @@ def test_normalize_sample_falls_back_when_messages_null():
                                 {"role": "assistant", "content": "你好！"}]}
     normalized = normalize_sample(sample)
     assert [m["role"] for m in normalized["messages"]] == ["user", "assistant"]
+
+
+# ── RepeatGenerator：行间深拷贝 ──────────────────────────────────────────────
+def test_repeat_generator_rows_do_not_share_nested_values():
+    from lib.adapters.repeat import RepeatGenerator
+
+    generator = RepeatGenerator(name="probe", n_rows=3, template={"items": ["seed"]})
+    rows = []
+    for batch, _last in generator.process():
+        rows.extend(batch)
+    rows[0]["items"].append("mutated")
+    assert rows[0]["items"] == ["seed", "mutated"]
+    assert rows[1]["items"] == ["seed"]  # 旧实现浅拷贝：这里也会变成 mutated
+    assert rows[2]["items"] == ["seed"]

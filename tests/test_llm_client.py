@@ -45,3 +45,14 @@ def test_parse_json_robust_handles_fences_and_trailing():
     assert parse_json_robust('```json\n{"a": 1}\n```') == {"a": 1}
     assert parse_json_robust('{"a": 1} 尾随文本') == {"a": 1}
     assert parse_json_robust('前缀 {"a": [1, {"b": 2}]}') == {"a": [1, {"b": 2}]}
+
+
+def test_client_sets_no_proxy_before_httpx_construction(monkeypatch):
+    """代理绕过必须在 OpenAI/httpx 构造前生效（httpx 构造时快照环境变量）。"""
+    import os
+
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    ChatClient(base_url="http://127.0.0.1:1/v1", api_key="sk-t", model="m")
+    assert "127.0.0.1" in os.environ.get("NO_PROXY", "")
+    assert "127.0.0.1" in os.environ.get("no_proxy", "")

@@ -49,7 +49,7 @@ def merged_to_sample(record: Dict[str, Any]) -> Dict[str, Any]:
         "scenario": record.get("natural_language_task", ""),
         "messages": messages,
         "quality": {
-            "task_completed": bool(record.get("task_completed")),
+            "task_completed": record.get("task_completed") is True,
             "alignment_score": record.get("alignment_score"),
             "efficiency_score": record.get("efficiency_score"),
             "task_difficulty": record.get("task_difficulty"),
@@ -62,7 +62,7 @@ def merged_to_samples(path: str) -> Dict[str, Any]:
     import json
 
     samples: List[Dict[str, Any]] = []
-    stats = {"tasks": 0, "kept": 0, "rejected_unfinished": 0}
+    stats = {"tasks": 0, "kept": 0, "rejected_unfinished": 0, "rejected_empty_traj": 0}
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -70,6 +70,10 @@ def merged_to_samples(path: str) -> Dict[str, Any]:
                 continue
             record = json.loads(line)
             stats["tasks"] += 1
+            if not record.get("traj"):
+                # 无轨迹只产 user-only "样本"，导出侧必被丢弃：这里直接拒绝并计数
+                stats["rejected_empty_traj"] += 1
+                continue
             sample = merged_to_sample(record)
             if sample["quality"]["task_completed"]:
                 samples.append(sample)

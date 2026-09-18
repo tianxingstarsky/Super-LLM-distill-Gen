@@ -129,6 +129,10 @@ class ChatClient:
         price_output_per_1m: float = 0.0,
         budget: BudgetGuard | None = None,
     ):
+        # 本地端点绕代理（spike 报告 F2）：httpx 在 OpenAI 客户端构造时快照代理
+        # 环境变量，必须在构造前设置；构造后再 setdefault 对本客户端无效。
+        os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)
+        os.environ.setdefault("no_proxy", DEFAULT_NO_PROXY)
         from openai import OpenAI  # 延迟导入：离线测试无需该依赖路径
 
         self.client = OpenAI(base_url=base_url, api_key=api_key)
@@ -278,8 +282,4 @@ def load_backend(
         price_output_per_1m=float(prices.get("output_per_1m_usd", 0.0)),
         budget=guard,
     )
-
-    # 本地端点绕代理（spike 报告 F2）
-    os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)
-    os.environ.setdefault("no_proxy", DEFAULT_NO_PROXY)
     return client, model

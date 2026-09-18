@@ -63,5 +63,26 @@ def test_merged_to_samples_quality_gate(tmp_path):
         encoding="utf-8",
     )
     result = merged_to_samples(str(path))
-    assert result["stats"] == {"tasks": 2, "kept": 1, "rejected_unfinished": 1}
+    assert result["stats"] == {"tasks": 2, "kept": 1, "rejected_unfinished": 1, "rejected_empty_traj": 0}
     assert result["samples"][0]["id"] == "gui-test-001"
+
+
+def test_quality_gate_rejects_non_bool_and_empty_traj(tmp_path):
+    """task_completed 为字符串 "false"/"0" 时不得通过；空轨迹直接拒绝并计数。"""
+    from lib.adapters.opencua_out import merged_to_samples
+
+    string_false = _merged_record(completed="false")  # type: ignore[arg-type]
+    empty_traj = _merged_record(True)
+    empty_traj["traj"] = []
+
+    path = tmp_path / "merged.jsonl"
+    path.write_text(
+        json.dumps(string_false, ensure_ascii=False) + "\n"
+        + json.dumps(empty_traj, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    result = merged_to_samples(str(path))
+    assert result["samples"] == []
+    assert result["stats"]["kept"] == 0
+    assert result["stats"]["rejected_unfinished"] == 1  # "false" 字符串不再冒充 True
+    assert result["stats"]["rejected_empty_traj"] == 1

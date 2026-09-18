@@ -8,6 +8,7 @@ Magpie 无种子指令生成的 API 适配版 = 本步骤（产生空 instructio
 """
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from pydantic import Field
@@ -41,6 +42,7 @@ class RepeatGenerator(GeneratorStep):
             remaining = max(0, self.n_rows - offset)
         while remaining > 0:
             batch_size = min(self.batch_size, remaining)
-            batch = [dict(self.template) for _ in range(batch_size)]
+            # 深拷贝：浅拷贝会让所有行共享嵌套可变值，下游改一行等于改全部
+            batch = [copy.deepcopy(self.template) for _ in range(batch_size)]
             remaining -= batch_size
             yield batch, remaining == 0
