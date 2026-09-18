@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import streamlit as st
+from filelock import Timeout
 from lib import workspace as WS
 from lib.render import MESSAGE_CSS, _render_message
 from lib.console_jobs import Job
@@ -123,8 +124,13 @@ def _begin(command):
         st.warning("当前工作区已有运行任务")
         return
     job = Job(command, ws, ROOT)
+    try:
+        job.start()
+    except Timeout:
+        # 任务登记在浏览器会话里；换窗口/刷新后看不到旧任务，靠工作区级锁挡住并发写入
+        st.warning("该工作区已有任务在运行（可能在其他窗口启动），请等待完成后再试。")
+        return
     st.session_state[key] = job
-    job.start()
 
 
 @st.fragment(run_every=1)
@@ -211,6 +217,8 @@ def page_run():
             label = action.dest.replace("_", " ")
             labels = {"input": "输入路径", "out": "输出目录", "format": "训练格式", "bulk": "放量导出（需审核）", "tag": "版本标签", "model": "模型", "backend": "模型后端", "action": "操作", "config": "审核配置路径", "batch": "每批条数", "task": "任务要求", "team": "启用子智能体团队"}
             label = labels.get(action.dest, label)
+            if action.required:
+                label += "（必填）"
             with columns[index % 2]:
                 key = keybase + ":" + action.dest
                 if action.dest == "review_config":
@@ -237,19 +245,24 @@ def page_run():
                 values.append((action, value))
         submit = st.form_submit_button("运行", type="primary")
     if submit:
-        argv = [command]
-        for action, value in values:
-            if isinstance(action, argparse._AppendAction):
-                for entry in value:
-                    argv.extend([action.option_strings[0], str(entry)])
-            elif isinstance(action, argparse._StoreTrueAction):
-                if value:
-                    argv.append(action.option_strings[0])
-            elif value not in (None, ""):
-                if action.option_strings:
-                    argv.append(action.option_strings[0])
-                argv.append(str(value))
-        _begin(argv)
+        missing = [action.dest for action, value in values if action.required and value in (None, "")]
+        if missing:
+            # 必填参数留空直接提交只会得到晦涩的"退出码 2"；在提交前明确指出缺什么
+            st.warning("请填写必填参数：" + "、".join(d.replace("_", " ") for d in missing))
+        else:
+            argv = [command]
+            for action, value in values:
+                if isinstance(action, argparse._AppendAction):
+                    for entry in value:
+                        argv.extend([action.option_strings[0], str(entry)])
+                elif isinstance(action, argparse._StoreTrueAction):
+                    if value:
+                        argv.append(action.option_strings[0])
+                elif value not in (None, ""):
+                    if action.option_strings:
+                        argv.append(action.option_strings[0])
+                    argv.append(str(value))
+            _begin(argv)
     _job_status()
 
 
@@ -430,10 +443,11 @@ def page_prefs():
             yaml.safe_load(text)
             from datetime import datetime
             backup = path.with_suffix(path.suffix + "." + datetime.now().strftime("%Y%m%d%H%M%S%f") + ".bak")
-            backup.write_text(original, encoding="utf-8")
+            # 备份保存时刻的磁盘内容：页面加载后可能有其他会话写入，旧的 original 不含它
+            backup.write_text(path.read_text(encoding="utf-8") if path.exists() else "", encoding="utf-8")
             path.write_text(text, encoding="utf-8")
             st.success("已保存并备份")
-        except (ValueError, yaml.YAMLError) as error:
+        except (ValueError, yaml.YAMLError, OSError) as error:
             st.error(str(error))
 
 

@@ -79,6 +79,18 @@ def test_form_runs_readonly_diagnostics_twice():
         assert any("Local service" in w.value for w in view.code)
 
 
+def test_run_page_blocks_missing_required_input():
+    """必填参数（如 doc2corpus --input）留空时提交被拦下并明确提示，不启动注定失败的任务。"""
+    view = app()
+    view.sidebar.radio[0].set_value("管线运行").run()
+    next(w for w in view.selectbox if w.label == "任务").set_value("文档语料整理").run()
+    assert any(w.label.endswith("（必填）") for w in view.text_input)  # 必填项有标记
+    next(w for w in view.button if w.label == "运行").click().run()
+    assert any("必填参数" in w.value for w in view.warning)
+    assert "job:default" not in view.session_state  # 没有启动任务
+    assert not view.exception
+
+
 def test_sessions_choose_independent_workspaces(tmp_path):
     from lib import workspace as ws
     for name in ("alpha", "beta"):
