@@ -37,6 +37,30 @@ def test_candidates_pairs_only_with_gap():
     assert pairs[0]["source"] == "candidates"
 
 
+def test_candidates_never_emits_identical_pair():
+    """judge 噪声下同文不同分：不得产出 chosen==rejected 的零梯度对。"""
+
+    class SameAnswerClient:
+        def __init__(self):
+            self.usage = {"calls": 0}
+            self.judge_calls = 0
+
+        def chat(self, messages, **kwargs):
+            self.usage["calls"] += 1
+            content = messages[0]["content"]
+            if "审校员" in content and "correctness" in content:
+                self.judge_calls += 1  # 首次 5 分、其余 1 分：同文不同分
+                return json.dumps({"correctness": 5 if self.judge_calls == 1 else 1,
+                                   "alignment": 3, "efficiency": 3, "lesson_quality": 3,
+                                   "keep": True}, ensure_ascii=False)
+            return "完全相同的回答"
+
+    from lib.dpo_enhance import candidates
+
+    pairs = candidates(SameAnswerClient(), ["什么是过拟合"], n_per_prompt=3)
+    assert pairs == []  # 分差 4 但两分支同文 → 拒绝成对
+
+
 def test_refine_pair_chosen_is_refined():
     from lib.dpo_enhance import refine
 

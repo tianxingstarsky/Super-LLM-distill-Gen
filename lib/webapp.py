@@ -93,6 +93,18 @@ def _sample_files():
     return sorted(candidates)
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
+def _load_normalized_samples(path_key: str, mtime_ns: int):
+    """按 路径+mtime 缓存已规范化样本：预览翻页/表单重渲染不再整读 JSONL。
+
+    大文件（上万条）在每次控件交互都会触发全量 read+normalize，是预览页卡顿的
+    直接来源；LRU 上限 8 个文件控制内存，文件变更（mtime 变化）自动失效。"""
+    from pathlib import Path as _Path
+    from lib.quality import read_samples
+    from lib.review_editor import normalize_sample
+    return [normalize_sample(row) for row in read_samples(_Path(path_key))]
+
+
 def _selected_samples(key):
     files = _sample_files()
     if not files:
@@ -100,10 +112,7 @@ def _selected_samples(key):
         return None, []
     source = st.selectbox("样本文件", files, format_func=lambda p: str(p.relative_to(WS.folder(st.session_state['ws']))) if p.is_relative_to(WS.folder(st.session_state['ws'])) else p.name,
                           key=f"{key}:{st.session_state['ws']}")
-    from lib.quality import read_samples
-    raw = read_samples(source)
-    from lib.review_editor import normalize_sample
-    return source, [normalize_sample(row) for row in raw]
+    return source, _load_normalized_samples(str(source), source.stat().st_mtime_ns)
 
 
 def _gate():

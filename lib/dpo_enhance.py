@@ -78,7 +78,9 @@ def candidates(
                 answers.append(_answer(c, p, 0.5 + 0.35 * i))
         scored = sorted(((_judge(client, p, a), a) for a in answers), key=lambda x: x[0])
         low, high = scored[0], scored[-1]
-        if high[0] - low[0] >= MIN_GAP:
+        # refine/hallucinate 均有同文守卫；这里同样要求两分支文本不同——
+        # judge 打分有噪声（同文不同分真实存在），chosen==rejected 的对零梯度且污染统计
+        if high[0] - low[0] >= MIN_GAP and high[1] != low[1]:
             pairs.append(_mk_pair(p, high[1], low[1], "candidates"))
     return pairs
 

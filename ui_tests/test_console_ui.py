@@ -91,6 +91,33 @@ def test_run_page_blocks_missing_required_input():
     assert not view.exception
 
 
+def test_preview_caches_samples_across_rerenders(tmp_path, monkeypatch):
+    """预览页翻页/重渲染不重读整个 JSONL（路径+mtime 缓存）。"""
+    from lib import quality
+
+    calls = {"n": 0}
+    real_read = quality.read_samples
+
+    def counting(path):
+        calls["n"] += 1
+        return real_read(path)
+
+    monkeypatch.setattr(quality, "read_samples", counting)
+    seed_bare_session_state(ws="default")  # AppTest 在测试进程求值 format_func（依赖 ws）
+    out = tmp_path / "app" / "data" / "output"
+    out.mkdir(parents=True)
+    (out / "rollout_samples.jsonl").write_text(
+        "\n".join(json.dumps(sample_record(f"cache-{i}"), ensure_ascii=False) for i in (1, 2)) + "\n",
+        encoding="utf-8")
+    view = app()
+    view.sidebar.radio[0].set_value("数据预览").run()
+    assert calls["n"] == 1  # 首次渲染读取一次
+    view.number_input[0].set_value(2).run()  # 翻到第 2 条：重渲染走缓存
+    assert calls["n"] == 1
+    assert not view.exception
+    assert any(w.value == 2 for w in view.number_input)
+
+
 def test_sessions_choose_independent_workspaces(tmp_path):
     from lib import workspace as ws
     for name in ("alpha", "beta"):

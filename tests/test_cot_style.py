@@ -65,3 +65,31 @@ def test_run_produces_styled_samples_and_dpo(tmp_path):
     for pair in result["dpo_pairs"]:
         assert pair["chosen"][0]["reasoning_content"].startswith("STYLE|")
         assert pair["rejected"][0]["reasoning_content"].startswith("PLAIN|")
+
+
+def test_baseline_wins_not_labeled_as_styled():
+    """无风格版反而更贴合时：不入 styled 样本库、单独计数，DPO 照常保留偏好事实。"""
+
+    class InvertedClient(FakeClient):
+        def chat(self, messages, **kwargs):
+            content = messages[0]["content"]
+            if "思考风格审校员" in content:
+                thinking = content.split("# 思维链:")[-1]
+                high = "PLAIN" in thinking  # 反转：无风格版判高分
+                return json.dumps({
+                    "adherence": 5 if high else 1,
+                    "violations": [] if high else ["未遵守风格"],
+                    "keep": high,
+                }, ensure_ascii=False)
+            return super().chat(messages, **kwargs)
+
+    from lib.cot_style import run
+
+    result = run(InvertedClient(), [{"goal": "任务一", "annotated_steps": "- a [正确]"}], _styles())
+    assert result["samples"] == []  # 无风格内容不得打着风格标签入库
+    assert result["stats"]["baseline_wins"] == 1
+    assert result["stats"]["kept_styled"] == 0
+    # 偏好事实保留：chosen=高分版（PLAIN）、rejected=低分版（STYLE）
+    assert result["stats"]["dpo_pairs"] == 1
+    assert result["dpo_pairs"][0]["chosen"][0]["reasoning_content"].startswith("PLAIN|")
+    assert result["dpo_pairs"][0]["rejected"][0]["reasoning_content"].startswith("STYLE|")

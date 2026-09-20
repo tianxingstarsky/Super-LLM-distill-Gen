@@ -57,7 +57,8 @@ def run(
     styles = styles_cfg["styles"]
     samples: List[Dict[str, Any]] = []
     dpo_pairs: List[Dict[str, Any]] = []
-    stats = {"tasks": len(tasks), "kept_styled": 0, "dpo_pairs": 0, "style_hits": 0}
+    stats = {"tasks": len(tasks), "kept_styled": 0, "dpo_pairs": 0, "style_hits": 0,
+             "baseline_wins": 0}
 
     for task in tasks:
         style_name = sampler.sample(1)[0]
@@ -76,7 +77,7 @@ def run(
             chosen, rejected = baseline, styled
             chosen_adherence = check_base.get("adherence", 0)
 
-        if chosen_adherence >= 4:
+        if chosen_adherence >= 4 and chosen is styled:
             stats["style_hits"] += 1
             samples.append({
                 "id": f"cotstyle-{style_name}-{len(samples)}",
@@ -88,8 +89,11 @@ def run(
                     {"role": "assistant", "content": chosen["final_answer"],
                      "reasoning_content": chosen["thinking"]},
                 ],
-                "style_check": check_styled if chosen is styled else check_base,
+                "style_check": check_styled,
             })
+        elif chosen_adherence >= 4:
+            # 无风格版反而更贴合：不能打着风格标签入库（下游按 style 筛选会拿到未调教内容）
+            stats["baseline_wins"] += 1
         # 风格 DPO 对：prompt=任务，chosen/rejected=两版完整回答（思维链+最终回答）
         if abs(check_styled.get("adherence", 0) - check_base.get("adherence", 0)) >= 2:
             stats["dpo_pairs"] += 1
