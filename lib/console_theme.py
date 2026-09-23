@@ -67,11 +67,14 @@ $theme_vars
 }
 [data-testid="stApp"] { background: var(--df-bg); color: var(--df-text); }
 [data-testid="stApp"] [data-testid="stHeader"] { background: transparent !important; border: 0; z-index: 1001; }
-[data-testid="stApp"] [data-testid="stToolbar"] { display: none !important; }
 [data-testid="stApp"] [data-testid="stMainMenu"] { display: none !important; }
-[data-testid="stApp"] .st-key-sidebar-toggle { position: fixed; top: 7px; left: 14.25rem; z-index: 1003; width: 40px; margin: 0; }
-[data-testid="stApp"] .st-key-sidebar-toggle button { width: 40px; min-height: 40px; padding: 0; border-color: transparent; background: transparent; color: var(--df-text2); font-size: 19px; }
-[data-testid="stApp"] .st-key-sidebar-toggle button:hover { border-color: transparent; background: #EEF4FC; color: var(--df-brand); }
+[data-testid="stAppDeployButton"] { display: none !important; }
+[data-testid="stExpandSidebarButton"] { position: fixed !important; top: 6px !important; left: .5rem !important; z-index: 20000 !important; width: 44px !important; height: 44px !important; border: 1px solid #B8CFF0 !important; border-radius: 10px !important; background: #EAF2FF !important; color: #145DBF !important; box-shadow: 0 2px 8px rgba(30,60,100,.13) !important; }
+[data-testid="stExpandSidebarButton"]:hover { border-color: #7EA9E8 !important; background: #DCEBFF !important; color: #064DAB !important; box-shadow: 0 3px 10px rgba(30,60,100,.2) !important; }
+[data-testid="stSidebarCollapseButton"] { position: fixed !important; top: 6px !important; left: 14.25rem !important; z-index: 20000 !important; width: 44px !important; pointer-events: auto; }
+[data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stSidebarCollapseButton"] { left: .5rem !important; }
+[data-testid="stSidebarCollapseButton"] button { width: 44px; min-height: 44px; padding: 0; border: 1px solid #B8CFF0; border-radius: 10px; background: #EAF2FF; color: #145DBF; box-shadow: 0 2px 8px rgba(30,60,100,.13); }
+[data-testid="stSidebarCollapseButton"] button:hover { border-color: #7EA9E8; background: #DCEBFF; color: #064DAB; box-shadow: 0 3px 10px rgba(30,60,100,.2); }
 [data-testid="stApp"] [data-testid="stMainBlockContainer"] { max-width: 1680px; padding: 3.5rem 1.6rem 2.2rem; }
 [data-testid="stApp"] [data-testid="stHeadingWithActionElements"]:has(> h1) { display: none !important; }
 [data-testid="stSidebar"] { background: var(--df-layer1); border-right: 1px solid var(--df-border2); width: 14.25rem !important; min-width: 14.25rem !important; max-width: 14.25rem !important; }

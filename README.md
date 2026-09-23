@@ -1,36 +1,58 @@
 # ShuJian Cube
 
 <p align="center">
-  <img src="assets/brand/shujian-cube-mark.png" width="112" alt="ShuJian Cube logo" />
+  <img src="assets/brand/shujian-cube-mark.png" width="144" alt="ShuJian Cube logo" />
 </p>
 
-<p align="center"><strong>Better data for brighter AI.</strong></p>
+<p align="center"><strong>Make high-quality AI data simple to create.</strong></p>
 
-ShuJian Cube helps teams turn their knowledge into useful examples for AI. Start with documents, assistant conversations, or a short task brief. Follow the work as it happens. Review the results before sharing them with your team.
+<p align="center">Documents | Agent context | Open briefs</p>
 
-The name means making data creation simple. The mark shows data paths joining into a cube, with a rounded triangle at its center to represent generation.
+ShuJian Cube turns useful knowledge into training examples that teams can follow, review, and share.
 
-## Made for real work
+## Our purpose
 
-- Bring the material your team already uses.
-- Choose the kind of examples you need.
-- Follow each stage and see what needs attention.
-- Review and improve examples with their source context.
-- Share a complete, checked collection with your team.
+Good AI starts with useful data. We make each step easy to follow and each result ready for human review.
 
-## A clear path from source to result
+## Start with what you have
 
-1. Add documents, conversation records, or a short brief.
-2. Choose an outcome or start with a suggested plan.
-3. Watch progress and review quality notes.
-4. Approve the examples that are ready to share.
+| Starting point | What it helps you create |
+| --- | --- |
+| Documents | Examples grounded in manuals, guides, and team knowledge. |
+| Agent context | Examples from conversations, tool use, and observed results. |
+| Open briefs | New examples for a role, topic, or task. |
 
-Every step stays visible. People stay in control of what gets shared.
+## Choose a learning goal
 
-## Product tour
+| Goal | Plain meaning |
+| --- | --- |
+| CPT | Help a model learn from domain material. |
+| SFT | Teach clear answers from examples. |
+| DPO | Show which answer better fits your goals. |
 
-See the current screens and what each one helps you do in the [ShuJian Cube product tour](docs/product-tour.md).
+## One clear path
 
-## License
+<p align="center"><strong>Source -> Plan -> Generate -> Review -> Share</strong></p>
 
-ShuJian Cube is available under the [Apache License 2.0](LICENSE).
+1. Add documents, agent context, or a short brief.
+2. Choose a learning goal or use a suggested plan.
+3. Follow progress and see which stages need attention.
+4. Review examples before sharing a collection.
+
+## Our commitments
+
+- Keep examples connected to their source.
+- Show progress while work is underway.
+- Let people review results before release.
+
+## Responsible use
+
+Generated examples can be wrong or contain private information. Check quality, permissions, and privacy before training or sharing.
+
+## Screenshots
+
+Product screenshots are not stored in this repository yet. The [product tour](docs/product-tour.md) describes the current screens.
+
+## License and notices
+
+ShuJian Cube is available under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for third-party acknowledgments.

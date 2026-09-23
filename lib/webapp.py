@@ -15,6 +15,7 @@ _BRAND_MARK = base64.b64encode((ROOT / "assets" / "brand" / "shujian-cube-mark.p
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import streamlit as st
+from lib.presentation.streamlit.i18n import initialize_language, install_streamlit_localization, set_language_from_choice, translate_label
 from filelock import Timeout
 from lib.render import MESSAGE_CSS, render_message_sequence
 from lib.console_jobs import Job
@@ -22,16 +23,12 @@ from lib.bootstrap.workspaces import workspace_application
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.home_style import HOME_STYLE
 
-st.set_page_config(page_title="数简立方 · 数据生成平台", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="数简立方 · ShuJian Cube", layout="wide", initial_sidebar_state="expanded")
+initialize_language(st)
+install_streamlit_localization()
 from lib.console_theme import CSS as CHROME_CSS
-_sidebar_layout_css = ""
-if st.session_state.get("sidebar_collapsed", False):
-    _sidebar_layout_css = (
-        '[data-testid="stApp"] [data-testid="stSidebar"] { display: none !important; }'
-        '[data-testid="stApp"] .df-topbar { left: 0 !important; }'
-        '[data-testid="stApp"] .st-key-sidebar-toggle { left: .5rem !important; }'
-    )
-st.html(f"<style>{MESSAGE_CSS}\n{CHROME_CSS}\n{_sidebar_layout_css}</style>")
+# Keep Streamlit's native sidebar controls in charge of opening and closing it.
+st.html(f"<style>{MESSAGE_CSS}\n{CHROME_CSS}</style>")
 WORKSPACES = workspace_application()
 
 
@@ -55,8 +52,8 @@ def _select_page(page: str):
     st.session_state["nav"] = page
 
 
-def _toggle_sidebar():
-    st.session_state["sidebar_collapsed"] = not st.session_state.get("sidebar_collapsed", False)
+def _set_ui_language():
+    set_language_from_choice(st, st.session_state.get("ui-language-choice", "简体中文"))
 
 
 @st.dialog("打开已有文件夹", width="large", on_dismiss=_close_folder_dialog)
@@ -85,6 +82,11 @@ def _open_folder_dialog():
 
 def _ws_choice():
     st.sidebar.html(f'<div class="df-brand-line"><img class="df-brand-mark" src="data:image/png;base64,{_BRAND_MARK}" alt="" /><span><span class="df-brand">数简立方</span><span class="df-kicker">数据简单生成</span></span></div>')
+    st.sidebar.selectbox(
+        "界面语言", ["简体中文", "English"], key="ui-language-choice",
+        label_visibility="collapsed", on_change=_set_ui_language,
+    )
+    set_language_from_choice(st, st.session_state["ui-language-choice"])
     options = WORKSPACES.available_workspaces()
     if 'folder-to-open' in st.session_state:
         st.session_state['ws'] = st.session_state.pop('folder-to-open')
@@ -1156,8 +1158,8 @@ st.query_params['ws'] = st.session_state['ws']
 if st.session_state['ws'] != _previous_workspace:
     st.query_params.pop('record', None)
 st.session_state['last-workspace'] = st.session_state['ws']
-st.button("☰", key="sidebar-toggle", on_click=_toggle_sidebar, help="展开或收起菜单")
-st.html(f'<div class="df-topbar"><div><strong>数简立方</strong><span>　/　{html.escape(page)}</span></div><div class="df-topbar-meta">当前工作区　<strong>{html.escape(WORKSPACES.label(st.session_state["ws"]))}</strong>　·　数据简单生成</div></div>')
+top_page = translate_label(page, st.session_state.get("ui_language", "zh"))
+st.html(f'<div class="df-topbar"><div><strong>数简立方</strong><span>　/　{html.escape(top_page)}</span></div><div class="df-topbar-meta">当前工作区　<strong>{html.escape(WORKSPACES.label(st.session_state["ws"]))}</strong>　·　数据简单生成</div></div>')
 st.query_params['page'] = page
 try:
     PAGES[page]()
