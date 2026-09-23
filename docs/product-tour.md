@@ -1,4 +1,4 @@
-# DataForge Product Tour
+# ShuJian Cube Product Tour
 
 This guide describes the current screens. Each screen keeps the next step easy to find.
 

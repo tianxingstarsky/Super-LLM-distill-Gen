@@ -11,7 +11,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-_BRAND_MARK = base64.b64encode((ROOT / "assets" / "brand" / "dataforge-mark.png").read_bytes()).decode("ascii")
+_BRAND_MARK = base64.b64encode((ROOT / "assets" / "brand" / "shujian-cube-mark.png").read_bytes()).decode("ascii")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import streamlit as st
@@ -22,7 +22,7 @@ from lib.bootstrap.workspaces import workspace_application
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.home_style import HOME_STYLE
 
-st.set_page_config(page_title="DataForge 运营控制台", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="数简立方 · 数据生成平台", layout="wide", initial_sidebar_state="expanded")
 from lib.console_theme import CSS as CHROME_CSS
 _sidebar_layout_css = ""
 if st.session_state.get("sidebar_collapsed", False):
@@ -84,7 +84,7 @@ def _open_folder_dialog():
 
 
 def _ws_choice():
-    st.sidebar.html(f'<div class="df-brand-line"><img class="df-brand-mark" src="data:image/png;base64,{_BRAND_MARK}" alt="" /><span><span class="df-brand">AI Data</span><span class="df-kicker">数据智能平台</span></span></div>')
+    st.sidebar.html(f'<div class="df-brand-line"><img class="df-brand-mark" src="data:image/png;base64,{_BRAND_MARK}" alt="" /><span><span class="df-brand">数简立方</span><span class="df-kicker">数据简单生成</span></span></div>')
     options = WORKSPACES.available_workspaces()
     if 'folder-to-open' in st.session_state:
         st.session_state['ws'] = st.session_state.pop('folder-to-open')
@@ -1139,7 +1139,7 @@ for label, target, active_pages in visible_nav:
     )
 # Keep the state-backed radio for existing deep links and UI automation. The visible
 # navigation above uses buttons so it can match the product's full-row menu design.
-st.sidebar.radio("DataForge 控制台", list(PAGES), key="nav",
+st.sidebar.radio("数简立方控制台", list(PAGES), key="nav",
                  format_func=lambda item: f"{icons.get(item, '•')}   {item}")
 st.sidebar.divider()
 st.sidebar.caption("当前工作区")
@@ -1157,7 +1157,7 @@ if st.session_state['ws'] != _previous_workspace:
     st.query_params.pop('record', None)
 st.session_state['last-workspace'] = st.session_state['ws']
 st.button("☰", key="sidebar-toggle", on_click=_toggle_sidebar, help="展开或收起菜单")
-st.html(f'<div class="df-topbar"><div><strong>AI Data</strong><span>　/　{html.escape(page)}</span></div><div class="df-topbar-meta">当前工作区　<strong>{html.escape(WORKSPACES.label(st.session_state["ws"]))}</strong>　·　高质量数据驱动智能</div></div>')
+st.html(f'<div class="df-topbar"><div><strong>数简立方</strong><span>　/　{html.escape(page)}</span></div><div class="df-topbar-meta">当前工作区　<strong>{html.escape(WORKSPACES.label(st.session_state["ws"]))}</strong>　·　数据简单生成</div></div>')
 st.query_params['page'] = page
 try:
     PAGES[page]()

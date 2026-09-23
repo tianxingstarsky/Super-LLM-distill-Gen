@@ -1,4 +1,4 @@
-"""Windowless Windows launcher for the local DataForge console.
+"""Windowless Windows launcher for the local ShuJian Cube console.
 
 The FileLock owns one console process; health polling has a fixed deadline and
 never starts a second service. ShellExecuteW opens the system browser without
@@ -36,7 +36,7 @@ def _log(message: str) -> None:
 def _show_error(message: str) -> None:
     """A pythonw process has no terminal, so failures must be visible."""
     if sys.platform == "win32":
-        ctypes.windll.user32.MessageBoxW(None, message, "DataForge 启动失败", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, message, "数简立方 启动失败", 0x10)
     else:
         print(message, file=sys.stderr)
 
@@ -66,7 +66,7 @@ def _console_ready() -> bool:
 
 
 def _existing_console_ready() -> bool:
-    """Require both the Streamlit UI and DataForge review API to be healthy."""
+    """Require both the Streamlit UI and review API to be healthy."""
     if not _console_ready():
         return False
     body = _request(REVIEW_HEALTH_URL)

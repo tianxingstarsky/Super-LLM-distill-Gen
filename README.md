@@ -1,12 +1,14 @@
-# DataForge
+# ShuJian Cube
 
 <p align="center">
-  <img src="assets/brand/dataforge-mark.png" width="112" alt="DataForge logo" />
+  <img src="assets/brand/shujian-cube-mark.png" width="112" alt="ShuJian Cube logo" />
 </p>
 
 <p align="center"><strong>Better data for brighter AI.</strong></p>
 
-DataForge helps teams turn their knowledge into useful examples for AI. Start with documents, assistant conversations, or a short description of a task. Follow the work as it happens. Review the results before sharing them with your team.
+ShuJian Cube helps teams turn their knowledge into useful examples for AI. Start with documents, assistant conversations, or a short task brief. Follow the work as it happens. Review the results before sharing them with your team.
+
+The name means making data creation simple. The mark shows data paths joining into a cube, with a rounded triangle at its center to represent generation.
 
 ## Made for real work
 
@@ -27,8 +29,8 @@ Every step stays visible. People stay in control of what gets shared.
 
 ## Product tour
 
-See the current screens and what each one helps you do in the [DataForge product tour](docs/product-tour.md).
+See the current screens and what each one helps you do in the [ShuJian Cube product tour](docs/product-tour.md).
 
 ## License
 
-DataForge is available under the [Apache License 2.0](LICENSE).
+ShuJian Cube is available under the [Apache License 2.0](LICENSE).
