@@ -20,6 +20,7 @@ def test_translates_known_copy_and_preserves_unknown_user_text():
     assert translate("数据生成", "en") == "Create Data"
     assert translate("最近任务", "en") == "Recent tasks"
     assert translate("打开Data Library", "en") == "Open Data Library"
+    assert translate("系统设置视图", "en") == "Settings view"
     assert translate("已确认 3 / 3", "en") == "3 / 3 approved"
     assert translate("此确认点已通过；当时的确认参数未保存在记录中。", "en") == "This check passed. Its settings were not saved in the record."
     assert translate("数据生成", "zh") == "数据生成"

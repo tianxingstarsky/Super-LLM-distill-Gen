@@ -29,6 +29,7 @@ ZH_EN: dict[str, str] = {
     "输出打包": "Release Packages",
     "模型与密钥": "Models & Keys",
     "系统设置": "Settings",
+    "系统设置视图": "Settings view",
     "闸门": "Gates",
     "偏好设置": "Preferences",
     "当前工作区": "Current workspace",
