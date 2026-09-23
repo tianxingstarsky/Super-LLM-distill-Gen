@@ -13,6 +13,7 @@ ZH_EN: dict[str, str] = {
     "·　数据简单生成": "· Simple data creation",
     "数简立方控制台": "ShuJian Cube Console",
     "界面语言": "Language",
+    "选择控制台显示语言。": "Choose the language used across the console.",
     "首页": "Home",
     "总览": "Overview",
     "数据生成": "Create Data",
@@ -557,6 +558,28 @@ def translate_label(value: Any, language: str = "en") -> Any:
         if source and source in result:
             result = result.replace(source, target)
     return result
+
+
+def canonical_navigation_route(
+    value: Any,
+    routes: Any,
+    icons: dict[str, str],
+    fallback: str = "总览",
+) -> str:
+    """Resolve stored route keys and labels from older localized nav widgets."""
+    route_list = tuple(routes)
+    if value in route_list:
+        return value
+
+    label = " ".join(str(value).split())
+    for route in route_list:
+        icon = icons.get(route, "•")
+        for language in ("zh", "en"):
+            translated = translate_label(route, language)
+            candidates = (route, translated, f"{icon} {route}", f"{icon} {translated}")
+            if label in {" ".join(candidate.split()) for candidate in candidates}:
+                return route
+    return fallback
 
 
 class _MarkupTextLocalizer(HTMLParser):

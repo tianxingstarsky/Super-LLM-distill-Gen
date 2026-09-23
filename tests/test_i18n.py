@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from lib.presentation.streamlit.i18n import (
+    canonical_navigation_route,
     initialize_language,
     language_code,
     set_language_from_choice,
@@ -29,6 +30,14 @@ def test_translates_known_copy_and_preserves_unknown_user_text():
 
 def test_translates_icon_prefixed_navigation_labels():
     assert translate_label("◈　数据生成", "en") == "◈　Create Data"
+
+
+def test_navigation_recovers_localized_values_saved_by_old_widget():
+    routes = ("首页", "总览", "系统设置")
+    icons = {"首页": "⌂", "系统设置": "⚙"}
+    assert canonical_navigation_route("⌂ Home", routes, icons) == "首页"
+    assert canonical_navigation_route("⚙   Settings", routes, icons) == "系统设置"
+    assert canonical_navigation_route("unknown route", routes, icons) == "总览"
 
 
 def test_markup_localization_changes_interface_text_only():

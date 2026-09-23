@@ -51,7 +51,11 @@ Generated examples can be wrong or contain private information. Check quality, p
 
 ## Screenshots
 
-Product screenshots are not stored in this repository yet. The [product tour](docs/product-tour.md) describes the current screens.
+<p align="center">
+  <img src="screenshots/homepage.png" width="1200" alt="ShuJian Cube home page" />
+</p>
+
+The [product tour](docs/product-tour.md) describes the main screens.
 
 ## License and notices
 

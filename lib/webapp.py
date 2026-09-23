@@ -15,7 +15,7 @@ _BRAND_MARK = base64.b64encode((ROOT / "assets" / "brand" / "shujian-cube-mark.p
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import streamlit as st
-from lib.presentation.streamlit.i18n import initialize_language, install_streamlit_localization, set_language_from_choice, translate_label
+from lib.presentation.streamlit.i18n import canonical_navigation_route, initialize_language, install_streamlit_localization, set_language_from_choice, translate_label
 from filelock import Timeout
 from lib.render import MESSAGE_CSS, render_message_sequence
 from lib.console_jobs import Job
@@ -82,11 +82,6 @@ def _open_folder_dialog():
 
 def _ws_choice():
     st.sidebar.html(f'<div class="df-brand-line"><img class="df-brand-mark" src="data:image/png;base64,{_BRAND_MARK}" alt="" /><span><span class="df-brand">数简立方</span><span class="df-kicker">数据简单生成</span></span></div>')
-    st.sidebar.selectbox(
-        "界面语言", ["简体中文", "English"], key="ui-language-choice",
-        label_visibility="collapsed", on_change=_set_ui_language,
-    )
-    set_language_from_choice(st, st.session_state["ui-language-choice"])
     options = WORKSPACES.available_workspaces()
     if 'folder-to-open' in st.session_state:
         st.session_state['ws'] = st.session_state.pop('folder-to-open')
@@ -1070,6 +1065,12 @@ def page_system_settings():
     from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 
     st.html(SETTINGS_STYLE)
+    with st.container(border=True):
+        section_heading("界面语言", "选择控制台显示语言。", "文")
+        st.selectbox(
+            "界面语言", ["简体中文", "English"], key="ui-language-choice",
+            label_visibility="collapsed", on_change=_set_ui_language,
+        )
     area = st.segmented_control(
         "系统设置视图", ("HITL 闸门", "生成偏好"),
         default="HITL 闸门", key="system-settings-view",
@@ -1129,7 +1130,14 @@ icons = {"首页": "⌂", "数据生成": "◈", "数据管理": "▤", "人工�
          "任务管理": "⤴", "输出打包": "⇩", "模型与密钥": "⬡", "系统设置": "⚙"}
 if "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page if _qp_page in PAGES else "总览"
-page = st.session_state["nav"]
+# Older sessions could retain a formatted label from the former hidden radio
+# (for example, "⌂ Home") instead of a route key. Resolve it before dispatch.
+_route_label = canonical_navigation_route(
+    st.session_state.get("nav", "总览"), PAGES, icons,
+)
+if st.session_state.get("nav") != _route_label:
+    st.session_state["nav"] = _route_label
+page = _route_label
 for label, target, active_pages in visible_nav:
     st.sidebar.button(
         f"{icons.get(label, '•')}　{label}",
@@ -1139,10 +1147,6 @@ for label, target, active_pages in visible_nav:
         args=(target,),
         width="stretch",
     )
-# Keep the state-backed radio for existing deep links and UI automation. The visible
-# navigation above uses buttons so it can match the product's full-row menu design.
-st.sidebar.radio("数简立方控制台", list(PAGES), key="nav",
-                 format_func=lambda item: f"{icons.get(item, '•')}   {item}")
 st.sidebar.divider()
 st.sidebar.caption("当前工作区")
 st.sidebar.selectbox("工作区", _workspace_options,
