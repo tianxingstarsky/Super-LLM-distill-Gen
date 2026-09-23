@@ -6,6 +6,7 @@ import pathlib
 import sys
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import mock_llm_server  # noqa: E402
@@ -19,7 +20,9 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-mock")
 def test_magpie_chain_runs_and_caches(tmp_path):
     from distilabel.pipeline import Pipeline
 
-    pipeline = Pipeline.from_yaml(str(ROOT / "pipelines" / "01_magpie.yaml"))
+    # Distilabel 1.5.3 opens YAML with the Windows locale codec; read UTF-8
+    # explicitly before reconstructing the same pipeline from its YAML data.
+    pipeline = Pipeline.from_dict(yaml.safe_load((ROOT / "pipelines" / "01_magpie.yaml").read_text(encoding="utf-8")))
     pipeline._cache_dir = tmp_path / "cache_magpie"
 
     before = mock_llm_server.MockLLMHandler.request_count

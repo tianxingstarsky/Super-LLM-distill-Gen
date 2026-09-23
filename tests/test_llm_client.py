@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from lib.llm_client import ChatClient, chat_json, parse_json_robust
+from lib.llm_client import ChatClient, chat_json, load_backend, parse_json_robust
 
 
 def _make_client(behavior: str) -> ChatClient:
@@ -56,3 +56,35 @@ def test_client_sets_no_proxy_before_httpx_construction(monkeypatch):
     ChatClient(base_url="http://127.0.0.1:1/v1", api_key="sk-t", model="m")
     assert "127.0.0.1" in os.environ.get("NO_PROXY", "")
     assert "127.0.0.1" in os.environ.get("no_proxy", "")
+
+
+def test_jev_role_uses_its_own_slot_and_environment_over_global_model(tmp_path, monkeypatch):
+    import lib.llm_client as llm
+
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    (configs / "backends.yaml").write_text(
+        "backends:\n"
+        "  main: { base_url: 'https://main.invalid/v1', api_key_env: '', models: [default] }\n"
+        "  reviewer: { base_url: 'http://127.0.0.1:9000/v1', api_key_env: '', models: [review-default] }\n"
+        "default_backend: main\n"
+        "default_model: default\n"
+        "model_roles:\n"
+        "  generation: { backend: main, model: generator }\n"
+        "  jev: { backend: reviewer, model: reviewer-default }\n",
+        encoding="utf-8")
+    monkeypatch.setenv("LLM_MODEL", "global-generation-model")
+    monkeypatch.setenv("JEV_BACKEND", "reviewer")
+    monkeypatch.setenv("JEV_MODEL", "jev-environment-model")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(llm, "ChatClient", FakeClient)
+    client, model = load_backend(tmp_path, role="jev")
+    assert isinstance(client, FakeClient)
+    assert model == "jev-environment-model"
+    assert captured["base_url"] == "http://127.0.0.1:9000/v1"

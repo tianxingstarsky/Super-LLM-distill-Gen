@@ -21,8 +21,8 @@ def test_console_pages_cover_all_operations():
         assert page in text, f"缺页面 {page}"
     # 灵活性：管线运行页面必须覆盖主要命令、审核页面复用 render、偏好页面可编辑 yaml
     assert "_command_meta" in text and "load_commands" in text
-    assert "_render_message" in text
-    assert "PREF_FILES" in text and "cot_styles" in text
+    assert "render_message_sequence" in text
+    assert "render_generation_settings" in text
 
 
 def test_console_command_wired_in_cli():
@@ -65,17 +65,9 @@ def test_command_registry_single_source_of_truth():
 
 
 def test_asset_categorization_logic():
-    import tempfile
+    from lib.domain.dataset_assets import output_category
 
-    with tempfile.TemporaryDirectory() as td:
-        import pathlib as _p
-
-        d = _p.Path(td)
-        (d / "rollout_samples.jsonl").write_text("{}")
-        (d / "dpo_all.jsonl").write_text("{}")
-        (d / "corpus_docs.jsonl").write_text("{}")
-        (d / "budget.json").write_text("{}")
-        text = WEBAPP.read_text(encoding="utf-8")
-        # 分类规则存在且覆盖四类
-        for cat in ("样本", "DPO 偏好对", "语料", "报告与状态"):
-            assert cat in text, f"缺分类 {cat}"
+    assert output_category("rollout_samples.jsonl") == "样本"
+    assert output_category("dpo_all.jsonl") == "DPO 偏好对"
+    assert output_category("corpus_docs.jsonl") == "语料"
+    assert output_category("budget.json") == "报告与状态"

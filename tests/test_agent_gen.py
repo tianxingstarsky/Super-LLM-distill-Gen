@@ -43,6 +43,7 @@ def test_run_produces_valid_trajectory():
     assert result["stats"]["kept"] == 1
     sample = result["samples"][0]
     assert sample["source"] == "agent" and sample["scenario"] == "web"
+    assert sample["verification_status"] == "synthetic_unverified"
     # 轨迹结构：user → assistant(toolCalls) → tool(observation) → assistant(final)
     roles = [m["role"] for m in sample["messages"]]
     assert roles == ["user", "assistant", "tool", "assistant"]
@@ -112,3 +113,17 @@ def test_prune_redundant_removes_repeated_calls():
     ids = [m.get("toolCalls", [{}])[0].get("id") for m in pruned if m["role"] == "assistant" and m.get("toolCalls")]
     assert ids == ["c0", "c2"]  # c1 及其观察被剪掉
     assert pruned[-1]["role"] == "assistant"  # 结尾结构保持
+
+
+def test_prune_keeps_repeated_call_when_observation_changes():
+    from lib.agent_gen import prune_redundant
+
+    messages = [
+        {"role": "user", "content": "goal"},
+        {"role": "assistant", "content": "查找", "toolCalls": [{"id": "a", "name": "web_search", "input": {"query": "X"}}]},
+        {"role": "tool", "content": "旧结果", "toolCallId": "a"},
+        {"role": "assistant", "content": "查找", "toolCalls": [{"id": "b", "name": "web_search", "input": {"query": "X"}}]},
+        {"role": "tool", "content": "新结果", "toolCallId": "b"},
+        {"role": "assistant", "content": "新结果"},
+    ]
+    assert prune_redundant(messages) == (messages, 0)

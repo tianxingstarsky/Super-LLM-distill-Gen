@@ -1,4 +1,4 @@
-"""主题统一契约测试：共享暗色令牌、强制暗色控制台 CSS、消息作用域 CSS、独立预览页兼容。
+"""主题统一契约测试：共享浅色产品令牌、主题 CSS、消息作用域 CSS、独立预览页兼容。
 
 断言基于 CSS/令牌语义（选择器、变量、对比度），不依赖源码空白/格式。
 """
@@ -49,41 +49,41 @@ def _contrast(fg: str, bg: str) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
-def test_dark_tokens_required_keys():
-    from lib.console_theme import DARK_TOKENS
+def test_light_tokens_required_keys():
+    from lib.console_theme import LIGHT_TOKENS
 
     for key in REQUIRED_TOKENS:
-        assert key in DARK_TOKENS and DARK_TOKENS[key], f"缺少令牌 {key}"
+        assert key in LIGHT_TOKENS and LIGHT_TOKENS[key], f"缺少令牌 {key}"
 
 
-def test_dark_token_text_contrast_at_least_4_5():
-    from lib.console_theme import DARK_TOKENS
+def test_light_token_text_contrast_at_least_4_5():
+    from lib.console_theme import LIGHT_TOKENS
 
     for fg, bg in CONTRAST_PAIRS:
-        ratio = _contrast(DARK_TOKENS[fg], DARK_TOKENS[bg])
+        ratio = _contrast(LIGHT_TOKENS[fg], LIGHT_TOKENS[bg])
         assert ratio >= 4.5, f"{fg} 在 {bg} 上对比度 {ratio:.2f} < 4.5"
 
 
-def test_console_css_forced_dark_without_os_preference():
+def test_console_css_forced_light_without_os_preference():
     from lib.console_theme import CSS
 
     body = _strip_comments(CSS)
     assert "prefers-color-scheme" not in body          # 与系统/浏览器偏好解耦
-    assert "color-scheme: dark" in body                # 原生控件/滚动条走暗色
-    assert "color-scheme: light" not in body
+    assert "color-scheme: light" in body                # 原生控件/滚动条走浅色
+    assert "color-scheme: dark" not in body
     assert ":root" not in body                         # 不写全局根选择器
     assert re.search(r"[{,]\s*(body|html|\*)\s*[,{]", body) is None   # 无 body/html/通配符规则
     assert not re.search(r"\*[^{}]*!important", body)  # 无全局 !important 通配
 
 
 def test_console_css_sets_native_streamlit_vars():
-    from lib.console_theme import CSS, DARK_TOKENS
+    from lib.console_theme import CSS, LIGHT_TOKENS
 
     body = _strip_comments(CSS)
     mapping = {"--text-color": "text", "--background-color": "bg",
                "--secondary-background-color": "layer1", "--primary-color": "brand"}
     for var, key in mapping.items():
-        pattern = re.escape(var) + r"\s*:\s*" + re.escape(DARK_TOKENS[key])
+        pattern = re.escape(var) + r"\s*:\s*" + re.escape(LIGHT_TOKENS[key])
         assert re.search(pattern, body), f"缺少原生主题变量 {var}"
 
 
@@ -95,9 +95,9 @@ def test_console_css_selectors_are_scoped():
 
 
 def test_console_css_uses_shared_tokens():
-    from lib.console_theme import CSS, DARK_TOKENS
+    from lib.console_theme import CSS, THEME_TOKENS
 
-    for key, value in DARK_TOKENS.items():
+    for key, value in THEME_TOKENS.items():
         pattern = rf"--df-{re.escape(key)}\s*:\s*{re.escape(value)}"
         assert re.search(pattern, CSS), f"令牌 {key} 未体现在控制台 CSS 中"
 
@@ -114,11 +114,11 @@ def test_message_css_scoped_to_bubbles_only():
         assert f"--df-{key}" in body, f"MESSAGE_CSS 缺少令牌 {key}"
 
 
-def test_message_css_reuses_dark_tokens():
-    from lib.console_theme import DARK_TOKENS
+def test_message_css_reuses_product_tokens():
+    from lib.console_theme import THEME_TOKENS
     from lib.render import MESSAGE_CSS
 
-    for value in DARK_TOKENS.values():
+    for value in THEME_TOKENS.values():
         assert value in MESSAGE_CSS, f"MESSAGE_CSS 未使用共享色板值 {value}"
 
 
@@ -147,14 +147,14 @@ def test_preview_html_still_renders_with_standalone_css(tmp_path):
     assert "<strong>q</strong>" in text
 
 
-def test_streamlit_theme_config_matches_dark_tokens():
+def test_streamlit_theme_config_matches_light_tokens():
     import tomllib
-    from lib.console_theme import DARK_TOKENS
+    from lib.console_theme import LIGHT_TOKENS
 
     config = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
     theme = config["theme"]
-    assert theme["base"] == "dark"
-    assert theme["backgroundColor"] == DARK_TOKENS["bg"]
-    assert theme["secondaryBackgroundColor"] == DARK_TOKENS["layer1"]
-    assert theme["textColor"] == DARK_TOKENS["text"]
-    assert theme["primaryColor"] == DARK_TOKENS["brand"]
+    assert theme["base"] == "light"
+    assert theme["backgroundColor"] == LIGHT_TOKENS["bg"]
+    assert theme["secondaryBackgroundColor"] == LIGHT_TOKENS["layer1"]
+    assert theme["textColor"] == LIGHT_TOKENS["text"]
+    assert theme["primaryColor"] == LIGHT_TOKENS["brand"]

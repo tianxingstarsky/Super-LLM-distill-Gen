@@ -228,9 +228,8 @@ def load_backend(
 ) -> tuple[ChatClient, str]:
     """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
 
-    解析优先级：显式 backend/model/base_url > role 槽位（model_roles）>
-    judge_backend/judge_model > default_backend/default_model。
-    role ∈ {generation, judge, vision, refine, simulate, translation}；
+    解析优先级：显式 backend/model/base_url > 角色专属环境变量 > role 槽位 > 默认配置。
+    role ∈ {generation, judge, jev, vision, refine, simulate, translation}。JEV 可用 JEV_BACKEND/JEV_MODEL 环境变量独立配置；
     judge=True 等价 role='judge'。base_url 自定义端点（本地 Ollama/llama.cpp 等）
     时 api_key 走 OPENAI_API_KEY 环境变量。
     预算：backends.yaml 的 budget + 各后端 prices 生效，超限抛 BudgetExceeded。"""
@@ -252,8 +251,11 @@ def load_backend(
         role = "judge"
     if role and base_url is None:
         slot = (cfg.get("model_roles") or {}).get(role) or {}
-        backend = backend or slot.get("backend") or (cfg.get("judge_backend") if role == "judge" else None)
-        model = model or os.environ.get("LLM_MODEL") or slot.get("model") or (cfg.get("judge_model") if role == "judge" else None)
+        role_backend = os.environ.get(f"{role.upper()}_BACKEND")
+        role_model = os.environ.get(f"{role.upper()}_MODEL")
+        backend = backend or role_backend or slot.get("backend") or (cfg.get("judge_backend") if role == "judge" else None)
+        global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
+        model = model or role_model or global_model or slot.get("model") or (cfg.get("judge_model") if role == "judge" else None)
     if judge and backend is None and base_url is None:
         backend = cfg.get("judge_backend")
         model = model or cfg.get("judge_model")
@@ -267,7 +269,9 @@ def load_backend(
     if not base_url and os.environ.get("LLM_BASE_URL"):
         b = {"base_url": os.environ["LLM_BASE_URL"], "api_key_env": "OPENAI_API_KEY", "models": []}
     api_key = b.get("api_key") or os.environ.get(b.get("api_key_env") or "", "")
-    model = model or os.environ.get("LLM_MODEL") or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
+    role_model = os.environ.get(f"{role.upper()}_MODEL") if role else None
+    global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
+    model = model or role_model or global_model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
 
     budget_cfg = cfg.get("budget") or {}
     guard = None

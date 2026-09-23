@@ -16,7 +16,6 @@ import re
 from typing import Any, Dict, Iterator, List
 
 SUPPORTED_EXTS = {".md", ".txt", ".pdf", ".docx"}
-PAGE_NUMBER_RE = re.compile(r"^\s*\d{1,4}\s*$")  # 纯页码行（PDF 提取常见噪音）
 
 
 # ── 导入层 ──────────────────────────────────────────────────────────────────
@@ -31,7 +30,7 @@ def _decode_text(data: bytes) -> str:
             return data.decode(encoding)
         except UnicodeDecodeError:
             continue
-    return data.decode("utf-8", errors="replace")  # 兜底：保证不崩，但不静默吞掉可解码的编码
+    raise UnicodeError("invalid_text_encoding_utf8_gb18030")
 
 
 def import_text(path: str | pathlib.Path) -> str:
@@ -59,18 +58,15 @@ def import_text(path: str | pathlib.Path) -> str:
 
 
 def clean_text(text: str) -> str:
-    """无损规范化：去纯页码行、压缩多余空行、统一换行；不删任何正文内容。"""
+    """Conservative normalization: keep numeric lines and code indentation."""
     lines = []
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
+        if not line.strip():
             lines.append("")
             continue
-        if PAGE_NUMBER_RE.match(stripped):
-            continue  # 纯页码行（PDF 提取噪音），非正文
-        lines.append(stripped)
+        lines.append(line)
     text = "\n".join(lines)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    return re.sub(r"\n{3,}", "\n\n", text).strip("\n")
 
 
 # ── 分块层 ──────────────────────────────────────────────────────────────────
@@ -78,11 +74,28 @@ def chunk_text(text: str, target_chars: int = 2000, overlap: int = 0) -> List[st
     """按段落边界分块，目标长度 target_chars；Markdown 标题作为硬边界。
     段落合并直到接近目标长度；overlap>0 时块间回退 N 字符（连续上下文）。
     """
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if target_chars < 1:
+        raise ValueError("target_chars must be positive")
+    paragraphs = [p.rstrip("\n") for p in re.split(r"\n\s*\n", text) if p.strip()]
     chunks: List[str] = []
     buf: List[str] = []
     buf_len = 0
     for para in paragraphs:
+        if len(para) > target_chars:
+            # A PDF extraction or code block can be one very long paragraph.
+            # Keep every character in order instead of letting the workflow
+            # quarantine the entire block as oversized.
+            if buf:
+                chunks.append("\n\n".join(buf))
+                buf, buf_len = [], 0
+            stride = target_chars - min(max(0, overlap), target_chars - 1)
+            start = 0
+            while start < len(para):
+                chunks.append(para[start:start + target_chars])
+                if start + target_chars >= len(para):
+                    break
+                start += stride
+            continue
         is_heading = para.lstrip().startswith("#")  # Markdown 标题硬边界
         if buf and (is_heading or buf_len + len(para) > target_chars):
             chunks.append("\n\n".join(buf))

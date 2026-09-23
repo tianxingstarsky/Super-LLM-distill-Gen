@@ -70,7 +70,7 @@ def doc_to_samples(
                 except Exception as e:  # noqa: BLE001
                     rejected.append({"question": question[:80], "error": str(e)[:200]})
                     continue
-                if not check.get("keep", False):
+                if check.get("keep") is not True or check.get("grounded") is not True or check.get("unsupported") != []:
                     stats["ground_rejected"] += 1
                     rejected.append({"question": question[:80], "unsupported": check.get("unsupported", [])})
                     continue
@@ -116,7 +116,7 @@ def doc_to_samples(
             except Exception as e:  # noqa: BLE001
                 rejected.append({"question": question[:80], "error": str(e)[:200]})
                 continue
-            if not check.get("keep", False):
+            if check.get("keep") is not True or check.get("grounded") is not True or check.get("unsupported") != []:
                 stats["ground_rejected"] += 1
                 rejected.append({"question": question[:80], "unsupported": check.get("unsupported", [])})
                 continue

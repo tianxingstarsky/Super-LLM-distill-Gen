@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import time
@@ -91,18 +92,33 @@ def test_run_page_blocks_missing_required_input():
     assert not view.exception
 
 
+def test_monitor_shows_event_timeline_and_keeps_bad_rows_visible_as_warning(tmp_path):
+    output = tmp_path / "app" / "data" / "output"
+    output.mkdir(parents=True)
+    (output / "runs.jsonl").write_text(
+        '{"kind":"export","at":"2026-09-23T08:00:00","format":"minimind"}\n'
+        '{invalid json}\n', encoding="utf-8",
+    )
+    view = app()
+    view.sidebar.radio[0].set_value("运行监控").run()
+    assert not view.exception
+    assert any("事件时间线" in str(item.value) for item in view.get("html"))
+    assert any("minimind" in str(item.value) for item in view.get("html"))
+    assert any("1 条记录无法读取" in item.value for item in view.warning)
+
+
 def test_preview_caches_samples_across_rerenders(tmp_path, monkeypatch):
     """预览页翻页/重渲染不重读整个 JSONL（路径+mtime 缓存）。"""
-    from lib import quality
+    from lib.infrastructure.release_file_driver import FilesystemReleaseDriver
 
     calls = {"n": 0}
-    real_read = quality.read_samples
+    real_read = FilesystemReleaseDriver.read_samples
 
-    def counting(path):
+    def counting(self, path):
         calls["n"] += 1
-        return real_read(path)
+        return real_read(self, path)
 
-    monkeypatch.setattr(quality, "read_samples", counting)
+    monkeypatch.setattr(FilesystemReleaseDriver, "read_samples", counting)
     seed_bare_session_state(ws="default")  # AppTest 在测试进程求值 format_func（依赖 ws）
     out = tmp_path / "app" / "data" / "output"
     out.mkdir(parents=True)
@@ -116,6 +132,127 @@ def test_preview_caches_samples_across_rerenders(tmp_path, monkeypatch):
     assert calls["n"] == 1
     assert not view.exception
     assert any(w.value == 2 for w in view.number_input)
+
+
+def test_data_library_shows_real_sources_outputs_and_selected_excerpt(tmp_path):
+    """Library cards, file list and inspector reflect only isolated workspace files."""
+    source = tmp_path / "app" / "data" / "seeds"
+    source.mkdir(parents=True)
+    (source / "manual&notes.md").write_text("设备维护步骤 A", encoding="utf-8")
+    output = tmp_path / "app" / "data" / "output"
+    output.mkdir(parents=True)
+    (output / "sft.jsonl").write_text(json.dumps(sample_record("library-sft"), ensure_ascii=False) + "\n",
+                                     encoding="utf-8")
+    (output / "dpo.jsonl").write_text('{"id":"library-dpo","chosen":"A","rejected":"B"}\n',
+                                     encoding="utf-8")
+
+    view = app()
+    view.sidebar.radio[0].set_value("数据管理").run()
+    assert not view.exception
+    html_blocks = "\n".join(str(item.value) for item in view.get("html"))
+    assert "来源文件</span><strong>1" in html_blocks
+    assert "工作区产物</span><strong>2" in html_blocks
+    assert "训练数据文件</span><strong>2" in html_blocks
+    assert "偏好文件</span><strong>1" in html_blocks
+    assert "manual&amp;notes.md" in html_blocks
+    assert "sft.jsonl" in html_blocks and "dpo.jsonl" in html_blocks
+
+    next(item for item in view.text_input if item.label == "搜索文件").set_value("manual").run()
+    assert not view.exception
+    html_blocks = "\n".join(str(item.value) for item in view.get("html"))
+    assert "1 个匹配文件" in html_blocks
+    assert "已有资料" in html_blocks
+    assert any("设备维护步骤 A" in str(item.value) for item in view.code)
+
+
+def test_data_library_prioritizes_real_source_and_cpt_over_workflow_evidence(tmp_path):
+    """Nested workflow inputs stay traceable but never masquerade as source data."""
+    from lib import workspace as ws
+
+    source = tmp_path / "cpt-source"
+    source.mkdir()
+    (source / "guide.txt").write_text("设备操作指南", encoding="utf-8")
+    output = source / ".dataforge" / "output"
+    run = output / "workflows" / ("a" * 32)
+    (run / "inputs").mkdir(parents=True)
+    (run / "inputs" / "0000.txt").write_text("快照，不是原始来源", encoding="utf-8")
+    (run / "artifacts").mkdir()
+    (run / "artifacts" / "cpt.jsonl").write_text('{"text":"训练语料"}\n', encoding="utf-8")
+    (run / "artifacts" / "cpt.records.json").write_text("{}", encoding="utf-8")
+    (run / "checkpoints" / "cpt").mkdir(parents=True)
+    (run / "checkpoints" / "cpt" / "state.json").write_text("{}", encoding="utf-8")
+    (run / "recipe.json").write_text("{}", encoding="utf-8")
+    ws.set_current(ws.add_folder(source, name="cpt-ui"))
+
+    view = app()
+    view.sidebar.radio[0].set_value("数据管理").run()
+    assert not view.exception
+    html_blocks = "\n".join(str(item.value) for item in view.get("html"))
+    assert "训练数据文件</span><strong>1" in html_blocks
+    assert next(item for item in view.selectbox if item.label == "文件分类").value == "常用文件"
+    file_list = next(str(item.value) for item in view.get("html") if '<div class="df-data-list">' in str(item.value))
+    assert file_list.index("guide.txt") < file_list.index("cpt.jsonl")
+    assert "0000.txt" not in file_list and "recipe.json" not in file_list
+    assert "cpt.records.json" not in file_list
+    assert "来源 / guide.txt" in file_list and "产物 / workflows" in file_list
+
+    next(item for item in view.selectbox if item.label == "文件分类").set_value("全部文件").run()
+    assert not view.exception
+    file_list = next(str(item.value) for item in view.get("html") if '<div class="df-data-list">' in str(item.value))
+    assert file_list.index("guide.txt") < file_list.index("0000.txt")
+    assert "cpt.jsonl" in file_list and "recipe.json" in file_list
+    assert "cpt.records.json" in file_list
+    assert "产物 / workflows" in file_list
+    next(item for item in view.selectbox if item.label == "文件分类").set_value("输入快照").run()
+    assert not view.exception
+    file_list = next(str(item.value) for item in view.get("html") if '<div class="df-data-list">' in str(item.value))
+    assert "0000.txt" in file_list and "guide.txt" not in file_list
+
+
+def test_data_preview_separates_record_facts_from_conversation(tmp_path):
+    output = tmp_path / "app" / "data" / "output"
+    output.mkdir(parents=True)
+    (output / "rollout_samples.jsonl").write_text(
+        json.dumps(sample_record("preview-real-1"), ensure_ascii=False) + "\n", encoding="utf-8")
+    view = app()
+    view.sidebar.radio[0].set_value("数据预览").run()
+    assert not view.exception
+    html_blocks = "\n".join(str(item.value) for item in view.get("html"))
+    assert "选择样本" in html_blocks and "样本概览" in html_blocks
+    assert "preview-real-1" in html_blocks
+    assert "2 / 1" in html_blocks  # two messages and one user turn
+    assert "rollout_samples.jsonl" in html_blocks
+    assert any(item.value == 1 for item in view.number_input)
+
+
+def test_data_preview_counts_tool_result_as_trace_not_user_turn(tmp_path):
+    output = tmp_path / "app" / "data" / "output"
+    output.mkdir(parents=True)
+    record = {"id": "trace-real-1", "messages": [
+        {"role": "user", "content": "计算 1+1"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "call-1", "name": "calculator", "input": {"expression": "1+1"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "is_error": True, "content": "工具暂不可用"}]},
+        {"role": "assistant", "content": "计算未完成"},
+    ]}
+    (output / "agent_samples.jsonl").write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    view = app()
+    view.sidebar.radio[0].set_value("数据预览").run()
+    assert not view.exception
+    html_blocks = "\n".join(str(item.value) for item in view.get("html"))
+    assert "Agent 工具轨迹" in html_blocks
+    assert "4 / 1" in html_blocks
+    assert "工具调用</span><b>1" in html_blocks
+    assert "工具错误</span><b>1" in html_blocks
+
+
+def test_data_preview_reports_non_conversation_file_without_crashing(tmp_path):
+    output = tmp_path / "app" / "data" / "output"
+    output.mkdir(parents=True)
+    (output / "cpt_samples.jsonl").write_text('{"text":"连续预训练正文"}\n', encoding="utf-8")
+    view = app()
+    view.sidebar.radio[0].set_value("数据预览").run()
+    assert not view.exception
+    assert any("当前文件不是对话样本" in item.value for item in view.error)
 
 
 def test_sessions_choose_independent_workspaces(tmp_path):
@@ -145,7 +282,138 @@ def test_backends_page_renders_without_exception():
     view.sidebar.radio[0].set_value("模型与密钥").run()
     assert not view.exception
     assert any(w.label == "后端名" for w in view.text_input)
-    assert any("密钥来源" in [str(c) for c in w.value.columns] for w in view.dataframe)
+    assert any(w.label == "选择后端" for w in view.selectbox)
+    assert any(w.label == "清零预算" for w in view.button)
+
+
+def test_generation_preferences_use_guided_controls():
+    from lib.application.preference_service import preference_summary
+
+    view = app()
+    view.sidebar.radio[0].set_value("系统设置").run()
+    next(w for w in view.segmented_control if w.label == "系统设置视图").set_value("生成偏好").run()
+    assert not view.exception
+    labels = {w.label for w in view.slider}
+    assert {"默认样本占比", "推理与反思", "长上下文利用", "工具使用", "双语与知识桥接"} <= labels
+    assert any(w.label == "保存生成偏好" for w in view.button)
+    assert any(w.label == "高级编辑：YAML 原始配置" for w in view.expander)
+    rendered = "".join(str(node.value) for node in view.get("html"))
+    assert "当前已保存的生成倾向" in rendered
+    configured = preference_summary((ROOT / "configs/preferences.yaml").read_text(encoding="utf-8"))
+    assert f'默认 {configured["default_share"]:.0%}' in rendered
+
+
+def test_system_settings_gate_overview_reflects_work_area():
+    from lib.gates import GateKeeper
+    from lib import workspace as ws
+
+    gate = GateKeeper(ROOT / "configs/gates.yaml", ws.out("default") / "gates_state.json")
+    gate.propose("G1", {"rollout_dir": "test-rollouts", "default_backend": "test-backend"})
+
+    view = app()
+    view.sidebar.radio[0].set_value("系统设置").run()
+    assert not view.exception
+    rendered = "".join(str(node.value) for node in view.get("html"))
+    assert 'data-kind="attention"><span>需处理</span><strong>1</strong>' in rendered
+    assert 'data-kind="approved"><span>已确认</span><strong>0</strong>' in rendered
+    assert "test-rollouts" in rendered
+
+
+def test_home_shows_real_recent_task_and_source_entry(tmp_path):
+    source = tmp_path / "app" / "data" / "seeds"
+    source.mkdir(parents=True)
+    (source / "manual.md").write_text("设备说明", encoding="utf-8")
+    run_id = "a" * 32
+    run = tmp_path / "app" / "data" / "output" / "workflows" / run_id
+    run.mkdir(parents=True)
+    (run / "state.json").write_text(json.dumps({
+        "id": run_id, "name": "产品手册训练", "status": "completed", "targets": ["cpt", "sft"],
+        "created_at": "2026-09-23T00:00:00+00:00", "updated_at": "2026-09-23T00:01:00+00:00",
+    }), encoding="utf-8")
+    older_id = "b" * 32
+    older_run = run.parent / older_id
+    older_run.mkdir()
+    (older_run / "state.json").write_text(json.dumps({
+        "id": older_id, "name": "持续更新任务", "status": "running", "targets": ["sft"],
+        "created_at": "2026-09-22T00:00:00+00:00", "updated_at": "2026-09-23T01:00:00+00:00",
+    }), encoding="utf-8")
+    release = run / "releases" / "cpt-v0001"
+    release.mkdir(parents=True)
+    cpt_data = b'{"text":"manual"}\n'
+    (release / "cpt.jsonl").write_bytes(cpt_data)
+    (release / "manifest.json").write_text(json.dumps({
+        "status": "human_reviewed", "target": "cpt", "run_id": run_id, "version": 1,
+        "sha256": {"cpt.jsonl": hashlib.sha256(cpt_data).hexdigest()},
+    }), encoding="utf-8")
+    staging = run / "releases" / ".cpt-v0002.pending"
+    staging.mkdir()
+    (staging / "manifest.json").write_text("{}", encoding="utf-8")
+    legacy = run.parents[1] / "export" / "legacy-v1"
+    legacy.mkdir(parents=True)
+    sft_data = b'{"messages":[]}\n'
+    (legacy / "sft.jsonl").write_bytes(sft_data)
+    (legacy / "manifest.json").write_text(json.dumps({
+        "status": "complete", "format": "chat",
+        "sha256": {"sft.jsonl": hashlib.sha256(sft_data).hexdigest()},
+    }), encoding="utf-8")
+    incomplete = legacy.parent / "incomplete"
+    incomplete.mkdir()
+    (incomplete / "manifest.json").write_text('{"status":"writing"}', encoding="utf-8")
+    view = app()
+    assert not view.exception
+    assert not view.dataframe  # 最近任务和来源文件不再是原生表格
+    assert any("产品手册训练" in str(item.value) and "已完成" in str(item.value)
+               for item in view.get("html"))
+    assert any("manual.md" in str(item.value) for item in view.get("html"))
+    markup = "\n".join(str(item.value) for item in view.get("html"))
+    assert markup.index("持续更新任务") < markup.index("产品手册训练")
+    assert "本地发布版本 <b>2</b>" in markup
+    assert any(item.label == "工作区路径与存储位置" for item in view.expander)
+    assert any(item.label == "查看 →" for item in view.button)
+
+
+def test_home_empty_workspace_shows_honest_next_steps():
+    view = app()
+    assert not view.exception
+    markup = "\n".join(str(item.value) for item in view.get("html"))
+    assert "当前工作区还没有工作流任务" in markup
+    assert "尚无来源文件" in markup
+    assert "暂无最近任务" in markup
+    assert "工作流总数</small><strong>0" in markup
+    assert "本地发布版本 <b>0</b>" in markup
+    assert any(button.label == "开始配置 →" for button in view.button)
+    next(button for button in view.button if button.key == "overview:开放需求").click().run()
+    assert not view.exception
+    assert view.session_state["nav"] == "自动工作流"
+    assert view.session_state["workflow-source-mode"] == "开放需求"
+
+
+def test_quality_report_filters_real_issues_and_locates_source_row(tmp_path):
+    seed_bare_session_state(ws="default")
+    output = tmp_path / "app" / "data" / "output"
+    output.mkdir(parents=True)
+    rows = [
+        {"id": "broken-1", "messages": []},
+        {**sample_record("picture-2"), "images": ["image-reference"]},
+    ]
+    (output / "rollout_samples.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    view = app()
+    view.sidebar.radio[0].set_value("质量报告").run()
+    assert not view.exception
+    assert any("结构问题" in str(item.value) and "重复内容" in str(item.value)
+               for item in view.get("html"))
+    assert any("缺少对话消息" in str(item.value) and "图像需人工查看" in str(item.value)
+               for item in view.get("html"))
+    assert any(item.label == "问题类型" for item in view.selectbox)
+    assert any(item.label == "定位问题样本" for item in view.selectbox)
+    assert any("文件第 1 条" in str(item.value) and "broken-1" in str(item.value)
+               for item in view.get("html"))
+    next(item for item in view.text_input if item.label == "搜索样本 ID").set_value("picture-2").run()
+    assert not view.exception
+    assert any("匹配 1 / 2 条问题" in str(item.value) for item in view.caption)
+    assert any("文件第 2 条" in str(item.value) and "picture-2" in str(item.value)
+               for item in view.get("html"))
 
 
 def test_review_workspace_v2_envelope_has_rendered_markdown():

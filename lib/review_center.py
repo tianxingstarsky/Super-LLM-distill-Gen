@@ -462,7 +462,7 @@ def _field_revision_builder(record, index, field, text, reviewer):
     其余元数据不丢），validate_edits 服务端强制白名单（非 assistant 不能改
     reasoning_content；多模态结构不能压成文本）；build_records 重新计算内容哈希。
     """
-    from lib import review_editor as editor
+    from lib.domain import review_edit as editor
     from lib.review import build_records
 
     sample = editor.unpack_record(record)

@@ -36,7 +36,7 @@ class Job:
         self._thread.start()
 
     def _run(self):
-        env = {**os.environ, "DF_WORKSPACE": self.workspace, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+        env = {**os.environ, "DF_WORKSPACE": self.workspace, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"}
         try:
             with subprocess.Popen([sys.executable, "-m", "lib.cli", *self.command, "--ws", self.workspace],
                 cwd=self.cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

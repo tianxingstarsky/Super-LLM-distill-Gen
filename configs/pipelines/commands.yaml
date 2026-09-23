@@ -2,6 +2,7 @@
 # 新增管线 = 本文件加一行 + lib/cli.py 加子命令 + lib 模块实现（见 docs/extensibility.md）。
 # gates 标注该命令需过的闸门；g0=true 表示调用付费 API。
 commands:
+  workflow:      { help: 自动 CPT/SFT/DPO/RLAIF/GSM8K/CoT/ORPO 工作流（JEV 专用评分槽位）, gates: [], g0: true, group: 生成管线 }
   import:        { help: 导入 rollout 真实会话数据 → 多轮 SFT 样本, gates: [G1], g0: false, group: 数据源 }
   stats:         { help: 查看导入统计, gates: [], g0: false, group: 数据源 }
   preview:       { help: 预览样本（--html 生成美化渲染页）, gates: [], g0: false, group: 数据源 }

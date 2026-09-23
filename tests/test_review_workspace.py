@@ -351,17 +351,17 @@ def test_envelope_shape_scope_and_state_isolation():
 
 # ── 共享主题令牌（追加在组件 CSS 之后，accent 保持组件亮色） ────────────────
 def test_shared_dark_tokens_appended_after_component_css():
-    from lib.console_theme import DARK_TOKENS
+    from lib.console_theme import THEME_TOKENS
 
     base = ":host { --rw-bg:#11151c; --rw-accent:#9dbbff; }"
     css = rw.compose_css(base)
     assert css.startswith(base)  # 组件自有色板在前，共享令牌在后覆盖
-    assert f"--rw-bg: {DARK_TOKENS['bg']};" in css
-    assert f"--rw-panel: {DARK_TOKENS['layer1']};" in css
-    assert f"--rw-raised: {DARK_TOKENS['layer2']};" in css
-    assert f"--rw-text: {DARK_TOKENS['text']};" in css
-    assert f"--rw-muted: {DARK_TOKENS['text2']};" in css
-    assert f"--rw-line: {DARK_TOKENS['border2']};" in css
+    assert f"--rw-bg: {THEME_TOKENS['bg']};" in css
+    assert f"--rw-panel: {THEME_TOKENS['layer1']};" in css
+    assert f"--rw-raised: {THEME_TOKENS['layer2']};" in css
+    assert f"--rw-text: {THEME_TOKENS['text']};" in css
+    assert f"--rw-muted: {THEME_TOKENS['text2']};" in css
+    assert f"--rw-line: {THEME_TOKENS['border2']};" in css
     assert "--rw-accent" not in css[len(base):]  # 不覆盖亮色 accent
 
 

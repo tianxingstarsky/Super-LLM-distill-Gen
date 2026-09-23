@@ -68,6 +68,22 @@ def test_doc_to_samples_global_dedup(tmp_path):
     assert r2["stats"]["dups"] == 4  # 跨运行零重复
 
 
+@pytest.mark.parametrize("check", [
+    {"keep": "false", "grounded": True, "unsupported": []},
+    {"keep": True, "grounded": False, "unsupported": []},
+    {"keep": True, "grounded": True, "unsupported": ["没有证据"]},
+    {"keep": True},
+])
+def test_document_requires_strict_grounding_contract(tmp_path, check):
+    class InvalidGrounding(FakeClient):
+        def chat(self, messages, **kwargs):
+            content = messages[0]["content"]
+            if "校验规则" in content or "事实依据" in content:
+                return json.dumps(check)
+            return super().chat(messages, **kwargs)
+    assert _run(tmp_path, InvalidGrounding())["stats"]["kept"] == 0
+
+
 class CrossFakeClient:
     """cross 模式：qa 返回跨块综合问题；ground 全通过。"""
 
@@ -106,7 +122,9 @@ def test_cross_mode_covers_tail_chunk(tmp_path):
     from lib.doc2corpus import chunk_text, clean_text, import_text
     from lib.doc2data import doc_to_samples
 
-    text = "\n\n".join(f"mark{i}：" + "知识内容" * 60 for i in range(4))
+    # Keep each paragraph below chunk_size; long-paragraph splitting is tested
+    # separately in test_doc2corpus, while this case isolates cross windows.
+    text = "\n\n".join(f"mark{i}：" + "知识内容" * 40 for i in range(4))
     doc = tmp_path / "doc.md"
     doc.write_text(text, encoding="utf-8")
     chunks = chunk_text(clean_text(import_text(doc)), 200)

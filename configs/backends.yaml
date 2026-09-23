@@ -23,7 +23,7 @@ backends:
     models: [qwen2.5vl:7b]
   # 本地 CUDA 推理（Ollama/vLLM 等任何 OpenAI 兼容端点）。
   # 接入规则（见 docs/gpu.md）：本机 GPU 显存占用 ≥90% 时禁止在此机启动本地模型；
-  # 审核/精炼等角色切本地 GPU 省预算 → 把 model_roles.judge 的 backend 指到这里即可。
+  # 审核/精炼等角色切本地 GPU 省预算 → 把 model_roles.jev 的 backend 指到这里即可。
   local_gpu:
     base_url: http://localhost:11434/v1   # vLLM 默认 http://localhost:8000/v1
     api_key_env: ""                       # 本地服务无需 key
@@ -37,14 +37,15 @@ backends:
 default_backend: deepseek
 default_model: deepseek-chat
 
-# judge/打分角色：flash 在低温度 JSON 场景空回复率高（spike 实测），judge 用更稳的模型
+# 旧 judge 角色兼容现有命令；新工作流用专属 JEV 角色。
 judge_backend: deepseek
 judge_model: deepseek-v4-pro
 
-# 角色槽位（操作空间）：各角色默认模型，单次运行可用 --backend/--model/--base-url 覆盖
+# 角色槽位（操作空间）：各角色默认模型，工作流可单独覆盖生成与 JEV 评分模型
 model_roles:
   generation:    { backend: deepseek, model: deepseek-v4-flash }          # 大批量生成：快、省
   judge:         { backend: deepseek, model: deepseek-v4-pro }            # 判定/打分/质检：稳
+  jev:           { backend: deepseek, model: deepseek-v4-pro }            # JEV 专用五维评审模型，可独立切换及计费
   vision:        { backend: deepseek, model: deepseek-v4-flash-vision-exp }  # 视觉
   refine:        { backend: deepseek, model: deepseek-v4-pro }            # 精炼/风格矫正：文笔要求高
   simulate:      { backend: deepseek, model: deepseek-v4-flash }          # agent 模拟器：量大

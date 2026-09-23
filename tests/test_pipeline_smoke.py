@@ -10,6 +10,7 @@ import pathlib
 import sys
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import mock_llm_server  # noqa: E402
@@ -24,7 +25,8 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-mock")
 def _fresh_pipeline(tmp_path: pathlib.Path, tag: str):
     from distilabel.pipeline import Pipeline
 
-    pipeline = Pipeline.from_yaml(str(ROOT / "pipelines" / "00_smoke.yaml"))
+    # The upstream from_yaml path uses the Windows locale codec rather than UTF-8.
+    pipeline = Pipeline.from_dict(yaml.safe_load((ROOT / "pipelines" / "00_smoke.yaml").read_text(encoding="utf-8")))
     # YAML 中路径为相对项目根；测试中改为绝对路径
     pipeline.dag.set_step_attr(
         "load_data", "file_path", str(ROOT / "tests" / "fixtures" / "smoke_input.jsonl")

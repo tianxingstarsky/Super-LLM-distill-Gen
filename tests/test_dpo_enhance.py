@@ -102,3 +102,26 @@ def test_merge_pairs_dedups_and_normalizes():
 
 def test_pair_id_deterministic():
     assert pair_id("q", "c", "r") == pair_id("q", "c", "r")
+
+
+def test_invalid_judge_never_becomes_rejected_candidate():
+    import pytest
+    from lib.dpo_enhance import candidates
+    class InvalidJudge(FakeClient):
+        def chat(self, messages, **kwargs):
+            if "审校员" in messages[0]["content"]:
+                return json.dumps({"correctness": "invalid"})
+            return super().chat(messages, **kwargs)
+    with pytest.raises(ValueError, match="judge correctness"):
+        candidates(InvalidJudge(), ["测试问题"])
+
+
+def test_candidates_are_not_artificially_truncated_and_keep_evidence():
+    from lib.dpo_enhance import candidates
+    class FullCandidate(FakeClient):
+        def chat(self, messages, **kwargs):
+            assert kwargs.get("max_tokens") is None
+            return super().chat(messages, **kwargs)
+    pair = candidates(FullCandidate(), ["问题"])[0]
+    assert pair["preference"]["chosen_score"] == 5
+    assert merge_pairs([pair])[0]["preference"] == pair["preference"]

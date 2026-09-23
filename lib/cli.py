@@ -131,20 +131,20 @@ def cmd_preview(args) -> int:
 
 
 def cmd_export(args) -> int:
-    from lib.quality import read_samples, export_release
-    from lib.review import pull_decisions
+    from lib.bootstrap.releases import release_application
     from lib.monitor import trace_run
 
     source = pathlib.Path(args.input) if args.input else OUT_DIR / "rollout_samples.jsonl"
-    samples = read_samples(source)
+    releases = release_application()
+    samples = releases.read_samples(source)
     if args.bulk:
         _gates().require("G3")
     parent = pathlib.Path(args.out) if args.out else OUT_DIR / "export"
     if parent.suffix == ".jsonl":
         parent = parent.parent
-    decisions = pull_decisions(dataset_name=WS.dataset_name())
     # Unreviewed DPO/corpus sidecars are draft-only; bulk approval applies to this SFT input.
-    destination, counts = export_release(samples, args.format, parent, decisions,
+    destination, counts = releases.export_release_for_dataset(samples, args.format, parent,
+        WS.dataset_name(),
         corpus_path=None if args.bulk else OUT_DIR / "corpus" / "docs.jsonl",
         dpo_path=None if args.bulk else OUT_DIR / "dpo_pairs.jsonl", tag=args.tag, bulk=args.bulk)
     trace_run(ROOT, "export", {"format": args.format, "counts": counts, "bulk": args.bulk, "path": str(destination)})
@@ -746,10 +746,10 @@ def cmd_review_remote(args) -> int:
 
 
 def cmd_quality_report(args) -> int:
-    from lib.quality import read_samples, report
-    from lib.review import pull_decisions
+    from lib.bootstrap.releases import release_application
     source = pathlib.Path(args.input) if args.input else OUT_DIR / "rollout_samples.jsonl"
-    result = report(read_samples(source), pull_decisions(dataset_name=WS.dataset_name()))
+    releases = release_application()
+    result = releases.quality_report_for_dataset(releases.read_samples(source), WS.dataset_name())
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -904,19 +904,34 @@ def _launch_console() -> int:
     若等页面加载再起 API，协作者会在没人打开页面时连不上中心。"""
     from lib import review_center as rc
 
-    rc.start_in_thread()  # 幂等；端口被占（如独立 review-server）也不阻塞控制台
-    import subprocess
+    from urllib.request import ProxyHandler, build_opener
 
-    print("启动控制台: http://localhost:8501（审核中心 API: http://127.0.0.1:6900）")
-    from streamlit.web import bootstrap
-    flags = {"server.port": 8501, "server.headless": True,
-             "server.address": "127.0.0.1", "server.fileWatcherType": "none"}
-    # bootstrap.run does not apply initial flag options when called outside Streamlit's CLI.
-    bootstrap.load_config_options(flag_options=flags)
+    owns_api = False
     try:
+        owns_api = rc.start_in_thread() is not False
+    except OSError:
+        # A separately launched review-server can share the same local API.
+        try:
+            opener = build_opener(ProxyHandler({}))
+            with opener.open("http://127.0.0.1:6900/health", timeout=1) as response:
+                health = json.load(response)
+            if health.get("service") != "df-review-center":
+                raise RuntimeError("端口 6900 被其他服务占用")
+        except Exception as exc:
+            raise RuntimeError("审核中心 API 无法在端口 6900 启动") from exc
+        print("复用已运行的本地审核中心 API。")
+
+    try:
+        print("启动控制台: http://localhost:8501（审核中心 API: http://127.0.0.1:6900）")
+        from streamlit.web import bootstrap
+        flags = {"server.port": 8501, "server.headless": True,
+                 "server.address": "127.0.0.1", "server.fileWatcherType": "none"}
+        # bootstrap.run does not apply initial flag options when called outside Streamlit's CLI.
+        bootstrap.load_config_options(flag_options=flags)
         bootstrap.run(str(ROOT / "lib" / "webapp.py"), False, [], flags)
     finally:
-        rc.stop_thread()
+        if owns_api:
+            rc.stop_thread()
     return 0
 
 
@@ -979,6 +994,32 @@ def cmd_gate(args) -> int:
     return 1
 
 
+def cmd_workflow(args) -> int:
+    from lib.bootstrap.workflows import workflow_application
+    application = workflow_application(ROOT, OUT_DIR)
+    if args.action == "list":
+        print(json.dumps(application.list_runs(), ensure_ascii=False, indent=2))
+        return 0
+    if args.action == "resume":
+        if not args.run_id:
+            raise ValueError("resume 需要 --run-id")
+        state = application.resume(args.run_id)
+    else:
+        sources = [pathlib.Path(p) for p in (args.input or [])]
+        run_id = application.create_run(sources=sources, brief=args.brief or "",
+                            evaluation_sources=[pathlib.Path(p) for p in (args.evaluation_reference or [])],
+                            targets=args.targets.split(","), name=args.name,
+                            backend=args.backend, model=args.model,
+                            judge_backend=args.judge_backend, judge_model=args.judge_model,
+                            jev_backend=args.jev_backend, jev_model=args.jev_model,
+                            max_units=args.max_units, chunk_chars=args.chunk_chars, tasks=args.tasks,
+                            conversation_turns=args.conversation_turns)
+        print(f"运行 ID: {run_id}", flush=True)
+        state = application.execute(run_id)
+    print(json.dumps(state, ensure_ascii=False, indent=2))
+    return 0 if state["status"] == "completed" else 4
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="df", description="Super-LLM-distill-Gen CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1020,7 +1061,7 @@ def build_parser():
     p_review.add_argument("--n", type=int, default=20, help="push 条数")
     p_review.set_defaults(func=cmd_review)
 
-    p_console = sub.add_parser("console", help="统一运营控制台（七页：总览/预览/运行/审核/监控/闸门/偏好）")
+    p_console = sub.add_parser("console", help="统一运营控制台：数据生成、管理、审核、任务与打包")
     p_console.set_defaults(func=lambda args: _launch_console())
 
     p_peval = sub.add_parser("prompt-eval", help="提示词真机评测（G0 闸门）")
@@ -1181,6 +1222,27 @@ def build_parser():
     p_quality = sub.add_parser("quality-report", help="当前样本结构、重复和审核覆盖报告")
     p_quality.add_argument("--input")
     p_quality.set_defaults(func=cmd_quality_report)
+
+    p_workflow = sub.add_parser("workflow", help="持久化自动 CPT/SFT/多轮/Agent/DPO/RLAIF/GSM8K/CoT/ORPO 工作流")
+    p_workflow.add_argument("--action", choices=["start", "resume", "list"], default="start")
+    p_workflow.add_argument("--run-id")
+    p_workflow.add_argument("--input", action="append", help="来源文件路径，可重复指定")
+    p_workflow.add_argument("--evaluation-reference", action="append",
+                            help="CPT 去污染参照 JSON/JSONL，可重复指定；记录仅含 text 字段")
+    p_workflow.add_argument("--brief", help="开放性需求，或来源文档的任务要求")
+    p_workflow.add_argument("--name", default="自动数据生成")
+    p_workflow.add_argument("--targets", default="cpt,sft,dpo")
+    p_workflow.add_argument("--max-units", type=int, default=100)
+    p_workflow.add_argument("--chunk-chars", type=int, default=2000)
+    p_workflow.add_argument("--tasks", type=int, default=10)
+    p_workflow.add_argument("--conversation-turns", type=int, default=3, help="多轮对话目标的轮数，2–8")
+    p_workflow.add_argument("--backend")
+    p_workflow.add_argument("--model")
+    p_workflow.add_argument("--judge-backend")
+    p_workflow.add_argument("--judge-model")
+    p_workflow.add_argument("--jev-backend", help="JEV 专用打分后端")
+    p_workflow.add_argument("--jev-model", help="JEV 专用五维评审模型")
+    p_workflow.set_defaults(func=cmd_workflow)
 
     # 全局 --ws：所有子命令可用（df import --ws docs）；default 工作区=原 data/output
     for p in sub.choices.values():

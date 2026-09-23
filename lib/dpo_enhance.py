@@ -22,10 +22,10 @@ def _judge(client: Any, prompt: str, answer: str) -> int:
     """judge.score 打分，返回 correctness（1-5）。"""
     out = chat_json(client, [{"role": "user", "content": render(
         get("judge.score"), goal=prompt, thinking="", final_answer=answer)}], temperature=0.2)
-    try:
-        return int(out.get("correctness", 1))
-    except (TypeError, ValueError):
-        return 1
+    score = out.get("correctness")
+    if type(score) is not int or not 1 <= score <= 5:
+        raise ValueError("judge correctness 必须是 1–5 的整数，不能用默认低分替代失败")
+    return score
 
 
 def _answer(
@@ -64,24 +64,24 @@ def candidates(
     extra_clients: List[Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """多候选判分对比：单模型候选太一致（实测 flash 3 候选分差全 <2），
-    故支持多模型采样（UltraFeedback 用 17 模型采样的同构做法），
-    且末位候选强制截断（weak candidate，制造真实质量方差）。"""
+    故支持多模型采样。所有候选完整生成，不能依赖强制截断制造偏好差异。"""
+    if n_per_prompt < 2:
+        raise ValueError("至少需要两个完整候选")
     clients = [client] + list(extra_clients or [])
     pairs = []
     for p in prompts:
         answers: List[str] = []
         for i in range(n_per_prompt):
             c = clients[i % len(clients)]
-            if i == n_per_prompt - 1:
-                answers.append(_answer(c, p, 0.7, max_tokens=40))  # 截断弱候选
-            else:
-                answers.append(_answer(c, p, 0.5 + 0.35 * i))
+            answers.append(_answer(c, p, min(1.2, 0.5 + 0.35 * i)))
         scored = sorted(((_judge(client, p, a), a) for a in answers), key=lambda x: x[0])
         low, high = scored[0], scored[-1]
         # refine/hallucinate 均有同文守卫；这里同样要求两分支文本不同——
         # judge 打分有噪声（同文不同分真实存在），chosen==rejected 的对零梯度且污染统计
-        if high[0] - low[0] >= MIN_GAP and high[1] != low[1]:
-            pairs.append(_mk_pair(p, high[1], low[1], "candidates"))
+        if high[0] >= 4 and high[0] - low[0] >= MIN_GAP and high[1].strip() != low[1].strip():
+            pair = _mk_pair(p, high[1], low[1], "candidates")
+            pair["preference"] = {"dimension": "correctness", "chosen_score": high[0], "rejected_score": low[0]}
+            pairs.append(pair)
     return pairs
 
 
@@ -98,8 +98,10 @@ def refine(client: Any, prompts: List[str]) -> List[Dict[str, Any]]:
         if not v2 or v2 == v1:
             continue
         s1, s2 = _judge(client, p, v1), _judge(client, p, v2)
-        if s2 - s1 >= 1:
-            pairs.append(_mk_pair(p, v2, v1, "refine"))
+        if s2 >= 4 and s2 - s1 >= MIN_GAP:
+            pair = _mk_pair(p, v2, v1, "refine")
+            pair["preference"] = {"dimension": "correctness", "chosen_score": s2, "rejected_score": s1}
+            pairs.append(pair)
     return pairs
 
 
@@ -117,8 +119,10 @@ def hallucinate(client: Any, items: List[Dict[str, str]]) -> List[Dict[str, Any]
         if not wrong or wrong == correct:
             continue
         s_correct, s_wrong = _judge(client, prompt, correct), _judge(client, prompt, wrong)
-        if s_correct - s_wrong >= 1:
-            pairs.append(_mk_pair(prompt, correct, wrong, "hallucinate"))
+        if s_correct >= 4 and s_correct - s_wrong >= MIN_GAP:
+            pair = _mk_pair(prompt, correct, wrong, "hallucinate")
+            pair["preference"] = {"dimension": "correctness", "chosen_score": s_correct, "rejected_score": s_wrong, "facts": facts}
+            pairs.append(pair)
     return pairs
 
 
@@ -135,5 +139,5 @@ def merge_pairs(entries: List[Dict[str, Any]], manifest: set[str] | None = None)
         if pid in manifest:
             continue
         manifest.add(pid)
-        out.append({"id": pid, "prompt": e["prompt"], "chosen": e["chosen"], "rejected": e["rejected"]})
+        out.append({**e, "id": pid, "prompt": e["prompt"], "chosen": e["chosen"], "rejected": e["rejected"]})
     return out

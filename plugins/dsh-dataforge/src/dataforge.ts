@@ -21,6 +21,7 @@ export const name = 'dataforge'
 export const inject = ['tools']
 
 const COMMAND_HELP: Record<string, string> = {
+  workflow: '自动 CPT/SFT/DPO/RLAIF/GSM8K/CoT/ORPO 工作流（--action start/resume/list；JEV 专用评分模型）',
   import: '导入 rollout 真实会话数据 → 多轮 SFT 样本（需 G1 数据源闸门已过）',
   stats: '查看导入统计（各会话文件 ok/error/模型分布）',
   preview: '预览样本（--html 生成美化渲染页供人工过目）',

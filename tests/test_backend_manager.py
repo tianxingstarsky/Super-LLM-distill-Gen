@@ -16,7 +16,7 @@ def manager(monkeypatch, tmp_path):
     (tmp_path / "configs" / "backends.yaml").write_text(
         "backends:\n  deepseek:\n    base_url: https://api.deepseek.com/v1\n    api_key_env: DEEPSEEK_API_KEY\n    models: [deepseek-chat]\n"
         "default_backend: deepseek\njudge_model: deepseek-v4-pro\n"
-        "model_roles:\n  generation: { backend: deepseek, model: deepseek-chat }\n  judge: { backend: deepseek, model: deepseek-v4-pro }\n"
+        "model_roles:\n  generation: { backend: deepseek, model: deepseek-chat }\n  judge: { backend: deepseek, model: deepseek-v4-pro }\n  jev: { backend: deepseek, model: jev-test }\n"
         "budget:\n  max_total_usd: 5.0\n", encoding="utf-8")
     return bm
 
@@ -28,7 +28,7 @@ def test_list_masks_and_sources(manager, monkeypatch):
     assert row["api_key"]["source"] == "env:DEEPSEEK_API_KEY"
     assert row["api_key"]["status"] == "存在"
     assert "sk-test" not in str(info) and "1234abcd" not in str(info)  # 全量输出不含明文密钥
-    assert row["roles"] == ["generation", "judge"] and row["is_default"] is True
+    assert row["roles"] == ["generation", "jev", "judge"] and row["is_default"] is True
     assert info["budget"]["max_total_usd"] == 5.0
 
 
@@ -64,7 +64,9 @@ def test_save_endpoint_merge_backup_and_validation(manager):
 def test_role_switch_and_reset_budget(manager, monkeypatch):
     manager.save_endpoint("local_gpu", "http://127.0.0.1:11434/v1", ["q:7b"], api_key_env="")
     manager.set_role("judge", "local_gpu", "q:7b")
+    manager.set_role("jev", "local_gpu", "q:7b")
     assert manager.list_backends()["roles"]["judge"] == {"backend": "local_gpu", "model": "q:7b"}
+    assert manager.list_backends()["roles"]["jev"] == {"backend": "local_gpu", "model": "q:7b"}
     with pytest.raises(ValueError):
         manager.set_role("nope", "local_gpu", "q")
     monkeypatch.setattr(manager, "_limit", lambda: 5.0)

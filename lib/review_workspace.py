@@ -886,32 +886,32 @@ def apply_event(state: MutableMapping, event: Any, *, dataset: str, username: st
 
 # ── Streamlit v2 注册与渲染 ───────────────────────────────────────────────────
 def shared_token_css() -> str:
-    """`:host` 暗色令牌映射（console_theme.DARK_TOKENS → 组件 --rw-* 变量）。
+    """`:host` 产品主题令牌映射（console_theme.THEME_TOKENS → 组件 --rw-* 变量）。
 
     追加在组件 CSS 之后（同优先级后者生效），保证工作台与控制台/消息气泡同一
     色板；``--rw-accent`` 不覆盖，保留组件自己的亮色 #9dbbff。
     """
     try:
-        from lib.console_theme import DARK_TOKENS
+        from lib.console_theme import THEME_TOKENS
     except Exception:  # noqa: BLE001 - 主题模块缺失时保持组件自有色板
         return ""
     mapping = {
-        "--rw-bg": DARK_TOKENS.get("bg"),          # 控制台背景
-        "--rw-panel": DARK_TOKENS.get("layer1"),   # 侧栏/面板
-        "--rw-raised": DARK_TOKENS.get("layer2"),  # 抬升层/输入框
-        "--rw-text": DARK_TOKENS.get("text"),
-        "--rw-muted": DARK_TOKENS.get("text2"),
-        "--rw-line": DARK_TOKENS.get("border2"),
+        "--rw-bg": THEME_TOKENS.get("bg"),          # 控制台背景
+        "--rw-panel": THEME_TOKENS.get("layer1"),   # 侧栏/面板
+        "--rw-raised": THEME_TOKENS.get("layer2"),  # 抬升层/输入框
+        "--rw-text": THEME_TOKENS.get("text"),
+        "--rw-muted": THEME_TOKENS.get("text2"),
+        "--rw-line": THEME_TOKENS.get("border2"),
     }
     lines = "\n".join(f"  {key}: {value};" for key, value in mapping.items() if value)
     if not lines:
         return ""
-    return ("\n/* 共享主题令牌（lib/console_theme.DARK_TOKENS）：追加在组件样式后覆盖 --rw-* */\n"
+    return ("\n/* 共享主题令牌（lib/console_theme.THEME_TOKENS）：追加在组件样式后覆盖 --rw-* */\n"
             f":host {{\n{lines}\n}}\n")
 
 
 def compose_css(base_css: str) -> str:
-    """组件 CSS + 共享暗色令牌块（组件自带色板在前、共享覆盖在后）。"""
+    """组件 CSS + 共享产品主题令牌块（组件自带色板在前、共享覆盖在后）。"""
     return (base_css or "") + shared_token_css()
 
 

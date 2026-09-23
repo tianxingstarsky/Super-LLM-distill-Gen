@@ -1,8 +1,8 @@
 """Agent 工具使用零参考数据管线：任务生成 → 执行循环（act/simulate）→ 轨迹质检。
 
 Instructor + Simulator 双角色：Simulator 扮演环境（搜索返回/代码输出/报错），
-无需真实环境即可合成自洽的多步 agent 轨迹；轨迹格式与 rollout 蒸馏同构
-（assistant toolCalls + tool 观察），可直接并入现有 SFT 数据流。
+模拟观察仅用于合成候选，不能证明工具真实执行或最终回答正确。
+输出标记 synthetic_unverified，不能直接并入已重放验证的 Agent 数据流。
 """
 from __future__ import annotations
 
@@ -30,30 +30,39 @@ def _last_call_repeated(messages: List[Dict[str, Any]]) -> bool:
 
 
 def prune_redundant(messages: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], int]:
-    """冗余修剪器（效率守卫）：删除与上一次完全相同的工具调用及其观察（绕弯子=零推进）。
+    """仅删除相邻、调用和观察都完全相同的模拟步骤。
 
     返回 (修剪后 messages, 剪掉的调用数)。不改变首尾结构：user 开头、最终 assistant 结尾。
     """
     pruned: List[Dict[str, Any]] = []
     removed = 0
-    last_call = None
-    for i, m in enumerate(messages):
-        if m.get("role") == "assistant" and m.get("toolCalls"):
-            call = m["toolCalls"][0]
-            sig = (call["name"], json.dumps(call.get("args", call.get("input", {})), ensure_ascii=False, sort_keys=True))
-            if sig == last_call:
-                # 冗余：跳过本调用；其后的 tool 观察一并跳过
-                removed += 1
-                skip_next_tool = True
+    previous = None
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        calls = message.get("toolCalls") or []
+        if (message.get("role") == "assistant" and isinstance(calls, list) and len(calls) == 1
+                and index + 1 < len(messages) and messages[index + 1].get("role") == "tool"
+                and isinstance(calls[0], dict)):
+            call, observation = calls[0], messages[index + 1]
+            call_id = call.get("id")
+            if call_id and observation.get("toolCallId") == call_id:
+                call_without_id = {key: value for key, value in call.items() if key != "id"}
+                observation_without_link = {key: value for key, value in observation.items() if key != "toolCallId"}
+                signature = json.dumps([message.get("content"), message.get("reasoning_content"),
+                                        call_without_id, observation_without_link], ensure_ascii=False, sort_keys=True)
+                later = json.dumps(messages[index + 2:], ensure_ascii=False, sort_keys=True)
+                if signature == previous and call_id not in later:
+                    removed += 1
+                    index += 2
+                    continue
+                previous = signature
+                pruned.extend((message, observation))
+                index += 2
                 continue
-            last_call = sig
-            skip_next_tool = False
-            pruned.append(m)
-        elif m.get("role") == "tool" and skip_next_tool:
-            skip_next_tool = False
-            continue
-        else:
-            pruned.append(m)
+        previous = None
+        pruned.append(message)
+        index += 1
     return pruned, removed
 
 
@@ -165,6 +174,7 @@ def run(
                 "source": "agent",
                 "type": "sft",
                 "scenario": scenario,
+                "verification_status": "synthetic_unverified",
                 "messages": traj["messages"],
             })
     return {"samples": samples, "stats": stats}

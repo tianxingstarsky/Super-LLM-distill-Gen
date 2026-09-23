@@ -1,13 +1,13 @@
-# Streamlit 原生主题锁定为暗色：即使浏览器/系统偏好为 light，BaseWeb 控件也渲染暗色。
-# 色值必须与 lib/console_theme.py 的 DARK_TOKENS 一致（tests/test_console_theme.py 校验）。
+# Streamlit 原生主题锁定为浅色工作台，与截图中的数据后台保持一致。
+# 色值必须与 lib/console_theme.py 的 LIGHT_TOKENS 一致（tests/test_console_theme.py 校验）。
 [server]
 address = "127.0.0.1"
 headless = true
 fileWatcherType = "none"
 
 [theme]
-base = "dark"
-primaryColor = "#5686FE"
-backgroundColor = "#151517"
-secondaryBackgroundColor = "#232324"
-textColor = "#F9FAFB"
+base = "light"
+primaryColor = "#1769E0"
+backgroundColor = "#F1F5FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#152238"

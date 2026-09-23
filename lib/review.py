@@ -111,8 +111,8 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
 
 def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List[Dict[str, Any]]:
     """样本 → 审核中心记录（id=样本 ID；payload=完整样本 JSON，修订不丢元数据）。"""
-    from lib.quality import sample_hash
-    from lib import review_editor as editor
+    from lib.domain.release_quality import sample_hash
+    from lib.domain import review_edit as editor
     records = []
     for s in samples:
         instruction = _first_user_content(s) or "（无用户指令，工具型样本）"
@@ -150,21 +150,9 @@ def pull_decisions(client: Any = None, dataset_name: str = DATASET_NAME) -> List
 
 def decide_gate(decisions: List[Dict[str, str]], threshold: float = PASS_THRESHOLD, minimum: int = MIN_REVIEWED) -> Dict[str, Any]:
     """标注统计 + 是否放行 G3（通过率 ≥ 阈值且条数 ≥ 下限）。"""
-    by_sample = {}
-    for d in decisions:
-        by_sample.setdefault(d["sample_id"], set()).add(d["decision"])
-    total = len(by_sample)
-    keeps = sum(values == {"keep"} for values in by_sample.values())
-    rate = keeps / total if total else 0.0
-    return {
-        "reviewed": total,
-        "responses": len(decisions),
-        "conflicts": sum(len(values) > 1 for values in by_sample.values()),
-        "keep": keeps,
-        "reject": total - keeps,
-        "pass_rate": round(rate, 3),
-        "release": total >= minimum and rate >= threshold,
-    }
+    from lib.domain.release_quality import decide_gate as domain_decide_gate
+
+    return domain_decide_gate(decisions, threshold=threshold, minimum=minimum)
 
 
 def revise_sample(dataset: str, record: Dict[str, Any], messages: List[Dict[str, Any]],
@@ -177,7 +165,7 @@ def revise_sample(dataset: str, record: Dict[str, Any], messages: List[Dict[str,
     序号分配走 review_center.add_revision（单事务），并发修订也绝不覆盖同 id。
     返回新 sample_id。"""
     from lib import review_center as rc
-    from lib import review_editor as editor
+    from lib.domain import review_edit as editor
 
     original = editor.unpack_record(record)
     revised = editor.validate_edits(original, messages)
@@ -210,7 +198,7 @@ def propose_revision(messages: List[Dict[str, Any]], instruction: str, scope: st
     任何不符抛 ValueError。"""
     from lib.llm_client import chat_json
     from lib.prompts import get, render
-    from lib import review_editor as editor
+    from lib.domain import review_edit as editor
 
     if scope not in REVISE_SCOPES:
         raise ValueError(f"未知改动范围：{scope!r}（可用 {sorted(REVISE_SCOPES)}）")
