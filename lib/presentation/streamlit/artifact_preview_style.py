@@ -69,7 +69,7 @@ ARTIFACT_PREVIEW_STYLE = """<style>
 .df-artifact-preview .bubble.bub-call { max-width:100%; align-self:stretch; padding:10px 12px; border:1px solid #E2D7F6; border-radius:10px; background:#F8F5FF; }
 .df-artifact-preview .bubble.bub-call .role-tag { color:#7352A8; }
 .df-artifact-preview .bubble.bub-tool { max-width:100%; align-self:stretch; padding:10px 12px; border:1px solid #DDE7F4; border-radius:10px; background:#fff; color:#344B64; font-family:inherit; font-size:13px; line-height:1.62; }
-.df-artifact-preview .bubble.bub-tool .role-tag::before { content:"工具返回 · "; color:#506E98; }
+.df-artifact-preview .bubble.bub-tool .role-tag::before { content:attr(data-i18n-before); color:#506E98; }
 .df-artifact-preview .bubble.bub-tool.err { border-color:#F0B8C2; background:#FFF7F8; color:#9A2F45; }
 .df-artifact-preview .bubble.bub-system { max-width:100%; align-self:stretch; padding:9px 12px; border:1px solid #E2E9F2; border-radius:9px; background:#F6F8FC; color:#576B85; font-size:12px; }
 .df-artifact-preview .bubble.bub-think { align-self:stretch; }

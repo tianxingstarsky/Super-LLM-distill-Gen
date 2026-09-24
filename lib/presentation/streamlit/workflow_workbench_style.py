@@ -80,3 +80,21 @@ WORKBENCH_STYLE = """<style>
   [class*="st-key-workbench-target-card-"] button::after {left:13px}}
 @media(max-width:700px) {.df-wb-plan-edges {grid-template-columns:1fr}}
 </style>"""
+
+
+def workbench_style(language: str = "zh") -> str:
+    """Return workbench CSS with language-specific text in target cards."""
+    if str(language).lower() not in {"en", "english"}:
+        return WORKBENCH_STYLE
+    localized = WORKBENCH_STYLE
+    for source, target in {
+        'content:"文档清洗、分块与去重"': 'content:"Clean, split, and deduplicate documents"',
+        'content:"对话"': 'content:"CHAT"',
+        'content:"SFT、多轮与 Agent 轨迹"': 'content:"SFT, multi-turn, and agent traces"',
+        'content:"偏好"': 'content:"PAIR"',
+        'content:"ORPO、DPO 与 RLAIF"': 'content:"ORPO, DPO, and RLAIF"',
+        'content:"推理"': 'content:"CoT"',
+        'content:"CoT 与算术核验"': 'content:"CoT and checked arithmetic"',
+    }.items():
+        localized = localized.replace(source, target)
+    return localized

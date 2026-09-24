@@ -329,13 +329,13 @@ def _render_tool_result(m: Dict[str, Any]) -> str:
     call_id = str(m.get("toolCallId") or m.get("tool_call_id") or m.get("tool_use_id") or "")[:32]
     if len(content) > 1200:
         preview = render_md(content[:1200] + "…")
-        full = render_md(content[:20000] + ("…［后续内容省略］" if len(content) > 20000 else ""))
+        full = render_md(content[:20000] + ("…" if len(content) > 20000 else ""))
         body = (f'<div class="md">{preview}</div><details class="tool-overflow">'
                 f'<summary>展开工具输出（{len(content)} 字）</summary><div class="md">{full}</div></details>')
     else:
         body = f'<div class="md">{render_md(content or "（空结果）")}</div>'
     return (
-        f'<div class="bubble {cls}"><div class="role-tag">{_esc(tool_name)}'
+        f'<div class="bubble {cls}"><div class="role-tag" data-i18n-before="工具返回 · ">{_esc(tool_name)}'
         f'{(" · " + _esc(call_id)) if call_id else ""}{note}</div>{body}</div>'
     )
 

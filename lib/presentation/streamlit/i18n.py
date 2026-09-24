@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from functools import wraps
+import html
 from html.parser import HTMLParser
 import re
 from typing import Any
@@ -521,6 +522,599 @@ ZH_EN: dict[str, str] = {
     "暂无运行记录。创建工作流后，这里会显示实时阶段、质量统计与产物。": "No run history yet. Stages, quality, and results will appear here after a workflow starts.",
     "尚无运行日志": "No run logs yet",
     "该事件只有类型和时间，可展开查看原始记录。": "This event has a type and time only. Expand it to view the original record.",
+    # Data library metadata and categories.
+    "数据视图": "Data view",
+    "常用文件": "Common files",
+    "全部文件": "All files",
+    "工作区产物": "Workspace results",
+    "训练数据文件": "Training data files",
+    "偏好文件": "Preference files",
+    "文件名": "File name",
+    "类型": "Type",
+    "来源 / 目录": "Source / folder",
+    "来源": "Source",
+    "产物": "Result",
+    "已有资料": "Source material",
+    "文件": "File",
+    "位置": "Location",
+    "大小": "Size",
+    "修改时间": "Modified",
+    "文件分类": "File group",
+    "查看文件详情": "View file details",
+    "查看路径、大小和内容摘录": "View path, size, and content excerpt",
+    "表格": "Table",
+    "图表": "Chart",
+    "文件目录": "Files and folders",
+    "常用": "Common",
+    "语料": "Corpus",
+    "样本": "Examples",
+    "DPO 偏好对": "DPO preference pairs",
+    "其他偏好数据": "Other preference data",
+    "输入快照": "Input snapshot",
+    "报告与状态": "Reports and status",
+    "来源文件": "Source files",
+    "搜索文件": "Search files",
+    "按文件名或路径筛选…": "Filter by file name or path…",
+    "没有匹配的文件": "No matching files",
+    "清除搜索词，或切换文件分类。": "Clear the search or choose another file group.",
+    "文件已变化或无法下载：": "The file changed or could not be downloaded: ",
+    "文件超过 50 MiB；请从工作区目录直接读取，或在输出打包中下载任务数据包。": "This file exceeds 50 MiB. Read it from the workspace or download the task package.",
+    "仅展示文件开头的摘录，未在这里校验全文件。": "Only the beginning of the file is shown. The full file was not checked here.",
+    "为保持浏览流畅，当前显示前 ": "Showing the first ",
+    " 个文件；请使用搜索缩小范围。": " files. Search to narrow the results.",
+    # Generation preference controls and summaries.
+    "设置训练数据的生成倾向、推理风格与语言规则。": "Set data generation preferences, reasoning style, and language rules.",
+    "配置类别": "Settings category",
+    "偏好配比": "Preference mix",
+    "默认样本占比": "Default example share",
+    "保留无风格注入的基线": "Keep a baseline without injected styles",
+    "每维模板": "Templates per dimension",
+    "轮换生成，减少重复": "Rotate templates to reduce repetition",
+    "后验校正": "Distribution correction",
+    "已开启": "On",
+    "已关闭": "Off",
+    "偏差超过阈值时调整下批采样": "Adjust the next batch when it exceeds the threshold",
+    "推理输出": "Reasoning output",
+    "分字段": "Separate fields",
+    "原生 token": "Native tokens",
+    "合并正文": "In the answer text",
+    "仅答案": "Answer only",
+    "匹配模型的思考格式": "Match the model's reasoning format",
+    "默认": "Default",
+    "推理与反思": "Reasoning and reflection",
+    "长上下文": "Long context",
+    "长上下文利用": "Long context use",
+    "工具使用": "Tool use",
+    "双语桥接": "Bilingual bridging",
+    "双语与知识桥接": "Bilingual and knowledge bridging",
+    "当前已保存的生成倾向": "Saved generation preferences",
+    "批次内打乱模板顺序": "Shuffle template order within each batch",
+    "开启后验分布校正": "Enable distribution correction",
+    "触发校正的偏差阈值": "Correction threshold",
+    "分字段保存": "Separate fields",
+    "模型原生思考 token": "Model-native reasoning tokens",
+    "合并到正文": "Include in answer text",
+    "只保留答案": "Keep answer only",
+    "分布标记来源": "Distribution label source",
+    "后验分布校正": "Distribution correction",
+    # Pipeline utility descriptions.
+    "按任务选择工具，只填写必要参数；运行记录会保留命令与输出。": "Choose a tool and fill in the required settings. Runs keep their commands and output.",
+    "将已有审核结果转换为 MiniMind 可读取的草稿文件。": "Convert reviewed results into a draft that MiniMind can read.",
+    "解析文档并清洗、分块，形成可追溯语料。": "Parse, clean, and split documents into traceable corpus data.",
+    "从文档生成问答候选，并保留来源片段。": "Create question and answer examples from documents with source excerpts.",
+    "统计已有样本的质量问题与检查结果。": "Summarize quality issues and checks for existing examples.",
+    "使用工作区审核配置处理需要专家复核的任务。": "Use workspace review settings for tasks that need expert review.",
+    "拉取已配置协作服务中的待审核记录。": "Fetch pending reviews from a configured collaboration service.",
+    "检查本机工作区与模型服务的运行条件。": "Check whether the workspace and model services are ready.",
+    "使用完整命令目录；适合熟悉命令行参数的操作者。": "Browse all commands if you are familiar with command-line settings.",
+    # Model endpoints, roles, and budgets.
+    "已登记端点": "Configured endpoints",
+    "可供工作流选择的模型服务": "Model services available to workflows",
+    "密钥已配置": "Credentials configured",
+    "仅表示凭据存在，连接需单独测试": "Credentials are present; test the connection separately",
+    "已分配角色": "Assigned roles",
+    "生成与评审等工作流槽位": "Workflow roles such as generation and review",
+    "预算已用": "Budget used",
+    "上限 ": "Limit ",
+    "尚未设置预算上限": "No budget limit set",
+    "当前默认：": "Current default: ",
+    "服务端点提供模型": "Endpoints provide models",
+    "角色槽位指定用途": "Roles define their purpose",
+    "工作流按角色调用": "Workflows call models by role",
+    "用量写入审计": "Usage is recorded for audits",
+    "查看模型、分工与凭据状态；连接可用性以实际测试为准。": "View models, roles, and credential status. Test connections to confirm availability.",
+    " 个端点": " endpoints",
+    "尚无服务端点。展开下方配置区添加第一个模型服务。": "No endpoints yet. Open the settings below to add a model service.",
+    "暂未设置模型": "No models set",
+    "尚未分配角色": "No roles assigned",
+    "默认端点": "Default endpoint",
+    "密钥未配置": "Credentials not configured",
+    "保存到本地覆盖文件，自动保留上一个版本。": "Save to a local override file. The previous version is kept as a backup.",
+    "查看连接状态": "View connection status",
+    "端点与连接": "Endpoints and connections",
+    "预算与用量": "Budget and usage",
+    "配置端点": "Configure endpoint",
+    "保存端点": "Save endpoint",
+    "端点": "Endpoint",
+    "模型服务": "Model service",
+    "模型列表": "Models",
+    "质量评审": "Quality review",
+    "视觉解析": "Vision parsing",
+    "数据改写": "Data rewriting",
+    "模拟环境": "Simulation",
+    "JEV 独立评分": "JEV independent scoring",
+    "翻译": "Translation",
+    "minimind 兼容草稿导出": "MiniMind-compatible draft export",
+    "文档语料整理": "Organize document corpus",
+    "文档问答生成": "Generate document Q&A",
+    "AI 审核小队": "AI review team",
+    "协作者拉取": "Pull reviewer assignments",
+    "环境自检": "System diagnostics",
+    "全部命令": "All commands",
+    "工作流角色": "Workflow roles",
+    "角色决定数据生成、质检和辅助阶段调用哪个端点与模型。": "Roles choose which endpoint and model are used for generation, checks, and support stages.",
+    "编辑角色槽位": "Edit role slots",
+    "保存后，后续工作流将使用新的默认模型。": "Future workflows use the new default model after you save.",
+    "已分配": "Assigned",
+    "累计已用": "Total used",
+    "剩余额度": "Remaining budget",
+    "预算状态": "Budget status",
+    "已使用": "Used",
+    "预算上限": "Budget limit",
+    "未设上限": "No limit",
+    "预算操作": "Budget actions",
+    "已用额度读取磁盘审计记录。": "Usage is read from the disk audit log.",
+    "清零会留下审计记录。": "Resetting the budget adds an audit record.",
+    "CPT 连续预训练语料": "CPT continued pretraining corpus",
+    "仅允许修订训练正文；原始候选与来源证据不会被覆盖。": "Only the training text can be edited. The original candidate and source evidence stay unchanged.",
+    "仅修订更优回答和对照回答的正文；提示与工具定义锁定。": "Only the preferred and comparison answers can be edited. Prompts and tool definitions are locked.",
+    "仅允许修订助手正文与已有推理说明；其余字段锁定。": "Only the assistant response and existing reasoning notes can be edited. Other fields are locked.",
+    "指令与多轮对话": "Instructions and multi-turn conversations",
+    "多轮对话与上下文": "Multi-turn conversations and context",
+    "Agent 失败轨迹": "Agent failure trace",
+    "偏好对照": "Preference comparison",
+    "AI 反馈与排序": "AI feedback and ranking",
+    "算术推理题": "Arithmetic reasoning problem",
+    "可见推理解释": "Visible reasoning explanation",
+    "训练样本": "Training example",
+    "暂无对话消息": "No conversation messages",
+    "上下文指令": "Context instructions",
+    "暂无轨迹消息": "No trace messages",
+    "本地算术重放": "Local arithmetic replay",
+    "JSON 快照重放": "JSON snapshot replay",
+    "受限本地重放": "Sandboxed local replay",
+    "隔离容器重放": "Isolated container replay",
+    "混合工具重放": "Mixed tool replay",
+    "失败截断点": "Failure cutoff",
+    "本地重放已核对": "Local replay verified",
+    "未记录工具返回": "Tool result not recorded",
+    "重放校验": "Replay verification",
+    "执行失败": "Execution failed",
+    "展开工具输出": "Expand tool output",
+    "空结果": "Empty result",
+    "已省略中间": "Omitted middle",
+    "工具返回": "Tool result",
+    "工具返回 · ": "Tool result · ",
+    "工具结果": "Tool result",
+    "未配对的结果": "Unmatched result",
+    "运行上下文": "Run context",
+    "其他消息": "Other message",
+    "失败轨迹": "Failure trace",
+    "其他": "Other",
+    "执行证据": "Execution evidence",
+    "连续训练语料": "Continued pretraining text",
+    "题目": "Problem",
+    "计算与答案": "Work and answer",
+    "结构化内容": "Structured content",
+    "问题上下文": "Question context",
+    "可见推理步骤": "Visible reasoning steps",
+    "对话过程": "Conversation flow",
+    "最终答案": "Final answer",
+    "共同提示上下文": "Shared prompt context",
+    "更优回答 · chosen": "Preferred answer · chosen",
+    "对照回答 · rejected": "Comparison answer · rejected",
+    "候选回答": "Candidate answer",
+    "AI 评语": "AI feedback",
+    "AI 评分": "AI score",
+    "排名": "Rank",
+    "思考": "Reasoning",
+    "展开后续": "Show later",
+    "轮对话": "conversation",
+    "调用已核对": "calls checked",
+    "组重复调用已剪枝": "duplicate call groups pruned",
+    "轮回答已核对": "turns checked",
+    "事实未独立核验": "Facts not independently verified",
+    "助手回复与工具过程": "Assistant response and tool activity",
+    "本轮输入": "Turn input",
+    "该轮尚无回复": "No response for this turn",
+    "问": "Q",
+    "答": "A",
+    "未知角色": "Unknown role",
+    "⚠ 执行失败": "⚠ Execution failed",
+    "未注明": "Not specified",
+    "开发者指令": "Developer instructions",
+    "系统指令": "System instructions",
+    "来源：": "Source: ",
+    "校验记录：": "Verification record: ",
+    "运行记录会保留命令与输出。": "Runs keep their commands and output.",
+    # Workflow setup, stage names, and task-state copy.
+    "打开数据管理": "Open Data Library",
+    "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。": "Upload documents, import agent context, or describe an open brief. The system creates and checks data for review.",
+    "文档、对话或需求": "Documents, conversations, or briefs",
+    "语料、对话、轨迹或偏好": "Text, conversations, tool records, or preferences",
+    "解析、生成与质检": "Parse, create, and check",
+    "人工复核后发布": "Review before release",
+    "快捷方案": "Quick plan",
+    "自动推荐": "Recommended",
+    "预训练语料": "Pretraining text",
+    "多轮对话": "Multi-turn conversation",
+    "Agent 轨迹": "Agent traces",
+    "偏好对齐": "Preference alignment",
+    "数学推理": "Math reasoning",
+    "选择SourceType": "Choose a source type",
+    "快捷方案会预填下方目标；每个目标仍可单独增减。": "Quick plans preselect goals below. You can still change each goal.",
+    "选择常用目标组合。下面仍可逐项增删训练目标。": "Choose a common goal set. You can still change individual goals below.",
+    "按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。": "Choose a source type. Add extra instructions to documents or agent records if needed.",
+    "预训练语料": "Pretraining text",
+    "对话与轨迹": "Conversations and tool records",
+    "推理与数学": "Reasoning and math",
+    "CPT 预训练语料": "CPT pretraining text",
+    "SFT 指令对话": "SFT instructions and conversations",
+    "Agent 验证轨迹": "Agent verified traces",
+    "DPO 偏好对": "DPO preference pairs",
+    "RLAIF AI 反馈": "RLAIF feedback",
+    "基础算术（GSM8K 格式）": "Basic arithmetic (GSM8K format)",
+    "CoT 可见推理": "CoT reasoning text",
+    "ORPO 偏好对": "ORPO preference pairs",
+    "运行前流程预览": "Run plan",
+    "输入解析": "Parse input",
+    "CPT 语料": "CPT corpus",
+    "SFT 生成": "Create SFT data",
+    "偏好评审": "Review preferences",
+    "质检打包": "Check and package",
+    "本次包含的处理阶段；节点间的实际连接见下方依赖详情。": "Stages in this run. See dependency details below for their actual links.",
+    "本次包含的阶段；节点间的实际连接见下方依赖详情。": "Stages in this run. See dependency details below for their actual links.",
+    "查看完整数据依赖": "View data dependencies",
+    "查看完整数据依赖 · ": "View data dependencies · ",
+    "数据依赖": "Data dependencies",
+    "箭头表示本次目标的真实数据依赖；各阶段仍按顺序执行。": "Arrows show data dependencies for these goals. Stages still run in order.",
+    "本次来源类型：": "Source type: ",
+    "运行配置摘要": "Run settings",
+    "自动数据生成": "Automatic data generation",
+    "先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。": "Sources are parsed before data is created and checked. Review or export the results when the run ends.",
+    "尚无运行记录。创建工作流后，这里会显示实时阶段、质量统计与产物。": "No run history yet. Live stages, quality, and results will appear here after a workflow starts.",
+    "查看任务运行过程": "View task progress",
+    "真实样本预览": "Example preview",
+    "按训练目标呈现语料、对话、偏好对或工具轨迹": "Browse text, conversations, preference pairs, or tool records by goal.",
+    "这些字段来自当前选中的记录": "Fields from the selected record",
+    "样本 ID": "Example ID",
+    "内容类型": "Content type",
+    "消息 / 用户轮次": "Messages / user turns",
+    "含推理记录": "Has reasoning record",
+    "工具错误": "Tool errors",
+    "文件浏览仅展示原有样本内容；是否可用于训练请查看质量报告与人工审核。": "File browsing shows the original examples. Check the quality report and review queue before training.",
+    "样本内容": "Example content",
+    "按对话轮次展开上下文与工具调用": "Expand context and tool calls by turn",
+    "任务输入": "Task input",
+    "用户目标": "User goal",
+    "用户": "User",
+    "助手": "Assistant",
+    "Agent 工具轨迹": "Agent tool trace",
+    "助手输出": "Assistant response",
+    "模型响应": "Model response",
+    "待审核样本": "Examples awaiting review",
+    "审核类型": "Review type",
+    "审核队列状态": "Review queue status",
+    "审核状态": "Review status",
+    "任务视图": "Task view",
+    "本次包含的处理阶段": "Stages in this run",
+    "版本标签": "Version tag",
+    "放量导出（需审核）": "Bulk export (review required)",
+    "我确认清零预算（审计记录本次操作）": "I confirm the budget reset (this action will be audited)",
+    "已有发布版本可在下方查看、校验和下载。上传文档、导入 Agent 上下文或描述开放需求，可生成新的训练数据包。": "View, check, and download existing releases below. Upload documents, import agent context, or describe an open brief to create a new data package.",
+    "在发布前检查样本质量、修订内容并保留审核历史。": "Review example quality, revise content, and keep a full history before release.",
+    "调用与返回": "Calls and results",
+    "Agent 执行轨迹": "Agent execution trace",
+    "仅展示文件开头的摘录，未在这里校验全文件。": "Only the beginning of the file is shown. The full file was not checked here.",
+    # Task center, command runner, monitor, and workflow run labels.
+    "数据工作流": "Data workflows",
+    "命令管线": "Command pipeline",
+    "运行日志": "Run logs",
+    "文档、对话记录或开放需求": "Documents, conversations, or open briefs",
+    "读取、切块与来源追踪": "Read, split, and track sources",
+    "按 CPT、SFT、DPO 等目标运行": "Create data for CPT, SFT, DPO, and other goals",
+    "导出可校验候选包；人工审核另行发布": "Export checked candidates. Reviewed versions are released separately.",
+    "记录总数": "Total events",
+    "最近记录": "Latest event",
+    "显示原始记录中的实际字段": "Show fields from the original record",
+    "当前工作区暂无运行日志": "No run logs in this workspace",
+    "运行状态": "Run status",
+    "已完成节点": "Completed stages",
+    "本次目标": "Goals in this run",
+    "运行尝试": "Run attempt",
+    "工作流运行图": "Workflow run",
+    "点击节点卡，检查该步骤的状态、配置与日志。": "Select a stage to view its status, settings, and logs.",
+    "实时进度": "Live progress",
+    "节点配置": "Stage settings",
+    "所选节点的运行状态与实际配方": "Status and settings for the selected stage",
+    "产物与质量": "Results and quality",
+    "全部事件": "All events",
+    "来源与配方": "Sources and plan",
+    "训练产物与质量": "Training results and quality",
+    "每个目标只会导出通过对应检查的样本。": "Only examples that pass the checks for each goal are exported.",
+    "自动质检候选版本 · 未进行人工审核。开放需求生成的数据依赖模型评审，不能视为已核实的事实。": "Automatically checked candidates. They have not been reviewed. Data from open briefs relies on model review and is not verified fact.",
+    "查看未通过原因明细": "View reasons for failed checks",
+    "样本预览": "Example preview",
+    "无法验证或读取该目标的训练文件，请在任务产物中检查完整性。": "The training file could not be verified or read. Check the task results.",
+    "以下轨迹保留了实际执行失败证据，单独存放，不会混入通过验证的训练样本。": "These traces preserve execution failures. They are stored separately from verified examples.",
+    "来源文件": "Source files",
+    "开放需求": "Open brief",
+    "未填写": "Not provided",
+    "工作流已停止": "Workflow stopped",
+    "节点开始运行": "Stage started",
+    "节点处理完成": "Stage completed",
+    "模型请求开始": "Model request started",
+    "模型请求完成": "Model request completed",
+    "工作流运行结束": "Workflow finished",
+    "工作流运行失败": "Workflow failed",
+    "工作流已停止": "Workflow stopped",
+    "任务编号": "Run ID",
+    "运行状态": "Run status",
+    "可处理输入": "Ready inputs",
+    "隔离输入": "Isolated inputs",
+    "导出样本": "Exported examples",
+    "需关注记录": "Records to review",
+    "通过质检": "Passed checks",
+    "隔离记录": "Isolated records",
+    "当前筛选：": "Current filter: ",
+    "节点错误：": "Stage error: ",
+    "任务目标": "Training goals",
+    # Empty review queues and review controls.
+    "SFT 数据调整": "SFT Review",
+    "DPO 偏好优化": "DPO Review",
+    "ORPO 偏好优化": "ORPO Review",
+    "CPT 语料审核": "CPT Corpus Review",
+    "逐条检查样本质量、修订内容并保留审核历史。": "Review each example, revise content, and keep a full history.",
+    "发布前检查样本质量、修订内容并保留审核历史。": "Review example quality, revise content, and keep a full history before release.",
+    "0 个可审任务 · 候选样本": "0 reviewable tasks · candidate examples",
+    "当前没有待审 SFT 候选": "No SFT examples to review",
+    "当前没有待审 CPT 语料": "No CPT text to review",
+    "先生成包含高质量问答的 SFT 工作流。通过自动质量检查的对话会进入这里，审核通过后可单独发布。": "Create an SFT workflow with high-quality answers first. Examples that pass automatic checks appear here and can be released after review.",
+    "生成并验证文档语料后，可在这里逐条检查来源证据、修订结果并发布审核版本。": "Create and check document text first. Then review sources, revise examples, and release an approved version here.",
+    "当前工作区没有通过产物校验的 SFT 工作流。先在“自动工作流”生成 SFT 候选，再进入审核。": "No checked SFT workflow is available. Create SFT candidates in Workflows, then review them here.",
+    "当前工作区没有通过产物校验的 CPT 工作流。先在“自动工作流”生成 CPT 候选，再进入语料审核。": "No checked CPT workflow is available. Create CPT candidates in Workflows, then review them here.",
+    "打开历史 / 导入样本审核中心": "Open legacy or imported example reviews",
+    "样本进入审核的流程": "How examples reach review",
+    "选择目标": "Choose goals",
+    "自动生成与质检": "Create and check data",
+    "仅合格候选进入队列": "Only eligible examples enter the queue",
+    "人工复核": "Human review",
+    "修订、通过或退回": "Revise, approve, or return",
+    "SFT 指令与高质量回答": "SFT instructions and high-quality answers",
+    "前往数据生成": "Go to data creation",
+    "任务操作": "Review actions",
+    "任务详情": "Example details",
+    "任务进度": "Review progress",
+    "语料审核队列": "Corpus review queue",
+    "偏好对比": "Preference comparison",
+    "同一提示下比较两种模型回答": "Compare two model answers to the same prompt",
+    "审核、退回或暂时跳过": "Approve, return, or skip for now",
+    "确认质量后提交审核结论": "Submit the review after checking the example",
+    "确认偏好方向并提交结论": "Confirm the preferred answer and submit the review",
+    "全部样本通过或退回后开放": "Available after all examples are approved or returned",
+    "全部偏好对处理后开放": "Available after all preference pairs are reviewed",
+    "跳过项仍需处理；自动候选与审核证据会保留。": "Skipped examples still need review. Candidates and review evidence are kept.",
+    "跳过项仍需处理；原自动候选与评分证据会保留。": "Skipped examples still need review. Original candidates and scores are kept.",
+    "跳过项仍需处理；版本只包含通过的语料，并附带审核历史与 SHA-256 清单。": "Skipped examples still need review. The release includes approved text, review history, and a SHA-256 manifest.",
+    "样本": "Examples",
+    "语料详情": "Corpus details",
+    "选择候选语料查看来源": "Select a text example to view its source",
+    "审核记录已保存。": "Review saved.",
+    "尚无人工处理记录": "No review history yet",
+    "当前样本等待审核": "This example is waiting for review",
+    "当前语料等待审核": "This text is waiting for review",
+    "审核意见（可选）": "Review note (optional)",
+    "通过并保存修订": "Approve and save changes",
+    "生成已审核 SFT 版本": "Create reviewed SFT release",
+    "生成已审核 CPT 版本": "Create reviewed CPT release",
+    "生成已审核 DPO 版本": "Create reviewed DPO release",
+    "下载人工审核 SFT ZIP": "Download reviewed SFT ZIP",
+    "下载人工审核 CPT ZIP": "Download reviewed CPT ZIP",
+    "下载人工审核 DPO ZIP": "Download reviewed DPO ZIP",
+    # Legacy quality report and output package copy.
+    "样本总数": "Total examples",
+    "当前选择的文件": "Selected file",
+    "结构问题": "Structural issues",
+    "逐条检查所记录的问题": "Recorded issues checked per example",
+    "重复内容": "Duplicate content",
+    "依据消息等内容指纹": "Based on message content fingerprints",
+    "重复 ID": "Duplicate IDs",
+    "同名样本额外出现次数": "Extra occurrences of the same example ID",
+    "审核覆盖与放量条件": "Review coverage and release checks",
+    "审核记录仅在绑定当前样本内容时计入覆盖率。": "A review counts only when it is linked to the current example content.",
+    "正式放量仍需人工确认 G3。": "A person must still approve G3 before release.",
+    "达到当前自动放量检查条件；正式放量仍需人工确认 G3。": "Automatic release checks passed. A person must still approve G3.",
+    "当前未达到放量条件：": "Release checks not met: ",
+    "空数据集": "Empty dataset",
+    "存在结构问题": "Structural issues found",
+    "存在重复样本": "Duplicate examples found",
+    "有效审核覆盖不足 90%": "Review coverage below 90%",
+    "审核共识未达成": "Reviewer consensus not met",
+    "语言为字符启发式分类；长度按字符统计。": "Language groups use a character-based estimate. Length is counted by character.",
+    "中文": "Chinese",
+    "中英混合": "Chinese and English",
+    "英文或其他": "English or other",
+    "正文长度：最短 ": "Text length: min ",
+    " 字符 · 平均 ": " characters · average ",
+    " 字符 · 最长 ": " characters · max ",
+    "按问题类型和样本 ID 筛选，查看原始样本及所在行。": "Filter by issue type or example ID to inspect the original example and row.",
+    "问题类型": "Issue type",
+    "搜索样本 ID": "Search example ID",
+    "输入样本 ID 的任意部分…": "Enter part of an example ID…",
+    "定位问题样本": "Find an example with this issue",
+    "全部问题": "All issues",
+    "图像需人工查看": "Image needs human review",
+    "缺少对话消息": "Conversation messages are missing",
+    "消息结构不符": "Message structure is invalid",
+    "上下文起点缺失": "Context start is missing",
+    "回答未完成": "Answer is incomplete",
+    "未解决的工具错误": "Unresolved tool error",
+    "当前文件没有逐条结构问题。重复统计和审核覆盖仍需单独核对。": "No structural issues were found. Check duplicates and review coverage separately.",
+    "检查边界与原始问题码": "Check scope and raw issue codes",
+    "本报告只验证结构和当前内容绑定的审核记录；含图像样本还需要具备视觉能力的人工复核。": "This report checks structure and reviews linked to current content. Image examples also need a reviewer who can inspect images.",
+    "数据包尚未生成": "No package has been created yet",
+    "暂无新的工作流训练包": "No new workflow packages",
+    "完成的自动工作流会在这里列出可验证产物": "Checked results from completed workflows appear here",
+    "当前没有可打包的完成任务": "No completed tasks to package",
+    "已有发布版本可在下方查看、校验和下载。": "View, check, and download existing releases below.",
+    "上传文档、导入 Agent 上下文或描述开放需求，可生成新的训练数据包。": "Upload documents, import agent context, or describe an open brief to create a new data package.",
+    "前往Workflows": "Go to Workflows",
+    "前往自动工作流": "Go to Workflows",
+    "支持的训练目标": "Supported training goals",
+    "同一批来源可产出多类数据": "One source can produce several data types",
+    "文档清洗和语料整理": "Clean documents and prepare text",
+    "问答和多轮上下文": "Question and answer pairs with multi-turn context",
+    "重放、剪枝与失败证据": "Replay, prune, and keep failure evidence",
+    "导出前检查": "Checks before export",
+    "每个 ZIP 都附带校验清单": "Each ZIP includes a verification manifest",
+    "仅展示完成或需检查的任务": "Completed tasks and tasks that need review",
+    "逐个匹配 SHA-256 指纹": "Verify each SHA-256 fingerprint",
+    "包含训练、质量与来源证据": "Includes training data, quality, and source evidence",
+    "已有本地发布版本": "Local releases",
+    "选择本地发布版本": "Choose a local release",
+    "人工审核 · ": "Human review · ",
+    "历史导出 · ": "Previous export · ",
+    "人工审核发布": "Reviewed release",
+    "历史导出发布": "Previous export",
+    "创建于 ": "Created ",
+    "清单文件": "Manifest file",
+    "以下历史文件未列入原始 SHA-256 清单，因此未提供已校验下载：": "These older files are not listed in the original SHA-256 manifest, so verified downloads are unavailable:",
+    "选择要打开或下载的已校验文件": "Choose a verified file to open or download",
+    "下载已校验文件": "Download verified file",
+    "manifest.json 记录训练文件的 SHA-256，可与下载文件独立核对。": "manifest.json records training file hashes for independent verification.",
+    "质量与来源": "Quality and sources",
+    "数量来自已验证清单；原因来自本次工作流质量记录": "Counts come from the verified manifest. Reasons come from this workflow's checks.",
+    "合格": "Eligible",
+    "候选": "Candidates",
+    "无隔离原因": "No isolation reasons",
+    "当前清单无训练目标。": "The current manifest has no training goals.",
+    "查看来源记录": "View source records",
+    "创建完整 ZIP": "Create complete ZIP",
+    "输出目标": "Export goals",
+    "任务状态": "Task status",
+    "文件完整性": "File integrity",
+    "来源任务": "Source task",
+    "预览来自校验后的自动候选；正式训练前仍可进入人工审核。": "This preview uses checked automatic candidates. Review them before training.",
+    "任务完成": "Task complete",
+    "已完成 · 产物校验通过": "Complete · results verified",
+    "已校验 · 质量需检查": "Verified · quality needs review",
+    "合格样本": "Eligible examples",
+    "合格产出率": "Eligible output rate",
+    "清单中的目标数量": "Goal count in the manifest",
+    "更新时间": "Updated",
+    "当前任务": "Current task",
+    "质量汇总将在生成与验证步骤结束后出现。进度会自动刷新。": "Quality details appear when generation and checks finish. Progress refreshes automatically.",
+    "任务 ID：": "Task ID: ",
+    "已完成 · 产物校验通过": "Complete · results verified",
+    "需检查": "Needs review",
+    "问答样本": "Question and answer example",
+    "第": "Example ",
+    "语言": "Language",
+    "多轮目标逐轮及整段评审；合成内容会标记证据等级。": "Review each turn and the full conversation. Synthetic examples show their evidence level.",
+    "Agent 正例需要完整的已记录工具轨迹；当前仅能重放受限整数 calculator。": "Positive agent examples need complete recorded tool traces. Only the restricted integer calculator can be replayed.",
+    "描述任务、领域和使用场景，系统会规划并生成候选。": "Describe a task, field, and use case. The system will plan and create examples.",
+    "上传 PDF、DOCX、TXT 或 Markdown；解析时保留来源位置。": "Upload PDF, DOCX, TXT, or Markdown files. Source locations are kept during parsing.",
+    "补充生成要求（可选）": "Additional generation notes (optional)",
+    "开放性需求": "Open brief",
+    "上传文档 / 上下文记录": "Upload documents or context records",
+    "运行名称": "Run name",
+    "本次最多处理单元": "Maximum units for this run",
+    "文档分块目标字符数": "Target characters per document chunk",
+    "开放需求任务数": "Tasks for the open brief",
+    "每段对话轮数": "Turns per conversation",
+    "仅用于新生成的多轮对话；导入的完整对话保持原有轮次。": "Used for new multi-turn examples only. Imported conversations keep their existing turns.",
+    "预训练评测集去污染（可选）": "Pretraining evaluation set decontamination (optional)",
+    "上传自备 JSON / JSONL 评测参照，每条记录格式为 {\"text\": \"...\"}。只在本机对 CPT 候选查重，不作为训练来源，也不发送给模型；未上传时报告会标记未配置。": "Upload a JSON or JSONL evaluation set. Each record must use {\"text\": \"...\"}. It is checked locally against CPT examples, is not used for training, and is not sent to a model. Reports show when none is provided.",
+    "上传评测集参照": "Upload evaluation references",
+    "生成后端（留空使用模型配置）": "Generation provider (blank uses model settings)",
+    "生成模型（留空使用模型配置）": "Generation model (blank uses model settings)",
+    "JEV 打分后端（留空使用专用槽位）": "JEV reviewer provider (blank uses its role setting)",
+    "JEV 打分模型（留空使用专用槽位）": "JEV reviewer model (blank uses its role setting)",
+    "生成模型与 JEV 评审器可以分开配置；留空时使用系统模型配置。": "Set the generation model and JEV reviewer separately. Blank fields use system model settings.",
+    "本次最多处理单元": "Maximum units for this run",
+    "生成后端": "Generation provider",
+    "选择来源类型": "Choose source type",
+    "选择训练目标": "Choose training goals",
+    "点击分类卡快速启用或清空整组，下方可逐项调整。": "Select a category card to enable or clear its goals. Adjust individual goals below.",
+    "可以同时选择多类目标；系统只会导出通过对应质量检查的样本。": "Choose several goals. Only examples that pass the checks for each goal are exported.",
+    "可选": "Optional",
+    "本次包含的阶段；节点间的实际连接见下方依赖详情。": "Stages in this run. See dependency details below for their actual links.",
+    "质量统计与产物": "Quality and results",
+    "最近工作流": "Recent workflows",
+    "尚无最近工作流": "No recent workflows",
+    "预训练Corpus": "Pretraining corpus",
+    "工作区产物": "Workspace results",
+    "打开Data Library": "Open Data Library",
+    "上限 ": "Limit ",
+    "服务端点": "Model endpoints",
+    "连接检查": "Connection check",
+    "读取所选服务的模型列表，不发起生成请求。": "Read the selected service's model list without starting a generation request.",
+    "选择服务": "Choose a service",
+    "选择模型": "Choose a model",
+    "服务名称": "Service name",
+    "模型列表": "Model list",
+    "默认模型服务": "Default model service",
+    "未设置": "Not set",
+    "配置模型服务后才能进行连接检查。": "Configure a model service before testing the connection.",
+    "端点数量": "Endpoint count",
+    "内容类型": "Content type",
+    "来源位置": "Source location",
+    "来源类型": "Source type",
+    "来源任务": "Source task",
+    "文件完整性": "File integrity",
+    "SHA-256 通过": "SHA-256 verified",
+    "查看任务过程": "View task progress",
+    "数据导出": "Data export",
+    "完整性校验": "Integrity check",
+    "DATASET RELEASE　·　完整性校验": "DATASET RELEASE · INTEGRITY CHECK",
+    "每个 ZIP 都附带校验清单": "Each ZIP includes a verification manifest",
+    "自动检查产物仍需按用途进行人工复核。": "Automatically checked results still need human review for their intended use.",
+    "训练格式": "Training format",
+    "输出目录": "Output folder",
+    "输入路径": "Input path",
+    "更多参数（2 项）": "More settings (2)",
+    "仅表示凭据存在，连接需单独测试": "Credentials are present; test the connection separately",
+    "数据来源与质量检查": "Sources and quality checks",
+    "状态": "Status",
+    "事件时间线": "Event timeline",
+    "事件详情": "Event details",
+    "事件类型": "Event type",
+    "选择事件": "Choose an event",
+    "查看原始事件记录": "View raw event record",
+    "显示最近 ": "Showing the latest ",
+    "已登记端点": "Configured endpoints",
+    "已分配角色": "Assigned roles",
+    "预算已用": "Budget used",
+    "角色分配": "Role assignments",
+    "生成角色": "Generation role",
+    "自动评审": "Automatic review",
+    "自动质检": "Automatic checks",
+    "候选总数": "Total candidates",
+    "问题详情": "Issue details",
+    "样本 ID：": "Example ID: ",
+    "问题：": "Issue: ",
+    "工具调用": "Tool calls",
+    "语言规则": "Language rules",
+    "默认样本占比": "Default example share",
+    "输入来源": "Input sources",
+    "训练目标": "Training goals",
+    "任务状态": "Task status",
+    "输入快照": "Input snapshot",
+    "导出目录": "Export folder",
+    "任务及审核产物目录": "Task and review results folder",
+    "来源目录": "Source folder",
+    "首选项": "Preferences",
+    "未命名任务": "Untitled task",
 }
 
 
@@ -535,12 +1129,213 @@ def translate(value: Any, language: str = "en") -> Any:
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    remaining_budget = re.fullmatch(r"剩余额度\s*\$([\d,.]+)", value)
+    if remaining_budget:
+        return f"Remaining budget ${remaining_budget.group(1)}"
+    reset_budget = re.fullmatch(r"预算已清零（原已用\s*\$([\d,.]+)，已记审计）", value)
+    if reset_budget:
+        return f"Budget reset (previous usage ${reset_budget.group(1)}; audit recorded)"
     approval_count = re.fullmatch(r"已确认\s*(\d+)\s*/\s*(\d+)", value)
     if approval_count:
         return f"{approval_count.group(1)} / {approval_count.group(2)} approved"
     approved_at = re.fullmatch(r"确认时间\s*(.+)", value)
     if approved_at:
         return f"Approved at {approved_at.group(1)}"
+    match = re.fullmatch(r"([\d,]+) 个匹配文件 · 来源优先", value)
+    if match:
+        return f"{match.group(1)} matching files · sources first"
+    match = re.fullmatch(r"为保持浏览流畅，当前显示前\s*(\d+)\s*个文件；请使用搜索缩小范围。", value)
+    if match:
+        return f"Showing the first {match.group(1)} files. Search to narrow the results."
+    match = re.fullmatch(r"([\d,]+) 个阶段 · ([\d,]+) 条数据依赖", value)
+    if match:
+        return f"{match.group(1)} stages · {match.group(2)} data dependencies"
+    match = re.fullmatch(r"已选目标\s*(\d+)", value)
+    if match:
+        return f"Selected goals: {match.group(1)}"
+    match = re.fullmatch(r"(.+) · (\d+) 项已选", value)
+    if match:
+        return f"{translate_label(match.group(1), language)} · {match.group(2)} selected"
+    match = re.fullmatch(r"(.+) · 未选", value)
+    if match:
+        return f"{translate_label(match.group(1), language)} · not selected"
+    match = re.fullmatch(r"(.+) · 已选 (\d+) 类目标 · 最多处理 ([\d,]+) 单元", value)
+    if match:
+        return f"{translate_label(match.group(1), language)} · {match.group(2)} goal types · up to {match.group(3)} units"
+    match = re.fullmatch(r"本次来源类型[：:]\s*(.+)", value)
+    if match:
+        return f"Source type: {translate_label(match.group(1), language)}"
+    match = re.fullmatch(r"当前未达到放量条件：(.+)", value)
+    if match:
+        reasons = [translate_label(reason.strip(), language) for reason in match.group(1).split("、")]
+        return "Release checks not met: " + ", ".join(reasons)
+    match = re.fullmatch(
+        r"(文档清洗、分块与去重|SFT、多轮与 Agent 轨迹|ORPO、DPO 与 RLAIF|CoT 与算术核验)。点击(清空|启用)整组；下方可逐项调整。",
+        value,
+    )
+    if match:
+        descriptions = {
+            "文档清洗、分块与去重": "Clean, split, and deduplicate documents",
+            "SFT、多轮与 Agent 轨迹": "SFT, multi-turn, and agent traces",
+            "ORPO、DPO 与 RLAIF": "ORPO, DPO, and RLAIF",
+            "CoT 与算术核验": "CoT and checked arithmetic",
+        }
+        action = "clear" if match.group(2) == "清空" else "enable"
+        return f"{descriptions[match.group(1)]}. Click to {action} this group. Adjust individual goals below."
+    match = re.fullmatch(r"上限\s*\$([\d,.]+)", value)
+    if match:
+        return f"Limit ${match.group(1)}"
+    match = re.fullmatch(r"当前默认：\s*(.+)", value)
+    if match:
+        return f"Current default: {match.group(1)}"
+    match = re.fullmatch(r"([\d,]+) 个端点", value)
+    if match:
+        return f"{match.group(1)} endpoints"
+    match = re.fullmatch(r"(\d+) 个槽位", value)
+    if match:
+        return f"{match.group(1)} slots"
+    match = re.fullmatch(r"(.+?)等\s*([\d,]+)\s*个角色", value)
+    if match:
+        return f"{translate_label(match.group(1), language)} and {match.group(2)} roles"
+    match = re.fullmatch(r"(?:历史导出发布|人工审核发布)\s*·\s*(.+)", value)
+    if match:
+        prefix = "Previous export" if value.startswith("历史导出") else "Reviewed release"
+        return f"{prefix} · {match.group(1)}"
+    match = re.fullmatch(r"(?:历史导出|人工审核)\s*·\s*(.+)", value)
+    if match:
+        prefix = "Previous export" if value.startswith("历史导出") else "Reviewed release"
+        return f"{prefix} · {match.group(1)}"
+    match = re.fullmatch(r"创建于\s*(.+)", value)
+    if match:
+        return f"Created {match.group(1)}"
+    match = re.fullmatch(r"更多参数（(\d+) 项）", value)
+    if match:
+        return f"More settings ({match.group(1)})"
+    match = re.fullmatch(r"([\d,]+) 条", value)
+    if match:
+        return f"{match.group(1)} items"
+    match = re.fullmatch(r"(?:默认|推理与反思|长上下文|工具使用|双语桥接)\s+(\d+(?:\.\d+)?%)", value)
+    if match:
+        label = value.rsplit(None, 1)[0]
+        return f"{translate_label(label, language)} {match.group(1)}"
+    role_parts = value.split("、")
+    if len(role_parts) > 1 and all(part in ZH_EN for part in role_parts):
+        return ", ".join(ZH_EN[part] for part in role_parts)
+    match = re.fullmatch(r"查看完整数据依赖\s*·\s*(\d+)\s*条", value)
+    if match:
+        return f"View data dependencies · {match.group(1)} links"
+    match = re.fullmatch(r"当前文件共\s*([\d,]+)\s*条 · 正在查看第\s*([\d,]+)\s*条", value)
+    if match:
+        return f"{match.group(1)} examples in this file · viewing {match.group(2)}"
+    match = re.fullmatch(r"本目标共\s*([\d,]+)\s*条 · 当前展示前\s*([\d,]+)\s*条中的第\s*([\d,]+)\s*条", value)
+    if match:
+        return f"{match.group(1)} examples for this goal · viewing {match.group(3)} of the first {match.group(2)}"
+    match = re.fullmatch(r"第\s*(\d+)\s*/\s*(\d+)\s*条", value)
+    if match:
+        return f"Example {match.group(1)} of {match.group(2)}"
+    match = re.fullmatch(r"([\d,]+) 个步骤 · ([\d,]+) 条消息", value)
+    if match:
+        return f"{match.group(1)} steps · {match.group(2)} messages"
+    match = re.fullmatch(r"(.+)\s*·\s*(\d+) 条消息", value)
+    if match:
+        return f"{translate_label(match.group(1).strip(), language)} · {match.group(2)} messages"
+    match = re.fullmatch(r"([\d,]+) 条消息", value)
+    if match:
+        return f"{match.group(1)} messages"
+    match = re.fullmatch(r"([\d,]+) 个工具定义", value)
+    if match:
+        return f"{match.group(1)} tool definitions"
+    match = re.fullmatch(r"([\d,]+) 轮模型评估记录", value)
+    if match:
+        return f"{match.group(1)} model review records"
+    match = re.fullmatch(r"([\d,]+) 轮 · ([\d,]+) 条消息", value)
+    if match:
+        return f"{match.group(1)} turns · {match.group(2)} messages"
+    match = re.fullmatch(r"候选\s*(\d+)\s*·\s*排名\s*(.+)", value)
+    if match:
+        return f"Candidate {match.group(1)} · Rank {match.group(2)}"
+    match = re.fullmatch(r"([\d,]+) 次调用已核对", value)
+    if match:
+        return f"{match.group(1)} calls verified"
+    match = re.fullmatch(r"([\d,]+) 组重复调用已剪枝", value)
+    if match:
+        return f"{match.group(1)} duplicate call groups pruned"
+    match = re.fullmatch(r"([\d,]+) 轮回答已核对", value)
+    if match:
+        return f"{match.group(1)} turns verified"
+    match = re.fullmatch(r"第\s*(\d+)\s*轮对话", value)
+    if match:
+        return f"Turn {match.group(1)}"
+    match = re.fullmatch(r"第\s*(\d+)\s*条消息（索引\s*(\d+)）", value)
+    if match:
+        return f"Message {match.group(1)} (index {match.group(2)})"
+    match = re.fullmatch(
+        r"第\s*(\d+)\s*条消息（索引\s*(\d+)）\s*·\s*来源：(.+)", value
+    )
+    if match:
+        return f"Message {match.group(1)} (index {match.group(2)}) · Source: {match.group(3)}"
+    match = re.fullmatch(r"展开后续\s*(\d+)\s*轮对话", value)
+    if match:
+        return f"Show {match.group(1)} later turns"
+    match = re.fullmatch(r"展开工具输出（([\d,]+) 字）", value)
+    if match:
+        return f"Expand tool output ({match.group(1)} characters)"
+    match = re.fullmatch(r"(?:🧠\s*)?思考（([\d,]+) 字）", value)
+    if match:
+        return f"🧠 Reasoning ({match.group(1)} characters)"
+    match = re.fullmatch(r"已省略中间\s*([\d,]+)\s*条消息", value)
+    if match:
+        return f"Omitted {match.group(1)} middle messages"
+    match = re.fullmatch(r"来源：\s*(.+)", value)
+    if match:
+        return f"Source: {match.group(1)}"
+    match = re.fullmatch(r"校验记录：\s*(.+)", value)
+    if match:
+        return f"Verification record: {match.group(1)}"
+    match = re.fullmatch(r"其他消息\s*·\s*(.+)", value)
+    if match:
+        return f"Other message · {translate_label(match.group(1), language)}"
+    match = re.fullmatch(r"([\d,]+) 轮用户交互", value)
+    if match:
+        return f"{match.group(1)} user turns"
+    match = re.fullmatch(r"([\d,]+) 次工具调用", value)
+    if match:
+        return f"{match.group(1)} tool calls"
+    match = re.fullmatch(r"([\d,]+) 个可审任务 · 候选样本", value)
+    if match:
+        return f"{match.group(1)} reviewable tasks · candidate examples"
+    match = re.fullmatch(r"有效审核覆盖\s*(\d+(?:\.\d+)?)%", value)
+    if match:
+        return f"Verified review coverage {match.group(1)}%"
+    match = re.fullmatch(r"显示最近\s*(\d+)\s*/\s*(\d+)\s*条", value)
+    if match:
+        return f"Showing the latest {match.group(1)} of {match.group(2)}"
+    match = re.fullmatch(r"当前工作区找到\s*(\d+)\s*个版本目录 ·\s*(\d+)\s*个版本通过文件校验", value)
+    if match:
+        return f"Found {match.group(1)} release folders · {match.group(2)} passed file checks"
+    match = re.fullmatch(r"生成成对回答并通过质量检查后，(DPO|ORPO) 候选会显示在这里供人工比较。", value)
+    if match:
+        return f"{match.group(1)} candidates appear here for review after paired answers pass quality checks."
+    match = re.fullmatch(
+        r"当前工作区没有通过产物校验的 (CPT|SFT|DPO|ORPO) 工作流。先在“自动工作流”生成 \1 候选，再进入人工审核。",
+        value,
+    )
+    if match:
+        target = match.group(1)
+        return f"No checked {target} workflow is available. Create {target} candidates in Workflows, then review them here."
+    match = re.fullmatch(r"文件：(.+?) · 本报告只说明结构与有效审核证据，不代表事实正确性。", value)
+    if match:
+        return f"File: {match.group(1)} · This report covers structure and linked review evidence, not factual accuracy."
+    match = re.fullmatch(r"正文长度：最短\s*([\d,]+)\s*字符 · 平均\s*([\d,.]+)\s*字符 · 最长\s*([\d,]+)\s*字符", value)
+    if match:
+        return f"Text length: min {match.group(1)} characters · average {match.group(2)} · max {match.group(3)} characters"
+    match = re.fullmatch(r"匹配\s*(\d+)\s*/\s*(\d+)\s*条问题；重复内容与重复 ID 为单独的汇总计数。", value)
+    if match:
+        return f"{match.group(1)} of {match.group(2)} issues match. Duplicate content and IDs are counted separately."
+    match = re.fullmatch(r"(?:来源|产物) / (.+)", value)
+    if match:
+        prefix = "Source" if value.startswith("来源") else "Result"
+        return f"{prefix} / {match.group(1)}"
     return value
 
 
@@ -550,6 +1345,9 @@ def translate_label(value: Any, language: str = "en") -> Any:
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    translated = translate(value, language)
+    if translated != value:
+        return translated
     remaining_files = re.fullmatch(r"还可在数据管理中查看其余\s*(\d+)\s*个文件。", value)
     if remaining_files:
         return f"View {remaining_files.group(1)} more files in Data Library."
@@ -589,17 +1387,52 @@ class _MarkupTextLocalizer(HTMLParser):
         super().__init__(convert_charrefs=False)
         self.language = language
         self.parts: list[str] = []
+        self._preserved_tags: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.parts.append(self.get_starttag_text())
+        source = self.get_starttag_text()
+        if self._preserved_tags:
+            self.parts.append(source)
+            if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+                self._preserved_tags.append(tag)
+            return
+        classes = next((set((value or "").split()) for name, value in attrs if name == "class"), set())
+        if classes.intersection({"md", "df-artifact-body"}):
+            self.parts.append(source)
+            if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+                self._preserved_tags.append(tag)
+            return
+        if language_code(self.language) == "en":
+            for name, value in attrs:
+                if name not in {"aria-label", "title", "placeholder", "alt", "data-i18n-before"} or not value:
+                    continue
+                translated = translate(value, self.language)
+                if translated == value:
+                    continue
+                attribute = re.compile(rf"(\s{re.escape(name)}\s*=\s*)([\"'])(.*?)(\2)", re.IGNORECASE)
+                source = attribute.sub(
+                    lambda match, text=translated: (
+                        match.group(1) + match.group(2) + html.escape(text, quote=True) + match.group(4)
+                    ),
+                    source,
+                    count=1,
+                )
+        self.parts.append(source)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.parts.append(self.get_starttag_text())
 
     def handle_endtag(self, tag: str) -> None:
         self.parts.append(f"</{tag}>")
+        for index in range(len(self._preserved_tags) - 1, -1, -1):
+            if self._preserved_tags[index] == tag:
+                del self._preserved_tags[index:]
+                break
 
     def handle_data(self, data: str) -> None:
+        if self._preserved_tags:
+            self.parts.append(data)
+            return
         trimmed = data.strip()
         if not trimmed:
             self.parts.append(data)
@@ -627,6 +1460,24 @@ def translate_markup(value: str, language: str = "en") -> str:
     parser.feed(value)
     parser.close()
     return "".join(parser.parts)
+
+
+def _localized_dataframe(data: Any, language: str) -> Any:
+    """Translate table headings while leaving cell values and source data intact."""
+    if language_code(language) != "en":
+        return data
+    try:
+        import pandas as pd
+        if isinstance(data, pd.DataFrame):
+            return data.rename(columns=lambda item: translate_label(item, language))
+    except ImportError:
+        pass
+    if isinstance(data, list) and data and all(isinstance(row, dict) for row in data):
+        return [
+            {translate_label(key, language): value for key, value in row.items()}
+            for row in data
+        ]
+    return data
 
 
 def initialize_language(st: Any) -> None:
@@ -658,13 +1509,13 @@ def install_streamlit_localization() -> None:
         "button", "download_button", "file_uploader", "selectbox", "multiselect",
         "radio", "segmented_control", "checkbox", "form_submit_button", "text_input", "text_area",
         "number_input", "date_input", "time_input", "expander", "popover",
-        "slider", "link_button", "page_link", "metric", "text", "caption",
+        "slider", "toggle", "link_button", "page_link", "metric", "text", "caption", "progress",
         "title", "header", "subheader", "info", "success", "warning", "error",
-        "exception", "toast", "dialog",
+        "exception", "toast", "dialog", "dataframe",
     }
     markup_methods = {"html", "markdown"}
     option_methods = {"selectbox", "multiselect", "radio", "segmented_control", "pills"}
-    label_keywords = {"label", "help", "placeholder", "caption", "aria_label"}
+    label_keywords = {"label", "help", "placeholder", "caption", "aria_label", "text"}
     methods = label_methods | markup_methods | {"write", "tabs"}
 
     def current_language() -> str:
@@ -680,7 +1531,9 @@ def install_streamlit_localization() -> None:
             return args, kwargs
 
         translated_args = list(args)
-        if translated_args and method_name in label_methods:
+        if method_name == "dataframe" and translated_args:
+            translated_args[0] = _localized_dataframe(translated_args[0], language)
+        elif translated_args and method_name in label_methods - {"dataframe"}:
             translated_args[0] = translate_label(translated_args[0], language)
         elif translated_args and method_name in markup_methods:
             translated_args[0] = translate_markup(translated_args[0], language)

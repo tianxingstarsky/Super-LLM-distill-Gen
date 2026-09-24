@@ -15,7 +15,7 @@ from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES, execution_gra
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
-from lib.presentation.streamlit.workflow_workbench_style import WORKBENCH_STYLE
+from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
 
 
@@ -478,7 +478,7 @@ def render_run(application, run_id, begin, *, embedded=False):
 
 def render_workbench(application: WorkflowApplication, begin):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
-    st.html(WORKBENCH_STYLE)
+    st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     st.html(
         '<div class="df-wizard-steps">'
         '<div class="df-wizard-step active"><b>1</b><span><strong>添加来源</strong><small>文档、对话或需求</small></span></div>'
@@ -570,7 +570,9 @@ def render_workbench(application: WorkflowApplication, begin):
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
         with setup_col, st.container(border=True, key="workbench-parameters-panel"):
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
-            name = st.text_input("运行名称", value="自动数据生成")
+            default_run_name = ("Automatic data generation"
+                                if st.session_state.get("ui_language") == "en" else "自动数据生成")
+            name = st.text_input("运行名称", value=default_run_name)
             a, b = st.columns(2, gap="small")
             maximum = a.number_input("本次最多处理单元", 1, 10000, 100)
             chunk_chars = (b.number_input("文档分块目标字符数", 200, 20000, 2000)

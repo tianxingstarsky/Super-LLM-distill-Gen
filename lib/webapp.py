@@ -1066,7 +1066,7 @@ def page_system_settings():
 
     st.html(SETTINGS_STYLE)
     with st.container(border=True):
-        section_heading("界面语言", "选择控制台显示语言。", "文")
+        section_heading("界面语言", "选择控制台显示语言。", "Aa")
         st.selectbox(
             "界面语言", ["简体中文", "English"], key="ui-language-choice",
             label_visibility="collapsed", on_change=_set_ui_language,
