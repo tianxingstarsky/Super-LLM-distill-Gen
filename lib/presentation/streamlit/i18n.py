@@ -1123,12 +1123,119 @@ def language_code(value: Any) -> str:
     return "en" if str(value).lower() in {"en", "english"} else "zh"
 
 
+ZH_EN.update({
+    "质量汇总与打包": "Quality summary and packaging", "任务数": "Task count", "处理上限": "Unit limit",
+    "配方和来源快照已固定，可用于核对与重新运行。": "This run keeps fixed sources and settings. Use them to review or repeat the run.",
+    "全部任务": "All tasks", "待启动 / 执行中": "Queued / running", "筛选任务": "Filter tasks",
+    "未结束": "Unfinished", "按创建时间倒序": "Newest first", "运行动态": "Recent activity",
+    "尚无运行事件；启动后这里会显示实际处理记录。": "No run events yet. Processing events appear after the run starts.",
+    "未指定目标": "No goals selected",
+    "定位运行节点": "Go to running node",
+    "待启动": "Queued", "等待": "Pending", "待处理": "Pending", "执行中": "Running",
+    "完成": "Completed", "已完成": "Completed", "失败": "Failed", "已停止": "Stopped",
+    "已跳过": "Skipped", "未选择": "Not selected",
+    "解析与来源检查": "Input and source checks", "CPT 语料整理": "CPT corpus preparation",
+    "Agent 轨迹重放与剪枝": "Agent replay and pruning", "DPO / RLAIF / ORPO 偏好打分": "DPO / RLAIF / ORPO scoring",
+    "GSM8K 算术核验": "GSM8K arithmetic checks",
+    "生成候选": "Generate candidates", "最大处理单元": "Maximum source units", "分块目标字符数": "Target chunk characters",
+    "隐私与结构规则": "Privacy and structure checks", "疑似密钥、无效结构和超长单元进入隔离": "Quarantine suspected secrets, invalid structures, and oversized units",
+    "未知来源": "Unknown source", "去重": "Deduplication", "精确去重与保守近重复检查": "Exact and conservative near-duplicate checks",
+    "质检方式": "Quality checks", "逐轮评审 + 全段一致性评审": "Review each turn and check conversation consistency",
+    "验证方式": "Verification", "受限 calculator 与录制 JSON 快照重放；其他工具轨迹隔离": "Replay bounded calculator calls and recorded JSON snapshots. Quarantine other tool traces.",
+    "比较目标": "Comparison goals", "生成方式": "Generation method", "本地整数算术模板": "Local integer arithmetic templates",
+    "受限 AST 逐步计算，不调用模型": "Check each arithmetic step locally. No model calls.",
+    "质检证据": "Quality evidence", "逐条记录、失败原因、来源指纹与 SHA-256 清单": "Per-record evidence, failure reasons, source fingerprints, and SHA-256 manifest",
+    "发布状态": "Release status", "自动检查候选，尚未完成人工审核": "Automatically checked candidates. Human review is pending.",
+    "旧版默认配置 / 旧版默认配置": "Legacy default / Legacy default",
+    "CPT 清洗去重": "CPT cleaning and deduplication", "Agent 轨迹重放验证": "Agent replay checks",
+    "DPO / RLAIF / ORPO 偏好对齐": "DPO / RLAIF / ORPO preferences", "CoT 推理核对": "CoT reasoning checks",
+    "GSM8K 算术验证": "GSM8K arithmetic checks", "多轮对话生成与一致性验证": "Multi-turn generation and consistency checks",
+    "输入解析与来源追踪": "Input parsing and source tracking", "训练文件与质量报告": "Training files and quality reports",
+    "生成候选，不重复导入记录": "Generate candidates. Keep imported records intact.",
+    "放大工作流视图": "Expand workflow view", "选择任务": "Choose a task",
+    "展开工作流画布与节点配置；任务列表可从“选择任务”打开。": "Expand the canvas and node panel. Open Choose a task to switch runs.",
+    "可在工作流节点中选用": "Available in workflow nodes",
+    "所选节点": "Selected node", "生成模型": "Generation model", "启用目标": "Enabled goals",
+    "失败，可重试": "Failed, ready to retry", "已完成，部分目标需处理": "Finished with issues",
+    "解析单元": "Parsed units", "可处理": "Ready", "输入隔离": "Quarantined inputs", "超出上限": "Beyond the limit",
+    "SFT 生成与验证": "SFT generation and checks", "多轮对话生成与验证": "Multi-turn generation and checks",
+    "CPT 清洗与去重": "CPT cleaning and deduplication", "偏好对生成与验证": "Preference generation and checks",
+    "模型服务": "Model Services", "模型选择位置": "Model selection", "工作流节点": "Workflow nodes",
+    "点击节点分别选择生成与评审模型": "Select generation and review models in each node",
+    "点击工作流节点选择模型": "Choose models in workflow nodes",
+    "登记服务地址、凭据与预算；具体模型在工作流节点中选择。": "Register service addresses, credentials, and budgets. Choose models in workflow nodes.",
+    "候选样本规模": "Candidate count", "并发请求上限": "Concurrency limit", "每批候选数": "Candidates per batch",
+    "设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。": "Set the candidate count for each generation goal. Quality checks may reduce exports. Imported traces and CPT documents are kept intact.",
+    "限制来源解析后的处理范围。开放需求规划也受此上限约束。": "Limit the number of source units to process. This also limits open-brief planning.",
+    "同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。": "Limit samples processed at once within a node. Lower this value to meet service limits. Stages run in order.",
+    "只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。": "Queue one batch at a time. Save a checkpoint for each result before loading the next batch.",
+    "支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。": "Plan and process large runs in batches. Track progress as results arrive. Resume from saved checkpoints after a failure.",
+    "工作流节点配置": "Configure workflow nodes", "直接点击节点，在右侧选择该步骤的模型。": "Select a node. Choose its models in the panel on the right.",
+    "点击配置节点": "Select to configure", "独立质量评审模型": "Independent review model",
+    "此节点使用本地规则，不需要配置模型。": "This node uses local rules. No model is needed.",
+    "请先在模型服务中登记服务地址与凭据，再回到节点选择模型。": "Register an address and credentials in Model Services. Then choose a model in this node.",
+    "选择或输入模型名": "Choose or enter a model name",
+    "每个节点独立保存选择；开始运行后，本次配置固定。": "Each node keeps its own model choices. The configuration is fixed when the run starts.",
+    "输入解析保留来源位置；开放需求按每批最多 50 个任务规划。": "Keep source locations during parsing. Plan open briefs in batches of up to 50 tasks.",
+    "只打包通过质量检查的记录，并附带来源与审核证据。": "Package records that pass quality checks. Include source and review evidence.",
+    "请为所有需要模型的节点选择服务与模型。": "Choose a service and model for every node that needs one.",
+    "加载样本预览": "Load sample preview", "加载失败轨迹": "Load failed traces", "加载隔离记录": "Load quarantined records",
+    "最多显示前 100 条；完整记录保留在本次产物中。": "Show the first 100 records. The full records are saved with this run.",
+    "候选 / 分钟": "Candidates / minute", "旧版默认配置": "Legacy default",
+})
+
+
 def translate(value: Any, language: str = "en") -> Any:
     """Translate an exact interface phrase and leave all other values intact."""
     if language_code(language) != "en" or not isinstance(value, str):
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    match = re.fullmatch(r"共 (\d+) 条", value)
+    if match:
+        return f"{match.group(1)} runs"
+    match = re.fullmatch(r"显示 (\d+) / 匹配 (\d+)", value)
+    if match:
+        return f"Showing {match.group(1)} / {match.group(2)} matches"
+    match = re.fullmatch(r"最近 (\d+) 条", value)
+    if match:
+        return f"Last {match.group(1)} events"
+    match = re.fullmatch(r"(.+) 北京时间", value)
+    if match:
+        return f"{match.group(1)} UTC+8"
+    match = re.fullmatch(r"通过 / (\d+) 候选 · (\d+) 条需处理", value)
+    if match:
+        return f"passed / {match.group(1)} candidates · {match.group(2)} to review"
+    match = re.fullmatch(r"第 (\d+) 次运行", value)
+    if match:
+        return f"Run attempt {match.group(1)}"
+    match = re.fullmatch(r"更新于 (.+) UTC", value)
+    if match:
+        return f"Updated {match.group(1)} UTC"
+    match = re.fullmatch(r"(.+) · (待启动|等待|执行中|完成|失败，可重试|已停止|已完成，部分目标需处理) · ([a-f0-9]{8})", value)
+    if match:
+        return f"{translate(match.group(1), language)} · {translate(match.group(2), language)} · {match.group(3)}"
+    match = re.fullmatch(r"运行失败：(.+)。已完成的步骤与模型响应已保存。", value)
+    if match:
+        return f"Run failed: {match.group(1)}. Completed steps and model responses are saved."
+    match = re.fullmatch(r"当前筛选：(.+) · 最近 (\d+) 条事件", value)
+    if match:
+        return f"Current filter: {translate(match.group(1), language)} · Last {match.group(2)} events"
+    match = re.fullmatch(r"([\d,]+) / ([\d,]+) 单元", value)
+    if match:
+        return f"{match.group(1)} / {match.group(2)} units"
+    match = re.fullmatch(r"(等待|执行中|已完成|失败|已停止|已跳过) · (\d+)%", value)
+    if match:
+        return f"{translate(match.group(1), language)} · {match.group(2)}%"
+    match = re.fullmatch(r"批次 ([\d,]+) / ([\d,]+)", value)
+    if match:
+        return f"Batch {match.group(1)} / {match.group(2)}"
+    match = re.fullmatch(r"预计剩余 ([\d,]+) 分钟", value)
+    if match:
+        return f"About {match.group(1)} minutes remaining"
+    match = re.fullmatch(r"(.+) · 已选 (\d+) 类目标 · 候选规模 ([\d,]+) · 并发 (\d+) · 每批 (\d+)", value)
+    if match:
+        return f"{translate_label(match.group(1), language)} · {match.group(2)} goal types · {match.group(3)} candidates · {match.group(4)} concurrent · {match.group(5)} per batch"
     remaining_budget = re.fullmatch(r"剩余额度\s*\$([\d,.]+)", value)
     if remaining_budget:
         return f"Remaining budget ${remaining_budget.group(1)}"

@@ -13,6 +13,11 @@ from lib.workflow import Workflow, create_run
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def canvas(app, key):
+    return next(json.loads(item.proto.json_args)["spec"] for item in app.get("component_instance")
+                if json.loads(item.proto.json_args).get("key") == key)
+
+
 def setup_workspace(tmp_path, monkeypatch):
     from lib import workspace as ws
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
@@ -41,22 +46,19 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     assert not app.exception
     assert any("文档自动验收" == item.value for item in app.subheader)
     assert any("所选目标已完成" in item.value for item in app.success)
-    node_buttons = [item for item in app.button if item.key and item.key.startswith(f"flow-node:{rid}:")]
-    assert len(node_buttons) == 9
+    route = canvas(app, f"live-canvas:{rid}")
+    assert [node["id"] for node in route["nodes"]] == ["ingest", "cpt", "package"]
     assert not any(item.label == "查看工作流节点" for item in app.selectbox)
     assert app.session_state[f"workflow-stage:{rid}"] == "package"
     overview = [item.value for item in app.get("html") if isinstance(item.value, str)
                 and 'class="df-run-overview"' in item.value]
     assert overview and "已完成节点 <strong>3 / 3</strong>" in overview[0]
-    routes = [item.value for item in app.get("html") if isinstance(item.value, str)
-              and 'class="df-dag-canvas"' in item.value]
-    assert routes and 'data-from="ingest" data-to="cpt"' in routes[0]
-    assert 'data-from="cpt" data-to="package"' in routes[0]
-    assert 'data-stage="sft"' not in routes[0]
+    assert route["edges"] == [["ingest", "cpt"], ["cpt", "package"]]
     assert any("下载本次训练数据与质量证据" in item.label for item in app.download_button)
     assert any("CPT 预训练语料 · 样本预览" == item.label for item in app.expander)
     assert any("来源与配方" in item.label for item in app.tabs)
-    next(item for item in node_buttons if item.key.endswith(":cpt")).click().run()
+    app.session_state[f"live-canvas:{rid}"] = {"node": "cpt", "serial": "click-1"}
+    app.run()
     assert not app.exception
     assert app.session_state[f"workflow-stage:{rid}"] == "cpt"
     node_logs = [item.value for item in app.get("html") if isinstance(item.value, str)
@@ -87,9 +89,14 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     assert not app.exception
     inputs = {widget.label: widget for widget in app.multiselect}
     inputs["或选择当前文件夹内的来源"].set_value([str(source)])
-    text_inputs = {widget.label: widget for widget in app.text_input}
-    text_inputs["JEV 打分后端（留空使用专用槽位）"].set_value("local_gpu")
-    text_inputs["JEV 打分模型（留空使用专用槽位）"].set_value("reviewer-model")
+    assert not any("留空使用" in widget.label for widget in app.text_input)
+    for widget in app.number_input:
+        if widget.label == "候选样本规模":
+            widget.set_value(50000)
+        elif widget.label == "并发请求上限":
+            widget.set_value(8)
+        elif widget.label == "每批候选数":
+            widget.set_value(200)
     next(widget for widget in app.number_input if widget.label == "每段对话轮数").set_value(5)
     next(b for b in app.button if b.label == "开始自动生成").click().run()
     assert not app.exception
@@ -99,11 +106,13 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     assert app.session_state["nav"] == "任务管理"
     assert app.session_state[f"task-view:{name}"] == "数据工作流"
     assert app.session_state[f"task-center-run:{name}"] == run_id
-    assert any(item.key == f"flow-node:{run_id}:ingest" for item in app.button)
+    assert canvas(app, f"live-canvas:{run_id}")["nodes"][0]["id"] == "ingest"
     assert not any(item.label == "开始自动生成" for item in app.button)
     from lib.workflow import read_json, run_path
     recipe = read_json(run_path(ws.out(name), run_id) / "recipe.json")
-    assert recipe["jev_backend"] == "local_gpu" and recipe["jev_model"] == "reviewer-model"
+    assert set(recipe["node_models"]) == {"multiturn"}
+    assert set(recipe["node_models"]["multiturn"]) == {"generation", "jev"}
+    assert recipe["sample_count"] == 50000 and recipe["concurrency"] == 8 and recipe["batch_size"] == 200
     assert recipe["conversation_turns"] == 5
 
 
@@ -137,6 +146,91 @@ def test_target_group_cards_and_detailed_picker_share_state(tmp_path, monkeypatc
     assert "已选目标 2" in rendered
     assert "Agent 验证轨迹" in rendered and "基础算术（GSM8K 格式）" in rendered
     assert "SFT 中间步骤" not in rendered
+
+
+def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_nodes(tmp_path, monkeypatch):
+    _, workspace, _ = setup_workspace(tmp_path, monkeypatch)
+    from lib import backend_manager
+    monkeypatch.setattr(backend_manager, "list_backends", lambda: {
+        "default_backend": "writer", "roles": {"generation": {"backend": "writer", "model": "write-v1"},
+                                                 "jev": {"backend": "review", "model": "review-v1"}},
+        "backends": [{"name": "writer", "models": ["write-v1", "write-v2"]},
+                     {"name": "review", "models": ["review-v1", "review-v2"]}]})
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "自动工作流"
+    app.run()
+    draft_key = f"workflow-node-bindings:{workspace}"
+    generation_key = f"node-model:{workspace}:sft:generation:model:writer"
+    next(widget for widget in app.selectbox if widget.key == generation_key).set_value("write-v2").run()
+    assert not app.exception
+    assert app.session_state[draft_key]["sft"]["generation"]["model"] == "write-v2"
+    app.session_state[f"setup-canvas:{workspace}"] = {"node": "preference", "serial": "switch-1"}
+    app.run()
+    assert not app.exception
+    review_key = f"node-model:{workspace}:preference:jev:backend"
+    next(widget for widget in app.selectbox if widget.key == review_key).set_value("writer").run()
+    assert not app.exception
+    app.session_state[f"setup-canvas:{workspace}"] = {"node": "sft", "serial": "switch-2"}
+    app.run()
+    assert not app.exception
+    assert next(widget for widget in app.selectbox if widget.key == generation_key).value == "write-v2"
+    assert app.session_state[draft_key]["preference"]["generation"]["model"] == "write-v1"
+    assert app.session_state[draft_key]["preference"]["jev"]["backend"] == "writer"
+    assert app.session_state[draft_key]["sft"]["jev"]["backend"] == "review"
+
+
+def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatch):
+    _, workspace, source = setup_workspace(tmp_path, monkeypatch)
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "自动工作流"
+    app.session_state["ui_language"] = "en"
+    app.run()
+    assert not app.exception
+    assert any(widget.label == "Candidate count" for widget in app.number_input)
+    assert any(button.label == "⬡　Model Services" for button in app.sidebar.button)
+    spec = canvas(app, f"setup-canvas:{workspace}")
+    assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
+    markup = "".join(str(node.value) for node in app.get("html"))
+    assert "Generation model" in markup and "Independent review model" in markup
+    visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
+    visible = re.sub(r"<[^>]*>", "", visible)
+    assert not re.search(r"[\u4e00-\u9fff]", visible), visible
+    app.session_state["nav"] = "模型与密钥"
+    app.run()
+    assert not app.exception and any(item.value == "Model Services" for item in app.title)
+    assert not any(widget.key == "backend-role-edit" for widget in app.selectbox)
+
+
+def test_english_run_canvas_translates_all_stage_statuses():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    from lib.presentation.streamlit.workflow_page import GRAPH_LABELS, STAGE_GLYPHS
+    for status in ("pending", "queued", "running", "completed", "failed", "cancelled"):
+        spec = canvas_spec(["sft"], {"sft": {"status": status, "done": 25, "total": 50000}},
+                           "sft", GRAPH_LABELS, STAGE_GLYPHS, language="en", live=True)
+        assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
+
+
+def test_expanded_english_task_view_uses_full_canvas_and_localized_quality(tmp_path, monkeypatch):
+    ws, workspace, source = setup_workspace(tmp_path, monkeypatch)
+    rid = create_run(ws.out(workspace), sources=[source], targets=["cpt"], name="Offline document run")
+    Workflow(ws.out(workspace), rid, ROOT).execute()
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "任务管理"
+    app.session_state["ui_language"] = "en"
+    app.session_state[f"task-center-focus:{workspace}"] = True
+    app.run()
+    assert not app.exception
+    assert any(widget.label == "Expand workflow view" and widget.value for widget in app.toggle)
+    spec = canvas(app, f"live-canvas:{rid}")
+    assert spec["selected"] == "package"
+    assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
+    markup = "".join(str(node.value) for node in app.get("html"))
+    visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
+    visible = re.sub(r"<[^>]*>", "", visible)
+    assert not re.search(r"[\u4e00-\u9fff]", visible), visible
 
 
 def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
@@ -212,8 +306,7 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     overview = [item.value for item in app.get("html") if isinstance(item.value, str)
                 and 'class="df-run-overview"' in item.value]
     assert overview and "已完成节点 <strong>0 / 3</strong>" in overview[0]
-    sft_node = next(item for item in app.button if item.key == f"flow-node:{run_id}:sft")
-    assert "已跳过" in sft_node.label
+    assert "sft" not in {node["id"] for node in canvas(app, f"live-canvas:{run_id}")["nodes"]}
     next(item for item in app.button if item.label == "继续执行 / 从断点重试").click().run()
     assert commands and commands[-1][-1] == run_id
 

@@ -225,6 +225,7 @@ def load_backend(
     judge: bool = False,
     base_url: str | None = None,
     role: str | None = None,
+    allow_global_endpoint_override: bool = True,
 ) -> tuple[ChatClient, str]:
     """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
 
@@ -265,8 +266,10 @@ def load_backend(
     else:
         name = backend or cfg.get("default_backend", "deepseek")
         b = (cfg.get("backends") or {}).get(name) or {}
+        if not allow_global_endpoint_override and not b.get("base_url"):
+            raise ValueError("workflow_node_service_not_configured")
     # 环境变量级全局覆盖（任意命令的临时操作空间，无需加 CLI 参数）
-    if not base_url and os.environ.get("LLM_BASE_URL"):
+    if allow_global_endpoint_override and not base_url and os.environ.get("LLM_BASE_URL"):
         b = {"base_url": os.environ["LLM_BASE_URL"], "api_key_env": "OPENAI_API_KEY", "models": []}
     api_key = b.get("api_key") or os.environ.get(b.get("api_key_env") or "", "")
     role_model = os.environ.get(f"{role.upper()}_MODEL") if role else None

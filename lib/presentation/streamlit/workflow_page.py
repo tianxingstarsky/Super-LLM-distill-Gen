@@ -11,12 +11,15 @@ import streamlit as st
 from filelock import Timeout
 
 from lib.application.workflow_service import WorkflowApplication
-from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES, execution_graph
+from lib.domain.workflow_graph import execution_graph
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
+from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
+from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
+from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_bindings, snapshot_available_bindings
 
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
@@ -51,15 +54,24 @@ STAGE_STATUS = {"pending": "待处理", "queued": "待启动", "running": "执�
 def _stage_configuration(key, recipe, state):
     targets = recipe.get("targets", [])
     if key == "ingest":
-        return {"来源": [row.get("name", row.get("file", "未知来源")) for row in recipe.get("sources", [])] or ["开放需求"],
+        details = {"来源": [row.get("name", row.get("file", "未知来源")) for row in recipe.get("sources", [])] or ["开放需求"],
                 "最大处理单元": recipe.get("max_units"), "分块目标字符数": recipe.get("chunk_chars"),
                 "隐私与结构规则": "疑似密钥、无效结构和超长单元进入隔离"}
+        binding = recipe.get("node_models", {}).get(key, {}).get("generation")
+        if binding:
+            details["生成模型"] = binding["backend"] + " / " + binding["model"]
+        return details
     if key in {"cpt", "sft", "multiturn", "agent", "preference", "cot"}:
-        details = {"启用目标": [target.upper() for target in targets],
-                "生成后端": recipe.get("backend") or "模型配置默认值",
-                "生成模型": recipe.get("model") or "模型配置默认值",
-                "JEV 后端": recipe.get("jev_backend") or recipe.get("judge_backend") or "JEV 专用配置",
-                "JEV 模型": recipe.get("jev_model") or recipe.get("judge_model") or "JEV 专用配置"}
+        details = {"启用目标": [target.upper() for target in targets]}
+        mode = "文档资料" if recipe.get("sources") else "开放需求"
+        for role in node_roles(key, mode):
+            binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
+            prefix = "" if role == "generation" else "jev_"
+            label = "生成模型" if role == "generation" else "独立质量评审模型"
+            details[label] = ((binding.get("backend") or recipe.get(prefix + "backend") or "旧版默认配置")
+                              + " / " + (binding.get("model") or recipe.get(prefix + "model") or "旧版默认配置"))
+        if node_roles(key, mode):
+            details.update({"并发请求上限": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
         if key == "cpt":
             details.update({"分块目标字符数": recipe.get("chunk_chars"), "去重": "精确去重与保守近重复检查"})
         elif key == "multiturn":
@@ -99,11 +111,12 @@ def _stage_numbers(stage):
 
 def _config_html(configuration):
     rows = []
+    english = st.session_state.get("ui_language", "zh") == "en"
     for label, value in configuration.items():
         if isinstance(value, list):
-            rendered = "、".join(str(item) for item in value[:5]) or "—"
+            rendered = (", " if english else "、").join(str(item) for item in value[:5]) or "—"
             if len(value) > 5:
-                rendered += f"，另有 {len(value) - 5} 项"
+                rendered += f", {len(value) - 5} more" if english else f"，另有 {len(value) - 5} 项"
         elif isinstance(value, dict):
             rendered = json.dumps(value, ensure_ascii=False)
         else:
@@ -199,94 +212,11 @@ def _planned_dependencies_html(edges: tuple[tuple[str, str], ...]) -> str:
             '<div class="df-wb-plan-edges">' + ''.join(rows) + '</div></div>')
 
 
-def _execution_route_html(targets, stages: dict, selected_stage: str) -> str:
-    """Render the persisted dependency graph at the available container width.
-
-    The links describe data lineage, not parallel scheduling.  Every node and
-    link comes from ``execution_graph``; the visual state comes from the run.
-    """
-    nodes, edges = execution_graph(targets)
-    base = [key for key in BASE_STAGES if key in nodes]
-    derived = [key for key in DERIVED_STAGES if key in nodes]
-    height = max(270, 94 + 78 * len(base))
-    node_height = 64
-    middle = (height - node_height) / 2
-    positions = {"ingest": (14, middle, 150),
-                 "package": (589, middle, 156)}
-    first_base = 57 + (height - 80 - ((len(base) - 1) * 78 + node_height)) / 2
-    base_x = 194 if derived else 271
-    for index, key in enumerate(base):
-        positions[key] = (base_x, first_base + index * 78, 157)
-    if derived:
-        sft_y = positions["sft"][1]
-        first_derived = max(57, min(height - node_height - (len(derived) - 1) * 78 - 16,
-                                    sft_y - (len(derived) - 1) * 39))
-        for index, key in enumerate(derived):
-            positions[key] = (392, first_derived + index * 78, 157)
-
-    lanes = [("来源", 14), ("生成与验证", base_x)]
-    if derived:
-        lanes.append(("偏好与推理", 392))
-    lanes.append(("产物", 589))
-    lane_markup = "".join(
-        f'<div class="df-dag-lane" style="left:{100*x/760:.3f}%">{label}</div>'
-        for label, x in lanes)
-    edge_markup: list[str] = []
-    for origin, destination in edges:
-        x1, y1, w1 = positions[origin]
-        x2, y2, _ = positions[destination]
-        start_x, end_x = x1 + w1 + 3, x2 - 8
-        start_y, end_y = y1 + node_height / 2, y2 + node_height / 2
-        source_status = _stage_numbers(stages.get(origin, {}))[0]
-        destination_status = _stage_numbers(stages.get(destination, {}))[0]
-        if destination_status in {"failed", "cancelled"}:
-            edge_status = "attention"
-        elif destination_status == "running":
-            edge_status = "running"
-        elif source_status == destination_status == "completed":
-            edge_status = "completed"
-        else:
-            edge_status = "pending"
-        length = math.hypot(end_x - start_x, end_y - start_y)
-        angle = math.degrees(math.atan2(end_y - start_y, end_x - start_x))
-        edge_markup.append(f'<div class="df-dag-edge" aria-hidden="true" data-from="{origin}" '
-                           f'data-to="{destination}" data-status="{edge_status}" '
-                           f'style="left:{100*start_x/760:.3f}%;top:{100*start_y/height:.3f}%;'
-                           f'width:{100*length/760:.3f}%;transform:rotate({angle:.2f}deg)"></div>')
-
-    node_markup: list[str] = []
-    for key in nodes:
-        x, y, width = positions[key]
-        stage = stages.get(key, {})
-        status, done, total, _ = _stage_numbers(stage)
-        label = html.escape(GRAPH_LABELS[key])
-        glyph = html.escape(STAGE_GLYPHS[key])
-        intermediate = key == "sft" and "sft" not in targets
-        note = f"{STAGE_STATUS[status]} · {done}/{total} 单元"
-        title = html.escape(str(stage.get("label", GRAPH_LABELS[key])) +
-                            ("（中间候选）" if intermediate else "") + f"：{note}", quote=True)
-        node_markup.append(
-            f'<div class="df-dag-node" data-stage="{key}" data-status="{status}" '
-            f'data-selected="{str(key == selected_stage).lower()}" '
-            f'data-intermediate="{str(intermediate).lower()}" title="{title}" '
-            f'style="left:{100*x/760:.3f}%;top:{100*y/height:.3f}%;'
-            f'width:{100*width/760:.3f}%;height:{100*node_height/height:.3f}%">'
-            f'<span class="df-dag-icon">{glyph}</span><span class="df-dag-copy">'
-            f'<strong>{label}</strong><small>{html.escape(note)}</small></span>'
-            '<i class="df-dag-status" aria-hidden="true"></i></div>')
-
-    accessible = html.escape("、".join(GRAPH_LABELS[key] for key in nodes), quote=True)
-    return ('<div class="df-dag-wrap">'
-            f'<div class="df-dag-canvas" role="img" aria-label="本次数据依赖流程：{accessible}" '
-            f'style="aspect-ratio:760/{height}">' + lane_markup + "".join(edge_markup) + "".join(node_markup) + '</div>'
-            '<div class="df-dag-caption"><span>连线表示本次目标的真实数据依赖；步骤按顺序执行。</span>'
-            '<span class="df-dag-legend"><i data-status="completed"></i>完成'
-            '<i data-status="running"></i>运行中<i data-status="attention"></i>需处理'
-            '<i data-status="pending"></i>等待</span></div></div>')
-
-
-def _select_stage(selection_key, stage):
-    st.session_state[selection_key] = stage
+def _loaded_preview(application, run_id, target):
+    key = f"workflow-loaded-preview:{run_id}:{target}"
+    if key not in st.session_state:
+        st.session_state[key] = application.artifact_preview(run_id, target, 3)
+    return st.session_state[key]
 
 
 @st.fragment(run_every=2)
@@ -337,33 +267,20 @@ def render_run(application, run_id, begin, *, embedded=False):
     elif status in {"queued", "running", "failed", "cancelled"}:
         if st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}"):
             begin(["workflow", "--action", "resume", "--run-id", run_id])
-    if embedded:
-        flow, inspector = st.container(), st.container()
-    else:
-        flow, inspector = st.columns([2.25, 1], gap="large")
+    flow, inspector = st.columns([2.25, 1], gap="medium")
     with flow:
         with st.container(border=True):
             st.html('<div class="df-run-section"><div><strong>工作流运行图</strong>'
                     '<small>点击节点卡，检查该步骤的状态、配置与日志。</small></div>'
                     '<span class="df-run-section-tag">实时进度</span></div>')
-            st.html(_execution_route_html(recipe["targets"], state["stages"], selected_stage))
-            for row_start in range(0, len(stage_keys), 3):
-                columns = st.columns(3, gap="small")
-                for column, key in zip(columns, stage_keys[row_start:row_start + 3]):
-                    stage = state["stages"][key]
-                    stage_status, done, total, percent = _stage_numbers(stage)
-                    if key not in active_stages:
-                        stage_status, done, total, percent = "skipped", 0, 0, 0
-                    label = str(stage.get("label", key))
-                    display_status = STAGE_STATUS.get(stage_status, stage_status)
-                    style_state = "selected" if key == selected_stage else stage_status
-                    with column:
-                        with st.container(key=f"flow_node_{style_state}_{key}_{run_id[:8]}"):
-                            st.button(f"{STAGE_GLYPHS.get(key, '◈')}  **{label}**  \n"
-                                      f"{display_status} · {percent}%  \n"
-                                      f"{done} / {total} 单元",
-                                      key=f"flow-node:{run_id}:{key}", use_container_width=True,
-                                      on_click=_select_stage, args=(selection_key, key))
+            running_node = next((key for key in graph_nodes if state["stages"][key].get("status") == "running"), None)
+            if running_node and st.button("定位运行节点", key=f"locate-node:{run_id}"):
+                selected_stage = running_node
+                st.session_state[selection_key] = running_node
+            render_canvas(canvas_spec(recipe["targets"], state["stages"], selected_stage,
+                                      GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
+                                      language=st.session_state.get("ui_language", "zh"), live=True),
+                          selection_key, key=f"live-canvas:{run_id}")
     selected_metrics = state["stages"][selected_stage]
     selected_status, done, total, percent = _stage_numbers(selected_metrics)
     if selected_stage not in active_stages:
@@ -393,6 +310,12 @@ def render_run(application, run_id, begin, *, embedded=False):
                     f'<small>{html.escape(STAGE_STATUS.get(selected_status, selected_status))} · {percent}%</small>'
                     '</div></div>')
             st.progress(percent / 100, text=f"{done} / {total} 单元")
+            if selected_metrics.get("batches_total"):
+                st.caption(f"批次 {selected_metrics.get('batches_done', 0)} / {selected_metrics['batches_total']}")
+                st.metric("候选 / 分钟", f"{selected_metrics.get('rate_per_minute', 0):,.0f}")
+                eta = selected_metrics.get("eta_seconds")
+                if selected_status == "running" and eta is not None:
+                    st.caption(f"预计剩余 {math.ceil(eta / 60):,} 分钟")
             st.html('<div class="df-run-stat-grid">'
                     f'<div class="df-run-stat"><b>{max(0, passed)}</b><span>{passed_label}</span></div>'
                     f'<div class="df-run-stat"><b>{max(0, quarantined)}</b><span>{quarantined_label}</span></div>'
@@ -423,12 +346,14 @@ def render_run(application, run_id, begin, *, embedded=False):
                                "未通过原因": json.dumps(info["reasons"], ensure_ascii=False)}
                               for target, info in quality["targets"].items()], hide_index=True, width="stretch")
             if status in {"completed", "needs_attention"}:
-                st.download_button("下载本次训练数据与质量证据 ZIP", application.bundle(run_id),
+                st.download_button("下载本次训练数据与质量证据 ZIP", lambda: application.bundle(run_id),
                                    file_name=f"training-{run_id[:8]}.zip", mime="application/zip", key=f"zip:{run_id}")
                 for target in state["targets"]:
                     with st.expander(f"{TARGET_LABELS.get(target, target.upper())} · 样本预览"):
+                        if not st.toggle("加载样本预览", key=f"load-preview:{run_id}:{target}"):
+                            continue
                         try:
-                            preview = application.artifact_preview(run_id, target, 3)
+                            preview = _loaded_preview(application, run_id, target)
                         except (OSError, ValueError, KeyError):
                             st.error("无法验证或读取该目标的训练文件，请在任务产物中检查完整性。")
                             continue
@@ -440,22 +365,25 @@ def render_run(application, run_id, begin, *, embedded=False):
                 if "agent" in state["targets"] and negative_count:
                     with st.expander(f"Agent 失败轨迹 · {negative_count} 条"):
                         st.caption("以下轨迹保留了实际执行失败证据，单独存放，不会混入通过验证的训练样本。")
-                        try:
-                            negatives = application.artifact_preview(run_id, "agent_negative", 3)
-                        except (OSError, ValueError, KeyError):
-                            st.error("无法验证或读取失败轨迹文件，请在任务产物中检查完整性。")
-                        else:
-                            for row in negatives:
-                                st.html(render_training_sample("agent_negative", row))
+                        if st.toggle("加载失败轨迹", key=f"load-negative:{run_id}"):
+                            try:
+                                negatives = _loaded_preview(application, run_id, "agent_negative")
+                            except (OSError, ValueError, KeyError):
+                                st.error("无法验证或读取失败轨迹文件，请在任务产物中检查完整性。")
+                            else:
+                                for row in negatives:
+                                    st.html(render_training_sample("agent_negative", row))
             with st.expander("产物保存位置"):
                 st.code(application.artifact_location(run_id))
         else:
             st.caption("质量汇总将在生成与验证步骤结束后出现。进度会自动刷新。")
-        rejected = [{"ID": u["id"], "定位": u.get("location", ""), "原因": u.get("reason")}
-                    for u in application.quarantined_inputs(run_id)]
-        if rejected:
-            with st.expander(f"输入隔离记录 · {len(rejected)}"):
-                st.dataframe(rejected, hide_index=True)
+        if summary.get("quarantined"):
+            with st.expander(f"输入隔离记录 · {summary['quarantined']}"):
+                if st.toggle("加载隔离记录", key=f"load-inputs:{run_id}"):
+                    rejected = [{"ID": u["id"], "定位": u.get("location", ""), "原因": u.get("reason")}
+                                for u in application.quarantined_inputs(run_id)[:100]]
+                    st.caption("最多显示前 100 条；完整记录保留在本次产物中。")
+                    st.dataframe(rejected, hide_index=True)
     with tabs[1]:
         st.html('<div class="df-run-section"><div><strong>全部运行事件</strong>'
                 '<small>按时间倒序展示最近的处理与模型调用事件。</small></div></div>')
@@ -574,11 +502,18 @@ def render_workbench(application: WorkflowApplication, begin):
                                 if st.session_state.get("ui_language") == "en" else "自动数据生成")
             name = st.text_input("运行名称", value=default_run_name)
             a, b = st.columns(2, gap="small")
-            maximum = a.number_input("本次最多处理单元", 1, 10000, 100)
+            sample_count = a.number_input("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100,
+                                           help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
+            maximum = a.number_input("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES,
+                                      help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
             chunk_chars = (b.number_input("文档分块目标字符数", 200, 20000, 2000)
                            if source_mode == "文档资料" else 2000)
-            tasks = (b.number_input("开放需求任务数", 1, 100, 10)
-                     if source_mode == "开放需求" else 10)
+            tasks = sample_count
+            concurrency = a.number_input("并发请求上限", 1, MAX_CONCURRENCY, 4,
+                                          help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
+            batch_size = b.number_input("每批候选数", 1, MAX_BATCH_SIZE, 100,
+                                         help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
+            st.caption("支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。")
             conversation_turns = (st.number_input("每段对话轮数", 2, 8, 3,
                                                   help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
                                   if "multiturn" in targets else 3)
@@ -590,22 +525,35 @@ def render_workbench(application: WorkflowApplication, begin):
                     evaluation_uploads = st.file_uploader(
                         "上传评测集参照", type=["json", "jsonl"], accept_multiple_files=True,
                         max_upload_size=5, key=f"workflow-evaluations:{ws}")
-            with st.expander("高级设置：模型与评审器"):
-                left, right = st.columns(2)
-                with left:
-                    backend = st.text_input("生成后端（留空使用模型配置）")
-                    model = st.text_input("生成模型（留空使用模型配置）")
-                with right:
-                    jev_backend = st.text_input("JEV 打分后端（留空使用专用槽位）")
-                    jev_model = st.text_input("JEV 打分模型（留空使用专用槽位）")
-                st.caption("生成模型与 JEV 评审器可以分开配置；留空时使用系统模型配置。")
+        if targets:
+            selection_key = f"workflow-setup-node:{ws}"
+            selected_node = st.session_state.get(selection_key, "sft" if "sft" in graph_nodes else "ingest")
+            if selected_node not in graph_nodes:
+                selected_node = graph_nodes[0]
+            st.session_state[selection_key] = selected_node
+            bindings, endpoints = node_bindings(graph_nodes, source_mode, ws)
+            canvas_column, node_column = st.columns([2.25, 1], gap="medium")
+            with canvas_column, st.container(border=True):
+                section_heading("工作流节点配置", "直接点击节点，在右侧选择该步骤的模型。", "◇")
+                render_canvas(canvas_spec(targets, {}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
+                                          snapshot_available_bindings(graph_nodes, source_mode, bindings),
+                                          language=st.session_state.get("ui_language", "zh")),
+                              selection_key, key=f"setup-canvas:{ws}")
+            with node_column, st.container(border=True):
+                section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
+                render_node_models(selected_node, source_mode, ws, bindings, endpoints)
+                if selected_node == "ingest":
+                    st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
+                elif selected_node == "package":
+                    st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
         with st.container(border=True, key="workbench-submit"):
             summary_col, action_col = st.columns([3, 1], vertical_alignment="center", gap="large")
             with summary_col:
                 st.html('<div class="df-wb-submit-summary"><b>运行配置摘要</b><strong>' +
                         html.escape(name.strip() or "未命名任务") + '</strong><span>' +
                         html.escape(source_mode) + ' · 已选 ' + str(len(targets)) +
-                        ' 类目标 · 最多处理 ' + str(int(maximum)) + ' 单元' +
+                        ' 类目标 · 候选规模 ' + f'{int(sample_count):,}' +
+                        ' · 并发 ' + str(int(concurrency)) + ' · 每批 ' + str(int(batch_size)) +
                         (f' · 评测参照 {len(evaluation_uploads)} 份' if evaluation_uploads else '') +
                         '</span></div>')
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
@@ -635,8 +583,8 @@ def render_workbench(application: WorkflowApplication, begin):
                     if source_mode == "开放需求" and not brief.strip():
                         raise ValueError("请描述开放性需求。")
                     run_id = application.create_run(sources=sources, brief=brief, name=name, targets=targets,
-                                        backend=backend or None, model=model or None,
-                                        jev_backend=jev_backend or None, jev_model=jev_model or None,
+                                        node_models=snapshot_bindings(graph_nodes, source_mode, bindings, endpoints),
+                                        sample_count=int(sample_count), concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),
                                         source_names=source_names,

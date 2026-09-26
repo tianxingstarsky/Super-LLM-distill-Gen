@@ -95,7 +95,7 @@ def _recent_events_html(run: dict) -> str:
         moment = _display_time(event.get("at"))
         rows.append('<div class="df-task-activity-event">'
                     f'<i data-kind="{html.escape(kind, quote=True)}"></i>'
-                    f'<span><b>{html.escape(stage_name)}</b> · {html.escape(label)}</span>'
+                    f'<span><b>{html.escape(stage_name)}</b> · <span>{html.escape(label)}</span></span>'
                     f'<time>{html.escape(moment)}</time></div>')
     return ('<div class="df-task-activity"><div class="df-task-activity-head">'
             f'<strong>运行动态</strong><small>最近 {len(events)} 条</small></div>'
@@ -171,7 +171,12 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                     '</div>')
         return None
     st.html(_summary_html(runs))
-    left, right = st.columns([1.03, 2.7], gap="large")
+    focus = st.toggle("放大工作流视图", key=f"task-center-focus:{workspace_id}",
+                      help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
+    if focus:
+        left, right = st.popover("选择任务"), st.container()
+    else:
+        left, right = st.columns([1.03, 2.7], gap="large")
     with left:
         st.html('<div class="df-task-list-head"><strong>自动工作流</strong>'
                 f'<small>共 {len(runs)} 条</small></div>')

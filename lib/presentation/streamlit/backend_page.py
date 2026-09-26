@@ -1,4 +1,4 @@
-"""Model endpoint, role and budget administration for the Streamlit console."""
+"""Model service credentials and budget administration for the console."""
 from __future__ import annotations
 
 import html
@@ -9,13 +9,6 @@ import streamlit as st
 from lib import backend_manager as bm
 from lib.presentation.streamlit.backend_style import CSS
 from lib.presentation.streamlit.shared import page_header
-
-
-ROLE_LABELS = {
-    "generation": "数据生成", "judge": "质量评审", "jev": "JEV 独立评分",
-    "vision": "视觉解析", "refine": "数据改写", "simulate": "模拟环境",
-    "translation": "翻译",
-}
 
 
 def _safe(value: object) -> str:
@@ -30,9 +23,6 @@ def _credential_ready(row: dict) -> bool:
 
 def _summary(info: dict) -> None:
     rows = info.get("backends") or []
-    roles = info.get("roles") or {}
-    assigned = sum(bool((roles.get(role) or {}).get("backend") and (roles.get(role) or {}).get("model"))
-                   for role in ROLE_LABELS)
     configured = sum(_credential_ready(row) for row in rows)
     default = next((row["name"] for row in rows if row.get("is_default")), "未设置")
     spent = float(info.get("spent") or 0)
@@ -40,7 +30,7 @@ def _summary(info: dict) -> None:
     cards = (
         ("已登记端点", str(len(rows)), "可供工作流选择的模型服务", "blue"),
         ("密钥已配置", str(configured), "仅表示凭据存在，连接需单独测试", "green"),
-        ("已分配角色", f"{assigned} / {len(ROLE_LABELS)}", "生成与评审等工作流槽位", "purple"),
+        ("模型选择位置", "工作流节点", "点击节点分别选择生成与评审模型", "purple"),
         ("预算已用", f"${spent:.2f}", f"上限 ${limit:.2f}" if limit > 0 else "尚未设置预算上限", "amber"),
     )
     st.html('<div class="df-model-summary">' + ''.join(
@@ -49,8 +39,8 @@ def _summary(info: dict) -> None:
         for label, value, note, tone in cards
     ) + '</div>')
     st.html('<div class="df-model-context"><b>当前默认：' + _safe(default) + '</b>'
-            '<i>›</i><span>服务端点提供模型</span><i>›</i><span>角色槽位指定用途</span>'
-            '<i>›</i><span>工作流按角色调用</span><i>›</i><span>用量写入审计</span></div>')
+            '<i>›</i><span>服务端点提供模型</span><i>›</i><span>点击工作流节点选择模型</span>'
+            '<i>›</i><span>用量写入审计</span></div>')
 
 
 def _panel_heading(title: str, description: str, icon: str, aside: str = "") -> None:
@@ -72,11 +62,7 @@ def _endpoints(rows: list[dict]) -> None:
             model_tags += '<span>+' + str(len(models) - 3) + '</span>'
         if not model_tags:
             model_tags = '<i>暂未设置模型</i>'
-        assigned = row.get("roles") or []
-        role_names = [ROLE_LABELS.get(role, role) for role in assigned]
-        role_detail = "、".join(role_names) or "尚未分配角色"
-        role_text = (("、".join(role_names[:2]) + f"等 {len(role_names)} 个角色")
-                     if len(role_names) > 2 else role_detail)
+        role_detail = role_text = "可在工作流节点中选用"
         ready = _credential_ready(row)
         cards.append(
             '<div class="df-model-endpoint" data-default="' + str(bool(row.get("is_default"))).lower() + '">'
@@ -140,40 +126,6 @@ def _connection_probe(names: list[str], default: str) -> None:
             st.error(f"连接失败（{type(error).__name__}）。请检查地址、密钥与服务状态。")
 
 
-def _roles(roles: dict, names: list[str]) -> None:
-    _panel_heading("工作流角色", "角色决定数据生成、质检和辅助阶段调用哪个端点与模型。", "◈",
-                   f"{len(ROLE_LABELS)} 个槽位")
-    cards = []
-    for role, label in ROLE_LABELS.items():
-        slot = roles.get(role) or {}
-        ready = bool(slot.get("backend") and slot.get("model"))
-        binding = f"{slot.get('backend')} / {slot.get('model')}" if ready else "尚未配置模型"
-        cards.append('<div class="df-model-role"><b>◇</b><div><strong>' + _safe(label)
-                     + '</strong><small title="' + _safe(binding) + '">' + _safe(binding)
-                     + '</small></div><em data-ready="' + str(ready).lower() + '">'
-                     + ('已分配' if ready else '待配置') + '</em></div>')
-    st.html('<div class="df-model-role-map">' + ''.join(cards) + '</div>')
-
-
-def _role_editor(roles: dict, names: list[str]) -> None:
-    _panel_heading("编辑角色槽位", "保存后，后续工作流将使用新的默认模型。", "✎")
-    role = st.selectbox("选择角色", list(ROLE_LABELS),
-                        format_func=lambda value: ROLE_LABELS[value], key="backend-role-edit")
-    slot = roles.get(role) or {}
-    with st.form("role-form:" + role):
-        backend = st.selectbox("后端", names, key=f"role-slot:{role}:b",
-                               index=names.index(slot["backend"]) if slot.get("backend") in names else 0)
-        model = st.text_input("模型", slot.get("model", ""), key=f"role-slot:{role}:m")
-        save = st.form_submit_button("保存角色", type="primary", disabled=not names, width="stretch")
-    if save:
-        try:
-            bm.set_role(role, backend, model)
-            st.toast(f"{ROLE_LABELS[role]}已更新")
-            st.rerun()
-        except ValueError as error:
-            st.error(str(error))
-
-
 def _budget(info: dict) -> None:
     limit = float((info.get("budget") or {}).get("max_total_usd") or 0)
     spent = float(info.get("spent") or 0)
@@ -204,14 +156,14 @@ def _budget(info: dict) -> None:
 
 
 def render_backend_page() -> None:
-    """Render real, masked backend inventory and editable workflow bindings."""
-    page_header("模型与密钥", "配置工作流调用的模型服务、角色槽位与预算；密钥只展示配置状态。", "MODEL CONNECTIONS")
+    """Render real, masked service inventory and credential administration."""
+    page_header("模型服务", "登记服务地址、凭据与预算；具体模型在工作流节点中选择。", "MODEL CONNECTIONS")
     st.html(CSS)
     info = bm.list_backends()
     rows = info.get("backends") or []
     names = [row["name"] for row in rows]
     _summary(info)
-    endpoint_tab, role_tab, budget_tab = st.tabs(["端点与连接", "角色槽位", "预算与用量"])
+    endpoint_tab, budget_tab = st.tabs(["端点与连接", "预算与用量"])
     with endpoint_tab:
         with st.container(border=True):
             _endpoints(rows)
@@ -220,11 +172,5 @@ def render_backend_page() -> None:
             _endpoint_form()
         with right, st.container(border=True):
             _connection_probe(names, info.get("default_backend", ""))
-    with role_tab:
-        left, right = st.columns([1.35, 1], gap="medium")
-        with left, st.container(border=True):
-            _roles(info.get("roles") or {}, names)
-        with right, st.container(border=True):
-            _role_editor(info.get("roles") or {}, names)
     with budget_tab:
         _budget(info)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from streamlit.testing.v1 import AppTest
 
@@ -9,6 +10,11 @@ from lib.infrastructure.training_workflow import Workflow, create_run
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def live_canvas(app, run_id):
+    return next(json.loads(item.proto.json_args)["spec"] for item in app.get("component_instance")
+                if json.loads(item.proto.json_args).get("key") == f"live-canvas:{run_id}")
 
 
 def task_screen(output: str, workspace_id: str) -> None:
@@ -47,11 +53,11 @@ def test_task_cards_select_real_run_and_show_its_nodes_and_events(tmp_path):
     assert 'aria-valuemax="3" aria-valuenow="3"' in card_markup
     assert "CPT 预训练语料" in card_markup
     assert app.session_state["task-center-run:test-space"] == queued_id
-    assert any(item.key == f"flow-node:{queued_id}:ingest" for item in app.button)
+    assert live_canvas(app, queued_id)["selected"] == "ingest"
     next(item for item in cards if item.key.endswith(complete_id)).click().run()
     assert not app.exception
     assert app.session_state["task-center-run:test-space"] == complete_id
-    assert any(item.key == f"flow-node:{complete_id}:package" for item in app.button)
+    assert live_canvas(app, complete_id)["selected"] == "package"
     assert any(item.label == "下载本次训练数据与质量证据 ZIP" for item in app.download_button)
     selected_logs = [item.value for item in app.get("html") if isinstance(item.value, str)
                      and '<div class="df-run-log">' in item.value]
@@ -119,23 +125,19 @@ def test_task_progress_includes_implicit_sft_dependency_and_escapes_events():
     assert "&lt;img src=x onerror=1&gt;" in activity
 
 
-def test_running_graph_uses_actual_edges_and_stage_states_without_horizontal_canvas():
-    from lib.presentation.streamlit.workflow_page import _execution_route_html
-    from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
+def test_running_graph_uses_actual_edges_and_stage_states():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    from lib.presentation.streamlit.workflow_page import GRAPH_LABELS, STAGE_GLYPHS
 
     stages = {"ingest": {"status": "completed"}, "sft": {"status": "completed"},
               "preference": {"status": "running", "done": 2, "total": 5},
               "cot": {"status": "failed"}, "package": {"status": "pending"}}
-    route = _execution_route_html(["dpo", "cot"], stages, "preference")
-
-    assert '<div class="df-dag-canvas"' in route and 'aspect-ratio:760/' in route
-    assert 'data-from="sft" data-to="preference" data-status="running"' in route
-    assert 'data-from="sft" data-to="cot" data-status="attention"' in route
-    assert 'data-from="ingest" data-to="sft" data-status="completed"' in route
-    assert 'data-stage="sft" data-status="completed"' in route
-    assert 'data-intermediate="true"' in route
-    assert 'data-stage="cpt"' not in route
-    assert 'min-width:760px' not in workflow_run_styles()
+    route = canvas_spec(["dpo", "cot"], stages, "preference", GRAPH_LABELS, STAGE_GLYPHS, live=True)
+    nodes = {node["id"]: node for node in route["nodes"]}
+    assert ("sft", "preference") in route["edges"] and ("sft", "cot") in route["edges"]
+    assert nodes["sft"]["status"] == "completed" and nodes["sft"]["intermediate"] is True
+    assert nodes["preference"]["percent"] == 40 and nodes["cot"]["status"] == "failed"
+    assert "cpt" not in nodes and route["selected"] == "preference"
 
 
 def test_run_log_keeps_event_stage_and_escapes_untrusted_details():

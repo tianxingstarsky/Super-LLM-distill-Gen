@@ -1013,6 +1013,8 @@ def cmd_workflow(args) -> int:
                             judge_backend=args.judge_backend, judge_model=args.judge_model,
                             jev_backend=args.jev_backend, jev_model=args.jev_model,
                             max_units=args.max_units, chunk_chars=args.chunk_chars, tasks=args.tasks,
+                            sample_count=args.sample_count, concurrency=args.concurrency, batch_size=args.batch_size,
+                            node_models=json.loads(pathlib.Path(args.node_models).read_text(encoding="utf-8")) if args.node_models else None,
                             conversation_turns=args.conversation_turns)
         print(f"运行 ID: {run_id}", flush=True)
         state = application.execute(run_id)
@@ -1232,9 +1234,13 @@ def build_parser():
     p_workflow.add_argument("--brief", help="开放性需求，或来源文档的任务要求")
     p_workflow.add_argument("--name", default="自动数据生成")
     p_workflow.add_argument("--targets", default="cpt,sft,dpo")
-    p_workflow.add_argument("--max-units", type=int, default=100)
+    p_workflow.add_argument("--max-units", type=int, default=100000)
     p_workflow.add_argument("--chunk-chars", type=int, default=2000)
     p_workflow.add_argument("--tasks", type=int, default=10)
+    p_workflow.add_argument("--sample-count", type=int, help="候选规模，最多 100000；最终数量取决于质检")
+    p_workflow.add_argument("--concurrency", type=int, default=1, help="节点内并发上限，1–16")
+    p_workflow.add_argument("--batch-size", type=int, default=100, help="每批候选数，1–500")
+    p_workflow.add_argument("--node-models", help="节点模型配置 JSON 文件，仅包含 backend 与 model")
     p_workflow.add_argument("--conversation-turns", type=int, default=3, help="多轮对话目标的轮数，2–8")
     p_workflow.add_argument("--backend")
     p_workflow.add_argument("--model")

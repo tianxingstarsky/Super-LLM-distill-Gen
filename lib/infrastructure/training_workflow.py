@@ -6,6 +6,7 @@ stage metrics and a hash-verified training bundle. No global output is overwritt
 from __future__ import annotations
 
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -13,6 +14,9 @@ import os
 from pathlib import Path
 import re
 import uuid
+from itertools import islice
+import threading
+import time
 
 from filelock import FileLock, Timeout
 
@@ -22,6 +26,9 @@ from lib.domain.agent_trajectory import (REPLAY_POLICY_VERSION, ReplayUnavailabl
                                          assess_recorded_trajectory, validate_tool_snapshots)
 from lib.domain.corpus_quality import CorpusNearDuplicateIndex, inspect_corpus, summarize_corpus_sources
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k
+from lib.domain.workflow_scale import (MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE,
+                                      PLAN_BATCH_SIZE, generation_units, validate_node_models)
+from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -37,8 +44,8 @@ from lib.prompts import get, registry, render
 
 EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
-RECIPE_VERSION = 4
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4})
+RECIPE_VERSION = 5
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5})
 
 
 def now():
@@ -111,16 +118,60 @@ def verify_artifacts(path):
     return manifest
 
 
+def write_trainer_export(destination, target, records):
+    """Convert rows individually while retaining the all-or-nothing TRL gate."""
+    output = destination / f"trl_{target}.jsonl"
+    pending = destination / f".trl_{target}.pending"
+    total, compatible, failures, reasons = 0, 0, [], {}
+    format_name = "trl_sft" if target in {"sft", "multiturn", "agent"} else "trl_preference"
+    with pending.open("w", encoding="utf-8") as handle:
+        for row in records:
+            if row["status"] != "eligible":
+                continue
+            payload = {"id": row.get("id"), **(rlaif_reward_model_record(row) if target == "rlaif"
+                                               else training_record(target, row))}
+            check = prepare_trl_export("dpo" if target == "rlaif" else target, [payload])
+            if check["ready"]:
+                compatible += 1
+                handle.write(canonical(check["rows"][0]) + "\n")
+            else:
+                failure = {**check["failures"][0], "index": total}
+                failures.append(failure)
+                reasons[failure["reason"]] = reasons.get(failure["reason"], 0) + 1
+            total += 1
+    if not total:
+        failures.append({"index": None, "id": None, "reason": "trl_no_records"})
+        reasons["trl_no_records"] = 1
+    ready = bool(total) and not failures
+    if ready:
+        pending.replace(output)
+    else:
+        pending.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+    return {"status": "ready" if ready else "incompatible", "format": format_name,
+            "file": output.name if ready else None,
+            "summary": {"total": total, "compatible": compatible, "incompatible": total - compatible,
+                        "reasons": dict(sorted(reasons.items()))}, "failures": failures}
+
+
 def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                name="自动数据生成", backend=None, model=None, judge_backend=None,
                judge_model=None, jev_backend=None, jev_model=None,
                max_units=100, chunk_chars=2000, tasks=10, conversation_turns=3, source_names=None,
-               evaluation_sources=(), evaluation_source_names=None):
+               evaluation_sources=(), evaluation_source_names=None,
+               sample_count=None, concurrency=1, batch_size=100, node_models=None):
     targets = list(dict.fromkeys(targets))
     if not targets or any(t not in TARGETS for t in targets):
         raise ValueError("请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话")
-    if not 1 <= max_units <= 10000 or not 200 <= chunk_chars <= 20000 or not 1 <= tasks <= 100:
+    if any(type(value) is not int for value in (max_units, chunk_chars, tasks)) or not 1 <= max_units <= MAX_CANDIDATES or not 200 <= chunk_chars <= 20000 or not 1 <= tasks <= MAX_CANDIDATES:
         raise ValueError("处理上限/分块大小/任务数超出允许范围")
+    if sample_count is not None and (type(sample_count) is not int or not 1 <= sample_count <= MAX_CANDIDATES):
+        raise ValueError("invalid_sample_count")
+    if type(concurrency) is not int or not 1 <= concurrency <= MAX_CONCURRENCY:
+        raise ValueError("invalid_workflow_concurrency")
+    if type(batch_size) is not int or not 1 <= batch_size <= MAX_BATCH_SIZE:
+        raise ValueError("invalid_workflow_batch_size")
+    node_models = validate_node_models(node_models)
     if type(conversation_turns) is not int or not 2 <= conversation_turns <= 8:
         raise ValueError("多轮对话轮次必须为 2 到 8")
     if not isinstance(brief, str) or len(brief) > 20000:
@@ -166,6 +217,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "conversation_turns": conversation_turns, "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
+              "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
+              "node_models": node_models,
               "prompts": prompt_versions()}
     atomic_json(path / "recipe.json", recipe)
     atomic_json(path / "state.json", {"id": run_id, "name": name[:100], "created_at": now(), "updated_at": now(),
@@ -190,21 +243,32 @@ class Workflow:
         # calls and accounting use the dedicated JEV role.
         self.jev = jev if jev is not None else judge
         self.stage = "ingest"
+        self._lock = threading.RLock()
+        self._local = threading.local()
+        self._client_locks = {}
+        self._abort = threading.Event()
+        self._last_save = 0.0
 
-    def save(self):
-        self.state["updated_at"] = now()
-        atomic_json(self.path / "state.json", self.state)
+    def save(self, *, force=True):
+        with self._lock:
+            moment = time.monotonic()
+            if not force and moment - self._last_save < 0.5:
+                return
+            self.state["updated_at"] = now()
+            atomic_json(self.path / "state.json", self.state)
+            self._last_save = moment
 
     def event(self, kind, **fields):
         event = {"at": now(), "stage": self.stage, "kind": kind, **fields}
-        with (self.path / "events.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(canonical(event) + "\n")
-        self.state["events"].append(event)
-        self.state["events"] = self.state["events"][-300:]
-        self.save()
+        with self._lock:
+            with (self.path / "events.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(canonical(event) + "\n")
+            self.state["events"].append(event)
+            self.state["events"] = self.state["events"][-300:]
+            self.save(force=not kind.startswith("model_"))
 
     def check_cancel(self):
-        if (self.path / "cancel.json").exists():
+        if self._abort.is_set() or (self.path / "cancel.json").exists():
             raise Cancelled()
 
     def checkpoint(self, key, action):
@@ -223,59 +287,110 @@ class Workflow:
         field = {"judge": "judge", "jev": "jev"}.get(role, "generator")
         client = getattr(self, field)
         if client is None:
-            prefix = f"{role}_" if role in {"judge", "jev"} else ""
-            client, _ = load_backend(self.root, backend=self.recipe[prefix + "backend"],
-                                     model=self.recipe[prefix + "model"], role=role)
-            setattr(self, field, client)
+            cache = getattr(self._local, "clients", None)
+            if cache is None:
+                cache = self._local.clients = {}
+            cache_key = (self.stage, role)
+            client = cache.get(cache_key)
+            if client is None:
+                prefix = f"{role}_" if role in {"judge", "jev"} else ""
+                binding = self.recipe.get("node_models", {}).get(self.stage, {}).get(role, {})
+                client, _ = load_backend(self.root, backend=binding.get("backend") or self.recipe.get(prefix + "backend"),
+                                         model=binding.get("model") or self.recipe.get(prefix + "model"), role=role,
+                                         allow_global_endpoint_override=not bool(binding))
+                cache[cache_key] = client
         identity = {"model": getattr(client, "model", type(client).__name__),
                     "endpoint_hash": digest(str(getattr(getattr(client, "client", None), "base_url", "injected")))}
-        pinned = self.state.setdefault("models", {}).get(role)
-        if pinned and pinned != identity:
-            raise ValueError("model_configuration_changed_create_new_run")
-        self.state["models"][role] = identity
-        self.save()
+        model_key = f"{self.stage}.{role}" if self.recipe.get("node_models", {}).get(self.stage, {}).get(role) else role
+        with self._lock:
+            pinned = self.state.setdefault("models", {}).get(model_key)
+            if pinned and pinned != identity:
+                raise ValueError("model_configuration_changed_create_new_run")
+            self.state["models"][model_key] = identity
+            self._client_locks.setdefault(id(client), threading.Lock())
+            self.save(force=False)
         return client
 
     def ask(self, key, role, prompt_id, data):
         def invoke():
             self.check_cancel()
             client = self.client(role)
-            before = dict(getattr(client, "usage", {}))
-            self.event("model_started", role=role)
-            try:
-                return chat_json(client, [
-                    {"role": "system", "content": render(get("workflow.system")) + "\n" + render(get(prompt_id))},
-                    {"role": "user", "content": canonical(data)}])
-            finally:
-                after = getattr(client, "usage", {})
-                usage = self.state["usage"].setdefault(role, {})
-                for metric in ("calls", "prompt_tokens", "completion_tokens"):
-                    usage[metric] = usage.get(metric, 0) + max(0, after.get(metric, 0) - before.get(metric, 0))
-                self.event("model_finished", role=role)
+            with self._client_locks[id(client)]:
+                self.check_cancel()
+                before = dict(getattr(client, "usage", {}))
+                self.event("model_started", role=role)
+                try:
+                    return chat_json(client, [
+                        {"role": "system", "content": render(get("workflow.system")) + "\n" + render(get(prompt_id))},
+                        {"role": "user", "content": canonical(data)}])
+                finally:
+                    after = getattr(client, "usage", {})
+                    with self._lock:
+                        usage = self.state["usage"].setdefault(role, {})
+                        for metric in ("calls", "prompt_tokens", "completion_tokens"):
+                            usage[metric] = usage.get(metric, 0) + max(0, after.get(metric, 0) - before.get(metric, 0))
+                        self.event("model_finished", role=role)
         return self.checkpoint(["call", key], invoke)
 
     def stage_items(self, stage, items, action):
         self.stage = stage
+        self._abort.clear()
         metrics = self.state["stages"][stage]
-        metrics.update(status="running", done=0, total=len(items), started_at=now())
+        batch_size = self.recipe.get("batch_size", 100)
+        workers = self.recipe.get("concurrency", 1) if stage not in {"ingest", "agent", "gsm8k"} else 1
+        metrics.update(status="running", done=0, total=len(items), started_at=now(),
+                       outputs=0, eligible=0, quarantined=0, cached=0,
+                       batch_size=batch_size, concurrency=workers, batches_done=0,
+                       batches_total=(len(items) + batch_size - 1) // batch_size)
         metrics.pop("error", None)
         self.event("stage_started")
-        result = []
-        for index, item in enumerate(items):
+        directory = self.path / "stage-results"
+        directory.mkdir(exist_ok=True)
+        destination = directory / f"{stage}.jsonl"
+        pending = directory / f".{stage}.pending"
+        started = time.monotonic()
+        def process(index, item):
             checkpoint_key = ["item", index, digest(item)]
             if stage == "agent":
                 checkpoint_key.extend((REPLAY_POLICY_VERSION, RUNNER_SHA256,
                                        self.recipe.get("agent_sandbox_image")))
+            cached = (self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json").exists()
             value = self.checkpoint(checkpoint_key, lambda: action(item))
-            result.extend(value)
-            metrics["done"] = index + 1
-            metrics["outputs"] = len(result)
-            metrics["eligible"] = sum(r.get("status") in {"ready", "eligible"} for r in result)
-            metrics["quarantined"] = sum(r.get("status") == "quarantined" for r in result)
-            self.save()
+            with self._lock:
+                metrics["done"] += 1
+                metrics["outputs"] += len(value)
+                metrics["eligible"] += sum(row.get("status") in {"ready", "eligible"} for row in value)
+                metrics["quarantined"] += sum(row.get("status") == "quarantined" for row in value)
+                metrics["cached"] += int(cached)
+                elapsed = max(0.001, time.monotonic() - started)
+                metrics["rate_per_minute"] = round(metrics["done"] * 60 / elapsed, 1)
+                metrics["eta_seconds"] = round((metrics["total"] - metrics["done"]) * elapsed / metrics["done"])
+                self.save(force=False)
+            return value
+        iterator = iter(enumerate(items))
+        with pending.open("w", encoding="utf-8") as handle, ThreadPoolExecutor(max_workers=workers) as executor:
+            while batch := list(islice(iterator, batch_size)):
+                self.check_cancel()
+                futures = {executor.submit(process, index, item): index for index, item in batch}
+                ordered = {}
+                try:
+                    for future in as_completed(futures):
+                        ordered[futures[future]] = future.result()
+                except BaseException:
+                    self._abort.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
+                for index, _ in batch:
+                    for row in ordered[index]:
+                        handle.write(canonical(row) + "\n")
+                handle.flush()
+                metrics["batches_done"] += 1
+                self.save()
+        pending.replace(destination)
         metrics.update(status="completed", finished_at=now())
-        self.event("stage_completed", outputs=len(result))
-        return result
+        self.event("stage_completed", outputs=metrics["outputs"])
+        return WorkflowRows(destination, metrics["outputs"])
 
     def rejected(self, unit, reason):
         provenance = {key: unit[key] for key in ("source_name", "location", "source_location") if key in unit}
@@ -381,12 +496,30 @@ class Workflow:
         return result
 
     def plan(self):
-        data = self.ask("plan", "generation", "workflow.plan",
-            {"brief": self.recipe["brief"], "count": self.recipe["tasks"]})
-        tasks = data.get("tasks") if isinstance(data, dict) else None
-        if not isinstance(tasks, list) or len(tasks) != self.recipe["tasks"] or any(text_issue(t) for t in tasks):
-            (self.path / "checkpoints" / self.stage / f"{digest(['call', 'plan'])}.json").unlink(missing_ok=True)
-            raise ValueError("invalid_task_plan")
+        count = min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"])
+        tasks, seen = [], set()
+        metrics = self.state["stages"]["ingest"]
+        metrics.update(status="running", done=0, total=count, phase="planning")
+        self.save()
+        for offset in range(0, count, PLAN_BATCH_SIZE):
+            size = min(PLAN_BATCH_SIZE, count - offset)
+            key = "plan" if count <= PLAN_BATCH_SIZE else ["plan", offset]
+            data = self.ask(key, "generation", "workflow.plan",
+                {"brief": self.recipe["brief"], "count": size, "offset": offset,
+                 "total": count, "batch": offset // PLAN_BATCH_SIZE + 1,
+                 "previous_tasks": tasks[-10:],
+                 "instruction": "只规划当前批；利用 batch 和 offset 覆盖不同主题与情境，避免重复之前任务。"})
+            planned = data.get("tasks") if isinstance(data, dict) else None
+            if (not isinstance(planned, list) or len(planned) != size or any(text_issue(t) for t in planned)
+                    or len({task.strip() for task in planned}) != size or any(task.strip() in seen for task in planned)):
+                (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
+                raise ValueError("invalid_task_plan")
+            tasks.extend(planned)
+            seen.update(task.strip() for task in planned)
+            metrics.update(done=len(tasks), outputs=len(tasks), eligible=len(tasks))
+            self.save()
+        metrics.update(status="completed", finished_at=now())
+        self.save()
         return [{"id": digest([self.recipe["brief"], task]), "source_id": digest(self.recipe["brief"]),
                  "source_name": "开放需求", "location": index + 1,
                  "source_location": {"brief_task": index + 1},
@@ -642,7 +775,12 @@ class Workflow:
             return [self.rejected(sample, "identical_dpo_answers")]
         check = self.judge_answer([sample["id"], "alternative_judge"],
                                   {"prompt": prefix, "source": sample["source_context"]}, alternative)
-        choices = sorted([(sample["judge"], chosen), (check, alternative)], key=lambda x: x[0]["correctness"])
+        node_models = self.recipe.get("node_models", {})
+        chosen_check = sample["judge"]
+        if node_models.get("sft", {}).get("jev") != node_models.get("preference", {}).get("jev"):
+            chosen_check = self.judge_answer([sample["id"], "chosen_judge"],
+                {"prompt": prefix, "source": sample["source_context"]}, chosen)
+        choices = sorted([(chosen_check, chosen), (check, alternative)], key=lambda x: x[0]["correctness"])
         low, high = choices
         if not accepted(high[0]) or high[0]["correctness"] - low[0]["correctness"] < 2:
             return [{**self.rejected(sample, "insufficient_preference_evidence"), "checks": [low[0], high[0]]}]
@@ -731,9 +869,13 @@ class Workflow:
             report["limitations"].append(
                 "RLAIF 当前仅产出任务正确性准则下的 AI 反馈和奖励模型偏好候选；未训练奖励模型、提供在线奖励或运行强化学习")
         for target in self.recipe["targets"]:
-            records, seen, training = [], set(), []
+            self.check_cancel()
+            records = RowSpool(self.path / "stage-results" / f"package-{target}-records.jsonl")
+            training = RowSpool(self.path / "stage-results" / f"package-{target}-training.jsonl")
+            seen = set()
             corpus_index = CorpusNearDuplicateIndex() if target == "cpt" else None
             for original in collections[target]:
+                self.check_cancel()
                 row = deepcopy(original)
                 if row["status"] == "eligible":
                     payload = training_record(target, row)
@@ -777,6 +919,8 @@ class Workflow:
                             seen.add(identity)
                             training.append(payload)
                 records.append(row)
+            records.close()
+            training.close()
             if target == "cpt":
                 cluster_sizes = {}
                 for row in records:
@@ -788,15 +932,15 @@ class Workflow:
                 for root_id in {row["duplicate_of"] for row in records
                                 if row.get("duplicate_scope") == "prior_cpt_release"}:
                     cluster_sizes[root_id] += 1
-                for row in records:
+                def with_cluster(row):
                     if row["status"] in {"eligible", "duplicate"}:
                         row["duplicate_cluster_size"] = cluster_sizes[row.get("duplicate_of", row["id"])]
+                    return row
+                records = WorkflowRows(records.path, len(records), transform=with_cluster)
             # Atomic checkpoints hold metadata; files contain only the selected training schema.
             output = destination / f"{target}.jsonl"
-            temporary = destination / f".{target}.pending"
-            temporary.write_text("".join(canonical(row) + "\n" for row in training), encoding="utf-8")
-            temporary.replace(output)
-            atomic_json(destination / f"{target}.records.json", records)
+            write_jsonl(output, training)
+            write_json_array(destination / f"{target}.records.json", records)
             reasons = {}
             for row in records:
                 if row.get("reason"):
@@ -805,26 +949,7 @@ class Workflow:
             if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:
                 # A trainer export is complete only if every eligible native row converts.
                 # Keep the native target even when its optional TRL format is incompatible.
-                selected = [{"id": row.get("id"), **(rlaif_reward_model_record(row) if target == "rlaif"
-                                                 else training_record(target, row))}
-                            for row in records if row["status"] == "eligible"]
-                # RewardTrainer consumes the same explicit preference columns as DPO.
-                compatibility = prepare_trl_export("dpo" if target == "rlaif" else target, selected)
-                trainer_file = destination / f"trl_{target}.jsonl"
-                report["trainer_exports"][target] = {
-                    "status": "ready" if compatibility["ready"] else "incompatible",
-                    "format": compatibility["format"],
-                    "file": trainer_file.name if compatibility["ready"] else None,
-                    "summary": compatibility["summary"],
-                    "failures": compatibility["failures"],
-                }
-                if compatibility["ready"]:
-                    pending_trainer = destination / f".trl_{target}.pending"
-                    pending_trainer.write_text("".join(canonical(row) + "\n" for row in compatibility["rows"]),
-                                               encoding="utf-8")
-                    pending_trainer.replace(trainer_file)
-                else:
-                    trainer_file.unlink(missing_ok=True)
+                report["trainer_exports"][target] = write_trainer_export(destination, target, records)
             if target == "cpt":
                 selected_count = len(collections[target])
                 quality_passed = sum(row["status"] == "eligible" for row in collections[target])
@@ -866,14 +991,16 @@ class Workflow:
                 }
                 report["targets"][target]["source_breakdown"] = summarize_corpus_sources(records)
             if target == "agent":
-                negatives = [row["negative"] for row in records if row.get("negative")]
+                negative_count = sum(bool(row.get("negative")) for row in records)
                 sidecar = destination / "agent.negative.jsonl"
-                pending = destination / ".agent.negative.pending"
-                pending.write_text("".join(canonical(row) + "\n" for row in negatives), encoding="utf-8")
-                pending.replace(sidecar)
-                report["targets"][target]["negative"] = len(negatives)
+                write_jsonl(sidecar, (row["negative"] for row in records if row.get("negative")))
+                report["targets"][target]["negative"] = negative_count
         atomic_json(destination / "quality.json", report)
-        self.state["quality"] = report
+        self.state["quality"] = {"policy": report["policy"], "targets": report["targets"],
+                                 "human_review": report["human_review"],
+                                 "trainer_exports": {target: {key: value for key, value in summary.items()
+                                                            if key != "failures"}
+                                                     for target, summary in report["trainer_exports"].items()}}
         for pending in destination.glob(".*.pending"):
             pending.unlink(missing_ok=True)
         files = {p.name: file_hash(p) for p in destination.iterdir() if p.is_file() and p.name != "manifest.json"}
@@ -915,27 +1042,32 @@ class Workflow:
                 if self.recipe["brief"] and not self.recipe["sources"] and planned_targets:
                     self.stage = "ingest"
                     units = self.checkpoint("planned_tasks", self.plan)
+                    self.state["stages"]["ingest"].update(status="completed", done=len(units),
+                                                          total=len(units), outputs=len(units), eligible=len(units))
                 if "gsm8k" in selected_targets and not units:
                     units = [{"id": digest([self.recipe["brief"], "gsm8k", i]), "source_id": digest(self.recipe["brief"]),
                               "kind": "brief", "text": self.recipe["brief"], "status": "ready"}
                              for i in range(self.recipe["tasks"])]
                 eligible = [u for u in units if u["status"] == "ready"]
-                gsm_deferred = max(0, self.recipe["tasks"] - self.recipe["max_units"]) if "gsm8k" in selected_targets else 0
+                requested = self.recipe.get("sample_count") or self.recipe["tasks"]
+                planning_deferred = max(0, requested - self.recipe["max_units"]) if not self.recipe["sources"] else 0
                 self.state["input_summary"] = {"units": len(units), "ready": len(eligible),
-                    "quarantined": len(units) - len(eligible), "deferred": max(0, len(eligible) - self.recipe["max_units"]) + gsm_deferred,
+                    "quarantined": len(units) - len(eligible), "deferred": max(max(0, len(eligible) - self.recipe["max_units"]), planning_deferred),
                     "targets": list(self.recipe["targets"])}
-                atomic_json(self.path / "input_records.json", units)
+                write_json_array(self.path / "input_records.json", units)
                 selected = eligible[:self.recipe["max_units"]]
+                generated = generation_units(selected, self.recipe.get("sample_count"))
+                self.state["input_summary"]["generation_candidates"] = len(generated)
                 collections = {}
                 needs_sft = bool(selected_targets & (PREFERENCE_TARGETS | {"sft", "cot"}))
                 collections["cpt"] = self.stage_items("cpt", selected, self.cpt) if "cpt" in selected_targets else []
-                collections["sft"] = self.stage_items("sft", selected, self.sft) if needs_sft else []
+                collections["sft"] = self.stage_items("sft", generated, self.sft) if needs_sft else []
                 if not needs_sft:
                     self.state["stages"]["sft"]["status"] = "skipped"
 
                 self.state["stages"].setdefault("multiturn", {"label": STAGES["multiturn"],
                     "status": "pending", "done": 0, "total": 0})
-                collections["multiturn"] = (self.stage_items("multiturn", selected, self.multiturn)
+                collections["multiturn"] = (self.stage_items("multiturn", generated, self.multiturn)
                                             if "multiturn" in selected_targets else [])
                 if "multiturn" not in selected_targets:
                     self.state["stages"]["multiturn"]["status"] = "skipped"
@@ -946,16 +1078,18 @@ class Workflow:
                     self.state["stages"]["agent"]["status"] = "skipped"
 
                 if selected_targets & PREFERENCE_TARGETS:
-                    sft_items = [sample for sample in collections["sft"] if sample["status"] == "eligible"]
+                    sft_items = collections["sft"].eligible(self.state["stages"]["sft"]["eligible"])
                     pairs = self.stage_items("preference", sft_items, self.preference)
-                    collections["dpo"] = [deepcopy(row) for row in pairs] if "dpo" in selected_targets else []
-                    collections["orpo"] = [deepcopy(row) for row in pairs] if "orpo" in selected_targets else []
-                    collections["rlaif"] = [deepcopy(row) for row in pairs] if "rlaif" in selected_targets else []
-                    for row in collections["rlaif"]:
+                    collections["dpo"] = pairs if "dpo" in selected_targets else []
+                    collections["orpo"] = pairs if "orpo" in selected_targets else []
+                    def checked_rlaif(row):
                         if row["status"] == "eligible":
                             issue = rlaif_feedback_issue(row)
                             if issue:
                                 row.update(status="quarantined", reason=issue)
+                        return row
+                    collections["rlaif"] = (WorkflowRows(pairs.path, len(pairs), transform=checked_rlaif)
+                                             if "rlaif" in selected_targets else [])
                 else:
                     for target in PREFERENCE_TARGETS:
                         collections[target] = []
@@ -965,14 +1099,14 @@ class Workflow:
                     seed_base = self.recipe["brief"] or canonical(self.recipe["sources"])
                     items = [{"id": digest([seed_base, "gsm8k", index]),
                               "source_id": digest(seed_base), "status": "ready"}
-                             for index in range(min(self.recipe["tasks"], self.recipe["max_units"]))]
+                             for index in range(min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"]))]
                     collections["gsm8k"] = self.stage_items("gsm8k", items, self.gsm8k)
                 else:
                     collections["gsm8k"] = []
                     self.state["stages"]["gsm8k"]["status"] = "skipped"
 
                 if "cot" in selected_targets:
-                    sft_items = [sample for sample in collections["sft"] if sample["status"] == "eligible"]
+                    sft_items = collections["sft"].eligible(self.state["stages"]["sft"]["eligible"])
                     collections["cot"] = self.stage_items("cot", sft_items, self.cot)
                 else:
                     collections["cot"] = []
