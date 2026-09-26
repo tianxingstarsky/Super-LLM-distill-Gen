@@ -345,10 +345,12 @@ def render_run(application, run_id, begin, *, embedded=False):
                 st.caption("处理进度包含已校验并复用的断点；新处理单元也可能复用此前保存的模型响应。")
             if selected_metrics.get("batches_total"):
                 st.caption(f"批次 {selected_metrics.get('batches_done', 0)} / {selected_metrics['batches_total']}")
-                st.metric("候选 / 分钟", f"{selected_metrics.get('rate_per_minute', 0):,.0f}")
+                rate = selected_metrics.get("rate_per_minute")
+                st.metric("候选 / 分钟", f"{rate:,.0f}" if rate is not None else "—")
                 eta = selected_metrics.get("eta_seconds")
                 if selected_status == "running" and eta is not None:
                     st.caption(f"预计剩余 {math.ceil(eta / 60):,} 分钟")
+                    st.caption("按本次处理速度估算，不计已复用的单元断点；剩余单元仍可能复用模型响应。")
             st.html('<div class="df-run-stat-grid">'
                     f'<div class="df-run-stat"><b>{max(0, passed)}</b><span>{passed_label}</span></div>'
                     f'<div class="df-run-stat"><b>{max(0, quarantined)}</b><span>{quarantined_label}</span></div>'

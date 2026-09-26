@@ -35,6 +35,32 @@ def test_capacity_and_node_snapshot_are_persisted(tmp_path):
         validate_node_models({"sft": {"generation": {"backend": "a", "model": "b", "api_key": "secret"}}})
 
 
+def test_reused_item_checkpoints_do_not_claim_new_processing_speed(tmp_path):
+    run = workflow(tmp_path)
+    items = [{"id": str(i)} for i in range(3)]
+    def action(item):
+        return [{"id": item["id"], "status": "eligible"}]
+    list(run.stage_items("sft", items, action))
+    assert run.state["stages"]["sft"]["rate_per_minute"] is not None
+    def must_not_process(item):
+        pytest.fail("Completed item should be reused")
+    list(run.stage_items("sft", items, must_not_process))
+    metrics = run.state["stages"]["sft"]
+    assert metrics["done"] == metrics["cached"] == 3
+    assert metrics["rate_per_minute"] is None and metrics["eta_seconds"] is None
+
+
+def test_attempt_clears_previous_speed_before_first_new_result(tmp_path):
+    run = workflow(tmp_path)
+    metrics = run.state["stages"]["sft"]
+    metrics.update(rate_per_minute=9999, eta_seconds=1)
+    def action(item):
+        assert metrics["rate_per_minute"] is None and metrics["eta_seconds"] is None
+        raise RuntimeError("offline failure")
+    with pytest.raises(RuntimeError, match="offline failure"):
+        run.stage_items("sft", [{"id": "new"}], action)
+
+
 def test_large_planning_is_batched_and_resumes_completed_calls(tmp_path):
     run = workflow(tmp_path, sample_count=125, max_units=1000)
     calls = []

@@ -689,6 +689,7 @@ ZH_EN: dict[str, str] = {
     "失败截断点": "Failure cutoff",
     "本地重放已核对": "Local replay verified",
     "未记录工具返回": "Tool result not recorded",
+    "按本次处理速度估算，不计已复用的单元断点；剩余单元仍可能复用模型响应。": "Estimated from this attempt's processing speed, excluding reused item checkpoints. Remaining items may reuse model responses.",
     "检查隔离环境": "Check isolated environment",
     "正在检查本机容器服务与镜像…": "Checking the local container service and image…",
     "容器服务与固定镜像可用；实际重放仍需在运行时验证。": "The container service and pinned image are available. Replay is verified during execution.",

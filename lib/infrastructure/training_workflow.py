@@ -347,6 +347,7 @@ class Workflow:
         workers = self.recipe.get("concurrency", 1) if stage not in {"ingest", "agent", "gsm8k"} else 1
         metrics.update(status="running", done=0, total=len(items), started_at=now(),
                        outputs=0, eligible=0, quarantined=0, cached=0,
+                       rate_per_minute=None, eta_seconds=None,
                        batch_size=batch_size, concurrency=workers, batches_done=0,
                        batches_total=(len(items) + batch_size - 1) // batch_size)
         metrics.pop("error", None)
@@ -355,13 +356,18 @@ class Workflow:
         directory.mkdir(exist_ok=True)
         destination = directory / f"{stage}.jsonl"
         pending = directory / f".{stage}.pending"
-        started = time.monotonic()
+        processing_started = None
         def process(index, item):
+            nonlocal processing_started
             checkpoint_key = ["item", index, digest(item)]
             if stage == "agent":
                 checkpoint_key.extend((REPLAY_POLICY_VERSION, RUNNER_SHA256,
                                        self.recipe.get("agent_sandbox_image")))
             cached = (self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json").exists()
+            if not cached:
+                with self._lock:
+                    if processing_started is None:
+                        processing_started = time.monotonic()
             value = self.checkpoint(checkpoint_key, lambda: action(item))
             with self._lock:
                 metrics["done"] += 1
@@ -369,9 +375,11 @@ class Workflow:
                 metrics["eligible"] += sum(row.get("status") in {"ready", "eligible"} for row in value)
                 metrics["quarantined"] += sum(row.get("status") == "quarantined" for row in value)
                 metrics["cached"] += int(cached)
-                elapsed = max(0.001, time.monotonic() - started)
-                metrics["rate_per_minute"] = round(metrics["done"] * 60 / elapsed, 1)
-                metrics["eta_seconds"] = round((metrics["total"] - metrics["done"]) * elapsed / metrics["done"])
+                processed = metrics["done"] - metrics["cached"]
+                if processed and processing_started is not None:
+                    elapsed = max(0.001, time.monotonic() - processing_started)
+                    metrics["rate_per_minute"] = round(processed * 60 / elapsed, 1)
+                    metrics["eta_seconds"] = round((metrics["total"] - metrics["done"]) * elapsed / processed)
                 self.save(force=False)
             return value
         iterator = iter(enumerate(items))
