@@ -2,7 +2,9 @@
 
 平台主运行时统一使用 Python 3.11：Streamlit 提供桌面浏览器工作台，Python 应用服务连接数据生成、文件解析、模型调用和持久化。仓库中的 Node 依赖用于已有 Web Component 回归测试与可选插件开发，不作为平台启动服务，也不引入第二套产品 API。
 
-Windows double-click startup uses the windowless launcher and the system browser. It is not an embedded desktop window. Directory creation and log opening now fail visibly before dependency loading or service startup. The launcher keeps the single-instance lock and health checks after logging is available. Tests cover blocked data paths and blocked log paths using real temporary filesystem entries; Windows message-box delivery is mocked in those tests.
+Windows double-click startup now selects `scripts/launch_desktop.py`. The native pywebview shell embeds the existing loopback workbench with WebView2. It does not expose a Python bridge or add another product API. Downloads are enabled for dataset export; file URLs are disabled. The shell waits for both the UI and review API, reuses a healthy service, or starts the existing windowless service launcher with `--service-only`. The service keeps its existing single-instance lock. Closing the desktop window leaves the service running so long tasks continue. Multiple shell windows can share that service. An unsuccessful new service child is reported; a timed-out child owned by this launch is terminated. Existing healthy services are never terminated by the shell.
+
+`scripts/launch_console.py` remains the explicit browser entry. Directory creation and log opening fail visibly before loading dependencies or starting services. Desktop failures use `desktop.log`; service failures use `console.log`. Lifecycle tests mock the GUI and message boxes. On Windows the shell enables renderer accessibility in its process environment while preserving existing browser arguments. Native checks confirmed a loaded home document, navigation, workspace controls, and real task statistics through Windows accessibility. Closing one native window left the other window and both service health checks intact. Screenshot capture failed with the system `SetIsBorderRequired` interface error. Native upload and dataset download dialogs remain unverified.
 
 ## 洋葱依赖方向
 

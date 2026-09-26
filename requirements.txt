@@ -10,3 +10,4 @@ PyYAML>=6,<7
 # 不再依赖 argilla/argilla-server/redis（旧协作栈已下线）
 langfuse
 streamlit==1.63.0
+pywebview==6.2.1; sys_platform == "win32"

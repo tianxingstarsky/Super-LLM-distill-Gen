@@ -42,6 +42,8 @@ def _show_error(message: str) -> None:
 
 
 def _open_console() -> None:
+    if "--service-only" in sys.argv:
+        return
     if sys.platform != "win32":
         return
     launch = ctypes.windll.shell32.ShellExecuteW
@@ -91,7 +93,7 @@ def _wait_then_open(*, timeout: float, stop: threading.Event | None = None) -> b
             return False
         if _existing_console_ready():
             _open_console()
-            _log("控制台已就绪，已打开浏览器。")
+            _log("控制台已就绪。")
             return True
         if stop is None:
             time.sleep(0.3)

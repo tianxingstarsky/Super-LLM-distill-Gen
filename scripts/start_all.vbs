@@ -4,7 +4,7 @@ Set shell = CreateObject("WScript.Shell")
 Set fs = CreateObject("Scripting.FileSystemObject")
 root = fs.GetParentFolderName(fs.GetParentFolderName(WScript.ScriptFullName))
 python = root & "\.venv\Scripts\pythonw.exe"
-script = root & "\scripts\launch_console.py"
+script = root & "\scripts\launch_desktop.py"
 If Not fs.FileExists(python) Then
     MsgBox "ShuJian Cube Python environment is missing:" & vbCrLf & python & vbCrLf & vbCrLf & _
            "Run these commands in the project folder, then double-click again:" & vbCrLf & _

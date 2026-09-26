@@ -39,6 +39,10 @@ Good AI starts with useful data. We make each step easy to follow and each resul
 3. Follow progress and see which stages need attention.
 4. Review examples before sharing a collection.
 
+## Open the app
+
+On Windows, double-click `scripts/start_all.vbs` to open the desktop workspace. Work keeps running when you close the window. Open it again to return to your tasks.
+
 ## Our commitments
 
 - Keep examples connected to their source.
