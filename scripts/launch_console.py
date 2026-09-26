@@ -100,11 +100,8 @@ def _wait_then_open(*, timeout: float, stop: threading.Event | None = None) -> b
     return False
 
 
-def main() -> int:
-    output = ROOT / "data" / "output"
-    output.mkdir(parents=True, exist_ok=True)
-    with (output / "console.log").open("a", encoding="utf-8", buffering=1) as log, \
-            redirect_stdout(log), redirect_stderr(log):
+def _main_with_log(output: Path, log) -> int:
+    with redirect_stdout(log), redirect_stderr(log):
         os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")
         for key, name in (("PIP_CACHE_DIR", "pip-cache"), ("HF_HOME", "hf-home"), ("DSH_HOME", "dsh-home")):
@@ -184,6 +181,21 @@ def main() -> int:
             return 1
         finally:
             lock.release()
+
+
+def main() -> int:
+    output = ROOT / "data" / "output"
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        log = (output / "console.log").open("a", encoding="utf-8", buffering=1)
+    except OSError as exc:
+        _show_error("无法创建控制台数据目录或写入启动日志。\n"
+                    f"请检查目录是否可写：{output}\n\n详细错误：{exc}")
+        return 1
+    try:
+        return _main_with_log(output, log)
+    finally:
+        log.close()
 
 
 if __name__ == "__main__":

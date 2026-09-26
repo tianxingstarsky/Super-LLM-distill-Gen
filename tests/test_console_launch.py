@@ -134,3 +134,20 @@ def test_vbs_reports_missing_python_before_hidden_launch():
     source = (launcher.ROOT / 'scripts' / 'start_all.vbs').read_text(encoding='utf-8')
     assert 'fs.FileExists(python)' in source
     assert 'MsgBox' in source
+
+
+@pytest.mark.parametrize('failure', ['directory', 'log'])
+def test_unwritable_startup_storage_reports_error_before_starting_service(monkeypatch, tmp_path, failure):
+    _prepare_launcher(monkeypatch, tmp_path)
+    errors = []
+    monkeypatch.setattr(launcher, '_show_error', errors.append)
+    monkeypatch.setattr(cli, '_launch_console', lambda: (_ for _ in ()).throw(AssertionError('must not start')))
+    if failure == 'directory':
+        (tmp_path / 'data').write_text('blocking file', encoding='utf-8')
+    else:
+        output = tmp_path / 'data' / 'output'
+        output.mkdir(parents=True)
+        (output / 'console.log').mkdir()
+    assert launcher.main() == 1
+    assert len(errors) == 1
+    assert '无法创建控制台数据目录或写入启动日志' in errors[0]

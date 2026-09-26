@@ -2,6 +2,8 @@
 
 平台主运行时统一使用 Python 3.11：Streamlit 提供桌面浏览器工作台，Python 应用服务连接数据生成、文件解析、模型调用和持久化。仓库中的 Node 依赖用于已有 Web Component 回归测试与可选插件开发，不作为平台启动服务，也不引入第二套产品 API。
 
+Windows double-click startup uses the windowless launcher and the system browser. It is not an embedded desktop window. Directory creation and log opening now fail visibly before dependency loading or service startup. The launcher keeps the single-instance lock and health checks after logging is available. Tests cover blocked data paths and blocked log paths using real temporary filesystem entries; Windows message-box delivery is mocked in those tests.
+
 ## 洋葱依赖方向
 
 ```mermaid
