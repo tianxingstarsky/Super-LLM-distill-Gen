@@ -177,6 +177,7 @@ ZH_EN: dict[str, str] = {
     "队列页码": "Queue page",
     "页码": "Page", "上一页": "Previous page", "下一页": "Next page",
     "上一条": "Previous", "下一条": "Next",
+    "查看完整参数": "View full arguments",
     "前往数据生成": "Go to data creation",
     "进入数据生成工作台": "Open data creation workspace",
     "逐条检查训练语料及其来源证据，修订通过的样本并保留完整审核记录。": "Review each example and its source. Approve or revise it with a full review record.",

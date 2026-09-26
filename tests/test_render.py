@@ -19,6 +19,26 @@ def test_untrusted_html_is_escaped():
     assert "<script>" not in html and "&lt;script&gt;" in html
 
 
+def test_full_tool_arguments_preserve_long_code_nested_fields_and_call_id():
+    from lib.render import _render_tool_call
+    from lib.presentation.streamlit.i18n import translate_markup
+    args = {f"field{i}": i for i in range(12)}
+    args.update(code="x" * 22000 + "CODE_END", nested={"items": list(range(12)), "工作流": "<script>"})
+    call_id = "call-" + "a" * 80
+    preview = _render_tool_call({"id": call_id, "name": "run_code", "arguments": args})
+    assert "CODE_END" in preview and "field11" in preview and call_id in preview
+    assert "<script>" not in preview and "&lt;script&gt;" in preview
+    english = translate_markup(preview, "en")
+    assert "View full arguments" in english and "工作流" in english
+
+
+def test_non_json_tool_arguments_keep_the_original_string():
+    from lib.render import _render_tool_call
+    raw = "not-json <payload> " + "x" * 500 + "RAW_END"
+    preview = _render_tool_call({"name": "custom", "arguments": raw})
+    assert "RAW_END" in preview and "&lt;payload&gt;" in preview
+
+
 def test_bubble_roles_and_thinking():
     from lib.render import _render_message
 

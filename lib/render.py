@@ -300,13 +300,17 @@ def _render_tool_call(tc: Dict[str, Any]) -> str:
     lines = [f'<span class="tc-name">🔧 {_esc(name)}</span>']
     call_id = tc.get("id") or tc.get("toolCallId") or tc.get("tool_call_id")
     if call_id:
-        lines[0] += f'<span class="tc-id">{_esc(str(call_id)[:32])}</span>'
+        lines[0] += f'<span class="tc-id" data-user-content style="overflow-wrap:anywhere">{_esc(str(call_id))}</span>'
     if isinstance(args, dict):
         for k, v in list(args.items())[:10]:
             lines.append(f'<span class="tc-key">{_esc(str(k))}</span> = <span class="tc-val">{_esc(_human_value(v))}</span>')
     elif args:
         lines.append(_esc(_human_value(args)))
-    return f'<div class="tool-call">{"<br>".join(lines)}</div>'
+    raw = (args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, indent=2, default=str))
+    full = ('<details class="tool-overflow"><summary>查看完整参数</summary>'
+            '<pre data-user-content style="max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere">'
+            + _esc(raw) + '</pre></details>')
+    return f'<div class="tool-call">{"<br>".join(lines)}{full}</div>'
 
 
 def _iter_tool_calls(value: Any) -> List[Dict[str, Any]]:
