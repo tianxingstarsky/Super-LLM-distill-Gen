@@ -18,7 +18,7 @@ def fingerprint(manifest: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def verify_archive(data, manifest: dict) -> None:
+def verify_archive(data, manifest: dict, *, progress=None) -> None:
     expected = manifest.get("sha256", {})
     if not isinstance(expected, dict) or not expected:
         raise ValueError("archive_manifest_missing")
@@ -28,11 +28,18 @@ def verify_archive(data, manifest: dict) -> None:
             raise ValueError("archive_inventory_mismatch")
         if json.loads(archive.read("manifest.json")) != manifest:
             raise ValueError("archive_manifest_changed")
+        total = sum(archive.getinfo(name).file_size for name in expected)
+        done = 0
+        if progress:
+            progress("verify", done, total)
         for filename, expected_hash in expected.items():
             digest = hashlib.sha256()
             with archive.open(filename) as handle:
                 for block in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(block)
+                    done += len(block)
+                    if progress:
+                        progress("verify", done, total)
             if digest.hexdigest() != expected_hash:
                 raise ValueError("archive_integrity_error")
 
@@ -60,10 +67,12 @@ def prepared_bundle(run: Path, *, verified_manifest: dict | None = None) -> dict
     return _cached(run, verified_manifest if verified_manifest is not None else verify_artifacts(run))
 
 
-def prepare_bundle(run: Path) -> dict:
+def prepare_bundle(run: Path, *, progress=None) -> dict:
     folder = run / "delivery"
     folder.mkdir(exist_ok=True)
     with FileLock(str(folder / ".archive.lock")):
+        if progress:
+            progress("source")
         manifest = verify_artifacts(run)
         cached = _cached(run, manifest)
         if cached:
@@ -72,15 +81,30 @@ def prepare_bundle(run: Path) -> dict:
         pending = folder / f".{key}.pending"
         destination = folder / f"{key}.zip"
         try:
+            files = sorted(manifest["sha256"]) + ["manifest.json"]
+            total = sum((run / "artifacts" / name).stat().st_size for name in files)
+            done = 0
+            if progress:
+                progress("archive", done, total)
             with zipfile.ZipFile(pending, "w", zipfile.ZIP_DEFLATED) as archive:
-                for name in sorted(manifest["sha256"]):
-                    archive.write(run / "artifacts" / name, name)
-                archive.write(run / "artifacts" / "manifest.json", "manifest.json")
-            verify_archive(pending, manifest)
+                for name in files:
+                    with (run / "artifacts" / name).open("rb") as source, archive.open(name, "w", force_zip64=True) as target:
+                        for block in iter(lambda: source.read(1024 * 1024), b""):
+                            target.write(block)
+                            done += len(block)
+                            if progress:
+                                progress("archive", done, total)
+            if progress:
+                verify_archive(pending, manifest, progress=progress)
+                progress("recheck")
+            else:
+                verify_archive(pending, manifest)
             if verify_artifacts(run) != manifest:
                 raise ValueError("archive_source_changed")
             digest = file_hash(pending)
             size = pending.stat().st_size
+            if progress:
+                progress("publish")
             pending.replace(destination)
             atomic_json(folder / f"{key}.json", {"fingerprint": key, "sha256": digest, "bytes": size})
         finally:

@@ -24,13 +24,14 @@ class ReleaseCancelled(Exception):
 
 
 def _paths(output, run_id, target):
-    if target not in {"sft", "cpt", "dpo", "orpo"}:
+    if target not in {"sft", "cpt", "dpo", "orpo", "workflow"}:
         raise ValueError("invalid_review_target")
     run = run_path(output, run_id)
-    directory = run / "human-review" / ".jobs"
+    owner = run / ("delivery" if target == "workflow" else "human-review")
+    directory = owner / ".jobs"
     if not (run / "state.json").is_file():
         raise ValueError("review_run_not_found")
-    if any(is_linked(p) for p in (run, run / "human-review", directory) if p.exists() or p.is_symlink()):
+    if any(is_linked(p) for p in (run, owner, directory) if p.exists() or p.is_symlink()):
         raise ValueError("linked_review_job")
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{target}.json"
@@ -137,8 +138,12 @@ def execute_release_job(output, run_id, target, job_id):
                 atomic_json(path, state)
 
         try:
-            from lib.infrastructure.training_review_driver import FilesystemTrainingReviewDriver
-            result = FilesystemTrainingReviewDriver(output, target).prepare_release(run_id, progress=progress)
+            if target == "workflow":
+                from lib.infrastructure.workflow_archive import prepare_bundle
+                result = prepare_bundle(run_path(output, run_id), progress=progress)
+            else:
+                from lib.infrastructure.training_review_driver import FilesystemTrainingReviewDriver
+                result = FilesystemTrainingReviewDriver(output, target).prepare_release(run_id, progress=progress)
             state = {**state, "status": "completed", "phase": "completed", "result": result}
         except ReleaseCancelled:
             state = {**state, "status": "cancelled"}

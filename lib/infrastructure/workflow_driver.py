@@ -12,6 +12,7 @@ from lib.infrastructure.training_workflow import (
 from lib.infrastructure.release_catalog import list_releases as catalog_releases, release_file as catalog_file
 from lib.infrastructure.json_stream import iter_json_records
 from lib.infrastructure import workflow_archive
+from lib.infrastructure import review_release_jobs
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib import workspace as WS
 
@@ -93,6 +94,18 @@ class FilesystemWorkflowDriver:
 
     def prepared_bundle(self, run_id: str) -> dict | None:
         return workflow_archive.prepared_bundle(run_path(self.output, run_id))
+
+    def start_bundle(self, run_id: str) -> dict:
+        state = self.state(run_id)
+        if state.get("status") not in {"completed", "needs_attention"}:
+            raise ValueError("workflow_not_ready_to_package")
+        return review_release_jobs.start_release_job(self.output, run_id, "workflow", 0)
+
+    def bundle_job(self, run_id: str) -> dict | None:
+        return review_release_jobs.release_job(self.output, run_id, "workflow")
+
+    def cancel_bundle(self, run_id: str) -> dict | None:
+        return review_release_jobs.cancel_release_job(self.output, run_id, "workflow")
 
     def artifact_file(self, run_id: str, filename: str) -> bytes:
         return workflow_archive.artifact_bytes(run_path(self.output, run_id), filename,

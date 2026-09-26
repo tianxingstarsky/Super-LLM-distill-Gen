@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import re
+import time
 from pathlib import Path
 import zipfile
 
@@ -13,6 +14,61 @@ from streamlit.testing.v1 import AppTest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def wait_for_package(app, run_id):
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        app.run()
+        assert not app.exception
+        if f"verified-package:{run_id}" in app.session_state:
+            return
+        time.sleep(0.05)
+    raise AssertionError("Background package did not finish")
+
+
+def test_active_package_poll_does_not_load_large_artifacts(tmp_path, monkeypatch):
+    from filelock import FileLock
+    from lib import workspace as ws
+    from lib.infrastructure import review_release_jobs as jobs
+    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    from lib.infrastructure.training_workflow import Workflow, create_run
+
+    monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
+    monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
+    monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
+    source = tmp_path / "source"
+    source.mkdir()
+    guide = source / "guide.txt"
+    guide.write_text("Disconnect power before checking wiring.", encoding="utf-8")
+    name = ws.add_folder(source)
+    run_id = create_run(ws.out(name), sources=[guide], targets=["cpt"])
+    Workflow(ws.out(name), run_id, ROOT).execute()
+    driver = FilesystemWorkflowDriver(ROOT, ws.out(name))
+    monkeypatch.setattr(jobs.subprocess, "Popen", lambda *args, **kwargs: None)
+    job = driver.start_bundle(run_id)
+    path = jobs._paths(ws.out(name), run_id, "workflow")
+    jobs.atomic_json(path, {**job, "status": "running", "phase": "archive", "done": 1024, "total": 4096})
+
+    def no_artifact_load(*args):
+        raise AssertionError("Polling must not scan large artifacts")
+
+    monkeypatch.setattr(FilesystemWorkflowDriver, "package_contents", no_artifact_load)
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = name
+    app.session_state["nav"] = "输出打包"
+    app.session_state["ui_language"] = "en"
+    with FileLock(str(path) + ".active.lock", timeout=0):
+        app.run()
+        assert not app.exception
+        app.run()
+        assert not app.exception
+        assert any(button.label == "Stop packaging" for button in app.button)
+        assert any(progress.value == 25 for progress in app.get("progress"))
+        markup = "".join(str(item.value) for item in app.get("html"))
+        visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
+        visible = re.sub(r"<[^>]*>", "", visible)
+        assert not re.search(r"[\u4e00-\u9fff]", visible), visible
 
 
 def test_review_entry_only_exposes_supported_nonempty_artifacts():
@@ -127,6 +183,7 @@ def test_verified_workflow_outputs_can_be_prepared_for_download(tmp_path, monkey
     assert any('data-ready="false"' in str(item.value) for item in app.get("html"))
 
     next(button for button in app.button if button.label == "生成并校验完整 ZIP").click().run()
+    wait_for_package(app, run_id)
     assert not app.exception
     reference = app.session_state[f"verified-package:{run_id}"]
     assert isinstance(reference["bytes"], int)
@@ -266,6 +323,7 @@ def test_trl_sidecar_and_cached_zip_follow_verified_manifest(tmp_path, monkeypat
     assert any("先断电" in str(item.value) for item in app.get("html"))
 
     next(button for button in app.button if button.label == "生成并校验完整 ZIP").click().run()
+    wait_for_package(app, run_id)
     assert not app.exception
     key = f"verified-package:{run_id}"
     package = app.session_state[key]
@@ -288,6 +346,7 @@ def test_trl_sidecar_and_cached_zip_follow_verified_manifest(tmp_path, monkeypat
 
     # A tampered file without a corresponding manifest update blocks the page and download.
     next(button for button in app.button if button.label == "生成并校验完整 ZIP").click().run()
+    wait_for_package(app, run_id)
     assert key in app.session_state
     native.write_text("tampered\n", encoding="utf-8")
     app.run()

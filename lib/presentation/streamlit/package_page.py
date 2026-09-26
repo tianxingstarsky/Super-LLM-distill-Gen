@@ -25,6 +25,33 @@ _STATUS = {
     "cancelled": ("已停止", "muted"),
 }
 
+_BUNDLE_PHASES = {"queued": "等待后台进程", "source": "来源校验", "archive": "压缩数据包",
+                  "verify": "归档完整性校验", "recheck": "再次核对来源", "publish": "保存完整数据包"}
+
+
+@st.fragment(run_every=2)
+def _poll_bundle(application, run_id):
+    job = application.bundle_job(run_id)
+    if not job or job["status"] not in {"queued", "running"}:
+        st.rerun()
+    progress, actions = st.columns([1.88, 1], gap="large")
+    with progress, st.container(border=True):
+        st.html(_heading("▣", "后台打包进度", "可离开页面，返回后继续查看进度。"))
+        phase = _BUNDLE_PHASES.get(job.get("phase"), "等待后台进程")
+        st.info(phase)
+        if job.get("total"):
+            st.progress(min(job["done"] / job["total"], 1),
+                        text=f"{_size(job['done'])} / {_size(job['total'])}")
+        st.caption("进度来自实际写入或校验的字节数；每个阶段独立统计。")
+    with actions, st.container(border=True):
+        st.html(_heading("◈", "操作", "数据包完整写入并校验后才会显示下载入口。"))
+        if st.button("停止打包", disabled=job.get("cancel_requested", False),
+                     key=f"stop-package:{run_id}", width="stretch"):
+            application.cancel_bundle(run_id)
+            st.rerun(scope="fragment")
+        if job.get("cancel_requested"):
+            st.caption("正在停止，当前校验或文件处理完成后生效。")
+
 
 def _safe(value: Any) -> str:
     return html.escape(str(value), quote=True)
@@ -410,6 +437,15 @@ def render_package_page(application: WorkflowApplication) -> None:
         )
     run = labels[run_id]
     package_key = f"verified-package:{run_id}"
+    job = application.bundle_job(run_id)
+    if job and job["status"] in {"queued", "running"}:
+        st.session_state.pop(package_key, None)
+        _poll_bundle(application, run_id)
+        return
+    if job and job["status"] in {"failed", "interrupted"}:
+        st.warning("上次自动数据包未完成，请检查产物后重新开始。已保存的完整数据包仍然保留。")
+    elif job and job["status"] == "cancelled":
+        st.info("本次打包已停止，可重新生成。已完成版本仍然保留。")
     try:
         state = application.state(run_id)
         contents = application.package_contents(run_id)
@@ -473,9 +509,7 @@ def render_package_page(application: WorkflowApplication) -> None:
             if st.button("生成并校验完整 ZIP", type="primary", key=f"prepare-package:{run_id}",
                          width="stretch"):
                 try:
-                    with st.spinner("正在写入磁盘并校验数据包…"):
-                        package = application.prepare_bundle(run_id)
-                    st.session_state[package_key] = package
+                    application.start_bundle(run_id)
                     st.rerun()
                 except (OSError, ValueError, TypeError, KeyError,
                         json.JSONDecodeError) as error:
