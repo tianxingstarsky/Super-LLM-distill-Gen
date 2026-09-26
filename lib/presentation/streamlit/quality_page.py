@@ -8,6 +8,7 @@ from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_quality_page import render_workflow_quality
 from lib.render import render_message_sequence
+from lib.presentation.streamlit.i18n import translate_label
 
 
 def render_quality_page(workflow_app: WorkflowApplication, release_app: ReleaseApplication, workspace_id: str,
@@ -106,7 +107,10 @@ def render_quality_page(workflow_app: WorkflowApplication, release_app: ReleaseA
             "visual_review_required": "图像需人工查看", "messages_missing": "缺少对话消息",
             "message_schema": "消息结构不符", "orphan_context": "上下文起点缺失",
             "incomplete_answer": "回答未完成", "unresolved_tool_error": "未解决的工具错误",
+            "invalid_tool_error_flag": "工具错误标记无效",
         }
+        language = st.session_state.get("ui_language", "zh")
+        issue_names = {code: translate_label(label, language) for code, label in issue_names.items()}
         code_counts = {}
         for issue in data["issues"]:
             code = str(issue.get("code", "未知问题"))
@@ -140,9 +144,10 @@ def render_quality_page(workflow_app: WorkflowApplication, release_app: ReleaseA
                 position = (st.selectbox("同名样本位置", positions, format_func=lambda index: f"文件第 {index + 1} 条")
                             if len(positions) > 1 else positions[0])
                 sample = samples[position]
-                st.html('<div class="df-quality-record"><span>文件第 ' + str(position + 1)
-                        + ' 条</span><span>样本 ID：' + html.escape(sample_id)
-                        + '</span><span>问题：' + html.escape(issue_names.get(str(issue.get('code')), str(issue.get('code'))))
+                row_label = f"File record {position + 1}" if language == "en" else f"文件第 {position + 1} 条"
+                st.html('<div class="df-quality-record"><span>' + row_label
+                        + '</span><span>' + translate_label("样本 ID：", language) + html.escape(sample_id)
+                        + '</span><span>' + translate_label("问题：", language) + html.escape(issue_names.get(str(issue.get('code')), str(issue.get('code'))))
                         + '</span></div>')
                 messages = sample.get("messages")
                 if isinstance(messages, list) and all(isinstance(message, dict) for message in messages):

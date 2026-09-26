@@ -54,6 +54,7 @@ REASON_LABELS = {
     "invalid_or_incomplete_conversation": "对话结构不完整",
     "missing_messages": "缺少对话消息", "missing_final_answer": "缺少最终回答",
     "unresolved_tool_error": "未解决的工具错误", "missing_tool_result": "缺少工具返回",
+    "invalid_tool_error_flag": "工具错误标记无效",
     "orphan_tool_result": "工具返回无法对应调用",
     "multimodal_requires_dedicated_pipeline": "需要多模态专用流程",
     "invalid_generated_corpus": "生成语料不合格", "corpus_judge_rejected": "语料评审未通过",

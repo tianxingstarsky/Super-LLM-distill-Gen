@@ -9,6 +9,7 @@ from collections import Counter
 import hashlib
 import json
 import re
+from lib.domain.workflow_quality import tool_error_flag
 
 
 def sample_hash(sample: dict) -> str:
@@ -69,7 +70,10 @@ def report(samples, decisions=()) -> dict:
                 or not (messages[-1].get("content") or messages[-1].get("toolCalls")
                         or messages[-1].get("tool_calls"))):
             issues.append({"sample": label, "code": "incomplete_answer"})
-        if any(message.get("isError") for message in messages):
+        error_flags = [tool_error_flag(message) for message in messages]
+        if any(issue for _, issue in error_flags):
+            issues.append({"sample": label, "code": "invalid_tool_error_flag"})
+        if any(error for error, _ in error_flags):
             issues.append({"sample": label, "code": "unresolved_tool_error"})
         text = "\n".join(message.get("content", "") for message in messages)
         lengths.append(len(text))

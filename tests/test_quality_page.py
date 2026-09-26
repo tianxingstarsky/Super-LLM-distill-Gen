@@ -1,6 +1,7 @@
 """Quality presentation runs with supplied applications, without console globals."""
 import ast
 import json
+import pytest
 from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
@@ -13,7 +14,8 @@ def test_quality_page_has_no_storage_or_composition_imports():
     assert not any(module.startswith(('lib.bootstrap','lib.infrastructure','lib.workspace')) for module in modules)
 
 
-def test_quality_page_reports_raw_issue_and_filters_with_injected_services(tmp_path):
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_quality_page_reports_raw_issue_and_filters_with_injected_services(tmp_path, language):
     path=tmp_path/'samples.jsonl'
     rows=[{'id':'broken','messages':'invalid original'},
           {'id':'incomplete','messages':[{'role':'user','content':'question'}]}]
@@ -21,6 +23,8 @@ def test_quality_page_reports_raw_issue_and_filters_with_injected_services(tmp_p
     path.write_text(source,encoding='utf-8')
     script=f'''
 from pathlib import Path
+import streamlit as st
+st.session_state['ui_language']={language!r}
 from lib.application.release_service import ReleaseApplication
 from lib.infrastructure.sample_preview import RawSamplePreview
 from lib.presentation.streamlit.quality_page import render_quality_page
@@ -42,4 +46,5 @@ render_quality_page(Workflow(),ReleaseApplication(Driver()),"isolated-ui",Path({
     assert not ui.exception
     matches=[item for item in ui.selectbox if item.label=='定位问题样本']
     assert matches[0].value==0
+    assert matches[0].format_func(0)==("Answer is incomplete · incomplete" if language=="en" else "回答未完成 · incomplete")
     assert path.read_text(encoding='utf-8')==source
