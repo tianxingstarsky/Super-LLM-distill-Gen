@@ -64,3 +64,22 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints):
 def snapshot_available_bindings(nodes, source_mode, bindings, endpoints):
     return {node: {role: bindings[node][role] for role in node_roles(node, source_mode)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
+
+
+def render_agent_verification(workspace, capabilities):
+    draft_key = f"workflow-agent-mode:{workspace}"
+    draft = st.session_state.get(draft_key, "local")
+    mode = st.selectbox("轨迹验证方式", ["local", "isolated"], index=1 if draft == "isolated" else 0,
+                        format_func=lambda value: "本地验证" if value == "local" else "隔离验证",
+                        key=f"agent-mode-choice:{workspace}")
+    st.session_state[draft_key] = mode
+    if mode == "isolated":
+        if not capabilities.get("isolated_configured"):
+            st.warning("尚未配置可用的隔离验证环境。选择本地验证，或完成环境配置后再开始。")
+        else:
+            st.caption("已登记固定版本的隔离镜像；运行时仍会检查本机环境。")
+        st.caption("隔离验证增加受限账本工具的状态重放，不运行上传记录中的任意代码。")
+    st.caption("本地验证核对受限算术工具和录制 JSON 快照；其他工具记录会隔离保存。")
+    st.info("轨迹处理：重放核对 → 保守剪枝 → 分开保存合格与失败轨迹")
+    st.caption("只剪除已核对、相邻且完全相同、后文不引用的调用与返回；原始轨迹保留在质量记录中。")
+    st.caption("失败轨迹保留原因和执行证据，不混入合格训练样本。")

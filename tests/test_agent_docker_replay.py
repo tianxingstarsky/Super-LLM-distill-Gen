@@ -170,6 +170,29 @@ def test_workflow_pins_opt_in_image_and_keeps_unavailable_trace_out_of_training(
     assert "negative" not in record
 
 
+def test_node_verification_choice_is_pinned_and_missing_environment_rejected(tmp_path, monkeypatch):
+    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    source = tmp_path / "trajectory.jsonl"
+    source.write_text(json.dumps({"messages": _messages()}) + "\n", encoding="utf-8")
+    output = tmp_path / "out"
+    driver = FilesystemWorkflowDriver(tmp_path, output)
+    monkeypatch.setenv(IMAGE_ENV, IMAGE)
+    local = create_run(output, sources=[source], targets=["agent"], agent_replay_mode="local")
+    assert read_json(run_path(output, local) / "recipe.json")["agent_sandbox_image"] is None
+    isolated = create_run(output, sources=[source], targets=["agent"], agent_replay_mode="isolated")
+    assert read_json(run_path(output, isolated) / "recipe.json")["agent_sandbox_image"] == IMAGE
+    assert driver.agent_replay_capabilities() == {"isolated_configured": True}
+    monkeypatch.delenv(IMAGE_ENV)
+    before = set(output.rglob("recipe.json"))
+    with pytest.raises(ValueError, match="agent_sandbox_not_configured"):
+        create_run(output, sources=[source], targets=["agent"], agent_replay_mode="isolated")
+    assert set(output.rglob("recipe.json")) == before
+    monkeypatch.setenv(IMAGE_ENV, "invalid")
+    assert driver.agent_replay_capabilities()["isolated_configured"] is False
+    create_run(output, sources=[source], targets=["agent"], agent_replay_mode="local")
+    assert read_json(run_path(output, isolated) / "recipe.json")["agent_sandbox_image"] == IMAGE
+
+
 def test_unsupported_tool_and_unbounded_action_never_reach_docker(monkeypatch):
     calls = []
     monkeypatch.setattr(agent_docker_replay.subprocess, "run", _fake_docker(calls))

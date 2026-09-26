@@ -20,7 +20,7 @@ from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
-from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings
+from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification
 
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
@@ -79,7 +79,9 @@ def _stage_configuration(key, recipe, state):
             details.update({"每段对话轮数": recipe.get("conversation_turns", 3),
                             "质检方式": "逐轮评审 + 全段一致性评审"})
         elif key == "agent":
-            details["验证方式"] = "受限 calculator 与录制 JSON 快照重放；其他工具轨迹隔离"
+            details["验证方式"] = "隔离验证" if recipe.get("agent_sandbox_image") else "本地验证"
+            details["轨迹剪枝"] = "已核对的相邻重复调用；原始记录保留"
+            details["失败样本"] = "单独保存原因和执行证据，不混入训练样本"
         elif key == "preference":
             details["比较目标"] = [target.upper() for target in targets if target in {"dpo", "orpo", "rlaif"}]
         return details
@@ -485,7 +487,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
                 st.html(_planned_dependencies_html(graph_edges))
         if "agent" in targets:
-            st.caption("Agent 正例需要完整的已记录工具轨迹；当前仅能重放受限整数 calculator。")
+            st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
             st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
     with st.container(key=f"workbench-create:{ws}"):
@@ -543,6 +545,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                         "上传评测集参照", type=["json", "jsonl"], accept_multiple_files=True,
                         max_upload_size=5, key=f"workflow-evaluations:{ws}")
         model_issues = []
+        agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
         if targets:
             selection_key = f"workflow-setup-node:{ws}"
             selected_node = st.session_state.get(selection_key, "sft" if "sft" in graph_nodes else "ingest")
@@ -564,11 +567,18 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             with node_column, st.container(border=True):
                 section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
                 render_node_models(selected_node, source_mode, ws, bindings, endpoints)
+                if selected_node == "agent":
+                    render_agent_verification(ws, agent_capabilities)
                 if selected_node == "ingest":
                     st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
                 elif selected_node == "package":
                     st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
         with st.container(border=True, key="workbench-submit"):
+            agent_mode = st.session_state.get(f"workflow-agent-mode:{ws}", "local")
+            agent_unavailable = ("agent" in targets and agent_mode == "isolated"
+                                 and not agent_capabilities.get("isolated_configured"))
+            if agent_unavailable:
+                st.warning("Agent 节点的隔离验证环境未配置，请检查该节点。")
             summary_col, action_col = st.columns([3, 1], vertical_alignment="center", gap="large")
             with summary_col:
                 st.html('<div class="df-wb-submit-summary"><b>运行配置摘要</b><strong>' +
@@ -580,7 +590,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                         '</span></div>')
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
-                submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues),
+                submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues) or agent_unavailable,
                                       key=f"workflow-create:{ws}", width="stretch")
         if submitted:
             try:
@@ -609,6 +619,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                                         sample_count=int(sample_count), concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),
+                                        agent_replay_mode=agent_mode,
                                         source_names=source_names,
                                         evaluation_sources=evaluation_sources,
                                         evaluation_source_names=evaluation_source_names)

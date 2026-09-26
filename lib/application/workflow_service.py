@@ -16,6 +16,9 @@ class WorkflowApplication:
     def create_run(self, **recipe: Any) -> str:
         return self._driver.create(**recipe)
 
+    def agent_replay_capabilities(self) -> dict:
+        return self._driver.agent_replay_capabilities()
+
     def execute(self, run_id: str) -> dict:
         return self._driver.execute(run_id)
 

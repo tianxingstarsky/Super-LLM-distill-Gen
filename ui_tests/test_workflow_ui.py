@@ -31,6 +31,30 @@ def setup_workspace(tmp_path, monkeypatch):
     return ws, name, source
 
 
+def test_agent_node_retains_verification_choice_and_blocks_unconfigured_start(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATAFORGE_AGENT_REPLAY_IMAGE", raising=False)
+    ws, name, source = setup_workspace(tmp_path, monkeypatch)
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = name
+    app.session_state["nav"] = "自动工作流"
+    app.run()
+    next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(["agent"]).run()
+    app.session_state[f"setup-canvas:{name}"] = {"node": "agent", "serial": "agent-1"}
+    app.run()
+    next(widget for widget in app.selectbox if widget.label == "轨迹验证方式").set_value("isolated").run()
+    assert not app.exception
+    assert next(button for button in app.button if button.key == f"workflow-create:{name}").disabled
+    app.session_state[f"setup-canvas:{name}"] = {"node": "package", "serial": "package-1"}
+    app.run()
+    app.session_state[f"setup-canvas:{name}"] = {"node": "agent", "serial": "agent-2"}
+    app.run()
+    picker = next(widget for widget in app.selectbox if widget.label == "轨迹验证方式")
+    assert picker.value == "isolated"
+    picker.set_value("local").run()
+    assert not app.exception
+    assert not next(button for button in app.button if button.key == f"workflow-create:{name}").disabled
+
+
 def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monkeypatch):
     ws, name, source = setup_workspace(tmp_path, monkeypatch)
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)

@@ -72,3 +72,7 @@ Browser downloads are capped at 50 MiB. Larger prepared archives remain availabl
 ### Long-message preview controls
 
 Training artifact previews opt into collapsible message rendering for content or tool payloads longer than 1,600 characters. The compact summary contains a short escaped excerpt. The complete rendered message remains inside a named, keyboard-focusable scroll region with a maximum height of 420 pixels. Tool-call grouping, recorded ordering, and failure markers stay outside the collapsed payload. English controls are translated while excerpts and full training text retain their original language. The shared renderer's default remains unchanged for callers that do not request compact previews. This controls visual height; it is not lazy DOM loading of an individual message.
+
+### Agent node verification choice
+
+The Agent setup node owns the local or isolated replay choice. A separate session draft survives switching to another node. Isolated replay requires a valid pinned image configuration before starting; actual Docker availability is checked during execution. The application capability reports configuration only. Task creation validates the current configuration again and stores the selected image in the immutable recipe. Explicit local replay ignores the container environment. Existing CLI callers retain the configured environment default. The node explains conservative duplicate pruning and the separate destination for failed traces; neither mechanism makes uploaded snapshots proof of external truth.

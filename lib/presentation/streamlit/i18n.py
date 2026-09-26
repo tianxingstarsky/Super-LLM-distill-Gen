@@ -1160,6 +1160,19 @@ def language_code(value: Any) -> str:
 
 
 ZH_EN.update({
+    "轨迹验证方式": "Trace verification",
+    "Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。": "Positive agent examples need complete recorded tool traces. Select verification in the Agent node and check its supported scope.",
+    "本地验证": "Local verification", "隔离验证": "Isolated verification",
+    "尚未配置可用的隔离验证环境。选择本地验证，或完成环境配置后再开始。": "Isolated verification is not configured. Choose local verification or configure the environment first.",
+    "已登记固定版本的隔离镜像；运行时仍会检查本机环境。": "A pinned container image is configured. The local environment is checked at run time.",
+    "隔离验证增加受限账本工具的状态重放，不运行上传记录中的任意代码。": "Isolated verification also replays bounded ledger state. It does not run arbitrary code from uploaded records.",
+    "本地验证核对受限算术工具和录制 JSON 快照；其他工具记录会隔离保存。": "Local verification checks bounded arithmetic tools and recorded JSON snapshots. Other tool records are quarantined.",
+    "轨迹处理：重放核对 → 保守剪枝 → 分开保存合格与失败轨迹": "Trace processing: replay checks → conservative pruning → separate eligible and failed traces",
+    "只剪除已核对、相邻且完全相同、后文不引用的调用与返回；原始轨迹保留在质量记录中。": "Pruning removes verified, adjacent identical calls and results with no later references. Quality records keep the original trace.",
+    "失败轨迹保留原因和执行证据，不混入合格训练样本。": "Failed traces keep their reasons and execution evidence. They stay separate from eligible training samples.",
+    "轨迹剪枝": "Trace pruning", "已核对的相邻重复调用；原始记录保留": "Verified adjacent duplicate calls. Original records are retained.",
+    "失败样本": "Failed samples", "单独保存原因和执行证据，不混入训练样本": "Reasons and execution evidence are stored separately from training samples.",
+    "Agent 节点的隔离验证环境未配置，请检查该节点。": "Isolated verification is not configured for the Agent node. Check that node.",
     "质量汇总与打包": "Quality summary and packaging", "任务数": "Task count", "处理上限": "Unit limit",
     "配方和来源快照已固定，可用于核对与重新运行。": "This run keeps fixed sources and settings. Use them to review or repeat the run.",
     "全部任务": "All tasks", "待启动 / 执行中": "Queued / running", "筛选任务": "Filter tasks",

@@ -159,7 +159,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                judge_model=None, jev_backend=None, jev_model=None,
                max_units=100, chunk_chars=2000, tasks=10, conversation_turns=3, source_names=None,
                evaluation_sources=(), evaluation_source_names=None,
-               sample_count=None, concurrency=1, batch_size=100, node_models=None):
+               sample_count=None, concurrency=1, batch_size=100, node_models=None,
+               agent_replay_mode="configured"):
     targets = list(dict.fromkeys(targets))
     if not targets or any(t not in TARGETS for t in targets):
         raise ValueError("请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话")
@@ -195,8 +196,12 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if evaluation_sources and "cpt" not in targets:
         raise ValueError("评测集参照仅用于 CPT 去污染检查")
     references = snapshot_released_corpus(Path(output)) if "cpt" in targets else []
+    if not isinstance(agent_replay_mode, str) or agent_replay_mode not in {"configured", "local", "isolated"}:
+        raise ValueError("invalid_agent_replay_mode")
     agent_sandbox_image = (validate_sandbox_image(os.environ.get(IMAGE_ENV))
-                           if "agent" in targets else None)
+                           if "agent" in targets and agent_replay_mode != "local" else None)
+    if "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:
+        raise ValueError("agent_sandbox_not_configured")
     run_id = uuid.uuid4().hex
     path = run_path(output, run_id)
     (path / "inputs").mkdir(parents=True, exist_ok=False)

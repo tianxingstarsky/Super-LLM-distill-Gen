@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from lib.infrastructure.training_workflow import (
@@ -14,6 +15,7 @@ from lib.infrastructure.json_stream import iter_json_records
 from lib.infrastructure import workflow_archive
 from lib.infrastructure import review_release_jobs
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
+from lib.infrastructure.agent_docker_replay import IMAGE_ENV, validate_sandbox_image
 from lib import workspace as WS
 
 
@@ -24,6 +26,13 @@ class FilesystemWorkflowDriver:
 
     def create(self, **recipe) -> str:
         return create_run(self.output, **recipe)
+
+    def agent_replay_capabilities(self) -> dict:
+        try:
+            configured = bool(validate_sandbox_image(os.environ.get(IMAGE_ENV)))
+            return {"isolated_configured": configured}
+        except ValueError:
+            return {"isolated_configured": False, "configuration_invalid": True}
 
     def execute(self, run_id: str) -> dict:
         return Workflow(self.output, run_id, self.root).execute()
