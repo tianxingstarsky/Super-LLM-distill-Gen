@@ -212,6 +212,19 @@ def test_english_run_canvas_translates_all_stage_statuses():
         assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
 
 
+def test_all_target_canvas_localizes_inspection_and_configuration_controls():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    from lib.presentation.streamlit.workflow_page import GRAPH_LABELS, STAGE_GLYPHS
+    targets = ["cpt", "sft", "multiturn", "agent", "gsm8k", "cot", "orpo", "dpo", "rlaif"]
+    setup = canvas_spec(targets, {}, "agent", GRAPH_LABELS, STAGE_GLYPHS, language="en")
+    live = canvas_spec(targets, {}, "agent", GRAPH_LABELS, STAGE_GLYPHS, language="en", live=True)
+    assert "configure" in setup["labels"]["hint"] and "inspect" in live["labels"]["hint"]
+    assert setup["labels"]["overview"] == f"{len(setup['nodes'])} nodes · {len(setup['edges'])} links"
+    assert setup["labels"]["focus"] == "Locate selected node"
+    for spec in (setup, live):
+        assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
+
+
 def test_expanded_english_task_view_uses_full_canvas_and_localized_quality(tmp_path, monkeypatch):
     ws, workspace, source = setup_workspace(tmp_path, monkeypatch)
     rid = create_run(ws.out(workspace), sources=[source], targets=["cpt"], name="Offline document run")

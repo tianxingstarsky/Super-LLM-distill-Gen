@@ -920,6 +920,8 @@ ZH_EN: dict[str, str] = {
     "正在生成审核版本…": "Creating reviewed version…",
     "审核版本已生成": "Reviewed version is ready",
     "后台打包进度": "Background release progress",
+    "算术核验": "Arithmetic checks",
+    "CoT 核对": "CoT checks",
     "停止打包": "Stop release",
     "正在停止，当前校验或文件处理完成后生效。": "Stopping after the current check or file finishes.",
     "本次打包已停止，可重新生成。已完成版本仍然保留。": "Release stopped. You can try again. Completed versions are kept.",

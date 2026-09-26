@@ -41,8 +41,17 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
     return {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
             "live": live, "labels": {"fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
                                        "zoom_out": "Zoom out" if english else "缩小",
-                                       "hint": "Select a node to configure it. Drag the canvas to pan." if english else
-                                       "点击节点查看配置 · 拖动画布平移 · 支持缩放与键盘选择",
+                                       "focus": "Locate selected node" if english else "定位所选节点",
+                                       "reset": "Actual size" if english else "实际大小",
+                                       "completed": "Completed" if english else "已完成",
+                                       "running": "Running" if english else "运行中",
+                                       "failed": "Failed" if english else "失败",
+                                       "overview": f"{len(nodes)} nodes · {len(edges)} links" if english else
+                                       f"{len(nodes)} 个节点 · {len(edges)} 条连线",
+                                       "hint": ("Select a node to inspect it. Drag to pan. Ctrl + scroll to zoom." if live else
+                                                "Select a node to configure it. Drag to pan. Ctrl + scroll to zoom.") if english else
+                                       ("点击节点查看运行详情 · 拖动平移 · Ctrl + 滚轮缩放" if live else
+                                        "点击节点配置模型 · 拖动平移 · Ctrl + 滚轮缩放"),
                                        "lineage": "Arrows show data dependencies. Stages run in order." if english else
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
 
