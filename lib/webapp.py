@@ -1112,6 +1112,17 @@ if (isinstance(_workflow_handoff, dict)
     st.session_state[f"task-center-search:{st.session_state['ws']}"] = ""
     st.session_state[f"task-center-locate:{st.session_state['ws']}"] = _handoff_run_id
     st.session_state["workflow-scroll-top"] = True
+_preview_handoff = st.session_state.pop("workflow-open-preview", None)
+if (isinstance(_preview_handoff, dict)
+        and _preview_handoff.get("workspace") == st.session_state["ws"]
+        and _preview_handoff.get("run_id") and _preview_handoff.get("target")):
+    _preview_ws = st.session_state["ws"]
+    _preview_run = str(_preview_handoff["run_id"])
+    st.session_state["nav"] = "数据管理"
+    st.session_state[f"data-view:{_preview_ws}"] = "数据预览"
+    st.session_state[f"preview-source:{_preview_ws}"] = "工作流产物"
+    st.session_state[f"data-preview-run:{_preview_ws}"] = _preview_run
+    st.session_state[f"data-preview-target:{_preview_ws}:{_preview_run}"] = str(_preview_handoff["target"])
 # 深链：?page=人工审核&record=<sample_id>（协作者可直接分享定位链接）
 _qp_page = st.query_params.get("page")
 _review_route = {"偏好审核": "DPO 偏好优化", "语料审核": "CPT 语料审核"}

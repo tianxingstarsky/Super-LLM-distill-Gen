@@ -55,10 +55,15 @@ def test_data_preview_renders_verified_orpo_comparison(tmp_path, monkeypatch):
 
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = name
-    app.session_state["nav"] = "数据管理"
-    app.session_state[f"data-view:{name}"] = "数据预览"
+    app.session_state["nav"] = "任务管理"
+    app.session_state[f"data-view:{name}"] = "资产管理"
+    app.session_state[f"preview-source:{name}"] = "已有对话文件"
+    app.session_state["workflow-open-preview"] = {"workspace": name, "run_id": run_id, "target": "orpo"}
     app.run()
     assert not app.exception
+    assert app.session_state["nav"] == "数据管理"
+    assert app.session_state[f"data-preview-run:{name}"] == run_id
+    assert app.session_state[f"data-preview-target:{name}:{run_id}"] == "orpo"
     markup = "\n".join(str(item.value) for item in app.get("html"))
     assert "真实样本预览" in markup
     assert "如何检查电源？" in markup

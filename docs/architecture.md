@@ -95,6 +95,8 @@ HTML user-content regions use `data-user-content` to preserve text and nested at
 
 ### Absolute sample navigation
 
+Completed task details open the shared sample browser with the run and target selected. The route also selects the workflow result view, so a previous file view cannot hide the requested sample. Failed agent traces use the same browser but stay in their separate artifact. Task details no longer retain a separate three-example session cache. Each browser read still verifies artifact integrity.
+
 The data-library preview accepts a sample number across the complete manifest count and requests one native record. The application bounds the request size and normalizes negative offsets. JSONL previews build a sparse binary byte-offset index every 128 nonempty lines on the first nonzero-offset request. The first-record preview skips index construction. A process-local cache retains up to 16 file identities; a 50,000-row file needs 391 offsets. Indexed reads skip at most 127 nonempty lines before decoding selected rows. File replacement invalidates the index by metadata identity, with a post-read change check. Existing full artifact-manifest SHA-256 verification still runs before preview reads; its cost is not removed by the index. Index construction scans the full selected file once and does not persist across server restarts.
 
 The preview card has previous/next example controls with disabled first/last boundaries. Callbacks update the same per-workspace/run/target position used by absolute navigation. User-owned run names remain untranslated in the completed-run selector. Opening task progress uses the shared explicit-run handoff to clear stale task filters and locate the chosen run.

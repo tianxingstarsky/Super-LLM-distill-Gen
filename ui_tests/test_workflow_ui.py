@@ -107,7 +107,7 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     assert overview and "已完成节点 <strong>3 / 3</strong>" in overview[0]
     assert route["edges"] == [["ingest", "cpt"], ["cpt", "package"]]
     assert any("查看并打包本次训练数据" in item.label for item in app.button)
-    assert any("CPT 预训练语料 · 样本预览" == item.label for item in app.expander)
+    assert any(item.key == f"browse-preview:{rid}:cpt" and not item.disabled for item in app.button)
     assert any("来源与配方" in item.label for item in app.tabs)
     app.session_state[f"live-canvas:{rid}"] = {"node": "cpt", "serial": "click-1"}
     app.run()
@@ -117,6 +117,12 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
                  and '<div class="df-run-log">' in item.value]
     assert node_logs and "节点处理完成" in node_logs[0]
     assert "run_finished" not in node_logs[0]
+    next(item for item in app.button if item.key == f"browse-preview:{rid}:cpt").click().run()
+    assert not app.exception
+    assert app.session_state["nav"] == "数据管理"
+    assert app.session_state[f"data-preview-run:{name}"] == rid
+    assert app.session_state[f"data-preview-target:{name}:{rid}"] == "cpt"
+    assert any("操作前先断电" in str(item.value) for item in app.get("html"))
     # A fresh browser session discovers the same persistent run.
     other = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     other.session_state["ws"] = name

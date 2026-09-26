@@ -12,7 +12,6 @@ from filelock import Timeout
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_graph import execution_graph
-from lib.presentation.streamlit.artifact_preview import render_training_sample
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
@@ -223,11 +222,10 @@ def _planned_dependencies_html(edges: tuple[tuple[str, str], ...]) -> str:
             '<div class="df-wb-plan-edges">' + ''.join(rows) + '</div></div>')
 
 
-def _loaded_preview(application, run_id, target):
-    key = f"workflow-loaded-preview:{run_id}:{target}"
-    if key not in st.session_state:
-        st.session_state[key] = application.artifact_preview(run_id, target, 3)
-    return st.session_state[key]
+def _open_sample_browser(run_id, target):
+    st.session_state["workflow-open-preview"] = {
+        "workspace": st.session_state["ws"], "run_id": run_id, "target": target}
+    st.rerun()
 
 
 def _open_package(run_id):
@@ -371,31 +369,17 @@ def render_run(application, run_id, begin, *, embedded=False):
             if status in {"completed", "needs_attention"}:
                 st.button("查看并打包本次训练数据", on_click=_open_package, args=(run_id,),
                           type="primary", key=f"zip:{run_id}")
+                st.caption("按目标进入完整样本浏览，支持序号定位与连续翻阅。")
                 for target in state["targets"]:
-                    with st.expander(f"{TARGET_LABELS.get(target, target.upper())} · 样本预览"):
-                        if not st.toggle("加载样本预览", key=f"load-preview:{run_id}:{target}"):
-                            continue
-                        try:
-                            preview = _loaded_preview(application, run_id, target)
-                        except (OSError, ValueError, KeyError):
-                            st.error("无法验证或读取该目标的训练文件，请在任务产物中检查完整性。")
-                            continue
-                        if not preview:
-                            st.caption("该目标目前没有通过质量检查的样本。请查看上方隔离原因。")
-                        for row in preview:
-                            st.html(render_training_sample(target, row))
+                    eligible = int(quality["targets"].get(target, {}).get("eligible", 0))
+                    st.button(TARGET_LABELS.get(target, target.upper()),
+                              disabled=eligible <= 0, on_click=_open_sample_browser,
+                              args=(run_id, target), key=f"browse-preview:{run_id}:{target}")
                 negative_count = int(quality.get("targets", {}).get("agent", {}).get("negative", 0))
                 if "agent" in state["targets"] and negative_count:
-                    with st.expander(f"Agent 失败轨迹 · {negative_count} 条"):
-                        st.caption("以下轨迹保留了实际执行失败证据，单独存放，不会混入通过验证的训练样本。")
-                        if st.toggle("加载失败轨迹", key=f"load-negative:{run_id}"):
-                            try:
-                                negatives = _loaded_preview(application, run_id, "agent_negative")
-                            except (OSError, ValueError, KeyError):
-                                st.error("无法验证或读取失败轨迹文件，请在任务产物中检查完整性。")
-                            else:
-                                for row in negatives:
-                                    st.html(render_training_sample("agent_negative", row))
+                    st.caption("失败轨迹单独保存原因和执行证据，不混入通过验证的训练样本。")
+                    st.button("浏览 Agent 失败轨迹", on_click=_open_sample_browser,
+                              args=(run_id, "agent_negative"), key=f"browse-negative:{run_id}")
             with st.expander("产物保存位置"):
                 st.code(application.artifact_location(run_id))
         else:
