@@ -410,6 +410,18 @@ $theme_vars
 .df-review-release-ready > span { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; background:#17A574; color:#fff; }
 .df-review-release-ready strong { display:block; color:#166447; font-size:12px; }
 .df-review-release-ready small { display:block; margin-top:3px; color:#56756A; font-size:10px; overflow-wrap:anywhere; }
+.df-review-release-progress { padding:22px; margin:16px 0; border:1px solid #DCE8F7; border-radius:14px; background:linear-gradient(140deg,#FFF,#F5F9FF); box-shadow:0 5px 22px rgba(38,82,137,.05); }
+.df-review-release-progress header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; color:#193B60; }
+.df-review-release-progress header > span { padding:5px 10px; border-radius:6px; background:#E6F1FF; color:#176ED4; font-size:12px; }
+.df-review-release-progress > div { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; }
+.df-review-release-progress > div > span { display:flex; gap:8px; align-items:center; min-width:0; padding:12px 10px; border:1px solid #E2EAF4; border-radius:9px; color:#8493A7; background:#FAFCFF; font-size:12px; }
+.df-review-release-progress > div > span > b { display:grid; place-items:center; width:25px; height:25px; flex:0 0 auto; border-radius:50%; background:#EAF0F7; font-size:11px; }
+.df-review-release-progress > div > span[data-state="active"] { background:#EDF5FF; border-color:#99C5FA; color:#1565C4; }
+.df-review-release-progress > div > span[data-state="active"] > b { background:#2379E5; color:white; }
+.df-review-release-progress > div > span[data-state="done"] { color:#16805D; border-color:#D1EADF; background:#F2FBF6; }
+.df-review-release-progress > div > span[data-state="done"] > b { background:#DDF5E9; }
+@media(max-width:1100px) { .df-review-release-progress > div { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:640px) { .df-review-release-progress > div { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @container (min-width:500px) {
   .df-review-sample .df-artifact-turn-columns { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }

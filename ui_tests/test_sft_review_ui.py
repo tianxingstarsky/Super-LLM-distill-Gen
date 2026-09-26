@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
+import time
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
+from filelock import FileLock
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +63,17 @@ def test_reviewer_can_approve_and_release_sft_candidate(tmp_path, monkeypatch):
     next(button for button in app.button if button.label == "通过并保存修订").click().run()
     assert not app.exception
     next(button for button in app.button if button.label == "生成已审核 SFT 版本").click().run()
+    assert not app.exception
+    job_path = run / "human-review" / ".jobs" / "sft.json"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        with FileLock(str(job_path) + ".submit.lock", timeout=2):
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+        if job["status"] not in {"queued", "running"}:
+            break
+        time.sleep(0.05)
+    assert job["status"] == "completed", job
+    app.run()
     assert not app.exception
     release = app.session_state[f"sft-release:{run_id}"]
     assert isinstance(release, dict) and release["target"] == "sft"

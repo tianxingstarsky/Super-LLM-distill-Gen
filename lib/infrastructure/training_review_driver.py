@@ -57,8 +57,12 @@ class FilesystemTrainingReviewDriver:
                 continue
             try:
                 path = self._run(state["id"])
-                with review_index(path, self.target, self.validate, self.identity) as index:
-                    count = index.count
+                job = self.release_job(state["id"])
+                if job and job["status"] in {"queued", "running"}:
+                    count = job["candidate_count"]
+                else:
+                    with review_index(path, self.target, self.validate, self.identity) as index:
+                        count = index.count
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             result.append({"id": state["id"], "name": state.get("name", f"{self.target.upper()} 工作流"),
@@ -94,9 +98,28 @@ class FilesystemTrainingReviewDriver:
             validate_review_event(self.target, source, record)
             return store.append(record)
 
-    def prepare_release(self, run_id):
+    def prepare_release(self, run_id, *, progress=None):
+        if progress:
+            progress("source")
         with self._context(run_id) as (path, index, store):
-            return prepare_review_release(path, self.target, self.prefix, index, store)
+            return prepare_review_release(path, self.target, self.prefix, index, store, progress=progress)
+
+    def start_release(self, run_id):
+        from lib.infrastructure.review_release_jobs import start_release_job
+        job = self.release_job(run_id)
+        if job and job["status"] in {"queued", "running"}:
+            return job
+        with review_index(self._run(run_id), self.target, self.validate, self.identity) as index:
+            count = index.count
+        return start_release_job(self.output, run_id, self.target, count)
+
+    def release_job(self, run_id):
+        from lib.infrastructure.review_release_jobs import release_job
+        return release_job(self.output, run_id, self.target)
+
+    def cancel_release(self, run_id):
+        from lib.infrastructure.review_release_jobs import cancel_release_job
+        return cancel_release_job(self.output, run_id, self.target)
 
     def release_archive(self, run_id, release_id, expected_hash):
         return review_archive(self._run(run_id), self.prefix, release_id, expected_hash)

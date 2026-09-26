@@ -40,10 +40,10 @@ def _verify_zip(path, manifest):
                 raise ValueError("review_archive_integrity_error")
 
 
-def prepare_review_release(path, target, prefix, index, store):
+def prepare_review_release(path, target, prefix, index, store, *, progress=None):
     """The caller holds the artifact-index and audit locks for this operation."""
     before = verify_artifacts(path)
-    store.verify()
+    store.verify(progress=progress)
     queue = index.page(store, limit=1)
     counts = queue["counts"]
     family = "preference" if target in {"dpo", "orpo"} else target
@@ -70,6 +70,8 @@ def prepare_review_release(path, target, prefix, index, store):
     id_key, payload_key = ("pair_id", "pair") if preference else ("sample_id", "row")
     rows = iter_review_rows(path, target, validate, identity, id_key=id_key, payload_key=payload_key)
     written, total = 0, 0
+    if progress:
+        progress("data", 0, queue["total"])
     with data.open("w", encoding="utf-8", newline="\n") as handle:
         for row in rows:
             review = store.get(row[id_key])
@@ -80,9 +82,13 @@ def prepare_review_release(path, target, prefix, index, store):
                                         separators=(",", ":")) + "\n")
                 written += 1
             total += 1
+            if progress and (total % 250 == 0 or total == queue["total"]):
+                progress("data", total, queue["total"])
     if total != queue["total"] or written != counts["approved"]:
         raise ValueError("review_release_counts_changed")
     audit = staging / "review.json"
+    if progress:
+        progress("snapshot")
     store.write_snapshot(audit)
     if verify_artifacts(path) != before:
         raise ValueError("review_source_changed_retry")
@@ -96,10 +102,18 @@ def prepare_review_release(path, target, prefix, index, store):
     archives.mkdir(exist_ok=True)
     archive_path = archives / f"{release_id}.zip"
     pending_archive = archives / f".{release_id}.pending.zip"
+    if progress:
+        progress("archive", 0, 3)
     with zipfile.ZipFile(pending_archive, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name in (artifact_name, "review.json", "manifest.json"):
+        for position, name in enumerate((artifact_name, "review.json", "manifest.json"), 1):
             archive.write(staging / name, name)
+            if progress:
+                progress("archive", position, 3)
+    if progress:
+        progress("verify")
     _verify_zip(pending_archive, manifest)
+    if progress:
+        progress("verify", 1, 1)
     staging.rename(destination)
     pending_archive.replace(archive_path)
     return {"id": release_id, "target": target, "counts": manifest["counts"],

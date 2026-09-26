@@ -35,3 +35,12 @@ class CorpusReviewApplication:
 
     def release_archive(self, run_id: str, release_id: str, expected_hash: str):
         return self._driver.release_archive(run_id, release_id, expected_hash)
+
+    def start_release(self, run_id: str) -> dict:
+        return self._driver.start_release(run_id)
+
+    def release_job(self, run_id: str) -> dict | None:
+        return self._driver.release_job(run_id)
+
+    def cancel_release(self, run_id: str) -> dict | None:
+        return self._driver.cancel_release(run_id)

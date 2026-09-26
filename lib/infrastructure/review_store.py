@@ -83,15 +83,20 @@ class ReviewStore:
                 raise self._history_error()
             yield sample_id, decision
 
-    def verify(self):
+    def verify(self, *, progress=None):
         mismatch = self.db.execute("SELECT c.sample_id FROM current c LEFT JOIN events e ON c.sequence=e.sequence "
             "WHERE e.sequence IS NULL OR e.sample_id<>c.sample_id OR c.sequence<>"
             "(SELECT MAX(sequence) FROM events WHERE sample_id=c.sample_id) LIMIT 1").fetchone()
         orphan = self.db.execute("SELECT sample_id FROM events WHERE sample_id NOT IN (SELECT sample_id FROM current) LIMIT 1").fetchone()
         if mismatch or orphan:
             raise self._history_error()
-        for row in self.db.execute("SELECT sample_id,decision,payload,digest FROM events ORDER BY sequence"):
+        total = self.db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        if progress:
+            progress("audit", 0, total)
+        for position, row in enumerate(self.db.execute("SELECT sample_id,decision,payload,digest FROM events ORDER BY sequence"), 1):
             self._decode(row)
+            if progress and (position % 250 == 0 or position == total):
+                progress("audit", position, total)
 
     def write_snapshot(self, destination):
         """Keep the public audit format while writing one event at a time."""

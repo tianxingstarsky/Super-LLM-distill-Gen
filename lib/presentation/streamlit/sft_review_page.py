@@ -13,7 +13,7 @@ from lib.presentation.streamlit.shared import review_empty_state
 from lib.render import MESSAGE_CSS
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
-from lib.presentation.streamlit.review_release_controls import render_review_release
+from lib.presentation.streamlit.review_release_controls import render_active_release, render_review_release
 
 
 _DECISIONS = {"approved": "已通过", "rejected": "已退回", "skipped": "已跳过", "pending": "待审核"}
@@ -89,6 +89,8 @@ def render_sft_review(application: SftReviewApplication, *, legacy_review: Calla
     labels = {row["id"]: row for row in runs}
     run_id = st.selectbox("SFT 工作流", list(labels), key="sft-review-run",
                           format_func=lambda key: f"{labels[key]['name']} · {labels[key]['sample_count']} 条 · {key[:8]}")
+    if render_active_release(application, run_id, widgets=st):
+        return
     overview = application.queue(run_id, limit=1)
     counts, total = overview["counts"], overview["total"]
     finished = counts["approved"] + counts["rejected"]

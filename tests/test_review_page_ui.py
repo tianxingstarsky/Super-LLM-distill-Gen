@@ -80,6 +80,9 @@ class FakeReviewApplication:
         self.review = review
         self.decisions = []
 
+    def release_job(self, _run_id):
+        return None
+
     def reviewable_runs(self):
         count_key = "sample_count" if self.target in {"sft", "cpt"} else "pair_count"
         return [{"id": "r" * 32, "name": "审核任务", count_key: 1}]

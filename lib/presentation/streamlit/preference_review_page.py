@@ -9,7 +9,7 @@ import streamlit as st
 from lib.application.preference_review_service import PreferenceReviewApplication
 from lib.presentation.streamlit.shared import page_header, review_empty_state
 from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
-from lib.presentation.streamlit.review_release_controls import render_review_release
+from lib.presentation.streamlit.review_release_controls import render_active_release, render_review_release
 from lib.render import MESSAGE_CSS, render_message_sequence
 
 
@@ -88,6 +88,8 @@ def render_preference_review(application: PreferenceReviewApplication, *, show_h
     labels = {row["id"]: row for row in runs}
     run_id = st.selectbox(f"{label} 工作流", list(labels), key=_key("preference-review-run", target),
                           format_func=lambda key: f"{labels[key]['name']} · {labels[key]['pair_count']} 对 · {key[:8]}")
+    if render_active_release(application, run_id, widgets=st):
+        return
     state = application.queue(run_id, limit=1)
     total, counts = state["total"], state["counts"]
     finished = counts["approved"] + counts["rejected"]
