@@ -550,78 +550,10 @@ def page_quality(show_title=True):
 
 
 def page_monitor(show_title=True):
-    if show_title:
-        page_header("运行监控", "跟踪命令任务状态和最近输出，快速定位失败阶段。", "RUN MONITOR")
-    path = _OUT("runs.jsonl")
-    rows = []
-    invalid = 0
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                invalid += 1
-                continue
-            if isinstance(event, dict):
-                rows.append(event)
-            else:
-                invalid += 1
-    if invalid:
-        st.warning(f"日志中有 {invalid} 条记录无法读取，以下只展示有效事件。")
-    if rows:
-        st.html('''<style>
-        .df-event-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:0 0 14px; }
-        .df-event-summary > div { display:grid; gap:5px; min-height:82px; padding:14px 16px; border:1px solid #DFE8F4; border-radius:11px; background:#fff; }
-        .df-event-summary span { color:#71839A; font-size:12px; }
-        .df-event-summary strong { overflow:hidden; color:#1C3453; font-size:20px; text-overflow:ellipsis; white-space:nowrap; }
-        .df-event-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; margin:10px 0; }
-        .df-event-facts > div { min-width:0; padding:10px 12px; border:1px solid #E3EBF6; border-radius:9px; background:#F9FBFF; }
-        .df-event-facts span { display:block; color:#71839A; font-size:11px; }
-        .df-event-facts strong { display:block; margin-top:4px; overflow-wrap:anywhere; color:#263C57; font-size:13px; }
-        @media(max-width:800px) { .df-event-summary,.df-event-facts { grid-template-columns:1fr; } }
-        </style>''')
-        recent = list(reversed(rows))
-        kinds = sorted({str(row.get("kind") or "未知类型") for row in recent})
-        st.html('<div class="df-event-summary">'
-                f'<div><span>记录总数</span><strong>{len(rows):,}</strong></div>'
-                f'<div><span>事件类型</span><strong>{len(kinds):,}</strong></div>'
-                '<div><span>最近记录</span><strong>'
-                + html.escape(str(recent[0].get("at") or "—")[:19].replace("T", " "))
-                + '</strong></div></div>')
-        left, right = st.columns([1, 2], gap="large")
-        with left, st.container(border=True):
-            section_heading("事件时间线", "按类型筛选并选择一条记录", "◷")
-            kind = st.selectbox("事件类型", ["全部类型", *kinds], key=f"monitor-kind:{st.session_state['ws']}")
-            visible = [row for row in recent if kind == "全部类型" or str(row.get("kind") or "未知类型") == kind][:100]
-            st.caption(f"显示最近 {len(visible)} / {len(rows)} 条")
-            with st.container(height=510, border=False):
-                selected = st.radio(
-                    "选择事件", list(range(len(visible))), label_visibility="collapsed",
-                    format_func=lambda index: (
-                        f"{visible[index].get('kind') or '未知类型'} · "
-                        f"{str(visible[index].get('at') or '时间未知')[:19].replace('T', ' ')}"
-                    ), key=f"monitor-event:{st.session_state['ws']}:{kind}",
-                )
-        with right, st.container(border=True):
-            section_heading("事件详情", "显示原始记录中的实际字段", "▤")
-            event = visible[selected]
-            facts = []
-            for key, value in event.items():
-                if key in ("kind", "at") or isinstance(value, (dict, list)):
-                    continue
-                facts.append('<div><span>' + html.escape(str(key)) + '</span><strong>'
-                             + html.escape(str(value)[:200]) + '</strong></div>')
-            if facts:
-                st.html('<div class="df-event-facts">' + ''.join(facts) + '</div>')
-            else:
-                st.caption("该事件只有类型和时间，可展开查看原始记录。")
-            with st.expander("查看原始事件记录"):
-                st.json(event)
-    else:
-        st.html('<div class="df-empty-state"><span class="df-empty-state-icon">◷</span><strong>当前工作区暂无运行日志</strong><p>任务启动后，这里会显示阶段、耗时与执行结果。</p></div>')
-    _job_status()
+    from lib.bootstrap.monitor import monitor_application
+    from lib.presentation.streamlit.monitor_page import render_monitor_page
+    render_monitor_page(monitor_application(_OUT("runs.jsonl")), st.session_state["ws"],
+                        _job_status, show_title=show_title)
 
 
 def page_backends():

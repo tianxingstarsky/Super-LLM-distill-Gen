@@ -34,6 +34,8 @@ ZH_EN: dict[str, str] = {
     "任务管理": "Task Center",
     "管线运行": "Pipeline Run",
     "运行监控": "Run Monitor",
+    "未知类型": "Unknown type",
+    "时间未知": "Unknown time",
     "监控": "Monitor",
     "输出打包": "Release Packages",
     "模型与密钥": "Models & Keys",

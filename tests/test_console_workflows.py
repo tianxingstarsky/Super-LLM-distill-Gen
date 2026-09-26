@@ -31,26 +31,48 @@ def test_missing_corpus_input_preserves_existing_output(tmp_path, monkeypatch):
     assert existing.read_text(encoding="utf-8") == '{"text":"preserve me"}\n'
 
 
-def test_job_lock_serializes_same_workspace(tmp_path):
+def test_job_lock_serializes_same_workspace(tmp_path, monkeypatch):
     """工作区级文件锁：任务只在浏览器会话登记，跨窗口不得并发写同一输出目录。"""
     from filelock import Timeout
     from lib.console_jobs import Job
+    import threading
+
+    started, finish = threading.Event(), threading.Event()
+
+    class HeldProcess:
+        def __enter__(self):
+            started.set()
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @property
+        def stdout(self):
+            yield "worker started\n"
+            if not finish.wait(10):
+                raise RuntimeError("test worker was not released")
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr("lib.console_jobs.subprocess.Popen", lambda *args, **kwargs: HeldProcess())
 
     root = tmp_path / "app"
     job1 = Job(["__no_such_command__"], "default", root)
     job1.start()
-    job2 = Job(["__no_such_command__"], "default", root)
-    with pytest.raises(Timeout):
-        job2.start()  # 同工作区第二个任务被拒
-
-    deadline = time.monotonic() + 30
-    while job1.snapshot()[0] is None and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert job1.code is not None
+    try:
+        assert started.wait(5)
+        job2 = Job(["__no_such_command__"], "default", root)
+        with pytest.raises(Timeout):
+            job2.start()  # 同工作区第二个任务被拒
+    finally:
+        finish.set()
+        job1._thread.join(5)
+    assert job1.code == 0
     # filelock 在释放时删除锁文件；锁的持有已由上方 Timeout 验证
 
     job3 = Job(["__no_such_command__"], "default", root)
     job3.start()  # 锁已随任务结束释放
-    while job3.snapshot()[0] is None and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert job3.code is not None
+    job3._thread.join(5)
+    assert job3.code == 0
