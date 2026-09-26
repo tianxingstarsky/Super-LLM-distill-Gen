@@ -1161,6 +1161,7 @@ def language_code(value: Any) -> str:
 
 ZH_EN.update({
     "轨迹验证方式": "Trace verification",
+    "查看所选任务": "View selected run",
     "完整内容": "Full content",
     "Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。": "Positive agent examples need complete recorded tool traces. Select verification in the Agent node and check its supported scope.",
     "本地验证": "Local verification", "隔离验证": "Isolated verification",

@@ -78,3 +78,7 @@ Long plain-text corpus, evidence, and structured-record previews share the same 
 ### Agent node verification choice
 
 The Agent setup node owns the local or isolated replay choice. A separate session draft survives switching to another node. Isolated replay requires a valid pinned image configuration before starting; actual Docker availability is checked during execution. The application capability reports configuration only. Task creation validates the current configuration again and stores the selected image in the immutable recipe. Explicit local replay ignores the container environment. Existing CLI callers retain the configured environment default. The node explains conservative duplicate pruning and the separate destination for failed traces; neither mechanism makes uploaded snapshots proof of external truth.
+
+### Creation and run inspection
+
+The creation workbench lists past runs without rendering their execution details. Opening a selected run uses the same task-center handoff as starting a new run. The task center owns live inspection, checkpoint retry, and packaging navigation. This avoids reading a selected historical run's artifacts and event details during creation form rerenders, and keeps old failures separate from a new configuration. Refreshing a workspace still discovers its persistent history.

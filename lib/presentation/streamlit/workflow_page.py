@@ -639,4 +639,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
     lookup = {r["id"]: r for r in runs}
     selected_id = st.selectbox("运行记录", list(lookup), key=f"workflow-selected:{ws}",
                               format_func=lambda rid: f"{lookup[rid]['name']} · {LABELS.get(lookup[rid]['status'], lookup[rid]['status'])} · {rid[:8]}")
-    render_run(application, selected_id, begin)
+    if st.button("查看所选任务", key=f"workflow-open-history:{ws}"):
+        st.session_state["workflow-open-run"] = {"workspace": ws, "run_id": selected_id}
+        st.rerun()
