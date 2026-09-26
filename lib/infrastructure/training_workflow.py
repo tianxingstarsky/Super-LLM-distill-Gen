@@ -21,7 +21,7 @@ import time
 from filelock import FileLock, Timeout
 
 from lib.application.trainer_export_service import prepare_trl_export
-from lib.domain.workflow_quality import POLICY, accepted, canonical, conversation_issue, same_answer, text_issue, verdict
+from lib.domain.workflow_quality import POLICY, accepted, canonical, conversation_issue, same_answer, text_issue, tool_error_flag, verdict
 from lib.domain.agent_trajectory import (REPLAY_POLICY_VERSION, ReplayUnavailable,
                                          assess_recorded_trajectory, validate_tool_snapshots)
 from lib.domain.corpus_quality import CorpusNearDuplicateIndex, inspect_corpus, summarize_corpus_sources
@@ -476,9 +476,10 @@ class Workflow:
                 if issue == "unresolved_tool_error" and "agent" in self.recipe["targets"]:
                     # Keep observed failed tool steps for the separate negative
                     # sidecar, but still require a structurally complete trace.
-                    cleaned = [{k: v for k, v in message.items() if k != "isError"}
+                    cleaned = [{k: v for k, v in message.items() if k not in {"isError", "is_error"}}
                                for message in sample["messages"]]
-                    issue = conversation_issue(cleaned)
+                    issue = next((tool_error_flag(message)[1] for message in sample["messages"]
+                                  if tool_error_flag(message)[1]), None) or conversation_issue(cleaned)
                 message_metadata_issue = text_issue(canonical(sample["messages"]))
                 if message_metadata_issue in {"potential_secret", "potential_personal_data"}:
                     issue = message_metadata_issue
@@ -582,7 +583,8 @@ class Workflow:
     def sft(self, unit):
         if unit.get("verification_status") == "synthetic_unverified":
             return [self.rejected(unit, "simulated_tool_observation_not_verified_sft")]
-        if any(message.get("isError") for message in unit.get("messages", [])):
+        if any(tool_error_flag(message)[0] or tool_error_flag(message)[1]
+               for message in unit.get("messages", [])):
             return [self.rejected(unit, "observed_tool_error_not_sft")]
         history = deepcopy(unit.get("messages", []))
         context = {"source": {**unit, "messages": [
@@ -636,7 +638,8 @@ class Workflow:
         """
         if unit.get("verification_status") == "synthetic_unverified":
             return [self.rejected(unit, "simulated_tool_observation_not_verified_multiturn")]
-        if any(message.get("isError") for message in unit.get("messages", [])):
+        if any(tool_error_flag(message)[0] or tool_error_flag(message)[1]
+               for message in unit.get("messages", [])):
             return [self.rejected(unit, "observed_tool_error_not_multiturn")]
         provenance = {"source_id": unit["source_id"], "source_name": unit.get("source_name"),
                       "location": unit.get("location"), "source_location": unit.get("source_location"),

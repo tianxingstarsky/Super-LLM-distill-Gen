@@ -38,6 +38,33 @@ def _run(tmp_path, messages: list[dict], **source_fields):
     return state, path, WorkflowApplication(FilesystemWorkflowDriver(tmp_path, output)), run_id
 
 
+@pytest.mark.parametrize("flags", [{"is_error": True}, {"isError": True, "is_error": True}])
+def test_error_alias_is_retained_only_in_verified_negative(tmp_path, flags):
+    messages = [{"role": "user", "content": "2+2"}, _call("a", "2+2"),
+                {**_result("a", "failed"), **flags}, {"role": "assistant", "content": "4"}]
+    state, _, app, run_id = _run(tmp_path, messages)
+    assert state["status"] == "needs_attention"
+    assert app.artifact_preview(run_id, "agent") == []
+    negative = app.artifact_preview(run_id, "agent_negative")[0]
+    assert negative["failure"] == "recorded_tool_error"
+    assert negative["evidence"]["expected"] == 4
+    for key, value in flags.items():
+        assert negative["messages"][2][key] is value
+
+
+@pytest.mark.parametrize("flags", [{"is_error": "false"}, {"is_error": 0},
+                                     {"is_error": None}, {"is_error": []},
+                                     {"isError": False, "is_error": True}])
+def test_invalid_error_alias_is_quarantined_without_negative(tmp_path, flags):
+    messages = [{"role": "user", "content": "2+2"}, _call("a", "2+2"),
+                {**_result("a", "4"), **flags}, {"role": "assistant", "content": "4"}]
+    state, path, app, run_id = _run(tmp_path, messages)
+    assert state["status"] == "needs_attention"
+    assert app.artifact_preview(run_id, "agent") == []
+    assert app.artifact_preview(run_id, "agent_negative") == []
+    assert read_json(path / "input_records.json")[0]["reason"] == "invalid_tool_error_flag"
+
+
 def test_replayed_multi_turn_trajectory_is_pruned_and_exported_without_model(tmp_path):
     messages = [
         {"role": "user", "content": "先计算 1 + 1"},

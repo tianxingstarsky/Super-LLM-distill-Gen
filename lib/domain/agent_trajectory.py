@@ -15,7 +15,7 @@ from typing import Callable, Protocol
 
 from lib.domain.math_tasks import evaluate_integer_expression
 from lib.domain.multiturn import completed_turn_ends
-from lib.domain.workflow_quality import canonical, conversation_issue
+from lib.domain.workflow_quality import canonical, conversation_issue, tool_error_flag
 
 
 MAX_SNAPSHOTS = 16
@@ -254,7 +254,11 @@ def assess_recorded_trajectory(messages: list[dict], *, tool_snapshots: object =
     structural = deepcopy(messages)
     for message in structural:
         if isinstance(message, dict) and message.get("role") == "tool":
+            _, flag_issue = tool_error_flag(message)
+            if flag_issue:
+                return {"status": "quarantined", "reason": flag_issue}
             message.pop("isError", None)
+            message.pop("is_error", None)
     issue = conversation_issue(structural)
     if issue:
         return {"status": "quarantined", "reason": issue}
@@ -330,14 +334,14 @@ def assess_recorded_trajectory(messages: list[dict], *, tool_snapshots: object =
                 sandbox_used = True
         except ReplayUnavailable as error:
             return {"status": "quarantined", "reason": str(error)}
-        error_flag = message.get("isError", False)
-        if type(error_flag) is not bool:
-            return {"status": "quarantined", "reason": "invalid_tool_error_flag"}
+        error_flag, _ = tool_error_flag(message)
         if error_flag:
             return {"status": "quarantined", "reason": "recorded_tool_error",
                     "negative": _negative(messages, index, "recorded_tool_error",
                                           {"tool": name, "call_id": call_id, "expected": outcome.value,
-                                           "observed": "isError", "basis": outcome.method, **outcome.evidence})}
+                                           "observed": next(key for key in ("isError", "is_error")
+                                                            if message.get(key) is True),
+                                           "basis": outcome.method, **outcome.evidence})}
         observed = _observation_value(message.get("content", ""))
         if observed is _UNSET or type(observed) is not type(outcome.value):
             return {"status": "quarantined", "reason": "unparseable_tool_observation"}

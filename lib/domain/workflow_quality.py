@@ -26,6 +26,14 @@ def text_issue(text):
     return None
 
 
+def tool_error_flag(message):
+    """Read both recorded error aliases without changing source evidence."""
+    flags = [message[key] for key in ("isError", "is_error") if key in message]
+    if any(type(flag) is not bool for flag in flags) or len(set(flags)) > 1:
+        return False, "invalid_tool_error_flag"
+    return any(flags), None
+
+
 def conversation_issue(messages, final=True):
     if not isinstance(messages, list) or not messages:
         return "missing_messages"
@@ -37,7 +45,10 @@ def conversation_issue(messages, final=True):
         role = message.get("role")
         if role not in {"system", "user", "assistant", "tool"}:
             return "invalid_role"
-        if message.get("isError"):
+        error_flag, flag_issue = tool_error_flag(message)
+        if flag_issue:
+            return flag_issue
+        if error_flag:
             return "unresolved_tool_error"
         content = message.get("content", "")
         if not isinstance(content, str):
