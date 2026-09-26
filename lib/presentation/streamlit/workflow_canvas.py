@@ -30,6 +30,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         status_label = {"completed": "完成", "running": "执行中", "failed": "失败", "cancelled": "已停止",
                         "pending": "等待", "queued": "待启动"}.get(status, "等待")
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
+                    translate_label("请选择可用模型", language) if status == "configuration_required" else
                     f"{role['backend']} · {role['model']}" if role else
                     translate_label("点击配置节点", language))
         data.append({"id": key, "label": translate_label(labels[key], language), "glyph": glyphs[key],

@@ -150,8 +150,8 @@ def test_target_group_cards_and_detailed_picker_share_state(tmp_path, monkeypatc
 
 def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_nodes(tmp_path, monkeypatch):
     _, workspace, _ = setup_workspace(tmp_path, monkeypatch)
-    from lib import backend_manager
-    monkeypatch.setattr(backend_manager, "list_backends", lambda: {
+    from lib.application.backend_service import BackendApplication
+    monkeypatch.setattr(BackendApplication, "list_backends", lambda self: {
         "default_backend": "writer", "roles": {"generation": {"backend": "writer", "model": "write-v1"},
                                                  "jev": {"backend": "review", "model": "review-v1"}},
         "backends": [{"name": "writer", "models": ["write-v1", "write-v2"]},
@@ -210,6 +210,33 @@ def test_english_run_canvas_translates_all_stage_statuses():
         spec = canvas_spec(["sft"], {"sft": {"status": status, "done": 25, "total": 50000}},
                            "sft", GRAPH_LABELS, STAGE_GLYPHS, language="en", live=True)
         assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
+
+
+def test_removed_node_service_requires_explicit_replacement(tmp_path, monkeypatch):
+    _, workspace, _ = setup_workspace(tmp_path, monkeypatch)
+    from lib.application.backend_service import BackendApplication
+    inventory = {"default_backend": "writer", "roles": {"generation": {"backend": "writer", "model": "write"},
+                 "jev": {"backend": "review", "model": "judge"}},
+                 "backends": [{"name": "writer", "models": ["write"]}, {"name": "review", "models": ["judge"]}]}
+    monkeypatch.setattr(BackendApplication, "list_backends", lambda self: inventory)
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "自动工作流"
+    app.session_state["ui_language"] = "en"
+    app.run()
+    inventory["backends"] = [inventory["backends"][0]]
+    app.run()
+    assert not app.exception
+    key = f"node-model:{workspace}:sft:jev:backend"
+    assert next(widget for widget in app.selectbox if widget.key == key).value is None
+    assert app.session_state[f"workflow-node-bindings:{workspace}"]["sft"]["jev"]["backend"] == "review"
+    assert next(button for button in app.button if button.label == "Start generation").disabled
+    assert any("previous model service is unavailable" in item.value for item in app.warning)
+    node = next(node for node in canvas(app, f"setup-canvas:{workspace}")["nodes"] if node["id"] == "sft")
+    assert node["status"] == "configuration_required" and node["subtitle"] == "Choose an available model"
+    next(widget for widget in app.selectbox if widget.key == key).set_value("writer").run()
+    assert not app.exception
+    assert app.session_state[f"workflow-node-bindings:{workspace}"]["sft"]["jev"]["backend"] == "writer"
 
 
 def test_all_target_canvas_localizes_inspection_and_configuration_controls():

@@ -1,0 +1,21 @@
+"""Model inventory and draft preparation without framework or filesystem access."""
+from typing import Protocol
+
+from lib.domain.workflow_node_models import binding_snapshot, initialize_draft
+
+
+class ModelInventoryPort(Protocol):
+    def list_backends(self) -> dict: ...
+
+
+class WorkflowNodeModelsApplication:
+    def __init__(self, inventory: ModelInventoryPort):
+        self._inventory = inventory
+
+    def prepare_draft(self, nodes, source_mode, draft, initialized):
+        return initialize_draft(nodes, source_mode, draft, initialized, self._inventory.list_backends())
+
+    def snapshot(self, nodes, source_mode, bindings):
+        # Recheck service existence at submission, rather than trust an earlier UI render.
+        endpoints = {row["name"]: row for row in self._inventory.list_backends().get("backends", [])}
+        return binding_snapshot(nodes, source_mode, bindings, endpoints)

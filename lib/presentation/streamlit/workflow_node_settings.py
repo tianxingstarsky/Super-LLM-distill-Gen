@@ -3,31 +3,16 @@ from copy import deepcopy
 
 import streamlit as st
 
-from lib import backend_manager as bm
+from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
 from lib.domain.workflow_scale import node_roles
 
 
-def node_bindings(nodes, source_mode, workspace):
-    inventory = bm.list_backends()
-    rows = inventory.get("backends") or []
-    endpoints = {row["name"]: row for row in rows}
+def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace):
     draft_key = f"workflow-node-bindings:{workspace}"
     draft = deepcopy(st.session_state.get(draft_key, {}))
     initialized_key = draft_key + ":initialized"
-    initialized = set(st.session_state.get(initialized_key, ()))
-    for node in nodes:
-        for role in node_roles(node, source_mode):
-            marker = node + ":" + role
-            if marker in initialized or role in draft.get(node, {}):
-                initialized.add(marker)
-                continue
-            initialized.add(marker)
-            slot = (inventory.get("roles") or {}).get(role) or {}
-            backend = slot.get("backend") or inventory.get("default_backend")
-            row = endpoints.get(backend, {})
-            model = slot.get("model") or next(iter(row.get("models") or []), "")
-            if backend and model:
-                draft.setdefault(node, {})[role] = {"backend": backend, "model": model}
+    draft, initialized, endpoints = application.prepare_draft(
+        nodes, source_mode, draft, st.session_state.get(initialized_key, ()))
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
     return draft, endpoints
@@ -48,8 +33,17 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints):
         binding = bindings.get(node, {}).get(role, {})
         prefix = f"node-model:{workspace}:{node}:{role}"
         names = list(endpoints)
+        if binding.get("backend") and binding["backend"] not in endpoints:
+            st.warning("原模型服务已不可用，请为此节点重新选择。")
+        if prefix + ":backend" in st.session_state and st.session_state[prefix + ":backend"] not in names:
+            st.session_state[prefix + ":backend"] = None
         backend = st.selectbox("模型服务", names, index=names.index(binding["backend"])
-                               if binding.get("backend") in names else 0, key=prefix + ":backend")
+                               if binding.get("backend") in names else None, key=prefix + ":backend",
+                               placeholder="选择模型服务")
+        if backend is None:
+            if binding.get("backend") in endpoints:
+                bindings.setdefault(node, {}).pop(role, None)
+            continue
         models = list(endpoints[backend].get("models") or [])
         if binding.get("backend") == backend and binding.get("model") not in models and binding.get("model"):
             models.append(binding["model"])
@@ -67,17 +61,6 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints):
         st.rerun()
 
 
-def snapshot_bindings(nodes, source_mode, bindings, endpoints=None):
-    result = {}
-    for node in nodes:
-        for role in node_roles(node, source_mode):
-            binding = bindings.get(node, {}).get(role)
-            if not binding or (endpoints is not None and binding["backend"] not in endpoints):
-                raise ValueError("请为所有需要模型的节点选择服务与模型。")
-            result.setdefault(node, {})[role] = deepcopy(binding)
-    return result
-
-
-def snapshot_available_bindings(nodes, source_mode, bindings):
+def snapshot_available_bindings(nodes, source_mode, bindings, endpoints):
     return {node: {role: bindings[node][role] for role in node_roles(node, source_mode)
-                   if role in bindings.get(node, {})} for node in nodes}
+                   if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}

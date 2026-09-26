@@ -18,8 +18,9 @@ from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
+from lib.domain.workflow_node_models import missing_bindings
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
-from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_bindings, snapshot_available_bindings
+from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings
 
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
@@ -404,7 +405,7 @@ def render_run(application, run_id, begin, *, embedded=False):
             st.json(recipe)
 
 
-def render_workbench(application: WorkflowApplication, begin):
+def render_workbench(application: WorkflowApplication, begin, model_application):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     st.html(
@@ -525,18 +526,23 @@ def render_workbench(application: WorkflowApplication, begin):
                     evaluation_uploads = st.file_uploader(
                         "上传评测集参照", type=["json", "jsonl"], accept_multiple_files=True,
                         max_upload_size=5, key=f"workflow-evaluations:{ws}")
+        model_issues = []
         if targets:
             selection_key = f"workflow-setup-node:{ws}"
             selected_node = st.session_state.get(selection_key, "sft" if "sft" in graph_nodes else "ingest")
             if selected_node not in graph_nodes:
                 selected_node = graph_nodes[0]
             st.session_state[selection_key] = selected_node
-            bindings, endpoints = node_bindings(graph_nodes, source_mode, ws)
+            bindings, endpoints = node_bindings(model_application, graph_nodes, source_mode, ws)
+            model_issues = missing_bindings(graph_nodes, source_mode, bindings, endpoints)
+            if model_issues:
+                st.warning("部分节点尚未选择可用模型，请点击这些节点完成配置。")
+                st.caption(" · ".join(dict.fromkeys(GRAPH_LABELS[node] for node, _ in model_issues)))
             canvas_column, node_column = st.columns([2.25, 1], gap="medium")
             with canvas_column, st.container(border=True):
                 section_heading("工作流节点配置", "直接点击节点，在右侧选择该步骤的模型。", "◇")
-                render_canvas(canvas_spec(targets, {}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
-                                          snapshot_available_bindings(graph_nodes, source_mode, bindings),
+                render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
+                                          snapshot_available_bindings(graph_nodes, source_mode, bindings, endpoints),
                                           language=st.session_state.get("ui_language", "zh")),
                               selection_key, key=f"setup-canvas:{ws}")
             with node_column, st.container(border=True):
@@ -558,7 +564,7 @@ def render_workbench(application: WorkflowApplication, begin):
                         '</span></div>')
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
-                submitted = st.button("开始自动生成", type="primary", disabled=not targets,
+                submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues),
                                       key=f"workflow-create:{ws}", width="stretch")
         if submitted:
             try:
@@ -583,7 +589,7 @@ def render_workbench(application: WorkflowApplication, begin):
                     if source_mode == "开放需求" and not brief.strip():
                         raise ValueError("请描述开放性需求。")
                     run_id = application.create_run(sources=sources, brief=brief, name=name, targets=targets,
-                                        node_models=snapshot_bindings(graph_nodes, source_mode, bindings, endpoints),
+                                        node_models=model_application.snapshot(graph_nodes, source_mode, bindings),
                                         sample_count=int(sample_count), concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),

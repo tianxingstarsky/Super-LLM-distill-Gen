@@ -428,7 +428,8 @@ def page_preview(show_title=True):
 def page_workflow():
     from lib.bootstrap.workflows import workflow_application
     from lib.presentation.streamlit.workflow_page import render_workbench
-    render_workbench(workflow_application(ROOT, _ws_out()), _begin)
+    from lib.bootstrap.workflow_node_models import workflow_node_models_application
+    render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT))
 
 
 def page_run(show_title=True):
