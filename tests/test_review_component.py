@@ -24,6 +24,7 @@ HARNESS = Path(__file__).resolve().parent / "review_component_harness.mjs"
 COMPONENT = ROOT / "lib" / "components" / "review_workspace" / "index.js"
 
 SCENARIOS = (
+    "english_preserves_user_content_and_draft",
     "scope_reset",
     "repeat_render_preserves_draft",
     "save_request_is_field_only_and_blocks_repeat",
@@ -94,6 +95,12 @@ def _observed(results, name):
 
 def test_harness_covers_every_required_scenario(harness_results):
     assert set(harness_results) == set(SCENARIOS)
+
+
+def test_component_language_switch_preserves_user_content_and_drafts(harness_results):
+    observed = _observed(harness_results, "english_preserves_user_content_and_draft")
+    assert observed["button"] == "Approve and next"
+    assert observed["draft"] == "有未保存的改动"
 
 
 def test_scope_reset_clears_draft_ai_reason_pending_and_scroll(harness_results):

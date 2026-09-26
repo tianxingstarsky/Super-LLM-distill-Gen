@@ -1041,6 +1041,7 @@ def render_workspace(dataset: str, username: str, workspace: str, *, gate: Any,
                               queue=queue, record=record_view, notice=notice, ack=ack,
                               suggestion=state.get("suggestion") if record_view else None)
     component = _component()
+    envelope["language"] = "en" if st.session_state.get("ui_language") == "en" else "zh"
     result = component(data=envelope, key=COMPONENT_KEY, height="content",
                        on_event_change=lambda: None)
     event = _result_event(result)

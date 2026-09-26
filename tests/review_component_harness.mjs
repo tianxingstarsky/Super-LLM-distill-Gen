@@ -542,6 +542,33 @@ scenarios.ai_run_requires_instruction = async () => {
   };
 };
 
+scenarios.english_preserves_user_content_and_draft = async () => {
+  const t = setup();
+  const data = makeData({language:'en', workspace:'审核工作台', identity:'正文'});
+  data.record.sample_id='审核队列';
+  data.record.messages[2].content.html='<p title="审核判定">审核工作台</p>';
+  data.record.messages[2].content.text='审核工作台';
+  data.queue.items[0].instruction='当前版本判定';
+  t.render(data);
+  assertEqual(t.$('[data-action="keep"]').textContent,'Approve and next','approve label');
+  assertEqual(t.$('[data-input="search"]').getAttribute('aria-label'),'Search examples','search accessibility');
+  assertEqual(t.$('.reader-title strong').textContent,'审核队列','source ID unchanged');
+  assertEqual(t.$('.queue-preview').textContent,'当前版本判定','source question unchanged');
+  assertEqual(t.$('.top-meta [data-user-content]').textContent,'审核工作台 · 正文','workspace and identity unchanged');
+  assertEqual(t.$('#message-2 [data-field-block="content"] .field-read p').textContent,'审核工作台','content unchanged');
+  assertEqual(t.$('#message-2 [data-field-block="content"] .field-read p').getAttribute('title'),'审核判定','content attributes unchanged');
+  t.click(editButton(t,2,'content'));
+  t.input(t.$('textarea.source'),'有未保存的改动');
+  assertEqual(t.$('[data-draft-status]').textContent,'Unsaved changes · Ctrl+S Save','draft notice localized');
+  t.render({...data, language:'zh'});
+  assertEqual(t.$('textarea.source').value,'有未保存的改动','draft preserved on language change');
+  assertEqual(t.$('[data-action="keep"]').textContent,'保留并下一条','Chinese restored');
+  t.render({...data, language:'en'});
+  assertEqual(t.$('textarea.source').value,'有未保存的改动','draft preserved on return to English');
+  assertEqual(t.$('textarea.source').getAttribute('aria-label'),'Message 3 Content source','editor accessibility translated');
+  return {draft:t.$('textarea.source').value,button:t.$('[data-action="keep"]').textContent};
+};
+
 // ── runner ───────────────────────────────────────────────────────────────────
 const results = {};
 const only = process.env.HARNESS_ONLY;
