@@ -70,7 +70,8 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
                      if target == "agent_negative"
                      else (inventory["manifest"].get("counts") or {}).get(target, 0)))
         position_key = f"data-preview-position:{workspace_id}:{run_id}:{target}"
-        position = st.number_input("样本序号", 1, count, 1, key=position_key)
+        position = st.number_input("样本序号", 1, count,
+                                   value=None if position_key in st.session_state else 1, key=position_key)
         try:
             rows = application.artifact_preview(run_id, target, limit=1, offset=int(position) - 1)
         except (KeyError, OSError, ValueError, TypeError) as error:
