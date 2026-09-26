@@ -1219,6 +1219,8 @@ ZH_EN.update({
     "最多显示前 100 条；完整记录保留在本次产物中。": "Show the first 100 records. The full records are saved with this run.",
     "候选 / 分钟": "Candidates / minute", "旧版默认配置": "Legacy default",
     "已复用断点": "Reused checkpoints",
+    "展开完整内容": "Show full content",
+    "完整消息": "Full message",
     "再次核对来源": "Recheck source files", "保存完整数据包": "Save the verified package",
     "可离开页面，返回后继续查看进度。": "You can leave this page and return to check progress.",
     "进度来自实际写入或校验的字节数；每个阶段独立统计。": "Progress tracks bytes written or checked. Each stage has its own total.",

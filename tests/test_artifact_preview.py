@@ -2,6 +2,41 @@
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 
 
+def test_long_messages_collapse_without_losing_or_executing_content():
+    content = "Long answer line.\n" * 150 + "END <script>alert(1)</script>"
+    preview = render_training_sample("multiturn", {"messages": [
+        {"role": "user", "content": "Explain."}, {"role": "assistant", "content": content},
+    ]})
+    assert '<details class="df-message-long"><summary>' in preview
+    assert "展开完整内容" in preview
+    assert "END &lt;script&gt;alert(1)&lt;/script&gt;" in preview
+    assert "<script>" not in preview
+    assert 'class="df-message-full" tabindex="0" role="region"' in preview
+
+
+def test_long_agent_result_preserves_tool_pair_and_failure_status():
+    preview = render_training_sample("agent_negative", {"messages": [
+        {"role": "user", "content": "Look up the record."},
+        {"role": "assistant", "tool_calls": [{"id": "x", "function": {"name": "lookup", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "x", "content": "observed data " * 200 + "RESULT_END"},
+    ], "failure": "tool_replay_mismatch", "failure_step": 2})
+    assert 'data-failed="true"' in preview and "失败截断点" in preview
+    assert "RESULT_END" in preview
+    assert '<details class="df-message-long">' in preview
+    assert "lookup" in preview
+
+
+def test_long_message_controls_translate_without_translating_recorded_text():
+    from lib.presentation.streamlit.i18n import translate_markup
+    text = "完整消息中的中文训练正文。" * 180
+    preview = translate_markup(render_training_sample("sft", {"messages": [
+        {"role": "user", "content": "Explain."}, {"role": "assistant", "content": text},
+    ]}), "en")
+    assert "Show full content" in preview and 'aria-label="Full message"' in preview
+    assert text in preview and text[:180] in preview
+    assert "展开完整内容" not in preview
+
+
 def test_agent_preview_keeps_tool_sequence_and_escapes_sample_content():
     sample = {
         "messages": [

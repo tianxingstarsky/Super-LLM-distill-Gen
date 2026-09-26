@@ -433,7 +433,7 @@ def _render_message(m: Dict[str, Any]) -> str:
 
 
 def render_message_sequence(messages: List[Dict[str, Any]], *, omission_after: Optional[int] = None,
-                            omission_count: int = 0) -> str:
+                            omission_count: int = 0, collapse_after: Optional[int] = None) -> str:
     """Render a trajectory and label tool observations with their matching call names."""
     call_names: Dict[str, str] = {}
     rendered: List[str] = []
@@ -470,7 +470,18 @@ def render_message_sequence(messages: List[Dict[str, Any]], *, omission_after: O
                 content.append(block)
             if changed:
                 current = {**message, "content": content}
-        rendered.append(_render_message(current))
+        body = _render_message(current)
+        if collapse_after is not None:
+            payload = current.get("content") or current.get("toolCalls") or current.get("tool_calls") or ""
+            text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, default=str)
+            if len(text) > collapse_after:
+                role = {"user": "用户", "assistant": "助手", "tool": "工具返回",
+                        "system": "系统指令", "developer": "开发者指令"}.get(current.get("role"), "其他消息")
+                body = ('<details class="df-message-long"><summary>'
+                        f'<b>{role}</b><span>展开完整内容</span>'
+                        f'<small class="md df-message-excerpt">{_esc(text[:180])}…</small></summary>'
+                        '<div class="df-message-full" tabindex="0" role="region" aria-label="完整消息">' + body + '</div></details>')
+        rendered.append(body)
     return "\n".join(rendered)
 
 

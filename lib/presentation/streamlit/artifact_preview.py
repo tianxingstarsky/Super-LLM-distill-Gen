@@ -5,7 +5,7 @@ import html
 import json
 from typing import Any
 
-from lib.render import render_message_sequence
+from lib.render import render_message_sequence as _render_message_sequence
 from lib.presentation.streamlit.artifact_preview_style import ARTIFACT_PREVIEW_STYLE
 
 
@@ -21,6 +21,11 @@ _TARGET_TITLES = {
     "gsm8k": "算术推理题",
     "cot": "可见推理解释",
 }
+
+
+def render_message_sequence(messages):
+    """Compact long messages without dropping any recorded content."""
+    return _render_message_sequence(messages, collapse_after=1600)
 
 
 def _safe(value: Any) -> str:
