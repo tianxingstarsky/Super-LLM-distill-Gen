@@ -581,7 +581,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                 section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
                 render_node_models(selected_node, source_mode, ws, bindings, endpoints)
                 if selected_node == "agent":
-                    render_agent_verification(ws, agent_capabilities)
+                    render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
                 if selected_node == "ingest":
                     st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
                 elif selected_node == "package":

@@ -23,6 +23,35 @@ _IMAGE = re.compile(r"docker\.io/library/python@sha256:[0-9a-f]{64}\Z")
 _TIMEOUT_SECONDS = 8
 _MAX_OUTPUT_BYTES = 4_096
 
+
+def check_environment(image: str | None) -> dict:
+    """Inspect the local daemon and pinned image; never pull or run an image."""
+    try:
+        image = validate_sandbox_image(image)
+    except ValueError:
+        return {"ready": False, "reason": "invalid_image"}
+    if not image:
+        return {"ready": False, "reason": "image_not_configured"}
+    options = {"capture_output": True, "timeout": 5,
+               "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    try:
+        daemon = subprocess.run(["docker", "info", "--format", "{{.OSType}}"], **options)
+        if daemon.returncode != 0:
+            return {"ready": False, "reason": "daemon_unavailable"}
+        if daemon.stdout.strip() != b"linux":
+            return {"ready": False, "reason": "linux_required"}
+        inspected = subprocess.run(["docker", "image", "inspect", image,
+                                    "--format", "{{.Os}}/{{.Architecture}}"], **options)
+        if inspected.returncode != 0:
+            return {"ready": False, "reason": "image_missing"}
+        if inspected.stdout.strip() != b"linux/amd64":
+            return {"ready": False, "reason": "image_platform_mismatch"}
+    except FileNotFoundError:
+        return {"ready": False, "reason": "docker_missing"}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ready": False, "reason": "check_unavailable"}
+    return {"ready": True, "reason": "ready"}
+
 # No filesystem, network, shell, user code, arbitrary Python expression, or
 # import from the uploaded record is available to this program. Keep this in
 # sync with the independent host contract/comparator in agent_sandbox_contract.

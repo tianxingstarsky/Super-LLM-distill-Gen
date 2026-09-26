@@ -19,6 +19,9 @@ class WorkflowApplication:
     def agent_replay_capabilities(self) -> dict:
         return self._driver.agent_replay_capabilities()
 
+    def check_agent_sandbox(self) -> dict:
+        return self._driver.check_agent_sandbox()
+
     def execute(self, run_id: str) -> dict:
         return self._driver.execute(run_id)
 

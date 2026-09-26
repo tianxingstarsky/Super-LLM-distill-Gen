@@ -73,7 +73,7 @@ def snapshot_available_bindings(nodes, source_mode, bindings, endpoints):
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
 
 
-def render_agent_verification(workspace, capabilities):
+def render_agent_verification(workspace, capabilities, check_environment=None):
     draft_key = f"workflow-agent-mode:{workspace}"
     draft = st.session_state.get(draft_key, "local")
     mode = st.selectbox("轨迹验证方式", ["local", "isolated"], index=1 if draft == "isolated" else 0,
@@ -86,6 +86,22 @@ def render_agent_verification(workspace, capabilities):
         else:
             st.caption("已登记固定版本的隔离镜像；运行时仍会检查本机环境。")
         st.caption("隔离验证增加受限账本工具的状态重放，不运行上传记录中的任意代码。")
+        if check_environment and st.button("检查隔离环境", key=f"agent-check:{workspace}"):
+            with st.spinner("正在检查本机容器服务与镜像…"):
+                result = check_environment()
+            labels = {
+                "ready": "容器服务与固定镜像可用；实际重放仍需在运行时验证。",
+                "invalid_image": "隔离镜像配置无效，请检查固定版本设置。",
+                "image_not_configured": "尚未配置固定版本的隔离镜像。",
+                "daemon_unavailable": "容器服务未启动或无法连接，请先启动 Docker。",
+                "linux_required": "隔离验证需要 Linux 容器服务。",
+                "image_missing": "本机尚未准备配置中的固定镜像。",
+                "image_platform_mismatch": "镜像平台不匹配，需要 Linux amd64 镜像。",
+                "docker_missing": "本机未找到 Docker 命令。",
+                "check_unavailable": "环境检查未完成，请检查容器服务后重试。",
+            }
+            message = labels.get(result.get("reason"), labels["check_unavailable"])
+            (st.success if result.get("ready") else st.warning)(message)
     st.caption("本地验证核对受限算术工具和录制 JSON 快照；其他工具记录会隔离保存。")
     st.info("轨迹处理：重放核对 → 保守剪枝 → 分开保存合格与失败轨迹")
     st.caption("只剪除已核对、相邻且完全相同、后文不引用的调用与返回；原始轨迹保留在质量记录中。")

@@ -27,6 +27,10 @@ class FilesystemWorkflowDriver:
     def create(self, **recipe) -> str:
         return create_run(self.output, **recipe)
 
+    def check_agent_sandbox(self) -> dict:
+        from lib.infrastructure.agent_docker_replay import check_environment
+        return check_environment(os.environ.get(IMAGE_ENV))
+
     def agent_replay_capabilities(self) -> dict:
         try:
             configured = bool(validate_sandbox_image(os.environ.get(IMAGE_ENV)))
