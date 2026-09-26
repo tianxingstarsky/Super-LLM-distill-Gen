@@ -80,6 +80,13 @@ def test_asset_catalog_page_uses_application_contract():
                    for name in dependencies)
 
 
+def test_dataset_browser_uses_application_contract_and_injected_file_selector():
+    dependencies = imported_modules(ROOT / "lib/presentation/streamlit/dataset_browser_page.py")
+    assert "lib.application.workflow_service" in dependencies
+    assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workspace"))
+                   for name in dependencies)
+
+
 def test_workflow_application_limits_preview_and_delegates_to_port():
     from lib.application.workflow_service import WorkflowApplication
 
