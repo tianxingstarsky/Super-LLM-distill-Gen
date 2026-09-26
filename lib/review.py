@@ -95,14 +95,18 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
             for tc in (m.get("toolCalls") or m.get("tool_calls") or []):
                 if not isinstance(tc, dict):
                     continue
-                args = tc.get("input") or tc.get("arguments") or {}
+                function = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                name = tc.get("name") or function.get("name") or "call"
+                args = next((source[key] for source, key in (
+                    (tc, "input"), (tc, "arguments"), (function, "arguments"), (function, "input"))
+                    if key in source), {})
                 if isinstance(args, dict):
                     argstr = "，".join(f"{k} = {v}" for k, v in args.items())
                 else:
                     argstr = str(args)
-                lines.append(f"【工具调用】{tc.get('name')}（{argstr}）")
+                lines.append(f"【工具调用】{name}（{argstr}）")
         elif role == "tool":
-            mark = "❌" if m.get("isError") else "✔"
+            mark = "❌" if m.get("isError") or m.get("is_error") else "✔"
             lines.append(f"【工具结果{mark}】{_content_text(m.get('content', ''))}")
         else:
             lines.append(f"【{role}】{_content_text(m.get('content', ''))}")

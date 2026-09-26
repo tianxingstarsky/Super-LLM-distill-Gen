@@ -547,10 +547,13 @@ scenarios.english_preserves_user_content_and_draft = async () => {
   const data = makeData({language:'en', workspace:'审核工作台', identity:'正文'});
   data.record.sample_id='审核队列';
   data.record.messages[2].content.html='<p title="审核判定">审核工作台</p>';
-  data.record.messages[2].content.text='审核工作台';
+    data.record.messages[2].content.text='审核工作台';
+    data.record.messages[2].extra_html='<div class="rw-tool"><details class="rw-tool-parameters"><summary>完整参数</summary><pre class="rw-tool-args">审核判定</pre></details></div>';
   data.queue.items[0].instruction='当前版本判定';
   t.render(data);
-  assertEqual(t.$('[data-action="keep"]').textContent,'Approve and next','approve label');
+    assertEqual(t.$('[data-action="keep"]').textContent,'Approve and next','approve label');
+    assertEqual(t.$('.rw-tool-parameters summary').textContent,'Full arguments','tool parameter control translated');
+    assertEqual(t.$('.rw-tool-args').textContent,'审核判定','tool argument value unchanged');
   assertEqual(t.$('[data-input="search"]').getAttribute('aria-label'),'Search examples','search accessibility');
   assertEqual(t.$('.reader-title strong').textContent,'审核队列','source ID unchanged');
   assertEqual(t.$('.queue-preview').textContent,'当前版本判定','source question unchanged');

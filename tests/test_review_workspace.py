@@ -254,6 +254,33 @@ def test_local_image_rejects_links(monkeypatch, tmp_area):
 
 
 # ── 工具元数据与长内容：完整展示，绝不 1200 字符截断 ────────────────────────
+def test_openai_tool_calls_keep_full_arguments_and_metadata():
+    import copy
+    from lib.review import _plain_messages
+
+    args = "x" * 22000 + "<script>尾部</script>"
+    message = {"role": "assistant", "content": "", "tool_calls": [{
+        "id": "call-" + "a" * 100, "type": "function", "trace": "trace-kept",
+        "function": {"name": "read_file", "arguments": args, "custom": "nested-kept"}}]}
+    original = copy.deepcopy(message)
+    extra = rw.build_message_view(message, 0)["extra_html"]
+    assert 'rw-tool-name">🔧 read_file' in extra
+    assert 'rw-tool-parameters' in extra and 'tabindex="0"' in extra
+    assert "x" * 22000 in extra and "&lt;script&gt;尾部&lt;/script&gt;" in extra
+    assert "call-" + "a" * 100 in extra
+    assert "trace-kept" in extra and "nested-kept" in extra
+    assert message == original
+    summary = _plain_messages({"messages": [message, {"role": "tool", "content": "failed", "is_error": True}]})
+    assert "read_file" in summary and args in summary
+    assert "工具结果❌" in summary
+
+
+@pytest.mark.parametrize("args", [None, False, 0, "", {}])
+def test_tool_arguments_keep_empty_and_false_values(args):
+    extra = rw.build_extra_html({"tool_calls": [{"function": {"name": "call", "arguments": args}}]})
+    assert "rw-tool-parameters" in extra
+
+
 def test_tool_metadata_and_long_content_are_never_truncated():
     tail = "尾部标记-完整保留"
     long_text = "开头" + "x" * 5000 + tail

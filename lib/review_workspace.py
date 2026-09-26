@@ -342,36 +342,47 @@ def build_field_view(value: Any, field: str, role: str, *, source_dir: Any = Non
     return {"text": text, "html": f"<pre>{_esc(text)}</pre>" if text else "", "editable": False}
 
 
-_MESSAGE_CORE_KEYS = {"role", "content", "reasoning_content", "toolCalls"}
-_TOOL_CORE_KEYS = {"name", "input", "arguments", "id", "toolCallId", "type"}
+_MESSAGE_CORE_KEYS = {"role", "content", "reasoning_content", "toolCalls", "tool_calls"}
+_TOOL_CORE_KEYS = {"name", "input", "arguments", "id", "toolCallId", "type", "function"}
 
 
 def build_extra_html(message: Mapping[str, Any]) -> str:
     """消息附加信息：工具调用/元数据，全部转义进 <pre>，完整不截断。"""
     chunks: List[str] = []
-    tool_calls = message.get("toolCalls")
+    tool_calls = message.get("toolCalls") or message.get("tool_calls")
     if isinstance(tool_calls, list) and tool_calls:
         chunks.append('<div class="rw-tools">')
         for call in tool_calls:
             if not isinstance(call, dict):
                 chunks.append(f'<pre class="rw-tool">{_esc(_json_text(call))}</pre>')
                 continue
-            name = call.get("name", "call")
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = call.get("name") or function.get("name") or "call"
             chunks.append(f'<div class="rw-tool"><span class="rw-tool-name">🔧 {_esc(name)}</span>')
             for key in ("id", "toolCallId", "type"):
                 if key in call:
                     chunks.append(f'<span class="rw-tool-meta">{_esc(key)}={_esc(call[key])}</span>')
-            args = call.get("input", call.get("arguments"))
-            if args is not None:
-                chunks.append(f'<pre class="rw-tool-args">{_esc(_json_text(args))}</pre>')
+            args = next((source[key] for source, key in (
+                (call, "input"), (call, "arguments"), (function, "arguments"), (function, "input"))
+                if key in source), None)
+            if any(key in source for source, key in ((call, "input"), (call, "arguments"),
+                                                     (function, "arguments"), (function, "input"))):
+                chunks.append('<details class="rw-tool-parameters"><summary>完整参数</summary>'
+                              f'<pre class="rw-tool-args" tabindex="0">{_esc(_json_text(args))}</pre></details>')
             others = {key: value for key, value in call.items() if key not in _TOOL_CORE_KEYS}
+            function_extra = {key: value for key, value in function.items()
+                              if key not in {"name", "arguments", "input"}}
+            if function_extra:
+                others["function"] = function_extra
+            elif "function" in call and not isinstance(call["function"], dict):
+                others["function"] = call["function"]
             if others:
                 chunks.append(f'<pre class="rw-tool-extra">{_esc(_json_text(others))}</pre>')
             chunks.append("</div>")
         chunks.append("</div>")
     if str(message.get("role", "")) == "tool":
         status = []
-        for key in ("toolCallId", "tool_call_id", "isError"):
+        for key in ("toolCallId", "tool_call_id", "isError", "is_error"):
             if key in message:
                 status.append(f"{key}={_esc(message[key])}")
         if status:
