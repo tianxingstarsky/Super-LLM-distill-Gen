@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+from typing import Iterable
 
 from lib.application.release_ports import ReleasePort
 from lib.domain.release_quality import report
@@ -18,11 +19,14 @@ class ReleaseApplication:
     def preview_samples(self, path: Path):
         return self._port.preview_samples(Path(path))
 
+    def raw_preview_samples(self, path: Path):
+        return self._port.raw_preview_samples(Path(path))
+
     @staticmethod
-    def quality_report(samples: list[dict], decisions=()) -> dict:
+    def quality_report(samples: Iterable[dict], decisions=()) -> dict:
         return report(samples, decisions)
 
-    def quality_report_for_dataset(self, samples: list[dict], dataset_name: str) -> dict:
+    def quality_report_for_dataset(self, samples: Iterable[dict], dataset_name: str) -> dict:
         return self.quality_report(samples, self._port.review_decisions(dataset_name))
 
     def export_release(self, samples: list[dict], fmt: str, parent: Path, decisions=(),

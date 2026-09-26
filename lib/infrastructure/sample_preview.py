@@ -7,6 +7,10 @@ from lib.infrastructure.jsonl_preview import _identity, read_rows, row_count
 
 
 class SamplePreview:
+    @staticmethod
+    def _normalize(row):
+        return normalize_sample(row)
+
     def __init__(self, path):
         self.path = Path(path)
         self.identity = _identity(self.path)
@@ -30,7 +34,7 @@ class SamplePreview:
                 if not line.strip():
                     continue
                 try:
-                    row = normalize_sample(json.loads(line))
+                    row = self._normalize(json.loads(line))
                 except (ValueError, TypeError) as error:
                     raise ValueError(f"{self.path}:{number}: {error}") from error
                 count += 1
@@ -54,4 +58,14 @@ class SamplePreview:
         self._check()
         if not rows or not isinstance(rows[0], dict):
             raise ValueError(f"{self.path}: record {index + 1}: expected an object")
-        return normalize_sample(rows[0])
+        return self._normalize(rows[0])
+
+
+class RawSamplePreview(SamplePreview):
+    """Stream original objects for quality checks without repairing their schema."""
+
+    @staticmethod
+    def _normalize(row):
+        if not isinstance(row, dict):
+            raise ValueError("expected an object")
+        return row

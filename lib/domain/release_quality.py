@@ -36,16 +36,22 @@ def decide_gate(decisions: list[dict], threshold: float = 0.9, minimum: int = 10
     }
 
 
-def report(samples: list[dict], decisions=()) -> dict:
+def report(samples, decisions=()) -> dict:
     issues: list[dict] = []
     hashes: Counter[str] = Counter()
     ids: Counter[str] = Counter()
     languages: Counter[str] = Counter()
     lengths: list[int] = []
+    source_hashes = {}
+    count = 0
     for index, row in enumerate(samples):
+        count += 1
         label = row.get("id") or f"row-{index + 1}"
         ids[label] += 1
-        hashes[sample_hash(row)] += 1
+        fingerprint = sample_hash(row)
+        hashes[fingerprint] += 1
+        if row.get("id"):
+            source_hashes[row["id"]] = fingerprint
         if row.get("images"):
             issues.append({"sample": label, "code": "visual_review_required"})
         messages = row.get("messages")
@@ -73,15 +79,14 @@ def report(samples: list[dict], decisions=()) -> dict:
 
     duplicates = sum(count - 1 for count in hashes.values() if count > 1)
     duplicate_ids = sum(count - 1 for count in ids.values() if count > 1)
-    source_hashes = {row.get("id"): sample_hash(row) for row in samples if row.get("id")}
     # A decision for an older payload with the same ID must not approve a new row.
     matched = [decision for decision in decisions
                if source_hashes.get(decision.get("sample_id")) == decision.get("sample_hash")
                and decision.get("sample_hash")]
     summary = decide_gate(matched)
-    coverage = len({decision["sample_id"] for decision in matched}) / len(samples) if samples else 0
+    coverage = len({decision["sample_id"] for decision in matched}) / count if count else 0
     blocks: list[str] = []
-    if not samples:
+    if not count:
         blocks.append("empty_dataset")
     if issues:
         blocks.append("structural_errors")
@@ -92,7 +97,7 @@ def report(samples: list[dict], decisions=()) -> dict:
     if not summary["release"]:
         blocks.append("review_consensus_not_met")
     return {
-        "samples": len(samples), "duplicate_content": duplicates, "duplicate_ids": duplicate_ids,
+        "samples": count, "duplicate_content": duplicates, "duplicate_ids": duplicate_ids,
         "issue_count": len(issues), "issues": issues, "language_heuristic": dict(languages),
         "length_chars": {"min": min(lengths, default=0), "max": max(lengths, default=0),
                          "mean": round(sum(lengths) / len(lengths)) if lengths else 0},

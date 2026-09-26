@@ -115,14 +115,6 @@ def _load_normalized_samples(path_key: str, mtime_ns: int):
     return [normalize_sample(row) for row in release_application().read_samples(_Path(path_key))]
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
-def _load_raw_samples(path_key: str, mtime_ns: int):
-    """Cache source rows for quality filters without hiding structural errors."""
-    from pathlib import Path as _Path
-    from lib.bootstrap.releases import release_application
-    return release_application().read_samples(_Path(path_key))
-
-
 def _selected_samples(key, *, preview_only=False):
     files = _sample_files()
     if not files:
@@ -579,15 +571,15 @@ def page_quality(show_title=True):
         key=f"quality-file:{ws}",
     )
     try:
-        samples = _load_raw_samples(str(source_path), source_path.stat().st_mtime_ns)
+        samples = release_application().raw_preview_samples(source_path)
+        data = release_application().quality_report_for_dataset(
+            samples, WORKSPACES.dataset_name(st.session_state["ws"]))
     except (OSError, ValueError) as error:
         st.error(f"无法读取样本文件：{error}")
         return
     if not samples:
         st.html('<div class="df-empty-state"><span class="df-empty-state-icon">✓</span><strong>暂无质量报告</strong><p>选取一个样本文件后，系统会统计结构问题、审核覆盖与批量放行条件。</p></div>')
         return
-    data = release_application().quality_report_for_dataset(
-        samples, WORKSPACES.dataset_name(st.session_state["ws"]))
     st.html('''<style>
     .df-quality-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:10px 0 16px; }
     .df-quality-summary > div { display:grid; align-content:center; gap:5px; min-height:93px; padding:15px; border:1px solid #DFE8F4; border-radius:11px; background:linear-gradient(145deg,#fff,#F8FBFF); }
