@@ -11,6 +11,12 @@ const labels={node_picker:'Go to node',fit:'Fit',focus:'Locate',hint:'Select',li
 const nodes=[{id:'ingest',label:'Input',x:24,y:100},{id:'sft',label:'SFT <source>',x:294,y:100},{id:'package',label:'Package',x:564,y:100}].map(n=>({...n,status:'pending',subtitle:'Choose model',glyph:'◇'}));
 function render(selected){w.dispatchEvent(new w.MessageEvent('message',{source:w,data:{type:'streamlit:render',args:{spec:{nodes,edges:[['ingest','sft'],['sft','package']],selected,width:810,height:310,labels}}}}));}
 render('ingest');
+assert.equal(d.getElementById('canvas').style.transform,'scale(1)');
+assert.equal(d.getElementById('scale').textContent,'100%');
+d.getElementById('fit').click();
+assert.notEqual(d.getElementById('canvas').style.transform,'scale(1)');
+d.getElementById('reset').click();
+assert.equal(d.getElementById('canvas').style.transform,'scale(1)');
 nodes[1].models=['Generate: writer <source>', 'Review: critic & judge'];
 render('sft');
 assert.deepEqual([...d.querySelector('[data-node="sft"] .copy').querySelectorAll('small')].map(x=>x.textContent),nodes[1].models);

@@ -147,7 +147,7 @@ AI feedback remains bound to its original responses. Human review can approve, r
 
 ### Large-run setup and source parsing
 
-Candidate counts of 5,000 or more open the processing settings automatically. Setup nodes display separate generation and review model roles; selecting a node opens its existing configuration panel. Live nodes continue to show recorded progress instead of model labels. These labels do not change model routing or the immutable run recipe.
+Candidate counts of 5,000 or more open the processing settings automatically. Setup nodes display separate generation and review model roles; selecting a node opens its existing configuration panel. The canvas starts at actual size and locates the selected node, preserving readable text in narrow panels. Fit remains an explicit full-graph overview. Live nodes continue to show recorded progress instead of model labels. These labels do not change model routing or the immutable run recipe.
 
 JSONL source parsing reads physical lines incrementally, preserving blank-line offsets and quarantining malformed records. It checks cancellation before the first line and every 100 lines. This removes the full source string and predecoded record list from the parsing path. Normalized source units and each source checkpoint still accumulate in memory, and source hashing still reads the complete file. This is not a fully bounded-memory ingest pipeline.
 
