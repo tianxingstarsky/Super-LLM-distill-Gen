@@ -39,6 +39,21 @@ def test_non_json_tool_arguments_keep_the_original_string():
     assert "RAW_END" in preview and "&lt;payload&gt;" in preview
 
 
+def test_parallel_long_ids_and_outputs_stay_complete_and_keyboard_scrollable():
+    from lib.render import render_message_sequence
+    prefix = "call-" + "a" * 80
+    ids = [prefix + "-first", prefix + "-second"]
+    messages = [{"role": "assistant", "content": "", "tool_calls": [
+        {"id": call_id, "function": {"name": "lookup", "arguments": "{}"}} for call_id in ids]}]
+    messages += [{"role": "tool", "tool_call_id": call_id, "content": "x" * 22000 + f"END-{i}"}
+                 for i, call_id in enumerate(ids)]
+    result = render_message_sequence(messages)
+    for call_id in ids:
+        assert result.count(call_id) == 2
+    assert "END-0" in result and "END-1" in result
+    assert result.count('class="md tool-output-full" tabindex="0"') == 2
+
+
 def test_bubble_roles_and_thinking():
     from lib.render import _render_message
 

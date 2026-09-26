@@ -268,7 +268,8 @@ def test_long_tool_result_keeps_tail_and_localizes_only_fallback_label():
     assert "TOOL_END" in preview
     english = translate_markup(preview, "en")
     assert '<span>Tool result</span>' in english
-    assert english.count('<span data-user-content>工作流</span>') == 2
+    assert '<span data-user-content>工作流</span>' in english
+    assert '<span data-user-content style="overflow-wrap:anywhere">工作流</span>' in english
 
 
 def test_long_corpus_and_evidence_are_collapsible_complete_and_not_translated():

@@ -121,6 +121,7 @@ details.think .md { margin-top: 8px; }
                         border-radius: 6px; color: var(--df-text3); font-size: 12px; }
 .tool-overflow { margin-top: 8px; }
 .tool-overflow summary { cursor: pointer; color: var(--df-brand); font-family: var(--df-font); }
+.tool-output-full { max-height: 360px; overflow: auto; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .err-note { color: #ef4444; font-size: 12px; }
 """)
 
@@ -186,6 +187,7 @@ $dark_vars
 .bubbles .tc-val { color: var(--df-text2); word-break: break-word; }
 .bubbles .tool-overflow { margin-top: 8px; }
 .bubbles .tool-overflow summary { cursor: pointer; color: var(--df-brand); font-family: var(--df-font); }
+.bubbles .tool-output-full { max-height: 360px; overflow: auto; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .bubbles .err-note { color: var(--df-danger); font-size: 12px; }
 """)
 
@@ -333,17 +335,19 @@ def _render_tool_result(m: Dict[str, Any]) -> str:
     tool_label = (f'<span data-user-content>{_esc(tool_name)}</span>' if tool_name
                   else '<span>工具结果</span>')
     prefix = "工具返回 · " if tool_name else ""
-    call_id = str(m.get("toolCallId") or m.get("tool_call_id") or m.get("tool_use_id") or "")[:32]
+    call_id = str(m.get("toolCallId") or m.get("tool_call_id") or m.get("tool_use_id") or "")
     if len(content) > 1200:
         preview = render_md(content[:1200] + "…")
         full = render_md(content)
         body = (f'<div class="md">{preview}</div><details class="tool-overflow">'
-                f'<summary>展开工具输出（{len(content)} 字）</summary><div class="md">{full}</div></details>')
+                f'<summary>展开工具输出（{len(content)} 字）</summary><div class="md tool-output-full" tabindex="0">{full}</div></details>')
     else:
         body = f'<div class="md">{render_md(content or "（空结果）")}</div>'
+    id_label = (f' · <span data-user-content style="overflow-wrap:anywhere">{_esc(call_id)}</span>'
+                if call_id else "")
     return (
         f'<div class="bubble {cls}"><div class="role-tag" data-i18n-before="{prefix}">{tool_label}'
-        f'{(" · <span data-user-content>" + _esc(call_id) + "</span>") if call_id else ""}{note}</div>{body}</div>'
+        f'{id_label}{note}</div>{body}</div>'
     )
 
 
