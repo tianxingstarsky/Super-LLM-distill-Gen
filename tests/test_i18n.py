@@ -19,6 +19,13 @@ def test_language_choice_accepts_chinese_and_english_values():
     assert language_code("简体中文") == "zh"
 
 
+def test_explicit_user_markup_preserves_names_and_nested_attributes():
+    source = '<strong data-user-content title="工作流">工作流<span>执行中</span></strong><span>执行中</span>'
+    assert translate_markup(source, "en") == (
+        '<strong data-user-content title="工作流">工作流<span>执行中</span></strong><span>Running</span>')
+    assert translate_markup(source, "zh") == source
+
+
 def test_translates_known_copy_and_preserves_unknown_user_text():
     assert translate("数据生成", "en") == "Create Data"
     assert translate("最近任务", "en") == "Recent tasks"

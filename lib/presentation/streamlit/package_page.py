@@ -107,7 +107,7 @@ def _file_preview(files: list[dict]) -> str:
         digest = str(row.get("sha256", ""))
         rows.append(
             '<div class="df-pack-file-row">'
-            '<span class="df-pack-filename"><b>' + _safe(suffix[:4]) + '</b><strong title="'
+            '<span class="df-pack-filename"><b>' + _safe(suffix[:4]) + '</b><strong data-user-content title="'
             + _safe(name) + '">' + _safe(name) + '</strong></span>'
             '<span>' + _safe(_file_description(name)) + '</span>'
             '<span>' + _safe(_size(int(row.get("bytes", 0)))) + '</span>'
@@ -192,7 +192,7 @@ def _render_empty(runs: list[dict], has_releases: bool) -> None:
             st.html(_heading("◷", "最近工作流", "完成后可在这里校验并导出"))
             for row in runs[:5]:
                 label = _STATUS.get(str(row.get("status")), ("未知", "muted"))[0]
-                st.html('<div class="df-pack-recent"><strong>' + _safe(row.get("name", "未命名任务"))
+                st.html('<div class="df-pack-recent"><strong data-user-content>' + _safe(row.get("name", "未命名任务"))
                         + '</strong><span>' + _safe(label) + '</span><small>'
                         + _safe(_stamp(row.get("updated_at"))) + '</small></div>')
 
@@ -219,7 +219,7 @@ def _render_releases(application: WorkflowApplication, releases: list[dict]) -> 
             '<div class="df-pack-release-title" data-verified="'
             + str(release["verified"]).lower() + '"><span>✓</span><div><small>'
             + _safe(kind) + ' · ' + _safe(target) + '</small><strong>'
-            + _safe(release["name"]) + '</strong><small>创建于 '
+            + '<span data-user-content>' + _safe(release["name"]) + '</span></strong><small>创建于 '
             + _safe(_stamp(release.get("created_at"))) + '</small></div></div>'
         )
         st.caption("本地版本目录（复制后可在文件管理器中打开）")
@@ -229,7 +229,7 @@ def _render_releases(application: WorkflowApplication, releases: list[dict]) -> 
             return
         files = release["files"]
         st.html('<div class="df-pack-release-files">' + ''.join(
-            '<div><strong>' + _safe(file["name"]) + '</strong><span>'
+            '<div><strong data-user-content>' + _safe(file["name"]) + '</strong><span>'
             + _safe(_size(file["bytes"])) + '</span><code>'
             + _safe(file["sha256"][:12] + "…" if file["sha256"] else "清单文件")
             + '</code></div>' for file in files
@@ -276,7 +276,7 @@ def _render_summary(run: dict, state: dict, manifest: dict, quality: dict) -> No
         '<div class="df-pack-run-title"><span class="df-pack-success" data-attention="'
         + str(has_attention).lower() + '">' + ("!" if has_attention else "✓") + '</span><span>'
         '<span class="df-pack-eyebrow">' + ("已校验 · 质量需检查" if has_attention else "已完成 · 产物校验通过") + '</span><strong>'
-        + _safe(run.get("name", "未命名任务")) + '</strong><small>任务 ID：' + _safe(run.get("id", ""))
+        + '<span data-user-content>' + _safe(run.get("name", "未命名任务")) + '</span></strong><small>任务 ID：' + _safe(run.get("id", ""))
         + '　·　更新于 ' + _safe(_stamp(state.get("updated_at"))) + '</small></span>'
         + _badge(status) + '</div>'
     )
@@ -319,7 +319,7 @@ def _render_quality(quality: dict, manifest: dict) -> None:
                 continue
             name = source.get("name", source.get("file", "来源文件"))
             digest = str(source.get("sha256", ""))
-            st.html('<div class="df-pack-source"><strong>' + _safe(name) + '</strong>'
+            st.html('<div class="df-pack-source"><strong data-user-content>' + _safe(name) + '</strong>'
                     '<small>SHA-256：' + _safe(digest or "未记录") + '</small></div>')
 
 
@@ -550,7 +550,7 @@ def render_package_page(application: WorkflowApplication) -> None:
             st.html(_heading("◷", "最近可导出任务", "当前工作区已完成的工作流"))
             for recent in ready[:5]:
                 targets = "、".join(str(target).upper() for target in recent.get("targets", [])) or "—"
-                st.html('<div class="df-pack-recent"><strong>' + _safe(recent.get("name", "未命名任务"))
+                st.html('<div class="df-pack-recent"><strong data-user-content>' + _safe(recent.get("name", "未命名任务"))
                         + '</strong>' + _badge(str(recent.get("status", "completed"))) + '<small>'
                         + _safe(targets) + ' · ' + _safe(_stamp(recent.get("updated_at"))) + '</small></div>')
     _render_releases(application, releases)

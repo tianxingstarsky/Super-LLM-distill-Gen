@@ -56,12 +56,12 @@ STAGE_STATUS = {"pending": "待处理", "queued": "待启动", "running": "执�
 def _stage_configuration(key, recipe, state):
     targets = recipe.get("targets", [])
     if key == "ingest":
-        details = {"来源": [row.get("name", row.get("file", "未知来源")) for row in recipe.get("sources", [])] or ["开放需求"],
+        details = {"来源": [UntranslatedText(row.get("name", row.get("file", "未知来源"))) for row in recipe.get("sources", [])] or ["开放需求"],
                 "最大处理单元": recipe.get("max_units"), "分块目标字符数": recipe.get("chunk_chars"),
                 "隐私与结构规则": "疑似密钥、无效结构和超长单元进入隔离"}
         binding = recipe.get("node_models", {}).get(key, {}).get("generation")
         if binding:
-            details["生成模型"] = binding["backend"] + " / " + binding["model"]
+            details["生成模型"] = UntranslatedText(binding["backend"] + " / " + binding["model"])
         return details
     if key in {"cpt", "sft", "multiturn", "agent", "preference", "cot"}:
         details = {"启用目标": [target.upper() for target in targets]}
@@ -70,8 +70,9 @@ def _stage_configuration(key, recipe, state):
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
             prefix = "" if role == "generation" else "jev_"
             label = "生成模型" if role == "generation" else "独立质量评审模型"
-            details[label] = ((binding.get("backend") or recipe.get(prefix + "backend") or "旧版默认配置")
-                              + " / " + (binding.get("model") or recipe.get(prefix + "model") or "旧版默认配置"))
+            fallback = translate("旧版默认配置", st.session_state.get("ui_language", "zh"))
+            details[label] = UntranslatedText((binding.get("backend") or recipe.get(prefix + "backend") or fallback)
+                              + " / " + (binding.get("model") or recipe.get(prefix + "model") or fallback))
         if node_roles(key, mode):
             details.update({"并发请求上限": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
         if key == "cpt":
@@ -125,7 +126,9 @@ def _config_html(configuration):
             rendered = json.dumps(value, ensure_ascii=False)
         else:
             rendered = "—" if value is None else str(value)
-        rows.append(f"<div><span>{html.escape(str(label))}</span><strong>{html.escape(rendered)}</strong></div>")
+        marker = (' data-user-content' if (isinstance(value, UntranslatedText)
+                   or isinstance(value, list) and any(isinstance(item, UntranslatedText) for item in value)) else '')
+        rows.append(f"<div><span>{html.escape(str(label))}</span><strong{marker}>{html.escape(rendered)}</strong></div>")
     return '<div class="df-run-config">' + "".join(rows) + "</div>"
 
 
@@ -414,10 +417,10 @@ def render_run(application, run_id, begin, *, embedded=False):
     with tabs[2]:
         st.html('<div class="df-run-section"><div><strong>来源与运行配方</strong>'
                 '<small>配方和来源快照已固定，可用于核对与重新运行。</small></div></div>')
-        st.html(_config_html({"来源文件": [source.get("name", source.get("file", ""))
+        st.html(_config_html({"来源文件": [UntranslatedText(source.get("name", source.get("file", "")))
                                                 for source in recipe.get("sources", [])] or ["开放需求"],
-                              "开放需求": (recipe.get("brief", "")[:180] + "…" if len(recipe.get("brief", "")) > 180
-                                         else recipe.get("brief") or "未填写"),
+                              "开放需求": (UntranslatedText(recipe["brief"][:180] + "…" if len(recipe["brief"]) > 180
+                                                       else recipe["brief"]) if recipe.get("brief") else "未填写"),
                               "训练目标": [TARGET_LABELS.get(target, target.upper()) for target in recipe.get("targets", [])],
                               "任务数": recipe.get("tasks"), "处理上限": recipe.get("max_units")}))
         with st.expander("技术详情：完整配方 JSON"):

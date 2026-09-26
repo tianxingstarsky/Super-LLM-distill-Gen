@@ -1659,7 +1659,7 @@ class _MarkupTextLocalizer(HTMLParser):
                 self._preserved_tags.append(tag)
             return
         classes = next((set((value or "").split()) for name, value in attrs if name == "class"), set())
-        if classes.intersection({"md", "df-artifact-body"}):
+        if classes.intersection({"md", "df-artifact-body"}) or any(name == "data-user-content" for name, _ in attrs):
             self.parts.append(source)
             if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
                 self._preserved_tags.append(tag)
