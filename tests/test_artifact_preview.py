@@ -214,6 +214,63 @@ def test_agent_preview_distinguishes_verified_and_unverified_tool_steps():
     assert html.index("ledger_read") < html.index("ledger_write")
 
 
+def test_agent_preview_does_not_pair_unrelated_or_duplicate_results():
+    messages = [
+        {"role": "assistant", "toolCalls": [{"id": "x", "name": "calculator"}]},
+        {"role": "tool", "toolCallId": "other", "content": "UNRELATED"},
+    ]
+    preview = render_training_sample("agent", {"messages": messages,
+                "verification": {"verified_call_ids": ["x"]}})
+    assert "未记录工具返回" in preview and "未配对的结果" in preview
+    assert 'data-failed="false" data-verified="true"' not in preview
+    messages[1] = {"role": "tool", "toolCallId": "x", "content": "FIRST"}
+    messages.append({"role": "tool", "toolCallId": "x", "content": "DUPLICATE"})
+    preview = render_training_sample("agent", {"messages": messages})
+    assert "2 个步骤" in preview and "未配对的结果" in preview
+    assert preview.count("FIRST") == 1 and preview.count("DUPLICATE") == 1
+
+
+def test_parallel_calls_report_missing_results_and_match_anthropic_ids():
+    messages = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "a", "name": "read"},
+            {"type": "tool_use", "id": "b", "name": "write"}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "b", "content": "B"}]},
+    ]
+    preview = render_training_sample("agent", {"messages": messages,
+                    "verification": {"verified_call_ids": ["a", "b"]}})
+    assert "部分调用缺少返回" in preview and 'data-failed="false" data-verified="true"' not in preview
+    messages[1]["content"].append({"type": "tool_result", "tool_use_id": "a", "content": "A"})
+    preview = render_training_sample("agent", {"messages": messages,
+                    "verification": {"verified_call_ids": ["a", "b"]}})
+    assert "1 个步骤" in preview and 'data-failed="false" data-verified="true"' in preview
+
+
+def test_mixed_tool_result_and_new_user_text_starts_a_dialogue_turn():
+    preview = render_training_sample("multiturn", {"messages": [
+        {"role": "user", "content": "First task"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "read"}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "a", "content": "Result"},
+            {"type": "text", "text": "NEW_USER_REQUEST"}]},
+        {"role": "assistant", "content": "Second response"},
+    ]})
+    assert "2 轮" in preview and "第 02 轮对话" in preview
+    assert preview.count("NEW_USER_REQUEST") == 1
+
+
+def test_long_tool_result_keeps_tail_and_localizes_only_fallback_label():
+    from lib.presentation.streamlit.i18n import translate_markup
+    preview = render_training_sample("agent", {"messages": [
+        {"role": "tool", "tool_call_id": "工作流", "content": "x" * 21000 + "TOOL_END"},
+        {"role": "tool", "name": "工作流", "content": "Content"},
+    ]})
+    assert "TOOL_END" in preview
+    english = translate_markup(preview, "en")
+    assert '<span>Tool result</span>' in english
+    assert english.count('<span data-user-content>工作流</span>') == 2
+
+
 def test_long_corpus_and_evidence_are_collapsible_complete_and_not_translated():
     from lib.presentation.streamlit.i18n import translate_markup
     text = "工作流 <script>alert(1)</script>\n" * 300 + "CORPUS_END"

@@ -67,7 +67,8 @@ def _conversation(title: str, value: Any) -> str:
 def _tool_result_user(message: dict) -> bool:
     """Anthropic tool results are carried in a user-role content block."""
     return (message.get("role") == "user" and isinstance(message.get("content"), list)
-            and any(isinstance(block, dict) and block.get("type") == "tool_result"
+            and bool(message["content"])
+            and all(isinstance(block, dict) and block.get("type") == "tool_result"
                     for block in message["content"]))
 
 
@@ -101,6 +102,19 @@ def _tool_call_names(message: dict) -> list[str]:
 def _tool_call_ids(message: dict) -> list[str]:
     return [str(call_id) for call in _tool_calls(message)
             if (call_id := call.get("id") or call.get("toolCallId") or call.get("tool_call_id"))]
+
+
+def _tool_result_ids(message: dict) -> list[str]:
+    if message.get("role") == "tool":
+        call_id = message.get("tool_call_id") or message.get("toolCallId")
+        return [str(call_id)] if call_id else []
+    content = message.get("content")
+    if message.get("role") == "user" and isinstance(content, list) and content:
+        # Mixed text/result messages remain separate so user input stays visible.
+        if all(isinstance(block, dict) and block.get("type") == "tool_result"
+               and block.get("tool_use_id") for block in content):
+            return [str(block["tool_use_id"]) for block in content]
+    return []
 
 
 def _turn_card(number: int | None, messages: list[dict], *, context: bool = False) -> str:
@@ -167,10 +181,17 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
     while index < len(messages):
         message = messages[index]
         names = _tool_call_names(message) if message.get("role") == "assistant" else []
+        call_ids = _tool_call_ids(message) if names else []
+        returned_ids: set[str] = set()
         end = index + 1
         if names:
-            while end < len(messages) and (messages[end].get("role") == "tool"
-                                           or _tool_result_user(messages[end])):
+            while end < len(messages):
+                result_ids = _tool_result_ids(messages[end])
+                if (not result_ids or len(result_ids) != len(set(result_ids))
+                        or not set(result_ids).issubset(call_ids)
+                        or returned_ids.intersection(result_ids)):
+                    break
+                returned_ids.update(result_ids)
                 end += 1
             kind, label = "tool", "工具调用"
             title = "、".join(dict.fromkeys(names))
@@ -183,8 +204,8 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
         else:
             kind, label, title = "context", "运行上下文", str(message.get("role") or "其他消息")
         failed = isinstance(failure_step, int) and index <= failure_step < end
-        call_ids = _tool_call_ids(message) if names else []
         verified = bool(call_ids and verified_call_ids
+                        and set(call_ids).issubset(returned_ids)
                         and all(call_id in verified_call_ids for call_id in call_ids) and not failed)
         if failed:
             status = "失败截断点"
@@ -192,6 +213,8 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
             status = "本地重放已核对"
         elif names and end == index + 1:
             status = "未记录工具返回"
+        elif names and not set(call_ids).issubset(returned_ids):
+            status = "部分调用缺少返回"
         elif names:
             status = f"调用与返回 · {end - index} 条消息"
         else:

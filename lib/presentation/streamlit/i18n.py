@@ -689,6 +689,7 @@ ZH_EN: dict[str, str] = {
     "失败截断点": "Failure cutoff",
     "本地重放已核对": "Local replay verified",
     "未记录工具返回": "Tool result not recorded",
+    "部分调用缺少返回": "Some calls have no recorded result",
     "重放校验": "Replay verification",
     "执行失败": "Execution failed",
     "展开工具输出": "Expand tool output",

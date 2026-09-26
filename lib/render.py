@@ -325,18 +325,21 @@ def _render_tool_result(m: Dict[str, Any]) -> str:
     failed = m.get("isError") or m.get("is_error")
     cls = "bub-tool err" if failed else "bub-tool"
     note = ' <span class="err-note">⚠ 执行失败</span>' if failed else ""
-    tool_name = m.get("toolName") or m.get("name") or m.get("tool_name") or "工具结果"
+    tool_name = m.get("toolName") or m.get("name") or m.get("tool_name")
+    tool_label = (f'<span data-user-content>{_esc(tool_name)}</span>' if tool_name
+                  else '<span>工具结果</span>')
+    prefix = "工具返回 · " if tool_name else ""
     call_id = str(m.get("toolCallId") or m.get("tool_call_id") or m.get("tool_use_id") or "")[:32]
     if len(content) > 1200:
         preview = render_md(content[:1200] + "…")
-        full = render_md(content[:20000] + ("…" if len(content) > 20000 else ""))
+        full = render_md(content)
         body = (f'<div class="md">{preview}</div><details class="tool-overflow">'
                 f'<summary>展开工具输出（{len(content)} 字）</summary><div class="md">{full}</div></details>')
     else:
         body = f'<div class="md">{render_md(content or "（空结果）")}</div>'
     return (
-        f'<div class="bubble {cls}"><div class="role-tag" data-i18n-before="工具返回 · ">{_esc(tool_name)}'
-        f'{(" · " + _esc(call_id)) if call_id else ""}{note}</div>{body}</div>'
+        f'<div class="bubble {cls}"><div class="role-tag" data-i18n-before="{prefix}">{tool_label}'
+        f'{(" · <span data-user-content>" + _esc(call_id) + "</span>") if call_id else ""}{note}</div>{body}</div>'
     )
 
 
