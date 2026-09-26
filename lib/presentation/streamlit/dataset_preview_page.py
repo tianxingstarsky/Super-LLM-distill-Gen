@@ -16,7 +16,7 @@ from lib.presentation.streamlit.i18n import UntranslatedText
 TARGET_LABELS = {
     "cpt": "CPT 预训练语料", "sft": "SFT 指令对话", "dpo": "DPO 偏好对",
     "orpo": "ORPO 偏好对", "rlaif": "RLAIF 反馈排序", "agent": "Agent 工具轨迹",
-    "multiturn": "多轮对话", "gsm8k": "GSM8K 数学推理", "cot": "CoT 可见推理",
+    "multiturn": "多轮对话", "gsm8k": "基础算术（GSM8K 格式）", "cot": "CoT 可见推理",
 }
 
 

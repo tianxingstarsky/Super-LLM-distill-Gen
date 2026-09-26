@@ -2,6 +2,31 @@
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 
 
+def test_multistep_arithmetic_has_numbered_calculations_and_final_answer():
+    preview = render_training_sample("gsm8k", {"question": "How many items?", "answer":
+        "First count: <<2 * 3=6>>.\nThen add: <<2 * 3 + 4=10>>.\n#### 10"})
+    assert '<b>01</b>' in preview and '<b>02</b>' in preview
+    assert '<code>2 * 3=6</code>' in preview
+    assert "最终答案" in preview and "计算步骤" in preview
+    unsafe = render_training_sample("gsm8k", {"question": "<script>x</script>", "answer":
+        "<script>x</script> <<2 + 2=4>>\n#### 4"})
+    assert '<script>' not in unsafe and '&lt;script&gt;' in unsafe
+
+
+def test_nonstandard_math_answer_keeps_full_original_content():
+    preview = render_training_sample("gsm8k", {"question": "Question", "answer": "Legacy answer END"})
+    assert "Legacy answer END" in preview and "计算与答案" in preview
+
+
+def test_english_ui_preserves_recorded_math_and_reasoning_step_text():
+    from lib.presentation.streamlit.i18n import translate_markup
+    math = render_training_sample("gsm8k", {"question": "题目", "answer": "工作流 <<2 + 2=4>>\n#### 4"})
+    rationale = render_training_sample("cot", {"reasoning": ["工作流", "执行中"], "answer": "答案"})
+    assert "Calculation steps" in translate_markup(math)
+    assert "工作流" in translate_markup(math)
+    assert "工作流" in translate_markup(rationale) and "执行中" in translate_markup(rationale)
+
+
 def test_long_messages_collapse_without_losing_or_executing_content():
     content = "Long answer line.\n" * 150 + "END <script>alert(1)</script>"
     preview = render_training_sample("multiturn", {"messages": [

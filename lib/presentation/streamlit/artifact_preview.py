@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from typing import Any
 
 from lib.render import render_message_sequence as _render_message_sequence
@@ -30,6 +31,22 @@ def render_message_sequence(messages):
 
 def _safe(value: Any) -> str:
     return html.escape(str(value), quote=True)
+
+
+def _math_answer(answer: str) -> str:
+    """Display short annotated solutions as steps without claiming verification."""
+    lines = answer.splitlines() if isinstance(answer, str) else []
+    final = re.fullmatch(r"####\s*(-?\d+)\s*", lines[-1]) if lines else None
+    if len(lines) < 2 or not final or len(answer) > 1600:
+        return _text("计算与答案", answer, "df-artifact-answer")
+    steps = []
+    for index, line in enumerate(lines[:-1], 1):
+        rendered = _safe(line)
+        if line.count("<<") == line.count(">>") == 1:
+            rendered = rendered.replace("&lt;&lt;", "<code>").replace("&gt;&gt;", "</code>")
+        steps.append(f'<div class="df-artifact-step"><b>{index:02d}</b><span data-user-content>{rendered}</span></div>')
+    return ('<div class="df-artifact-reasoning"><div class="df-artifact-subhead">计算步骤</div>'
+            + ''.join(steps) + '</div>' + _text("最终答案", final[1], "df-artifact-answer"))
 
 
 def _messages(value: Any) -> list[dict]:
@@ -339,12 +356,12 @@ def render_training_sample(target: str, row: dict) -> str:
     elif target == "cpt":
         body = _text("连续训练语料", row.get("text", ""))
     elif target == "gsm8k":
-        body = _text("题目", row.get("question", "")) + _text("计算与答案", row.get("answer", ""), "df-artifact-answer")
+        body = _text("题目", row.get("question", "")) + _math_answer(row.get("answer", ""))
     elif target == "cot":
         steps = row.get("reasoning")
         steps = steps if isinstance(steps, list) else [steps] if steps else []
         reasoning = ''.join(
-            f'<div class="df-artifact-step"><b>{index:02d}</b><span>{_safe(step)}</span></div>'
+            f'<div class="df-artifact-step"><b>{index:02d}</b><span data-user-content>{_safe(step)}</span></div>'
             for index, step in enumerate(steps, start=1)
         )
         body = (_conversation("问题上下文", row.get("question"))

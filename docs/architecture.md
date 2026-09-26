@@ -48,6 +48,12 @@ Agent 回放的纯状态机合同在 `lib/domain/agent_sandbox_contract.py`，�
 
 ## 工作流依赖规则
 
+### Arithmetic generator and validation
+
+New recipes pin `math_generator_version=2`. Four deterministic multi-step integer families cover grouped addition, grouped subtraction, repeated daily totals, and balanced redistribution. Every calculation annotation is evaluated with bounded AST arithmetic; the single terminal `####` integer must equal the computed final result. Invalid annotations, wrong intermediate calculations, trailing unchecked text, and excessive expression size or depth are rejected. Calculation steps and generator version are retained in the quality records; the native training schema remains `question` and `answer`. Unversioned recipes continue using the original version-1 generator, so restored checkpoints keep the original question distribution.
+
+This is synthetic arithmetic, not a general mathematical proof verifier or a substitute for GSM8K itself. Short multiline answers render as numbered calculation steps plus a final-answer card. Nonstandard or long answers retain the full existing text preview. The renderer formats recorded content without claiming it independently verifies the math. References: [GSM8K calculation annotations](https://github.com/openai/grade-school-math) and [TRL reward functions](https://huggingface.co/docs/trl/rewards).
+
 审核分页合同现在通过 Application 端口传入数据适配器。CPT、SFT、DPO、ORPO 按全队列状态筛选后分页，页面每次最多读取 100 条，默认 20 条；待审队列完成最后一页后会自动回到有效页码。基础设施为已校验产物建立可重建的 SQLite 索引，按来源哈希和索引版本失效；候选正文和来源证据在索引建立时逐条读取，翻页只解析当前页。索引只在运行的 `human-review/.indexes/` 下缓存，不改变原始产物或人工审核事件，发布仍重新校验原始产物。SFT 审核页复用数据预览的真实轮次卡片，输入、助手回答、工具调用与返回保持原始顺序。
 
 5 万条离线 SFT 候选（每条约 1 KB 回答）的本地检查中，首次校验并建索引约 12.66 秒，索引就绪后读取末尾 20 条约 0.16 秒，Python 分配追踪峰值约 0.26 MiB。该检查包含产物哈希核对与当前页来源证据，不调用模型；不是模型生成吞吐量或整个进程内存的测量。审核事件现在统一写入 SQLite 事务存储，单条保存追加事件并更新当前决定。旧 JSON 记录逐条校验并事务迁入，原文件保留且检测后续修改。完整发布逐条写出训练数据与审计快照，并在磁盘生成和复核 ZIP；页面只保留版本摘要，点击下载才读取归档。Streamlit 下载仍可能分配整个归档的字节缓冲，这不等于 HTTP 流式下载。

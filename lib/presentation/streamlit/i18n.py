@@ -930,6 +930,8 @@ ZH_EN: dict[str, str] = {
     "浏览 Agent 失败轨迹": "Browse failed agent traces",
     "产物保存位置": "Result folder",
     "处理与批次设置": "Processing and batch settings",
+    "计算步骤": "Calculation steps",
+    "生成可复现的多步整数算术题，核对计算标注和最终答案；不处理通用数学证明，此节点不调用模型。": "Create repeatable multi-step integer problems. Check calculations and the final answer. General math proofs are outside this node. No model is called.",
     "算术核验": "Arithmetic checks",
     "CoT 核对": "CoT checks",
     "停止打包": "Stop packaging",

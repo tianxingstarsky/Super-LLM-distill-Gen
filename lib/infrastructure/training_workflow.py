@@ -219,7 +219,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "targets": targets, "backend": backend, "model": model, "judge_backend": judge_backend,
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
-              "conversation_turns": conversation_turns, "cpt_reference_releases": references,
+              "conversation_turns": conversation_turns, "math_generator_version": 2, "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
@@ -797,12 +797,14 @@ class Workflow:
     def gsm8k(self, item):
         seed = int(item["id"][:8], 16)
         theme = self.recipe["brief"] or (self.recipe["sources"][0]["name"] if self.recipe["sources"] else "开放数学推理")
-        sample = build_gsm8k(theme, seed)
+        sample = build_gsm8k(theme, seed, version=self.recipe.get("math_generator_version", 1))
         if not validate_gsm8k(sample):
             return [self.rejected(item, "gsm8k_arithmetic_verification_failed")]
         return [{"id": item["id"], "source_id": item["source_id"], "status": "eligible",
                  "question": sample["question"], "answer": sample["answer"],
                  "arithmetic_expression": sample["_expression"], "verified_result": sample["_result"],
+                 "calculation_steps": sample.get("_steps", []),
+                 "generator_version": self.recipe.get("math_generator_version", 1),
                  "evidence_level": "deterministic_synthetic_arithmetic"}]
 
     def cot(self, sample):

@@ -336,6 +336,8 @@ def test_all_seven_objectives_have_validated_exports(tmp_path):
     assert "#### " in gsm["answer"]
     record = read_json(artifacts / "gsm8k.records.json")[0]
     assert evaluate_integer_expression(record["arithmetic_expression"]) == record["verified_result"]
+    assert record["generator_version"] == 2 and len(record["calculation_steps"]) >= 2
+    assert read_json(run_path(out, rid) / "recipe.json")["math_generator_version"] == 2
     assert state["models"]["jev"]["model"] == "judge-test"
 
 
@@ -346,3 +348,24 @@ def test_math_expression_checker_rejects_executable_or_unbounded_input():
             evaluate_integer_expression(invalid)
     for seed in range(100):
         assert validate_gsm8k(build_gsm8k("设备维护", seed))
+
+
+def test_unversioned_math_recipe_keeps_legacy_generator_on_execution(tmp_path):
+    from lib.workflow import digest
+    from lib.io_utils import atomic_json
+    from lib.math_tasks import build_gsm8k
+    out, rid, _ = make_run(tmp_path, targets=["gsm8k"], tasks=4)
+    path = run_path(out, rid)
+    recipe = read_json(path / "recipe.json")
+    recipe.pop("math_generator_version")
+    atomic_json(path / "recipe.json", recipe)
+    state = read_json(path / "state.json")
+    state["recipe_hash"] = digest(recipe)
+    atomic_json(path / "state.json", state)
+    generator = Generator()
+    execute(out, rid, generator=generator)
+    assert not generator.calls
+    record = read_json(path / "artifacts/gsm8k.records.json")[0]
+    sample = build_gsm8k(recipe["sources"][0]["name"], int(record["id"][:8], 16), version=1)
+    assert record["question"] == sample["question"] and record["answer"] == sample["answer"]
+    assert record["generator_version"] == 1
