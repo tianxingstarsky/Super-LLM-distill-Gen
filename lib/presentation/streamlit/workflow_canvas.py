@@ -40,7 +40,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                      "intermediate": key == "sft" and "sft" not in targets})
     english = language == "en"
     return {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
-            "live": live, "labels": {"fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
+            "live": live, "labels": {"node_picker": "Go to node" if english else "定位节点",
+                                       "fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
                                        "zoom_out": "Zoom out" if english else "缩小",
                                        "focus": "Locate selected node" if english else "定位所选节点",
                                        "reset": "Actual size" if english else "实际大小",
