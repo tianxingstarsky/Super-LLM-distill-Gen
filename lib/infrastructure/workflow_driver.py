@@ -59,7 +59,7 @@ class FilesystemWorkflowDriver:
     def cancel(self, run_id: str) -> None:
         cancel_run(self.output, run_id)
 
-    def artifact_preview(self, run_id: str, target: str, limit: int) -> list[dict]:
+    def artifact_preview(self, run_id: str, target: str, limit: int, offset: int = 0) -> list[dict]:
         if limit <= 0:
             return []
         run = run_path(self.output, run_id)
@@ -72,14 +72,8 @@ class FilesystemWorkflowDriver:
             return []
         if not manifest.is_file():
             raise ValueError("incomplete_artifact_manifest")
-        rows = []
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    rows.append(json.loads(line))
-                    if len(rows) >= limit:
-                        break
-        return rows
+        from lib.infrastructure.jsonl_preview import read_rows
+        return read_rows(path, offset, limit)
 
     def quarantined_inputs(self, run_id: str, limit: int = 100) -> list[dict]:
         if limit <= 0:

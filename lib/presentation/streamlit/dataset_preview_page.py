@@ -61,20 +61,20 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
             format_func=lambda value: "Agent 失败轨迹" if value == "agent_negative"
             else TARGET_LABELS.get(value, value.upper()),
         )
+        count = int(((inventory["manifest"].get("negative_counts") or {}).get("agent", 0)
+                     if target == "agent_negative"
+                     else (inventory["manifest"].get("counts") or {}).get(target, 0)))
+        position = st.number_input("样本序号", 1, count, 1,
+                                   key=f"data-preview-position:{workspace_id}:{run_id}:{target}")
         try:
-            rows = application.artifact_preview(run_id, target, limit=50)
+            rows = application.artifact_preview(run_id, target, limit=1, offset=int(position) - 1)
         except (KeyError, OSError, ValueError, TypeError) as error:
             st.error(f"无法读取已校验样本：{error}")
             return True
         if not rows:
             st.warning("清单记录了合格样本，但当前文件没有可读取的记录。")
             return True
-        position = st.number_input("样本序号", 1, len(rows), 1,
-                                   key=f"data-preview-position:{workspace_id}:{run_id}:{target}")
-        count = int(((inventory["manifest"].get("negative_counts") or {}).get("agent", len(rows))
-                     if target == "agent_negative"
-                     else (inventory["manifest"].get("counts") or {}).get(target, len(rows))))
-        st.caption(f"本目标共 {count:,} 条 · 当前展示前 {len(rows):,} 条中的第 {position:,} 条")
+        st.caption(f"本目标共 {count:,} 条 · 当前展示第 {position:,} 条")
         st.html('<div class="df-data-sample-facts">'
                 '<div><span>训练目标</span><b>' + _safe(target.upper()) + '</b></div>'
                 '<div><span>任务状态</span><b>'
@@ -93,5 +93,5 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         st.html('<div class="df-data-sample-head"><strong>'
                 + _safe("agent.negative.jsonl" if target == "agent_negative" else f"{target}.jsonl")
                 + '</strong><span>第 ' + str(position) + ' / ' + str(count) + ' 条</span></div>')
-        st.html(render_training_sample(target, rows[position - 1]))
+        st.html(render_training_sample(target, rows[0]))
     return True

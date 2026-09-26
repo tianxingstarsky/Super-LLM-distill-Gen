@@ -43,10 +43,10 @@ class WorkflowApplication:
     def cancel(self, run_id: str) -> None:
         self._driver.cancel(run_id)
 
-    def artifact_preview(self, run_id: str, target: str, limit: int = 3) -> list[dict]:
+    def artifact_preview(self, run_id: str, target: str, limit: int = 3, offset: int = 0) -> list[dict]:
         if target not in TARGETS and target != "agent_negative":
             raise ValueError("unknown_training_target")
-        return self._driver.artifact_preview(run_id, target, max(0, min(int(limit), 100)))
+        return self._driver.artifact_preview(run_id, target, max(0, min(int(limit), 100)), max(0, int(offset)))
 
     def quarantined_inputs(self, run_id: str, limit: int = 100) -> list[dict]:
         return self._driver.quarantined_inputs(run_id, max(0, min(int(limit), 100)))

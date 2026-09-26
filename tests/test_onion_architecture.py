@@ -77,12 +77,13 @@ def test_workflow_application_limits_preview_and_delegates_to_port():
     from lib.application.workflow_service import WorkflowApplication
 
     class Driver:
-        def artifact_preview(self, run_id, target, limit):
-            return [run_id, target, limit]
+        def artifact_preview(self, run_id, target, limit, offset=0):
+            return [run_id, target, limit, offset]
 
     app = WorkflowApplication(Driver())
-    assert app.artifact_preview("run-1", "sft", 1000) == ["run-1", "sft", 100]
-    assert app.artifact_preview("run-1", "sft", -10) == ["run-1", "sft", 0]
+    assert app.artifact_preview("run-1", "sft", 1000) == ["run-1", "sft", 100, 0]
+    assert app.artifact_preview("run-1", "sft", -10, -5) == ["run-1", "sft", 0, 0]
+    assert app.artifact_preview("run-1", "sft", 1, 49999) == ["run-1", "sft", 1, 49999]
 
 
 def test_quality_and_export_entrypoints_use_release_application():

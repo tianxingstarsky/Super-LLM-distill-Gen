@@ -1161,6 +1161,7 @@ def language_code(value: Any) -> str:
 
 ZH_EN.update({
     "轨迹验证方式": "Trace verification",
+    "仅预览当前任务中通过完整性校验的真实文件": "Browse actual files that pass this run's integrity checks",
     "上一页任务": "Previous tasks", "下一页任务": "Next tasks",
     "解析上传来源并保留来源位置；此步骤不调用生成模型。": "Parse uploaded sources and keep source locations. This step does not call a generation model.",
     "清洗、分块并去重已有语料；此步骤不调用生成模型。": "Clean, chunk, and deduplicate existing text. This step does not call a generation model.",
@@ -1489,6 +1490,9 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"当前文件共\s*([\d,]+)\s*条 · 正在查看第\s*([\d,]+)\s*条", value)
     if match:
         return f"{match.group(1)} examples in this file · viewing {match.group(2)}"
+    match = re.fullmatch(r"本目标共\s*([\d,]+)\s*条 · 当前展示第\s*([\d,]+)\s*条", value)
+    if match:
+        return f"{match[1]} examples in this goal · Showing example {match[2]}"
     match = re.fullmatch(r"本目标共\s*([\d,]+)\s*条 · 当前展示前\s*([\d,]+)\s*条中的第\s*([\d,]+)\s*条", value)
     if match:
         return f"{match.group(1)} examples for this goal · viewing {match.group(3)} of the first {match.group(2)}"

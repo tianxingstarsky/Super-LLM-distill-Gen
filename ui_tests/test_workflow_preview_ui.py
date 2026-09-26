@@ -39,14 +39,16 @@ def test_data_preview_renders_verified_orpo_comparison(tmp_path, monkeypatch):
     }
     native = artifacts / "orpo.jsonl"
     quality = artifacts / "quality.json"
-    native.write_text(json.dumps(pair, ensure_ascii=False) + "\n", encoding="utf-8")
-    quality.write_text(json.dumps({"targets": {"orpo": {"eligible": 1, "total": 1}}}), encoding="utf-8")
+    last = {**pair, "chosen": [{"role": "assistant", "content": "第53条样本末尾"}]}
+    native.write_text((json.dumps(pair, ensure_ascii=False) + "\n") * 52
+                      + json.dumps(last, ensure_ascii=False) + "\n", encoding="utf-8")
+    quality.write_text(json.dumps({"targets": {"orpo": {"eligible": 53, "total": 53}}}), encoding="utf-8")
     (run / "state.json").write_text(json.dumps({
         "id": run_id, "name": "ORPO 预览验收", "status": "completed", "targets": ["orpo"],
         "created_at": "2026-09-23T00:00:00+00:00", "updated_at": "2026-09-23T00:00:00+00:00",
     }), encoding="utf-8")
     (artifacts / "manifest.json").write_text(json.dumps({
-        "status": "complete", "run_id": run_id, "counts": {"orpo": 1},
+        "status": "complete", "run_id": run_id, "counts": {"orpo": 53},
         "sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                    for path in (native, quality)},
     }), encoding="utf-8")
@@ -63,6 +65,11 @@ def test_data_preview_renders_verified_orpo_comparison(tmp_path, monkeypatch):
     assert "先断电，再核对隔离状态。" in markup
     assert "保持通电直接检查。" in markup
     assert "SHA-256 通过" in markup
+    next(item for item in app.number_input if item.label == "样本序号").set_value(53).run()
+    assert not app.exception
+    markup = "\n".join(str(item.value) for item in app.get("html"))
+    assert "第53条样本末尾" in markup
+    assert any("本目标共 53 条 · 当前展示第 53 条" == item.value for item in app.caption)
 
     native.write_text("tampered\n", encoding="utf-8")
     app.run()
