@@ -65,11 +65,19 @@ def test_data_preview_renders_verified_orpo_comparison(tmp_path, monkeypatch):
     assert "先断电，再核对隔离状态。" in markup
     assert "保持通电直接检查。" in markup
     assert "SHA-256 通过" in markup
+    assert next(item for item in app.button if item.label == "上一条样本").disabled
+    next(item for item in app.button if item.label == "下一条样本").click().run()
+    assert not app.exception
+    assert next(item for item in app.number_input if item.label == "样本序号").value == 2
     next(item for item in app.number_input if item.label == "样本序号").set_value(53).run()
     assert not app.exception
     markup = "\n".join(str(item.value) for item in app.get("html"))
     assert "第53条样本末尾" in markup
     assert any("本目标共 53 条 · 当前展示第 53 条" == item.value for item in app.caption)
+    assert next(item for item in app.button if item.label == "下一条样本").disabled
+    next(item for item in app.button if item.label == "上一条样本").click().run()
+    assert not app.exception
+    assert next(item for item in app.number_input if item.label == "样本序号").value == 52
 
     native.write_text("tampered\n", encoding="utf-8")
     app.run()

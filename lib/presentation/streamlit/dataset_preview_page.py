@@ -10,6 +10,7 @@ from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_targets import TARGETS
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 from lib.presentation.streamlit.shared import section_heading
+from lib.presentation.streamlit.i18n import UntranslatedText
 
 
 TARGET_LABELS = {
@@ -21,6 +22,10 @@ TARGET_LABELS = {
 
 def _safe(value: Any) -> str:
     return html.escape(str(value), quote=True)
+
+
+def _select_sample(key: str, position: int) -> None:
+    st.session_state[key] = position
 
 
 def _preview_targets(manifest: dict, files: list[dict]) -> list[str]:
@@ -45,7 +50,7 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         section_heading("选择工作流产物", "仅预览当前任务中通过完整性校验的真实文件", "▤")
         run_id = st.selectbox(
             "已完成任务", list(by_id), key=f"data-preview-run:{workspace_id}",
-            format_func=lambda key: f"{by_id[key].get('name', '未命名任务')} · {key[:8]}",
+            format_func=lambda key: UntranslatedText(f"{by_id[key].get('name', '未命名任务')} · {key[:8]}"),
         )
         try:
             inventory = application.package_inventory(run_id)
@@ -64,8 +69,8 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         count = int(((inventory["manifest"].get("negative_counts") or {}).get("agent", 0)
                      if target == "agent_negative"
                      else (inventory["manifest"].get("counts") or {}).get(target, 0)))
-        position = st.number_input("样本序号", 1, count, 1,
-                                   key=f"data-preview-position:{workspace_id}:{run_id}:{target}")
+        position_key = f"data-preview-position:{workspace_id}:{run_id}:{target}"
+        position = st.number_input("样本序号", 1, count, 1, key=position_key)
         try:
             rows = application.artifact_preview(run_id, target, limit=1, offset=int(position) - 1)
         except (KeyError, OSError, ValueError, TypeError) as error:
@@ -84,12 +89,16 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
                 '<div><span>来源任务</span><b>' + _safe(run_id[:8]) + '</b></div>'
                 '</div><p class="df-data-note">预览来自校验后的自动候选；正式训练前仍可进入人工审核。</p>')
         if st.button("查看任务运行过程", key=f"data-preview-workflow:{workspace_id}:{run_id}", width="stretch"):
-            st.session_state[f"workflow-selected:{workspace_id}"] = run_id
-            st.session_state[f"task-center-run:{workspace_id}"] = run_id
-            st.session_state["nav"] = "任务管理"
+            st.session_state["workflow-open-run"] = {"workspace": workspace_id, "run_id": run_id}
             st.rerun()
     with right, st.container(border=True):
-        section_heading("真实样本预览", "按训练目标呈现语料、对话、偏好对或工具轨迹", "◉")
+        heading, previous, following = st.columns([3, 1, 1], vertical_alignment="center")
+        with heading:
+            section_heading("真实样本预览", "按训练目标呈现语料、对话、偏好对或工具轨迹", "◉")
+        previous.button("上一条样本", disabled=position <= 1, on_click=_select_sample,
+                        args=(position_key, int(position) - 1), key=position_key + ":previous", width="stretch")
+        following.button("下一条样本", disabled=position >= count, on_click=_select_sample,
+                         args=(position_key, int(position) + 1), key=position_key + ":next", width="stretch")
         st.html('<div class="df-data-sample-head"><strong>'
                 + _safe("agent.negative.jsonl" if target == "agent_negative" else f"{target}.jsonl")
                 + '</strong><span>第 ' + str(position) + ' / ' + str(count) + ' 条</span></div>')

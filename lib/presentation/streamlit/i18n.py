@@ -1161,6 +1161,7 @@ def language_code(value: Any) -> str:
 
 ZH_EN.update({
     "轨迹验证方式": "Trace verification",
+    "上一条样本": "Previous example", "下一条样本": "Next example",
     "仅预览当前任务中通过完整性校验的真实文件": "Browse actual files that pass this run's integrity checks",
     "上一页任务": "Previous tasks", "下一页任务": "Next tasks",
     "解析上传来源并保留来源位置；此步骤不调用生成模型。": "Parse uploaded sources and keep source locations. This step does not call a generation model.",
