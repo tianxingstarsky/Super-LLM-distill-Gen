@@ -1161,6 +1161,7 @@ def language_code(value: Any) -> str:
 
 ZH_EN.update({
     "轨迹验证方式": "Trace verification",
+    "上一页任务": "Previous tasks", "下一页任务": "Next tasks",
     "解析上传来源并保留来源位置；此步骤不调用生成模型。": "Parse uploaded sources and keep source locations. This step does not call a generation model.",
     "清洗、分块并去重已有语料；此步骤不调用生成模型。": "Clean, chunk, and deduplicate existing text. This step does not call a generation model.",
     "核对已记录的工具轨迹；此节点不调用模型。验证环境在下方选择。": "Check recorded tool traces without model calls. Choose the verification environment below.",

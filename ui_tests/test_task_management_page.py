@@ -58,7 +58,7 @@ def test_task_cards_select_real_run_and_show_its_nodes_and_events(tmp_path):
     assert not app.exception
     assert app.session_state["task-center-run:test-space"] == complete_id
     assert live_canvas(app, complete_id)["selected"] == "package"
-    assert any(item.label == "下载本次训练数据与质量证据 ZIP" for item in app.download_button)
+    assert any(item.label == "查看并打包本次训练数据" for item in app.button)
     selected_logs = [item.value for item in app.get("html") if isinstance(item.value, str)
                      and '<div class="df-run-log">' in item.value]
     assert selected_logs and "工作流运行结束" in selected_logs[0]
@@ -67,6 +67,38 @@ def test_task_cards_select_real_run_and_show_its_nodes_and_events(tmp_path):
     activity = [item.value for item in app.get("html") if isinstance(item.value, str)
                 and 'class="df-task-activity"' in item.value]
     assert activity and "工作流运行结束" in activity[0]
+
+
+def test_task_pages_reach_older_runs_and_explicit_location(tmp_path):
+    source = tmp_path / "guide.txt"
+    source.write_text("操作前断电，检查后记录。", encoding="utf-8")
+    output = tmp_path / "out"
+    run_ids = {create_run(output, sources=[source], targets=["cpt"], name=f"Task {index}")
+               for index in range(53)}
+    app = AppTest.from_function(task_screen, args=(str(output), "pages"), default_timeout=15)
+    app.run()
+    assert not app.exception
+    def cards():
+        return {item.key.rsplit(":", 1)[1] for item in app.button
+                if item.key and item.key.startswith("task-card:pages:")}
+    first = cards()
+    assert len(first) == 50
+    next(item for item in app.button if item.key == "task-center-page:pages:next").click().run()
+    assert not app.exception
+    second = cards()
+    assert len(second) == 3 and not first.intersection(second)
+    assert first | second == run_ids
+    older = next(iter(second))
+    next(item for item in app.button if item.key == "task-center-page:pages:previous").click().run()
+    app.session_state["task-center-run:pages"] = older
+    app.session_state["task-center-locate:pages"] = older
+    app.run()
+    assert not app.exception
+    assert app.session_state["task-center-page:pages"] == 1
+    assert app.session_state["task-center-run:pages"] == older
+    next(item for item in app.text_input if item.label == "搜索任务").set_value("no match").run()
+    assert not app.exception
+    assert app.session_state["task-center-page:pages"] == 0
 
 
 def test_task_status_filter_and_resume_operation(tmp_path):

@@ -1108,6 +1108,9 @@ if (isinstance(_workflow_handoff, dict)
     st.session_state["nav"] = "任务管理"
     st.session_state[f"task-view:{st.session_state['ws']}"] = "数据工作流"
     st.session_state[f"task-center-run:{st.session_state['ws']}"] = _handoff_run_id
+    st.session_state[f"task-center-filter:{st.session_state['ws']}"] = "全部"
+    st.session_state[f"task-center-search:{st.session_state['ws']}"] = ""
+    st.session_state[f"task-center-locate:{st.session_state['ws']}"] = _handoff_run_id
     st.session_state["workflow-scroll-top"] = True
 # 深链：?page=人工审核&record=<sample_id>（协作者可直接分享定位链接）
 _qp_page = st.query_params.get("page")

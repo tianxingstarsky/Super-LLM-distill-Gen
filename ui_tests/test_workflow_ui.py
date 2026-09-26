@@ -69,9 +69,13 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     app.run()
     assert not app.exception
     assert not any('class="df-run-overview"' in str(item.value) for item in app.get("html"))
+    app.session_state[f"task-center-filter:{name}"] = "未完成"
+    app.session_state[f"task-center-search:{name}"] = "stale search"
     next(item for item in app.button if item.key == f"workflow-open-history:{name}").click().run()
     assert not app.exception
     assert app.session_state["nav"] == "任务管理"
+    assert app.session_state[f"task-center-search:{name}"] == ""
+    assert app.session_state[f"task-center-filter:{name}"] == "全部"
     assert any("文档自动验收" == item.value for item in app.subheader)
     assert any("所选目标已完成" in item.value for item in app.success)
     route = canvas(app, f"live-canvas:{rid}")

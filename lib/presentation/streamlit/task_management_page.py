@@ -134,6 +134,10 @@ def _select_run(selection_key: str, run_id: str) -> None:
     st.session_state[selection_key] = run_id
 
 
+def _change_page(page_key: str, page: int) -> None:
+    st.session_state[page_key] = page
+
+
 def render_task_management(application: WorkflowApplication, workspace_id: str,
                            begin: Callable[[list[str]], None],
                            on_new_workflow: Callable[[], None]) -> str | None:
@@ -185,7 +189,27 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         search = st.text_input("搜索任务", placeholder="名称、任务 ID 或训练目标",
                                key=f"task-center-search:{workspace_id}")
         matches = _filtered_runs(runs, status_filter, search)
-        visible = matches[:50]
+        page_key = f"task-center-page:{workspace_id}"
+        filter_key = page_key + ":filter"
+        signature = (status_filter, search)
+        page = st.session_state.get(page_key, 0)
+        if st.session_state.get(filter_key) != signature:
+            page = 0
+        st.session_state[filter_key] = signature
+        locate = st.session_state.pop(f"task-center-locate:{workspace_id}", None)
+        if locate:
+            page = next((index // 50 for index, run in enumerate(matches) if run["id"] == locate), 0)
+        page_count = max(1, (len(matches) + 49) // 50)
+        page = min(max(0, page), page_count - 1)
+        st.session_state[page_key] = page
+        visible = matches[page * 50:(page + 1) * 50]
+        if page_count > 1:
+            previous, following = st.columns(2)
+            previous.button("上一页任务", disabled=page == 0, key=page_key + ":previous",
+                            on_click=_change_page, args=(page_key, page - 1), width="stretch")
+            following.button("下一页任务", disabled=page == page_count - 1, key=page_key + ":next",
+                             on_click=_change_page, args=(page_key, page + 1), width="stretch")
+            st.caption(f"{page + 1} / {page_count}")
         st.html('<div class="df-task-list-head"><small>按创建时间倒序</small>'
                 f'<small>显示 {len(visible)} / 匹配 {len(matches)}</small></div>')
         selection_key = f"task-center-run:{workspace_id}"

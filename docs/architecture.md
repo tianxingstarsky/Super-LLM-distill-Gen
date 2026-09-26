@@ -82,3 +82,5 @@ The Agent setup node owns the local or isolated replay choice. A separate sessio
 ### Creation and run inspection
 
 The creation workbench lists past runs without rendering their execution details. Opening a selected run uses the same task-center handoff as starting a new run. The task center owns live inspection, checkpoint retry, and packaging navigation. This avoids reading a selected historical run's artifacts and event details during creation form rerenders, and keeps old failures separate from a new configuration. Refreshing a workspace still discovers its persistent history.
+
+Task cards use pages of 50 matching runs. Filter or search changes reset the page; pagination clamps after the number of matches changes. Explicit creation/history handoffs clear stale filters and search, and locate the selected run's page before choosing the visible record. This bounds rendered task cards, not the run inventory read by the adapter.
