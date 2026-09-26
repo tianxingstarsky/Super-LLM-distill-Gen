@@ -12,6 +12,10 @@ from lib.domain.release_quality import sample_hash
 
 
 class FilesystemReleaseDriver:
+    def preview_samples(self, path: Path):
+        from lib.infrastructure.sample_preview import SamplePreview
+        return SamplePreview(path)
+
     def review_decisions(self, dataset_name: str) -> list[dict]:
         from lib import review_center
 

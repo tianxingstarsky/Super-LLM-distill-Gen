@@ -55,3 +55,8 @@ def read_rows(path, offset, limit):
     if _identity(path) != identity:
         raise ValueError("preview_file_changed")
     return rows
+
+
+def row_count(path):
+    path = Path(path)
+    return _offsets(str(path.resolve()), _identity(path))[1]

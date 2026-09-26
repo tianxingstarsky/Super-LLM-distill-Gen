@@ -108,10 +108,7 @@ def _sample_files():
 
 @st.cache_data(show_spinner=False, max_entries=8)
 def _load_normalized_samples(path_key: str, mtime_ns: int):
-    """按 路径+mtime 缓存已规范化样本：预览翻页/表单重渲染不再整读 JSONL。
-
-    大文件（上万条）在每次控件交互都会触发全量 read+normalize，是预览页卡顿的
-    直接来源；LRU 上限 8 个文件控制内存，文件变更（mtime 变化）自动失效。"""
+    """Cache complete normalized inputs for legacy bulk review, not file preview."""
     from pathlib import Path as _Path
     from lib.bootstrap.releases import release_application
     from lib.review_editor import normalize_sample
@@ -126,13 +123,16 @@ def _load_raw_samples(path_key: str, mtime_ns: int):
     return release_application().read_samples(_Path(path_key))
 
 
-def _selected_samples(key):
+def _selected_samples(key, *, preview_only=False):
     files = _sample_files()
     if not files:
         st.info("当前工作区暂无样本")
         return None, []
     source = st.selectbox("样本文件", files, format_func=lambda p: str(p.relative_to(WORKSPACES.folder(st.session_state['ws']))) if p.is_relative_to(WORKSPACES.folder(st.session_state['ws'])) else p.name,
                           key=f"{key}:{st.session_state['ws']}")
+    if preview_only:
+        from lib.bootstrap.releases import release_application
+        return source, release_application().preview_samples(source)
     return source, _load_normalized_samples(str(source), source.stat().st_mtime_ns)
 
 
@@ -354,7 +354,7 @@ def page_preview(show_title=True):
     from lib.presentation.streamlit.dataset_browser_page import render_dataset_preview
 
     render_dataset_preview(workflow_application(ROOT, _ws_out()), st.session_state["ws"],
-                           _selected_samples, show_title=show_title)
+                           lambda key: _selected_samples(key, preview_only=True), show_title=show_title)
 
 
 def page_workflow():

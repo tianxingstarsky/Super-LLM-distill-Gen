@@ -48,7 +48,11 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
     if not samples:
         st.html('<div class="df-empty-state"><span class="df-empty-state-icon">◉</span><strong>还没有可预览的样本</strong><p>先选择已有数据文件，或从“数据生成”创建一条包含对话、推理或工具调用轨迹的工作流。</p></div>')
         return
-    sample = samples[index - 1]
+    try:
+        sample = samples[index - 1]
+    except (OSError, ValueError) as error:
+        st.error(f"无法预览当前文件：{error}")
+        return
     messages = [message for message in sample.get("messages", []) if isinstance(message, dict)]
     from lib.presentation.streamlit.artifact_preview import (
         _tool_call_names, _tool_result_user, render_training_sample,

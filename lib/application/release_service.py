@@ -15,6 +15,9 @@ class ReleaseApplication:
     def read_samples(self, path: Path) -> list[dict]:
         return self._port.read_samples(Path(path))
 
+    def preview_samples(self, path: Path):
+        return self._port.preview_samples(Path(path))
+
     @staticmethod
     def quality_report(samples: list[dict], decisions=()) -> dict:
         return report(samples, decisions)

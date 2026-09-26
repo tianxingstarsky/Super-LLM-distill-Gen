@@ -133,9 +133,9 @@ def test_preview_caches_samples_across_rerenders(tmp_path, monkeypatch):
         encoding="utf-8")
     view = app()
     navigate(view, "数据预览")
-    assert calls["n"] == 1  # 首次渲染读取一次
+    assert calls["n"] == 0  # Preview reads selected rows through the sparse index.
     view.number_input[0].set_value(2).run()  # 翻到第 2 条：重渲染走缓存
-    assert calls["n"] == 1
+    assert calls["n"] == 0
     assert not view.exception
     assert any(w.value == 2 for w in view.number_input)
 
