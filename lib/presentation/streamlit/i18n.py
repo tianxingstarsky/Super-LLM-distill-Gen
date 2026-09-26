@@ -924,6 +924,7 @@ ZH_EN: dict[str, str] = {
     "选择模型服务": "Choose a model service",
     "请选择可用模型": "Choose an available model",
     "部分节点尚未选择可用模型，请点击这些节点完成配置。": "Some nodes need a model. Select those nodes to finish their settings.",
+    "配置下一个待完善节点": "Configure next incomplete node",
     "算术核验": "Arithmetic checks",
     "CoT 核对": "CoT checks",
     "停止打包": "Stop packaging",

@@ -31,6 +31,26 @@ def setup_workspace(tmp_path, monkeypatch):
     return ws, name, source
 
 
+def test_next_incomplete_node_locates_panel_and_wraps_without_starting_run(tmp_path, monkeypatch):
+    from lib.application.backend_service import BackendApplication
+    _, workspace, _ = setup_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(BackendApplication, "list_backends", lambda self: {"backends": []})
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "自动工作流"
+    app.session_state["ui_language"] = "en"
+    app.run()
+    key = f"workflow-next-config:{workspace}"
+    assert app.session_state[f"workflow-setup-node:{workspace}"] == "sft"
+    next(button for button in app.button if button.key == key).click().run()
+    assert not app.exception
+    assert app.session_state[f"workflow-setup-node:{workspace}"] == "preference"
+    assert canvas(app, f"setup-canvas:{workspace}")["selected"] == "preference"
+    next(button for button in app.button if button.key == key).click().run()
+    assert app.session_state[f"workflow-setup-node:{workspace}"] == "sft"
+    assert next(button for button in app.button if button.label == "Start generation").disabled
+
+
 def test_agent_node_retains_verification_choice_and_blocks_unconfigured_start(tmp_path, monkeypatch):
     monkeypatch.delenv("DATAFORGE_AGENT_REPLAY_IMAGE", raising=False)
     ws, name, source = setup_workspace(tmp_path, monkeypatch)

@@ -40,6 +40,10 @@ PRESETS = {
 }
 
 
+def _select_setup_node(key: str, node: str) -> None:
+    st.session_state[key] = node
+
+
 def _toggle_target_group(key: str, members: frozenset[str], defaults: tuple[str, ...]) -> None:
     """Keep the category card and detailed target picker in one state."""
     current = {target for target in st.session_state.get(key, defaults) if target in TARGETS}
@@ -560,7 +564,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             model_issues = missing_bindings(graph_nodes, source_mode, bindings, endpoints)
             if model_issues:
                 st.warning("部分节点尚未选择可用模型，请点击这些节点完成配置。")
-                st.caption(" · ".join(dict.fromkeys(GRAPH_LABELS[node] for node, _ in model_issues)))
+                pending_nodes = list(dict.fromkeys(node for node, _ in model_issues))
+                next_node = next((node for node in graph_nodes[graph_nodes.index(selected_node) + 1:]
+                                  if node in pending_nodes), pending_nodes[0])
+                st.button("配置下一个待完善节点", on_click=_select_setup_node,
+                          args=(selection_key, next_node), key=f"workflow-next-config:{ws}")
+                st.caption(" · ".join(GRAPH_LABELS[node] for node in pending_nodes))
             canvas_column, node_column = st.columns([2.25, 1], gap="medium")
             with canvas_column, st.container(border=True):
                 section_heading("工作流节点配置", "直接点击节点，在右侧选择该步骤的模型。", "◇")
