@@ -11,6 +11,12 @@ const labels={node_picker:'Go to node',fit:'Fit',focus:'Locate',hint:'Select',li
 const nodes=[{id:'ingest',label:'Input',x:24,y:100},{id:'sft',label:'SFT <source>',x:294,y:100},{id:'package',label:'Package',x:564,y:100}].map(n=>({...n,status:'pending',subtitle:'Choose model',glyph:'◇'}));
 function render(selected){w.dispatchEvent(new w.MessageEvent('message',{source:w,data:{type:'streamlit:render',args:{spec:{nodes,edges:[['ingest','sft'],['sft','package']],selected,width:810,height:310,labels}}}}));}
 render('ingest');
+nodes[1].models=['Generate: writer <source>', 'Review: critic & judge'];
+render('sft');
+assert.deepEqual([...d.querySelector('[data-node="sft"] .copy').querySelectorAll('small')].map(x=>x.textContent),nodes[1].models);
+assert.equal(d.querySelector('[data-node="sft"] source'),null);
+assert.ok(d.querySelector('[data-node="sft"]').title.includes('Review: critic & judge'));
+render('ingest');
 const picker=d.getElementById('node-picker');
 assert.equal(picker.getAttribute('aria-label'),'Go to node');
 assert.equal(picker.options.length,3);

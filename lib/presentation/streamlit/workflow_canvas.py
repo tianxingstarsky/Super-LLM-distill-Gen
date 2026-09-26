@@ -26,16 +26,23 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         metrics = stages.get(key, {})
         done, total = int(metrics.get("done", 0) or 0), int(metrics.get("total", 0) or 0)
         status = metrics.get("status", "pending")
-        role = (bindings or {}).get(key, {}).get("generation") or (bindings or {}).get(key, {}).get("jev")
+        node_bindings = (bindings or {}).get(key, {})
+        role = node_bindings.get("generation") or node_bindings.get("jev")
         status_label = {"completed": "完成", "running": "执行中", "failed": "失败", "cancelled": "已停止",
                         "pending": "等待", "queued": "待启动"}.get(status, "等待")
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
                     translate_label("请选择可用模型", language) if status == "configuration_required" else
                     f"{role['backend']} · {role['model']}" if role else
                     translate_label("点击配置节点", language))
+        models = []
+        if not live:
+            for role_key, zh, en in (("generation", "生成", "Generate"), ("jev", "评审", "Review")):
+                binding = node_bindings.get(role_key)
+                if binding:
+                    models.append(f"{en if language == 'en' else zh}: {binding['backend']} · {binding['model']}")
         data.append({"id": key, "label": translate_label(labels[key], language), "glyph": glyphs[key],
                      "x": positions[key][0], "y": positions[key][1], "status": status,
-                     "subtitle": subtitle, "percent": min(100, done * 100 / total) if total else
+                     "subtitle": subtitle, "models": models, "percent": min(100, done * 100 / total) if total else
                      100 if status == "completed" else 0,
                      "intermediate": key == "sft" and "sft" not in targets})
     english = language == "en"

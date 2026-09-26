@@ -535,7 +535,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             conversation_turns = (st.number_input("每段对话轮数", 2, 8, 3,
                                                   help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
                                   if "multiturn" in targets else 3)
-            with st.expander("处理与批次设置"):
+            with st.expander("处理与批次设置", expanded=sample_count >= 5000):
                 st.caption("支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。")
                 a, b = st.columns(2, gap="small")
                 concurrency = a.number_input("并发请求上限", 1, MAX_CONCURRENCY, 4,

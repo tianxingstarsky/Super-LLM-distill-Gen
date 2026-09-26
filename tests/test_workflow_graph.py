@@ -3,6 +3,21 @@
 from lib.domain.workflow_graph import execution_graph
 
 
+def test_canvas_shows_both_node_model_roles_and_keeps_live_progress():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    labels = {key: key for key in execution_graph(['sft'])[0]}
+    bindings = {'sft': {'generation': {'backend': 'a', 'model': 'writer'},
+                        'jev': {'backend': 'b', 'model': 'critic'}}}
+    spec = canvas_spec(['sft'], {}, 'sft', labels, labels, bindings, language='en')
+    node = next(row for row in spec['nodes'] if row['id'] == 'sft')
+    assert node['models'] == ['Generate: a · writer', 'Review: b · critic']
+    live = canvas_spec(['sft'], {'sft': {'status': 'running', 'done': 12000, 'total': 50000}},
+                       'sft', labels, labels, bindings, language='en', live=True)
+    node = next(row for row in live['nodes'] if row['id'] == 'sft')
+    assert node['models'] == []
+    assert node['subtitle'] == 'Running · 12,000 / 50,000'
+
+
 def test_cpt_only_route_has_no_unselected_or_implicit_stages():
     nodes, edges = execution_graph(["cpt"])
     assert nodes == ("ingest", "cpt", "package")

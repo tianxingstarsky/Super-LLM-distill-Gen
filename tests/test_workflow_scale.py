@@ -17,6 +17,38 @@ def workflow(tmp_path, **options):
     return engine.Workflow(output, rid, tmp_path)
 
 
+def test_large_jsonl_source_streams_physical_lines_and_checks_cancellation(tmp_path, monkeypatch):
+    source = tmp_path / 'source.jsonl'
+    # Blank and malformed lines must keep their original physical locations.
+    source.write_text('\ufeff\nnot json\n' + '{"text":"A sufficiently detailed source document for training."}\n' * 50000,
+                      encoding='utf-8')
+    output = tmp_path / 'output'
+    rid = engine.create_run(output, sources=[source], targets=['cpt'])
+    run = engine.Workflow(output, rid, tmp_path)
+    input_path = run.path / 'inputs' / run.recipe['sources'][0]['file']
+    original_read = type(input_path).read_text
+    def guard(path, *args, **kwargs):
+        assert path != input_path, 'Source JSONL must not be read as one string'
+        return original_read(path, *args, **kwargs)
+    monkeypatch.setattr(type(input_path), 'read_text', guard)
+    checks = []
+    def stop():
+        checks.append(True)
+        if len(checks) == 2:
+            raise engine.Cancelled()
+    monkeypatch.setattr(run, 'check_cancel', stop)
+    with pytest.raises(engine.Cancelled):
+        run.parse_source(run.recipe['sources'][0])
+    assert len(checks) == 2
+    monkeypatch.setattr(run, 'check_cancel', lambda: None)
+    # Use a short source to verify normalization and exact provenance separately.
+    input_path.write_text('\ufeff\nnot json\n{"text":"A sufficiently detailed source document for training."}\n',encoding='utf-8')
+    descriptor = dict(run.recipe['sources'][0], sha256=engine.file_hash(input_path))
+    rows = run.parse_source(descriptor)
+    assert rows[0]['location'] == 2 and rows[0]['reason'] == 'invalid_json_record'
+    assert rows[1]['source_location']['record'] == 3 and rows[1]['status'] == 'ready'
+
+
 @pytest.mark.parametrize("option,value", [("sample_count", 100001), ("sample_count", True),
     ("concurrency", 17), ("concurrency", 0), ("batch_size", 501), ("batch_size", 0), ("tasks", 100001)])
 def test_capacity_is_validated(tmp_path, option, value):

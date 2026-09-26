@@ -439,14 +439,19 @@ class Workflow:
                 return [unit("document", status="quarantined", reason="invalid_encoding")]
             return documents(content, "document")
         if path.suffix == ".jsonl":
-            records = []
-            for index, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
-                if not line.strip():
-                    continue
-                try:
-                    records.append((index, json.loads(line)))
-                except ValueError:
-                    records.append((index, None))
+            def source_records():
+                with path.open(encoding="utf-8-sig") as handle:
+                    for index, line in enumerate(handle, 1):
+                        if (index - 1) % 100 == 0:
+                            self.check_cancel()
+                        if not line.strip():
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            row = None
+                        yield index, row
+            records = source_records()
         else:
             raw = read_json(path)
             if (isinstance(raw, list) and raw and all(
