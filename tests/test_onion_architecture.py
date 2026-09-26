@@ -73,6 +73,13 @@ def test_streamlit_package_page_uses_application_contract():
                    for name in dependencies)
 
 
+def test_asset_catalog_page_uses_application_contract():
+    dependencies = imported_modules(ROOT / "lib/presentation/streamlit/asset_catalog_page.py")
+    assert "lib.application.asset_catalog_service" in dependencies
+    assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workspace"))
+                   for name in dependencies)
+
+
 def test_workflow_application_limits_preview_and_delegates_to_port():
     from lib.application.workflow_service import WorkflowApplication
 

@@ -175,6 +175,7 @@ ZH_EN: dict[str, str] = {
     "退回": "Return",
     "跳过": "Skip",
     "队列页码": "Queue page",
+    "页码": "Page", "上一页": "Previous page", "下一页": "Next page",
     "前往数据生成": "Go to data creation",
     "进入数据生成工作台": "Open data creation workspace",
     "逐条检查训练语料及其来源证据，修订通过的样本并保留完整审核记录。": "Review each example and its source. Approve or revise it with a full review record.",
@@ -1393,6 +1394,9 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"([\d,]+) / ([\d,]+) 单元", value)
     if match:
         return f"{match.group(1)} / {match.group(2)} units"
+    match = re.fullmatch(r"显示 (\d+)–(\d+) / (\d+) 个文件", value)
+    if match:
+        return f"Files {match.group(1)}–{match.group(2)} of {match.group(3)}"
     match = re.fullmatch(r"(等待|执行中|已完成|失败|已停止|已跳过) · (\d+)%", value)
     if match:
         return f"{translate(match.group(1), language)} · {match.group(2)}%"

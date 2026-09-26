@@ -34,6 +34,12 @@ def app():
     return AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=30).run()
 
 
+def navigate(view, route):
+    """Select a registered route; sidebar navigation now uses buttons."""
+    view.session_state["nav"] = route
+    return view.run()
+
+
 def review_envelope(view):
     """审核工作台 v2 组件信封：BidiComponent.proto.json（AppTest 不暴露为 widget）。"""
     nodes = view.get("bidi_component")
@@ -65,7 +71,7 @@ def sample_record(sample_id="ui-test"):
 
 def test_form_runs_readonly_diagnostics_twice():
     view = app()
-    view.sidebar.radio[0].set_value("管线运行").run()
+    navigate(view, "管线运行")
     next(w for w in view.selectbox if w.label == "任务").set_value("环境自检").run()
     for _ in range(2):
         next(w for w in view.button if w.label == "运行").click().run()
@@ -83,7 +89,7 @@ def test_form_runs_readonly_diagnostics_twice():
 def test_run_page_blocks_missing_required_input():
     """必填参数（如 doc2corpus --input）留空时提交被拦下并明确提示，不启动注定失败的任务。"""
     view = app()
-    view.sidebar.radio[0].set_value("管线运行").run()
+    navigate(view, "管线运行")
     next(w for w in view.selectbox if w.label == "任务").set_value("文档语料整理").run()
     assert any(w.label.endswith("（必填）") for w in view.text_input)  # 必填项有标记
     next(w for w in view.button if w.label == "运行").click().run()
@@ -100,7 +106,7 @@ def test_monitor_shows_event_timeline_and_keeps_bad_rows_visible_as_warning(tmp_
         '{invalid json}\n', encoding="utf-8",
     )
     view = app()
-    view.sidebar.radio[0].set_value("运行监控").run()
+    navigate(view, "运行监控")
     assert not view.exception
     assert any("事件时间线" in str(item.value) for item in view.get("html"))
     assert any("minimind" in str(item.value) for item in view.get("html"))
@@ -126,7 +132,7 @@ def test_preview_caches_samples_across_rerenders(tmp_path, monkeypatch):
         "\n".join(json.dumps(sample_record(f"cache-{i}"), ensure_ascii=False) for i in (1, 2)) + "\n",
         encoding="utf-8")
     view = app()
-    view.sidebar.radio[0].set_value("数据预览").run()
+    navigate(view, "数据预览")
     assert calls["n"] == 1  # 首次渲染读取一次
     view.number_input[0].set_value(2).run()  # 翻到第 2 条：重渲染走缓存
     assert calls["n"] == 1
@@ -147,7 +153,7 @@ def test_data_library_shows_real_sources_outputs_and_selected_excerpt(tmp_path):
                                      encoding="utf-8")
 
     view = app()
-    view.sidebar.radio[0].set_value("数据管理").run()
+    navigate(view, "数据管理")
     assert not view.exception
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
     assert "来源文件</span><strong>1" in html_blocks
@@ -185,7 +191,7 @@ def test_data_library_prioritizes_real_source_and_cpt_over_workflow_evidence(tmp
     ws.set_current(ws.add_folder(source, name="cpt-ui"))
 
     view = app()
-    view.sidebar.radio[0].set_value("数据管理").run()
+    navigate(view, "数据管理")
     assert not view.exception
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
     assert "训练数据文件</span><strong>1" in html_blocks
@@ -215,7 +221,7 @@ def test_data_preview_separates_record_facts_from_conversation(tmp_path):
     (output / "rollout_samples.jsonl").write_text(
         json.dumps(sample_record("preview-real-1"), ensure_ascii=False) + "\n", encoding="utf-8")
     view = app()
-    view.sidebar.radio[0].set_value("数据预览").run()
+    navigate(view, "数据预览")
     assert not view.exception
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
     assert "选择样本" in html_blocks and "样本概览" in html_blocks
@@ -236,7 +242,7 @@ def test_data_preview_counts_tool_result_as_trace_not_user_turn(tmp_path):
     ]}
     (output / "agent_samples.jsonl").write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
     view = app()
-    view.sidebar.radio[0].set_value("数据预览").run()
+    navigate(view, "数据预览")
     assert not view.exception
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
     assert "Agent 工具轨迹" in html_blocks
@@ -250,7 +256,7 @@ def test_data_preview_reports_non_conversation_file_without_crashing(tmp_path):
     output.mkdir(parents=True)
     (output / "cpt_samples.jsonl").write_text('{"text":"连续预训练正文"}\n', encoding="utf-8")
     view = app()
-    view.sidebar.radio[0].set_value("数据预览").run()
+    navigate(view, "数据预览")
     assert not view.exception
     assert any("当前文件不是对话样本" in item.value for item in view.error)
 
@@ -279,7 +285,7 @@ def test_sessions_choose_independent_workspaces(tmp_path):
 
 def test_backends_page_renders_without_exception():
     view = app()
-    view.sidebar.radio[0].set_value("模型与密钥").run()
+    navigate(view, "模型与密钥")
     assert not view.exception
     assert any(w.label == "后端名" for w in view.text_input)
     assert any(w.label == "选择后端" for w in view.selectbox)
@@ -290,7 +296,7 @@ def test_generation_preferences_use_guided_controls():
     from lib.application.preference_service import preference_summary
 
     view = app()
-    view.sidebar.radio[0].set_value("系统设置").run()
+    navigate(view, "系统设置")
     next(w for w in view.segmented_control if w.label == "系统设置视图").set_value("生成偏好").run()
     assert not view.exception
     labels = {w.label for w in view.slider}
@@ -311,7 +317,7 @@ def test_system_settings_gate_overview_reflects_work_area():
     gate.propose("G1", {"rollout_dir": "test-rollouts", "default_backend": "test-backend"})
 
     view = app()
-    view.sidebar.radio[0].set_value("系统设置").run()
+    navigate(view, "系统设置")
     assert not view.exception
     rendered = "".join(str(node.value) for node in view.get("html"))
     assert 'data-kind="attention"><span>需处理</span><strong>1</strong>' in rendered
@@ -399,7 +405,7 @@ def test_quality_report_filters_real_issues_and_locates_source_row(tmp_path):
     (output / "rollout_samples.jsonl").write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
     view = app()
-    view.sidebar.radio[0].set_value("质量报告").run()
+    navigate(view, "质量报告")
     assert not view.exception
     assert any("结构问题" in str(item.value) and "重复内容" in str(item.value)
                for item in view.get("html"))
@@ -424,7 +430,7 @@ def test_review_workspace_v2_envelope_has_rendered_markdown():
     rc.ensure_admin()
     rc.add_records("rollout_review", build_records([sample_record()], {}))
     view = app()
-    view.sidebar.radio[0].set_value("人工审核").run()
+    navigate(view, "人工审核")
     assert not view.exception
 
     _proto, envelope = review_envelope(view)
@@ -463,7 +469,7 @@ def test_daily_review_avoids_sample_files_import_and_old_editor(monkeypatch):
                         lambda *_args, **_kwargs: calls.__setitem__("push", calls["push"] + 1))
 
     view = app()
-    view.sidebar.radio[0].set_value("人工审核").run()
+    navigate(view, "人工审核")
     assert not view.exception
     review_envelope(view)  # 组件仍正常声明/渲染
     assert calls == {"read": 0, "push": 0}
@@ -488,7 +494,7 @@ def test_review_management_import_writes_isolated_db_only():
     before = source.read_bytes()
 
     view = app()
-    view.sidebar.radio[0].set_value("人工审核").run()
+    navigate(view, "人工审核")
     view.session_state["review-management"] = "import"
     view.run()
     assert not view.exception
@@ -519,7 +525,7 @@ def test_review_identity_scopes_queue_per_credential():
         "model": "human", "sample_hash": first["sample_hash"]}])
 
     admin_view = app()
-    admin_view.sidebar.radio[0].set_value("人工审核").run()
+    navigate(admin_view, "人工审核")
     assert not admin_view.exception
     _proto, admin_env = review_envelope(admin_view)
     assert admin_env["identity"] == "admin" and admin_env["scope"] == "default:rollout_review:admin"
@@ -527,7 +533,7 @@ def test_review_identity_scopes_queue_per_credential():
 
     user_view = app()
     user_view.session_state["review-auth-key"] = reviewer_key
-    user_view.sidebar.radio[0].set_value("人工审核").run()
+    navigate(user_view, "人工审核")
     assert not user_view.exception
     _proto, user_env = review_envelope(user_view)
     assert user_env["identity"] == "reviewer1" and user_env["scope"] == "default:rollout_review:reviewer1"
@@ -544,7 +550,7 @@ def test_review_management_identity_and_denial_paths(tmp_path):
 
     settings = app()
     settings.session_state["review-auth-key"] = reviewer_key
-    settings.sidebar.radio[0].set_value("人工审核").run()
+    navigate(settings, "人工审核")
     settings.session_state["review-management"] = "settings"
     settings.run()
     assert not settings.exception
@@ -556,7 +562,7 @@ def test_review_management_identity_and_denial_paths(tmp_path):
 
     import_page = app()
     import_page.session_state["review-auth-key"] = reviewer_key
-    import_page.sidebar.radio[0].set_value("人工审核").run()
+    navigate(import_page, "人工审核")
     import_page.session_state["review-management"] = "import"
     import_page.run()
     assert not import_page.exception
@@ -570,14 +576,14 @@ def test_review_management_identity_and_denial_paths(tmp_path):
     ws.set_current("alpha")
     denied = app()
     denied.session_state["review-auth-key"] = outsider_key
-    denied.sidebar.radio[0].set_value("人工审核").run()
+    navigate(denied, "人工审核")
     assert not denied.exception
     assert any("没有此数据集的权限" in w.value for w in denied.error)
     assert not denied.get("bidi_component")
 
     bad_key = app()
     bad_key.session_state["review-auth-key"] = "agent.not-a-real-key"
-    bad_key.sidebar.radio[0].set_value("人工审核").run()
+    navigate(bad_key, "人工审核")
     assert not bad_key.exception
     assert any("没有此数据集的权限" in w.value for w in bad_key.error)
 
@@ -599,7 +605,7 @@ def test_open_existing_folder_dialog(tmp_path):
     assert ws.folder(identifier) == source
     assert ws.current() == "default"
     assert not ws.out(identifier).exists()
-    view.sidebar.radio[0].set_value("数据预览").run()
+    navigate(view, "数据预览")
     assert not view.exception
     assert any("file-" in w.value for w in view.caption)
     assert data.read_bytes() == before
@@ -622,7 +628,7 @@ def test_unavailable_folder_is_recoverable(tmp_path):
 def test_gui_form_and_environment_isolation(monkeypatch):
     monkeypatch.setenv("DF_WORKSPACE", "default")
     view = app()
-    view.sidebar.radio[0].set_value("管线运行").run()
+    navigate(view, "管线运行")
     assert not view.exception
     assert any(w.label == "任务" for w in view.selectbox)
     assert all("命令参数" not in w.label for w in view.text_input)
