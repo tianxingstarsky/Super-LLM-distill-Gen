@@ -150,3 +150,12 @@ def test_language_choice_is_shareable_in_the_url():
     initialize_language(state)
     assert state.session_state["ui_language"] == "en"
     assert state.session_state["ui-language-choice"] == "English"
+
+
+def test_planning_failure_reason_is_localized_inside_run_message():
+    assert translate(
+        "运行失败：规划批次包含重复任务，请重试当前批次。。已完成的步骤与模型响应已保存。", "en"
+    ) == (
+        "Run failed: The planning batch contains duplicate tasks. Retry this batch. "
+        "Completed steps and model responses are saved."
+    )

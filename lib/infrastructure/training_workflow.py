@@ -26,6 +26,7 @@ from lib.domain.agent_trajectory import (REPLAY_POLICY_VERSION, ReplayUnavailabl
                                          assess_recorded_trajectory, validate_tool_snapshots)
 from lib.domain.corpus_quality import CorpusNearDuplicateIndex, inspect_corpus, summarize_corpus_sources
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k
+from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_scale import (MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE,
                                       PLAN_BATCH_SIZE, generation_units, validate_node_models)
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
@@ -219,7 +220,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "targets": targets, "backend": backend, "model": model, "judge_backend": judge_backend,
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
-              "conversation_turns": conversation_turns, "math_generator_version": 2, "cpt_reference_releases": references,
+              "conversation_turns": conversation_turns, "math_generator_version": 2,
+              "planning_policy_version": 2, "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
@@ -509,18 +511,25 @@ class Workflow:
         for offset in range(0, count, PLAN_BATCH_SIZE):
             size = min(PLAN_BATCH_SIZE, count - offset)
             key = "plan" if count <= PLAN_BATCH_SIZE else ["plan", offset]
-            data = self.ask(key, "generation", "workflow.plan",
-                {"brief": self.recipe["brief"], "count": size, "offset": offset,
+            request = {"brief": self.recipe["brief"], "count": size, "offset": offset,
                  "total": count, "batch": offset // PLAN_BATCH_SIZE + 1,
                  "previous_tasks": tasks[-10:],
-                 "instruction": "只规划当前批；利用 batch 和 offset 覆盖不同主题与情境，避免重复之前任务。"})
+                 "instruction": "只规划当前批；利用 batch 和 offset 覆盖不同主题与情境，避免重复之前任务。"}
+            modern = self.recipe.get("planning_policy_version", 1) >= 2
+            if modern:
+                request.update(training_goals=self.recipe["targets"], max_task_chars=MAX_TASK_CHARS)
+                request["instruction"] += f" 每条任务不超过 {MAX_TASK_CHARS} 字符；围绕 training_goals 规划可独立回答的任务。"
+            data = self.ask(key, "generation", "workflow.plan", request)
             planned = data.get("tasks") if isinstance(data, dict) else None
-            if (not isinstance(planned, list) or len(planned) != size or any(text_issue(t) for t in planned)
-                    or len({task.strip() for task in planned}) != size or any(task.strip() in seen for task in planned)):
+            issue = task_plan_issue(planned, size, seen) if modern else None
+            legacy_invalid = not modern and (
+                not isinstance(planned, list) or len(planned) != size or any(text_issue(t) for t in planned)
+                or len({task.strip() for task in planned}) != size or any(task.strip() in seen for task in planned))
+            if issue or legacy_invalid:
                 (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
-                raise ValueError("invalid_task_plan")
+                raise ValueError("invalid_task_plan" + (f"_{issue}" if issue else ""))
             tasks.extend(planned)
-            seen.update(task.strip() for task in planned)
+            seen.update(task_identity(task) if modern else task.strip() for task in planned)
             metrics.update(done=len(tasks), outputs=len(tasks), eligible=len(tasks))
             self.save()
         metrics.update(status="completed", finished_at=now())

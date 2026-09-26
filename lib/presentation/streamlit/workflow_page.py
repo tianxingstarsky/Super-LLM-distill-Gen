@@ -43,6 +43,18 @@ def _select_setup_node(key: str, node: str) -> None:
     st.session_state[key] = node
 
 
+def _workflow_error(error) -> str:
+    return {
+        "invalid_task_plan_duplicate_normalized_task": "规划批次包含重复任务，请重试当前批次。",
+        "invalid_task_plan_task_too_long": "规划任务过长，请重试当前批次生成简洁任务。",
+        "invalid_task_plan_wrong_task_count": "规划批次的任务数量不符，请重试当前批次。",
+        "invalid_task_plan_empty_text": "规划批次包含空任务，请重试当前批次。",
+        "invalid_task_plan_potential_secret": "规划批次可能包含密钥，已阻止继续生成。",
+        "invalid_task_plan_potential_personal_data": "规划批次可能包含个人信息，已阻止继续生成。",
+        "invalid_task_plan_invalid_encoding": "规划批次包含无效文本，请重试当前批次。",
+    }.get(str(error), str(error))
+
+
 def _toggle_target_group(key: str, members: frozenset[str], defaults: tuple[str, ...]) -> None:
     """Keep the category card and detailed target picker in one state."""
     current = {target for target in st.session_state.get(key, defaults) if target in TARGETS}
@@ -267,7 +279,7 @@ def render_run(application, run_id, begin, *, embedded=False):
     if status == "running" and not active:
         st.warning("执行进程已中断。可从已完成的逐条断点继续。")
     elif status == "failed":
-        st.error(f"运行失败：{state.get('error', 'unknown')}。已完成的步骤与模型响应已保存。")
+        st.error(f"运行失败：{_workflow_error(state.get('error', 'unknown'))}。已完成的步骤与模型响应已保存。")
     elif status == "completed":
         st.success("所选目标已完成，训练文件与质量报告已生成。")
     elif status == "needs_attention":
@@ -343,7 +355,7 @@ def render_run(application, run_id, begin, *, embedded=False):
                     '</div>')
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
             if selected_metrics.get("error"):
-                st.error(f"节点错误：{selected_metrics['error']}")
+                st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
     selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
     st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
             f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'

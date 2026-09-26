@@ -931,6 +931,13 @@ ZH_EN: dict[str, str] = {
     "产物保存位置": "Result folder",
     "处理与批次设置": "Processing and batch settings",
     "计算步骤": "Calculation steps",
+    "规划批次包含重复任务，请重试当前批次。": "The planning batch contains duplicate tasks. Retry this batch.",
+    "规划任务过长，请重试当前批次生成简洁任务。": "Planned tasks are too long. Retry this batch with concise tasks.",
+    "规划批次的任务数量不符，请重试当前批次。": "The planning batch has the wrong task count. Retry this batch.",
+    "规划批次包含空任务，请重试当前批次。": "The planning batch contains an empty task. Retry this batch.",
+    "规划批次可能包含密钥，已阻止继续生成。": "The planning batch may contain a secret. Generation has stopped.",
+    "规划批次可能包含个人信息，已阻止继续生成。": "The planning batch may contain personal information. Generation has stopped.",
+    "规划批次包含无效文本，请重试当前批次。": "The planning batch contains invalid text. Retry this batch.",
     "生成可复现的多步整数算术题，核对计算标注和最终答案；不处理通用数学证明，此节点不调用模型。": "Create repeatable multi-step integer problems. Check calculations and the final answer. General math proofs are outside this node. No model is called.",
     "算术核验": "Arithmetic checks",
     "CoT 核对": "CoT checks",
@@ -1378,7 +1385,8 @@ def translate(value: Any, language: str = "en") -> Any:
         return f"{translate(match.group(1), language)} · {translate(match.group(2), language)} · {match.group(3)}"
     match = re.fullmatch(r"运行失败：(.+)。已完成的步骤与模型响应已保存。", value)
     if match:
-        return f"Run failed: {match.group(1)}. Completed steps and model responses are saved."
+        reason = translate(match.group(1), language).rstrip(".")
+        return f"Run failed: {reason}. Completed steps and model responses are saved."
     match = re.fullmatch(r"当前筛选：(.+) · 最近 (\d+) 条事件", value)
     if match:
         return f"Current filter: {translate(match.group(1), language)} · Last {match.group(2)} events"

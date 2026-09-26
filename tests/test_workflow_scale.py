@@ -60,6 +60,50 @@ def test_large_planning_is_batched_and_resumes_completed_calls(tmp_path):
     assert run.state["stages"]["ingest"]["done"] == 125
 
 
+def test_invalid_normalized_plan_batch_is_retried_without_repeating_prior_calls(tmp_path):
+    run = workflow(tmp_path, sample_count=100, max_units=1000)
+    calls = []
+
+    class Planner:
+        model = "offline-planner"
+        usage = {}
+
+        def chat(self, messages, **kwargs):
+            data = json.loads(messages[1]["content"])
+            calls.append(data["offset"])
+            assert data["max_task_chars"] == 512 and data["training_goals"] == ["sft"]
+            tasks = [f"Maintenance scenario {data['offset'] + i}" for i in range(data["count"])]
+            if calls == [0, 50]:
+                tasks[0] = "Maintenance\n scenario 0"
+            return json.dumps({"tasks": tasks})
+
+    run.generator = Planner()
+    run.stage = "ingest"
+    with pytest.raises(ValueError, match="duplicate_normalized_task"):
+        run.plan()
+    assert run.state["stages"]["ingest"]["done"] == 50
+    units = run.plan()
+    assert calls == [0, 50, 50] and len(units) == 100
+
+
+def test_unversioned_plan_keeps_original_request_and_validation(tmp_path):
+    run = workflow(tmp_path, sample_count=1)
+    run.recipe.pop("planning_policy_version")
+
+    class Planner:
+        model = "legacy-planner"
+        usage = {}
+
+        def chat(self, messages, **kwargs):
+            data = json.loads(messages[1]["content"])
+            assert "max_task_chars" not in data and "training_goals" not in data
+            return json.dumps({"tasks": ["Legacy task " * 100]})
+
+    run.generator = Planner()
+    run.stage = "ingest"
+    assert len(run.plan()[0]["text"]) > 512
+
+
 def test_concurrency_is_bounded_results_ordered_and_replay_skips_work(tmp_path):
     run = workflow(tmp_path, concurrency=4, batch_size=7)
     lock = threading.Lock()
