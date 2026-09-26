@@ -60,6 +60,7 @@ ARTIFACT_PREVIEW_STYLE = """<style>
 .df-artifact-preview .df-message-long summary b { margin-right:10px; color:#365675; }
 .df-artifact-preview .df-message-long .df-message-excerpt { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; padding-top:5px; color:#6B7D93; font-size:11px; overflow-wrap:anywhere; white-space:normal; }
 .df-artifact-preview .df-message-full { max-height:420px; overflow:auto; overscroll-behavior:contain; padding:10px; border-top:1px solid #E4ECF6; scrollbar-gutter:stable; }
+.df-artifact-preview .df-message-full .df-artifact-body { max-height:none; overflow:visible; }
 .df-artifact-preview .df-message-full:focus-visible, .df-artifact-preview .df-message-long summary:focus-visible { outline:2px solid #2878D8; outline-offset:2px; }
 .df-artifact-preview .bubble { min-width:0; max-width:100%; line-height:1.65; overflow-wrap:anywhere; word-break:normal; }
 .df-artifact-preview .bubbles .bubble .role-tag { display:block; margin:0 0 5px; color:#627A99; font-family:inherit; font-size:10px; font-weight:750; letter-spacing:.02em; }

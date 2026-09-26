@@ -250,11 +250,18 @@ def _failure_banner(row: dict) -> str:
 
 
 def _text(label: str, value: Any, modifier: str = "") -> str:
-    content = _safe(value) if value is not None else ""
+    raw = str(value) if value is not None else ""
+    content = _safe(raw)
+    body = f'<div class="df-artifact-body">{content or "（空内容）"}</div>'
+    if len(raw) > 1600:
+        body = ('<details class="df-message-long"><summary>展开完整内容'
+                '<small class="md df-message-excerpt">' + _safe(raw[:180]) + '</small></summary>'
+                '<div class="df-message-full" tabindex="0" role="region" aria-label="完整内容">'
+                + body + '</div></details>')
     return (
         f'<div class="df-artifact-text {modifier}">'
         f'<div class="df-artifact-subhead">{_safe(label)}</div>'
-        f'<div class="df-artifact-body">{content or "（空内容）"}</div></div>'
+        + body + '</div>'
     )
 
 
@@ -302,7 +309,7 @@ def render_training_sample(target: str, row: dict) -> str:
                              '<span>事实未独立核验</span></div>')
         if target == "agent_negative":
             if row.get("evidence"):
-                evidence = json.dumps(row["evidence"], ensure_ascii=False, indent=2, default=str)[:6000]
+                evidence = json.dumps(row["evidence"], ensure_ascii=False, indent=2, default=str)
                 body += _text("执行证据", evidence)
     elif target in {"dpo", "orpo"}:
         body = (
@@ -345,6 +352,6 @@ def render_training_sample(target: str, row: dict) -> str:
                 + (reasoning or '<div class="df-artifact-muted">暂无推理步骤</div>') + '</div>'
                 + _text("最终答案", row.get("answer", ""), "df-artifact-answer"))
     else:
-        raw = json.dumps(row, ensure_ascii=False, indent=2, default=str)[:10000]
+        raw = json.dumps(row, ensure_ascii=False, indent=2, default=str)
         body = _text("结构化内容", raw)
     return header + body + '</article>'

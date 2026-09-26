@@ -189,6 +189,26 @@ def test_agent_preview_distinguishes_verified_and_unverified_tool_steps():
     assert html.index("ledger_read") < html.index("ledger_write")
 
 
+def test_long_corpus_and_evidence_are_collapsible_complete_and_not_translated():
+    from lib.presentation.streamlit.i18n import translate_markup
+    text = "工作流 <script>alert(1)</script>\n" * 300 + "CORPUS_END"
+    preview = render_training_sample("cpt", {"text": text})
+    assert '<details class="df-message-long">' in preview
+    assert 'tabindex="0" role="region" aria-label="完整内容"' in preview
+    assert "CORPUS_END" in preview
+    assert "<script>" not in preview and "&lt;script&gt;" in preview
+    english = translate_markup(preview, "en")
+    assert "Show full content" in english and 'aria-label="Full content"' in english
+    assert "工作流" in english and "CORPUS_END" in english
+    short = render_training_sample("cpt", {"text": "short corpus"})
+    assert '<details class="df-message-long">' not in short
+    evidence = render_training_sample("agent_negative", {
+        "messages": [], "evidence": {"record": "x" * 7000 + "EVIDENCE_END"}})
+    assert "EVIDENCE_END" in evidence
+    structured = render_training_sample("custom", {"record": "x" * 11000 + "JSON_END"})
+    assert "JSON_END" in structured
+
+
 def test_agent_preview_flags_a_missing_result_without_inventing_one():
     html = render_training_sample("agent", {"messages": [
         {"role": "user", "content": "查询"},
