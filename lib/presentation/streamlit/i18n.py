@@ -1161,6 +1161,12 @@ def language_code(value: Any) -> str:
 
 ZH_EN.update({
     "轨迹验证方式": "Trace verification",
+    "解析上传来源并保留来源位置；此步骤不调用生成模型。": "Parse uploaded sources and keep source locations. This step does not call a generation model.",
+    "清洗、分块并去重已有语料；此步骤不调用生成模型。": "Clean, chunk, and deduplicate existing text. This step does not call a generation model.",
+    "核对已记录的工具轨迹；此节点不调用模型。验证环境在下方选择。": "Check recorded tool traces without model calls. Choose the verification environment below.",
+    "生成本地整数算术题并逐步验算；不是通用数学题生成器，此节点不调用模型。": "Create local integer arithmetic problems and check each calculation. This is not a general math generator. No model is called.",
+    "核对产物清单并整理候选数据；人工审核和正式发布在后续完成，此节点不调用模型。": "Check the artifact inventory and prepare candidate data. Human review and release follow later. No model is called.",
+    "此节点不需要配置模型。": "This node does not need model configuration.",
     "查看所选任务": "View selected run",
     "完整内容": "Full content",
     "Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。": "Positive agent examples need complete recorded tool traces. Select verification in the Agent node and check its supported scope.",

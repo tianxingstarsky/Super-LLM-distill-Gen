@@ -22,7 +22,14 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints):
     previous = deepcopy(bindings)
     roles = node_roles(node, source_mode)
     if not roles:
-        st.info("此节点使用本地规则，不需要配置模型。")
+        explanation = {
+            "ingest": "解析上传来源并保留来源位置；此步骤不调用生成模型。",
+            "cpt": "清洗、分块并去重已有语料；此步骤不调用生成模型。",
+            "agent": "核对已记录的工具轨迹；此节点不调用模型。验证环境在下方选择。",
+            "gsm8k": "生成本地整数算术题并逐步验算；不是通用数学题生成器，此节点不调用模型。",
+            "package": "核对产物清单并整理候选数据；人工审核和正式发布在后续完成，此节点不调用模型。",
+        }.get(node, "此节点不需要配置模型。")
+        st.info(explanation)
         return
     if not endpoints:
         st.warning("请先在模型服务中登记服务地址与凭据，再回到节点选择模型。")
