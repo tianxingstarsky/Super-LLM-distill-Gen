@@ -490,7 +490,7 @@ def page_review():
     dataset = WORKSPACES.dataset_name(st.session_state['ws'])
     mode = st.session_state.get('review-management')
     if mode:
-        render_management(mode, dataset, _selected_samples)
+        render_management(mode, dataset, lambda key: _selected_samples(key, preview_only=True))
         return
 
     def navigate(target):

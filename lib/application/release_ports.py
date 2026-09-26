@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Iterator, Protocol
 
 
 class SamplePreviewRows(Protocol):
     def __len__(self) -> int: ...
     def __getitem__(self, index: int) -> dict: ...
+    def __iter__(self) -> Iterator[dict]: ...
 
 
 class ReleasePort(Protocol):

@@ -109,11 +109,10 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
     return "\n\n".join(lines)
 
 
-def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List[Dict[str, Any]]:
+def iter_records(samples, scores):
     """样本 → 审核中心记录（id=样本 ID；payload=完整样本 JSON，修订不丢元数据）。"""
     from lib.domain.release_quality import sample_hash
     from lib.domain import review_edit as editor
-    records = []
     for s in samples:
         instruction = _first_user_content(s) or "（无用户指令，工具型样本）"
         conversation = _plain_messages(s) or "（空对话）"
@@ -129,8 +128,12 @@ def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List
         suggestion = _judge_suggestion(scores.get(s.get("id")))
         if suggestion:
             rec["suggestion"] = suggestion
-        records.append(rec)
-    return records
+        yield rec
+
+
+def build_records(samples: List[Dict[str, Any]], scores: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Compatibility list API; bulk imports consume iter_records directly."""
+    return list(iter_records(samples, scores))
 
 
 def push_samples(samples: List[Dict[str, Any]], scores: Dict[str, str], client: Any = None,
@@ -138,7 +141,7 @@ def push_samples(samples: List[Dict[str, Any]], scores: Dict[str, str], client: 
     """样本入库审核中心（SQLite，单进程融合；同机直连，无外部服务依赖）。"""
     from lib import review_center as rc
 
-    return rc.add_records(dataset_name, build_records(samples, scores))
+    return rc.add_records(dataset_name, iter_records(samples, scores))
 
 
 def pull_decisions(client: Any = None, dataset_name: str = DATASET_NAME) -> List[Dict[str, str]]:

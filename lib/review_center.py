@@ -174,9 +174,11 @@ def _auth(headers):
 def add_records(dataset, records):
     _validate_dataset(dataset)
     init_db()
+    count = 0
     with _lock, _conn() as con:
         con.execute("BEGIN IMMEDIATE")
         for row in records:
+            count += 1
             if not isinstance(row.get("sample_id"), str) or not row["sample_id"]:
                 raise ValueError("sample_id required")
             existing = con.execute("SELECT id,instruction,conversation,sample_hash FROM records WHERE dataset=? AND sample_id=?", (dataset, row["sample_id"])).fetchone()
@@ -193,7 +195,7 @@ def add_records(dataset, records):
                 suggestion=excluded.suggestion,sample_hash=excluded.sample_hash,payload=excluded.payload""",
                 (dataset,row["sample_id"],row.get("instruction",""),row.get("conversation",""),row.get("meta",""),
                  row.get("suggestion",""),row.get("sample_hash",""),row.get("payload","")))
-    return len(records)
+    return count
 
 
 def pending(dataset, username, batch=10):

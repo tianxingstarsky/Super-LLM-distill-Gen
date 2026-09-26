@@ -34,12 +34,21 @@ def render_management(mode, dataset, select_samples):
         if username != 'admin':
             st.info('导入由本机管理员执行。协作者可在审核工作台审阅已授权的数据集。')
             return
-        _, samples = select_samples('review-import-source')
-        if samples:
-            st.write(f'检测到 {len(samples)} 条样本，目标数据集：{dataset}')
+        try:
+            _, samples = select_samples('review-import-source')
+            count = len(samples)
+        except (OSError, ValueError) as error:
+            st.error(str(error))
+            return
+        if count:
+            st.write(f'检测到 {count} 条样本，目标数据集：{dataset}')
             if st.button('将所选样本加入待审'):
                 from lib.review import push_samples
-                push_samples(samples, {}, dataset_name=dataset)
+                try:
+                    push_samples(samples, {}, dataset_name=dataset)
+                except (OSError, ValueError) as error:
+                    st.error(str(error))
+                    return
                 st.success('样本已加入待审，原始文件未修改。')
         return
 

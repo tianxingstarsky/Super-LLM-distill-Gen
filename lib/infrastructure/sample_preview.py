@@ -1,5 +1,6 @@
 """Indexed normalization of selected JSONL examples without retaining all rows."""
 from pathlib import Path
+import json
 
 from lib.domain.review_edit import normalize_sample
 from lib.infrastructure.jsonl_preview import _identity, read_rows, row_count
@@ -19,6 +20,24 @@ class SamplePreview:
     def __len__(self):
         self._check()
         return self.count
+
+    def __iter__(self):
+        """Sequential import uses one row at a time and checks the source lease."""
+        self._check()
+        count = 0
+        with self.path.open(encoding="utf-8") as handle:
+            for number, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                try:
+                    row = normalize_sample(json.loads(line))
+                except (ValueError, TypeError) as error:
+                    raise ValueError(f"{self.path}:{number}: {error}") from error
+                count += 1
+                yield row
+        self._check()
+        if count != self.count:
+            raise ValueError("preview_file_changed")
 
     def __getitem__(self, index):
         if not isinstance(index, int):

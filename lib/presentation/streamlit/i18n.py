@@ -9,6 +9,13 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "返回审核工作台": "Return to review",
+    "导入待审样本": "Import examples for review",
+    "从已打开文件夹读取，不搬动、不覆盖原文件。导入后再进入连续审核。": "Read examples from an open folder. Source files stay unchanged. Return to review after import.",
+    "个人密钥已失效，请返回工作台并重新验证身份。": "Your personal key has expired. Return to review and sign in again.",
+    "导入由本机管理员执行。协作者可在审核工作台审阅已授权的数据集。": "Only the local administrator can import examples. Collaborators can review datasets they have access to.",
+    "将所选样本加入待审": "Import selected examples",
+    "样本已加入待审，原始文件未修改。": "Examples are ready for review. Source files are unchanged.",
     "数简立方": "ShuJian Cube",
     "数据简单生成": "Simple data creation",
     "·　数据简单生成": "· Simple data creation",
@@ -1388,6 +1395,9 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"(.+) 北京时间", value)
     if match:
         return f"{match.group(1)} UTC+8"
+    match = re.fullmatch(r"检测到 (\d+) 条样本，目标数据集：(.+)", value)
+    if match:
+        return f"{match.group(1)} examples found. Target dataset: {match.group(2)}"
     match = re.fullmatch(r"通过 / (\d+) 候选 · (\d+) 条需处理", value)
     if match:
         return f"passed / {match.group(1)} candidates · {match.group(2)} to review"

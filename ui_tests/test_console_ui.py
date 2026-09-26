@@ -482,7 +482,7 @@ def test_daily_review_avoids_sample_files_import_and_old_editor(monkeypatch):
     assert not view.get("component_instance")                           # 不再注入旧 v1 编辑器
 
 
-def test_review_management_import_writes_isolated_db_only():
+def test_review_management_import_writes_isolated_db_only(monkeypatch):
     """导入入口走管理页；样本入库到隔离 DB，源文件只读且不触发日常审核。"""
     from lib import review_center as rc, workspace as ws
 
@@ -492,6 +492,9 @@ def test_review_management_import_writes_isolated_db_only():
     source = out / "rollout_samples.jsonl"
     source.write_text(json.dumps(sample_record("imp-1"), ensure_ascii=False) + "\n", encoding="utf-8")
     before = source.read_bytes()
+    def no_full_read(*args, **kwargs):
+        raise AssertionError("Import must not materialize the complete input file")
+    monkeypatch.setattr("lib.infrastructure.release_file_driver.FilesystemReleaseDriver.read_samples", no_full_read)
 
     view = app()
     navigate(view, "人工审核")

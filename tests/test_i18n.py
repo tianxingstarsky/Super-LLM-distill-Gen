@@ -19,6 +19,12 @@ def test_language_choice_accepts_chinese_and_english_values():
     assert language_code("简体中文") == "zh"
 
 
+def test_review_import_translates_controls_and_preserves_dataset_name():
+    assert translate("将所选样本加入待审", "en") == "Import selected examples"
+    assert translate("检测到 50000 条样本，目标数据集：工作流", "en") == "50000 examples found. Target dataset: 工作流"
+    assert translate("返回审核工作台", "en") == "Return to review"
+
+
 def test_explicit_user_markup_preserves_names_and_nested_attributes():
     source = '<strong data-user-content title="工作流">工作流<span>执行中</span></strong><span>执行中</span>'
     assert translate_markup(source, "en") == (
