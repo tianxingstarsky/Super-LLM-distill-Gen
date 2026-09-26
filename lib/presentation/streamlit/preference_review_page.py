@@ -9,6 +9,7 @@ import streamlit as st
 from lib.application.preference_review_service import PreferenceReviewApplication
 from lib.presentation.streamlit.shared import page_header, review_empty_state
 from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
+from lib.presentation.streamlit.review_release_controls import render_review_release
 from lib.render import MESSAGE_CSS, render_message_sequence
 
 
@@ -216,13 +217,6 @@ def render_preference_review(application: PreferenceReviewApplication, *, show_h
                     '<small>全部偏好对处理后开放</small></span></div>')
             st.caption("跳过项仍需处理；原自动候选与评分证据会保留。")
             queue_complete = finished == total
-            if st.button(f"生成已审核 {label} 版本", type="primary", disabled=not queue_complete or counts["approved"] == 0):
-                try:
-                    st.session_state[_key(f"preference-release:{run_id}", target)] = application.release(run_id)
-                except (OSError, PermissionError, ValueError) as error:
-                    st.error(f"无法生成审核版本：{error}")
-            package = st.session_state.get(_key(f"preference-release:{run_id}", target))
-            if package:
-                st.download_button(f"下载人工审核 {label} ZIP", data=package,
-                                   file_name=f"{target}-human-reviewed-{run_id[:8]}.zip",
-                                   mime="application/zip", key=_key(f"preference-download:{run_id}", target))
+            render_review_release(application, run_id, target=target, complete=queue_complete,
+                                  approved=counts["approved"], session_key=_key(f"preference-release:{run_id}", target),
+                                  download_key=_key(f"preference-download:{run_id}", target), widgets=st)

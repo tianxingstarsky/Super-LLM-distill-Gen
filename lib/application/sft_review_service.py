@@ -29,3 +29,9 @@ class SftReviewApplication:
 
     def release(self, run_id: str) -> bytes:
         return self._driver.release(run_id)
+
+    def prepare_release(self, run_id: str) -> dict:
+        return self._driver.prepare_release(run_id)
+
+    def release_archive(self, run_id: str, release_id: str, expected_hash: str):
+        return self._driver.release_archive(run_id, release_id, expected_hash)

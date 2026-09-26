@@ -917,6 +917,11 @@ ZH_EN: dict[str, str] = {
     "通过并保存修订": "Approve and save changes",
     "生成已审核 SFT 版本": "Create reviewed SFT release",
     "处理状态": "Review status",
+    "正在生成审核版本…": "Creating reviewed version…",
+    "审核版本已生成": "Reviewed version is ready",
+    "此状态下没有样本": "No examples with this status.",
+    "此状态下没有语料": "No text examples with this status.",
+    "此状态下没有偏好对": "No preference pairs with this status.",
     "待审核任务": "Review queue",
     "选择对话查看完整内容": "Choose an example to view the full conversation",
     "按真实轮次呈现输入、回答和工具轨迹": "View recorded turns, replies, and tool activity",
@@ -1199,6 +1204,9 @@ def translate(value: Any, language: str = "en") -> Any:
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    match = re.fullmatch(r"已发布 ([\d,]+) 条通过样本", value)
+    if match:
+        return f"Published {match.group(1)} approved examples"
     match = re.fullmatch(r"([\d,]+) 轮 · ([\d,]+) 条消息", value)
     if match:
         return f"{match.group(1)} turns · {match.group(2)} messages"

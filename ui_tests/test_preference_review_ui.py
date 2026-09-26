@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -53,4 +54,11 @@ def test_reviewer_can_approve_and_release_dpo_candidate(tmp_path, monkeypatch):
     assert not app.exception
     next(button for button in app.button if button.label == "生成已审核 DPO 版本").click().run()
     assert not app.exception
-    assert isinstance(app.session_state[f"preference-release:{run_id}"], bytes)
+    release = app.session_state[f"preference-release:{run_id}"]
+    assert isinstance(release, dict) and release["target"] == "dpo"
+    assert release["counts"]["approved"] == 1
+    archive = run / "releases" / ".archives" / f"{release['id']}.zip"
+    assert hashlib.sha256(archive.read_bytes()).hexdigest() == release["sha256"]
+    with zipfile.ZipFile(archive) as package:
+        assert len(package.read("dpo.jsonl").splitlines()) == 1
+    assert not any(isinstance(value, bytes) for value in release.values())

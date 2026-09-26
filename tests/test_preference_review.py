@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import sqlite3
 from pathlib import Path
 import zipfile
 
@@ -136,8 +137,8 @@ def test_orpo_only_run_has_its_own_review_queue_and_release(tmp_path):
     release = tmp_path / "workflows" / run_id / "releases" / "orpo-preference-v0001"
     assert release.is_dir()
     assert not (release / "dpo.jsonl").exists()
-    assert (tmp_path / "workflows" / run_id / "human-review" / "preferences-orpo.json").exists()
-    assert not (tmp_path / "workflows" / run_id / "human-review" / "preferences.json").exists()
+    assert (tmp_path / "workflows" / run_id / "human-review" / "preferences-orpo.sqlite").exists()
+    assert not (tmp_path / "workflows" / run_id / "human-review" / "preferences.sqlite").exists()
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         assert set(archive.namelist()) == {"orpo.jsonl", "review.json", "manifest.json"}
         manifest = json.loads(archive.read("manifest.json"))
@@ -193,10 +194,12 @@ def test_orpo_release_rejects_modified_review_state(tmp_path):
     item = app.queue(run_id)["items"][0]
     app.decide(run_id, item["pair_id"], decision="approved", reviewer="admin",
                expected_hash=item["pair_id"])
-    review_path = tmp_path / "workflows" / run_id / "human-review" / "preferences-orpo.json"
-    state = json.loads(review_path.read_text(encoding="utf-8"))
-    state["current"][item["pair_id"]]["candidate"]["chosen"][0]["content"] = "未经审核的回答"
-    review_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    review_path = tmp_path / "workflows" / run_id / "human-review" / "preferences-orpo.sqlite"
+    with sqlite3.connect(review_path) as database:
+        sequence, payload = database.execute("SELECT sequence,payload FROM events LIMIT 1").fetchone()
+        event = json.loads(payload)
+        event["candidate"]["chosen"][0]["content"] = "未经审核的回答"
+        database.execute("UPDATE events SET payload=? WHERE sequence=?", (json.dumps(event), sequence))
     with pytest.raises(ValueError, match="invalid_preference_review_history"):
         app.release(run_id)
 

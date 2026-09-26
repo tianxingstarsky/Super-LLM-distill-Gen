@@ -406,6 +406,10 @@ $theme_vars
 .df-review-record-meta span { padding: 4px 8px; border: 1px solid #DCE7F5; border-radius: 999px; background: #F8FBFF; color: var(--df-text3); font-size: 10px; }
 .df-review-record-meta span:first-child { background: #E9F2FF; border-color: #D8E8FC; color: #125EBF; font-weight: 700; }
 .df-review-sample { max-height: 650px; overflow: auto; scrollbar-gutter: stable; }
+.df-review-release-ready { display:flex; gap:9px; align-items:center; padding:11px; margin:12px 0 8px; border:1px solid #BFE6D5; border-radius:9px; background:#F1FBF6; }
+.df-review-release-ready > span { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; background:#17A574; color:#fff; }
+.df-review-release-ready strong { display:block; color:#166447; font-size:12px; }
+.df-review-release-ready small { display:block; margin-top:3px; color:#56756A; font-size:10px; overflow-wrap:anywhere; }
 @container (min-width:500px) {
   .df-review-sample .df-artifact-turn-columns { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }

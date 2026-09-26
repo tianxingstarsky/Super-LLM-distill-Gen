@@ -68,11 +68,11 @@ def fixture_app(root, target, count=45):
 
 
 @pytest.mark.parametrize("target", ["cpt", "sft", "dpo", "orpo"])
-def test_status_filter_precedes_pagination_and_keeps_global_counts(tmp_path, target, monkeypatch):
+def test_status_filter_precedes_pagination_and_keeps_global_counts(tmp_path, target):
     app, run_id, rows = fixture_app(tmp_path, target)
-    # Page retrieval must not take the old whole-dataset path.
+    # The old whole-dataset readers have been removed from the shared adapter.
     method = "_read_rows" if target in {"cpt", "sft"} else "_read_pairs"
-    monkeypatch.setattr(app._driver, method, lambda *_: pytest.fail("materialized whole dataset"))
+    assert not hasattr(app._driver, method)
     result = app.queue(run_id, decision="pending", limit=20)
     key = "row" if target in {"cpt", "sft"} else "pair"
     assert result["items"][0][key] == rows[23]

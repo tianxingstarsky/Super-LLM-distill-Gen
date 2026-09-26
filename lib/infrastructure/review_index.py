@@ -34,9 +34,10 @@ class ReviewArtifactIndex:
         offset, limit, decision = review_query(offset, limit, decision)
         db = self.connection
         db.execute("CREATE TEMP TABLE decisions (id TEXT PRIMARY KEY, decision TEXT NOT NULL)")
+        decisions = (current.decision_rows() if hasattr(current, "decision_rows") else (
+            (key, value.get("decision")) for key, value in current.items()))
         db.executemany("INSERT INTO decisions VALUES (?,?)", (
-            (key, value.get("decision") if value.get("decision") in DECISIONS else "pending")
-            for key, value in current.items()))
+            (key, value if value in DECISIONS else "pending") for key, value in decisions))
         counts = dict.fromkeys(("approved", "rejected", "skipped", "pending"), 0)
         for state, count in db.execute("SELECT COALESCE(d.decision,'pending'),COUNT(*) FROM candidates c "
                                       "LEFT JOIN decisions d ON c.id=d.id GROUP BY COALESCE(d.decision,'pending')"):

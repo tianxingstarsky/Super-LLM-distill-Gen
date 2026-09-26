@@ -13,6 +13,7 @@ from lib.presentation.streamlit.shared import review_empty_state
 from lib.render import MESSAGE_CSS
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
+from lib.presentation.streamlit.review_release_controls import render_review_release
 
 
 _DECISIONS = {"approved": "已通过", "rejected": "已退回", "skipped": "已跳过", "pending": "待审核"}
@@ -217,16 +218,9 @@ def render_sft_review(application: SftReviewApplication, *, legacy_review: Calla
                     '<small>全部样本通过或退回后开放</small></span></div>')
             st.caption("跳过项仍需处理；自动候选与审核证据会保留。")
             complete = finished == total
-            if st.button("生成已审核 SFT 版本", type="primary", disabled=not complete or counts["approved"] == 0):
-                try:
-                    st.session_state[f"sft-release:{run_id}"] = application.release(run_id)
-                except (OSError, PermissionError, ValueError) as error:
-                    st.error(f"无法生成审核版本：{error}")
-            package = st.session_state.get(f"sft-release:{run_id}")
-            if package:
-                st.download_button("下载人工审核 SFT ZIP", data=package,
-                                   file_name=f"sft-human-reviewed-{run_id[:8]}.zip",
-                                   mime="application/zip", key=f"sft-download:{run_id}")
+            render_review_release(application, run_id, target="sft", complete=complete,
+                                  approved=counts["approved"], session_key=f"sft-release:{run_id}",
+                                  download_key=f"sft-download:{run_id}", widgets=st)
     if legacy_review:
         with st.expander("打开历史 / 导入样本审核中心"):
             legacy_review()
