@@ -39,16 +39,18 @@ def render_review_overview(output, mode_key: str) -> dict[str, object]:
         "SFT 数据调整": sft_review_application(output),
         "DPO 偏好优化": preference_review_application(output),
         "ORPO 偏好优化": preference_review_application(output, target="orpo"),
+        "RLAIF 反馈审核": preference_review_application(output, target="rlaif"),
         "CPT 语料审核": corpus_review_application(output),
     }
     cards = (
         ("sft", "SFT 数据调整", "✎", "sample_count"),
         ("dpo", "DPO 偏好优化", "♡", "pair_count"),
         ("orpo", "ORPO 偏好优化", "◇", "pair_count"),
+        ("rlaif", "RLAIF 反馈审核", "✦", "pair_count"),
         ("cpt", "CPT 语料审核", "▤", "sample_count"),
     )
     st.html(_STYLE)
-    for column, (kind, mode, glyph, count_field) in zip(st.columns(4, gap="small"), cards):
+    for column, (kind, mode, glyph, count_field) in zip(st.columns(len(cards), gap="small"), cards):
         with column, st.container(border=True, key=f"review-overview-{kind}"):
             try:
                 runs = applications[mode].reviewable_runs()

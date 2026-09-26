@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from lib.domain.corpus_review import corpus_identity, validate_corpus_row
-from lib.domain.preference_review import pair_identity, validate_pair
+from lib.domain.preference_review import pair_identity, validate_pair, validate_rlaif_pair
+from lib.domain.workflow_targets import PREFERENCE_TARGETS
 from lib.domain.sft_review import sft_identity, validate_sft_revision
 
 
 def validate_review_event(target: str, source: dict, record: dict) -> dict:
-    preference = target in {"dpo", "orpo"}
+    preference = target in PREFERENCE_TARGETS
     family = "preference" if preference else target
     if not isinstance(record, dict):
         raise ValueError(f"invalid_{family}_review_record")
@@ -33,6 +34,11 @@ def validate_review_event(target: str, source: dict, record: dict) -> dict:
         candidate = validate_corpus_row(record.get("candidate"))
     elif preference:
         candidate = validate_pair(record.get("candidate"))
+        if target == "rlaif":
+            validate_rlaif_pair(source)
+            validate_rlaif_pair(candidate)
+            if candidate != source:
+                raise ValueError("rlaif_revision_requires_new_feedback")
         if set(candidate) != set(source) or any(candidate[key] != source[key]
                 for key in source if key not in {"chosen", "rejected"}):
             raise ValueError("preference_context_is_immutable")

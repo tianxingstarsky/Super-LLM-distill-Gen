@@ -6,6 +6,6 @@ from lib.infrastructure.training_review_driver import FilesystemTrainingReviewDr
 
 class FilesystemPreferenceReviewDriver(FilesystemTrainingReviewDriver):
     def __init__(self, output: Path, *, target: str = "dpo"):
-        if target not in {"dpo", "orpo"}:
+        if target not in {"dpo", "orpo", "rlaif"}:
             raise ValueError("invalid_preference_review_target")
         super().__init__(output, target)

@@ -1037,6 +1037,26 @@ ZH_EN: dict[str, str] = {
     "回答未完成": "Answer is incomplete",
     "未解决的工具错误": "Unresolved tool error",
     "工具错误标记无效": "Invalid tool error flag",
+    "RLAIF 反馈审核": "RLAIF Feedback Review",
+    "逐对比较模型回答、确认偏好并保留修订历史；已审核版本单独发布。": "Compare model responses and keep review history. Publish reviewed data as a separate release.",
+    "偏好审核队列": "Preference review queue",
+    "选择一对回答进行比较": "Select a response pair to compare",
+    "原始提示与上下文": "Original prompt and context",
+    "更优回答": "Preferred response",
+    "对照回答": "Alternative response",
+    "chosen · 推荐保留": "chosen · Recommended",
+    "rejected · 用于偏好训练": "rejected · Preference comparison",
+    "当前偏好对等待审核": "This pair is waiting for review",
+    "编辑两个回答": "Edit both responses",
+    "交换偏好后通过": "Swap preference and approve",
+    "生成已审核 RLAIF 版本": "Create reviewed RLAIF release",
+    "生成已审核 ORPO 版本": "Create reviewed ORPO release",
+    "RLAIF 偏好对": "RLAIF preference pair",
+    "通过并保留 AI 反馈": "Approve and preserve AI feedback",
+    "更优回答评分": "Preferred response score",
+    "对照回答评分": "Alternative response score",
+    "查看 AI 反馈证据": "View AI feedback evidence",
+    "AI 评分与反馈绑定原始回答。需要改写或交换回答时，请重新生成并评审。": "AI scores and feedback belong to the original responses. Generate and review new responses to edit or swap them.",
     "⚠ 工具错误标记无效": "⚠ Invalid tool error flag",
     "无效工具标记": "Invalid tool flags",
     "当前文件没有逐条结构问题。重复统计和审核覆盖仍需单独核对。": "No structural issues were found. Check duplicates and review coverage separately.",
@@ -1381,7 +1401,10 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"指纹 ([a-f0-9]+)", value)
     if match:
         return f"Fingerprint {match.group(1)}"
-    match = re.fullmatch(r"已审核 ([\d,]+) 条 · 待处理 ([\d,]+) 条", value)
+    match = re.fullmatch(r"提示 ([\d,]+) 轮", value)
+    if match:
+        return f"Prompt: {match.group(1)} turns"
+    match = re.fullmatch(r"已审核 ([\d,]+) (?:条|对) · 待处理 ([\d,]+) (?:条|对)", value)
     if match:
         return f"Reviewed {match.group(1)} · Pending {match.group(2)}"
     match = re.fullmatch(r"(.+) · ([\d,]+) (条|对) · ([a-f0-9]{8})", value)
@@ -1631,7 +1654,7 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"当前工作区找到\s*(\d+)\s*个版本目录 ·\s*(\d+)\s*个版本通过文件校验", value)
     if match:
         return f"Found {match.group(1)} release folders · {match.group(2)} passed file checks"
-    match = re.fullmatch(r"生成成对回答并通过质量检查后，(DPO|ORPO) 候选会显示在这里供人工比较。", value)
+    match = re.fullmatch(r"生成成对回答并通过质量检查后，(DPO|ORPO|RLAIF) 候选会显示在这里供人工比较。", value)
     if match:
         return f"{match.group(1)} candidates appear here for review after paired answers pass quality checks."
     match = re.fullmatch(

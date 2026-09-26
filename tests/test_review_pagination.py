@@ -138,7 +138,7 @@ render_sft_review(SftReviewApplication(FilesystemSftReviewDriver(Path({str(tmp_p
     assert "Question 23" in ui.radio[0].options[0]
     assert ui.session_state[f"sft-review:{run_id}:page:pending"] == 1
     assert any("Page 1 of 1" in item.value for item in ui.caption)
-    rendered = "".join(str(item.value) for item in ui.get("html"))
+    rendered = "".join(item.proto.body for item in ui.get("html"))
     assert "Turn input" in rendered and "Assistant response and tool activity" in rendered
     assert "本轮输入" not in rendered
     assert "按真实轮次" not in rendered and "指纹 " not in rendered and "处理状态" not in rendered

@@ -512,8 +512,8 @@ def page_corpus_review():
 
 
 def page_human_review():
-    page_header("人工审核 / 模型对齐", "在发布前检查样本质量、修订内容并保留审核历史。", "CPT　·　SFT　·　DPO　·　ORPO")
-    modes = ("SFT 数据调整", "DPO 偏好优化", "ORPO 偏好优化", "CPT 语料审核")
+    page_header("人工审核 / 模型对齐", "在发布前检查样本质量、修订内容并保留审核历史。", "CPT　·　SFT　·　DPO　·　ORPO　·　RLAIF")
+    modes = ("SFT 数据调整", "DPO 偏好优化", "ORPO 偏好优化", "RLAIF 反馈审核", "CPT 语料审核")
     mode_key = f"review-mode:{st.session_state['ws']}"
     from lib.presentation.streamlit.review_overview import render_review_overview
     applications = render_review_overview(_ws_out(), mode_key)
@@ -525,7 +525,7 @@ def page_human_review():
     elif mode == modes[1]:
         from lib.presentation.streamlit.preference_review_page import render_preference_review
         render_preference_review(applications[mode], show_header=False)
-    elif mode == modes[2]:
+    elif mode in modes[2:4]:
         from lib.presentation.streamlit.preference_review_page import render_preference_review
         render_preference_review(applications[mode], show_header=False)
     else:

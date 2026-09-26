@@ -24,7 +24,7 @@ class ReleaseCancelled(Exception):
 
 
 def _paths(output, run_id, target):
-    if target not in {"sft", "cpt", "dpo", "orpo", "workflow"}:
+    if target not in {"sft", "cpt", "dpo", "orpo", "rlaif", "workflow"}:
         raise ValueError("invalid_review_target")
     run = run_path(output, run_id)
     owner = run / ("delivery" if target == "workflow" else "human-review")

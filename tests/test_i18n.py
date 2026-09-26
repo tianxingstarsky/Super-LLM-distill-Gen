@@ -19,6 +19,15 @@ def test_language_choice_accepts_chinese_and_english_values():
     assert language_code("简体中文") == "zh"
 
 
+def test_preference_review_controls_and_progress_translate_completely():
+    assert translate("编辑两个回答", "en") == "Edit both responses"
+    assert translate("已审核 12 对 · 待处理 50000 对", "en") == "Reviewed 12 · Pending 50000"
+    assert translate("提示 3 轮", "en") == "Prompt: 3 turns"
+    assert translate("生成已审核 RLAIF 版本", "en") == "Create reviewed RLAIF release"
+    assert translate_markup('<strong>偏好审核队列</strong><span data-user-content>编辑两个回答</span>', "en") == (
+        '<strong>Preference review queue</strong><span data-user-content>编辑两个回答</span>')
+
+
 def test_review_import_translates_controls_and_preserves_dataset_name():
     assert translate("将所选样本加入待审", "en") == "Import selected examples"
     assert translate("检测到 50000 条样本，目标数据集：工作流", "en") == "50000 examples found. Target dataset: 工作流"

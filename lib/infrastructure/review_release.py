@@ -7,7 +7,7 @@ import re
 import zipfile
 
 from lib.domain.corpus_review import corpus_identity, validate_corpus_row
-from lib.domain.preference_review import pair_identity, validate_pair
+from lib.domain.preference_review import pair_identity, validate_pair, validate_rlaif_pair
 from lib.domain.sft_review import sft_identity, validate_sft_record
 from lib.infrastructure.review_artifacts import iter_review_rows
 from lib.infrastructure.training_workflow import file_hash, verify_artifacts
@@ -16,6 +16,8 @@ from lib.workspace import is_linked
 
 
 def _validators(target):
+    if target == "rlaif":
+        return validate_rlaif_pair, pair_identity
     if target == "cpt":
         return validate_corpus_row, corpus_identity
     if target == "sft":
@@ -46,7 +48,7 @@ def prepare_review_release(path, target, prefix, index, store, *, progress=None)
     store.verify(progress=progress)
     queue = index.page(store, limit=1)
     counts = queue["counts"]
-    family = "preference" if target in {"dpo", "orpo"} else target
+    family = "preference" if target in {"dpo", "orpo", "rlaif"} else target
     pending = counts["pending"] + counts["skipped"]
     if pending:
         raise ValueError(f"{family}_review_incomplete:{pending}")
@@ -78,7 +80,11 @@ def prepare_review_release(path, target, prefix, index, store, *, progress=None)
             if review is None or review["decision"] not in {"approved", "rejected"}:
                 raise ValueError(f"{family}_review_incomplete")
             if review["decision"] == "approved":
-                handle.write(json.dumps(review["candidate"], ensure_ascii=False, sort_keys=True,
+                payload = review["candidate"]
+                if target == "rlaif":
+                    from lib.domain.workflow_targets import training_record
+                    payload = training_record(target, payload)
+                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True,
                                         separators=(",", ":")) + "\n")
                 written += 1
             total += 1

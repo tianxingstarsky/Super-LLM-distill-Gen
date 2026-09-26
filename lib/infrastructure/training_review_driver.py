@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 from lib.domain.corpus_review import corpus_identity, validate_corpus_row
-from lib.domain.preference_review import pair_identity, validate_pair
+from lib.domain.preference_review import pair_identity, validate_pair, validate_rlaif_pair
 from lib.domain.review_audit import validate_review_event
 from lib.domain.sft_review import sft_identity, validate_sft_record
 from lib.infrastructure.review_index import review_index
@@ -17,15 +17,17 @@ from lib.infrastructure.training_workflow import list_runs, read_json, run_path,
 
 class FilesystemTrainingReviewDriver:
     def __init__(self, output: Path, target: str):
-        if target not in {"sft", "cpt", "dpo", "orpo"}:
+        if target not in {"sft", "cpt", "dpo", "orpo", "rlaif"}:
             raise ValueError("invalid_review_target")
         self.output, self.target = Path(output), target
-        self.preference = target in {"dpo", "orpo"}
+        self.preference = target in {"dpo", "orpo", "rlaif"}
         self.family = "preference" if self.preference else target
         self.id_key = "pair_id" if self.preference else "sample_id"
         self.validate, self.identity = ((validate_pair, pair_identity) if self.preference else
             (validate_sft_record, sft_identity) if target == "sft" else (validate_corpus_row, corpus_identity))
-        self.prefix = {"sft": "sft", "cpt": "cpt", "dpo": "preference", "orpo": "orpo-preference"}[target]
+        if target == "rlaif":
+            self.validate = validate_rlaif_pair
+        self.prefix = {"sft": "sft", "cpt": "cpt", "dpo": "preference", "orpo": "orpo-preference", "rlaif": "rlaif-feedback"}[target]
 
     def _run(self, run_id):
         if not re.fullmatch(r"[a-f0-9]{32}", run_id or ""):
@@ -37,10 +39,14 @@ class FilesystemTrainingReviewDriver:
         verify_artifacts(path)
         if not (path / "artifacts" / f"{self.target}.jsonl").is_file():
             raise ValueError(f"{self.family}_artifact_missing")
+        if self.target == "rlaif":
+            manifest = read_json(path / "artifacts" / "manifest.json")
+            if "rlaif.records.json" not in manifest.get("sha256", {}):
+                raise ValueError("rlaif_feedback_evidence_missing")
         return path
 
     def _review_path(self, run_id):
-        name = {"sft": "sft", "cpt": "cpt", "dpo": "preferences", "orpo": "preferences-orpo"}[self.target]
+        name = {"sft": "sft", "cpt": "cpt", "dpo": "preferences", "orpo": "preferences-orpo", "rlaif": "preferences-rlaif"}[self.target]
         return run_path(self.output, run_id) / "human-review" / f"{name}.json"
 
     @contextmanager

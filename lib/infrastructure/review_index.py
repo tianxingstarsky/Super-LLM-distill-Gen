@@ -50,7 +50,7 @@ class ReviewArtifactIndex:
             args.append(decision)
         query += "ORDER BY c.position LIMIT ? OFFSET ?"
         args.extend((limit, offset))
-        preference = self.target in {"dpo", "orpo"}
+        preference = self.target in {"dpo", "orpo", "rlaif"}
         id_key, payload_key = ("pair_id", "pair") if preference else ("sample_id", "row")
         items = []
         for sample_id, payload, evidence in db.execute(query, args):
@@ -72,7 +72,7 @@ def _build(path, destination, target, signature, validate, identity):
         db.execute("CREATE TABLE candidates (position INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, "
                    "payload TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT '{}')")
         # Validation consumes the complete source before the index can be published.
-        preference = target in {"dpo", "orpo"}
+        preference = target in {"dpo", "orpo", "rlaif"}
         id_key, payload_key = ("pair_id", "pair") if preference else ("sample_id", "row")
         rows = iter_review_rows(path, target, validate, identity, payload_key=payload_key, id_key=id_key)
         for position, item in enumerate(rows):

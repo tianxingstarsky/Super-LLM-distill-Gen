@@ -1,4 +1,4 @@
-"""Human review surface for generated DPO and ORPO preference pairs."""
+"""Human review surface for DPO, ORPO, and verified RLAIF feedback."""
 from __future__ import annotations
 
 import html
@@ -17,8 +17,8 @@ _DECISIONS = {"approved": "已通过", "rejected": "已退回", "skipped": "已�
 
 
 def _key(value: str, target: str) -> str:
-    """Keep persisted DPO widget keys while isolating ORPO page state."""
-    return value if target == "dpo" else f"{value}:orpo"
+    """Keep persisted DPO widget keys while isolating each other target."""
+    return value if target == "dpo" else f"{value}:{target}"
 
 
 def _answer(messages):
@@ -70,7 +70,7 @@ def render_preference_review(application: PreferenceReviewApplication, *, show_h
     if show_header:
         page_header("偏好审核与模型对齐", "逐对比较模型回答、确认偏好并保留修订历史；已审核版本单独发布。", label)
     else:
-        st.subheader(f"{label} 偏好优化")
+        st.subheader("RLAIF 反馈审核" if target == "rlaif" else f"{label} 偏好优化")
     runs = application.reviewable_runs()
     if not runs:
         with st.container(border=True):
@@ -156,7 +156,14 @@ def render_preference_review(application: PreferenceReviewApplication, *, show_h
                                 names.append(str(name or tool.get("name") or "未命名工具"))
                         st.html('<div class="df-review-facts"><div><span>工具</span><strong>' +
                                 html.escape("、".join(names) or "已记录") + '</strong></div></div>')
-                edit_mode = st.session_state.get(_key(f"preference-review-edit:{run_id}:{chosen_id}", target), False)
+                if target == "rlaif":
+                    st.caption("AI 评分与反馈绑定原始回答。需要改写或交换回答时，请重新生成并评审。")
+                    a, b = st.columns(2)
+                    a.metric("更优回答评分", pair["preference"]["chosen"]["correctness"])
+                    b.metric("对照回答评分", pair["preference"]["rejected"]["correctness"])
+                    with st.expander("查看 AI 反馈证据"):
+                        st.json(pair["rlaif"])
+                edit_mode = target != "rlaif" and st.session_state.get(_key(f"preference-review-edit:{run_id}:{chosen_id}", target), False)
                 if edit_mode:
                     st.html('<div class="df-review-edit-head"><strong>修订偏好回答</strong>'
                             '<small>提示、工具定义和回答角色保持锁定</small></div>')
@@ -175,11 +182,12 @@ def render_preference_review(application: PreferenceReviewApplication, *, show_h
             if item:
                 st.html(_history_html(review))
                 st.toggle("编辑两个回答", value=False, key=_key(f"preference-review-edit:{run_id}:{chosen_id}", target),
+                          disabled=target == "rlaif",
                           help="仅修订更优回答和对照回答的正文；提示与工具定义锁定。")
                 with st.form(_key(f"preference-review-form:{run_id}:{chosen_id}", target)):
                     reason = st.text_input("审核意见（可选）", value=review.get("reason", ""), max_chars=2000)
-                    approve = st.form_submit_button("通过并保存修订", type="primary", width="stretch")
-                    swap = st.form_submit_button("交换偏好后通过", width="stretch")
+                    approve = st.form_submit_button("通过并保留 AI 反馈" if target == "rlaif" else "通过并保存修订", type="primary", width="stretch")
+                    swap = st.form_submit_button("交换偏好后通过", width="stretch", disabled=target == "rlaif")
                     reject = st.form_submit_button("退回", width="stretch")
                     skip = st.form_submit_button("跳过", width="stretch")
             else:

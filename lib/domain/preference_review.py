@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+from lib.domain.workflow_targets import PREFERENCE_TARGETS, rlaif_feedback_issue
 
 
 PROMPT_ROLES = frozenset({"system", "developer", "user", "assistant", "tool"})
@@ -39,13 +40,23 @@ def validate_pair(pair: dict) -> dict:
     return deepcopy(pair)
 
 
+def validate_rlaif_pair(pair: dict) -> dict:
+    result = validate_pair(pair)
+    issue = rlaif_feedback_issue(result)
+    if issue:
+        raise ValueError(issue)
+    return result
+
+
 def review_record(pair: dict, *, decision: str, reviewer: str, reviewed_at: str,
                   reason: str = "", chosen: str | None = None,
                   rejected: str | None = None, target: str = "dpo") -> dict:
     """Build an auditable decision while preserving prompt and message metadata."""
     source = validate_pair(pair)
-    if target not in {"dpo", "orpo"}:
+    if target not in PREFERENCE_TARGETS:
         raise ValueError("invalid_preference_review_target")
+    if target == "rlaif":
+        source = validate_rlaif_pair(source)
     if decision not in {"approved", "rejected", "skipped"}:
         raise ValueError("invalid_preference_decision")
     if not isinstance(reviewer, str) or not reviewer.strip() or len(reviewer) > 128:
@@ -64,6 +75,8 @@ def review_record(pair: dict, *, decision: str, reviewer: str, reviewed_at: str,
             raise ValueError("invalid_preference_revision")
         candidate["chosen"][-1]["content"] = chosen_text
         candidate["rejected"][-1]["content"] = rejected_text
+        if target == "rlaif" and candidate != source:
+            raise ValueError("rlaif_revision_requires_new_feedback")
     return {
         "target": target,
         "pair_id": pair_identity(source),

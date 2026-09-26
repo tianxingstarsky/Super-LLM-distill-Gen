@@ -2,12 +2,32 @@
 from __future__ import annotations
 
 import json
+from itertools import zip_longest
 
 from lib.infrastructure.json_stream import iter_json_records
+from lib.domain.workflow_targets import training_record
 
 
 def iter_review_rows(path, target, validate, identity, *, payload_key="row", id_key="sample_id"):
     seen = set()
+    if target == "rlaif":
+        records = (row for row in iter_json_records(path / "artifacts" / "rlaif.records.json")
+                   if row.get("status") == "eligible")
+        with (path / "artifacts" / "rlaif.jsonl").open(encoding="utf-8") as handle:
+            native = (json.loads(line) for line in handle if line.strip())
+            missing = object()
+            for payload, record in zip_longest(native, records, fillvalue=missing):
+                if payload is missing or record is missing:
+                    raise ValueError("rlaif_feedback_artifact_count_mismatch")
+                row = validate(record)
+                if training_record(target, row) != payload:
+                    raise ValueError("rlaif_feedback_artifact_mismatch")
+                sample_id = identity(row)
+                if sample_id in seen:
+                    raise ValueError("duplicate_preference_pair_id")
+                seen.add(sample_id)
+                yield {id_key: sample_id, payload_key: row, "evidence": {}}
+        return
     with (path / "artifacts" / f"{target}.jsonl").open(encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():

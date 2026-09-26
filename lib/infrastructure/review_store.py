@@ -26,8 +26,8 @@ def _file_hash(path):
 class ReviewStore:
     def __init__(self, connection, target, source_row):
         self.db, self.target, self.source_row = connection, target, source_row
-        self.id_key = "pair_id" if target in {"dpo", "orpo"} else "sample_id"
-        self.family = "preference" if target in {"dpo", "orpo"} else target
+        self.id_key = "pair_id" if target in {"dpo", "orpo", "rlaif"} else "sample_id"
+        self.family = "preference" if target in {"dpo", "orpo", "rlaif"} else target
 
     def _history_error(self):
         return ValueError(f"invalid_{self.family}_review_history")

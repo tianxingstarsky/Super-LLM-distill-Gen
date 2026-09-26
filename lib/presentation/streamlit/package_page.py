@@ -133,6 +133,7 @@ _REVIEW_MODES = {
     "sft": ("SFT 数据调整", "sft-review-run"),
     "dpo": ("DPO 偏好优化", "preference-review-run"),
     "orpo": ("ORPO 偏好优化", "preference-review-run:orpo"),
+    "rlaif": ("RLAIF 反馈审核", "preference-review-run:rlaif"),
     "cpt": ("CPT 语料审核", "corpus-review-run"),
 }
 
