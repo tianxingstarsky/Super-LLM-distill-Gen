@@ -28,6 +28,9 @@ class WorkflowApplication:
     def list_runs(self) -> list[dict]:
         return self._driver.list_runs()
 
+    def task_runs(self) -> list[dict]:
+        return self._driver.task_runs()
+
     def state(self, run_id: str) -> dict:
         return self._driver.state(run_id)
 

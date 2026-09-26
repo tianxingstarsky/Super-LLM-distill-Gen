@@ -157,7 +157,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         st.html("<script>document.querySelector('[data-testid=\"stMain\"]')"
                 ".scrollTo({top:0,left:0,behavior:'instant'});</script>",
                 unsafe_allow_javascript=True)
-    runs = application.list_runs()
+    runs = application.task_runs()
     if not runs:
         left, right = st.columns([1.25, 1], gap="large")
         with left, st.container(border=True):

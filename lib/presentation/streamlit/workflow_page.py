@@ -633,7 +633,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                 st.rerun()
             except (ValueError, OSError, Timeout) as error:
                 st.error(str(error))
-    runs = application.list_runs()
+    runs = application.task_runs()
     if not runs:
         st.info("尚无运行记录。创建工作流后，这里会显示实时阶段、质量统计与产物。")
         return

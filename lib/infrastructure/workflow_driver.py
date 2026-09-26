@@ -43,6 +43,10 @@ class FilesystemWorkflowDriver:
     def list_runs(self) -> list[dict]:
         return list_runs(self.output)
 
+    def task_runs(self) -> list[dict]:
+        from lib.infrastructure.workflow_task_inventory import task_runs
+        return task_runs(self.output)
+
     def state(self, run_id: str) -> dict:
         return read_json(run_path(self.output, run_id) / "state.json")
 
