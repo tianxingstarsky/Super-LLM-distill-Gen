@@ -42,8 +42,8 @@ class WorkflowApplication:
             raise ValueError("unknown_training_target")
         return self._driver.artifact_preview(run_id, target, max(0, min(int(limit), 100)))
 
-    def quarantined_inputs(self, run_id: str) -> list[dict]:
-        return self._driver.quarantined_inputs(run_id)
+    def quarantined_inputs(self, run_id: str, limit: int = 100) -> list[dict]:
+        return self._driver.quarantined_inputs(run_id, max(0, min(int(limit), 100)))
 
     def bundle(self, run_id: str) -> bytes:
         return self._driver.bundle(run_id)

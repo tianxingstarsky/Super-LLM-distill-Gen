@@ -347,6 +347,7 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
                 and 'class="df-run-overview"' in item.value]
     assert overview and "已完成节点 <strong>0 / 3</strong>" in overview[0]
     assert "sft" not in {node["id"] for node in canvas(app, f"live-canvas:{run_id}")["nodes"]}
+    assert any("继续执行沿用本次来源快照与节点配方" in item.value for item in app.caption)
     next(item for item in app.button if item.label == "继续执行 / 从断点重试").click().run()
     assert commands and commands[-1][-1] == run_id
 
@@ -355,6 +356,34 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     assert not app.exception
     next(item for item in app.button if item.label == "停止后续步骤").click().run()
     assert (ws.out(name) / "workflows" / run_id / "cancel.json").exists()
+
+
+def test_run_inspector_distinguishes_reused_units_in_english(tmp_path, monkeypatch):
+    ws, name, source = setup_workspace(tmp_path, monkeypatch)
+    run_id = create_run(ws.out(name), sources=[source], targets=["cpt"])
+    from lib.infrastructure.training_workflow import atomic_json, read_json, run_path
+    path = run_path(ws.out(name), run_id) / "state.json"
+    state = read_json(path)
+    state["status"] = "cancelled"
+    state["stages"]["cpt"].update(status="cancelled", done=40000, total=50000,
+                                   cached=35000, batches_done=200, batches_total=250)
+    atomic_json(path, state)
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = name
+    app.session_state["nav"] = "自动工作流"
+    app.session_state["ui_language"] = "en"
+    app.session_state[f"workflow-stage:{run_id}"] = "cpt"
+    app.run()
+    assert not app.exception
+    metrics = {item.label: item.value for item in app.metric}
+    assert metrics["Reused checkpoints"] == "35,000"
+    assert metrics["Processed this attempt"] == "5,000"
+    assert any("Create a new run to change models" in item.value for item in app.caption)
+    markup = "".join(str(node.value) for node in app.get("html"))
+    visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
+    visible = re.sub(r"<[^>]*>", "", visible)
+    assert "No events for this stage yet" in visible
+    assert not re.search(r"[\u4e00-\u9fff]", visible), visible
 
 
 def test_workflow_navigation_from_overview(tmp_path, monkeypatch):

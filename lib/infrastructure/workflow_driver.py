@@ -12,6 +12,7 @@ from lib.infrastructure.training_workflow import (
     list_runs, read_json, resume as resume_run, run_path, verify_artifacts,
 )
 from lib.infrastructure.release_catalog import list_releases as catalog_releases, release_file as catalog_file
+from lib.infrastructure.json_stream import iter_json_records
 from lib import workspace as WS
 
 
@@ -66,11 +67,23 @@ class FilesystemWorkflowDriver:
                         break
         return rows
 
-    def quarantined_inputs(self, run_id: str) -> list[dict]:
+    def quarantined_inputs(self, run_id: str, limit: int = 100) -> list[dict]:
+        if limit <= 0:
+            return []
         path = run_path(self.output, run_id) / "input_records.json"
         if not path.exists():
             return []
-        return [row for row in read_json(path) if row.get("status") == "quarantined"]
+        rows = []
+        records = iter_json_records(path)
+        try:
+            for row in records:
+                if row.get("status") == "quarantined":
+                    rows.append(row)
+                    if len(rows) >= limit:
+                        break
+        finally:
+            records.close()
+        return rows
 
     def bundle(self, run_id: str) -> bytes:
         path = run_path(self.output, run_id)

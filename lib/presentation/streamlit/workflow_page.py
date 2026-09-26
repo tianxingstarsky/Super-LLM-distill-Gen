@@ -266,6 +266,7 @@ def render_run(application, run_id, begin, *, embedded=False):
             application.cancel(run_id)
             st.info("已请求停止；当前模型请求返回后，在下一断点停止。")
     elif status in {"queued", "running", "failed", "cancelled"}:
+        st.caption("继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。")
         if st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}"):
             begin(["workflow", "--action", "resume", "--run-id", run_id])
     flow, inspector = st.columns([2.25, 1], gap="medium")
@@ -311,6 +312,12 @@ def render_run(application, run_id, begin, *, embedded=False):
                     f'<small>{html.escape(STAGE_STATUS.get(selected_status, selected_status))} · {percent}%</small>'
                     '</div></div>')
             st.progress(percent / 100, text=f"{done} / {total} 单元")
+            if "cached" in selected_metrics:
+                cached = min(done, max(0, int(selected_metrics.get("cached", 0) or 0)))
+                reused, processed = st.columns(2)
+                reused.metric("已复用断点", f"{cached:,}")
+                processed.metric("本次新处理", f"{max(0, done - cached):,}")
+                st.caption("处理进度包含已校验并复用的断点；新处理单元也可能复用此前保存的模型响应。")
             if selected_metrics.get("batches_total"):
                 st.caption(f"批次 {selected_metrics.get('batches_done', 0)} / {selected_metrics['batches_total']}")
                 st.metric("候选 / 分钟", f"{selected_metrics.get('rate_per_minute', 0):,.0f}")
@@ -381,10 +388,14 @@ def render_run(application, run_id, begin, *, embedded=False):
         if summary.get("quarantined"):
             with st.expander(f"输入隔离记录 · {summary['quarantined']}"):
                 if st.toggle("加载隔离记录", key=f"load-inputs:{run_id}"):
-                    rejected = [{"ID": u["id"], "定位": u.get("location", ""), "原因": u.get("reason")}
-                                for u in application.quarantined_inputs(run_id)[:100]]
-                    st.caption("最多显示前 100 条；完整记录保留在本次产物中。")
-                    st.dataframe(rejected, hide_index=True)
+                    try:
+                        rejected = [{"ID": u["id"], "定位": u.get("location", ""), "原因": u.get("reason")}
+                                    for u in application.quarantined_inputs(run_id, limit=100)]
+                    except (OSError, ValueError, KeyError):
+                        st.error("无法读取输入隔离记录，请检查本次任务文件。")
+                    else:
+                        st.caption("最多显示前 100 条；完整记录保留在本次产物中。")
+                        st.dataframe(rejected, hide_index=True)
     with tabs[1]:
         st.html('<div class="df-run-section"><div><strong>全部运行事件</strong>'
                 '<small>按时间倒序展示最近的处理与模型调用事件。</small></div></div>')

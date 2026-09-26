@@ -57,3 +57,8 @@ Agent 回放的纯状态机合同在 `lib/domain/agent_sandbox_contract.py`，�
 - Infrastructure 中的文件布局、模型 SDK 与数据库实现不能泄漏进业务合同；页面使用预览、状态和打包用例读取工作流。
 
 节点模型草稿与提交快照由 `WorkflowNodeModelsApplication` 经库存端口处理，Domain 负责首次默认选择、所需角色与服务存在性检查。工作台不再直接调用旧 backend 管理模块。已有节点的手动选择不随全局默认变化；服务消失时保留原选择并提示修复，画布标出缺配置节点，未修复前禁用启动。提交时再次读取库存，避免使用页面渲染时过期的服务列表。自定义模型名仍可使用，服务中的模型列表不当作远端可用性的证明。
+### Large-run recovery visibility
+
+The run inspector separates verified item checkpoints reused in the current attempt from newly processed units. Newly processed units can still reuse saved model responses, so this count is not a count of new model calls. Resume keeps the original source snapshots and node recipe. The execution engine verifies pinned recipe, prompt, source, and model identities before proceeding.
+
+Input quarantine previews use the incremental JSON-array reader through the workflow application port. The application caps requests at 100 records. The filesystem adapter stops at the requested number of quarantined records and closes the reader. This bounds preview memory while preserving the saved complete input records. Finding rare quarantined rows can still require scanning the source array; this preview is not an indexed page.

@@ -1218,6 +1218,12 @@ ZH_EN.update({
     "加载样本预览": "Load sample preview", "加载失败轨迹": "Load failed traces", "加载隔离记录": "Load quarantined records",
     "最多显示前 100 条；完整记录保留在本次产物中。": "Show the first 100 records. The full records are saved with this run.",
     "候选 / 分钟": "Candidates / minute", "旧版默认配置": "Legacy default",
+    "已复用断点": "Reused checkpoints",
+    "这个节点还没有运行事件。开始执行后会在这里持续更新。": "No events for this stage yet. Events will appear here during execution.",
+    "无法读取输入隔离记录，请检查本次任务文件。": "Cannot read quarantined inputs. Check the files saved with this run.",
+    "本次新处理": "Processed this attempt",
+    "处理进度包含已校验并复用的断点；新处理单元也可能复用此前保存的模型响应。": "Progress includes verified checkpoints. Newly processed units may also reuse saved model responses.",
+    "继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。": "Continue with this run's saved sources and node settings. Saved checkpoints are verified before reuse. Create a new run to change models or generation settings.",
 })
 
 
