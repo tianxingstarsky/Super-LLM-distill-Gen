@@ -55,6 +55,37 @@ def test_live_worker_lock_keeps_state_running_and_dead_worker_can_retry(tmp_path
     assert app.release_job(run_id)["id"] == replacement["id"]
 
 
+def test_dpo_publication_survives_temporary_windows_state_hold(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from lib import io_utils
+
+    app, run_id, _ = fixture_app(tmp_path, "dpo", count=3)
+    monkeypatch.setattr(jobs.subprocess, "Popen", lambda *args, **kwargs: None)
+    job = app.start_release(run_id)
+    job_path = jobs._paths(tmp_path, run_id, "dpo")
+    replace = io_utils.os.replace
+    holds = []
+
+    def transient_hold(source, destination):
+        if (str(destination) == str(job_path) and len(holds) < 2
+                and json.loads(Path(source).read_text(encoding="utf-8")).get("phase") == "archive"):
+            holds.append(source)
+            error = PermissionError("Windows state hold")
+            error.winerror = 5
+            raise error
+        return replace(source, destination)
+
+    monkeypatch.setattr(io_utils.os, "replace", transient_hold)
+    jobs.execute_release_job(tmp_path, run_id, "dpo", job["id"])
+    state = app.release_job(run_id)
+    assert len(holds) == 2
+    assert state["status"] == "completed", state
+    assert state["result"]["counts"]["approved"] == 3
+    with app.release_archive(run_id, state["result"]["id"], state["result"]["sha256"]) as archive:
+        assert archive.read(2) == b"PK"
+
+
 def test_worker_failure_is_durable_without_visible_release(tmp_path):
     app, run_id, _ = fixture_app(tmp_path, "sft", count=25)
     app.start_release(run_id)
