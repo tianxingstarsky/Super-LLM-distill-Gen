@@ -40,7 +40,7 @@ def _preview_targets(manifest: dict, files: list[dict]) -> list[str]:
 
 def render_workflow_samples(application: WorkflowApplication, workspace_id: str) -> bool:
     """Return whether the workspace has a completed candidate to browse."""
-    runs = [row for row in application.list_runs()
+    runs = [row for row in application.task_runs()
             if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
     if not runs:
         return False

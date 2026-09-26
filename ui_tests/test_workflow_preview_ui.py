@@ -21,6 +21,12 @@ def test_preview_offers_verified_agent_negative_sidecar():
 
 def test_data_preview_renders_verified_orpo_comparison(tmp_path, monkeypatch):
     from lib import workspace as ws
+    from lib.application.workflow_service import WorkflowApplication
+
+    def no_full_inventory(self):
+        raise AssertionError("The preview should use compact task summaries, not full run states")
+
+    monkeypatch.setattr(WorkflowApplication, "list_runs", no_full_inventory)
 
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")

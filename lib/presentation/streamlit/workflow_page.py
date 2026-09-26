@@ -474,10 +474,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
         st.html('<div class="df-wb-selected"><b>已选目标 ' + str(len(targets)) + '</b><div>' +
                 (selected_labels or '<small>请从上方列表至少选择一类训练目标。</small>') + '</div></div>')
         graph_nodes, graph_edges = execution_graph(targets)
-        st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
+                st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
                 st.html(_planned_dependencies_html(graph_edges))
+        else:
+            st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if "agent" in targets:
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
@@ -504,30 +506,32 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                     selected = st.multiselect("或选择当前文件夹内的来源", list(file_labels),
                                               format_func=lambda path: file_labels[path],
                                               key=f"workflow-sources:{ws}:{source_mode}")
-                brief = st.text_area("补充生成要求（可选）", placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
-                                     key=f"workflow-source-brief:{ws}:{source_mode}")
+                with st.expander("补充生成要求（可选）"):
+                    brief = st.text_area("补充生成要求（可选）", placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
+                                         key=f"workflow-source-brief:{ws}:{source_mode}", label_visibility="collapsed")
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
         with setup_col, st.container(border=True, key="workbench-parameters-panel"):
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
             default_run_name = ("Automatic data generation"
                                 if st.session_state.get("ui_language") == "en" else "自动数据生成")
             name = st.text_input("运行名称", value=default_run_name)
-            a, b = st.columns(2, gap="small")
-            sample_count = a.number_input("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100,
+            sample_count = st.number_input("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100,
                                            help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
-            maximum = a.number_input("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES,
-                                      help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
-            chunk_chars = (b.number_input("文档分块目标字符数", 200, 20000, 2000)
-                           if source_mode == "文档资料" else 2000)
             tasks = sample_count
-            concurrency = a.number_input("并发请求上限", 1, MAX_CONCURRENCY, 4,
-                                          help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
-            batch_size = b.number_input("每批候选数", 1, MAX_BATCH_SIZE, 100,
-                                         help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
-            st.caption("支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。")
             conversation_turns = (st.number_input("每段对话轮数", 2, 8, 3,
                                                   help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
                                   if "multiturn" in targets else 3)
+            with st.expander("处理与批次设置"):
+                st.caption("支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。")
+                a, b = st.columns(2, gap="small")
+                concurrency = a.number_input("并发请求上限", 1, MAX_CONCURRENCY, 4,
+                                              help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
+                batch_size = b.number_input("每批候选数", 1, MAX_BATCH_SIZE, 100,
+                                             help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
+                maximum = a.number_input("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES,
+                                          help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
+                chunk_chars = (b.number_input("文档分块目标字符数", 200, 20000, 2000)
+                               if source_mode == "文档资料" else 2000)
             evaluation_uploads = []
             if "cpt" in targets:
                 with st.expander("预训练评测集去污染（可选）"):

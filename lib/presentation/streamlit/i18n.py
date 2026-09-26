@@ -929,6 +929,7 @@ ZH_EN: dict[str, str] = {
     "失败轨迹单独保存原因和执行证据，不混入通过验证的训练样本。": "Failed traces keep their reasons and execution evidence. They stay separate from verified training examples.",
     "浏览 Agent 失败轨迹": "Browse failed agent traces",
     "产物保存位置": "Result folder",
+    "处理与批次设置": "Processing and batch settings",
     "算术核验": "Arithmetic checks",
     "CoT 核对": "CoT checks",
     "停止打包": "Stop packaging",

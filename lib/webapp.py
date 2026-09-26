@@ -357,7 +357,7 @@ def page_preview(show_title=True):
     from lib.bootstrap.workflows import workflow_application
     from lib.presentation.streamlit.dataset_preview_page import render_workflow_samples
     workflow_app = workflow_application(ROOT, _ws_out())
-    verified_runs = [row for row in workflow_app.list_runs()
+    verified_runs = [row for row in workflow_app.task_runs()
                      if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
     if verified_runs:
         view = st.segmented_control(

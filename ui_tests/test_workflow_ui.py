@@ -158,6 +158,13 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
         elif widget.label == "每批候选数":
             widget.set_value(200)
     next(widget for widget in app.number_input if widget.label == "每段对话轮数").set_value(5)
+    app.run()
+    app.session_state[f"setup-canvas:{name}"] = {"node": "package", "serial": "scale-settings-check"}
+    app.run()
+    assert not app.exception
+    values = {widget.label: widget.value for widget in app.number_input}
+    assert values["候选样本规模"] == 50000
+    assert values["并发请求上限"] == 8 and values["每批候选数"] == 200
     next(b for b in app.button if b.label == "开始自动生成").click().run()
     assert not app.exception
     assert commands and commands[0][:3] == ("workflow", "--action", "resume")
