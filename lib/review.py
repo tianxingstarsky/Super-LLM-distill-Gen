@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 from typing import Any, Dict, List, Optional
+from lib.domain.workflow_quality import tool_error_flag
 
 DATASET_NAME = "rollout_review"
 PASS_THRESHOLD = 0.9
@@ -106,7 +107,8 @@ def _plain_messages(sample: Dict[str, Any]) -> str:
                     argstr = str(args)
                 lines.append(f"【工具调用】{name}（{argstr}）")
         elif role == "tool":
-            mark = "❌" if m.get("isError") or m.get("is_error") else "✔"
+            failed, flag_issue = tool_error_flag(m)
+            mark = "⚠ 标记无效" if flag_issue else "❌" if failed else "✔"
             lines.append(f"【工具结果{mark}】{_content_text(m.get('content', ''))}")
         else:
             lines.append(f"【{role}】{_content_text(m.get('content', ''))}")

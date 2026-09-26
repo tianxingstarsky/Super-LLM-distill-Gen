@@ -1035,6 +1035,8 @@ ZH_EN: dict[str, str] = {
     "回答未完成": "Answer is incomplete",
     "未解决的工具错误": "Unresolved tool error",
     "工具错误标记无效": "Invalid tool error flag",
+    "⚠ 工具错误标记无效": "⚠ Invalid tool error flag",
+    "无效工具标记": "Invalid tool flags",
     "当前文件没有逐条结构问题。重复统计和审核覆盖仍需单独核对。": "No structural issues were found. Check duplicates and review coverage separately.",
     "检查边界与原始问题码": "Check scope and raw issue codes",
     "本报告只验证结构和当前内容绑定的审核记录；含图像样本还需要具备视觉能力的人工复核。": "This report checks structure and reviews linked to current content. Image examples also need a reviewer who can inspect images.",

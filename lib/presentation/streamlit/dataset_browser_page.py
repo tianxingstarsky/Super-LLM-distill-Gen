@@ -3,6 +3,17 @@ import html
 import streamlit as st
 from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
+from lib.domain.workflow_quality import tool_error_flag
+
+
+def _message_tool_errors(message):
+    records = [message]
+    content = message.get("content")
+    if isinstance(content, list):
+        records.extend(block for block in content
+                       if isinstance(block, dict) and block.get("type") == "tool_result")
+    states = [tool_error_flag(record) for record in records]
+    return any(failed for failed, _ in states), any(issue for _, issue in states)
 
 
 def _move_sample(key, delta):
@@ -60,16 +71,9 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
     tool_calls = sum(len(_tool_call_names(message)) for message in messages)
     reasoning = sum(bool(message.get("reasoning_content") or message.get("reasoning"))
                     for message in messages)
-    def has_tool_error(message: dict) -> bool:
-        content = message.get("content")
-        return isinstance(content, list) and any(
-            isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error")
-            for block in content
-        )
-
-    errors = sum(bool(message.get("isError") or message.get("is_error"))
-                 or has_tool_error(message)
-                 for message in messages)
+    error_states = [_message_tool_errors(message) for message in messages]
+    errors = sum(failed for failed, _ in error_states)
+    invalid_flags = sum(invalid for _, invalid in error_states)
     user_turns = sum(message.get("role") == "user" and not _tool_result_user(message)
                      for message in messages)
     content_type = "Agent 工具轨迹" if tool_calls or any(message.get("role") == "tool" or _tool_result_user(message)
@@ -85,6 +89,7 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
             f'<div><span>工具调用</span><b>{tool_calls}</b></div>'
             f'<div><span>含推理记录</span><b>{reasoning}</b></div>'
             f'<div><span>工具错误</span><b>{errors}</b></div>'
+            f'<div><span>无效工具标记</span><b>{invalid_flags}</b></div>'
             '</div>'
             '<p class="df-data-note">文件浏览仅展示原有样本内容；是否可用于训练请查看质量报告与人工审核。</p>'
         )

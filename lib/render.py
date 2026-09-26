@@ -18,6 +18,7 @@ from string import Template
 from typing import Any, Dict, List, Optional
 
 from lib.console_theme import DARK_TOKENS, dark_var_block, theme_var_block
+from lib.domain.workflow_quality import tool_error_flag
 
 try:  # Streamlit 自带依赖；缺失时降级为纯文本（换行保留）
     from markdown_it import MarkdownIt
@@ -328,9 +329,10 @@ def _iter_tool_calls(value: Any) -> List[Dict[str, Any]]:
 
 def _render_tool_result(m: Dict[str, Any]) -> str:
     content, _ = _message_parts(m.get("content", ""))
-    failed = m.get("isError") or m.get("is_error")
-    cls = "bub-tool err" if failed else "bub-tool"
-    note = ' <span class="err-note">⚠ 执行失败</span>' if failed else ""
+    failed, flag_issue = tool_error_flag(m)
+    cls = "bub-tool err" if failed or flag_issue else "bub-tool"
+    note = (' <span class="err-note">⚠ 工具错误标记无效</span>' if flag_issue else
+            ' <span class="err-note">⚠ 执行失败</span>' if failed else "")
     tool_name = m.get("toolName") or m.get("name") or m.get("tool_name")
     tool_label = (f'<span data-user-content>{_esc(tool_name)}</span>' if tool_name
                   else '<span>工具结果</span>')
@@ -399,9 +401,7 @@ def _render_message(m: Dict[str, Any]) -> str:
                              f'{_render_tool_call(item)}</div>')
             elif kind == "tool_result":
                 flush_text()
-                parts.append(_render_tool_result({"content": item.get("content", ""),
-                                                  "name": item.get("name"), "tool_use_id": item.get("tool_use_id"),
-                                                  "is_error": item.get("is_error")}))
+                parts.append(_render_tool_result(item))
         flush_text()
         calls = _iter_tool_calls(m.get("toolCalls") or m.get("tool_calls") or [])
         for tc in calls:
@@ -432,9 +432,7 @@ def _render_message(m: Dict[str, Any]) -> str:
                 pending_text.append(str(item))
             elif kind == "tool_result":
                 flush_text()
-                parts.append(_render_tool_result({"content": item.get("content", ""),
-                                                  "name": item.get("name"), "tool_use_id": item.get("tool_use_id"),
-                                                  "is_error": item.get("is_error")}))
+                parts.append(_render_tool_result(item))
             elif kind == "tool_call":
                 flush_text()
                 parts.append(f'<div class="bubble bub-call"><div class="role-tag">工具调用</div>'
