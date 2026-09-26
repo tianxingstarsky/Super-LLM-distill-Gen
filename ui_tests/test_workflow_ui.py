@@ -54,7 +54,7 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
                 and 'class="df-run-overview"' in item.value]
     assert overview and "已完成节点 <strong>3 / 3</strong>" in overview[0]
     assert route["edges"] == [["ingest", "cpt"], ["cpt", "package"]]
-    assert any("下载本次训练数据与质量证据" in item.label for item in app.download_button)
+    assert any("查看并打包本次训练数据" in item.label for item in app.button)
     assert any("CPT 预训练语料 · 样本预览" == item.label for item in app.expander)
     assert any("来源与配方" in item.label for item in app.tabs)
     app.session_state[f"live-canvas:{rid}"] = {"node": "cpt", "serial": "click-1"}

@@ -1,11 +1,8 @@
 """Verified workflow artifacts, readable previews, and ZIP delivery."""
 from __future__ import annotations
 
-import hashlib
 import html
-import io
 import json
-import zipfile
 from typing import Any
 
 import streamlit as st
@@ -13,6 +10,7 @@ import streamlit as st
 from lib import workspace as WS
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_targets import TARGETS
+from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 from lib.presentation.streamlit.package_style import PACKAGE_STYLE
 from lib.presentation.streamlit.shared import page_header
@@ -56,42 +54,6 @@ def _heading(icon: str, title: str, subtitle: str = "") -> str:
 def _badge(status: str) -> str:
     label, kind = _STATUS.get(status, (str(status), "muted"))
     return f'<span class="df-pack-badge" data-status="{kind}">{_safe(label)}</span>'
-
-
-def _manifest_fingerprint(manifest: dict) -> str:
-    payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _verify_archive(data: bytes, manifest: dict) -> None:
-    """Verify the ZIP bytes after packaging as files can change during bundling."""
-    expected = manifest.get("sha256", {})
-    if not isinstance(expected, dict) or not expected:
-        raise ValueError("导出清单缺少文件指纹")
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        names = archive.namelist()
-        if len(names) != len(set(names)) or set(names) != set(expected) | {"manifest.json"}:
-            raise ValueError("ZIP 文件列表与校验清单不一致")
-        if json.loads(archive.read("manifest.json")) != manifest:
-            raise ValueError("ZIP 内校验清单与当前任务不一致")
-        for filename, expected_hash in expected.items():
-            digest = hashlib.sha256()
-            with archive.open(filename) as handle:
-                for block in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(block)
-            if digest.hexdigest() != expected_hash:
-                raise ValueError(f"ZIP 内文件校验失败：{filename}")
-
-
-def _sidecar_bytes(data: bytes, filename: str, manifest: dict) -> bytes:
-    expected = manifest.get("sha256", {}).get(filename)
-    if not expected:
-        raise ValueError("TRL 文件未列入校验清单")
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        payload = archive.read(filename)
-    if hashlib.sha256(payload).hexdigest() != expected:
-        raise ValueError("TRL 文件完整性校验失败")
-    return payload
 
 
 def _file_description(name: str) -> str:
@@ -364,8 +326,8 @@ def _render_previews(application: WorkflowApplication, run_id: str, state: dict,
                 + render_training_sample(choice[0], row))
 
 
-def _render_trainer_exports(quality: dict, inventory: dict, manifest: dict,
-                            package: bytes | None) -> None:
+def _render_trainer_exports(application, run_id, quality: dict, inventory: dict, manifest: dict,
+                            package: dict | None) -> None:
     exports = quality.get("trainer_exports", {})
     if not exports:
         return
@@ -390,14 +352,14 @@ def _render_trainer_exports(quality: dict, inventory: dict, manifest: dict,
             '<small>' + _safe(filename if ready else reason_text or "未生成完整辅助文件") + '</small></div>'
         )
         if ready and package is not None:
-            try:
-                payload = _sidecar_bytes(package, filename, manifest)
-            except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
-                st.error(f"TRL 文件校验失败：{error}")
+            size = next(row["bytes"] for row in inventory["files"] if row["name"] == filename)
+            if size > DIRECT_DOWNLOAD_LIMIT_BYTES:
+                st.caption("文件较大，请从本地数据包中读取，避免浏览器占用大量内存。")
             else:
-                st.download_button("下载 " + filename, payload, file_name=filename,
+                st.download_button("下载 " + filename,
+                                   lambda name=filename: application.artifact_file(run_id, name), file_name=filename,
                                    mime="application/x-ndjson", key=f"package-trl:{target}:{filename}",
-                                   width="stretch")
+                                   on_click="ignore", width="stretch")
     if package is None:
         st.caption("先生成并校验完整 ZIP，即可单独下载其中的 TRL 文件。")
     st.caption("格式相容不代表模型聊天模板、分词器或训练参数已经验证。")
@@ -451,6 +413,7 @@ def render_package_page(application: WorkflowApplication) -> None:
     try:
         state = application.state(run_id)
         contents = application.package_contents(run_id)
+        package = contents.get("bundle")
     except (KeyError, OSError, ValueError, TypeError) as error:
         st.session_state.pop(package_key, None)
         st.error(f"无法读取或校验任务产物：{error}")
@@ -460,12 +423,10 @@ def render_package_page(application: WorkflowApplication) -> None:
     inventory = {"manifest": manifest, "files": contents["files"]}
     quality = contents["quality"]
     review_choices = _review_choices(state, manifest)
-    fingerprint = _manifest_fingerprint(manifest)
-    cached = st.session_state.get(package_key)
-    if cached is not None and (not isinstance(cached, dict) or cached.get("fingerprint") != fingerprint):
-        del st.session_state[package_key]
-        cached = None
-    package = cached.get("bytes") if isinstance(cached, dict) else None
+    # Release legacy whole-archive buffers. Only a small verified reference is kept.
+    st.session_state.pop(package_key, None)
+    if package:
+        st.session_state[package_key] = package
 
     left, right = st.columns([1.88, 1], gap="large")
     with left:
@@ -504,7 +465,7 @@ def render_package_page(application: WorkflowApplication) -> None:
             if package is not None:
                 st.html('<div class="df-pack-zip-ready"><b>ZIP</b><span><strong>已生成并再次校验</strong>'
                         '<small>' + _safe(f"training-{run_id[:8]}.zip") + ' · '
-                        + _safe(_size(len(package))) + '</small></span></div>')
+                        + _safe(_size(package["bytes"])) + '</small></span></div>')
             else:
                 st.caption("ZIP 尚未生成；下方按钮会重新校验所有文件与打包内容。")
         with st.container(border=True):
@@ -512,24 +473,28 @@ def render_package_page(application: WorkflowApplication) -> None:
             if st.button("生成并校验完整 ZIP", type="primary", key=f"prepare-package:{run_id}",
                          width="stretch"):
                 try:
-                    data = application.bundle(run_id)
-                    _verify_archive(data, manifest)
-                    st.session_state[package_key] = {"fingerprint": fingerprint, "bytes": data}
-                    package = data
+                    with st.spinner("正在写入磁盘并校验数据包…"):
+                        package = application.prepare_bundle(run_id)
+                    st.session_state[package_key] = package
                     st.rerun()
-                except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile,
+                except (OSError, ValueError, TypeError, KeyError,
                         json.JSONDecodeError) as error:
                     st.session_state.pop(package_key, None)
                     package = None
                     st.error(f"无法生成或校验数据包：{error}")
             if package is not None:
-                st.download_button("下载完整训练数据 ZIP", package,
-                                   file_name=f"training-{run_id[:8]}.zip", mime="application/zip",
-                                   key=f"download-package:{run_id}", width="stretch")
+                st.caption("数据包已保存到本地，刷新页面后仍可使用。")
+                st.code(package["path"], language=None)
+                if package["bytes"] <= DIRECT_DOWNLOAD_LIMIT_BYTES:
+                    st.download_button("下载完整训练数据 ZIP", lambda: application.bundle(run_id),
+                                       file_name=f"training-{run_id[:8]}.zip", mime="application/zip",
+                                       key=f"download-package:{run_id}", on_click="ignore", width="stretch")
+                else:
+                    st.info("数据包较大，请使用上方本地路径读取，避免浏览器占用大量内存。")
             st.caption("当前为自动检查候选；训练前可按用途进行人工审核。包内 SHA-256 可由 manifest.json 复核。")
         if quality.get("trainer_exports"):
             with st.container(border=True):
-                _render_trainer_exports(quality, inventory, manifest, package)
+                _render_trainer_exports(application, run_id, quality, inventory, manifest, package)
         if review_choices:
             with st.container(border=True):
                 st.html(_heading("✓", "下一步：人工审核", "按训练目标逐条审阅并单独发布人工审核版本"))

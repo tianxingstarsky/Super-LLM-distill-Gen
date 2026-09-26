@@ -220,6 +220,11 @@ def _loaded_preview(application, run_id, target):
     return st.session_state[key]
 
 
+def _open_package(run_id):
+    st.session_state[f"package-run:{st.session_state['ws']}"] = run_id
+    st.session_state["nav"] = "输出打包"
+
+
 @st.fragment(run_every=2)
 def render_run(application, run_id, begin, *, embedded=False):
     st.html(workflow_run_styles())
@@ -354,8 +359,8 @@ def render_run(application, run_id, begin, *, embedded=False):
                                "未通过原因": json.dumps(info["reasons"], ensure_ascii=False)}
                               for target, info in quality["targets"].items()], hide_index=True, width="stretch")
             if status in {"completed", "needs_attention"}:
-                st.download_button("下载本次训练数据与质量证据 ZIP", lambda: application.bundle(run_id),
-                                   file_name=f"training-{run_id[:8]}.zip", mime="application/zip", key=f"zip:{run_id}")
+                st.button("查看并打包本次训练数据", on_click=_open_package, args=(run_id,),
+                          type="primary", key=f"zip:{run_id}")
                 for target in state["targets"]:
                     with st.expander(f"{TARGET_LABELS.get(target, target.upper())} · 样本预览"):
                         if not st.toggle("加载样本预览", key=f"load-preview:{run_id}:{target}"):

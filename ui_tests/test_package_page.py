@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 from pathlib import Path
 import zipfile
 
@@ -59,7 +60,7 @@ def test_empty_workflow_state_shows_real_local_release(tmp_path, monkeypatch):
 
 
 def test_post_bundle_check_rejects_changed_or_extra_files():
-    from lib.presentation.streamlit.package_page import _verify_archive
+    from lib.infrastructure.workflow_archive import verify_archive as _verify_archive
 
     content = b'{"text":"verified"}\n'
     manifest = {"sha256": {"cpt.jsonl": hashlib.sha256(content).hexdigest()},
@@ -75,9 +76,9 @@ def test_post_bundle_check_rejects_changed_or_extra_files():
         return buffer.getvalue()
 
     _verify_archive(package(content), manifest)
-    with pytest.raises(ValueError, match="文件校验失败"):
+    with pytest.raises(ValueError, match="archive_integrity_error"):
         _verify_archive(package(b"tampered"), manifest)
-    with pytest.raises(ValueError, match="文件列表"):
+    with pytest.raises(ValueError, match="archive_inventory_mismatch"):
         _verify_archive(package(content, extra=True), manifest)
 
 
@@ -127,12 +128,28 @@ def test_verified_workflow_outputs_can_be_prepared_for_download(tmp_path, monkey
 
     next(button for button in app.button if button.label == "生成并校验完整 ZIP").click().run()
     assert not app.exception
-    package = app.session_state[f"verified-package:{run_id}"]["bytes"]
-    assert isinstance(package, bytes) and package.startswith(b"PK")
-    with zipfile.ZipFile(io.BytesIO(package)) as archive:
+    reference = app.session_state[f"verified-package:{run_id}"]
+    assert isinstance(reference["bytes"], int)
+    assert all(not isinstance(value, bytes) for value in reference.values())
+    with zipfile.ZipFile(reference["path"]) as archive:
         assert {"cpt.jsonl", "quality.json", "manifest.json"} <= set(archive.namelist())
     assert any("已完成 · 产物校验通过" in str(item.value) for item in app.get("html"))
     assert any('data-ready="true"' in str(item.value) for item in app.get("html"))
+    english = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    english.session_state["ws"] = name
+    english.session_state["nav"] = "输出打包"
+    english.session_state["ui_language"] = "en"
+    english.run()
+    assert not english.exception
+    markup = "".join(str(item.value) for item in english.get("html"))
+    visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
+    visible = re.sub(r"<[^>]*>", "", visible)
+    # Names and training content are user data and retain their original language.
+    assert "设备检查前应先断电。" in visible
+    visible = visible.replace("设备检查前应先断电。", "").replace("CPT 输出验收", "")
+    assert not re.search(r"[\u4e00-\u9fff]", visible), visible
+    assert any(button.label == "Review this task" for button in english.button)
+    assert english.session_state[f"verified-package:{run_id}"] == reference
     next(button for button in app.button if button.label == "进入当前任务的人工审核").click().run()
     assert not app.exception
     assert app.session_state["nav"] == "人工审核"
@@ -199,7 +216,7 @@ def test_orpo_package_opens_its_own_human_review_queue(tmp_path, monkeypatch):
 
 def test_trl_sidecar_and_cached_zip_follow_verified_manifest(tmp_path, monkeypatch):
     from lib import workspace as ws
-    from lib.presentation.streamlit.package_page import _sidecar_bytes
+    from lib.infrastructure.workflow_archive import artifact_bytes
 
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
@@ -251,8 +268,16 @@ def test_trl_sidecar_and_cached_zip_follow_verified_manifest(tmp_path, monkeypat
     next(button for button in app.button if button.label == "生成并校验完整 ZIP").click().run()
     assert not app.exception
     key = f"verified-package:{run_id}"
-    package = app.session_state[key]["bytes"]
-    assert _sidecar_bytes(package, "trl_sft.jsonl", manifest) == trainer.read_bytes()
+    package = app.session_state[key]
+    assert isinstance(package["bytes"], int)
+    assert artifact_bytes(run, "trl_sft.jsonl", 1024 * 1024) == trainer.read_bytes()
+
+    fresh = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    fresh.session_state["ws"] = name
+    fresh.session_state["nav"] = "输出打包"
+    fresh.run()
+    assert not fresh.exception
+    assert fresh.session_state[key] == package
 
     # A new valid manifest invalidates previously prepared bytes.
     native.write_text(json.dumps(sample, ensure_ascii=False) + "\n\n", encoding="utf-8")

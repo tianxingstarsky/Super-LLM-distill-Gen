@@ -48,6 +48,15 @@ class WorkflowApplication:
     def bundle(self, run_id: str) -> bytes:
         return self._driver.bundle(run_id)
 
+    def prepare_bundle(self, run_id: str) -> dict:
+        return self._driver.prepare_bundle(run_id)
+
+    def prepared_bundle(self, run_id: str) -> dict | None:
+        return self._driver.prepared_bundle(run_id)
+
+    def artifact_file(self, run_id: str, filename: str) -> bytes:
+        return self._driver.artifact_file(run_id, filename)
+
     def package_inventory(self, run_id: str) -> dict:
         return self._driver.package_inventory(run_id)
 

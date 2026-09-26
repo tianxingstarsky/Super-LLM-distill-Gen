@@ -1219,6 +1219,40 @@ ZH_EN.update({
     "最多显示前 100 条；完整记录保留在本次产物中。": "Show the first 100 records. The full records are saved with this run.",
     "候选 / 分钟": "Candidates / minute", "旧版默认配置": "Legacy default",
     "已复用断点": "Reused checkpoints",
+    "导出格式与交付内容": "Export formats and contents",
+    "根据当前任务已验证的文件展示可用格式": "Available formats come from this task's verified files.",
+    "推荐": "Recommended", "已包含": "Included", "无文件": "No files",
+    "完整交付包": "Complete package", "训练文件、质量证据和来源清单": "Training files, quality evidence, and sources",
+    "原生 JSONL": "Native JSONL", "训练器辅助格式": "Trainer exports",
+    "质量与来源证据": "Quality and source evidence", "包内容预览": "Package contents",
+    "真实内容": "Contents", "逐目标质量汇总与隔离原因": "Quality totals and isolation reasons for each goal",
+    "通过检查的训练样本": "Training samples that passed checks",
+    "来源、样本数量和 SHA-256 清单": "Sources, sample counts, and SHA-256 hashes",
+    "随 ZIP 导出": "Included in ZIP", "清单自身不哈希": "Manifest has no self-hash",
+    "直接读取已校验的训练 JSONL，展示前两条记录": "Preview the first two records from verified training files.",
+    "交付进度": "Delivery progress", "先校验文件，再生成并复核 ZIP": "Check files, then create and verify the ZIP.",
+    "文件完整，可生成 ZIP": "Files verified. Ready to create ZIP.",
+    "文件完整，质量需检查": "Files verified. Quality needs review.",
+    "当前产物已逐个匹配 SHA-256 清单。": "Every file matches its SHA-256 entry.",
+    "ZIP 封装与复核": "Create and verify ZIP", "点击生成后逐文件核对压缩包": "Create the archive and check each file inside.",
+    "已生成并核对压缩包内全部文件": "All files in the archive have been checked.",
+    "操作": "Actions", "下载前生成并核对完整压缩包": "Create and verify the full archive before downloading.",
+    "当前为自动检查候选；训练前可按用途进行人工审核。包内 SHA-256 可由 manifest.json 复核。": "These candidates passed automatic checks. Review them for your use case before training. The manifest lists file hashes.",
+    "下一步：人工审核": "Next: human review", "按训练目标逐条审阅并单独发布人工审核版本": "Review each sample and publish a separate reviewed version.",
+    "进入当前任务的人工审核": "Review this task",
+    "此入口仅显示本次任务中有合格原生样本的 CPT、SFT、DPO、ORPO 审核队列。": "Review queues are available for CPT, SFT, DPO, and ORPO goals with eligible samples.",
+    "最近可导出任务": "Recent export tasks", "当前工作区已完成的工作流": "Completed workflows in this workspace",
+    "已生成并再次校验": "Created and verified", "TRL 训练器兼容性": "TRL trainer compatibility",
+    "只有全部合格样本转换成功才生成辅助文件": "Trainer files are created only when every eligible sample converts.",
+    "先生成并校验完整 ZIP，即可单独下载其中的 TRL 文件。": "Create and verify the ZIP to download its trainer files separately.",
+    "格式相容不代表模型聊天模板、分词器或训练参数已经验证。": "Format compatibility does not validate chat templates, tokenizers, or training settings.",
+    "← 返回自动工作流": "← Back to Workflows",
+    "文件超过 50 MiB；为避免浏览器一次载入整个训练文件，请从上方本地路径读取。": "This file is over 50 MiB. Use the local path above to keep browser memory low.",
+    "查看并打包本次训练数据": "View and package this run",
+    "正在写入磁盘并校验数据包…": "Saving and checking the package…",
+    "数据包已保存到本地，刷新页面后仍可使用。": "The package is saved locally. It stays available after a page refresh.",
+    "数据包较大，请使用上方本地路径读取，避免浏览器占用大量内存。": "This package is large. Use the local path above to keep browser memory low.",
+    "文件较大，请从本地数据包中读取，避免浏览器占用大量内存。": "This file is large. Read it from the local package to keep browser memory low.",
     "这个节点还没有运行事件。开始执行后会在这里持续更新。": "No events for this stage yet. Events will appear here during execution.",
     "无法读取输入隔离记录，请检查本次任务文件。": "Cannot read quarantined inputs. Check the files saved with this run.",
     "本次新处理": "Processed this attempt",
@@ -1233,6 +1267,29 @@ def translate(value: Any, language: str = "en") -> Any:
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    for prefix, english in {
+        "无法读取或校验任务产物：": "Cannot read or verify task results: ",
+        "无法生成或校验数据包：": "Cannot create or verify the package: ",
+        "下载前文件校验失败：": "File check failed before download: ",
+    }.items():
+        if value.startswith(prefix):
+            return english + value[len(prefix):]
+    package_patterns = [
+        (r"任务 ID：(.+?)\s*·\s*更新于 (.+)", lambda m: f"Run ID: {m[1]} · Updated {m[2]}"),
+        (r"([\d,]+) / ([\d,]+) 候选", lambda m: f"{m[1]} / {m[2]} candidates"),
+        (r"合格 / ([\d,]+) 候选", lambda m: f"eligible / {m[1]} candidates"),
+        (r"样本 ([\d,]+)", lambda m: f"Sample {m[1]}"),
+        (r"([\d,]+) 个实际文件", lambda m: f"{m[1]} files"),
+        (r"([\d,]+) 个文件（含清单）", lambda m: f"{m[1]} files including the manifest"),
+        (r"完整 ZIP 包含 ([\d,]+) 个已校验文件和 manifest.json · ([\d,]+) 个输入来源", lambda m: f"The ZIP includes {m[1]} verified files and manifest.json · {m[2]} sources"),
+        (r"实际存在 ([\d,]+) 个文件 · 已校验文件共 (.+)", lambda m: f"{m[1]} files · Verified files total {m[2]}"),
+        (r"(.+) · 展示 ([\d,]+) 条，完整记录请下载 ZIP。", lambda m: f"{m[1]} · Previewing {m[2]} records. Download the ZIP for all records."),
+        (r"交付准备 ([12]) / 2 · (文件已校验|ZIP 已校验)", lambda m: f"Delivery {m[1]} / 2 · " + ("Files verified" if m[1] == "1" else "ZIP verified")),
+    ]
+    for pattern, render in package_patterns:
+        match = re.fullmatch(pattern, value)
+        if match:
+            return render(match)
     match = re.fullmatch(r"已发布 ([\d,]+) 条通过样本", value)
     if match:
         return f"Published {match.group(1)} approved examples"
@@ -1683,7 +1740,7 @@ def install_streamlit_localization() -> None:
         "number_input", "date_input", "time_input", "expander", "popover",
         "slider", "toggle", "link_button", "page_link", "metric", "text", "caption", "progress",
         "title", "header", "subheader", "info", "success", "warning", "error",
-        "exception", "toast", "dialog", "dataframe",
+        "exception", "toast", "dialog", "dataframe", "spinner",
     }
     markup_methods = {"html", "markdown"}
     option_methods = {"selectbox", "multiselect", "radio", "segmented_control", "pills"}

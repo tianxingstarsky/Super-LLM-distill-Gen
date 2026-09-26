@@ -1,11 +1,9 @@
 """Filesystem/model-backed workflow adapter for the application port."""
 from __future__ import annotations
 
-import io
 import hashlib
 import json
 from pathlib import Path
-import zipfile
 
 from lib.infrastructure.training_workflow import (
     Workflow, cancel as cancel_run, create_run, is_active as run_is_active,
@@ -13,6 +11,8 @@ from lib.infrastructure.training_workflow import (
 )
 from lib.infrastructure.release_catalog import list_releases as catalog_releases, release_file as catalog_file
 from lib.infrastructure.json_stream import iter_json_records
+from lib.infrastructure import workflow_archive
+from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib import workspace as WS
 
 
@@ -86,14 +86,17 @@ class FilesystemWorkflowDriver:
         return rows
 
     def bundle(self, run_id: str) -> bytes:
-        path = run_path(self.output, run_id)
-        verify_artifacts(path)
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            for item in sorted((path / "artifacts").iterdir()):
-                    if item.is_file():
-                        archive.write(item, item.name)
-        return buffer.getvalue()
+        return workflow_archive.bundle_bytes(run_path(self.output, run_id))
+
+    def prepare_bundle(self, run_id: str) -> dict:
+        return workflow_archive.prepare_bundle(run_path(self.output, run_id))
+
+    def prepared_bundle(self, run_id: str) -> dict | None:
+        return workflow_archive.prepared_bundle(run_path(self.output, run_id))
+
+    def artifact_file(self, run_id: str, filename: str) -> bytes:
+        return workflow_archive.artifact_bytes(run_path(self.output, run_id), filename,
+                                               DIRECT_DOWNLOAD_LIMIT_BYTES)
 
     def package_inventory(self, run_id: str) -> dict:
         path = run_path(self.output, run_id)
@@ -132,7 +135,8 @@ class FilesystemWorkflowDriver:
         path = run_path(self.output, run_id)
         manifest = verify_artifacts(path)
         return {"manifest": manifest, "files": self._verified_files(path, manifest),
-                "quality": self._verified_quality(path, manifest)}
+                "quality": self._verified_quality(path, manifest),
+                "bundle": workflow_archive.prepared_bundle(path, verified_manifest=manifest)}
 
     def artifact_location(self, run_id: str) -> str:
         return str(run_path(self.output, run_id) / "artifacts")
