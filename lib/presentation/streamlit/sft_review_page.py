@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import html
 import json
-import math
 import re
 from typing import Callable
 
@@ -11,7 +10,9 @@ import streamlit as st
 
 from lib.application.sft_review_service import SftReviewApplication
 from lib.presentation.streamlit.shared import review_empty_state
-from lib.render import MESSAGE_CSS, render_message_sequence
+from lib.render import MESSAGE_CSS
+from lib.presentation.streamlit.artifact_preview import render_training_sample
+from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
 
 
 _DECISIONS = {"approved": "已通过", "rejected": "已退回", "skipped": "已跳过", "pending": "待审核"}
@@ -99,25 +100,16 @@ def render_sft_review(application: SftReviewApplication, *, legacy_review: Calla
         st.warning("本次运行没有通过自动质量检查的 SFT 候选。请查看工作流质量报告中的隔离原因。")
         return
 
-    page_size = 20
-    pages = max(1, math.ceil(total / page_size))
-    queue_col, content_col, action_col = st.columns([1.05, 2.15, 1.05], gap="medium")
+    queue_col, content_col, action_col = st.columns([0.95, 2.7, 1.0], gap="medium")
     with queue_col:
         with st.container(border=True, key="df-review-queue-sft"):
             st.html('<div class="df-review-panel-title"><b>▤</b><span><strong>待审核任务</strong>'
                     '<small>选择对话查看完整内容</small></span></div>')
-            page = (st.number_input("队列页码", min_value=1, max_value=pages, value=1, step=1,
-                                    key=f"sft-review-page:{run_id}") if pages > 1 else 1)
-            queue = application.queue(run_id, offset=(int(page) - 1) * page_size, limit=page_size)
+            offset, filter_decision, page, pages = review_queue_controls(f"sft-review:{run_id}", counts, total, widgets=st)
+            queue = application.queue(run_id, offset=offset, limit=PAGE_SIZE, decision=filter_decision)
             items = queue["items"]
             st.caption(f"第 {int(page)} / {pages} 页 · {len(items)} 条")
-            filter_label = st.selectbox("处理状态", ["全部", "待审核", "已通过", "已退回", "已跳过"],
-                                        key=f"sft-review-filter:{run_id}:{page}")
-            filter_decision = {"全部": None, "待审核": "pending", "已通过": "approved",
-                               "已退回": "rejected", "已跳过": "skipped"}[filter_label]
-            filtered = [item for item in items if filter_decision is None or
-                        (item.get("review") or {}).get("decision", "pending") == filter_decision]
-            item_by_id = {item["sample_id"]: item for item in filtered}
+            item_by_id = {item["sample_id"]: item for item in items}
             sample_id = None
             if item_by_id:
                 selection_key = f"sft-review-item:{run_id}:{page}"
@@ -145,8 +137,8 @@ def render_sft_review(application: SftReviewApplication, *, legacy_review: Calla
                 st.html('<div class="df-review-record-meta"><span>SFT 对话</span><span>指纹 ' +
                         html.escape(sample_id[:16]) + '</span><span>共 ' +
                         str(len(candidate["messages"])) + ' 条消息</span></div>')
-                st.html('<style>' + MESSAGE_CSS + '</style><div class="df-review-dialogue">'
-                        '<div class="bubbles">' + render_message_sequence(candidate["messages"]) + '</div></div>')
+                st.html('<style>' + MESSAGE_CSS + '</style><div class="df-review-sample">' +
+                        render_training_sample("sft", candidate) + '</div>')
                 evidence = item.get("evidence") or {}
                 if evidence:
                     with st.expander("来源与自动质检证据"):

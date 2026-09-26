@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from lib.application.corpus_review_ports import CorpusReviewDriver
+from lib.domain.review_queue import review_query
 from lib.domain.corpus_review import corpus_review_record, validate_corpus_row
 
 
@@ -12,11 +13,10 @@ class CorpusReviewApplication:
     def reviewable_runs(self) -> list[dict]:
         return self._driver.reviewable_runs()
 
-    def queue(self, run_id: str, *, offset: int = 0, limit: int = 20) -> dict:
-        result = self._driver.queue(run_id)
-        start, size = max(0, int(offset)), max(1, min(int(limit), 100))
-        return {"items": result["items"][start:start + size], "total": result["total"],
-                "counts": result["counts"]}
+    def queue(self, run_id: str, *, offset: int = 0, limit: int = 20,
+              decision: str | None = None) -> dict:
+        offset, limit, decision = review_query(offset, limit, decision)
+        return self._driver.queue(run_id, offset=offset, limit=limit, decision=decision)
 
     def decide(self, run_id: str, sample_id: str, *, decision: str, reviewer: str,
                expected_hash: str, reason: str = "", text: str | None = None) -> dict:

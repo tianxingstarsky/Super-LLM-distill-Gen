@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import html
 import json
-import math
 import re
 
 import streamlit as st
 
 from lib.application.corpus_review_service import CorpusReviewApplication
 from lib.presentation.streamlit.shared import page_header, review_empty_state
+from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
 
 
 _DECISIONS = {"approved": "已通过", "rejected": "已退回", "skipped": "已跳过", "pending": "待审核"}
@@ -90,25 +90,16 @@ def render_corpus_review(application: CorpusReviewApplication, *, show_header: b
         st.warning("本次运行没有通过自动质量检查的语料。请查看工作流质量报告中的隔离原因。")
         return
 
-    page_size = 20
-    pages = max(1, math.ceil(total / page_size))
     queue_col, content_col, action_col = st.columns([1.05, 2.15, 1.05], gap="medium")
     with queue_col:
         with st.container(border=True, key="df-review-queue-cpt"):
             st.html('<div class="df-review-panel-title"><b>▤</b><span><strong>语料审核队列</strong>'
                     '<small>选择候选语料查看来源</small></span></div>')
-            page = (st.number_input("队列页码", min_value=1, max_value=pages, value=1, step=1,
-                                    key=f"corpus-review-page:{run_id}") if pages > 1 else 1)
-            queue = application.queue(run_id, offset=(int(page) - 1) * page_size, limit=page_size)
+            offset, filter_decision, page, pages = review_queue_controls(f"corpus-review:{run_id}", counts, total, widgets=st)
+            queue = application.queue(run_id, offset=offset, limit=PAGE_SIZE, decision=filter_decision)
             items = queue["items"]
             st.caption(f"第 {int(page)} / {pages} 页 · {len(items)} 条")
-            filter_label = st.selectbox("处理状态", ["全部", "待审核", "已通过", "已退回", "已跳过"],
-                                        key=f"corpus-review-filter:{run_id}:{page}")
-            filter_decision = {"全部": None, "待审核": "pending", "已通过": "approved",
-                               "已退回": "rejected", "已跳过": "skipped"}[filter_label]
-            filtered = [item for item in items if filter_decision is None or
-                        (item.get("review") or {}).get("decision", "pending") == filter_decision]
-            item_by_id = {item["sample_id"]: item for item in filtered}
+            item_by_id = {item["sample_id"]: item for item in items}
             chosen_id = None
             if item_by_id:
                 selection_key = f"corpus-review-item:{run_id}:{page}"

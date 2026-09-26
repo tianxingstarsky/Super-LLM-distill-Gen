@@ -13,6 +13,8 @@ from filelock import FileLock, Timeout
 from lib.domain.corpus_review import corpus_identity, validate_corpus_row
 from lib.infrastructure.training_workflow import file_hash, list_runs, read_json, run_path, verify_artifacts
 from lib.io_utils import atomic_json
+from lib.infrastructure.review_artifacts import attach_review_evidence, iter_review_rows
+from lib.infrastructure.review_index import review_index
 
 
 class FilesystemCorpusReviewDriver:
@@ -38,8 +40,8 @@ class FilesystemCorpusReviewDriver:
                 continue
             try:
                 path = self._run(state["id"])
-                with (path / "artifacts" / "cpt.jsonl").open(encoding="utf-8") as handle:
-                    count = sum(1 for line in handle if line.strip())
+                with review_index(path, "cpt", validate_corpus_row, corpus_identity) as index:
+                    count = index.count
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             result.append({"id": state["id"], "name": state.get("name", "CPT 工作流"),
@@ -49,25 +51,8 @@ class FilesystemCorpusReviewDriver:
 
     @staticmethod
     def _read_rows(path: Path) -> list[dict]:
-        evidence_by_text = {}
-        records_path = path / "artifacts" / "cpt.records.json"
-        if records_path.is_file():
-            records = read_json(records_path)
-            if isinstance(records, list):
-                for record in records:
-                    if isinstance(record, dict) and record.get("status") == "eligible" and isinstance(record.get("text"), str):
-                        evidence_by_text.setdefault(record["text"], {
-                            key: record[key] for key in ("id", "source_id", "kind", "location", "evidence_level", "judge", "citations")
-                            if key in record
-                        })
-        rows = []
-        with (path / "artifacts" / "cpt.jsonl").open(encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    row = validate_corpus_row(json.loads(line))
-                    rows.append({"sample_id": corpus_identity(row), "row": row,
-                                 "evidence": evidence_by_text.get(row["text"], {})})
-        return rows
+        rows = list(iter_review_rows(path, "cpt", validate_corpus_row, corpus_identity))
+        return attach_review_evidence(rows, path, "cpt", corpus_identity)
 
     def _review_path(self, run_id: str) -> Path:
         return run_path(self.output, run_id) / "human-review" / "cpt.json"
@@ -81,24 +66,20 @@ class FilesystemCorpusReviewDriver:
             raise ValueError("invalid_cpt_review_state")
         return value
 
-    def queue(self, run_id: str) -> dict:
+    def queue(self, run_id: str, *, offset: int = 0, limit: int = 20,
+              decision: str | None = None) -> dict:
         path = self._run(run_id)
-        rows = self._read_rows(path)
-        current = self._load_review(run_id).get("current", {})
-        items = [{"sample_id": row["sample_id"], "row": row["row"], "evidence": row["evidence"],
-                  "review": current.get(row["sample_id"])} for row in rows]
-        counts = {"approved": 0, "rejected": 0, "skipped": 0, "pending": 0}
-        for item in items:
-            decision = (item["review"] or {}).get("decision")
-            counts[decision if decision in {"approved", "rejected", "skipped"} else "pending"] += 1
-        return {"items": items, "total": len(items), "counts": counts}
+        current = self._load_review(run_id)["current"]
+        with review_index(path, "cpt", validate_corpus_row, corpus_identity) as index:
+            return index.page(current, offset=offset, limit=limit, decision=decision)
 
     def row(self, run_id: str, sample_id: str) -> dict:
         if not isinstance(sample_id, str) or not re.fullmatch(r"[a-f0-9]{64}", sample_id):
             raise ValueError("invalid_cpt_sample_id")
-        for item in self._read_rows(self._run(run_id)):
-            if item["sample_id"] == sample_id:
-                return item["row"]
+        with review_index(self._run(run_id), "cpt", validate_corpus_row, corpus_identity) as index:
+            row = index.row(sample_id)
+            if row is not None:
+                return row
         raise ValueError("cpt_sample_not_found")
 
     def record_decision(self, run_id: str, expected_hash: str, record: dict) -> dict:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from lib.application.preference_review_ports import PreferenceReviewDriver
+from lib.domain.review_queue import review_query
 from lib.domain.preference_review import review_record, validate_pair
 
 
@@ -15,12 +16,10 @@ class PreferenceReviewApplication:
     def reviewable_runs(self) -> list[dict]:
         return self._driver.reviewable_runs()
 
-    def queue(self, run_id: str, *, offset: int = 0, limit: int = 20) -> dict:
-        result = self._driver.queue(run_id)
-        items = result["items"]
-        offset = max(0, int(offset))
-        limit = max(1, min(int(limit), 100))
-        return {"items": items[offset:offset + limit], "total": result["total"], "counts": result["counts"]}
+    def queue(self, run_id: str, *, offset: int = 0, limit: int = 20,
+              decision: str | None = None) -> dict:
+        offset, limit, decision = review_query(offset, limit, decision)
+        return self._driver.queue(run_id, offset=offset, limit=limit, decision=decision)
 
     def decide(self, run_id: str, pair_id: str, *, decision: str, reviewer: str,
                expected_hash: str, reason: str = "", chosen: str | None = None,

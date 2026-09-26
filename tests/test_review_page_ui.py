@@ -108,7 +108,8 @@ def test_sft_three_column_preview_escapes_input_and_edits_only_assistant(monkeyp
     sft_review_page.render_sft_review(app)
 
     rendered = "\n".join(fake.html_blocks)
-    assert "df-review-dialogue" in rendered and "工具调用" in rendered and "calculator" in rendered
+    assert "df-artifact-turn" in rendered and "工具调用" in rendered and "calculator" in rendered
+    assert "本轮输入" in rendered and "助手回复与工具过程" in rendered
     assert "&lt;script&gt;" in rendered and "<script>alert(1)</script>" not in rendered
     assert "https://remote/img" not in rendered
     assert all("<script>" not in label for label in fake.radio_labels)

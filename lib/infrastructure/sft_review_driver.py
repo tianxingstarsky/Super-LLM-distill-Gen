@@ -13,6 +13,8 @@ from filelock import FileLock, Timeout
 from lib.domain.sft_review import sft_identity, validate_sft_record, validate_sft_revision
 from lib.infrastructure.training_workflow import canonical, file_hash, list_runs, read_json, run_path, verify_artifacts
 from lib.io_utils import atomic_json
+from lib.infrastructure.review_artifacts import attach_review_evidence, iter_review_rows
+from lib.infrastructure.review_index import review_index
 
 
 class FilesystemSftReviewDriver:
@@ -38,8 +40,8 @@ class FilesystemSftReviewDriver:
                 continue
             try:
                 path = self._run(state["id"])
-                with (path / "artifacts" / "sft.jsonl").open(encoding="utf-8") as handle:
-                    count = sum(1 for line in handle if line.strip())
+                with review_index(path, "sft", validate_sft_record, sft_identity) as index:
+                    count = index.count
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             result.append({"id": state["id"], "name": state.get("name", "SFT 工作流"),
@@ -49,32 +51,8 @@ class FilesystemSftReviewDriver:
 
     @staticmethod
     def _read_rows(path: Path) -> list[dict]:
-        evidence_by_payload = {}
-        records_path = path / "artifacts" / "sft.records.json"
-        if records_path.is_file():
-            records = read_json(records_path)
-            if isinstance(records, list):
-                for record in records:
-                    if not isinstance(record, dict) or record.get("status") != "eligible":
-                        continue
-                    payload = {"messages": record.get("messages")}
-                    if record.get("tools"):
-                        payload["tools"] = record["tools"]
-                    try:
-                        evidence_by_payload.setdefault(canonical(validate_sft_record(payload)), {
-                            key: record[key] for key in ("id", "source_id", "kind", "location", "evidence_level", "judge", "quotes", "citations")
-                            if key in record
-                        })
-                    except (TypeError, ValueError):
-                        continue
-        rows = []
-        with (path / "artifacts" / "sft.jsonl").open(encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    row = validate_sft_record(json.loads(line))
-                    rows.append({"sample_id": sft_identity(row), "row": row,
-                                 "evidence": evidence_by_payload.get(canonical(row), {})})
-        return rows
+        rows = list(iter_review_rows(path, "sft", validate_sft_record, sft_identity))
+        return attach_review_evidence(rows, path, "sft", sft_identity)
 
     def _review_path(self, run_id: str) -> Path:
         return run_path(self.output, run_id) / "human-review" / "sft.json"
@@ -88,23 +66,20 @@ class FilesystemSftReviewDriver:
             raise ValueError("invalid_sft_review_state")
         return state
 
-    def queue(self, run_id: str) -> dict:
-        rows = self._read_rows(self._run(run_id))
-        current = self._load_review(run_id).get("current", {})
-        items = [{"sample_id": row["sample_id"], "row": row["row"], "evidence": row["evidence"],
-                  "review": current.get(row["sample_id"])} for row in rows]
-        counts = {"approved": 0, "rejected": 0, "skipped": 0, "pending": 0}
-        for item in items:
-            decision = (item["review"] or {}).get("decision")
-            counts[decision if decision in {"approved", "rejected", "skipped"} else "pending"] += 1
-        return {"items": items, "total": len(items), "counts": counts}
+    def queue(self, run_id: str, *, offset: int = 0, limit: int = 20,
+              decision: str | None = None) -> dict:
+        path = self._run(run_id)
+        current = self._load_review(run_id)["current"]
+        with review_index(path, "sft", validate_sft_record, sft_identity) as index:
+            return index.page(current, offset=offset, limit=limit, decision=decision)
 
     def row(self, run_id: str, sample_id: str) -> dict:
         if not isinstance(sample_id, str) or not re.fullmatch(r"[a-f0-9]{64}", sample_id):
             raise ValueError("invalid_sft_sample_id")
-        for item in self._read_rows(self._run(run_id)):
-            if item["sample_id"] == sample_id:
-                return item["row"]
+        with review_index(self._run(run_id), "sft", validate_sft_record, sft_identity) as index:
+            row = index.row(sample_id)
+            if row is not None:
+                return row
         raise ValueError("sft_sample_not_found")
 
     def record_decision(self, run_id: str, expected_hash: str, record: dict) -> dict:

@@ -916,6 +916,14 @@ ZH_EN: dict[str, str] = {
     "审核意见（可选）": "Review note (optional)",
     "通过并保存修订": "Approve and save changes",
     "生成已审核 SFT 版本": "Create reviewed SFT release",
+    "处理状态": "Review status",
+    "待审核任务": "Review queue",
+    "选择对话查看完整内容": "Choose an example to view the full conversation",
+    "按真实轮次呈现输入、回答和工具轨迹": "View recorded turns, replies, and tool activity",
+    "SFT 对话": "SFT conversation",
+    "编辑助手回答": "Edit assistant response",
+    "仅允许修订助手正文与已有推理说明；其余字段锁定。": "Edit assistant text and existing reasoning notes. Other fields are locked.",
+    "指纹": "Fingerprint",
     "生成已审核 CPT 版本": "Create reviewed CPT release",
     "生成已审核 DPO 版本": "Create reviewed DPO release",
     "下载人工审核 SFT ZIP": "Download reviewed SFT ZIP",
@@ -1191,6 +1199,22 @@ def translate(value: Any, language: str = "en") -> Any:
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    match = re.fullmatch(r"([\d,]+) 轮 · ([\d,]+) 条消息", value)
+    if match:
+        return f"{match.group(1)} turns · {match.group(2)} messages"
+    match = re.fullmatch(r"共 ([\d,]+) 条消息", value)
+    if match:
+        return f"{match.group(1)} messages"
+    match = re.fullmatch(r"指纹 ([a-f0-9]+)", value)
+    if match:
+        return f"Fingerprint {match.group(1)}"
+    match = re.fullmatch(r"已审核 ([\d,]+) 条 · 待处理 ([\d,]+) 条", value)
+    if match:
+        return f"Reviewed {match.group(1)} · Pending {match.group(2)}"
+    match = re.fullmatch(r"(.+) · ([\d,]+) (条|对) · ([a-f0-9]{8})", value)
+    if match:
+        unit = "pairs" if match.group(3) == "对" else "examples"
+        return f"{match.group(1)} · {match.group(2)} {unit} · {match.group(4)}"
     match = re.fullmatch(r"共 (\d+) 条", value)
     if match:
         return f"{match.group(1)} runs"
@@ -1318,6 +1342,10 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"更多参数（(\d+) 项）", value)
     if match:
         return f"More settings ({match.group(1)})"
+    match = re.fullmatch(r"第\s*(\d+)\s*/\s*(\d+)\s*页 ·\s*(\d+)\s*(条|对)", value)
+    if match:
+        unit = "pairs" if match.group(4) == "对" else "items"
+        return f"Page {match.group(1)} of {match.group(2)} · {match.group(3)} {unit}"
     match = re.fullmatch(r"([\d,]+) 条", value)
     if match:
         return f"{match.group(1)} items"

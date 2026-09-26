@@ -13,6 +13,8 @@ from filelock import FileLock, Timeout
 from lib.domain.preference_review import pair_identity, validate_pair
 from lib.infrastructure.training_workflow import file_hash, list_runs, read_json, run_path, verify_artifacts
 from lib.io_utils import atomic_json
+from lib.infrastructure.review_artifacts import iter_review_rows
+from lib.infrastructure.review_index import review_index
 
 
 class FilesystemPreferenceReviewDriver:
@@ -51,7 +53,8 @@ class FilesystemPreferenceReviewDriver:
                 continue
             try:
                 path = self._run(row["id"])
-                count = len(self._read_pairs(path))
+                with review_index(path, self.target, validate_pair, pair_identity) as index:
+                    count = index.count
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             result.append({"id": row["id"], "name": row.get("name", f"{self.target.upper()} 工作流"),
@@ -60,39 +63,44 @@ class FilesystemPreferenceReviewDriver:
         return result
 
     def _read_pairs(self, path: Path) -> list[dict]:
-        artifact = path / "artifacts" / self._artifact_name
-        rows = []
-        seen = set()
-        with artifact.open(encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                pair = validate_pair(json.loads(line))
-                pair_id = pair_identity(pair)
-                if pair_id in seen:
-                    raise ValueError("duplicate_preference_pair_id")
-                seen.add(pair_id)
-                rows.append({"pair_id": pair_id, "pair": pair})
-        return rows
+        return list(self._iter_pairs(path))
 
-    def queue(self, run_id: str) -> dict:
+    def _iter_pairs(self, path: Path):
+        return iter_review_rows(path, self.target, validate_pair, pair_identity,
+                                payload_key="pair", id_key="pair_id")
+
+    def queue(self, run_id: str, *, offset: int = 0, limit: int = 20,
+              decision: str | None = None) -> dict:
         path = self._run(run_id)
-        rows = self._read_pairs(path)
-        current = self._verified_review_state(rows, self._load_review(run_id))["current"]
-        items = [{"pair_id": row["pair_id"], "pair": row["pair"], "review": current.get(row["pair_id"])}
-                 for row in rows]
-        counts = {"approved": 0, "rejected": 0, "skipped": 0, "pending": 0}
-        for item in items:
-            decision = (item["review"] or {}).get("decision")
-            counts[decision if decision in {"approved", "rejected", "skipped"} else "pending"] += 1
-        return {"items": items, "total": len(items), "counts": counts}
+        state = self._load_review(run_id)
+        with review_index(path, self.target, validate_pair, pair_identity) as index:
+            self._verify_indexed_review(index, state)
+            return index.page(state["current"], offset=offset, limit=limit, decision=decision)
+
+    def _verify_indexed_review(self, index, state: dict):
+        """Validate the whole audit history without retaining every original pair."""
+        events, latest = {}, {}
+        for event in state["events"]:
+            if not isinstance(event, dict) or not isinstance(event.get("pair_id"), str):
+                raise ValueError("orphaned_preference_reviews_refresh_required")
+            events.setdefault(event["pair_id"], []).append(event)
+            latest[event["pair_id"]] = event
+        if latest != state["current"]:
+            raise ValueError("invalid_preference_review_history")
+        for pair_id, history in events.items():
+            pair = index.row(pair_id)
+            if pair is None:
+                raise ValueError("orphaned_preference_reviews_refresh_required")
+            for event in history:
+                self._validated_record(pair, event)
 
     def pair(self, run_id: str, pair_id: str) -> dict:
         if not isinstance(pair_id, str) or not re.fullmatch(r"[a-f0-9]{64}", pair_id):
             raise ValueError("invalid_preference_pair_id")
-        for row in self._read_pairs(self._run(run_id)):
-            if row["pair_id"] == pair_id:
-                return row["pair"]
+        with review_index(self._run(run_id), self.target, validate_pair, pair_identity) as index:
+            pair = index.row(pair_id)
+            if pair is not None:
+                return pair
         raise ValueError("preference_pair_not_found")
 
     def _review_path(self, run_id: str) -> Path:

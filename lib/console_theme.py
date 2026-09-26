@@ -405,6 +405,10 @@ $theme_vars
 .df-review-record-meta { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 12px; }
 .df-review-record-meta span { padding: 4px 8px; border: 1px solid #DCE7F5; border-radius: 999px; background: #F8FBFF; color: var(--df-text3); font-size: 10px; }
 .df-review-record-meta span:first-child { background: #E9F2FF; border-color: #D8E8FC; color: #125EBF; font-weight: 700; }
+.df-review-sample { max-height: 650px; overflow: auto; scrollbar-gutter: stable; }
+@container (min-width:500px) {
+  .df-review-sample .df-artifact-turn-columns { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
 .df-review-dialogue { max-height: 610px; overflow: auto; padding: 17px; border: 1px solid #E2EAF4; border-radius: 10px; background: #FCFDFF; }
 .df-review-dialogue .bubbles { gap: 13px; }
 .df-review-dialogue .bubbles .bub-user, .df-review-prompt .bubbles .bub-user { max-width: 88%; border-radius: 14px 5px 14px 14px; }
