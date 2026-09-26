@@ -15,6 +15,7 @@ import streamlit as st
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_graph import execution_graph
 from lib.presentation.streamlit.task_management_styles import task_management_styles
+from lib.presentation.streamlit.i18n import UntranslatedText
 from lib.presentation.streamlit.workflow_page import EVENT_LABELS, LABELS, TARGET_LABELS, render_run
 
 
@@ -229,7 +230,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                 heading, detail = _run_card_html(run)
                 with st.container(key=f"task_card_{style_status}_{run_id}"):
                     st.html(heading)
-                    st.button(f"**{label}**　↗",
+                    st.button(UntranslatedText(f"**{label}**　↗"),
                               key=f"task-card:{workspace_id}:{run_id}", use_container_width=True,
                               on_click=_select_run, args=(selection_key, run_id))
                     st.html(detail)

@@ -1290,9 +1290,13 @@ ZH_EN.update({
 })
 
 
+class UntranslatedText(str):
+    """User-owned text passed through localized Streamlit label methods."""
+
+
 def translate(value: Any, language: str = "en") -> Any:
     """Translate an exact interface phrase and leave all other values intact."""
-    if language_code(language) != "en" or not isinstance(value, str):
+    if isinstance(value, UntranslatedText) or language_code(language) != "en" or not isinstance(value, str):
         return value
     if value in ZH_EN:
         return ZH_EN[value]
@@ -1599,7 +1603,7 @@ def translate(value: Any, language: str = "en") -> Any:
 
 def translate_label(value: Any, language: str = "en") -> Any:
     """Translate a control label, including a short icon prefix or suffix."""
-    if language_code(language) != "en" or not isinstance(value, str):
+    if isinstance(value, UntranslatedText) or language_code(language) != "en" or not isinstance(value, str):
         return value
     if value in ZH_EN:
         return ZH_EN[value]

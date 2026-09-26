@@ -69,6 +69,25 @@ def test_task_cards_select_real_run_and_show_its_nodes_and_events(tmp_path):
     assert activity and "工作流运行结束" in activity[0]
 
 
+def test_english_pending_inspector_translates_status_without_changing_task_name(tmp_path):
+    source = tmp_path / "guide.txt"
+    source.write_text("记录来源。", encoding="utf-8")
+    output = tmp_path / "out"
+    create_run(output, sources=[source], targets=["cpt"], name="用户任务名称")
+    app = AppTest.from_function(task_screen, args=(str(output), "english-pending"), default_timeout=15)
+    app.session_state["ui_language"] = "en"
+    # The production app installs localization before rendering its pages.
+    from lib.presentation.streamlit.i18n import install_streamlit_localization
+    install_streamlit_localization()
+    app.run()
+    assert not app.exception
+    head = next(item.value for item in app.get("html")
+                if isinstance(item.value, str) and 'class="df-run-inspector-head"' in item.value)
+    assert "Pending</span> · 0%" in head and "待处理" not in head
+    assert [item.value for item in app.subheader] == ["用户任务名称"]
+    assert any(item.label == "**用户任务名称**　↗" for item in app.button)
+
+
 def test_task_pages_reach_older_runs_and_explicit_location(tmp_path):
     source = tmp_path / "guide.txt"
     source.write_text("操作前断电，检查后记录。", encoding="utf-8")

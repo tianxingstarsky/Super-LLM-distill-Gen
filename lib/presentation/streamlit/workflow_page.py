@@ -13,6 +13,7 @@ from filelock import Timeout
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_graph import execution_graph
 from lib.presentation.streamlit.artifact_preview import render_training_sample
+from lib.presentation.streamlit.i18n import UntranslatedText, translate
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
@@ -233,7 +234,7 @@ def render_run(application, run_id, begin, *, embedded=False):
     state = application.state(run_id)
     recipe = application.recipe(run_id)
     active = application.is_active(run_id)
-    st.subheader(state["name"])
+    st.subheader(UntranslatedText(state["name"]))
     updated = str(state.get("updated_at") or "")[:19].replace("T", " ") or "—"
     st.html('<div class="df-run-meta">'
             f'<span>任务编号 <b>{html.escape(run_id[:8])}</b></span><i>·</i>'
@@ -316,7 +317,7 @@ def render_run(application, run_id, begin, *, embedded=False):
             st.html('<div class="df-run-inspector-head">'
                     f'<b>{html.escape(STAGE_GLYPHS.get(selected_stage, "◈"))}</b><div>'
                     f'<strong>{html.escape(selected_label)}</strong>'
-                    f'<small>{html.escape(STAGE_STATUS.get(selected_status, selected_status))} · {percent}%</small>'
+                    f'<small><span>{html.escape(STAGE_STATUS.get(selected_status, selected_status))}</span> · {percent}%</small>'
                     '</div></div>')
             st.progress(percent / 100, text=f"{done} / {total} 单元")
             if "cached" in selected_metrics:
@@ -637,8 +638,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
         st.info("尚无运行记录。创建工作流后，这里会显示实时阶段、质量统计与产物。")
         return
     lookup = {r["id"]: r for r in runs}
+    history_language = st.session_state.get("ui_language", "zh")
     selected_id = st.selectbox("运行记录", list(lookup), key=f"workflow-selected:{ws}",
-                              format_func=lambda rid: f"{lookup[rid]['name']} · {LABELS.get(lookup[rid]['status'], lookup[rid]['status'])} · {rid[:8]}")
+                              format_func=lambda rid: UntranslatedText(
+                                  f"{lookup[rid]['name']} · "
+                                  + translate(LABELS.get(lookup[rid]['status'], lookup[rid]['status']),
+                                              history_language)
+                                  + f" · {rid[:8]}"))
     if st.button("查看所选任务", key=f"workflow-open-history:{ws}"):
         st.session_state["workflow-open-run"] = {"workspace": ws, "run_id": selected_id}
         st.rerun()
