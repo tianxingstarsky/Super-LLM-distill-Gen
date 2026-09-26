@@ -66,14 +66,19 @@ class FilesystemWorkflowDriver:
         filename = "agent.negative.jsonl" if target == "agent_negative" else f"{target}.jsonl"
         path = run / "artifacts" / filename
         manifest = run / "artifacts" / "manifest.json"
+        from lib.infrastructure.verified_preview import verify_preview, inventory_identity
+        identity = None
         if manifest.is_file():
-            verify_artifacts(run)
+            identity = verify_preview(run)
         if not path.exists():
             return []
         if not manifest.is_file():
             raise ValueError("incomplete_artifact_manifest")
         from lib.infrastructure.jsonl_preview import read_rows
-        return read_rows(path, offset, limit)
+        rows = read_rows(path, offset, limit)
+        if inventory_identity(run) != identity:
+            raise ValueError("preview_file_changed")
+        return rows
 
     def quarantined_inputs(self, run_id: str, limit: int = 100) -> list[dict]:
         if limit <= 0:
