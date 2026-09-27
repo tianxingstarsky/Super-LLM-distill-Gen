@@ -139,3 +139,20 @@ def test_briefs_survive_source_changes_navigation_and_workspace_switch():
     ui.segmented_control(key=source).set_value('Agent 上下文').run()
     assert ui.text_area(key='workflow-source-brief:fixture:Agent 上下文').value == ''
     assert not ui.exception
+
+
+def test_quick_size_persists_and_open_brief_batch_count_respects_limit():
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.button(key='workflow-count-preset:fixture:50000').click().run()
+    assert ui.number_input(key='workflow-count:fixture').value == 50000
+    ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
+    ui.number_input(key='workflow-max-units:fixture').set_value(1200).run()
+    assert [m.value for m in ui.metric] == ['12', '4']
+    assert any('处理上限低于候选规模' in item.value for item in ui.warning)
+    ui.checkbox(key='fixture-show').uncheck().run()
+    ui.checkbox(key='fixture-show').check().run()
+    assert ui.number_input(key='workflow-count:fixture').value == 50000
+    ui.button(key='workflow-count-preset:fixture:1000').click().run()
+    assert ui.number_input(key='workflow-count:fixture').value == 1000
+    assert [m.value for m in ui.metric] == ['10', '4']
+    assert not ui.exception

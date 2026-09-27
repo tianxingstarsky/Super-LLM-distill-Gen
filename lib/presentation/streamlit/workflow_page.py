@@ -457,6 +457,12 @@ def _save_draft_value(workspace, key):
         **previous, key: st.session_state[key]}
 
 
+def _select_candidate_count(workspace, count):
+    key = f"workflow-count:{workspace}"
+    st.session_state[key] = count
+    _save_draft_value(workspace, key)
+
+
 def _draft_number(label, minimum, maximum, default, *, key, **options):
     """Keep inputs when Streamlit removes a conditional or off-page widget."""
     workspace = st.session_state["ws"]
@@ -641,6 +647,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             default_run_name = ("Automatic data generation"
                                 if st.session_state.get("ui_language") == "en" else "自动数据生成")
             name = _draft_name(default_run_name, ws)
+            st.caption("快捷规模 · 仍可输入自定义数量")
+            for size_column, count in zip(st.columns(3, gap="small"), (1000, 10000, 50000)):
+                with size_column:
+                    st.button(f"{count:,}", key=f"workflow-count-preset:{ws}:{count}",
+                              use_container_width=True, on_click=_select_candidate_count,
+                              args=(ws, count))
             sample_count = _draft_number("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100, key=f"workflow-count:{ws}",
                                            help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
             tasks = sample_count
@@ -662,8 +674,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                 with b:
                     chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
                                if source_mode == "文档资料" else 2000)
+                planning_count = min(int(sample_count), int(maximum)) if source_mode == "开放需求" else int(sample_count)
+                if source_mode == "开放需求" and maximum < sample_count:
+                    st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
                 batch_summary, request_summary = st.columns(2, gap="small")
-                batch_summary.metric("每个生成目标的候选批次", f"{(int(sample_count) + int(batch_size) - 1) // int(batch_size):,}")
+                batch_summary.metric("每个生成目标的候选批次", f"{(planning_count + int(batch_size) - 1) // int(batch_size):,}")
                 request_summary.metric("同时处理的样本上限", f"{min(int(concurrency), int(batch_size)):,}")
                 st.caption("批次数按候选规模估算；不代表模型调用次数或合格数量。CPT 与导入轨迹按实际来源处理。")
             evaluation_uploads = []

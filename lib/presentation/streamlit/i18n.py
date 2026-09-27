@@ -1309,6 +1309,8 @@ ZH_EN.update({
     "点击节点分别选择生成与评审模型": "Select generation and review models in each node",
     "点击工作流节点选择模型": "Choose models in workflow nodes",
     "登记服务地址、凭据与预算；具体模型在工作流节点中选择。": "Register service addresses, credentials, and budgets. Choose models in workflow nodes.",
+    "快捷规模 · 仍可输入自定义数量": "Quick sizes. You can also enter a custom count.",
+    "处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。": "The processing limit is below the candidate count. This run plans up to that limit. The remaining candidates will not be generated in this run.",
     "候选样本规模": "Candidate count", "并发请求上限": "Concurrency limit", "每批候选数": "Candidates per batch",
     "每个生成目标的候选批次": "Candidate batches per generation goal",
     "同时处理的样本上限": "Samples processed at once",
