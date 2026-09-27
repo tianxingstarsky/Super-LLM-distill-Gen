@@ -2,20 +2,18 @@
 from __future__ import annotations
 
 import html
-from pathlib import Path
 
 import streamlit as st
 
-from lib.bootstrap.generation_settings import generation_settings_application
+from lib.application.generation_settings_service import GenerationSettingsApplication
 from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 from lib.presentation.streamlit.shared import page_header, section_heading
 
 
-def render_generation_settings(root: Path, show_title: bool = True) -> None:
+def render_generation_settings(settings: GenerationSettingsApplication, show_title: bool = True) -> None:
     if show_title:
         page_header("生成偏好", "设置训练数据的生成倾向、推理风格与语言规则。", "GENERATION PREFERENCES")
     st.html(SETTINGS_STYLE)
-    settings = generation_settings_application(root)
     area = st.segmented_control("配置类别", settings.categories(), default="生成偏好", key="preference-area",
                                 format_func=lambda value: {"生成偏好": "偏好配比"}.get(value, value),
                                 label_visibility="collapsed") or "生成偏好"

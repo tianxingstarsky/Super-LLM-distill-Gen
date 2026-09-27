@@ -362,7 +362,18 @@ def page_human_review():
     modes = ("SFT 数据调整", "DPO 偏好优化", "ORPO 偏好优化", "RLAIF 反馈审核", "CPT 语料审核")
     mode_key = f"review-mode:{st.session_state['ws']}"
     from lib.presentation.streamlit.review_overview import render_review_overview
-    applications = render_review_overview(_ws_out(), mode_key)
+    from lib.bootstrap.corpus_reviews import corpus_review_application
+    from lib.bootstrap.preference_reviews import preference_review_application
+    from lib.bootstrap.sft_reviews import sft_review_application
+    output = _ws_out()
+    applications = {
+        modes[0]: sft_review_application(output),
+        modes[1]: preference_review_application(output),
+        modes[2]: preference_review_application(output, target="orpo"),
+        modes[3]: preference_review_application(output, target="rlaif"),
+        modes[4]: corpus_review_application(output),
+    }
+    render_review_overview(applications, mode_key)
     mode = st.segmented_control("审核类型", modes, default=modes[0], key=mode_key,
                                 label_visibility="collapsed")
     if mode == modes[0]:
@@ -477,7 +488,8 @@ def page_assets(show_title=True):
 def page_prefs(show_title=True):
     from lib.presentation.streamlit.generation_settings_page import render_generation_settings
 
-    render_generation_settings(ROOT, show_title=show_title)
+    from lib.bootstrap.generation_settings import generation_settings_application
+    render_generation_settings(generation_settings_application(ROOT), show_title=show_title)
 
 
 def page_data_management():

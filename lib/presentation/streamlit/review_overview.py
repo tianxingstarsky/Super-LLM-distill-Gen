@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import streamlit as st
+from typing import Mapping, Protocol
 
-from lib.bootstrap.corpus_reviews import corpus_review_application
-from lib.bootstrap.preference_reviews import preference_review_application
-from lib.bootstrap.sft_reviews import sft_review_application
+
+class ReviewQueue(Protocol):
+    def reviewable_runs(self) -> list[dict]: ...
 
 
 _STYLE = """<style>
@@ -29,19 +30,12 @@ def _select_mode(key: str, mode: str) -> None:
     st.session_state[key] = mode
 
 
-def render_review_overview(output, mode_key: str) -> dict[str, object]:
+def render_review_overview(applications: Mapping[str, ReviewQueue], mode_key: str) -> Mapping[str, ReviewQueue]:
     """Show candidate counts from verified review queues; return the applications.
 
     A candidate count is not an unreviewed count or a quality score. Detailed
     decisions remain on the selected queue page.
     """
-    applications = {
-        "SFT 数据调整": sft_review_application(output),
-        "DPO 偏好优化": preference_review_application(output),
-        "ORPO 偏好优化": preference_review_application(output, target="orpo"),
-        "RLAIF 反馈审核": preference_review_application(output, target="rlaif"),
-        "CPT 语料审核": corpus_review_application(output),
-    }
     cards = (
         ("sft", "SFT 数据调整", "✎", "sample_count"),
         ("dpo", "DPO 偏好优化", "♡", "pair_count"),

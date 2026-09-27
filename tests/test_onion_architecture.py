@@ -44,6 +44,13 @@ def test_backend_page_uses_injected_application_without_legacy_composition():
                    for name in dependencies)
 
 
+def test_review_overview_and_generation_editor_do_not_construct_storage():
+    for filename in ("review_overview.py", "generation_settings_page.py"):
+        dependencies = imported_modules(ROOT / "lib/presentation/streamlit" / filename)
+        assert not any(name.startswith(("lib.bootstrap", "lib.infrastructure", "lib.workspace"))
+                       for name in dependencies), filename
+
+
 def test_streamlit_workflow_page_uses_application_contract_not_engine_adapter():
     path = ROOT / "lib/presentation/streamlit/workflow_page.py"
     dependencies = imported_modules(path)
