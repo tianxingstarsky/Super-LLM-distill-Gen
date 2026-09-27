@@ -350,6 +350,41 @@ def test_math_expression_checker_rejects_executable_or_unbounded_input():
         assert validate_gsm8k(build_gsm8k("设备维护", seed))
 
 
+def test_math_step_mismatch_is_quarantined_before_export(tmp_path, monkeypatch):
+    from lib.infrastructure import training_workflow
+    original = training_workflow.build_gsm8k
+
+    def mismatched(*args, **kwargs):
+        sample = original(*args, **kwargs)
+        first = sample["_steps"][0]
+        sample["answer"] = sample["answer"].replace(
+            f"<<{first['expression']}={first['result']}>>",
+            f"<<0 + {first['result']}={first['result']}>>")
+        return sample
+
+    monkeypatch.setattr(training_workflow, "build_gsm8k", mismatched)
+    out, rid, _ = make_run(tmp_path, targets=["gsm8k"], tasks=4)
+    state = execute(out, rid)
+    assert state["status"] == "needs_attention"
+    manifest = verify_artifacts(run_path(out, rid))
+    assert manifest["counts"]["gsm8k"] == 0
+    report = read_json(run_path(out, rid) / "artifacts/quality.json")
+    assert report["targets"]["gsm8k"]["reasons"]["gsm8k_arithmetic_verification_failed"] > 0
+
+
+def test_package_rechecks_persisted_math_step_evidence(tmp_path):
+    out, rid, _ = make_run(tmp_path, targets=["gsm8k"], tasks=4)
+    execute(out, rid)
+    path = run_path(out, rid)
+    record = read_json(path / "artifacts/gsm8k.records.json")[0]
+    record["calculation_steps"][0]["result"] += 1
+    Workflow(out, rid, out.parent).package({"gsm8k": [record]})
+    manifest = verify_artifacts(path)
+    assert manifest["counts"]["gsm8k"] == 0
+    report = read_json(path / "artifacts/quality.json")
+    assert report["targets"]["gsm8k"]["reasons"]["gsm8k_arithmetic_verification_failed"] == 1
+
+
 def test_unversioned_math_recipe_keeps_legacy_generator_on_execution(tmp_path):
     from lib.workflow import digest
     from lib.io_utils import atomic_json

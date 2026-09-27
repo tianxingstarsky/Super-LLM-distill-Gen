@@ -50,3 +50,39 @@ def test_correct_final_answer_does_not_hide_incorrect_intermediate_calculation()
 def test_expression_limits_reject_bad_types_and_excessive_work(expression):
     with pytest.raises(ValueError):
         evaluate_integer_expression(expression)
+
+
+def test_equal_result_cannot_replace_recorded_calculation():
+    legacy = build_gsm8k("设备维护", 0)
+    legacy["answer"] = "<<1 + 3=4>> #### 4"
+    assert not validate_gsm8k(legacy)
+    sample = build_gsm8k("设备维护", 0, version=2)
+    first = sample["_steps"][0]
+    sample["answer"] = sample["answer"].replace(
+        f"<<{first['expression']}={first['result']}>>", f"<<1 * {first['result']}={first['result']}>>")
+    assert not validate_gsm8k(sample)
+
+
+@pytest.mark.parametrize("steps", [None, {}, [], [None], [{"expression":"2 * 2","result":True,"explanation":"step"}]])
+def test_invalid_or_incomplete_recorded_steps_are_rejected(steps):
+    sample = build_gsm8k("设备维护", 0, version=2)
+    sample["_steps"] = steps
+    assert not validate_gsm8k(sample)
+
+
+def test_recorded_step_mutation_and_order_are_checked():
+    sample = build_gsm8k("设备维护", 0, version=2)
+    damaged = deepcopy(sample)
+    damaged["_steps"][0]["result"] += 1
+    assert not validate_gsm8k(damaged)
+    damaged = deepcopy(sample)
+    damaged["_steps"].reverse()
+    assert not validate_gsm8k(damaged)
+    damaged = deepcopy(sample)
+    damaged["answer"] = damaged["answer"].replace('<<2 * 2=4>>', '<<(2*2)=4>>')
+    assert validate_gsm8k(damaged)
+
+
+@pytest.mark.parametrize("record", [None, [], "sample"])
+def test_nonobject_math_record_is_rejected(record):
+    assert not validate_gsm8k(record)

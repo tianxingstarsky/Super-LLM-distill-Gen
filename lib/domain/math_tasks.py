@@ -98,6 +98,8 @@ def _build_multistep(phrase: str, seed: int) -> dict:
 
 
 def validate_gsm8k(record: dict) -> bool:
+    if not isinstance(record, dict):
+        return False
     expression, result = record.get("_expression"), record.get("_result")
     if not isinstance(record.get("question"), str) or not record["question"].strip():
         return False
@@ -112,8 +114,39 @@ def validate_gsm8k(record: dict) -> bool:
             return False
         if any(evaluate_integer_expression(formula) != int(value) for formula, value in calculations):
             return False
+        # Equal numeric results alone do not establish the same calculation.
+        def structure(formula):
+            return ast.dump(ast.parse(formula.strip(), mode="eval"), include_attributes=False)
+
+        if structure(calculations[-1][0]) != structure(expression):
+            return False
+        if "_steps" in record:
+            steps = record["_steps"]
+            if not isinstance(steps, list) or not steps or len(steps) != len(calculations):
+                return False
+            for step, (formula, value) in zip(steps, calculations):
+                if (not isinstance(step, dict) or type(step.get("result")) is not int
+                        or not isinstance(step.get("expression"), str)
+                        or not isinstance(step.get("explanation"), str)
+                        or not step["explanation"].strip()
+                        or evaluate_integer_expression(step["expression"]) != step["result"]
+                        or step["result"] != int(value)
+                        or structure(step["expression"]) != structure(formula)):
+                    return False
         final = re.search(r"####\s*(-?\d+)\s*$", answer)
         return bool(final and answer.count("####") == 1 and int(final[1]) == result
                     and int(calculations[-1][1]) == result)
-    except (ValueError, TypeError, OverflowError, RecursionError):
+    except (ValueError, TypeError, SyntaxError, OverflowError, RecursionError):
         return False
+
+
+def validate_math_candidate(row: dict) -> bool:
+    """Recheck persisted candidate evidence before creating training exports."""
+    sample = {"question": row.get("question"), "answer": row.get("answer"),
+              "_expression": row.get("arithmetic_expression"), "_result": row.get("verified_result")}
+    version = row.get("generator_version", 1)
+    if type(version) is not int or version not in {1, 2}:
+        return False
+    if version == 2 or row.get("calculation_steps"):
+        sample["_steps"] = row.get("calculation_steps")
+    return validate_gsm8k(sample)

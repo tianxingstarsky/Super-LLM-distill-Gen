@@ -27,7 +27,7 @@ from lib.domain.workflow_quality import POLICY, accepted, canonical, conversatio
 from lib.domain.agent_trajectory import (REPLAY_POLICY_VERSION, ReplayUnavailable,
                                          assess_recorded_trajectory, validate_tool_snapshots)
 from lib.domain.corpus_quality import CorpusNearDuplicateIndex, inspect_corpus, summarize_corpus_sources
-from lib.domain.math_tasks import build_gsm8k, validate_gsm8k
+from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_candidate
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_scale import (MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE,
                                       PLAN_BATCH_SIZE, validate_node_models)
@@ -945,6 +945,8 @@ class Workflow:
             for original in collections[target]:
                 self.check_cancel()
                 row = deepcopy(original)
+                if target == "gsm8k" and row["status"] == "eligible" and not validate_math_candidate(row):
+                    row.update(status="quarantined", reason="gsm8k_arithmetic_verification_failed")
                 if row["status"] == "eligible":
                     payload = training_record(target, row)
                     if corpus_index is not None:
