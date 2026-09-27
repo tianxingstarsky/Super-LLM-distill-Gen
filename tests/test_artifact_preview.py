@@ -2,6 +2,29 @@
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 
 
+def test_math_preview_distinguishes_consistent_conflicting_and_missing_evidence():
+    from copy import deepcopy
+    from lib.domain.math_tasks import build_gsm8k
+    from lib.presentation.streamlit.i18n import translate_markup
+    sample = build_gsm8k("工作流", 0, version=2)
+    row = {"question": sample["question"], "answer": sample["answer"],
+           "arithmetic_expression": sample["_expression"], "verified_result": sample["_result"],
+           "calculation_steps": sample["_steps"], "generator_version": 2}
+    preview = render_training_sample("gsm8k", row)
+    assert 'data-status="consistent"' in preview and '算术与步骤一致' in preview
+    assert '题意与文字解释未独立核验' in preview
+    assert 'Arithmetic and steps match' in translate_markup(preview)
+    assert '工作流' in translate_markup(preview)
+    damaged = deepcopy(row)
+    damaged["calculation_steps"][0]["result"] += 1
+    preview = render_training_sample("gsm8k", damaged)
+    assert 'data-status="conflict"' in preview and '算术证据存在冲突' in preview
+    assert 'Arithmetic evidence conflicts' in translate_markup(preview)
+    preview = render_training_sample("gsm8k", {"question": row["question"], "answer": row["answer"]})
+    assert 'data-status="missing"' in preview and '未附算术校验证据' in preview
+    assert 'Arithmetic evidence not included' in translate_markup(preview)
+
+
 def test_multistep_arithmetic_has_numbered_calculations_and_final_answer():
     preview = render_training_sample("gsm8k", {"question": "How many items?", "answer":
         "First count: <<2 * 3=6>>.\nThen add: <<2 * 3 + 4=10>>.\n#### 10"})

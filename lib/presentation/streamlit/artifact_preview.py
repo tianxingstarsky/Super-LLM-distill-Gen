@@ -5,6 +5,7 @@ import html
 import json
 import re
 from typing import Any
+from lib.domain.math_tasks import validate_math_candidate
 
 from lib.domain.conversation_structure import (
     tool_result_user as _tool_result_user,
@@ -56,6 +57,18 @@ def _math_answer(answer: str) -> str:
         steps.append(f'<div class="df-artifact-step"><b>{index:02d}</b><span data-user-content>{rendered}</span></div>')
     return ('<div class="df-artifact-reasoning"><div class="df-artifact-subhead">计算步骤</div>'
             + ''.join(steps) + '</div>' + _text("最终答案", final[1], "df-artifact-answer"))
+
+
+def _math_evidence(row: dict) -> str:
+    present = any(key in row for key in ("arithmetic_expression", "verified_result", "calculation_steps", "generator_version"))
+    if not present:
+        status, title = "missing", "未附算术校验证据"
+    elif validate_math_candidate(row):
+        status, title = "consistent", "算术与步骤一致"
+    else:
+        status, title = "conflict", "算术证据存在冲突"
+    return ('<div class="df-artifact-math-evidence" data-status="' + status + '"><strong>'
+            + title + '</strong><span>题意与文字解释未独立核验</span></div>')
 
 
 def _messages(value: Any) -> list[dict]:
@@ -335,7 +348,7 @@ def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
     elif target == "cpt":
         body = _text("连续训练语料", row.get("text", ""))
     elif target == "gsm8k":
-        body = _text("题目", row.get("question", "")) + _math_answer(row.get("answer", ""))
+        body = _math_evidence(row) + _text("题目", row.get("question", "")) + _math_answer(row.get("answer", ""))
     elif target == "cot":
         steps = row.get("reasoning")
         steps = steps if isinstance(steps, list) else [steps] if steps else []

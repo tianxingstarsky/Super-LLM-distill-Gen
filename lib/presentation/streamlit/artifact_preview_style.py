@@ -128,6 +128,9 @@ ARTIFACT_PREVIEW_STYLE = """<style>
 .df-artifact-preview .df-artifact-verification { align-items:center; gap:7px; padding:10px 11px; border-radius:9px; font-size:11px; line-height:1.45; }
 .df-artifact-preview .df-artifact-verification b { margin-right:2px; color:#116B50; font-size:11px; white-space:nowrap; }
 .df-artifact-preview .df-artifact-verification span + span { padding-left:8px; }
+.df-artifact-preview .df-artifact-math-evidence { display:flex;flex-wrap:wrap;gap:6px 14px;padding:10px 12px;margin-bottom:12px;border:1px solid #dce6f2;border-radius:9px;background:#f5f8fc;color:#60738d;font-size:11px;line-height:1.5; }
+.df-artifact-preview .df-artifact-math-evidence[data-status="consistent"] { border-color:#bde3d4;background:#f2fbf7;color:#187458; }
+.df-artifact-preview .df-artifact-math-evidence[data-status="conflict"] { border-color:#f0c8cf;background:#fff5f6;color:#b43850; }
 .df-artifact-preview .df-artifact-failure { padding:11px 12px; border-radius:9px; font-size:11px; }
 .df-artifact-preview .df-artifact-failure strong { font-size:12px; }
 .df-artifact-preview .df-artifact-failure small { margin-top:3px; line-height:1.5; overflow-wrap:anywhere; }
