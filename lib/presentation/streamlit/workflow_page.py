@@ -64,6 +64,7 @@ def _toggle_target_group(key: str, members: frozenset[str], defaults: tuple[str,
     else:
         current.update(members)
     st.session_state[key] = [target for target in TARGETS if target in current]
+    _save_draft_value(st.session_state["ws"], key)
 ICONS = {"pending": "○", "queued": "○", "running": "◉", "completed": "✓", "failed": "!", "cancelled": "■", "skipped": "—"}
 STAGE_STATUS = {"pending": "待处理", "queued": "待启动", "running": "执行中", "completed": "已完成",
                 "failed": "失败", "cancelled": "已停止", "skipped": "已跳过"}
@@ -486,6 +487,17 @@ def _draft_brief(label, *, key, **options):
                         on_change=_save_draft_value, args=(workspace, key), **options)
 
 
+def _restore_selection(workspace, key, default, choices):
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    value = st.session_state.get(key, draft.get(key, default))
+    if isinstance(default, list):
+        value = [item for item in value if item in choices] if isinstance(value, list) else list(default)
+    elif value not in choices:
+        value = default
+    st.session_state[key] = value
+    _save_draft_value(workspace, key)
+
+
 def render_workbench(application: WorkflowApplication, begin, model_application):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
@@ -498,15 +510,19 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
         '</div>'
     )
     ws = st.session_state["ws"]
+    preset_key = f"workflow-preset:{ws}"
+    _restore_selection(ws, preset_key, "自动推荐", PRESETS)
     preset = st.segmented_control(
-        "快捷方案", tuple(PRESETS), default=None if f"workflow-preset:{ws}" in st.session_state else "自动推荐", key=f"workflow-preset:{ws}",
+        "快捷方案", tuple(PRESETS), default=None, key=preset_key,
+        on_change=_save_draft_value, args=(ws, preset_key),
         help="选择常用目标组合。下面仍可逐项增删训练目标。",
     ) or "自动推荐"
     st.html('<div class="df-wb-preset-help">快捷方案会预填下方目标；每个目标仍可单独增减。</div>')
+    source_key = f"workflow-source-mode:{ws}"
+    _restore_selection(ws, source_key, "文档资料", ("文档资料", "Agent 上下文", "开放需求"))
     source_mode = st.segmented_control(
         "选择来源类型", ("文档资料", "Agent 上下文", "开放需求"),
-        default=None if "workflow-source-mode" in st.session_state else "文档资料",
-        key="workflow-source-mode",
+        default=None, key=source_key, on_change=_save_draft_value, args=(ws, source_key),
         help="按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。",
     ) or "文档资料"
     source_extensions = ({".pdf", ".docx", ".txt", ".md"} if source_mode == "文档资料"
@@ -517,6 +533,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
         section_heading("选择训练目标", "点击分类卡快速启用或清空整组，下方可逐项调整。", "◈")
         target_key = f"workflow-targets:{ws}:{preset}"
         target_defaults = [target for target in PRESETS[preset] if target in TARGETS]
+        _restore_selection(ws, target_key, target_defaults, TARGETS)
         targets = [target for target in st.session_state.get(target_key, target_defaults) if target in TARGETS]
         target_groups = (
             ("cpt", "预训练语料", "文档清洗、分块与去重", frozenset({"cpt"})),
@@ -536,9 +553,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                     use_container_width=True,
                 )
         targets = st.multiselect(
-            "训练目标", list(TARGETS), default=target_defaults,
+            "训练目标", list(TARGETS), default=None,
             format_func=lambda target: TARGET_LABELS.get(target, target.upper()),
             key=target_key,
+            on_change=_save_draft_value, args=(ws, target_key),
             help="可以同时选择多类目标；系统只会导出通过对应质量检查的样本。",
         )
         selected_labels = ''.join(f'<span>{html.escape(TARGET_LABELS.get(target, target.upper()))}</span>'
@@ -609,9 +627,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                                                 accept_multiple_files=True, max_upload_size=50,
                                                 key=f"workflow-upload:{ws}:{source_mode}")
                 with source_library:
+                    sources_key = f"workflow-sources:{ws}:{source_mode}"
+                    _restore_selection(ws, sources_key, [], file_labels)
                     selected = st.multiselect("或选择当前文件夹内的来源", list(file_labels),
                                               format_func=lambda path: file_labels[path],
-                                              key=f"workflow-sources:{ws}:{source_mode}")
+                                              key=sources_key, on_change=_save_draft_value, args=(ws, sources_key))
                 with st.expander("补充生成要求（可选）"):
                     brief = _draft_brief("补充生成要求（可选）", placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                          key=f"workflow-source-brief:{ws}:{source_mode}", label_visibility="collapsed")

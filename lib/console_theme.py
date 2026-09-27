@@ -266,7 +266,7 @@ $theme_vars
 .df-workflow-targets-compact > div b { width: 36px; height: 36px; font-size: 10px; }
 .df-workflow-targets-compact strong { font-size: 12px; }
 .df-workflow-targets-compact small { font-size: 10px; }
-[data-testid="stApp"] .st-key-workflow-source-mode, [data-testid="stApp"] .st-key-workflow-source-mode [data-testid="stButtonGroup"] { width: 100%; }
+[data-testid="stApp"] [class*="st-key-workflow-source-mode"], [data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] { width: 100%; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); width: 100%; max-width: none; gap: 12px; padding: 0; background: transparent; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button { display: grid; grid-template-columns: 45px minmax(0,1fr); grid-template-rows: auto auto; align-content: center; column-gap: 13px; row-gap: 5px; min-height: 110px; padding: 17px; border: 1px solid #DEE7F3; border-radius: 11px; background: linear-gradient(150deg,#FFF,#F8FBFF); color: var(--df-text); text-align: left; box-shadow: 0 2px 9px rgba(35,75,125,.025); }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button[data-selected="true"] { border-color: #75A9EC; background: #EFF6FF; color: #1263C9; box-shadow: 0 3px 10px rgba(30,105,205,.08); }

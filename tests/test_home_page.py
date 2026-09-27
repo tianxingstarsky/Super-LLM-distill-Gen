@@ -61,7 +61,7 @@ def test_home_orpo_shortcut_sets_only_its_workspace_recipe():
 def test_home_agent_and_recent_task_shortcuts_keep_context():
     ui=AppTest.from_string(SCRIPT).run()
     ui.button(key='overview:Agent 上下文').click().run()
-    assert ui.session_state['workflow-source-mode']=='Agent 上下文'
+    assert ui.session_state['workflow-source-mode:fixture']=='Agent 上下文'
     assert ui.session_state['workflow-preset:fixture']=='Agent 轨迹'
     ui.button(key='overview-run:0').click().run()
     assert ui.session_state['task-center-run:fixture']=='0'

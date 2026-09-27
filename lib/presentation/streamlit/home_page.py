@@ -13,7 +13,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
     st.html(HOME_STYLE)
 
     def start_mode(mode: str, preset: str | None = None) -> None:
-        st.session_state['workflow-source-mode'] = mode
+        st.session_state[f'workflow-source-mode:{ws}'] = mode
         if preset:
             st.session_state[f'workflow-preset:{ws}'] = preset
         st.session_state['nav'] = '自动工作流'
