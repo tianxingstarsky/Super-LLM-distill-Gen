@@ -34,3 +34,42 @@ def test_large_creation_preserves_recipe_and_copies_node_bindings():
 
 def test_domain_defaults_match_existing_creation_contract():
     assert validate_creation() == (['cpt', 'sft', 'dpo'], {})
+
+
+@pytest.mark.parametrize('targets', [None, 7, True, 'sft', b'sft', {'sft': True}, [['sft']], [None]])
+def test_malformed_target_collection_is_a_configuration_error(targets):
+    driver = Mock()
+    with pytest.raises(ValueError):
+        WorkflowApplication(driver).create_run(targets=targets)
+    driver.create.assert_not_called()
+
+
+@pytest.mark.parametrize('mode', ['unsupported', None, {}, True])
+def test_invalid_replay_mode_rejected_before_driver(mode):
+    driver = Mock()
+    with pytest.raises(ValueError, match='invalid_agent_replay_mode'):
+        WorkflowApplication(driver).create_run(agent_replay_mode=mode)
+    driver.create.assert_not_called()
+
+
+def test_evaluation_reference_requires_cpt_before_driver():
+    driver = Mock()
+    with pytest.raises(ValueError):
+        WorkflowApplication(driver).create_run(targets=['sft'], evaluation_sources=['missing.jsonl'])
+    driver.create.assert_not_called()
+
+
+def test_direct_engine_rejects_mode_before_reading_sources_or_reference_catalog(tmp_path, monkeypatch):
+    from lib.infrastructure import training_workflow as engine
+    catalog = Mock(side_effect=AssertionError('reference catalog must not be read'))
+    monkeypatch.setattr(engine, 'snapshot_released_corpus', catalog)
+    with pytest.raises(ValueError, match='invalid_agent_replay_mode'):
+        engine.create_run(tmp_path, sources=[tmp_path / 'missing.txt'], agent_replay_mode='unsupported')
+    catalog.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generator_targets_are_normalized_once_before_driver():
+    driver = Mock()
+    WorkflowApplication(driver).create_run(targets=(item for item in ['sft', 'orpo', 'sft']))
+    assert driver.create.call_args.kwargs['targets'] == ['sft', 'orpo']

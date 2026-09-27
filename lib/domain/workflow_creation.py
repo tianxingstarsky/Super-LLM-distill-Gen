@@ -6,10 +6,22 @@ from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       chunk_chars=2000, tasks=10, sample_count=None, concurrency=1,
-                      batch_size=100, node_models=None, conversation_turns=3, brief=""):
-    targets = list(dict.fromkeys(targets))
-    if not targets or any(t not in TARGETS for t in targets):
+                      batch_size=100, node_models=None, conversation_turns=3, brief="",
+                      agent_replay_mode="configured", evaluation_sources=()):
+    target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
+    if isinstance(targets, (str, bytes, dict)):
+        raise ValueError(target_error)
+    try:
+        targets = list(targets)
+    except TypeError as exc:
+        raise ValueError(target_error) from exc
+    if not targets or any(not isinstance(t, str) or t not in TARGETS for t in targets):
         raise ValueError("请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话")
+    targets = list(dict.fromkeys(targets))
+    if not isinstance(agent_replay_mode, str) or agent_replay_mode not in {"configured", "local", "isolated"}:
+        raise ValueError("invalid_agent_replay_mode")
+    if evaluation_sources and "cpt" not in targets:
+        raise ValueError("评测集参照仅用于 CPT 去污染检查")
     if any(type(value) is not int for value in (max_units, chunk_chars, tasks)) or not 1 <= max_units <= MAX_CANDIDATES or not 200 <= chunk_chars <= 20000 or not 1 <= tasks <= MAX_CANDIDATES:
         raise ValueError("处理上限/分块大小/任务数超出允许范围")
     if sample_count is not None and (type(sample_count) is not int or not 1 <= sample_count <= MAX_CANDIDATES):

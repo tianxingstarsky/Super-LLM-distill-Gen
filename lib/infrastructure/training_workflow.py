@@ -170,7 +170,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
-        node_models=node_models, conversation_turns=conversation_turns, brief=brief)
+        node_models=node_models, conversation_turns=conversation_turns, brief=brief,
+        agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources)
     files = [Path(p).resolve(strict=True) for p in sources]
     if not files and not brief.strip():
         raise ValueError("请上传来源文件或填写开放性需求")
@@ -185,11 +186,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             raise ValueError(f"来源超过 50 MiB：{path.name}")
     if sum(path.stat().st_size for path in files) > 200 * 1024 * 1024:
         raise ValueError("单次运行来源总大小最多 200 MiB，请拆分批次")
-    if evaluation_sources and "cpt" not in targets:
-        raise ValueError("评测集参照仅用于 CPT 去污染检查")
     references = snapshot_released_corpus(Path(output)) if "cpt" in targets else []
-    if not isinstance(agent_replay_mode, str) or agent_replay_mode not in {"configured", "local", "isolated"}:
-        raise ValueError("invalid_agent_replay_mode")
     agent_sandbox_image = (validate_sandbox_image(os.environ.get(IMAGE_ENV))
                            if "agent" in targets and agent_replay_mode != "local" else None)
     if "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:

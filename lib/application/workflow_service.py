@@ -17,7 +17,8 @@ class WorkflowApplication:
     def create_run(self, **recipe: Any) -> str:
         fields = {key: recipe[key] for key in (
             "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
-            "batch_size", "node_models", "conversation_turns", "brief") if key in recipe}
+            "batch_size", "node_models", "conversation_turns", "brief",
+            "agent_replay_mode", "evaluation_sources") if key in recipe}
         targets, node_models = validate_creation(**fields)
         return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models})
 
