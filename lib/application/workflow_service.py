@@ -5,6 +5,7 @@ from typing import Any
 
 from lib.application.workflow_ports import WorkflowDriver
 from lib.domain.workflow_targets import TARGETS
+from lib.domain.workflow_creation import validate_creation
 
 
 class WorkflowApplication:
@@ -14,7 +15,11 @@ class WorkflowApplication:
         self._driver = driver
 
     def create_run(self, **recipe: Any) -> str:
-        return self._driver.create(**recipe)
+        fields = {key: recipe[key] for key in (
+            "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
+            "batch_size", "node_models", "conversation_turns", "brief") if key in recipe}
+        targets, node_models = validate_creation(**fields)
+        return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models})
 
     def agent_replay_capabilities(self) -> dict:
         return self._driver.agent_replay_capabilities()

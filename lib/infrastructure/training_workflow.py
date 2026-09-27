@@ -29,8 +29,8 @@ from lib.domain.agent_trajectory import (REPLAY_POLICY_VERSION, ReplayUnavailabl
 from lib.domain.corpus_quality import CorpusNearDuplicateIndex, inspect_corpus, summarize_corpus_sources
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_candidate
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
-from lib.domain.workflow_scale import (MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE,
-                                      PLAN_BATCH_SIZE, validate_node_models)
+from lib.domain.workflow_creation import validate_creation
+from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
 from lib.infrastructure.workflow_candidates import prepare_generation_rows
@@ -167,24 +167,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                evaluation_sources=(), evaluation_source_names=None,
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
                agent_replay_mode="configured"):
-    targets = list(dict.fromkeys(targets))
-    if not targets or any(t not in TARGETS for t in targets):
-        raise ValueError("请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话")
-    if any(type(value) is not int for value in (max_units, chunk_chars, tasks)) or not 1 <= max_units <= MAX_CANDIDATES or not 200 <= chunk_chars <= 20000 or not 1 <= tasks <= MAX_CANDIDATES:
-        raise ValueError("处理上限/分块大小/任务数超出允许范围")
-    if sample_count is not None and (type(sample_count) is not int or not 1 <= sample_count <= MAX_CANDIDATES):
-        raise ValueError("invalid_sample_count")
-    if type(concurrency) is not int or not 1 <= concurrency <= MAX_CONCURRENCY:
-        raise ValueError("invalid_workflow_concurrency")
-    if type(batch_size) is not int or not 1 <= batch_size <= MAX_BATCH_SIZE:
-        raise ValueError("invalid_workflow_batch_size")
-    node_models = validate_node_models(node_models)
-    if type(conversation_turns) is not int or not 2 <= conversation_turns <= 8:
-        raise ValueError("多轮对话轮次必须为 2 到 8")
-    if not isinstance(brief, str) or len(brief) > 20000:
-        raise ValueError("需求必须是最多 20000 字符的文本")
-    if brief and text_issue(brief):
-        raise ValueError("需求包含空文本、损坏编码或疑似密钥")
+    targets, node_models = validate_creation(
+        targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
+        sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
+        node_models=node_models, conversation_turns=conversation_turns, brief=brief)
     files = [Path(p).resolve(strict=True) for p in sources]
     if not files and not brief.strip():
         raise ValueError("请上传来源文件或填写开放性需求")
