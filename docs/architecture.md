@@ -203,3 +203,6 @@ Replay badges require an identified supported replay method as well as matched r
 
 
 Workflow creation rules now live in `lib/domain/workflow_creation.py`. The application validates and normalizes targets, capacity, conversation length, brief text, and node model bindings before calling its driver. The filesystem adapter uses the same rules for direct engine callers. File checks and snapshots remain adapter responsibilities. This does not complete the workflow engine migration.
+
+
+Arithmetic-only workflows prepare fallback brief inputs and arithmetic seeds through verified row checkpoints. They no longer materialize either full list. A 50,000-row offline check covers stable first/last IDs, ordered iteration, and reuse on a second attempt. Python allocations during preparation stay below 4 MiB in that check. This excludes process RSS, native allocations, full generation, and export quality. The arithmetic generator still uses its existing bounded template families.

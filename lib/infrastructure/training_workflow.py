@@ -1101,9 +1101,13 @@ class Workflow:
                 else:
                     units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
                 if "gsm8k" in selected_targets and not units:
-                    units = [{"id": digest([self.recipe["brief"], "gsm8k", i]), "source_id": digest(self.recipe["brief"]),
-                              "kind": "brief", "text": self.recipe["brief"], "status": "ready"}
-                             for i in range(self.recipe["tasks"])]
+                    brief = self.recipe["brief"]
+                    source_id = digest(brief)
+                    units = row_checkpoint(
+                        self.path / "checkpoints" / "ingest" / "math-inputs.json",
+                        lambda: ({"id": digest([brief, "gsm8k", i]), "source_id": source_id,
+                                  "kind": "brief", "text": brief, "status": "ready"}
+                                 for i in range(self.recipe["tasks"])), self.check_cancel)
                 eligible_count = sum(u["status"] == "ready" for u in units)
                 eligible = (units.ready(eligible_count, self.recipe["max_units"]) if isinstance(units, WorkflowRows)
                             else [u for u in units if u["status"] == "ready"])
@@ -1158,9 +1162,13 @@ class Workflow:
 
                 if "gsm8k" in selected_targets:
                     seed_base = self.recipe["brief"] or canonical(self.recipe["sources"])
-                    items = [{"id": digest([seed_base, "gsm8k", index]),
-                              "source_id": digest(seed_base), "status": "ready"}
-                             for index in range(min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"]))]
+                    source_id = digest(seed_base)
+                    count = min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"])
+                    items = row_checkpoint(
+                        self.path / "checkpoints" / "gsm8k" / "math-seeds.json",
+                        lambda: ({"id": digest([seed_base, "gsm8k", index]),
+                                  "source_id": source_id, "status": "ready"}
+                                 for index in range(count)), self.check_cancel)
                     collections["gsm8k"] = self.stage_items("gsm8k", items, self.gsm8k)
                 else:
                     collections["gsm8k"] = []

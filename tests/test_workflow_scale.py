@@ -293,3 +293,49 @@ def test_preference_rescores_chosen_answer_when_its_node_uses_another_reviewer(t
     assert grades == ["alternative_judge", "chosen_judge"]
     assert row["status"] == "eligible" and row["preference"]["chosen"]["correctness"] == 4
     assert sample["judge"]["correctness"] == 5
+
+
+def test_fifty_thousand_math_inputs_and_seeds_stay_disk_backed(tmp_path, monkeypatch):
+    import tracemalloc
+    from lib.infrastructure import training_workflow as engine
+    from lib.infrastructure.workflow_rows import WorkflowRows
+    run_id = engine.create_run(tmp_path, brief='Arithmetic practice', targets=['gsm8k'],
+                               tasks=50000, sample_count=50000, max_units=50000)
+    run = engine.Workflow(tmp_path, run_id, tmp_path)
+    original = run.stage_items
+    seen = []
+    def stage_items(stage, items, action, **options):
+        if stage != 'gsm8k':
+            return original(stage, items, action, **options)
+        assert isinstance(items, WorkflowRows)
+        assert len(items) == 50000
+        first = last = None
+        count = 0
+        for row in items:
+            first = row if first is None else first
+            last = row
+            count += 1
+        assert count == 50000
+        assert first['id'] == engine.digest(['Arithmetic practice', 'gsm8k', 0])
+        assert last['id'] == engine.digest(['Arithmetic practice', 'gsm8k', 49999])
+        seen.append(count)
+        raise ValueError('fixture_stop_before_math_generation')
+    monkeypatch.setattr(run, 'stage_items', stage_items)
+    tracemalloc.start()
+    try:
+        state = run.execute()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert state['error'] == 'fixture_stop_before_math_generation'
+    assert seen == [50000]
+    assert state['input_summary']['ready'] == 50000
+    assert peak < 4 * 1024 * 1024
+    input_checkpoint = run.path / 'checkpoints' / 'ingest' / 'math-inputs.json'
+    seed_checkpoint = run.path / 'checkpoints' / 'gsm8k' / 'math-seeds.json'
+    assert engine.read_json(input_checkpoint)['data']['count'] == 50000
+    assert engine.read_json(seed_checkpoint)['data']['count'] == 50000
+    # A second attempt verifies and reuses both saved row sets.
+    state = run.execute(resume_run=True)
+    assert state['error'] == 'fixture_stop_before_math_generation'
+    assert seen == [50000, 50000]
