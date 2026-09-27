@@ -1081,6 +1081,8 @@ class Workflow:
             self.state.pop("error", None)
             self.save()
             try:
+                # Read under the run lock: construction may precede execution.
+                self.recipe = read_json(self.path / "recipe.json")
                 if digest(self.recipe) != self.state["recipe_hash"] or self.recipe["version"] not in SUPPORTED_RECIPE_VERSIONS:
                     raise ValueError("recipe_changed_create_new_run")
                 current_prompts = prompt_versions()

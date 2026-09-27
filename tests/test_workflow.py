@@ -404,3 +404,28 @@ def test_unversioned_math_recipe_keeps_legacy_generator_on_execution(tmp_path):
     sample = build_gsm8k(recipe["sources"][0]["name"], int(record["id"][:8], 16), version=1)
     assert record["question"] == sample["question"] and record["answer"] == sample["answer"]
     assert record["generator_version"] == 1
+
+
+def test_recipe_changed_after_executor_construction_is_rejected_before_calls(tmp_path):
+    from lib.infrastructure.training_workflow import atomic_json
+    out, rid, _ = make_run(tmp_path, targets=['sft'])
+    generator, judge = Generator(), Judge()
+    workflow = Workflow(out, rid, tmp_path, generator=generator, judge=judge)
+    recipe = read_json(workflow.path / 'recipe.json')
+    recipe['sample_count'] = 50000
+    atomic_json(workflow.path / 'recipe.json', recipe)
+    state = workflow.execute()
+    assert state['status'] == 'failed'
+    assert state['error'] == 'recipe_changed_create_new_run'
+    assert not generator.calls
+    assert not (workflow.path / 'input_records.json').exists()
+
+
+def test_unchanged_recipe_execution_uses_locked_disk_snapshot(tmp_path):
+    out, rid, _ = make_run(tmp_path, targets=['cpt'])
+    workflow = Workflow(out, rid, tmp_path)
+    workflow.recipe['targets'] = ['sft']
+    state = workflow.execute()
+    assert state['status'] == 'completed'
+    assert workflow.recipe['targets'] == ['cpt']
+    assert (workflow.path / 'artifacts' / 'cpt.jsonl').exists()
