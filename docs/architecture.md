@@ -151,7 +151,7 @@ AI feedback remains bound to its original responses. Human review can approve, r
 
 ### Large-run setup and source parsing
 
-Candidate counts of 5,000 or more open the processing settings automatically. Setup nodes display separate generation and review model roles; selecting a node opens its existing configuration panel. The canvas starts at actual size and locates the selected node, preserving readable text in narrow panels. Fit remains an explicit full-graph overview. Live nodes continue to show recorded progress instead of model labels. These labels do not change model routing or the immutable run recipe.
+Candidate counts of 5,000 or more open the processing settings automatically. Setup nodes display separate generation and review model roles; selecting a node opens its existing configuration panel. The canvas initially fits the graph within its panel and locates the selected node. The fit adapts when the panel resizes. Manual zoom or actual-size selection is retained across progress and selection refreshes. Graph changes start a new fit. The minimum zoom remains 35%, so very large graphs still require panning or node navigation. Live nodes continue to show recorded progress instead of model labels. These labels do not change model routing or the immutable run recipe.
 
 JSONL source parsing reads physical lines incrementally, preserving blank-line offsets and quarantining malformed records. It checks cancellation before the first line and every 100 lines. New source checkpoints store normalized rows in JSONL with a small count and SHA-256 manifest. A stopped write publishes no complete checkpoint. Restoring a checkpoint verifies both its metadata and row file. Existing aggregate checkpoints retain their original data and hash validation.
 
