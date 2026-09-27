@@ -1364,6 +1364,7 @@ ZH_EN.update({
     "未附算术校验证据": "Arithmetic evidence not included",
     "候选回答片段": "Candidate section",
     "未附重放校验记录；调用结果按来源原文展示。": "No replay verification record is included. Tool results are shown as recorded in the source.",
+    "重放方式未注明或不受支持；调用 ID 不代表已完成验证。": "The replay method is missing or unsupported. Call IDs alone do not establish verification.",
     "查看重放与剪枝记录": "View replay and pruning records",
     "记录描述受限工具核对，不证明来源或快照的外部真实性。": "These records describe bounded tool checks. They do not establish the external authenticity of the source or snapshot.",
     "当前片段调用证据": "Tool evidence for this section",

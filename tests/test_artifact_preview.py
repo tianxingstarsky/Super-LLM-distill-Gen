@@ -31,6 +31,19 @@ def test_agent_without_replay_metadata_does_not_imply_verification():
     assert '未附重放校验记录' in markup
 
 
+def test_call_ids_without_supported_method_do_not_mark_trace_verified():
+    from lib.presentation.streamlit.i18n import translate_markup
+    messages=[{'role':'assistant','tool_calls':[{'id':'x','function':{'name':'calculator'}}]},
+              {'role':'tool','tool_call_id':'x','content':'4'}]
+    for method in (None, 'unknown_runner', {}, []):
+        markup=render_training_sample('agent',{'messages':messages,
+            'verification':{'method':method,'verified_call_ids':['x']}})
+        assert '重放方式未注明或不受支持' in markup
+        assert 'data-failed="false" data-verified="true"' not in markup
+        assert '本地重放已验证' not in markup
+        assert 'The replay method is missing or unsupported.' in translate_markup(markup)
+
+
 def test_direct_rlaif_renderer_does_not_silently_discard_later_candidates():
     row={'responses':[{'response':[{'role':'assistant','content':f'ANSWER_{i}_END'}]} for i in range(6)]}
     markup=render_training_sample('rlaif',row)
@@ -296,11 +309,11 @@ def test_parallel_calls_report_missing_results_and_match_anthropic_ids():
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "b", "content": "B"}]},
     ]
     preview = render_training_sample("agent", {"messages": messages,
-                    "verification": {"verified_call_ids": ["a", "b"]}})
+                    "verification": {"method":"bounded_local_replay", "verified_call_ids": ["a", "b"]}})
     assert "部分调用缺少返回" in preview and 'data-failed="false" data-verified="true"' not in preview
     messages[1]["content"].append({"type": "tool_result", "tool_use_id": "a", "content": "A"})
     preview = render_training_sample("agent", {"messages": messages,
-                    "verification": {"verified_call_ids": ["a", "b"]}})
+                    "verification": {"method":"bounded_local_replay", "verified_call_ids": ["a", "b"]}})
     assert "1 个步骤" in preview and 'data-failed="false" data-verified="true"' in preview
 
 

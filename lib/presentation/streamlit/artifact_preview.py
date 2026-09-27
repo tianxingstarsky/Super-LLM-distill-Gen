@@ -203,25 +203,29 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
             + '<div class="df-artifact-trace">' + "".join(steps) + '</div></div>')
 
 
+_REPLAY_METHOD_LABELS = {
+    "bounded_arithmetic_replay": "本地算术重放",
+    "snapshot_json_pointer_replay": "JSON 快照重放",
+    "bounded_local_replay": "受限本地重放",
+    "isolated_docker_ledger_replay": "隔离容器重放",
+    "mixed_verified_tool_replay": "混合工具重放",
+}
+
+
 def _agent_verification(row: dict) -> str:
     verification = row.get("verification")
     if not isinstance(verification, dict):
         return '<p class="df-artifact-trace-hint">未附重放校验记录；调用结果按来源原文展示。</p>'
     method = verification.get("method")
-    labels = {
-        "bounded_arithmetic_replay": "本地算术重放",
-        "snapshot_json_pointer_replay": "JSON 快照重放",
-        "bounded_local_replay": "受限本地重放",
-        "isolated_docker_ledger_replay": "隔离容器重放",
-        "mixed_verified_tool_replay": "混合工具重放",
-    }
+    if not isinstance(method, str) or method not in _REPLAY_METHOD_LABELS:
+        return '<p class="df-artifact-trace-hint">重放方式未注明或不受支持；调用 ID 不代表已完成验证。</p>'
     verified = verification.get("verified_call_ids")
     pruned = verification.get("pruned_call_ids")
     turns = verification.get("verified_turns")
     verified_count = len(verified) if isinstance(verified, list) else 0
     pruned_count = len(pruned) if isinstance(pruned, list) else 0
     turn_count = len({turn for turn in turns if type(turn) is int and turn >= 0}) if isinstance(turns, list) else 0
-    facts = [labels.get(method, f"校验记录：{method or '未注明'}"),
+    facts = [_REPLAY_METHOD_LABELS[method],
              f"{verified_count} 次调用已核对", f"{pruned_count} 组重复调用已剪枝"]
     if turn_count:
         facts.append(f"{turn_count} 轮回答已核对")
@@ -320,6 +324,8 @@ def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
             verification = row.get("verification")
             verified_ids = (set(map(str, verification.get("verified_call_ids", [])))
                             if isinstance(verification, dict)
+                            and isinstance(verification.get("method"), str)
+                            and verification["method"] in _REPLAY_METHOD_LABELS
                             and isinstance(verification.get("verified_call_ids"), list) else None)
             body = meta + _agent_verification(row)
             if target == "agent_negative":
