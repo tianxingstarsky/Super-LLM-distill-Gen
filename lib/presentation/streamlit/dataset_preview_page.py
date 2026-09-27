@@ -8,7 +8,7 @@ import streamlit as st
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_targets import TARGETS
-from lib.presentation.streamlit.artifact_preview import render_training_sample
+from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.shared import section_heading
 from lib.presentation.streamlit.i18n import UntranslatedText
 
@@ -103,5 +103,5 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         st.html('<div class="df-data-sample-head"><strong>'
                 + _safe("agent.negative.jsonl" if target == "agent_negative" else f"{target}.jsonl")
                 + '</strong><span>第 ' + str(position) + ' / ' + str(count) + ' 条</span></div>')
-        st.html(render_training_sample(target, rows[0]))
+        render_sample_preview(target, rows[0], key=f"artifact-messages:{workspace_id}:{run_id}:{target}:{position}")
     return True

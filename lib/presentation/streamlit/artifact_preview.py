@@ -145,7 +145,7 @@ def _turn_card(number: int | None, messages: list[dict], *, context: bool = Fals
     )
 
 
-def _dialogue_flow(messages: list[dict]) -> str:
+def _dialogue_flow(messages: list[dict], *, turn_offset: int = 0) -> str:
     """Group a recorded dialogue at actual user-turn boundaries."""
     context: list[dict] = []
     turns: list[list[dict]] = []
@@ -161,9 +161,9 @@ def _dialogue_flow(messages: list[dict]) -> str:
     cards = [_turn_card(None, context, context=True)] if context else []
     if not turns:
         return '<div class="df-artifact-flow">' + "".join(cards) + '</div>'
-    cards.extend(_turn_card(index, turn) for index, turn in enumerate(turns[:3], start=1))
+    cards.extend(_turn_card(index, turn) for index, turn in enumerate(turns[:3], start=turn_offset + 1))
     if len(turns) > 3:
-        later = "".join(_turn_card(index, turn) for index, turn in enumerate(turns[3:], start=4))
+        later = "".join(_turn_card(index, turn) for index, turn in enumerate(turns[3:], start=turn_offset + 4))
         cards.append(f'<details class="df-artifact-more"><summary>展开后续 {len(turns) - 3} 轮对话</summary>'
                      f'<div>{later}</div></details>')
     return ('<div class="df-artifact-flow"><div class="df-artifact-flow-head">'
@@ -172,7 +172,7 @@ def _dialogue_flow(messages: list[dict]) -> str:
 
 
 def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
-                verified_call_ids: set[str] | None = None) -> str:
+                verified_call_ids: set[str] | None = None, step_offset: int = 0) -> str:
     """Keep tool-call and matching result adjacent in a readable step timeline."""
     if not messages:
         return '<div class="df-artifact-muted">暂无轨迹消息</div>'
@@ -228,7 +228,7 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
         card = (
             f'<div class="df-artifact-trace-item" data-kind="{kind}" data-failed="{str(failed).lower()}"'
             f' data-verified="{str(verified).lower()}">'
-            f'<span class="df-artifact-trace-marker">{"!" if failed else len(steps) + 1}</span>'
+            f'<span class="df-artifact-trace-marker">{"!" if failed else len(steps) + 1 + step_offset}</span>'
             + container + f'<{head_tag} class="df-artifact-trace-head">'
             f'<b>{label}</b><strong{title_attributes}>{_safe(title)}</strong>'
             f'<small>{_safe(status)}</small></{head_tag}>'
@@ -280,7 +280,7 @@ _FAILURE_LABELS = {
 }
 
 
-def _failure_banner(row: dict) -> str:
+def _failure_banner(row: dict, *, message_offset: int = 0) -> str:
     reason = str(row.get("failure") or "执行失败")
     message_index = row.get("failure_step")
     location = row.get("source_location")
@@ -288,6 +288,7 @@ def _failure_banner(row: dict) -> str:
         location = json.dumps(location, ensure_ascii=False, default=str)
     details = []
     if type(message_index) is int:
+        message_index += message_offset
         details.append(f"第 {message_index + 1} 条消息（索引 {message_index}）")
     if location:
         details.append(f"来源：{str(location)[:180]}")
@@ -313,7 +314,8 @@ def _text(label: str, value: Any, modifier: str = "") -> str:
     )
 
 
-def render_training_sample(target: str, row: dict) -> str:
+def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
+                           turn_offset: int = 0, step_offset: int = 0) -> str:
     """Project one training record into escaped, comparison-friendly HTML."""
     target = str(target).lower()
     title = _TARGET_TITLES.get(target, "训练样本")
@@ -345,10 +347,11 @@ def render_training_sample(target: str, row: dict) -> str:
                             and isinstance(verification.get("verified_call_ids"), list) else None)
             body = meta + _agent_verification(row)
             if target == "agent_negative":
-                body += _failure_banner(row)
-            body += _trace_flow(messages, failure_step=failure_step, verified_call_ids=verified_ids)
+                body += _failure_banner(row, message_offset=message_offset)
+            body += _trace_flow(messages, failure_step=failure_step, verified_call_ids=verified_ids,
+                                step_offset=step_offset)
         else:
-            body = meta + _dialogue_flow(messages)
+            body = meta + _dialogue_flow(messages, turn_offset=turn_offset)
             if target == "multiturn":
                 reviews = row.get("turn_reviews")
                 if isinstance(reviews, list):

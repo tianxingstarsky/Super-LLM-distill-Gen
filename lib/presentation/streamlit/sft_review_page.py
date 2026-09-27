@@ -11,7 +11,7 @@ import streamlit as st
 from lib.application.sft_review_service import SftReviewApplication
 from lib.presentation.streamlit.shared import review_empty_state
 from lib.render import MESSAGE_CSS
-from lib.presentation.streamlit.artifact_preview import render_training_sample
+from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
 from lib.presentation.streamlit.review_release_controls import render_active_release, render_review_release
 
@@ -140,8 +140,9 @@ def render_sft_review(application: SftReviewApplication, *, legacy_review: Calla
                 st.html('<div class="df-review-record-meta"><span>SFT 对话</span><span>指纹 ' +
                         html.escape(sample_id[:16]) + '</span><span>共 ' +
                         str(len(candidate["messages"])) + ' 条消息</span></div>')
-                st.html('<style>' + MESSAGE_CSS + '</style><div class="df-review-sample">' +
-                        render_training_sample("sft", candidate) + '</div>')
+                st.html('<style>' + MESSAGE_CSS + '</style>')
+                render_sample_preview("sft", candidate, key=f"review-messages:{run_id}:{sample_id}",
+                                      wrapper_class="df-review-sample", widgets=st)
                 evidence = item.get("evidence") or {}
                 if evidence:
                     with st.expander("来源与自动质检证据"):

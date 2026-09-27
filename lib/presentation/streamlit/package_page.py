@@ -11,7 +11,7 @@ from lib import workspace as WS
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
-from lib.presentation.streamlit.artifact_preview import render_training_sample
+from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.package_style import PACKAGE_STYLE
 from lib.presentation.streamlit.shared import page_header
 
@@ -350,8 +350,8 @@ def _render_previews(application: WorkflowApplication, run_id: str, state: dict,
         return
     st.caption(f"{choice[1]} · 展示 {len(rows)} 条，完整记录请下载 ZIP。")
     for index, row in enumerate(rows, start=1):
-        st.html('<div class="df-pack-preview-index">样本 ' + str(index) + '</div>'
-                + render_training_sample(choice[0], row))
+        st.html('<div class="df-pack-preview-index">样本 ' + str(index) + '</div>')
+        render_sample_preview(choice[0], row, key=f"package-messages:{run_id}:{choice[0]}:{index}")
 
 
 def _render_trainer_exports(application, run_id, quality: dict, inventory: dict, manifest: dict,

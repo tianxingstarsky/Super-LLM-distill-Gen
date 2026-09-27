@@ -66,7 +66,7 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
         return
     messages = [message for message in sample.get("messages", []) if isinstance(message, dict)]
     from lib.presentation.streamlit.artifact_preview import (
-        _tool_call_names, _tool_result_user, render_training_sample,
+        _tool_call_names, _tool_result_user,
     )
     tool_calls = sum(len(_tool_call_names(message)) for message in messages)
     reasoning = sum(bool(message.get("reasoning_content") or message.get("reasoning"))
@@ -98,6 +98,7 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
         section_heading("样本内容", "按对话轮次展开上下文与工具调用", "◉")
         st.html('<div class="df-data-sample-head"><strong data-user-content>' + html.escape(source.name if source else "样本")
                 + '</strong><span>第 ' + str(index) + ' / ' + str(len(samples)) + ' 条</span></div>')
-        st.html(render_training_sample(target, sample))
+        from lib.presentation.streamlit.sample_preview import render_sample_preview
+        render_sample_preview(target, sample, key=f"file-messages:{workspace_id}:{source}:{index}")
 
 
