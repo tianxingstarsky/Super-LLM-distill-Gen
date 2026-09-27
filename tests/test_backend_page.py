@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from lib.presentation.streamlit import backend_page
+from streamlit.testing.v1 import AppTest
 
 
 def test_backend_overview_uses_inventory_but_never_renders_masked_key(monkeypatch):
@@ -26,3 +27,77 @@ def test_backend_overview_uses_inventory_but_never_renders_masked_key(monkeypatc
     assert "密钥未配置" in markup
     assert "&lt;private&gt;" in markup
     assert "sk-" not in markup and "3456" not in markup and "<private>" not in markup
+
+
+SCRIPT = '''
+import streamlit as st
+from lib.application.backend_service import BackendApplication
+from lib.presentation.streamlit.backend_page import render_backend_page
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+st.session_state['ui_language']='en'
+install_streamlit_localization()
+class Port:
+    def read_config(self,filename):
+        if filename=='backends.local.yaml':
+            return st.session_state.get('fixture-local',{})
+        return {'backends':{'工作流':{'base_url':'http://127.0.0.1:11434/v1',
+                'models':['执行中'],'api_key_env':'FIXTURE_SECRET'}},
+                'default_backend':'工作流','budget':{'max_total_usd':5}}
+    def env_present(self,name): return False
+    def spent_usd(self): return 1.25
+    def write_local(self,value): st.session_state['fixture-local']=value
+    def probe(self,name,backend):
+        st.session_state['fixture-probed']=name
+        if st.session_state.get('fixture-probe-fail'):
+            raise RuntimeError('PRIVATE_TEST_ERROR')
+        return {'models':['执行中']}
+    def write_budget_reset(self,caller,limit):
+        st.session_state['fixture-budget-reset']=(caller,limit)
+    def audit_budget_reset(self,caller,spent):
+        st.session_state['fixture-budget-audit']=(caller,spent)
+render_backend_page(BackendApplication(Port()))
+'''
+SCRIPT = SCRIPT.encode('ascii','backslashreplace').decode('ascii')
+
+
+def test_service_page_uses_injected_application_and_preserves_user_names():
+    ui = AppTest.from_string(SCRIPT).run()
+    assert not ui.exception
+    markup = ''.join(item.proto.body for item in ui.get('html'))
+    assert '<strong data-user-content>工作流</strong>' in markup
+    assert '<span data-user-content>执行中</span>' in markup
+    assert 'Service addresses and credentials' in markup
+    assert 'fixture-probed' not in ui.session_state
+    next(button for button in ui.button if button.label=='Test connection').click().run()
+    assert ui.session_state['fixture-probed']=='工作流'
+    assert not ui.exception
+
+
+def test_connection_errors_do_not_render_exception_details():
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.session_state['fixture-probe-fail']=True
+    next(button for button in ui.button if button.label=='Test connection').click().run()
+    assert not ui.exception
+    assert 'PRIVATE_TEST_ERROR' not in ''.join(item.value for item in ui.error)
+    assert 'RuntimeError' in ui.error[0].value
+
+
+def test_service_page_budget_reset_uses_current_application_budget():
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.checkbox(key='budget-reset-confirm').check().run()
+    # Simulate an external budget edit after the overview was rendered.
+    ui.session_state['fixture-local']={'budget':{'max_total_usd':9}}
+    next(button for button in ui.button if button.label=='Reset budget').click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-budget-reset']==('console',9.0)
+    assert ui.session_state['fixture-budget-audit']==('console',1.25)
+
+
+def test_service_registration_saves_through_application_port():
+    ui = AppTest.from_string(SCRIPT).run()
+    next(button for button in ui.button if button.label=='Save endpoint').click().run()
+    assert not ui.exception
+    saved = ui.session_state['fixture-local']['backends']['local_gpu']
+    assert saved['models']==['qwen2.5:7b-instruct']
+    assert saved['api_key_env']=='OPENAI_API_KEY'
+    assert 'api_key' not in saved

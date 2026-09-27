@@ -78,7 +78,9 @@ class BackendApplication:
         local["model_roles"] = roles
         self._port.write_local(local)
 
-    def reset_budget(self, caller: str, limit: float) -> float:
+    def reset_budget(self, caller: str, limit: float | None = None) -> float:
+        if limit is None:
+            limit = float((self.list_backends().get("budget") or {}).get("max_total_usd") or 0)
         spent = self._port.spent_usd()
         self._port.write_budget_reset(caller, limit)
         self._port.audit_budget_reset(caller, spent)

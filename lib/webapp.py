@@ -403,9 +403,10 @@ def page_monitor(show_title=True):
 
 
 def page_backends():
+    from lib.bootstrap.backends import backend_application
     from lib.presentation.streamlit.backend_page import render_backend_page
 
-    render_backend_page()
+    render_backend_page(backend_application(ROOT))
 
 
 def page_gates(show_title=True):

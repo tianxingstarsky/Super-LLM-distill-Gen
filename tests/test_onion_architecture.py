@@ -36,6 +36,14 @@ def test_application_depends_only_inward_and_on_ports():
         assert "streamlit" not in dependencies, path.name
 
 
+def test_backend_page_uses_injected_application_without_legacy_composition():
+    dependencies = imported_modules(ROOT / "lib/presentation/streamlit/backend_page.py")
+    assert "lib.application.backend_service" in dependencies
+    assert "lib" not in dependencies
+    assert not any(name.startswith(("lib.backend_manager", "lib.bootstrap", "lib.infrastructure"))
+                   for name in dependencies)
+
+
 def test_streamlit_workflow_page_uses_application_contract_not_engine_adapter():
     path = ROOT / "lib/presentation/streamlit/workflow_page.py"
     dependencies = imported_modules(path)
