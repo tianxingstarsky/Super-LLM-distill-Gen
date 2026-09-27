@@ -1,6 +1,12 @@
 """Styles scoped to a rendered training-record preview."""
 
 ARTIFACT_PREVIEW_STYLE = """<style>
+.df-artifact-preview .df-artifact-trace-hint { margin:0 0 13px; padding:9px 12px; border:1px solid #DCE9F8; border-radius:9px; background:#F3F8FF; color:#607A99; font-size:11px; line-height:1.6; }
+.df-artifact-preview details.df-artifact-trace-card > summary { cursor:pointer; list-style:none; }
+.df-artifact-preview details.df-artifact-trace-card > summary::-webkit-details-marker { display:none; }
+.df-artifact-preview details.df-artifact-trace-card > summary::after { content:'＋'; flex:0 0 auto; color:#4380BC; font-weight:700; }
+.df-artifact-preview details.df-artifact-trace-card[open] > summary::after { content:'−'; }
+.df-artifact-preview details.df-artifact-trace-card > summary:focus-visible { outline:2px solid #2878D8; outline-offset:-3px; border-radius:9px; }
 .df-artifact-preview .df-artifact-flow { display:grid; gap:0; min-width:0; }
 .df-artifact-preview .df-artifact-flow-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:1px 0 12px; }
 .df-artifact-preview .df-artifact-flow-head strong { color:#183251; font-size:12px; }

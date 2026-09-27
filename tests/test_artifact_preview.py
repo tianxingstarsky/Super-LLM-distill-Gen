@@ -300,3 +300,57 @@ def test_agent_preview_flags_a_missing_result_without_inventing_one():
     assert "未记录工具返回" in html
     assert "调用与返回" not in html
     assert html.count("lookup") == 2  # step heading and call body
+
+
+def _long_trace():
+    messages = [{"role": "user", "content": "TASK_START"}]
+    for index in range(8):
+        messages.extend([
+            {"role": "assistant", "tool_calls": [{"id": f"call-{index}",
+             "function": {"name": "工作流", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": f"call-{index}", "content": f"OBSERVATION_{index}"},
+        ])
+    messages.append({"role": "assistant", "content": "FINAL_ANSWER"})
+    return messages
+
+
+def test_long_trace_collapses_middle_but_keeps_failure_and_final_open():
+    import re
+    from copy import deepcopy
+    messages = _long_trace()
+    original = deepcopy(messages)
+    preview = render_training_sample('agent_negative', {
+        'messages': messages, 'failure_step': 10, 'failure': 'recorded_tool_error'})
+    states = re.findall(r'<details class="df-artifact-trace-card"( open)?>', preview)
+    assert len(states) == 10
+    assert [i for i, state in enumerate(states) if state] == [0, 5, 9]
+    assert preview.count(' data-failed="true" data-verified=') == 1
+    for index in range(8):
+        assert preview.count(f'OBSERVATION_{index}') == 1
+    assert 'FINAL_ANSWER' in preview and messages == original
+
+
+def test_long_trace_controls_translate_but_tool_names_do_not():
+    from lib.presentation.streamlit.i18n import translate_markup
+    preview = translate_markup(render_training_sample('agent', {'messages': _long_trace()}), 'en')
+    assert 'Middle steps are collapsed in long traces.' in preview
+    assert '长轨迹默认' not in preview
+    assert '<strong data-user-content>工作流</strong>' in preview
+    assert '<summary class="df-artifact-trace-head">' in preview
+
+
+def test_boolean_failure_index_is_not_a_message_location():
+    preview = render_training_sample('agent_negative', {
+        'messages': _long_trace(), 'failure_step': True, 'failure': 'recorded_tool_error'})
+    assert ' data-failed="true" data-verified=' not in preview
+    assert '第 2 条消息（索引 True）' not in preview
+
+
+def test_all_known_failure_titles_translate_in_english():
+    from lib.presentation.streamlit.artifact_preview import _FAILURE_LABELS
+    from lib.presentation.streamlit.i18n import translate_markup
+    for reason, title in _FAILURE_LABELS.items():
+        preview = translate_markup(render_training_sample('agent_negative', {
+            'messages': [], 'failure': reason}), 'en')
+        assert title not in preview
+        assert reason in preview

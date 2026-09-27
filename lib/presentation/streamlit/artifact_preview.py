@@ -177,6 +177,7 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
     if not messages:
         return '<div class="df-artifact-muted">暂无轨迹消息</div>'
     steps = []
+    compact = len(messages) > 12
     index = 0
     while index < len(messages):
         message = messages[index]
@@ -203,7 +204,7 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
             kind, label, title = "tool", "工具返回", "未配对的结果"
         else:
             kind, label, title = "context", "运行上下文", str(message.get("role") or "其他消息")
-        failed = isinstance(failure_step, int) and index <= failure_step < end
+        failed = type(failure_step) is int and index <= failure_step < end
         verified = bool(call_ids and verified_call_ids
                         and set(call_ids).issubset(returned_ids)
                         and all(call_id in verified_call_ids for call_id in call_ids) and not failed)
@@ -219,21 +220,28 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
             status = f"调用与返回 · {end - index} 条消息"
         else:
             status = f"{end - index} 条消息"
+        expanded = failed or index == 0 or (end == len(messages) and kind == "answer")
+        container = ('<details class="df-artifact-trace-card"' + (' open' if expanded else '') + '>'
+                     if compact else '<section class="df-artifact-trace-card">')
+        head_tag = "summary" if compact else "div"
+        title_attributes = ' data-user-content' if names else ''
         card = (
             f'<div class="df-artifact-trace-item" data-kind="{kind}" data-failed="{str(failed).lower()}"'
             f' data-verified="{str(verified).lower()}">'
             f'<span class="df-artifact-trace-marker">{"!" if failed else len(steps) + 1}</span>'
-            '<section class="df-artifact-trace-card"><div class="df-artifact-trace-head">'
-            f'<b>{label}</b><strong>{_safe(title)}</strong>'
-            f'<small>{_safe(status)}</small></div>'
+            + container + f'<{head_tag} class="df-artifact-trace-head">'
+            f'<b>{label}</b><strong{title_attributes}>{_safe(title)}</strong>'
+            f'<small>{_safe(status)}</small></{head_tag}>'
             '<div class="df-artifact-trace-body"><div class="bubbles">'
-            + render_message_sequence(messages[index:end]) + '</div></div></section></div>'
+            + render_message_sequence(messages[index:end]) + '</div></div>'
+            + ('</details>' if compact else '</section>') + '</div>'
         )
         steps.append(card)
         index = end
     return ('<div class="df-artifact-flow"><div class="df-artifact-flow-head">'
             f'<strong>Agent 执行轨迹</strong><span>{len(steps)} 个步骤 · {len(messages)} 条消息</span></div>'
-            '<div class="df-artifact-trace">' + "".join(steps) + '</div></div>')
+            + ('<p class="df-artifact-trace-hint">长轨迹默认收起中间步骤；失败点与最终回答保持展开。</p>' if compact else '')
+            + '<div class="df-artifact-trace">' + "".join(steps) + '</div></div>')
 
 
 def _agent_verification(row: dict) -> str:
@@ -279,7 +287,7 @@ def _failure_banner(row: dict) -> str:
     if isinstance(location, (list, dict)):
         location = json.dumps(location, ensure_ascii=False, default=str)
     details = []
-    if isinstance(message_index, int):
+    if type(message_index) is int:
         details.append(f"第 {message_index + 1} 条消息（索引 {message_index}）")
     if location:
         details.append(f"来源：{str(location)[:180]}")
