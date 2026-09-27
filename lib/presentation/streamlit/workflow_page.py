@@ -506,6 +506,40 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
             st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
+    model_issues = []
+    agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
+    if targets:
+        selection_key = f"workflow-setup-node:{ws}"
+        selected_node = st.session_state.get(selection_key, "sft" if "sft" in graph_nodes else "ingest")
+        if selected_node not in graph_nodes:
+            selected_node = graph_nodes[0]
+        st.session_state[selection_key] = selected_node
+        bindings, endpoints = node_bindings(model_application, graph_nodes, source_mode, ws)
+        model_issues = missing_bindings(graph_nodes, source_mode, bindings, endpoints)
+        if model_issues:
+            st.warning("部分节点尚未选择可用模型，请点击这些节点完成配置。")
+            pending_nodes = list(dict.fromkeys(node for node, _ in model_issues))
+            next_node = next((node for node in graph_nodes[graph_nodes.index(selected_node) + 1:]
+                              if node in pending_nodes), pending_nodes[0])
+            st.button("配置下一个待完善节点", on_click=_select_setup_node,
+                      args=(selection_key, next_node), key=f"workflow-next-config:{ws}")
+            st.caption(" · ".join(GRAPH_LABELS[node] for node in pending_nodes))
+        canvas_column, node_column = st.columns([2.25, 1], gap="medium")
+        with canvas_column, st.container(border=True):
+            section_heading("工作流节点配置", "直接点击节点，在右侧选择该步骤的模型。", "◇")
+            render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
+                                      snapshot_available_bindings(graph_nodes, source_mode, bindings, endpoints),
+                                      language=st.session_state.get("ui_language", "zh")),
+                          selection_key, key=f"setup-canvas:{ws}")
+        with node_column, st.container(border=True):
+            section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
+            render_node_models(selected_node, source_mode, ws, bindings, endpoints)
+            if selected_node == "agent":
+                render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
+            if selected_node == "ingest":
+                st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
+            elif selected_node == "package":
+                st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
     with st.container(key=f"workbench-create:{ws}"):
         source_col, setup_col = st.columns([1.12, 1], gap="large")
         with source_col, st.container(border=True, key="workbench-source-panel"):
@@ -536,24 +570,28 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
             default_run_name = ("Automatic data generation"
                                 if st.session_state.get("ui_language") == "en" else "自动数据生成")
-            name = st.text_input("运行名称", value=default_run_name)
-            sample_count = st.number_input("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100,
+            name = st.text_input("运行名称", value=default_run_name, key=f"workflow-name:{ws}")
+            sample_count = st.number_input("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100, key=f"workflow-count:{ws}",
                                            help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
             tasks = sample_count
-            conversation_turns = (st.number_input("每段对话轮数", 2, 8, 3,
+            conversation_turns = (st.number_input("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
                                                   help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
                                   if "multiturn" in targets else 3)
             with st.expander("处理与批次设置", expanded=sample_count >= 5000):
                 st.caption("支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。")
                 a, b = st.columns(2, gap="small")
-                concurrency = a.number_input("并发请求上限", 1, MAX_CONCURRENCY, 4,
+                concurrency = a.number_input("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
                                               help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
-                batch_size = b.number_input("每批候选数", 1, MAX_BATCH_SIZE, 100,
+                batch_size = b.number_input("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
                                              help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
-                maximum = a.number_input("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES,
+                maximum = a.number_input("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
                                           help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
-                chunk_chars = (b.number_input("文档分块目标字符数", 200, 20000, 2000)
+                chunk_chars = (b.number_input("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
                                if source_mode == "文档资料" else 2000)
+                batch_summary, request_summary = st.columns(2, gap="small")
+                batch_summary.metric("每个生成目标的候选批次", f"{(int(sample_count) + int(batch_size) - 1) // int(batch_size):,}")
+                request_summary.metric("同时处理的样本上限", f"{min(int(concurrency), int(batch_size)):,}")
+                st.caption("批次数按候选规模估算；不代表模型调用次数或合格数量。CPT 与导入轨迹按实际来源处理。")
             evaluation_uploads = []
             if "cpt" in targets:
                 with st.expander("预训练评测集去污染（可选）"):
@@ -562,40 +600,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                     evaluation_uploads = st.file_uploader(
                         "上传评测集参照", type=["json", "jsonl"], accept_multiple_files=True,
                         max_upload_size=5, key=f"workflow-evaluations:{ws}")
-        model_issues = []
-        agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
-        if targets:
-            selection_key = f"workflow-setup-node:{ws}"
-            selected_node = st.session_state.get(selection_key, "sft" if "sft" in graph_nodes else "ingest")
-            if selected_node not in graph_nodes:
-                selected_node = graph_nodes[0]
-            st.session_state[selection_key] = selected_node
-            bindings, endpoints = node_bindings(model_application, graph_nodes, source_mode, ws)
-            model_issues = missing_bindings(graph_nodes, source_mode, bindings, endpoints)
-            if model_issues:
-                st.warning("部分节点尚未选择可用模型，请点击这些节点完成配置。")
-                pending_nodes = list(dict.fromkeys(node for node, _ in model_issues))
-                next_node = next((node for node in graph_nodes[graph_nodes.index(selected_node) + 1:]
-                                  if node in pending_nodes), pending_nodes[0])
-                st.button("配置下一个待完善节点", on_click=_select_setup_node,
-                          args=(selection_key, next_node), key=f"workflow-next-config:{ws}")
-                st.caption(" · ".join(GRAPH_LABELS[node] for node in pending_nodes))
-            canvas_column, node_column = st.columns([2.25, 1], gap="medium")
-            with canvas_column, st.container(border=True):
-                section_heading("工作流节点配置", "直接点击节点，在右侧选择该步骤的模型。", "◇")
-                render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
-                                          snapshot_available_bindings(graph_nodes, source_mode, bindings, endpoints),
-                                          language=st.session_state.get("ui_language", "zh")),
-                              selection_key, key=f"setup-canvas:{ws}")
-            with node_column, st.container(border=True):
-                section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
-                render_node_models(selected_node, source_mode, ws, bindings, endpoints)
-                if selected_node == "agent":
-                    render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
-                if selected_node == "ingest":
-                    st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
-                elif selected_node == "package":
-                    st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
         with st.container(border=True, key="workbench-submit"):
             agent_mode = st.session_state.get(f"workflow-agent-mode:{ws}", "local")
             agent_unavailable = ("agent" in targets and agent_mode == "isolated"
