@@ -6,6 +6,15 @@ import json
 import re
 from typing import Any
 
+from lib.domain.conversation_structure import (
+    tool_result_user as _tool_result_user,
+    tool_calls as _tool_calls,
+    tool_call_names as _tool_call_names,
+    tool_call_ids as _tool_call_ids,
+    tool_result_ids as _tool_result_ids,
+    trace_ranges, dialogue_ranges,
+)
+
 from lib.render import render_message_sequence as _render_message_sequence
 from lib.presentation.streamlit.artifact_preview_style import ARTIFACT_PREVIEW_STYLE
 
@@ -64,59 +73,6 @@ def _conversation(title: str, value: Any) -> str:
     )
 
 
-def _tool_result_user(message: dict) -> bool:
-    """Anthropic tool results are carried in a user-role content block."""
-    return (message.get("role") == "user" and isinstance(message.get("content"), list)
-            and bool(message["content"])
-            and all(isinstance(block, dict) and block.get("type") == "tool_result"
-                    for block in message["content"]))
-
-
-def _tool_calls(message: dict) -> list[dict]:
-    calls = message.get("toolCalls") or message.get("tool_calls") or []
-    if isinstance(calls, str):
-        try:
-            calls = json.loads(calls)
-        except ValueError:
-            calls = []
-    if isinstance(calls, dict):
-        calls = [calls]
-    result = [call for call in calls if isinstance(call, dict)] if isinstance(calls, list) else []
-    content = message.get("content")
-    if isinstance(content, list):
-        result.extend(block for block in content
-                      if isinstance(block, dict) and block.get("type") in {"tool_use", "tool_call"})
-    return result
-
-
-def _tool_call_names(message: dict) -> list[str]:
-    names = []
-    for call in _tool_calls(message):
-        function = call.get("function") if isinstance(call.get("function"), dict) else call
-        name = function.get("name") or call.get("toolName")
-        if name:
-            names.append(str(name))
-    return names
-
-
-def _tool_call_ids(message: dict) -> list[str]:
-    return [str(call_id) for call in _tool_calls(message)
-            if (call_id := call.get("id") or call.get("toolCallId") or call.get("tool_call_id"))]
-
-
-def _tool_result_ids(message: dict) -> list[str]:
-    if message.get("role") == "tool":
-        call_id = message.get("tool_call_id") or message.get("toolCallId")
-        return [str(call_id)] if call_id else []
-    content = message.get("content")
-    if message.get("role") == "user" and isinstance(content, list) and content:
-        # Mixed text/result messages remain separate so user input stays visible.
-        if all(isinstance(block, dict) and block.get("type") == "tool_result"
-               and block.get("tool_use_id") for block in content):
-            return [str(block["tool_use_id"]) for block in content]
-    return []
-
-
 def _turn_card(number: int | None, messages: list[dict], *, context: bool = False) -> str:
     heading = "上下文指令" if context else f"第 {number:02d} 轮对话"
     marker = "•" if context else f"{number:02d}"
@@ -149,13 +105,12 @@ def _dialogue_flow(messages: list[dict], *, turn_offset: int = 0) -> str:
     """Group a recorded dialogue at actual user-turn boundaries."""
     context: list[dict] = []
     turns: list[list[dict]] = []
-    for message in messages:
-        if message.get("role") == "user" and not _tool_result_user(message):
-            turns.append([message])
-        elif turns:
-            turns[-1].append(message)
+    for start, end in dialogue_ranges(messages):
+        group = messages[start:end]
+        if group[0].get("role") == "user" and not _tool_result_user(group[0]):
+            turns.append(group)
         else:
-            context.append(message)
+            context.extend(group)
     if not messages:
         return '<div class="df-artifact-muted">暂无对话消息</div>'
     cards = [_turn_card(None, context, context=True)] if context else []
@@ -178,22 +133,13 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
         return '<div class="df-artifact-muted">暂无轨迹消息</div>'
     steps = []
     compact = len(messages) > 12
-    index = 0
-    while index < len(messages):
+    for index, end in trace_ranges(messages):
         message = messages[index]
         names = _tool_call_names(message) if message.get("role") == "assistant" else []
         call_ids = _tool_call_ids(message) if names else []
-        returned_ids: set[str] = set()
-        end = index + 1
+        returned_ids = {call_id for result in messages[index + 1:end]
+                        for call_id in _tool_result_ids(result)}
         if names:
-            while end < len(messages):
-                result_ids = _tool_result_ids(messages[end])
-                if (not result_ids or len(result_ids) != len(set(result_ids))
-                        or not set(result_ids).issubset(call_ids)
-                        or returned_ids.intersection(result_ids)):
-                    break
-                returned_ids.update(result_ids)
-                end += 1
             kind, label = "tool", "工具调用"
             title = "、".join(dict.fromkeys(names))
         elif message.get("role") == "user" and not _tool_result_user(message):
@@ -237,7 +183,6 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
             + ('</details>' if compact else '</section>') + '</div>'
         )
         steps.append(card)
-        index = end
     return ('<div class="df-artifact-flow"><div class="df-artifact-flow-head">'
             f'<strong>Agent 执行轨迹</strong><span>{len(steps)} 个步骤 · {len(messages)} 条消息</span></div>'
             + ('<p class="df-artifact-trace-hint">长轨迹默认收起中间步骤；失败点与最终回答保持展开。</p>' if compact else '')
