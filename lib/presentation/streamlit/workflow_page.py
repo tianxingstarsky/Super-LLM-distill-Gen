@@ -436,6 +436,37 @@ def render_run(application, run_id, begin, *, embedded=False):
             st.json(recipe)
 
 
+def _save_draft_value(workspace, key):
+    draft_key = f"workflow-form-draft:{workspace}"
+    previous = st.session_state.get(draft_key, {})
+    if st.session_state[key] is None:
+        st.session_state[key] = previous[key]
+        return
+    st.session_state[draft_key] = {
+        **previous, key: st.session_state[key]}
+
+
+def _draft_number(label, minimum, maximum, default, *, key, **options):
+    """Keep inputs when Streamlit removes a conditional or off-page widget."""
+    workspace = st.session_state["ws"]
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    if key not in st.session_state:
+        st.session_state[key] = draft.get(key, default)
+    return st.number_input(label, minimum, maximum, value=None, key=key,
+                           on_change=_save_draft_value, args=(workspace, key), **options)
+
+
+def _draft_name(default, workspace):
+    key = f"workflow-name:{workspace}"
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    if key not in st.session_state:
+        st.session_state[key] = draft.get(key, default)
+    if key not in draft:
+        _save_draft_value(workspace, key)
+    return st.text_input("运行名称", value=None, key=key,
+                         on_change=_save_draft_value, args=(workspace, key))
+
+
 def render_workbench(application: WorkflowApplication, begin, model_application):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
@@ -570,23 +601,27 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
             default_run_name = ("Automatic data generation"
                                 if st.session_state.get("ui_language") == "en" else "自动数据生成")
-            name = st.text_input("运行名称", value=default_run_name, key=f"workflow-name:{ws}")
-            sample_count = st.number_input("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100, key=f"workflow-count:{ws}",
+            name = _draft_name(default_run_name, ws)
+            sample_count = _draft_number("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100, key=f"workflow-count:{ws}",
                                            help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
             tasks = sample_count
-            conversation_turns = (st.number_input("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
+            conversation_turns = (_draft_number("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
                                                   help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
                                   if "multiturn" in targets else 3)
             with st.expander("处理与批次设置", expanded=sample_count >= 5000):
                 st.caption("支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。")
                 a, b = st.columns(2, gap="small")
-                concurrency = a.number_input("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
+                with a:
+                    concurrency = _draft_number("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
                                               help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
-                batch_size = b.number_input("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
+                with b:
+                    batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
                                              help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
-                maximum = a.number_input("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
+                with a:
+                    maximum = _draft_number("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
                                           help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
-                chunk_chars = (b.number_input("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
+                with b:
+                    chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
                                if source_mode == "文档资料" else 2000)
                 batch_summary, request_summary = st.columns(2, gap="small")
                 batch_summary.metric("每个生成目标的候选批次", f"{(int(sample_count) + int(batch_size) - 1) // int(batch_size):,}")
