@@ -7,6 +7,7 @@ from lib.infrastructure.workflow_rows import RowSpool, WorkflowRows
 
 
 def prepare_generation_rows(path: Path, units, count, check_cancel):
+    path.parent.mkdir(parents=True, exist_ok=True)
     requested = len(units) if count is None else count
     needs_variants = requested > len(units)
     pending = path.with_name('.' + path.name + '.pending')

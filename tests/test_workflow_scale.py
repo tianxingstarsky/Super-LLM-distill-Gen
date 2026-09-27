@@ -116,6 +116,9 @@ def test_large_planning_is_batched_and_resumes_completed_calls(tmp_path):
     assert calls == [(0, 50), (50, 50), (50, 50), (100, 25)]
     assert len(units) == len({unit["id"] for unit in units}) == 125
     assert run.state["stages"]["ingest"]["done"] == 125
+    assert run.state['stages']['ingest']['cached'] == 50
+    assert run.state['stages']['ingest']['batches_done'] == 3
+    assert run.state['stages']['ingest']['batches_total'] == 3
 
 
 def test_invalid_normalized_plan_batch_is_retried_without_repeating_prior_calls(tmp_path):

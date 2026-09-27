@@ -6,6 +6,8 @@ stage metrics and a hash-verified training bundle. No global output is overwritt
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import deque
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
@@ -32,6 +34,7 @@ from lib.domain.workflow_scale import (MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATC
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
 from lib.infrastructure.workflow_candidates import prepare_generation_rows
+from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -525,22 +528,47 @@ class Workflow:
                 yield unit(index, status="quarantined", reason="invalid_or_incomplete_conversation")
 
     def plan(self):
-        count = min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"])
-        tasks, seen = [], set()
-        metrics = self.state["stages"]["ingest"]
-        metrics.update(status="running", done=0, total=count, phase="planning")
+        self.stage = 'ingest'
+        destination = self.path / "checkpoints" / "ingest" / f"{digest('planned_tasks')}.json"
+        cached = destination.exists()
+        def rows():
+            with closing(PlanningIdentities(self.path / "planning-identities.sqlite3")) as seen:
+                yield from self._plan_rows(seen)
+        planned = row_checkpoint(destination, rows, self.check_cancel)
+        if cached:
+            batches = (len(planned) + PLAN_BATCH_SIZE - 1) // PLAN_BATCH_SIZE
+            self.state['stages']['ingest'].update(status='completed', phase='planning', done=len(planned),
+                total=len(planned), outputs=len(planned), eligible=len(planned), cached=len(planned),
+                batches_done=batches, batches_total=batches, batch_size=PLAN_BATCH_SIZE,
+                concurrency=1, rate_per_minute=None, eta_seconds=None)
+        self.state['stages']['ingest'].update(status='completed', finished_at=now())
+        self.state['stages']['ingest'].pop('error', None)
         self.save()
+        self.event('stage_completed', outputs=len(planned), cached=self.state['stages']['ingest'].get('cached', 0))
+        return planned
+
+    def _plan_rows(self, seen):
+        count = min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"])
+        recent_tasks = deque(maxlen=10)
+        metrics = self.state["stages"]["ingest"]
+        metrics.update(status="running", done=0, total=count, phase="planning", cached=0,
+                       batches_done=0, batches_total=(count + PLAN_BATCH_SIZE - 1) // PLAN_BATCH_SIZE,
+                       batch_size=PLAN_BATCH_SIZE, concurrency=1, rate_per_minute=None, eta_seconds=None)
+        metrics.pop('error', None)
+        self.save()
+        self.event('stage_started')
         for offset in range(0, count, PLAN_BATCH_SIZE):
             size = min(PLAN_BATCH_SIZE, count - offset)
             key = "plan" if count <= PLAN_BATCH_SIZE else ["plan", offset]
             request = {"brief": self.recipe["brief"], "count": size, "offset": offset,
                  "total": count, "batch": offset // PLAN_BATCH_SIZE + 1,
-                 "previous_tasks": tasks[-10:],
+                 "previous_tasks": list(recent_tasks),
                  "instruction": "只规划当前批；利用 batch 和 offset 覆盖不同主题与情境，避免重复之前任务。"}
             modern = self.recipe.get("planning_policy_version", 1) >= 2
             if modern:
                 request.update(training_goals=self.recipe["targets"], max_task_chars=MAX_TASK_CHARS)
                 request["instruction"] += f" 每条任务不超过 {MAX_TASK_CHARS} 字符；围绕 training_goals 规划可独立回答的任务。"
+            cached = (self.path / 'checkpoints' / self.stage / f"{digest(['call', key])}.json").exists()
             data = self.ask(key, "generation", "workflow.plan", request)
             planned = data.get("tasks") if isinstance(data, dict) else None
             issue = task_plan_issue(planned, size, seen) if modern else None
@@ -550,17 +578,17 @@ class Workflow:
             if issue or legacy_invalid:
                 (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
                 raise ValueError("invalid_task_plan" + (f"_{issue}" if issue else ""))
-            tasks.extend(planned)
+            recent_tasks.extend(planned)
             seen.update(task_identity(task) if modern else task.strip() for task in planned)
-            metrics.update(done=len(tasks), outputs=len(tasks), eligible=len(tasks))
+            metrics.update(done=offset + size, outputs=offset + size, eligible=offset + size)
+            metrics['batches_done'] += 1
+            metrics['cached'] += size if cached else 0
             self.save()
-        metrics.update(status="completed", finished_at=now())
-        self.save()
-        return [{"id": digest([self.recipe["brief"], task]), "source_id": digest(self.recipe["brief"]),
-                 "source_name": "开放需求", "location": index + 1,
-                 "source_location": {"brief_task": index + 1},
-                 "kind": "brief", "text": task, "status": "ready", "synthetic": True}
-                for index, task in enumerate(tasks)]
+            for index, task in enumerate(planned, offset):
+                yield {"id": digest([self.recipe["brief"], task]), "source_id": digest(self.recipe["brief"]),
+                       "source_name": "开放需求", "location": index + 1,
+                       "source_location": {"brief_task": index + 1},
+                       "kind": "brief", "text": task, "status": "ready", "synthetic": True}
 
     def judge_answer(self, key, context, message, prompt_id="workflow.jev_score"):
         # A failed schema must not become a permanent successful call checkpoint.
@@ -1076,14 +1104,15 @@ class Workflow:
                 for source in self.recipe["sources"]:
                     if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
                         raise ValueError("source_snapshot_changed")
-                units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
                 selected_targets = set(self.recipe["targets"])
                 planned_targets = selected_targets & ({"cpt", "sft", "cot", "multiturn"} | PREFERENCE_TARGETS)
                 if self.recipe["brief"] and not self.recipe["sources"] and planned_targets:
                     self.stage = "ingest"
-                    units = self.checkpoint("planned_tasks", self.plan)
+                    units = self.plan()
                     self.state["stages"]["ingest"].update(status="completed", done=len(units),
                                                           total=len(units), outputs=len(units), eligible=len(units))
+                else:
+                    units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
                 if "gsm8k" in selected_targets and not units:
                     units = [{"id": digest([self.recipe["brief"], "gsm8k", i]), "source_id": digest(self.recipe["brief"]),
                               "kind": "brief", "text": self.recipe["brief"], "status": "ready"}

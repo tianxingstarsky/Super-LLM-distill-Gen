@@ -313,9 +313,12 @@ def render_run(application, run_id, begin, *, embedded=False):
     if selected_stage not in active_stages:
         selected_status, done, total, percent = "skipped", 0, 0, 0
     selected_label = str(selected_metrics.get("label", selected_stage))
-    if selected_stage == "ingest":
-        passed = int(state.get("input_summary", {}).get("ready", 0) or 0)
-        quarantined = int(state.get("input_summary", {}).get("quarantined", 0) or 0)
+    if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
+        passed, quarantined = done, max(0, total - done)
+        passed_label, quarantined_label = '已规划任务', '待规划任务'
+    elif selected_stage == "ingest":
+        passed = int(state.get("input_summary", {}).get("ready", selected_metrics.get('eligible', 0)) or 0)
+        quarantined = int(state.get("input_summary", {}).get("quarantined", selected_metrics.get('quarantined', 0)) or 0)
         passed_label, quarantined_label = "可处理输入", "隔离输入"
     elif selected_stage == "package":
         target_quality = state.get("quality", {}).get("targets", {})
@@ -337,6 +340,8 @@ def render_run(application, run_id, begin, *, embedded=False):
                     f'<small><span>{html.escape(STAGE_STATUS.get(selected_status, selected_status))}</span> · {percent}%</small>'
                     '</div></div>')
             st.progress(percent / 100, text=f"{done} / {total} 单元")
+            if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
+                st.caption("开放需求任务规划：按批完成后再进入生成节点。")
             if "cached" in selected_metrics:
                 cached = min(done, max(0, int(selected_metrics.get("cached", 0) or 0)))
                 reused, processed = st.columns(2)
@@ -359,10 +364,11 @@ def render_run(application, run_id, begin, *, embedded=False):
             if selected_metrics.get("error"):
                 st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
     selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
-    st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
-            f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'
-            '</div><span class="df-run-section-tag">所选节点</span></div>')
-    st.html(_events_html(selected_events))
+    with flow, st.container(border=True):
+        st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
+                f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'
+                '</div><span class="df-run-section-tag">所选节点</span></div>')
+        st.html(_events_html(selected_events))
     summary = state.get("input_summary", {})
     if summary:
         cols = st.columns(4)

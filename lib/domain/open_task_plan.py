@@ -1,5 +1,6 @@
 """Bounded validation for model-planned open-brief tasks."""
 import unicodedata
+from collections.abc import Container
 
 from lib.domain.workflow_quality import text_issue
 
@@ -11,7 +12,7 @@ def task_identity(task: str) -> str:
     return " ".join(unicodedata.normalize("NFC", task).split())
 
 
-def task_plan_issue(tasks, expected: int, seen: set[str]) -> str | None:
+def task_plan_issue(tasks, expected: int, seen: Container[str]) -> str | None:
     if not isinstance(tasks, list) or len(tasks) != expected:
         return "wrong_task_count"
     identities = set()
