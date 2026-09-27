@@ -92,6 +92,8 @@ ZH_EN: dict[str, str] = {
     "偏好优化": "Preference optimization",
     "优选与对照回答": "Preferred and comparison answers",
     "选用 DPO →": "Choose DPO →",
+    "选用 ORPO →": "Choose ORPO →",
+    "ORPO 数据生成": "Create ORPO data",
     "工具轨迹": "Tool trajectories",
     "使用自动推荐方案": "Use recommended plan",
     "任务统计": "Task Summary",
@@ -99,7 +101,7 @@ ZH_EN: dict[str, str] = {
     "工作流总数": "Total workflows",
     "已完成": "Completed",
     "处理中": "In progress",
-    "需检查": "Needs review",
+    "需检查": "Needs attention",
     "查看全部任务 →": "View all tasks →",
     "工作流总数 ": "Total workflows ",
     "已完成 ": "Completed ",
@@ -1119,7 +1121,7 @@ ZH_EN: dict[str, str] = {
     "质量汇总将在生成与验证步骤结束后出现。进度会自动刷新。": "Quality details appear when generation and checks finish. Progress refreshes automatically.",
     "任务 ID：": "Task ID: ",
     "已完成 · 产物校验通过": "Complete · results verified",
-    "需检查": "Needs review",
+    "需检查": "Needs attention",
     "问答样本": "Question and answer example",
     "第": "Example ",
     "语言": "Language",
@@ -1465,7 +1467,7 @@ def translate(value: Any, language: str = "en") -> Any:
         return f"About {match.group(1)} minutes remaining"
     match = re.fullmatch(r"(.+) · 已选 (\d+) 类目标 · 候选规模 ([\d,]+) · 并发 (\d+) · 每批 (\d+)", value)
     if match:
-        return f"{translate_label(match.group(1), language)} · {match.group(2)} goal types · {match.group(3)} candidates · {match.group(4)} concurrent · {match.group(5)} per batch"
+        return f"{translate_label(match.group(1), language)} · {match.group(2)} {'goal type' if match.group(2) == '1' else 'goal types'} · {match.group(3)} candidates · {match.group(4)} concurrent · {match.group(5)} per batch"
     remaining_budget = re.fullmatch(r"剩余额度\s*\$([\d,.]+)", value)
     if remaining_budget:
         return f"Remaining budget ${remaining_budget.group(1)}"
@@ -1498,7 +1500,7 @@ def translate(value: Any, language: str = "en") -> Any:
         return f"{translate_label(match.group(1), language)} · not selected"
     match = re.fullmatch(r"(.+) · 已选 (\d+) 类目标 · 最多处理 ([\d,]+) 单元", value)
     if match:
-        return f"{translate_label(match.group(1), language)} · {match.group(2)} goal types · up to {match.group(3)} units"
+        return f"{translate_label(match.group(1), language)} · {match.group(2)} {'goal type' if match.group(2) == '1' else 'goal types'} · up to {match.group(3)} units"
     match = re.fullmatch(r"本次来源类型[：:]\s*(.+)", value)
     if match:
         return f"Source type: {translate_label(match.group(1), language)}"

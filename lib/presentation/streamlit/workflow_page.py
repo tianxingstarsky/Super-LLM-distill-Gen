@@ -35,6 +35,7 @@ PRESETS = {
     "多轮对话": ("sft", "multiturn"),
     "Agent 轨迹": ("sft", "agent"),
     "偏好对齐": ("sft", "orpo", "dpo", "rlaif"),
+    "ORPO 数据生成": ("orpo",),
     "数学推理": ("sft", "gsm8k", "cot"),
 }
 
@@ -448,12 +449,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
     )
     ws = st.session_state["ws"]
     preset = st.segmented_control(
-        "快捷方案", tuple(PRESETS), default="自动推荐", key=f"workflow-preset:{ws}",
+        "快捷方案", tuple(PRESETS), default=None if f"workflow-preset:{ws}" in st.session_state else "自动推荐", key=f"workflow-preset:{ws}",
         help="选择常用目标组合。下面仍可逐项增删训练目标。",
     ) or "自动推荐"
     st.html('<div class="df-wb-preset-help">快捷方案会预填下方目标；每个目标仍可单独增减。</div>')
     source_mode = st.segmented_control(
-        "选择来源类型", ("文档资料", "Agent 上下文", "开放需求"), default="文档资料",
+        "选择来源类型", ("文档资料", "Agent 上下文", "开放需求"),
+        default=None if "workflow-source-mode" in st.session_state else "文档资料",
         key="workflow-source-mode",
         help="按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。",
     ) or "文档资料"

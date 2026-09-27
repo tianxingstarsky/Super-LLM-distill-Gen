@@ -1,7 +1,7 @@
 """Homepage visual treatment, kept separate from the shared console theme."""
 
 HOME_STYLE = """<style>
-.df-home-entry { min-height:169px; padding:16px 14px 11px; border:1px solid #E0E9F5; border-radius:11px; background:linear-gradient(155deg,#FFF 25%,#F4F9FF); transition:border-color .18s,box-shadow .18s; }
+.df-home-entry { display:flex; flex-direction:column; min-height:220px; padding:16px 14px 11px; border:1px solid #E0E9F5; border-radius:11px; background:linear-gradient(155deg,#FFF 25%,#F4F9FF); transition:border-color .18s,box-shadow .18s; }
 .df-home-entry:hover { border-color:#9EC4EF; box-shadow:0 7px 20px rgba(28,96,184,.08); }
 .df-home-entry[data-kind="agent"] { background:linear-gradient(155deg,#FFF 25%,#F0FBF7); }
 .df-home-entry[data-kind="brief"] { background:linear-gradient(155deg,#FFF 25%,#F8F5FF); }
@@ -17,7 +17,7 @@ HOME_STYLE = """<style>
 .df-home-entry[data-kind="brief"] .df-home-entry-icon b { top:18px; left:18px; font-size:16px; }
 .df-home-entry strong { display:block; color:#1B2D45; font-size:14px; line-height:1.35; }
 .df-home-entry p { min-height:37px; margin:7px 0 0; color:#64758B; font-size:11px; line-height:1.5; }
-.df-home-entry em { display:block; margin-top:7px; color:#1769E0; font-size:10px; font-style:normal; font-weight:700; }
+.df-home-entry em { display:block; margin-top:auto; padding-top:7px; color:#1769E0; font-size:10px; font-style:normal; font-weight:700; }
 .df-home-entry[data-kind="agent"] em { color:#14805B; }
 .df-home-entry[data-kind="brief"] em { color:#7652C7; }
 .st-key-home-source-entries [data-testid="stColumn"] { min-width:0; }
@@ -96,7 +96,7 @@ HOME_STYLE = """<style>
   .st-key-home-top [data-testid="stHorizontalBlock"]:has(.st-key-home-source-panel):has(.st-key-home-strategy-panel) > [data-testid="stColumn"]:has(.st-key-home-stats-panel) { flex-basis:100% !important; min-width:100%; }
   .st-key-home-source-entries [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
   .st-key-home-source-entries [data-testid="stColumn"] { flex:1 1 140px !important; width:auto !important; min-width:min(140px,100%); }
-  .df-home-entry { padding:16px 12px 11px; }
+  .df-home-entry { min-height:240px; padding:16px 12px 11px; }
   .df-home-entry p { font-size:12px; }
   .df-home-entry em { font-size:12px; }
   .st-key-home-source-entries button { min-height:36px; font-size:12px; }
