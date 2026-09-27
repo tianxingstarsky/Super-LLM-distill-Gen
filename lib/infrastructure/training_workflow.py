@@ -31,6 +31,7 @@ from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_can
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_creation import validate_creation
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
+from lib.infrastructure.json_stream import iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
@@ -450,13 +451,7 @@ class Workflow:
                         yield index, row
             records = source_records()
         else:
-            raw = read_json(path)
-            if (isinstance(raw, list) and raw and all(
-                    isinstance(item, dict) and ("role" in item or "from" in item) for item in raw)):
-                # A JSON file may itself be one complete messages array.
-                records = [(1, {"messages": raw})]
-            else:
-                records = list(enumerate(raw if isinstance(raw, list) else [raw], 1))
+            records = enumerate(iter_source_json_records(path), 1)
         for index, row in records:
             if not isinstance(row, dict):
                 yield unit(index, status="quarantined", reason="invalid_json_record")

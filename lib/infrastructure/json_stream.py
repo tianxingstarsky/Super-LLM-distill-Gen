@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 
-def iter_json_records(path: Path, *, chunk_size: int = 65536):
+def iter_json_records(path: Path, *, chunk_size: int = 65536, object_only: bool = True):
     """Read an array of objects, retaining one object and a bounded input chunk.
 
     The schema deliberately rejects non-object elements, trailing commas, and
@@ -36,7 +36,7 @@ def iter_json_records(path: Path, *, chunk_size: int = 65536):
         if not buffer.startswith("]"):
             while True:
                 whitespace()
-                if not buffer.startswith("{"):
+                if object_only and not buffer.startswith("{"):
                     raise ValueError("invalid_record_array")
                 while True:
                     try:
@@ -58,3 +58,36 @@ def iter_json_records(path: Path, *, chunk_size: int = 65536):
         whitespace()
         if buffer:
             raise ValueError("invalid_record_array")
+
+
+def iter_source_json_records(path: Path):
+    """Stream dataset arrays; retain a whole messages array as one trace."""
+    with Path(path).open(encoding="utf-8") as handle:
+        first_character = ""
+        while chunk := handle.read(1024):
+            content = chunk.lstrip(" \r\n\t")
+            if content:
+                first_character = content[0]
+                break
+    if first_character != "[":
+        with Path(path).open(encoding="utf-8") as handle:
+            yield json.load(handle)
+        return
+    records = iter_json_records(path, object_only=False)
+    try:
+        first = next(records, None)
+        message = lambda row: isinstance(row, dict) and ("role" in row or "from" in row)
+        if message(first):
+            # This compatibility case may be one long trace, not a dataset.
+            if all(message(row) for row in records):
+                yield {"messages": list(iter_json_records(path))}
+                return
+            yield from iter_json_records(path, object_only=False)
+        elif first is not None:
+            yield first
+            yield from records
+        else:
+            # Distinguish an empty array from a first null element.
+            yield from iter_json_records(path, object_only=False)
+    finally:
+        records.close()

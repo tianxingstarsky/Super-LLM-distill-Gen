@@ -4,6 +4,7 @@ import json
 import pytest
 from pathlib import Path
 from streamlit.testing.v1 import AppTest
+from lib.presentation.streamlit.i18n import translate
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -25,6 +26,8 @@ def test_quality_page_reports_raw_issue_and_filters_with_injected_services(tmp_p
 from pathlib import Path
 import streamlit as st
 st.session_state['ui_language']={language!r}
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+install_streamlit_localization()
 from lib.application.release_service import ReleaseApplication
 from lib.infrastructure.sample_preview import RawSamplePreview
 from lib.presentation.streamlit.quality_page import render_quality_page
@@ -41,10 +44,10 @@ render_quality_page(Workflow(),ReleaseApplication(Driver()),"isolated-ui",Path({
     ui=AppTest.from_string(script,default_timeout=15).run()
     assert not ui.exception
     assert ui.code[0].value.find('invalid original')>=0
-    filters=[item for item in ui.selectbox if item.label=='问题类型']
+    filters=[item for item in ui.selectbox if item.label==translate('问题类型', language)]
     filters[0].select('incomplete_answer').run()
     assert not ui.exception
-    matches=[item for item in ui.selectbox if item.label=='定位问题样本']
+    matches=[item for item in ui.selectbox if item.label==translate('定位问题样本', language)]
     assert matches[0].value==0
     assert matches[0].format_func(0)==("Answer is incomplete · incomplete" if language=="en" else "回答未完成 · incomplete")
     assert path.read_text(encoding='utf-8')==source

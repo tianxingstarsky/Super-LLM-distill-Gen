@@ -6,6 +6,9 @@ import pathlib
 import sys
 
 import pytest
+
+# Require isolation even when callers disable conftest discovery.
+pytestmark = pytest.mark.usefixtures("mock_llm_server")
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))

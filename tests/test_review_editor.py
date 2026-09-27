@@ -13,6 +13,9 @@ import time
 
 import pytest
 
+# Require isolation even when callers disable conftest discovery.
+pytestmark = pytest.mark.usefixtures("isolated_review_store")
+
 
 def _sample():
     """带图片、工具、多字段元数据的完整样本。"""

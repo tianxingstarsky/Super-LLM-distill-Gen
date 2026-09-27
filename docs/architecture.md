@@ -209,3 +209,6 @@ Arithmetic-only workflows prepare fallback brief inputs and arithmetic seeds thr
 
 
 Training source snapshots use 1 MiB copy chunks and hash the exact copied bytes. The adapter enforces both per-file and remaining aggregate size limits while copying, then atomically publishes the completed file. It removes only a pending file it created on failure. The roughly 12 MiB copy test stays below 3 MiB of Python allocations. Evaluation-reference parsing and document extraction have separate memory behavior; this check does not bound those stages or process RSS.
+
+
+JSON dataset arrays now use incremental source reading. Single objects retain their existing path. Arrays made entirely of role/from messages are kept as one conversation; mixed arrays retain per-record handling. Invalid non-object records are still quarantined by the importer. A 50,000-record JSON source parsing check stays below 4 MiB of Python allocations. A single long conversation is still loaded as one record. Review-store tests explicitly require their isolated database fixture, and legacy pipeline tests require their mock-server fixture; disabling conftest can no longer run those bodies against default stores or missing mock endpoints.

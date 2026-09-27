@@ -7,6 +7,9 @@ import json
 
 import pytest
 
+# Require isolation even when callers disable conftest discovery.
+pytestmark = pytest.mark.usefixtures("isolated_review_store")
+
 DATASET = "rollout_review"
 
 
