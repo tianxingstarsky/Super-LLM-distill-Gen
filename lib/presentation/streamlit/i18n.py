@@ -710,6 +710,7 @@ ZH_EN: dict[str, str] = {
     "终态与隔离重放结果不一致": "Final state differs from isolated replay",
     "隔离容器不可用": "Isolated container is unavailable",
     "长轨迹默认收起中间步骤；失败点与最终回答保持展开。": "Middle steps are collapsed in long traces. Failure points and the final answer stay open.",
+    "首个片段": "First section", "最后片段": "Last section", "定位失败步骤": "Go to failure",
     "对话片段": "Conversation section",
     "上一片段": "Previous section", "下一片段": "Next section",
     "当前消息范围": "Current message range",

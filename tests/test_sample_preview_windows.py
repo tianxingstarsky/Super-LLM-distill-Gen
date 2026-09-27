@@ -73,7 +73,7 @@ def test_long_dialogue_renders_only_selected_window_and_absolute_turns():
     first = ''.join(item.proto.body for item in ui.get('html'))
     assert 'QUESTION_0<' in first and 'QUESTION_8<' not in first
     assert 'Turn 01' in first
-    ui.number_input(key='fixture:message-page').set_value(125).run()
+    ui.button(key='fixture:message-page:last').click().run()
     assert not ui.exception
     last = ''.join(item.proto.body for item in ui.get('html'))
     assert 'QUESTION_999<' in last and 'QUESTION_0<' not in last
@@ -83,6 +83,9 @@ def test_long_dialogue_renders_only_selected_window_and_absolute_turns():
     assert ui.button(key='fixture:message-page:next').disabled
     ui.button(key='fixture:message-page:previous').click().run()
     assert ui.number_input(key='fixture:message-page').value == 124
+    ui.button(key='fixture:message-page:first').click().run()
+    assert ui.number_input(key='fixture:message-page').value == 1
+    assert ui.button(key='fixture:message-page:first').disabled
 
 
 def test_negative_preview_opens_failure_window_without_rewriting_source():
@@ -105,6 +108,12 @@ st.json({'source_failure_step':row['failure_step'],'source_messages':len(row['me
     assert '第 31 条消息（索引 30）' in markup
     assert ' data-failed="true" data-verified=' in markup
     assert 'source_failure_step' in ui.json[0].value and '30' in ui.json[0].value
+    assert ui.button(key='negative:message-page:failure').disabled
+    ui.button(key='negative:message-page:first').click().run()
+    assert ui.number_input(key='negative:message-page').value == 1
+    ui.button(key='negative:message-page:failure').click().run()
+    assert ui.number_input(key='negative:message-page').value == 2
+    assert not ui.exception
 
 
 def test_anthropic_results_stay_in_their_turn():
