@@ -42,6 +42,19 @@ def validate_node_models(value: dict | None) -> dict:
     return result
 
 
+def generation_variant(original: dict, index: int, document_count: int) -> dict:
+    """Make one candidate variant while preserving the original source."""
+    from lib.domain.workflow_quality import canonical
+    import hashlib
+    focuses = ("概念解释", "操作步骤", "条件与边界", "故障诊断", "对比判断", "应用场景")
+    unit = deepcopy(original)
+    unit['id'] = hashlib.sha256(canonical([original['id'], 'variant', index]).encode()).hexdigest()
+    unit['generation_variant'] = {'index': index // document_count + 1,
+                                  'focus': focuses[index % len(focuses)],
+                                  'instruction': '依据同一来源生成不同问题；不要重复已有问法或编造新事实。'}
+    return unit
+
+
 def generation_units(units: list[dict], count: int | None) -> list[dict]:
     """Expand document candidates only. Recorded conversations stay intact."""
     if count is None or not units:
@@ -50,15 +63,7 @@ def generation_units(units: list[dict], count: int | None) -> list[dict]:
     documents = [unit for unit in units if unit.get("kind") == "document"]
     if not documents:
         return result
-    from lib.domain.workflow_quality import canonical
-    import hashlib
-    focuses = ("概念解释", "操作步骤", "条件与边界", "故障诊断", "对比判断", "应用场景")
     for index in range(len(result), count):
         original = documents[(index - len(units)) % len(documents)]
-        variant = index // len(documents) + 1
-        unit = deepcopy(original)
-        unit["id"] = hashlib.sha256(canonical([original["id"], "variant", index]).encode()).hexdigest()
-        unit["generation_variant"] = {"index": variant, "focus": focuses[index % len(focuses)],
-                                      "instruction": "依据同一来源生成不同问题；不要重复已有问法或编造新事实。"}
-        result.append(unit)
+        result.append(generation_variant(original, index, len(documents)))
     return result

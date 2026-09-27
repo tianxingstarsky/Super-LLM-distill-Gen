@@ -8,19 +8,26 @@ from lib.domain.workflow_quality import canonical
 
 
 class WorkflowRows:
-    def __init__(self, path: Path, count: int, *, predicate=None, transform=None):
+    def __init__(self, path: Path, count: int, *, predicate=None, transform=None, limit=None):
         self.path, self.count = Path(path), count
         self.predicate, self.transform = predicate, transform
+        self.limit = limit
 
     def __len__(self):
         return self.count
 
     def __iter__(self):
+        if self.limit == 0:
+            return
+        emitted = 0
         with self.path.open(encoding="utf-8") as handle:
             for line in handle:
                 row = json.loads(line)
                 if self.predicate is None or self.predicate(row):
                     yield self.transform(row) if self.transform else row
+                    emitted += 1
+                    if self.limit is not None and emitted >= self.limit:
+                        break
 
     def __getitem__(self, index):
         if isinstance(index, slice):
@@ -35,6 +42,10 @@ class WorkflowRows:
 
     def eligible(self, count: int):
         return WorkflowRows(self.path, count, predicate=lambda row: row["status"] == "eligible")
+
+    def ready(self, count: int, limit: int):
+        return WorkflowRows(self.path, min(count, limit),
+                            predicate=lambda row: row['status'] == 'ready', limit=limit)
 
 
 class RowSpool(WorkflowRows):

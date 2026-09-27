@@ -28,8 +28,10 @@ from lib.domain.corpus_quality import CorpusNearDuplicateIndex, inspect_corpus, 
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_scale import (MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE,
-                                      PLAN_BATCH_SIZE, generation_units, validate_node_models)
+                                      PLAN_BATCH_SIZE, validate_node_models)
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
+from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
+from lib.infrastructure.workflow_candidates import prepare_generation_rows
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -339,7 +341,7 @@ class Workflow:
                         self.event("model_finished", role=role)
         return self.checkpoint(["call", key], invoke)
 
-    def stage_items(self, stage, items, action):
+    def stage_items(self, stage, items, action, *, stream_sources=False):
         self.stage = stage
         self._abort.clear()
         metrics = self.state["stages"][stage]
@@ -368,7 +370,9 @@ class Workflow:
                 with self._lock:
                     if processing_started is None:
                         processing_started = time.monotonic()
-            value = self.checkpoint(checkpoint_key, lambda: action(item))
+            value = (row_checkpoint(self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json",
+                                    lambda: self.iter_source_units(item), self.check_cancel)
+                     if stream_sources else self.checkpoint(checkpoint_key, lambda: action(item)))
             with self._lock:
                 metrics["done"] += 1
                 metrics["outputs"] += len(value)
@@ -413,6 +417,10 @@ class Workflow:
                 **provenance, "status": "quarantined", "reason": reason}
 
     def parse_source(self, source):
+        """Compatibility entry point; execution consumes the streaming iterator."""
+        return list(self.iter_source_units(source))
+
+    def iter_source_units(self, source):
         path = self.path / "inputs" / source["file"]
         if file_hash(path) != source["sha256"]:
             raise ValueError("source_snapshot_changed")
@@ -436,8 +444,10 @@ class Workflow:
             try:
                 content = import_text(path)
             except UnicodeError:
-                return [unit("document", status="quarantined", reason="invalid_encoding")]
-            return documents(content, "document")
+                yield unit("document", status="quarantined", reason="invalid_encoding")
+                return
+            yield from documents(content, "document")
+            return
         if path.suffix == ".jsonl":
             def source_records():
                 with path.open(encoding="utf-8-sig") as handle:
@@ -460,13 +470,12 @@ class Workflow:
                 records = [(1, {"messages": raw})]
             else:
                 records = list(enumerate(raw if isinstance(raw, list) else [raw], 1))
-        result = []
         for index, row in records:
             if not isinstance(row, dict):
-                result.append(unit(index, status="quarantined", reason="invalid_json_record"))
+                yield unit(index, status="quarantined", reason="invalid_json_record")
                 continue
             if isinstance(row.get("text"), str) and not (row.get("messages") or row.get("conversations")):
-                result.extend(documents(row["text"], index))
+                yield from documents(row["text"], index)
                 continue
             try:
                 if "request" in row and "response" in row:
@@ -506,15 +515,14 @@ class Workflow:
                 if sample.get("images"):
                     issue = "multimodal_requires_dedicated_pipeline"
                 if issue:
-                    result.append(unit(index, status="quarantined", reason=issue))
+                    yield unit(index, status="quarantined", reason=issue)
                     continue
-                result.append(unit(index, kind="conversation", messages=sample["messages"],
+                yield unit(index, kind="conversation", messages=sample["messages"],
                                    tools=sample.get("tools", []),
                                    tool_snapshots=tool_snapshots if "agent" in self.recipe["targets"] else None,
-                                   verification_status=sample.get("verification_status"), status="ready"))
+                                   verification_status=sample.get("verification_status"), status="ready")
             except (ValueError, TypeError, KeyError, AttributeError):
-                result.append(unit(index, status="quarantined", reason="invalid_or_incomplete_conversation"))
-        return result
+                yield unit(index, status="quarantined", reason="invalid_or_incomplete_conversation")
 
     def plan(self):
         count = min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"])
@@ -1068,7 +1076,7 @@ class Workflow:
                 for source in self.recipe["sources"]:
                     if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
                         raise ValueError("source_snapshot_changed")
-                units = self.stage_items("ingest", self.recipe["sources"], self.parse_source)
+                units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
                 selected_targets = set(self.recipe["targets"])
                 planned_targets = selected_targets & ({"cpt", "sft", "cot", "multiturn"} | PREFERENCE_TARGETS)
                 if self.recipe["brief"] and not self.recipe["sources"] and planned_targets:
@@ -1080,15 +1088,20 @@ class Workflow:
                     units = [{"id": digest([self.recipe["brief"], "gsm8k", i]), "source_id": digest(self.recipe["brief"]),
                               "kind": "brief", "text": self.recipe["brief"], "status": "ready"}
                              for i in range(self.recipe["tasks"])]
-                eligible = [u for u in units if u["status"] == "ready"]
+                eligible_count = sum(u["status"] == "ready" for u in units)
+                eligible = (units.ready(eligible_count, self.recipe["max_units"]) if isinstance(units, WorkflowRows)
+                            else [u for u in units if u["status"] == "ready"])
                 requested = self.recipe.get("sample_count") or self.recipe["tasks"]
                 planning_deferred = max(0, requested - self.recipe["max_units"]) if not self.recipe["sources"] else 0
-                self.state["input_summary"] = {"units": len(units), "ready": len(eligible),
-                    "quarantined": len(units) - len(eligible), "deferred": max(max(0, len(eligible) - self.recipe["max_units"]), planning_deferred),
+                self.state["input_summary"] = {"units": len(units), "ready": eligible_count,
+                    "quarantined": len(units) - eligible_count, "deferred": max(max(0, eligible_count - self.recipe["max_units"]), planning_deferred),
                     "targets": list(self.recipe["targets"])}
                 write_json_array(self.path / "input_records.json", units)
-                selected = eligible[:self.recipe["max_units"]]
-                generated = generation_units(selected, self.recipe.get("sample_count"))
+                selected = eligible if isinstance(eligible, WorkflowRows) else eligible[:self.recipe["max_units"]]
+                needs_generated_candidates = bool(selected_targets & (PREFERENCE_TARGETS | {'sft', 'multiturn', 'cot'}))
+                generated = (prepare_generation_rows(self.path / "stage-results" / "generation-inputs.jsonl",
+                                                     selected, self.recipe.get("sample_count"), self.check_cancel)
+                             if needs_generated_candidates else [])
                 self.state["input_summary"]["generation_candidates"] = len(generated)
                 collections = {}
                 needs_sft = bool(selected_targets & (PREFERENCE_TARGETS | {"sft", "cot"}))
