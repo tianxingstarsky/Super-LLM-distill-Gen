@@ -273,7 +273,7 @@ def _text(label: str, value: Any, modifier: str = "") -> str:
 
 
 def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
-                           turn_offset: int = 0, step_offset: int = 0) -> str:
+                           turn_offset: int = 0, step_offset: int = 0, response_offset: int = 0) -> str:
     """Project one training record into escaped, comparison-friendly HTML."""
     target = str(target).lower()
     title = _TARGET_TITLES.get(target, "训练样本")
@@ -331,7 +331,7 @@ def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
     elif target == "rlaif":
         responses = row.get("responses") if isinstance(row.get("responses"), list) else []
         cards = []
-        for index, response in enumerate(responses[:4]):
+        for index, response in enumerate(responses, response_offset):
             if not isinstance(response, dict):
                 continue
             rank = response.get("preference_rank", index + 1)
@@ -339,7 +339,7 @@ def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
             cards.append(
                 '<div class="df-artifact-feedback">'
                 f'<div class="df-artifact-subhead">候选 {index + 1} · 排名 {_safe(rank)}'
-                f'<span>AI 评分 {_safe(score)}</span></div>'
+                f'<span><b>AI 评分</b> {_safe(score)}</span></div>'
                 + _conversation("候选回答", response.get("response"))
                 + _text("AI 评语", response.get("feedback", ""))
                 + '</div>'

@@ -2,6 +2,12 @@
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 
 
+def test_direct_rlaif_renderer_does_not_silently_discard_later_candidates():
+    row={'responses':[{'response':[{'role':'assistant','content':f'ANSWER_{i}_END'}]} for i in range(6)]}
+    markup=render_training_sample('rlaif',row)
+    assert 'ANSWER_5_END' in markup and '候选 6' in markup
+
+
 def test_math_preview_distinguishes_consistent_conflicting_and_missing_evidence():
     from copy import deepcopy
     from lib.domain.math_tasks import build_gsm8k
@@ -140,7 +146,7 @@ def test_preference_preview_compares_complete_answers_and_escapes_feedback():
         "responses": [{"response": pair["chosen"], "preference_rank": 1,
                        "score": 5, "feedback": "保留 <img src=x onerror=alert(1)>"}],
     })
-    assert "AI 评分 5" in feedback
+    assert "<b>AI 评分</b> 5" in feedback
     assert "&lt;img" in feedback and "<img" not in feedback
 
 

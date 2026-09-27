@@ -3,6 +3,44 @@ from streamlit.testing.v1 import AppTest
 from lib.presentation.streamlit.sample_preview import message_windows
 
 
+RLAIF_SCRIPT = """
+import streamlit as st
+from lib.presentation.streamlit.sample_preview import render_sample_preview
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+st.session_state['ui_language']='en'
+install_streamlit_localization()
+count = st.session_state.get('response_count', 25)
+row={'prompt':[{'role':'user','content':'COMMON_PROMPT'}], 'responses':[
+    {'response':[{'role':'assistant','content':f'RESPONSE_{i}_END'}],
+     'preference_rank':25-i,'score':i,'feedback':f'FEEDBACK_{i}_END'} for i in range(count)]}
+render_sample_preview('rlaif',row,key='ranked')
+st.session_state['original_response_count']=len(row['responses'])
+"""
+
+
+def test_rlaif_candidates_page_without_losing_numbers_ranks_or_feedback():
+    ui=AppTest.from_string(RLAIF_SCRIPT).run()
+    assert not ui.exception
+    first=''.join(item.proto.body for item in ui.get('html'))
+    assert 'RESPONSE_0_END' in first and 'RESPONSE_4_END' not in first
+    assert 'Current candidate range: 1–4 / 25' in ui.caption[0].value
+    ui.button(key='ranked:response-page:next').click().run()
+    middle=''.join(item.proto.body for item in ui.get('html'))
+    assert 'RESPONSE_4_END' in middle and 'RESPONSE_0_END' not in middle
+    assert 'Candidate 5' in middle and 'Rank 21' in middle
+    assert '<b>AI score</b> 4' in middle
+    assert 'FEEDBACK_4_END' in middle
+    ui.number_input(key='ranked:response-page').set_value(7).run()
+    last=''.join(item.proto.body for item in ui.get('html'))
+    assert 'Candidate 25' in last and 'RESPONSE_24_END' in last
+    assert ui.button(key='ranked:response-page:next').disabled
+    assert ui.session_state['original_response_count']==25
+    ui.session_state['response_count']=5
+    ui.run()
+    assert ui.number_input(key='ranked:response-page').value==2
+    assert not ui.exception
+
+
 def test_tool_windows_preserve_parallel_results_and_unpaired_records():
     messages = []
     for i in range(9):

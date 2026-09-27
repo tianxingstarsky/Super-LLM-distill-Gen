@@ -20,6 +20,28 @@ def render_sample_preview(target, row, *, key, wrapper_class=None, widgets=st):
     start, end, step_offset = 0, len(messages), 0
     projected = row
     turn_offset = 0
+    response_offset = 0
+    responses = row.get('responses') if isinstance(row,dict) and target == 'rlaif' else None
+    if isinstance(responses,list) and len(responses) > 4:
+        language = widgets.session_state.get('ui_language','zh')
+        position_key = key + ':response-page'
+        pages = (len(responses)+3)//4
+        if position_key in widgets.session_state:
+            widgets.session_state[position_key] = min(max(1,widgets.session_state[position_key] or 1),pages)
+        picker, previous, following = widgets.columns([2,1,1],vertical_alignment='bottom')
+        with picker:
+            page = widgets.number_input('候选回答片段',1,pages,
+                                        value=None if position_key in widgets.session_state else 1,key=position_key)
+        page = int(page or 1)
+        previous.button('上一片段',disabled=page<=1,on_click=_select_section,
+                        args=(widgets,position_key,page-1),key=position_key+':previous',width='stretch')
+        following.button('下一片段',disabled=page>=pages,on_click=_select_section,
+                         args=(widgets,position_key,page+1),key=position_key+':next',width='stretch')
+        response_offset = (page-1)*4
+        end_response = min(response_offset+4,len(responses))
+        widgets.caption(translate('当前候选范围',language)+f': {response_offset+1:,}–{end_response:,} / {len(responses):,}')
+        widgets.caption('每页最多展示四个候选，原始排序、评分和完整记录保持不变。')
+        projected = {**row,'responses':responses[response_offset:end_response]}
     if len(windows) > 1:
         language = widgets.session_state.get('ui_language','zh')
         position_key = key + ':message-page'
@@ -47,7 +69,7 @@ def render_sample_preview(target, row, *, key, wrapper_class=None, widgets=st):
         turn_offset = sum(message.get('role') == 'user' and not tool_result_user(message)
                           for message in messages[:start])
     markup = render_training_sample(target,projected,message_offset=start,
-                                    turn_offset=turn_offset,step_offset=step_offset)
+                                    turn_offset=turn_offset,step_offset=step_offset,response_offset=response_offset)
     if wrapper_class:
         markup = '<div class="'+wrapper_class+'">'+markup+'</div>'
     widgets.html(markup)
