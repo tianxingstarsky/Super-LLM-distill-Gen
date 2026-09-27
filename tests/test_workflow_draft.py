@@ -1,5 +1,12 @@
 """Exercise workbench drafts without storage or paid model calls."""
 from streamlit.testing.v1 import AppTest
+import pytest
+from lib.presentation.streamlit import workflow_page
+
+
+@pytest.fixture(autouse=True)
+def restore_canvas_renderer(monkeypatch):
+    monkeypatch.setattr(workflow_page, "render_canvas", workflow_page.render_canvas)
 
 SCRIPT = '''
 import streamlit as st
@@ -81,3 +88,33 @@ def test_clearing_numeric_input_restores_last_valid_value():
     ui.number_input(key='workflow-count:fixture').set_value(None).run()
     assert not ui.exception
     assert ui.number_input(key='workflow-count:fixture').value==50000
+
+
+def test_briefs_survive_source_changes_navigation_and_workspace_switch():
+    ui = AppTest.from_string(SCRIPT).run()
+    source = 'workflow-source-mode'
+    ui.text_area(key='workflow-source-brief:fixture:文档资料').set_value('Document requirements').run()
+    ui.segmented_control(key=source).set_value('开放需求').run()
+    ui.text_area(key='workflow-open-brief:fixture').set_value('Generate 50K maintenance tasks').run()
+    ui.segmented_control(key=source).set_value('Agent 上下文').run()
+    ui.text_area(key='workflow-source-brief:fixture:Agent 上下文').set_value('Preserve tool evidence').run()
+    ui.segmented_control(key=source).set_value('开放需求').run()
+    assert ui.text_area(key='workflow-open-brief:fixture').value == 'Generate 50K maintenance tasks'
+    ui.checkbox(key='fixture-show').uncheck().run()
+    ui.checkbox(key='fixture-show').check().run()
+    ui.segmented_control(key=source).set_value('开放需求').run()
+    assert ui.text_area(key='workflow-open-brief:fixture').value == 'Generate 50K maintenance tasks'
+    ui.session_state['ws'] = 'other'
+    ui.run()
+    assert ui.text_area(key='workflow-open-brief:other').value == ''
+    ui.session_state['ws'] = 'fixture'
+    ui.run()
+    ui.segmented_control(key=source).set_value('文档资料').run()
+    assert ui.text_area(key='workflow-source-brief:fixture:文档资料').value == 'Document requirements'
+    ui.segmented_control(key=source).set_value('Agent 上下文').run()
+    assert ui.text_area(key='workflow-source-brief:fixture:Agent 上下文').value == 'Preserve tool evidence'
+    ui.text_area(key='workflow-source-brief:fixture:Agent 上下文').set_value('').run()
+    ui.segmented_control(key=source).set_value('文档资料').run()
+    ui.segmented_control(key=source).set_value('Agent 上下文').run()
+    assert ui.text_area(key='workflow-source-brief:fixture:Agent 上下文').value == ''
+    assert not ui.exception

@@ -477,6 +477,15 @@ def _draft_name(default, workspace):
                          on_change=_save_draft_value, args=(workspace, key))
 
 
+def _draft_brief(label, *, key, **options):
+    workspace = st.session_state["ws"]
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    if key not in st.session_state:
+        st.session_state[key] = draft.get(key, "")
+    return st.text_area(label, value=None, key=key,
+                        on_change=_save_draft_value, args=(workspace, key), **options)
+
+
 def render_workbench(application: WorkflowApplication, begin, model_application):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
@@ -588,7 +597,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
             if source_mode == "开放需求":
                 uploaded, selected = [], []
                 st.caption("描述任务、领域和使用场景，系统会规划并生成候选。")
-                brief = st.text_area("开放性需求", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
+                brief = _draft_brief("开放性需求", key=f"workflow-open-brief:{ws}", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
             else:
                 if source_mode == "Agent 上下文":
                     st.caption("导入完整的 JSON / JSONL 对话记录；工具轨迹需要真实观测。")
@@ -604,7 +613,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
                                               format_func=lambda path: file_labels[path],
                                               key=f"workflow-sources:{ws}:{source_mode}")
                 with st.expander("补充生成要求（可选）"):
-                    brief = st.text_area("补充生成要求（可选）", placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
+                    brief = _draft_brief("补充生成要求（可选）", placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                          key=f"workflow-source-brief:{ws}:{source_mode}", label_visibility="collapsed")
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
         with setup_col, st.container(border=True, key="workbench-parameters-panel"):
