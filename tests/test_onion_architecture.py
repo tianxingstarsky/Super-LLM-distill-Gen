@@ -86,6 +86,7 @@ def test_streamlit_package_page_uses_application_contract():
     assert "lib.application.workflow_service" in dependencies
     assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workflow"))
                    for name in dependencies)
+    assert "lib" not in dependencies
 
 
 def test_asset_catalog_page_uses_application_contract():

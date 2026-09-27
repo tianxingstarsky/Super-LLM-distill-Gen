@@ -7,13 +7,13 @@ from typing import Any
 
 import streamlit as st
 
-from lib import workspace as WS
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.package_style import PACKAGE_STYLE
 from lib.presentation.streamlit.shared import page_header
+from lib.presentation.streamlit.i18n import UntranslatedText
 
 
 _STATUS = {
@@ -419,7 +419,7 @@ def _render_format_cards(inventory: dict) -> None:
 def render_package_page(application: WorkflowApplication) -> None:
     st.html(PACKAGE_STYLE)
     page_header("输出打包", "核对真实训练文件、质量证据和来源信息，导出可校验的完整数据包。", "DATASET RELEASE　·　完整性校验")
-    runs = application.list_runs()
+    runs = application.task_runs()
     releases = application.list_releases()
     ready = [row for row in runs if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
     if not ready:
@@ -432,9 +432,12 @@ def render_package_page(application: WorkflowApplication) -> None:
     with navigation:
         st.button("← 返回自动工作流", key="package-back", on_click=_go_to_workflow)
     with selection:
+        selection_key = f"package-run:{st.session_state['ws']}"
+        if st.session_state.get(selection_key) not in labels:
+            st.session_state.pop(selection_key, None)
         run_id = st.selectbox(
-            "选择已完成任务", list(labels), key=f"package-run:{st.session_state['ws']}",
-            format_func=lambda key: f"{labels[key].get('name', '未命名任务')} · {key[:8]}",
+            "选择已完成任务", list(labels), key=selection_key,
+            format_func=lambda key: UntranslatedText(f"{labels[key].get('name', '未命名任务')} · {key[:8]}"),
         )
     run = labels[run_id]
     package_key = f"verified-package:{run_id}"
@@ -546,7 +549,7 @@ def render_package_page(application: WorkflowApplication) -> None:
                 st.button("进入当前任务的人工审核", on_click=_go_to_review,
                           args=(run_id, review_target), key=f"package-review:{run_id}",
                           width="stretch")
-                st.caption("此入口仅显示本次任务中有合格原生样本的 CPT、SFT、DPO、ORPO 审核队列。")
+                st.caption("此入口仅显示本次任务中有合格原生样本的 CPT、SFT、DPO、ORPO、RLAIF 审核队列。")
         with st.container(border=True):
             st.html(_heading("◷", "最近可导出任务", "当前工作区已完成的工作流"))
             for recent in ready[:5]:

@@ -374,7 +374,7 @@ def page_human_review():
         modes[4]: corpus_review_application(output),
     }
     render_review_overview(applications, mode_key)
-    mode = st.segmented_control("审核类型", modes, default=modes[0], key=mode_key,
+    mode = st.segmented_control("审核类型", modes, default=None if mode_key in st.session_state else modes[0], key=mode_key,
                                 label_visibility="collapsed")
     if mode == modes[0]:
         from lib.presentation.streamlit.sft_review_page import render_sft_review
