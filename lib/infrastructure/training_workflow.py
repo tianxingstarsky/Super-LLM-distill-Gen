@@ -31,6 +31,7 @@ from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_can
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_creation import validate_creation
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
+from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
 from lib.infrastructure.workflow_candidates import prepare_generation_rows
@@ -197,13 +198,13 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     evaluation_references = snapshot_evaluation_sources(
         path, evaluation_sources, evaluation_source_names) if evaluation_sources else []
     snapshots = []
+    copied_bytes = 0
     for index, source in enumerate(files):
         destination = path / "inputs" / f"{index:04d}{source.suffix.lower()}"
-        data = source.read_bytes()
-        if len(data) > MAX_FILE_BYTES:
-            raise ValueError("来源在读取期间超出大小限制")
-        destination.write_bytes(data)
-        snapshots.append({"name": (source_names or {}).get(str(source), source.name), "file": destination.name, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+        snapshot = snapshot_source(source, destination, min(MAX_FILE_BYTES, 200 * 1024 * 1024 - copied_bytes))
+        copied_bytes += snapshot["bytes"]
+        snapshots.append({"name": (source_names or {}).get(str(source), source.name),
+                          "file": destination.name, **snapshot})
     recipe = {"version": RECIPE_VERSION, "policy": POLICY, "sources": snapshots, "brief": brief.strip(),
               "targets": targets, "backend": backend, "model": model, "judge_backend": judge_backend,
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,

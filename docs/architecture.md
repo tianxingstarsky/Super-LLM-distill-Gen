@@ -206,3 +206,6 @@ Workflow creation rules now live in `lib/domain/workflow_creation.py`. The appli
 
 
 Arithmetic-only workflows prepare fallback brief inputs and arithmetic seeds through verified row checkpoints. They no longer materialize either full list. A 50,000-row offline check covers stable first/last IDs, ordered iteration, and reuse on a second attempt. Python allocations during preparation stay below 4 MiB in that check. This excludes process RSS, native allocations, full generation, and export quality. The arithmetic generator still uses its existing bounded template families.
+
+
+Training source snapshots use 1 MiB copy chunks and hash the exact copied bytes. The adapter enforces both per-file and remaining aggregate size limits while copying, then atomically publishes the completed file. It removes only a pending file it created on failure. The roughly 12 MiB copy test stays below 3 MiB of Python allocations. Evaluation-reference parsing and document extraction have separate memory behavior; this check does not bound those stages or process RSS.
