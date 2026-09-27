@@ -2,6 +2,35 @@
 from lib.presentation.streamlit.artifact_preview import render_training_sample
 
 
+def test_agent_evidence_is_scoped_bounded_escaped_and_preserves_record():
+    from copy import deepcopy
+    from lib.presentation.streamlit.i18n import translate_markup
+    row={'messages':[
+        {'role':'assistant','tool_calls':[{'id':'visible','function':{'name':'calculator','arguments':'{}'}}]},
+        {'role':'tool','tool_call_id':'visible','content':'4'}],
+         'verification':{'method':'bounded_arithmetic_replay','verified_call_ids':['visible'],
+                         'verified_turns':[1,1,True,{},-1],
+                         'pruned_call_ids':[f'pruned-{i}' for i in range(25)],
+                         'call_evidence':[{'call_id':'elsewhere','value':'HIDDEN_EVIDENCE'}]+
+                           [{'call_id':'visible','value':f'EVIDENCE_{i}_END <script>x</script>'} for i in range(30)]}}
+    original=deepcopy(row)
+    markup=render_training_sample('agent',row)
+    assert '查看重放与剪枝记录' in markup and '当前片段调用证据' in markup
+    assert 'HIDDEN_EVIDENCE' not in markup
+    assert 'EVIDENCE_15_END' in markup and 'EVIDENCE_16_END' not in markup
+    assert 'pruned-19' in markup and 'pruned-20' not in markup
+    assert '前 16 条调用证据' in markup and '前 20 个剪枝调用 ID' in markup
+    assert '<script>' not in markup and '&lt;script&gt;' in markup
+    assert '1 轮回答已核对' in markup
+    assert 'View replay and pruning records' in translate_markup(markup)
+    assert row==original
+
+
+def test_agent_without_replay_metadata_does_not_imply_verification():
+    markup=render_training_sample('agent',{'messages':[{'role':'user','content':'Input'}]})
+    assert '未附重放校验记录' in markup
+
+
 def test_direct_rlaif_renderer_does_not_silently_discard_later_candidates():
     row={'responses':[{'response':[{'role':'assistant','content':f'ANSWER_{i}_END'}]} for i in range(6)]}
     markup=render_training_sample('rlaif',row)

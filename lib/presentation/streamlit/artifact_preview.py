@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from itertools import islice
 from typing import Any
 from lib.domain.math_tasks import validate_math_candidate
 
@@ -205,7 +206,7 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
 def _agent_verification(row: dict) -> str:
     verification = row.get("verification")
     if not isinstance(verification, dict):
-        return ""
+        return '<p class="df-artifact-trace-hint">未附重放校验记录；调用结果按来源原文展示。</p>'
     method = verification.get("method")
     labels = {
         "bounded_arithmetic_replay": "本地算术重放",
@@ -219,13 +220,30 @@ def _agent_verification(row: dict) -> str:
     turns = verification.get("verified_turns")
     verified_count = len(verified) if isinstance(verified, list) else 0
     pruned_count = len(pruned) if isinstance(pruned, list) else 0
-    turn_count = len(set(turns)) if isinstance(turns, list) else 0
+    turn_count = len({turn for turn in turns if type(turn) is int and turn >= 0}) if isinstance(turns, list) else 0
     facts = [labels.get(method, f"校验记录：{method or '未注明'}"),
              f"{verified_count} 次调用已核对", f"{pruned_count} 组重复调用已剪枝"]
     if turn_count:
         facts.append(f"{turn_count} 轮回答已核对")
-    return '<div class="df-artifact-verification"><b>重放校验</b>' + ''.join(
+    summary = '<div class="df-artifact-verification"><b>重放校验</b>' + ''.join(
         '<span>' + _safe(fact) + '</span>' for fact in facts) + '</div>'
+    visible_ids = {call_id for message in _messages(row.get("messages")) for call_id in _tool_call_ids(message)}
+    evidence = verification.get("call_evidence")
+    evidence = list(islice((entry for entry in evidence if isinstance(entry, dict)
+                           and str(entry.get("call_id")) in visible_ids), 17)) if isinstance(evidence, list) else []
+    if not evidence and not pruned_count:
+        return summary
+    details = '<details class="df-artifact-more"><summary>查看重放与剪枝记录</summary><div>'
+    details += '<p class="df-artifact-trace-hint">记录描述受限工具核对，不证明来源或快照的外部真实性。</p>'
+    if evidence:
+        details += _text("当前片段调用证据", json.dumps(evidence[:16], ensure_ascii=False, indent=2, default=str))
+        if len(evidence) > 16:
+            details += '<p class="df-artifact-trace-hint">当前片段仅展示前 16 条调用证据；完整证据保留在记录中。</p>'
+    if pruned_count:
+        details += _text("已剪枝调用 ID", json.dumps(pruned[:20], ensure_ascii=False, indent=2, default=str))
+        if pruned_count > 20:
+            details += '<p class="df-artifact-trace-hint">仅展示前 20 个剪枝调用 ID；完整清单保留在记录中。</p>'
+    return summary + details + '</div></details>'
 
 
 _FAILURE_LABELS = {
