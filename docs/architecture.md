@@ -212,3 +212,6 @@ Training source snapshots use 1 MiB copy chunks and hash the exact copied bytes.
 
 
 JSON dataset arrays now use incremental source reading. Single objects retain their existing path. Arrays made entirely of role/from messages are kept as one conversation; mixed arrays retain per-record handling. Invalid non-object records are still quarantined by the importer. A 50,000-record JSON source parsing check stays below 4 MiB of Python allocations. A single long conversation is still loaded as one record. Review-store tests explicitly require their isolated database fixture, and legacy pipeline tests require their mock-server fixture; disabling conftest can no longer run those bodies against default stores or missing mock endpoints.
+
+
+Normalized source-conversation quality rules live in `lib/domain/source_conversation.py`. The filesystem importer still parses and normalizes formats, then asks the domain for the isolation reason. Recorded tool failures remain admissible for Agent assessment only when structure and error flags are valid. Context limits, tool snapshots, metadata checks, and dedicated multimodal routing retain their existing precedence. Input objects are not rewritten by these rules. This moves validation inward; it does not migrate the legacy normalizer or the full engine.
