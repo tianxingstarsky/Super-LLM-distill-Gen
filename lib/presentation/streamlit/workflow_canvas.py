@@ -65,11 +65,15 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
 
 
-def render_canvas(spec, selection_key, *, key):
+def render_canvas(spec, selection_key, *, key, follow_key=None):
     event = _canvas(spec=spec, key=key, default=None)
     if isinstance(event, dict) and event.get("node") in {node["id"] for node in spec["nodes"]}:
         consumed_key = f"canvas-event:{key}"
         if event.get("serial") != st.session_state.get(consumed_key):
             st.session_state[consumed_key] = event.get("serial")
             st.session_state[selection_key] = event["node"]
+            if follow_key is not None:
+                # The toggle already exists in this render. Apply the pause
+                # before creating it on the next rerun instead of mutating a widget.
+                st.session_state[f"canvas-pause:{follow_key}"] = True
             st.rerun()

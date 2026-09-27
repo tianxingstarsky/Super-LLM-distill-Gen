@@ -301,14 +301,24 @@ def render_run(application, run_id, begin, *, embedded=False):
             st.html('<div class="df-run-section"><div><strong>工作流运行图</strong>'
                     '<small>点击节点卡，检查该步骤的状态、配置与日志。</small></div>'
                     '<span class="df-run-section-tag">实时进度</span></div>')
-            running_node = next((key for key in graph_nodes if state["stages"][key].get("status") == "running"), None)
-            if running_node and st.button("定位运行节点", key=f"locate-node:{run_id}"):
-                selected_stage = running_node
-                st.session_state[selection_key] = running_node
+            follow_key = f"workflow-follow:{run_id}"
+            if st.session_state.pop(f"canvas-pause:{follow_key}", False):
+                st.session_state[follow_key] = False
+            follow = st.toggle("跟随执行节点", value=None if follow_key in st.session_state else True, key=follow_key,
+                               help="自动定位正在执行、失败或完成后的打包节点；点击节点会暂停跟随。")
+            if follow:
+                focus_node = (next((key for key in graph_nodes if state["stages"][key].get("status") == "running"), None)
+                              or next((key for key in graph_nodes if state["stages"][key].get("status") == "failed"), None)
+                              or ("package" if status in {"completed", "needs_attention"} else None))
+                if focus_node:
+                    selected_stage = focus_node
+                    st.session_state[selection_key] = focus_node
+            else:
+                st.caption("已暂停跟随，可检查所选节点；重新开启后定位当前执行阶段。")
             render_canvas(canvas_spec(recipe["targets"], state["stages"], selected_stage,
                                       GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
                                       language=st.session_state.get("ui_language", "zh"), live=True),
-                          selection_key, key=f"live-canvas:{run_id}")
+                          selection_key, key=f"live-canvas:{run_id}", follow_key=follow_key)
     selected_metrics = state["stages"][selected_stage]
     selected_status, done, total, percent = _stage_numbers(selected_metrics)
     if selected_stage not in active_stages:
