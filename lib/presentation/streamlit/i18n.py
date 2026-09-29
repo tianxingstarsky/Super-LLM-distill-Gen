@@ -1310,6 +1310,8 @@ ZH_EN.update({
     "点击节点分别选择生成与评审模型": "Select generation and review models in each node",
     "点击工作流节点选择模型": "Choose models in workflow nodes",
     "登记服务地址、凭据与预算；具体模型在工作流节点中选择。": "Register service addresses, credentials, and budgets. Choose models in workflow nodes.",
+    "配置草稿未能保存或恢复。当前修改仍保留在会话中。": "The draft could not be saved or restored. Your changes remain in this session.",
+    "参数、目标与需求文本自动保存到当前工作区；上传文件和节点模型选择需重新确认。": "Settings, goals, and brief text are saved in this workspace. Reconfirm uploads and node models when you reopen it.",
     "快捷规模 · 仍可输入自定义数量": "Quick sizes. You can also enter a custom count.",
     "处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。": "The processing limit is below the candidate count. This run plans up to that limit. The remaining candidates will not be generated in this run.",
     "候选样本规模": "Candidate count", "并发请求上限": "Concurrency limit", "每批候选数": "Candidates per batch",

@@ -19,6 +19,13 @@ def test_language_choice_accepts_chinese_and_english_values():
     assert language_code("简体中文") == "zh"
 
 
+def test_persistent_creation_draft_status_translates_completely():
+    assert translate("配置草稿未能保存或恢复。当前修改仍保留在会话中。", "en") == (
+        "The draft could not be saved or restored. Your changes remain in this session.")
+    assert translate("参数、目标与需求文本自动保存到当前工作区；上传文件和节点模型选择需重新确认。", "en") == (
+        "Settings, goals, and brief text are saved in this workspace. Reconfirm uploads and node models when you reopen it.")
+
+
 def test_preference_review_controls_and_progress_translate_completely():
     assert translate("编辑两个回答", "en") == "Edit both responses"
     assert translate("已审核 12 对 · 待处理 50000 对", "en") == "Reviewed 12 · Pending 50000"

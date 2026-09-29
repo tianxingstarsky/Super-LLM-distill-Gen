@@ -11,6 +11,7 @@ import streamlit as st
 from filelock import Timeout
 
 from lib.application.workflow_service import WorkflowApplication
+from lib.application.creation_draft_service import CreationDraftApplication
 from lib.domain.workflow_graph import execution_graph
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
 from lib.presentation.streamlit.shared import page_header, section_heading
@@ -455,6 +456,13 @@ def _save_draft_value(workspace, key):
         return
     st.session_state[draft_key] = {
         **previous, key: st.session_state[key]}
+    application = st.session_state.get(f"workflow-draft-application:{workspace}")
+    if application is not None:
+        try:
+            application.update({key: st.session_state[key]})
+            st.session_state.pop(f"workflow-draft-error:{workspace}", None)
+        except (OSError, ValueError, Timeout):
+            st.session_state[f"workflow-draft-error:{workspace}"] = True
 
 
 def _select_candidate_count(workspace, count):
@@ -480,7 +488,7 @@ def _draft_name(default, workspace):
         st.session_state[key] = draft.get(key, default)
     if key not in draft:
         _save_draft_value(workspace, key)
-    return st.text_input("运行名称", value=None, key=key,
+    return st.text_input("运行名称", value=None, key=key, max_chars=100,
                          on_change=_save_draft_value, args=(workspace, key))
 
 
@@ -489,7 +497,7 @@ def _draft_brief(label, *, key, **options):
     draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     if key not in st.session_state:
         st.session_state[key] = draft.get(key, "")
-    return st.text_area(label, value=None, key=key,
+    return st.text_area(label, value=None, key=key, max_chars=20000,
                         on_change=_save_draft_value, args=(workspace, key), **options)
 
 
@@ -504,7 +512,8 @@ def _restore_selection(workspace, key, default, choices):
     _save_draft_value(workspace, key)
 
 
-def render_workbench(application: WorkflowApplication, begin, model_application):
+def render_workbench(application: WorkflowApplication, begin, model_application, *,
+                     draft_application: CreationDraftApplication | None = None):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     st.html(
@@ -516,6 +525,20 @@ def render_workbench(application: WorkflowApplication, begin, model_application)
         '</div>'
     )
     ws = st.session_state["ws"]
+    if draft_application is not None:
+        st.session_state[f"workflow-draft-application:{ws}"] = draft_application
+        draft_key = f"workflow-form-draft:{ws}"
+        if not st.session_state.get(f"workflow-draft-loaded:{ws}"):
+            try:
+                saved = draft_application.load()
+                st.session_state[draft_key] = {**saved, **st.session_state.get(draft_key, {})}
+                st.session_state[f"workflow-draft-loaded:{ws}"] = True
+            except (OSError, ValueError):
+                st.session_state[f"workflow-draft-error:{ws}"] = True
+        if st.session_state.get(f"workflow-draft-error:{ws}"):
+            st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
+        else:
+            st.caption("参数、目标与需求文本自动保存到当前工作区；上传文件和节点模型选择需重新确认。")
     preset_key = f"workflow-preset:{ws}"
     _restore_selection(ws, preset_key, "自动推荐", PRESETS)
     preset = st.segmented_control(
