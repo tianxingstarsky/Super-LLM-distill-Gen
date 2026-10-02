@@ -319,7 +319,7 @@ def test_malformed_or_ambiguous_agent_call_ids_never_show_verified_badge():
     assert "2 次调用 ID 不可核对" in preview
     assert "调用 ID 缺失或重复，无法核对返回" in preview
     assert ' data-kind="tool" data-failed="false" data-verified="true"' not in preview
-    assert "1 次调用已核对" in preview  # metadata count is deduplicated, not replay proof
+    assert "0 次调用已核对" in preview  # duplicated IDs cannot support replay status
     malformed = render_training_sample("agent", {
         "messages": [{"role": "assistant", "toolCalls": [{"name": "read"}]}],
         "verification": {"method": [], "verified_call_ids": ["x"]},

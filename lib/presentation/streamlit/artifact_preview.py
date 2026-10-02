@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from collections import Counter
 from itertools import islice
 from typing import Any
 from lib.domain.math_tasks import validate_math_candidate
@@ -147,6 +148,8 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
         return '<div class="df-artifact-muted">暂无轨迹消息</div>'
     steps = []
     compact = len(messages) > 12
+    id_counts = Counter(call_id for message in messages if message.get("role") == "assistant"
+                        for call_id in _tool_call_ids(message))
     for index, end in trace_ranges(messages):
         message = messages[index]
         names = _tool_call_names(message) if message.get("role") == "assistant" else []
@@ -165,7 +168,8 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
         else:
             kind, label, title = "context", "运行上下文", str(message.get("role") or "其他消息")
         failed = type(failure_step) is int and index <= failure_step < end
-        complete_ids = len(call_ids) == len(names) and len(call_ids) == len(set(call_ids))
+        complete_ids = (len(call_ids) == len(names)
+                        and all(id_counts[call_id] == 1 for call_id in call_ids))
         verified = bool(complete_ids and call_ids and verified_call_ids
                         and set(call_ids).issubset(returned_ids)
                         and all(call_id in verified_call_ids for call_id in call_ids) and not failed)
@@ -229,6 +233,8 @@ def _agent_review_summary(messages: list[dict], verification: Any,
                           failure_step: int | None = None) -> str:
     """Summarize only visible recorded calls; metadata alone never proves a return."""
     verified_ids = _verified_ids(verification)
+    id_counts = Counter(call_id for message in messages if message.get("role") == "assistant"
+                        for call_id in _tool_call_ids(message))
     total = replayed = missing = needs_review = unmatched = ambiguous = 0
     for start, end in trace_ranges(messages):
         message = messages[start]
@@ -239,7 +245,7 @@ def _agent_review_summary(messages: list[dict], verification: Any,
             continue
         total += len(names)
         call_ids = _tool_call_ids(message)
-        if len(call_ids) != len(names) or len(call_ids) != len(set(call_ids)):
+        if len(call_ids) != len(names) or any(id_counts[call_id] != 1 for call_id in call_ids):
             ambiguous += len(names)
             continue
         returned = {value for result in messages[start + 1:end]
@@ -280,10 +286,25 @@ def _agent_verification(row: dict) -> str:
     method = verification.get("method")
     if not isinstance(method, str) or method not in _REPLAY_METHOD_LABELS:
         return '<p class="df-artifact-trace-hint">重放方式未注明或不受支持；调用 ID 不代表已完成验证。</p>'
-    verified = verification.get("verified_call_ids")
     pruned = verification.get("pruned_call_ids")
     turns = verification.get("verified_turns")
-    verified_count = len(_verified_ids(verification)) if isinstance(verified, list) else 0
+    messages = _messages(row.get("messages"))
+    id_counts = Counter(call_id for message in messages if message.get("role") == "assistant"
+                        for call_id in _tool_call_ids(message))
+    verified_ids = _verified_ids(verification)
+    failed_step = row.get("failure_step")
+    paired_verified = set()
+    for start, end in trace_ranges(messages):
+        message = messages[start]
+        names = _tool_call_names(message) if message.get("role") == "assistant" else []
+        ids = _tool_call_ids(message) if names else []
+        if (len(ids) != len(names) or any(id_counts[call_id] != 1 for call_id in ids)
+                or type(failed_step) is int and start <= failed_step < end):
+            continue
+        returned = {call_id for result in messages[start + 1:end]
+                    for call_id in _tool_result_ids(result)}
+        paired_verified.update(set(ids) & returned & verified_ids)
+    verified_count = len(paired_verified)
     pruned_count = len(pruned) if isinstance(pruned, list) else 0
     turn_count = len({turn for turn in turns if type(turn) is int and turn >= 0}) if isinstance(turns, list) else 0
     facts = [_REPLAY_METHOD_LABELS[method],
@@ -292,7 +313,7 @@ def _agent_verification(row: dict) -> str:
         facts.append(f"{turn_count} 轮回答已核对")
     summary = '<div class="df-artifact-verification"><b>重放校验</b>' + ''.join(
         '<span>' + _safe(fact) + '</span>' for fact in facts) + '</div>'
-    visible_ids = {call_id for message in _messages(row.get("messages")) for call_id in _tool_call_ids(message)}
+    visible_ids = {call_id for message in messages for call_id in _tool_call_ids(message)}
     evidence = verification.get("call_evidence")
     evidence = list(islice((entry for entry in evidence if isinstance(entry, dict)
                            and str(entry.get("call_id")) in visible_ids), 17)) if isinstance(evidence, list) else []
