@@ -9,6 +9,7 @@ import tracemalloc
 import pytest
 
 from lib import cli
+from lib import review_center as rc
 from lib.infrastructure.release_file_driver import FilesystemReleaseDriver
 from lib.render import render_preview_html  # noqa: F401 - exclude renderer import from peak usage
 
@@ -72,3 +73,40 @@ def test_quality_report_streams_from_source(tmp_path, monkeypatch, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["samples"] == 300
     assert report["length_chars"] == {"min": 19, "max": 23, "mean": 22}
+
+
+def test_review_push_imports_a_prefix_without_loading_all_rows(tmp_path, monkeypatch, capsys):
+    source = tmp_path / "rollout_samples.jsonl"
+    _source(source, 2_000)
+    monkeypatch.setattr(cli, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(cli, "_gates", lambda: object())
+    monkeypatch.setattr(rc, "DB_PATH", tmp_path / "review.db")
+    monkeypatch.setattr(rc, "OUT_ROOT", tmp_path)
+    rc.ensure_admin("offline-test-key")
+    original_read_text = Path.read_text
+
+    def guarded_read_text(path, *args, **kwargs):
+        if path == source:
+            pytest.fail("review push loaded the full JSONL file")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    assert cli.cmd_review(Namespace(action="push", n=3, ws="default")) == 0
+    dataset = cli.WS.dataset_name("default")
+    assert rc.queue_page(dataset, "admin", limit=1)["total"] == 3
+    assert "已推送 3 条" in capsys.readouterr().out
+
+
+def test_review_push_rolls_back_when_a_late_row_is_invalid(tmp_path, monkeypatch):
+    source = tmp_path / "rollout_samples.jsonl"
+    _source(source, 2)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("[]\n")
+    monkeypatch.setattr(cli, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(cli, "_gates", lambda: object())
+    monkeypatch.setattr(rc, "DB_PATH", tmp_path / "review.db")
+    monkeypatch.setattr(rc, "OUT_ROOT", tmp_path)
+    rc.ensure_admin("offline-test-key")
+    with pytest.raises(ValueError, match=r"rollout_samples\.jsonl:3: expected an object"):
+        cli.cmd_review(Namespace(action="push", n=1, ws="default"))
+    assert rc.queue_page(cli.WS.dataset_name("default"), "admin", limit=1)["total"] == 0

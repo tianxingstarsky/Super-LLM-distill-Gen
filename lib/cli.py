@@ -231,17 +231,24 @@ def cmd_review(args) -> int:
 
     gate = _gates()
     if args.action == "push":
-        samples = [
-            json.loads(l)
-            for l in pathlib.Path(OUT_DIR / "rollout_samples.jsonl").read_text(encoding="utf-8").splitlines()
-            if l.strip()
-        ][: args.n]
+        from lib.infrastructure.sample_preview import RawSamplePreview
+
+        preview = RawSamplePreview(OUT_DIR / "rollout_samples.jsonl")
+        limit = args.n if args.n >= 0 else max(0, len(preview) + args.n)
+
+        def selected_samples():
+            # Finish the source read before the database transaction commits,
+            # even when only a small prefix is sent for review.
+            for index, sample in enumerate(preview):
+                if index < limit:
+                    yield sample
+
         report_path = OUT_DIR / "distill_report.json"
         scores = {}
         if report_path.exists():
             scores = {s.get("id"): s.get("score", "") for s in json.loads(report_path.read_text(encoding="utf-8")).get("llm_scores", [])}
         dataset = WS.dataset_name(getattr(args, "ws", None))
-        n = review_mod.push_samples(samples, scores, dataset_name=dataset)
+        n = review_mod.push_samples(selected_samples(), scores, dataset_name=dataset)
         print(f"已推送 {n} 条到审核中心（数据集 {dataset}，控制台「人工审核」页过目）")
         print("标注完 keep/reject 后运行: df review pull")
         return 0
