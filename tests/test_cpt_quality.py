@@ -58,6 +58,24 @@ def test_near_and_exact_duplicates_keep_one_source_with_explainable_lineage(tmp_
                          "dedup_rate": 0.3333, "overall_rate": 0.3333}
 
 
+def test_cpt_index_retains_only_source_identity_during_package(tmp_path, monkeypatch):
+    references = []
+    original = CorpusNearDuplicateIndex.add_reference
+
+    def track_reference(index, text, reference):
+        references.append(reference)
+        return original(index, text, reference)
+
+    monkeypatch.setattr(CorpusNearDuplicateIndex, "add_reference", track_reference)
+    body = "设备维护前需断电，并记录检查结果。"
+    _, path = _run(tmp_path, [body, body])
+    records = read_json(path / "artifacts" / "cpt.records.json")
+    assert records[1]["duplicate_of"] == records[0]["id"]
+    assert records[1]["representative_source"] == records[0]["source_name"]
+    assert len(references) == 1
+    assert references[0] == {"id": records[0]["id"], "source_name": records[0]["source_name"]}
+
+
 def _publish(output, run_id, *, revised_text=None):
     application = CorpusReviewApplication(FilesystemCorpusReviewDriver(output))
     for item in application.queue(run_id)["items"]:

@@ -13,7 +13,7 @@ from filelock import Timeout
 from lib.application.workflow_service import WorkflowApplication
 from lib.application.creation_draft_service import CreationDraftApplication
 from lib.domain.workflow_graph import execution_graph
-from lib.presentation.streamlit.i18n import UntranslatedText, translate
+from lib.presentation.streamlit.i18n import UntranslatedText, translate, translate_label
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
@@ -193,6 +193,22 @@ def _quality_html(targets):
 GRAPH_LABELS = {"ingest": "输入解析", "cpt": "CPT 语料", "sft": "SFT 生成",
                 "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
                 "preference": "偏好评审", "cot": "CoT 核对", "package": "质检打包"}
+
+
+def _missing_model_role_summary(issues, language):
+    pending_roles = {}
+    for node, role in issues:
+        pending_roles.setdefault(node, []).append(role)
+    role_labels = {"generation": "生成模型", "jev": "独立质量评审模型"}
+    descriptions = []
+    for node, roles in pending_roles.items():
+        node_label = translate_label(GRAPH_LABELS[node], language)
+        missing = [translate_label(role_labels[role], language) for role in roles]
+        if language == "en":
+            descriptions.append(f"{node_label}: missing {', '.join(missing)}")
+        else:
+            descriptions.append(f"{node_label}：缺少{'、'.join(missing)}")
+    return " · ".join(descriptions)
 
 
 def _planned_flow_html(targets, nodes: tuple[str, ...], edges: tuple[tuple[str, str], ...]) -> str:
@@ -654,13 +670,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                               if node in pending_nodes), pending_nodes[0])
             st.button("配置下一个待完善节点", on_click=_select_setup_node,
                       args=(selection_key, next_node), key=f"workflow-next-config:{ws}")
-            st.caption(" · ".join(GRAPH_LABELS[node] for node in pending_nodes))
+            st.caption(_missing_model_role_summary(model_issues, st.session_state.get("ui_language", "zh")))
         canvas_column, node_column = st.columns([2.25, 1], gap="medium")
         with canvas_column, st.container(border=True):
-            section_heading("工作流节点配置", "直接点击节点，在右侧选择该步骤的模型。", "◇")
+            section_heading("工作流节点配置", "点击节点查看步骤；需要模型的节点可在右侧选择。", "◇")
             render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
                                       snapshot_available_bindings(graph_nodes, source_mode, bindings, endpoints),
-                                      language=st.session_state.get("ui_language", "zh")),
+                                      language=st.session_state.get("ui_language", "zh"), source_mode=source_mode),
                           selection_key, key=f"setup-canvas:{ws}")
         with node_column, st.container(border=True):
             section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])

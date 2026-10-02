@@ -391,7 +391,7 @@ def test_home_empty_workspace_shows_honest_next_steps():
     next(button for button in view.button if button.key == "overview:开放需求").click().run()
     assert not view.exception
     assert view.session_state["nav"] == "自动工作流"
-    assert view.session_state["workflow-source-mode"] == "开放需求"
+    assert view.session_state[f"workflow-source-mode:{view.session_state['ws']}"] == "开放需求"
 
 
 def test_quality_report_filters_real_issues_and_locates_source_row(tmp_path):

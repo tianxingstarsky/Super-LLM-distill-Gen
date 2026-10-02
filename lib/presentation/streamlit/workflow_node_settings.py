@@ -55,7 +55,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints):
         if binding.get("backend") == backend and binding.get("model") not in models and binding.get("model"):
             models.append(binding["model"])
         model = st.selectbox("模型", models, index=models.index(binding["model"])
-                             if binding.get("model") in models else 0 if models else None,
+                             if binding.get("backend") == backend and binding.get("model") in models else None,
                              accept_new_options=True, key=prefix + ":model:" + backend,
                              placeholder="选择或输入模型名")
         if model:

@@ -32,7 +32,7 @@ from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_i
 from lib.domain.workflow_creation import validate_creation
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
-from lib.infrastructure.json_stream import iter_source_json_records
+from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.brave_web_research import search as search_web
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
@@ -908,7 +908,8 @@ class Workflow:
                   "input_issues": [{"id": u["id"], "source_id": u["source_id"],
                                     "source_name": u.get("source_name"), "location": u.get("location"),
                                     "source_location": u.get("source_location"), "reason": u.get("reason")}
-                                   for u in read_json(self.path / "input_records.json") if u["status"] == "quarantined"],
+                                   for u in iter_json_records(self.path / "input_records.json")
+                                   if u["status"] == "quarantined"],
                   "limitations": ["模型评审不等于事实证明", "字符分块不是 tokenizer 长度",
                                   "CPT 当前批次及同工作区已发布版本的近重复筛查不证明来源许可或事实正确",
                                   "CPT 跨批参照仅覆盖任务创建时同一工作区已发布且清单可校验的版本；不覆盖其他工作区或未审核候选",
@@ -971,7 +972,11 @@ class Workflow:
                                            reference_release=released_duplicate["reference_release"],
                                            similarity=released_duplicate["similarity"])
                             else:
-                                duplicate = corpus_index.check_and_add(row["text"], row)
+                                # The index keeps references until packaging finishes. Retain
+                                # lineage only; full CPT rows are already spooled to disk.
+                                reference = {key: row[key] for key in ("id", "source_name", "reference_release")
+                                             if key in row}
+                                duplicate = corpus_index.check_and_add(row["text"], reference)
                                 if duplicate:
                                     row.update(status="duplicate", duplicate_scope="current_run", **duplicate)
                                 else:

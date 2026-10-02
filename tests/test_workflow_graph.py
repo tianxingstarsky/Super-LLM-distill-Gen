@@ -18,6 +18,20 @@ def test_canvas_shows_both_node_model_roles_and_keeps_live_progress():
     assert node['subtitle'] == 'Running · 12,000 / 50,000'
 
 
+def test_setup_canvas_only_asks_for_models_when_the_source_uses_them():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    labels = {key: key for key in execution_graph(['cpt'])[0]}
+    document = canvas_spec(['cpt'], {}, 'cpt', labels, labels, language='en',
+                           source_mode='文档资料')
+    assert all(node['subtitle'] == 'No model needed · inspect step' for node in document['nodes'])
+    open_brief = canvas_spec(['cpt'], {}, 'cpt', labels, labels, language='en',
+                             source_mode='开放需求')
+    subtitles = {node['id']: node['subtitle'] for node in open_brief['nodes']}
+    assert subtitles['ingest'] == 'Select to configure'
+    assert subtitles['cpt'] == 'Select to configure'
+    assert subtitles['package'] == 'No model needed · inspect step'
+
+
 def test_cpt_only_route_has_no_unselected_or_implicit_stages():
     nodes, edges = execution_graph(["cpt"])
     assert nodes == ("ingest", "cpt", "package")

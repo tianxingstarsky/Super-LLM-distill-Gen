@@ -9,8 +9,9 @@ Object.defineProperty(d.getElementById('view'),'clientWidth',{value:680,configur
 Object.defineProperty(d.getElementById('view'),'clientHeight',{value:320,configurable:true});
 const labels={node_picker:'Go to node',fit:'Fit',focus:'Locate',hint:'Select',lineage:'Dependencies',overview:'3 nodes',reset:'Actual size',zoom_in:'Zoom in',zoom_out:'Zoom out'};
 const nodes=[{id:'ingest',label:'Input',x:24,y:100},{id:'sft',label:'SFT <source>',x:294,y:100},{id:'package',label:'Package',x:564,y:100}].map(n=>({...n,status:'pending',subtitle:'Choose model',glyph:'◇'}));
-function render(selected){w.dispatchEvent(new w.MessageEvent('message',{source:w,data:{type:'streamlit:render',args:{spec:{nodes,edges:[['ingest','sft'],['sft','package']],selected,width:810,height:310,labels}}}}));}
+function render(selected,language='en'){w.dispatchEvent(new w.MessageEvent('message',{source:w,data:{type:'streamlit:render',args:{spec:{nodes,edges:[['ingest','sft'],['sft','package']],selected,width:810,height:310,labels,language}}}}));}
 render('ingest');
+assert.equal(d.documentElement.lang,'en');
 assert.equal(d.getElementById('scale').textContent,'82%');
 assert.ok(810*Number(d.getElementById('canvas').style.transform.match(/[\d.]+/)[0])<=680);
 Object.defineProperty(d.getElementById('view'),'clientWidth',{value:540,configurable:true});
@@ -29,6 +30,8 @@ assert.equal(d.getElementById('scale').textContent,'100%');
 assert.deepEqual([...d.querySelector('[data-node="sft"] .copy').querySelectorAll('small')].map(x=>x.textContent),nodes[1].models);
 assert.equal(d.querySelector('[data-node="sft"] source'),null);
 assert.ok(d.querySelector('[data-node="sft"]').title.includes('Review: critic & judge'));
+assert.ok(d.querySelector('[data-node="sft"]').getAttribute('aria-label').includes('Generate: writer <source>'));
+assert.ok(d.querySelector('[data-node="sft"]').getAttribute('aria-label').includes('Review: critic & judge'));
 render('ingest');
 const picker=d.getElementById('node-picker');
 assert.equal(picker.getAttribute('aria-label'),'Go to node');
@@ -37,7 +40,8 @@ assert.equal(picker.options[1].textContent,'SFT <source>');
 assert.equal(picker.querySelector('source'),null);
 picker.value='package';picker.dispatchEvent(new w.Event('change'));
 assert.equal(events.at(-1).value.node,'package');
-render('package');
+render('package','zh');
+assert.equal(d.documentElement.lang,'zh-CN');
 assert.equal(picker.value,'package');
 assert.equal(d.querySelector('.node.selected').dataset.node,'package');
 assert.equal(d.querySelector('path[data-from="sft"]').getAttribute('stroke-width'),'3');

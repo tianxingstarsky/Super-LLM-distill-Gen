@@ -5,12 +5,14 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES, execution_graph
+from lib.domain.workflow_scale import node_roles
 from lib.presentation.streamlit.i18n import translate_label
 
 _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__).with_name("workflow_canvas_frontend")))
 
 
-def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False):
+def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
+                source_mode="文档资料"):
     nodes, edges = execution_graph(targets)
     base = [key for key in BASE_STAGES if key in nodes]
     derived = [key for key in DERIVED_STAGES if key in nodes]
@@ -31,6 +33,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         status_label = {"completed": "完成", "running": "执行中", "failed": "失败", "cancelled": "已停止",
                         "pending": "等待", "queued": "待启动"}.get(status, "等待")
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
+                    translate_label("无需模型 · 查看步骤", language) if not node_roles(key, source_mode) else
                     translate_label("请选择可用模型", language) if status == "configuration_required" else
                     f"{role['backend']} · {role['model']}" if role else
                     translate_label("点击配置节点", language))
@@ -47,7 +50,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                      "intermediate": key == "sft" and "sft" not in targets})
     english = language == "en"
     return {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
-            "live": live, "labels": {"node_picker": "Go to node" if english else "定位节点",
+            "live": live, "language": language, "labels": {"node_picker": "Go to node" if english else "定位节点",
                                        "fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
                                        "zoom_out": "Zoom out" if english else "缩小",
                                        "focus": "Locate selected node" if english else "定位所选节点",
@@ -58,9 +61,9 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                        "overview": f"{len(nodes)} nodes · {len(edges)} links" if english else
                                        f"{len(nodes)} 个节点 · {len(edges)} 条连线",
                                        "hint": ("Select a node to inspect it. Drag to pan. Ctrl + scroll to zoom." if live else
-                                                "Select a node to configure it. Drag to pan. Ctrl + scroll to zoom.") if english else
+                                                 "Select a node to inspect its settings. Drag to pan. Ctrl + scroll to zoom.") if english else
                                        ("点击节点查看运行详情 · 拖动平移 · Ctrl + 滚轮缩放" if live else
-                                        "点击节点配置模型 · 拖动平移 · Ctrl + 滚轮缩放"),
+                                         "点击节点查看配置 · 拖动平移 · Ctrl + 滚轮缩放"),
                                        "lineage": "Arrows show data dependencies. Stages run in order." if english else
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
 

@@ -42,6 +42,8 @@ def test_next_incomplete_node_locates_panel_and_wraps_without_starting_run(tmp_p
     app.run()
     key = f"workflow-next-config:{workspace}"
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "sft"
+    assert any("missing Generation model, Independent review model" in str(item.value)
+               for item in app.caption)
     next(button for button in app.button if button.key == key).click().run()
     assert not app.exception
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "preference"
@@ -238,12 +240,17 @@ def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_node
     review_key = f"node-model:{workspace}:preference:jev:backend"
     next(widget for widget in app.selectbox if widget.key == review_key).set_value("writer").run()
     assert not app.exception
+    assert "jev" not in app.session_state[draft_key]["preference"]
+    review_model_key = f"node-model:{workspace}:preference:jev:model:writer"
+    next(widget for widget in app.selectbox if widget.key == review_model_key).set_value("write-v2").run()
+    assert not app.exception
     app.session_state[f"setup-canvas:{workspace}"] = {"node": "sft", "serial": "switch-2"}
     app.run()
     assert not app.exception
     assert next(widget for widget in app.selectbox if widget.key == generation_key).value == "write-v2"
     assert app.session_state[draft_key]["preference"]["generation"]["model"] == "write-v1"
     assert app.session_state[draft_key]["preference"]["jev"]["backend"] == "writer"
+    assert app.session_state[draft_key]["preference"]["jev"]["model"] == "write-v2"
     assert app.session_state[draft_key]["sft"]["jev"]["backend"] == "review"
 
 
@@ -303,6 +310,10 @@ def test_removed_node_service_requires_explicit_replacement(tmp_path, monkeypatc
     assert node["status"] == "configuration_required" and node["subtitle"] == "Choose an available model"
     next(widget for widget in app.selectbox if widget.key == key).set_value("writer").run()
     assert not app.exception
+    assert "jev" not in app.session_state[f"workflow-node-bindings:{workspace}"]["sft"]
+    model_key = f"node-model:{workspace}:sft:jev:model:writer"
+    next(widget for widget in app.selectbox if widget.key == model_key).set_value("write").run()
+    assert not app.exception
     assert app.session_state[f"workflow-node-bindings:{workspace}"]["sft"]["jev"]["backend"] == "writer"
 
 
@@ -312,7 +323,7 @@ def test_all_target_canvas_localizes_inspection_and_configuration_controls():
     targets = ["cpt", "sft", "multiturn", "agent", "gsm8k", "cot", "orpo", "dpo", "rlaif"]
     setup = canvas_spec(targets, {}, "agent", GRAPH_LABELS, STAGE_GLYPHS, language="en")
     live = canvas_spec(targets, {}, "agent", GRAPH_LABELS, STAGE_GLYPHS, language="en", live=True)
-    assert "configure" in setup["labels"]["hint"] and "inspect" in live["labels"]["hint"]
+    assert "inspect" in setup["labels"]["hint"] and "inspect" in live["labels"]["hint"]
     assert setup["labels"]["overview"] == f"{len(setup['nodes'])} nodes · {len(setup['edges'])} links"
     assert setup["labels"]["focus"] == "Locate selected node"
     for spec in (setup, live):

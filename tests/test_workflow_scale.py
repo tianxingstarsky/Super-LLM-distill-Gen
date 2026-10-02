@@ -339,3 +339,36 @@ def test_fifty_thousand_math_inputs_and_seeds_stay_disk_backed(tmp_path, monkeyp
     state = run.execute(resume_run=True)
     assert state['error'] == 'fixture_stop_before_math_generation'
     assert seen == [50000, 50000]
+
+
+@pytest.mark.parametrize("quarantined", [False, True])
+def test_package_streams_input_issues_without_loading_all_records(tmp_path, monkeypatch, quarantined):
+    run = workflow(tmp_path)
+    (run.path / "stage-results").mkdir(exist_ok=True)
+    input_path = run.path / "input_records.json"
+    rows = ({"id": str(index), "source_id": "source", "status": "ready"}
+            for index in range(2000))
+    with input_path.open("w", encoding="utf-8") as handle:
+        handle.write("[")
+        for index, row in enumerate(rows):
+            if index:
+                handle.write(",")
+            handle.write(json.dumps(row))
+        if quarantined:
+            handle.write(',{"id":"bad","source_id":"source","status":"quarantined",'
+                         '"source_name":"source.txt","reason":"invalid_record"}')
+        handle.write("]")
+
+    original_read = engine.read_json
+
+    def guarded_read(path):
+        assert path != input_path, "Packaging must not load every input record into memory"
+        return original_read(path)
+
+    monkeypatch.setattr(engine, "read_json", guarded_read)
+    run.package({"sft": []})
+    issues = original_read(run.path / "artifacts" / "quality.json")["input_issues"]
+    expected = ([{"id": "bad", "source_id": "source", "source_name": "source.txt",
+                  "location": None, "source_location": None, "reason": "invalid_record"}]
+                if quarantined else [])
+    assert issues == expected
