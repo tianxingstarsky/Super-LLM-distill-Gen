@@ -22,6 +22,7 @@ import time
 
 from filelock import FileLock, Timeout
 
+from lib.application.preference_service import preference_summary
 from lib.application.trainer_export_service import prepare_trl_export
 from lib.domain.workflow_quality import POLICY, accepted, canonical, conversation_issue, same_answer, text_issue, tool_error_flag, verdict
 from lib.domain.agent_trajectory import REPLAY_POLICY_VERSION, assess_recorded_trajectory
@@ -34,6 +35,7 @@ from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
+from lib.infrastructure.generation_settings_file import FileGenerationSettingsDriver
 from lib.infrastructure.brave_web_research import search as search_web
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
@@ -54,8 +56,34 @@ from lib.prompts import get, registry, render
 
 EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
-RECIPE_VERSION = 6
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6})
+RECIPE_VERSION = 7
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7})
+
+# The automatic workflow has no recipe pools or batch tagger. Keep those
+# preferences visible as unapplied until their behavior can be implemented.
+UNAPPLIED_PREFERENCE_FIELDS = (
+    "preferences.*", "sampling.default_floor", "sampling.templates_per_dim",
+    "sampling.shuffle_per_batch", "correction.*",
+)
+
+
+def preference_snapshot(root):
+    """Validate and pin settings once, before a run or any input is created."""
+    text = FileGenerationSettingsDriver(root).read("生成偏好")
+    return {"version": 1, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "values": preference_summary(text)}
+
+
+def preferred_training_record(target, row, preferences=None, *, reward_model=False):
+    """Drop SFT explanation fields without changing the scored answer text."""
+    record = rlaif_reward_model_record(row) if reward_model else training_record(target, row)
+    if target != "sft" or not preferences or preferences["values"]["cot_style"] != "drop":
+        return record
+    record = deepcopy(record)
+    for message in record["messages"]:
+        if message.get("role") == "assistant":
+            message.pop("reasoning_content", None)
+    return record
 
 
 def now():
@@ -128,7 +156,7 @@ def verify_artifacts(path):
     return manifest
 
 
-def write_trainer_export(destination, target, records):
+def write_trainer_export(destination, target, records, preferences=None):
     """Convert rows individually while retaining the all-or-nothing TRL gate."""
     output = destination / f"trl_{target}.jsonl"
     pending = destination / f".trl_{target}.pending"
@@ -138,8 +166,8 @@ def write_trainer_export(destination, target, records):
         for row in records:
             if row["status"] != "eligible":
                 continue
-            payload = {"id": row.get("id"), **(rlaif_reward_model_record(row) if target == "rlaif"
-                                               else training_record(target, row))}
+            payload = {"id": row.get("id"), **preferred_training_record(
+                target, row, preferences, reward_model=target == "rlaif")}
             check = prepare_trl_export("dpo" if target == "rlaif" else target, [payload])
             if check["ready"]:
                 compatible += 1
@@ -170,7 +198,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                max_units=100, chunk_chars=2000, tasks=10, conversation_turns=3, source_names=None,
                evaluation_sources=(), evaluation_source_names=None,
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
-               agent_replay_mode="configured", web_research=None):
+               agent_replay_mode="configured", web_research=None, settings_root=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -178,6 +206,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
+    preferences = preference_snapshot(settings_root or Path(__file__).resolve().parents[2])
     files = [Path(p).resolve(strict=True) for p in sources]
     if not files and not brief.strip():
         raise ValueError("请上传来源文件或填写开放性需求")
@@ -220,6 +249,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "agent_sandbox_image": agent_sandbox_image,
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
               "node_models": node_models, "web_research": web_research,
+              "generation_preferences": preferences,
               "prompts": prompt_versions()}
     atomic_json(path / "recipe.json", recipe)
     atomic_json(path / "state.json", {"id": run_id, "name": name[:100], "created_at": now(), "updated_at": now(),
@@ -923,6 +953,27 @@ class Workflow:
                                   "GSM8K 是受限整数算术模板样例，不等同完整 GSM8K 基准",
                                   "TRL 格式相容不证明所选模型聊天模板或 tokenizer 可用于训练",
                                   "敏感信息规则不能覆盖所有隐私类型"]}
+        preferences = self.recipe.get("generation_preferences")
+        if preferences:
+            sft_export = "sft" in self.recipe["targets"]
+            configured_style = preferences["values"]["cot_style"]
+            supported_style = configured_style in {"separated", "drop"}
+            report["generation_preferences"] = {
+                "source_sha256": preferences["sha256"],
+                "configured_reasoning_style": configured_style,
+                "export_reasoning_style": (configured_style if sft_export and supported_style
+                                           else "separated" if sft_export else None),
+                "applied_targets": ["sft"] if sft_export and supported_style else [],
+                "unapplied_fields": [*UNAPPLIED_PREFERENCE_FIELDS,
+                                     "cot.think_tokens",
+                                     *([] if sft_export and supported_style else ["cot.style"])],
+            }
+            report["limitations"].append(
+                "生成偏好的权重、模板轮换和后验校正尚未用于自动工作流；"
+                "仅 SFT 训练文件支持分字段保留或删除推理字段；plain/tags 尚不应用于自动工作流。"
+                "Agent 轨迹及偏好对保持原始证据。")
+        else:
+            report["generation_preferences"] = {"status": "legacy_run_without_snapshot"}
         if self._research_document is not None:
             atomic_json(destination / "web_research.json", self._research_document)
             report["web_research"] = {"status": "planning_leads_only", "provider": "brave",
@@ -949,7 +1000,7 @@ class Workflow:
                 if target == "gsm8k" and row["status"] == "eligible" and not validate_math_candidate(row):
                     row.update(status="quarantined", reason="gsm8k_arithmetic_verification_failed")
                 if row["status"] == "eligible":
-                    payload = training_record(target, row)
+                    payload = preferred_training_record(target, row, preferences)
                     if corpus_index is not None:
                         evaluation_hit = evaluation_index.inspect(row["text"]) if evaluation_index else None
                         if evaluation_hit:
@@ -1024,7 +1075,8 @@ class Workflow:
             if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:
                 # A trainer export is complete only if every eligible native row converts.
                 # Keep the native target even when its optional TRL format is incompatible.
-                report["trainer_exports"][target] = write_trainer_export(destination, target, records)
+                report["trainer_exports"][target] = write_trainer_export(
+                    destination, target, records, preferences)
             if target == "cpt":
                 selected_count = len(collections[target])
                 quality_passed = sum(row["status"] == "eligible" for row in collections[target])

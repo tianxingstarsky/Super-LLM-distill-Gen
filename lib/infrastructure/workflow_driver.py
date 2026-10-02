@@ -59,7 +59,7 @@ class FilesystemWorkflowDriver:
         self.output = Path(output)
 
     def create(self, **recipe) -> str:
-        return create_run(self.output, **recipe)
+        return create_run(self.output, settings_root=self.root, **recipe)
 
     def web_research_capabilities(self) -> dict:
         from lib.infrastructure.brave_web_research import configured

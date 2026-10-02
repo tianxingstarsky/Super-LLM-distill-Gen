@@ -1,5 +1,8 @@
 # 用户偏好中心 v1 —— 偏好=软配比，绝不写入指令文本
 # 用法：按你的期望改权重；default 兜底不可归零（防风格坍缩/重复输出）。
+# 自动工作流当前仅在 SFT 导出中支持 cot.style=separated/drop。
+# 权重、模板轮换、后验校正和 plain/tags 仍只供其他专用管线使用；
+# 自动工作流将配置快照与未应用字段写入运行配方和质量报告。
 preferences:
   reasoning: 0.30      # 深度思考 / CoT / 反思（recipe: recipes/reasoning.yaml）
   context_use: 0.20    # 长上下文利用 / 多轮信息整合（recipes/context_use.yaml）
