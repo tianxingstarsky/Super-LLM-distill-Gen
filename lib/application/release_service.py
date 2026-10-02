@@ -16,6 +16,9 @@ class ReleaseApplication:
     def read_samples(self, path: Path) -> list[dict]:
         return self._port.read_samples(Path(path))
 
+    def replayable_samples(self, path: Path) -> Iterable[dict]:
+        return self._port.replayable_samples(Path(path))
+
     def preview_samples(self, path: Path):
         return self._port.preview_samples(Path(path))
 
@@ -29,9 +32,11 @@ class ReleaseApplication:
     def quality_report_for_dataset(self, samples: Iterable[dict], dataset_name: str) -> dict:
         return self.quality_report(samples, self._port.review_decisions(dataset_name))
 
-    def export_release(self, samples: list[dict], fmt: str, parent: Path, decisions=(),
+    def export_release(self, samples: Iterable[dict], fmt: str, parent: Path, decisions=(),
                        corpus_path: Path | None = None, dpo_path: Path | None = None,
                        tag: str | None = None, bulk: bool = False) -> tuple[Path, dict[str, int]]:
+        if iter(samples) is samples:
+            raise ValueError("release_samples_not_replayable")
         quality = self.quality_report(samples, decisions)
         if bulk and not quality["ready_for_bulk"]:
             raise ValueError("Quality blocked: " + ", ".join(quality["block_reasons"]))
@@ -42,7 +47,7 @@ class ReleaseApplication:
                                         dpo_path=Path(dpo_path) if dpo_path else None,
                                         tag=tag, bulk=bulk)
 
-    def export_release_for_dataset(self, samples: list[dict], fmt: str, parent: Path,
+    def export_release_for_dataset(self, samples: Iterable[dict], fmt: str, parent: Path,
                                    dataset_name: str, **options) -> tuple[Path, dict[str, int]]:
         return self.export_release(samples, fmt, parent,
                                    self._port.review_decisions(dataset_name), **options)

@@ -57,6 +57,37 @@ def test_invalid_jsonl_is_reported_with_line_and_has_no_release(tmp_path):
     assert list(tmp_path.iterdir()) == [path]
 
 
+def test_replayable_source_rechecks_rows_and_rejects_changed_input(tmp_path):
+    application = release_application()
+    source = tmp_path / "samples.jsonl"
+    source.write_text(json.dumps(_sample(1)) + "\n", encoding="utf-8")
+    rows = application.replayable_samples(source)
+    assert list(rows) == [_sample(1)]
+
+    source.write_text(json.dumps(_sample(2)) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="^release_source_changed$"):
+        list(rows)
+
+
+def test_replayable_source_validation_precedes_release_directory(tmp_path):
+    source = tmp_path / "samples.jsonl"
+    source.write_text(json.dumps(_sample(1)) + "\n[]\n", encoding="utf-8")
+    destination = tmp_path / "releases"
+    with pytest.raises(ValueError, match=r"samples\.jsonl:2: expected an object"):
+        release_application().export_release(
+            release_application().replayable_samples(source), "chat", destination,
+            tag="invalid", bulk=True,
+        )
+    assert not destination.exists()
+
+
+def test_release_rejects_one_shot_iterator_before_side_effects(tmp_path):
+    rows = (_sample(number) for number in range(2))
+    with pytest.raises(ValueError, match="^release_samples_not_replayable$"):
+        release_application().export_release(rows, "chat", tmp_path / "releases")
+    assert not (tmp_path / "releases").exists()
+
+
 def test_lossy_minimind_conversion_keeps_incomplete_manifest(tmp_path):
     row = {**_sample(1), "images": ["frame.png"]}
     with pytest.raises(ValueError, match="images"):

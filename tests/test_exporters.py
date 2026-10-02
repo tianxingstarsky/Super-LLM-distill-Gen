@@ -76,6 +76,30 @@ def test_export_samples_writes_files(tmp_path):
     assert all("conversations" in json.loads(l) for l in out2.read_text(encoding="utf-8").splitlines())
 
 
+def test_all_formats_consume_one_shot_source_while_writing(tmp_path):
+    from lib.exporters import export_samples
+
+    out = tmp_path / "sft.jsonl"
+    destinations = (tmp_path / "sft_llamafactory.jsonl", tmp_path / "sft_chat.jsonl")
+    passes = 0
+
+    def one_shot():
+        nonlocal passes
+        passes += 1
+        assert passes == 1
+        for number in range(3):
+            assert all(path.exists() for path in destinations)
+            yield {"messages": [
+                {"role": "user", "content": f"Question {number}"},
+                {"role": "assistant", "content": f"Answer {number}"},
+            ]}
+
+    counts = export_samples(one_shot(), "all", out)
+    assert counts["llamafactory"] == counts["chat"] == counts["sft"] == 3
+    assert passes == 1
+    assert [len(path.read_text(encoding="utf-8").splitlines()) for path in destinations] == [3, 3]
+
+
 # ── minimind（格式规范：dataset/lm_dataset.py 加载侧实证） ───────────────────
 def test_to_minimind_sft_shape():
     """conversations[role/content]，assistant 保留 reasoning_content，tool_calls 为 JSON 字符串。"""

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator, Protocol
+from typing import Iterable, Iterator, Protocol
 
 
 class SamplePreviewRows(Protocol):
@@ -13,11 +13,12 @@ class SamplePreviewRows(Protocol):
 
 class ReleasePort(Protocol):
     def read_samples(self, path: Path) -> list[dict]: ...
+    def replayable_samples(self, path: Path) -> Iterable[dict]: ...
     def preview_samples(self, path: Path) -> SamplePreviewRows: ...
     def raw_preview_samples(self, path: Path) -> SamplePreviewRows: ...
 
     def review_decisions(self, dataset_name: str) -> list[dict]: ...
 
-    def write_release(self, samples: list[dict], fmt: str, parent: Path, quality: dict,
+    def write_release(self, samples: Iterable[dict], fmt: str, parent: Path, quality: dict,
                       *, corpus_path: Path | None, dpo_path: Path | None,
                       tag: str | None, bulk: bool) -> tuple[Path, dict[str, int]]: ...

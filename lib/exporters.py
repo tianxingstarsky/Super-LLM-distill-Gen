@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -191,17 +192,18 @@ def export_samples(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     formats = ["llamafactory", "chat"] if fmt == "all" else [fmt]
     counts: Dict[str, int] = {"sft": 0, "dpo": 0}
-    samples = list(samples)  # 物化：多格式导出需多次遍历
-    for f in formats:
-        target = out_path if fmt != "all" else out_path.with_name(out_path.stem + f"_{f}.jsonl")
-        n = 0
-        with open(target, "w", encoding="utf-8") as fh:
-            for s in samples:
-                converted = to_sharegpt_sample(s) if f == "llamafactory" else to_chat_sample(s)
+    with ExitStack() as stack:
+        writers = {}
+        for f in formats:
+            target = out_path if fmt != "all" else out_path.with_name(out_path.stem + f"_{f}.jsonl")
+            writers[f] = stack.enter_context(open(target, "w", encoding="utf-8"))
+            counts[f] = 0
+        for sample in samples:
+            for f, handle in writers.items():
+                converted = to_sharegpt_sample(sample) if f == "llamafactory" else to_chat_sample(sample)
                 if converted:
-                    fh.write(json.dumps(converted, ensure_ascii=False) + "\n")
-                    n += 1
-        counts[f] = n
+                    handle.write(json.dumps(converted, ensure_ascii=False) + "\n")
+                    counts[f] += 1
     counts["sft"] = max(counts.get("llamafactory", 0), counts.get("chat", 0))
     dpo_count = 0
     if dpo_pairs:

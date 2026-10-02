@@ -136,7 +136,7 @@ def cmd_export(args) -> int:
 
     source = pathlib.Path(args.input) if args.input else OUT_DIR / "rollout_samples.jsonl"
     releases = release_application()
-    samples = releases.read_samples(source)
+    samples = releases.replayable_samples(source)
     if args.bulk:
         _gates().require("G3")
     parent = pathlib.Path(args.out) if args.out else OUT_DIR / "export"
