@@ -9,7 +9,7 @@ from typing import Iterable, Iterator
 
 from lib.exporters import export_minimind, export_samples
 from lib.io_utils import atomic_json
-from lib.domain.release_quality import sample_hash
+from lib.domain.release_quality import sample_hash, update_source_digest
 
 
 class ReplayableJSONLSamples:
@@ -61,7 +61,7 @@ class FilesystemReleaseDriver:
         return ReplayableJSONLSamples(path)
 
     def write_release(self, samples: Iterable[dict], fmt: str, parent: Path, quality: dict,
-                      *, corpus_path: Path | None, dpo_path: Path | None,
+                      *, expected_source_digest: str, corpus_path: Path | None, dpo_path: Path | None,
                       tag: str | None, bulk: bool) -> tuple[Path, dict[str, int]]:
         version = tag or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         destination = Path(parent) / version
@@ -70,17 +70,21 @@ class FilesystemReleaseDriver:
         # A conversion failure keeps an explicit incomplete release on disk.
         atomic_json(destination / "manifest.json", {"status": "writing", "format": fmt})
         sample_hashes = []
+        source_digest = hashlib.sha256()
 
         def tracked_samples():
             for sample in samples:
-                sample_hashes.append(sample_hash(sample))
+                fingerprint = sample_hash(sample)
+                sample_hashes.append(fingerprint)
+                update_source_digest(source_digest, sample.get("id"), fingerprint)
                 yield sample
 
         if fmt == "minimind":
             counts = export_minimind(tracked_samples(), destination / "sft_t2t.jsonl", corpus_path, dpo_path)
         else:
             counts = export_samples(tracked_samples(), fmt, destination / "sft.jsonl")
-        if len(sample_hashes) != quality["samples"]:
+        if (len(sample_hashes) != quality["samples"]
+                or source_digest.hexdigest() != expected_source_digest):
             raise ValueError("release_source_changed")
         files = {}
         for path in destination.glob("*.jsonl"):

@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import re
 from typing import Iterable
 
 from lib.application.release_ports import ReleasePort
-from lib.domain.release_quality import report
+from lib.domain.release_quality import report, update_source_digest
 
 
 class ReleaseApplication:
@@ -26,8 +27,8 @@ class ReleaseApplication:
         return self._port.raw_preview_samples(Path(path))
 
     @staticmethod
-    def quality_report(samples: Iterable[dict], decisions=()) -> dict:
-        return report(samples, decisions)
+    def quality_report(samples: Iterable[dict], decisions=(), *, on_fingerprint=None) -> dict:
+        return report(samples, decisions, on_fingerprint=on_fingerprint)
 
     def quality_report_for_dataset(self, samples: Iterable[dict], dataset_name: str) -> dict:
         return self.quality_report(samples, self._port.review_decisions(dataset_name))
@@ -35,14 +36,22 @@ class ReleaseApplication:
     def export_release(self, samples: Iterable[dict], fmt: str, parent: Path, decisions=(),
                        corpus_path: Path | None = None, dpo_path: Path | None = None,
                        tag: str | None = None, bulk: bool = False) -> tuple[Path, dict[str, int]]:
-        if iter(samples) is samples:
+        first, second = iter(samples), iter(samples)
+        if first is samples or first is second:
             raise ValueError("release_samples_not_replayable")
-        quality = self.quality_report(samples, decisions)
+        del first, second
+        source_digest = hashlib.sha256()
+        quality = self.quality_report(
+            samples, decisions,
+            on_fingerprint=lambda sample_id, fingerprint: update_source_digest(
+                source_digest, sample_id, fingerprint),
+        )
         if bulk and not quality["ready_for_bulk"]:
             raise ValueError("Quality blocked: " + ", ".join(quality["block_reasons"]))
         if tag and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tag):
             raise ValueError("tag must contain 1-64 letters, digits, underscores or hyphens")
         return self._port.write_release(samples, fmt, Path(parent), quality,
+                                        expected_source_digest=source_digest.hexdigest(),
                                         corpus_path=Path(corpus_path) if corpus_path else None,
                                         dpo_path=Path(dpo_path) if dpo_path else None,
                                         tag=tag, bulk=bulk)

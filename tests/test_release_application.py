@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 import pytest
 
@@ -86,6 +87,48 @@ def test_release_rejects_one_shot_iterator_before_side_effects(tmp_path):
     with pytest.raises(ValueError, match="^release_samples_not_replayable$"):
         release_application().export_release(rows, "chat", tmp_path / "releases")
     assert not (tmp_path / "releases").exists()
+
+
+def test_release_rejects_container_that_reuses_one_iterator(tmp_path):
+    class CachedIterator:
+        def __init__(self):
+            self.iterator = iter([_sample(1)])
+
+        def __iter__(self):
+            return self.iterator
+
+    destination = tmp_path / "releases"
+    with pytest.raises(ValueError, match="^release_samples_not_replayable$"):
+        release_application().export_release(CachedIterator(), "chat", destination)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("changed_field", ["content", "id"])
+def test_bulk_release_refuses_changed_second_pass_with_same_row_count(tmp_path, changed_field):
+    approved = [_sample(number) for number in range(10)]
+    votes = [{"sample_id": row["id"], "sample_hash": sample_hash(row), "decision": "keep"}
+             for row in approved]
+    changed = deepcopy(approved)
+    if changed_field == "content":
+        changed[0]["messages"][-1]["content"] = "Unreviewed answer"
+    else:
+        changed[0]["id"] = "unreviewed-id"
+
+    class SwitchingRows:
+        def __init__(self):
+            self.passes = 0
+
+        def __iter__(self):
+            self.passes += 1
+            # Two preflight iterators are created but never consumed.
+            return iter(approved if self.passes <= 3 else changed)
+
+    destination = tmp_path / changed_field
+    with pytest.raises(ValueError, match="^release_source_changed$"):
+        release_application().export_release(
+            SwitchingRows(), "chat", tmp_path, votes, bulk=True, tag=changed_field)
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest == {"status": "writing", "format": "chat"}
 
 
 def test_lossy_minimind_conversion_keeps_incomplete_manifest(tmp_path):

@@ -18,6 +18,14 @@ def sample_hash(sample: dict) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+def update_source_digest(digest, sample_id, fingerprint: str) -> None:
+    """Frame each reviewed ID and content hash so row order is unambiguous."""
+    item = json.dumps([sample_id, fingerprint], ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    digest.update(len(item).to_bytes(8, "big"))
+    digest.update(item)
+
+
 def decide_gate(decisions: list[dict], threshold: float = 0.9, minimum: int = 10) -> dict:
     """Count distinct reviewed samples, with conflicting votes never kept."""
     by_sample: dict[str, set[str]] = {}
@@ -37,7 +45,7 @@ def decide_gate(decisions: list[dict], threshold: float = 0.9, minimum: int = 10
     }
 
 
-def report(samples, decisions=()) -> dict:
+def report(samples, decisions=(), *, on_fingerprint=None) -> dict:
     issues: list[dict] = []
     hashes: Counter[str] = Counter()
     ids: Counter[str] = Counter()
@@ -50,6 +58,8 @@ def report(samples, decisions=()) -> dict:
         label = row.get("id") or f"row-{index + 1}"
         ids[label] += 1
         fingerprint = sample_hash(row)
+        if on_fingerprint is not None:
+            on_fingerprint(row.get("id"), fingerprint)
         hashes[fingerprint] += 1
         if row.get("id"):
             source_hashes[row["id"]] = fingerprint
