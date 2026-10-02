@@ -187,6 +187,15 @@ def page_overview():
                     open_folder=_request_folder_dialog, job_status=_job_status)
 
 
+def page_guide():
+    from lib.presentation.streamlit.guide_page import render_guide
+
+    ws = st.session_state["ws"]
+    render_guide(ws, WORKSPACES.label(ws),
+                 has_source_files=bool(WORKSPACES.source_files(ws, limit=1)),
+                 navigate=_select_page)
+
+
 def page_preview(show_title=True):
     from lib.bootstrap.workflows import workflow_application
     from lib.presentation.streamlit.dataset_browser_page import render_dataset_preview
@@ -531,7 +540,7 @@ def page_task_manager():
 
 
 def page_system_settings():
-    page_header("系统设置", "管理质量确认点与生成偏好，控制数据进入审核和导出之前的检查。", "WORKSPACE SETTINGS")
+    page_header("系统设置", "管理界面语言、生成偏好与人工确认点。任务模型在工作流节点选择。", "WORKSPACE SETTINGS")
     from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 
     st.html(SETTINGS_STYLE)
@@ -541,6 +550,12 @@ def page_system_settings():
             "界面语言", ["简体中文", "English"], key="ui-language-choice",
             label_visibility="collapsed", on_change=_set_ui_language,
         )
+    with st.container(border=True, key="settings-guide-route"):
+        section_heading("设置导航", "不确定要去哪里？从使用指南按任务找到入口。", "?")
+        st.html('<div class="df-settings-guide-note">模型服务用于登记端点与凭据；'
+                '具体生成和评审模型在工作流节点内选择。</div>')
+        st.button("查看使用指南", key="settings-open-guide", on_click=_select_page,
+                  args=("使用指南",), width="stretch")
     area = st.segmented_control(
         "系统设置视图", ("HITL 闸门", "生成偏好"),
         default="HITL 闸门", key="system-settings-view",
@@ -554,6 +569,7 @@ def page_system_settings():
 
 PAGES = {
     "首页": page_overview, "总览": page_overview,
+    "使用指南": page_guide,
     "数据生成": page_workflow, "自动工作流": page_workflow,
     "数据管理": page_data_management, "资产管理": page_assets, "数据预览": page_preview,
     "人工审核": page_human_review, "任务管理": page_task_manager, "管线运行": page_run,
@@ -602,6 +618,7 @@ if _qp_page in PAGES and "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page
 visible_nav = [
     ("首页", "总览", {"首页", "总览"}),
+    ("使用指南", "使用指南", {"使用指南"}),
     ("数据生成", "自动工作流", {"数据生成", "自动工作流"}),
     ("数据管理", "数据管理", {"数据管理", "资产管理", "数据预览", "质量报告"}),
     ("人工审核", "人工审核", {"人工审核"}),
@@ -611,7 +628,8 @@ visible_nav = [
     ("系统设置", "系统设置", {"系统设置", "闸门", "偏好设置"}),
 ]
 icons = {"首页": "⌂", "数据生成": "◈", "数据管理": "▤", "人工审核": "✓",
-         "任务管理": "⤴", "输出打包": "⇩", "模型与密钥": "⬡", "模型服务": "⬡", "系统设置": "⚙"}
+         "任务管理": "⤴", "输出打包": "⇩", "模型与密钥": "⬡", "模型服务": "⬡", "系统设置": "⚙",
+         "使用指南": "?"}
 if "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page if _qp_page in PAGES else "总览"
 # Older sessions could retain a formatted label from the former hidden radio

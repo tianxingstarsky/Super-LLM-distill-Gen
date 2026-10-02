@@ -6,6 +6,7 @@ from typing import Any
 from lib.application.workflow_ports import WorkflowDriver
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_creation import validate_creation
+from lib.domain.web_research import validate_web_research
 
 
 class WorkflowApplication:
@@ -18,12 +19,18 @@ class WorkflowApplication:
         fields = {key: recipe[key] for key in (
             "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
             "batch_size", "node_models", "conversation_turns", "brief",
-            "agent_replay_mode", "evaluation_sources") if key in recipe}
+            "agent_replay_mode", "evaluation_sources", "web_research", "sources") if key in recipe}
         targets, node_models = validate_creation(**fields)
-        return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models})
+        research = validate_web_research(recipe.get("web_research"), brief=recipe.get("brief", ""),
+                                         sources=recipe.get("sources", ()), targets=targets)
+        return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models,
+                                      "web_research": research})
 
     def agent_replay_capabilities(self) -> dict:
         return self._driver.agent_replay_capabilities()
+
+    def web_research_capabilities(self) -> dict:
+        return self._driver.web_research_capabilities()
 
     def check_agent_sandbox(self) -> dict:
         return self._driver.check_agent_sandbox()

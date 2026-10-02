@@ -18,6 +18,9 @@ class Sources:
         return [] if st.session_state.get('fixture-remove-source') else [{'path':'fixture.txt','label':'Fixture source'}]
     def task_runs(self): return []
     def agent_replay_capabilities(self): return {}
+    def web_research_capabilities(self):
+        import os
+        return {'brave_configured': bool(os.environ.get('DATAFORGE_BRAVE_SEARCH_API_KEY'))}
 class Inventory:
     def list_backends(self):
         return {'default_backend':'local','default_model':'writer','roles':{},
@@ -155,4 +158,41 @@ def test_quick_size_persists_and_open_brief_batch_count_respects_limit():
     ui.button(key='workflow-count-preset:fixture:1000').click().run()
     assert ui.number_input(key='workflow-count:fixture').value == 1000
     assert [m.value for m in ui.metric] == ['10', '4']
+    assert not ui.exception
+
+
+def test_public_web_search_requires_explicit_query_and_configured_key(monkeypatch):
+    monkeypatch.delenv('DATAFORGE_BRAVE_SEARCH_API_KEY', raising=False)
+    ui = AppTest.from_string(SCRIPT).run()
+    assert not any(widget.key == 'workflow-web-research-enabled:fixture' for widget in ui.checkbox)
+    ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
+    enabled = 'workflow-web-research-enabled:fixture'
+    ui.checkbox(key=enabled).check().run()
+    assert ui.text_input(key='workflow-web-research-query:fixture').value == ''
+    assert ui.button(key='workflow-create:fixture').disabled
+    ui.text_input(key='workflow-web-research-query:fixture').set_value('设备维护安全规范').run()
+    ui.number_input(key='workflow-web-research-count:fixture').set_value(5).run()
+    assert any('检索服务尚未配置' in warning.value for warning in ui.warning)
+    monkeypatch.setenv('DATAFORGE_BRAVE_SEARCH_API_KEY', 'fixture-only')
+    ui.run()
+    assert not any('检索服务尚未配置' in warning.value for warning in ui.warning)
+    assert ui.checkbox(key=enabled).value is True
+    assert ui.text_input(key='workflow-web-research-query:fixture').value == '设备维护安全规范'
+    assert ui.number_input(key='workflow-web-research-count:fixture').value == 5
+    assert not ui.exception
+
+
+def test_web_search_explains_private_query_and_agent_only_goal(monkeypatch):
+    monkeypatch.setenv('DATAFORGE_BRAVE_SEARCH_API_KEY', 'fixture-only')
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
+    ui.text_area(key='workflow-open-brief:fixture').set_value('生成设备维护训练题').run()
+    ui.checkbox(key='workflow-web-research-enabled:fixture').check().run()
+    ui.text_input(key='workflow-web-research-query:fixture').set_value('person@example.org').run()
+    assert any('检索词疑似包含私有信息' in warning.value for warning in ui.warning)
+    assert ui.button(key='workflow-create:fixture').disabled
+    ui.text_input(key='workflow-web-research-query:fixture').set_value('设备维护安全规范').run()
+    ui.multiselect(key='workflow-targets:fixture:自动推荐').set_value(['agent']).run()
+    assert any('联网检索只为开放任务规划提供线索' in warning.value for warning in ui.warning)
+    assert ui.button(key='workflow-create:fixture').disabled
     assert not ui.exception

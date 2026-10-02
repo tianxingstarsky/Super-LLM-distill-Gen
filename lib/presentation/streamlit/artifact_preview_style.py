@@ -2,6 +2,12 @@
 
 ARTIFACT_PREVIEW_STYLE = """<style>
 .df-artifact-preview .df-artifact-trace-hint { margin:0 0 13px; padding:9px 12px; border:1px solid #DCE9F8; border-radius:9px; background:#F3F8FF; color:#607A99; font-size:11px; line-height:1.6; }
+.df-artifact-preview .df-artifact-review-summary { margin:0 0 12px; padding:12px 13px; border:1px solid #C8E5D9; border-radius:10px; background:#F3FBF7; color:#315F4E; }
+.df-artifact-preview .df-artifact-review-summary[data-attention="true"] { border-color:#F1D8AE; background:#FFFBF3; color:#76562B; }
+.df-artifact-preview .df-artifact-review-summary strong { display:block; margin-bottom:7px; font-size:12px; color:#183251; }
+.df-artifact-preview .df-artifact-review-summary div { display:flex; flex-wrap:wrap; gap:6px; }
+.df-artifact-preview .df-artifact-review-summary span { padding:3px 8px; border:1px solid currentColor; border-radius:7px; background:#fff; font-size:11px; }
+.df-artifact-preview .df-artifact-review-summary p { margin:8px 0 0; font-size:11px; line-height:1.5; }
 .df-artifact-preview details.df-artifact-trace-card > summary { cursor:pointer; list-style:none; }
 .df-artifact-preview details.df-artifact-trace-card > summary::-webkit-details-marker { display:none; }
 .df-artifact-preview details.df-artifact-trace-card > summary::after { content:'＋'; flex:0 0 auto; color:#4380BC; font-weight:700; }

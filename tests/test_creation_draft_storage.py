@@ -14,6 +14,7 @@ from test_workflow_draft import SCRIPT, restore_canvas_renderer  # noqa: F401
     ('workflow-concurrency:w', 17), ('workflow-turns:w', 1),
     ('workflow-targets:w:p', ['unknown']), ('workflow-sources:w:p', [123]),
     ('api-key:w', 'credential'), ('workflow-node-model:w', {'model': 'writer'}),
+    ('workflow-web-research-enabled:w', True),
     ('workflow-open-brief:w', 'x' * 20001), ('workflow-name', 'No workspace'),
 ])
 def test_draft_rejects_invalid_or_non_form_values(key, value):
@@ -102,6 +103,23 @@ def test_new_ui_session_restores_bulk_settings_goals_and_cleared_brief(tmp_path)
     again.segmented_control(key='workflow-source-mode:fixture').set_value('文档资料').run()
     assert again.multiselect(key='workflow-sources:fixture:文档资料').value == []
     assert not again.exception
+
+
+def test_public_query_restores_but_new_session_requires_fresh_web_consent(tmp_path):
+    script = persistent_script(tmp_path)
+    ui = AppTest.from_string(script).run()
+    ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
+    ui.checkbox(key='workflow-web-research-enabled:fixture').check().run()
+    ui.text_input(key='workflow-web-research-query:fixture').set_value('设备维护安全规范').run()
+    ui.number_input(key='workflow-web-research-count:fixture').set_value(4).run()
+    fresh = AppTest.from_string(script).run()
+    assert not fresh.exception
+    assert fresh.checkbox(key='workflow-web-research-enabled:fixture').value is False
+    assert 'workflow-web-research-enabled:fixture' not in creation_draft_application(tmp_path).load()
+    fresh.checkbox(key='workflow-web-research-enabled:fixture').check().run()
+    assert fresh.text_input(key='workflow-web-research-query:fixture').value == '设备维护安全规范'
+    assert fresh.number_input(key='workflow-web-research-count:fixture').value == 4
+    assert creation_draft_application(tmp_path / 'other').load() == {}
 
 
 def test_bad_disk_draft_shows_warning_and_keeps_session_changes(tmp_path):

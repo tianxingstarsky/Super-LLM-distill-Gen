@@ -27,6 +27,11 @@ class FilesystemWorkflowDriver:
     def create(self, **recipe) -> str:
         return create_run(self.output, **recipe)
 
+    def web_research_capabilities(self) -> dict:
+        from lib.infrastructure.brave_web_research import configured
+
+        return {"brave_configured": configured()}
+
     def check_agent_sandbox(self) -> dict:
         from lib.infrastructure.agent_docker_replay import check_environment
         return check_environment(os.environ.get(IMAGE_ENV))

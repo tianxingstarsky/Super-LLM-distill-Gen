@@ -18,6 +18,7 @@ from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
+from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
@@ -501,6 +502,39 @@ def _draft_brief(label, *, key, **options):
                         on_change=_save_draft_value, args=(workspace, key), **options)
 
 
+def _draft_web_control(workspace, *, configured: bool):
+    """An explicit public query, never an implicit copy of the private brief."""
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    enabled_key = f"workflow-web-research-enabled:{workspace}"
+    consent_key = f"workflow-web-research-session-consent:{workspace}"
+    if enabled_key not in st.session_state:
+        st.session_state[enabled_key] = st.session_state.get(consent_key, False)
+    enabled = st.checkbox("联网查找公开资料", key=enabled_key,
+                          on_change=_save_web_consent, args=(workspace, enabled_key))
+    st.caption("仅将下方公开检索词发送给已配置的网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
+    if not enabled:
+        return None, False
+    query_key = f"workflow-web-research-query:{workspace}"
+    if query_key not in st.session_state:
+        st.session_state[query_key] = draft.get(query_key, "")
+    query = st.text_input("公开检索词", value=None, key=query_key, max_chars=160,
+                          placeholder="例如：设备维护安全规范",
+                          on_change=_save_draft_value, args=(workspace, query_key))
+    count_key = f"workflow-web-research-count:{workspace}"
+    count = _draft_number("检索结果上限", 1, 5, 3, key=count_key)
+    unavailable = not query.strip() or not configured
+    if not query.strip():
+        st.warning("请填写可公开的检索词，不要粘贴需求全文或私有资料。")
+    elif unavailable:
+        st.warning("网页检索服务尚未配置，请先在运行环境设置检索密钥。")
+    return {"provider": "brave", "query": query.strip(), "count": int(count)}, unavailable
+
+
+def _save_web_consent(workspace, key):
+    # Consent is deliberately session-only; a new browser session starts offline.
+    st.session_state[f"workflow-web-research-session-consent:{workspace}"] = bool(st.session_state[key])
+
+
 def _restore_selection(workspace, key, default, choices):
     draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     value = st.session_state.get(key, draft.get(key, default))
@@ -538,7 +572,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if st.session_state.get(f"workflow-draft-error:{ws}"):
             st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
         else:
-            st.caption("参数、目标与需求文本自动保存到当前工作区；上传文件和节点模型选择需重新确认。")
+            st.caption("参数、目标与需求文本自动保存到当前工作区；上传文件、节点模型选择和联网检索需重新确认。")
     preset_key = f"workflow-preset:{ws}"
     _restore_selection(ws, preset_key, "自动推荐", PRESETS)
     preset = st.segmented_control(
@@ -638,6 +672,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             elif selected_node == "package":
                 st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
     with st.container(key=f"workbench-create:{ws}"):
+        web_research, web_unavailable = None, False
         source_col, setup_col = st.columns([1.12, 1], gap="large")
         with source_col, st.container(border=True, key="workbench-source-panel"):
             section_heading("添加来源", f"本次来源类型：{source_mode}", "▤")
@@ -645,6 +680,20 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 uploaded, selected = [], []
                 st.caption("描述任务、领域和使用场景，系统会规划并生成候选。")
                 brief = _draft_brief("开放性需求", key=f"workflow-open-brief:{ws}", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
+                with st.container(border=True, key=f"workbench-web-research:{ws}"):
+                    web_research, web_unavailable = _draft_web_control(
+                        ws, configured=bool(application.web_research_capabilities().get("brave_configured")))
+                    if web_research and web_research["query"]:
+                        try:
+                            validate_web_research(web_research, brief=brief, targets=targets)
+                        except ValueError as error:
+                            messages = {
+                                "web_research_requires_open_brief": "请先填写开放性需求，再开启联网检索。",
+                                "web_research_requires_planning_target": "联网检索只为开放任务规划提供线索；仅选 Agent 轨迹等目标时，请先选择可规划的训练目标。",
+                                "web_research_query_private_or_invalid": "检索词疑似包含私有信息或超过长度限制，请改用可公开的简短主题。",
+                            }
+                            st.warning(messages.get(str(error), "联网检索配置无效，请检查公开检索词与目标。"))
+                            web_unavailable = True
             else:
                 if source_mode == "Agent 上下文":
                     st.caption("导入完整的 JSON / JSONL 对话记录；工具轨迹需要真实观测。")
@@ -729,7 +778,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         '</span></div>')
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
-                submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues) or agent_unavailable,
+                submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues) or agent_unavailable or web_unavailable,
                                       key=f"workflow-create:{ws}", width="stretch")
         if submitted:
             try:
@@ -759,6 +808,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),
                                         agent_replay_mode=agent_mode,
+                                        web_research=web_research,
                                         source_names=source_names,
                                         evaluation_sources=evaluation_sources,
                                         evaluation_source_names=evaluation_source_names)

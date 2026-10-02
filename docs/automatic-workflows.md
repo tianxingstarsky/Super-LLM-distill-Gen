@@ -16,6 +16,8 @@
 
 开放需求先规划为多个独立任务，再按目标执行。任务文本和来源内容均作为不可信数据处理；提示词要求模型遵循 schema，不执行资料中嵌入的指令。文档来源会保留来源文件哈希和定位；开放需求合成内容会标记为 synthetic。字符分块并不等同 tokenizer 长度，超长输入会在模型调用前隔离。
 
+开放需求可以显式开启联网检索。使用者需要单独填写**可公开的检索词**；系统绝不会把完整需求或上传的文件自动改写成搜索请求。当前联网适配器固定使用 Brave Search 官方 HTTPS API，部署者在运行进程中设置 `DATAFORGE_BRAVE_SEARCH_API_KEY`。每次运行只检索一次，最多保留 5 条结果，单次响应上限 256 KiB、超时 8 秒；不打开结果网页，也不跟随搜索接口重定向。检索词须通过长度和敏感信息检查；开启联网但缺少密钥、结果无效或请求失败时，任务在模型规划前失败，不会悄悄退回离线。检索结果、原始 URL 和检索时间作为带哈希清单的 `web_research.json` 附件保存，供审查者追溯。网页摘要只用于规划选题，不能证明生成答案真实，也不能作为 Agent 工具轨迹的可重放证据。工作区默认仍为离线模式。
+
 ## 训练目标与产物
 
 | 目标 | 当前工作流行为 | 训练文件 schema |
@@ -86,6 +88,7 @@ CPT 自动候选可在同一审核工作区逐条确认。页面可查看来源�
 python -m lib.cli workflow --input guide.pdf --targets cpt,sft,dpo --name "产品手册训练数据"
 python -m lib.cli workflow --input guide.pdf --targets cpt --evaluation-reference heldout.jsonl
 python -m lib.cli workflow --brief "为设备维护助手编写训练任务" --targets sft,multiturn,dpo,gsm8k --tasks 20 --conversation-turns 3 --jev-backend deepseek --jev-model deepseek-v4-pro
+python -m lib.cli workflow --brief "公开设备维护训练任务" --targets sft --web-search-query "设备维护安全规范" --web-search-results 5
 python -m lib.cli workflow --action list
 python -m lib.cli workflow --action resume --run-id <32位运行 ID>
 ```

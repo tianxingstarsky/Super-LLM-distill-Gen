@@ -2,12 +2,14 @@
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_quality import text_issue
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, validate_node_models
+from lib.domain.web_research import validate_web_research
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       chunk_chars=2000, tasks=10, sample_count=None, concurrency=1,
                       batch_size=100, node_models=None, conversation_turns=3, brief="",
-                      agent_replay_mode="configured", evaluation_sources=()):
+                      agent_replay_mode="configured", evaluation_sources=(),
+                      web_research=None, sources=()):
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)
@@ -37,4 +39,5 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
         raise ValueError("需求必须是最多 20000 字符的文本")
     if brief and text_issue(brief):
         raise ValueError("需求包含空文本、损坏编码或疑似密钥")
+    validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     return targets, node_models

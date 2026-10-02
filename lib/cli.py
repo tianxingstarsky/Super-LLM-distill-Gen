@@ -1007,6 +1007,9 @@ def cmd_workflow(args) -> int:
     else:
         sources = [pathlib.Path(p) for p in (args.input or [])]
         run_id = application.create_run(sources=sources, brief=args.brief or "",
+                            web_research=({"provider": "brave", "query": args.web_search_query,
+                                           "count": args.web_search_results}
+                                          if args.web_search_query is not None else None),
                             evaluation_sources=[pathlib.Path(p) for p in (args.evaluation_reference or [])],
                             targets=args.targets.split(","), name=args.name,
                             backend=args.backend, model=args.model,
@@ -1232,6 +1235,8 @@ def build_parser():
     p_workflow.add_argument("--evaluation-reference", action="append",
                             help="CPT 去污染参照 JSON/JSONL，可重复指定；记录仅含 text 字段")
     p_workflow.add_argument("--brief", help="开放性需求，或来源文档的任务要求")
+    p_workflow.add_argument("--web-search-query", help="仅开放需求：显式公开检索词，不自动发送完整需求或上传文件")
+    p_workflow.add_argument("--web-search-results", type=int, default=5, help="每次联网检索保留 1–5 条结果")
     p_workflow.add_argument("--name", default="自动数据生成")
     p_workflow.add_argument("--targets", default="cpt,sft,dpo")
     p_workflow.add_argument("--max-units", type=int, default=100000)

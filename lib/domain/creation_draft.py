@@ -7,9 +7,11 @@ NUMBER_FIELDS = {
     'workflow-count': (1, MAX_CANDIDATES), 'workflow-max-units': (1, MAX_CANDIDATES),
     'workflow-turns': (2, 8), 'workflow-concurrency': (1, MAX_CONCURRENCY),
     'workflow-batch-size': (1, MAX_BATCH_SIZE), 'workflow-chunk-chars': (200, 20000),
+    'workflow-web-research-count': (1, 5),
 }
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
-               'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128}
+               'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
+               'workflow-web-research-query': 160}
 
 
 def validate_creation_draft(values):

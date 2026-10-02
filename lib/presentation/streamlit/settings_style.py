@@ -3,6 +3,10 @@ from __future__ import annotations
 
 
 SETTINGS_STYLE = """<style>
+.df-settings-guide-note {margin:6px 0 12px;padding:11px 13px;border-left:3px solid #378be8;
+  border-radius:0 8px 8px 0;background:#f3f8ff;color:#54708e;font-size:12px;line-height:1.55}
+[class*="st-key-settings-guide-route"] {border-color:#dce8f6!important;
+  box-shadow:0 4px 14px rgba(36,83,145,.04)!important}
 .df-settings-section {display:flex;align-items:center;justify-content:space-between;gap:16px;margin:7px 0 12px}
 .df-settings-section > span {display:flex;align-items:center;gap:11px;min-width:0}
 .df-settings-section i {display:grid;place-items:center;flex:0 0 auto;width:35px;height:35px;border-radius:9px;

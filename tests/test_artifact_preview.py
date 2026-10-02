@@ -285,6 +285,62 @@ def test_agent_preview_distinguishes_verified_and_unverified_tool_steps():
     assert html.index("ledger_read") < html.index("ledger_write")
 
 
+def test_agent_review_summary_prioritizes_missing_and_unverified_calls():
+    preview = render_training_sample("agent_negative", {
+        "messages": [
+            {"role": "assistant", "toolCalls": [{"id": "ok", "name": "read"}]},
+            {"role": "tool", "toolCallId": "ok", "content": "value"},
+            {"role": "assistant", "toolCalls": [{"id": "unchecked", "name": "read"}]},
+            {"role": "tool", "toolCallId": "unchecked", "content": "value"},
+            {"role": "assistant", "toolCalls": [{"id": "lost", "name": "read"}]},
+            {"role": "tool", "toolCallId": "orphan", "content": "unrelated"},
+        ],
+        "failure_step": 4,
+        "failure": "recorded_tool_error",
+        "verification": {"method": "bounded_local_replay", "verified_call_ids": ["ok"]},
+    })
+    assert 'data-attention="true"' in preview
+    assert "3 次工具调用" in preview
+    assert "1 次有重放记录" in preview
+    assert "1 次缺少返回" in preview
+    assert "1 次仅有来源记录" in preview
+    assert "1 条未配对结果" in preview
+
+
+def test_malformed_or_ambiguous_agent_call_ids_never_show_verified_badge():
+    preview = render_training_sample("agent", {
+        "messages": [
+            {"role": "assistant", "toolCalls": [{"id": "x", "name": "read"},
+                                                 {"id": "x", "name": "write"}]},
+            {"role": "tool", "toolCallId": "x", "content": "value"},
+        ],
+        "verification": {"method": "bounded_local_replay", "verified_call_ids": ["x", "x"]},
+    })
+    assert "2 次调用 ID 不可核对" in preview
+    assert "调用 ID 缺失或重复，无法核对返回" in preview
+    assert ' data-kind="tool" data-failed="false" data-verified="true"' not in preview
+    assert "1 次调用已核对" in preview  # metadata count is deduplicated, not replay proof
+    malformed = render_training_sample("agent", {
+        "messages": [{"role": "assistant", "toolCalls": [{"name": "read"}]}],
+        "verification": {"method": [], "verified_call_ids": ["x"]},
+    })
+    assert "1 次调用 ID 不可核对" in malformed
+    assert ' data-kind="tool" data-failed="false" data-verified="true"' not in malformed
+
+
+def test_agent_review_summary_translates_without_changing_source_tool_names():
+    from lib.presentation.streamlit.i18n import translate_markup
+    preview = render_training_sample('agent', {
+        'messages': [{'role': 'assistant', 'toolCalls': [{'id': 'x', 'name': '工作流'}]}],
+    })
+    english = translate_markup(preview, 'en')
+    assert 'Review this section' in english
+    assert '1 call missing result' in english
+    assert 'Calls and results' not in english
+    assert '<strong data-user-content>工作流</strong>' in english
+    assert '当前片段审查' not in english
+
+
 def test_agent_preview_does_not_pair_unrelated_or_duplicate_results():
     messages = [
         {"role": "assistant", "toolCalls": [{"id": "x", "name": "calculator"}]},
