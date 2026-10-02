@@ -5,12 +5,15 @@ import json
 from pathlib import Path
 
 
-def iter_json_records(path: Path, *, chunk_size: int = 65536, object_only: bool = True):
+def iter_json_records(path: Path, *, chunk_size: int = 65536, object_only: bool = True,
+                      max_record_chars: int | None = None):
     """Read an array of objects, retaining one object and a bounded input chunk.
 
     The schema deliberately rejects non-object elements, trailing commas, and
     trailing data. Large individual objects may require more than one chunk.
     """
+    if max_record_chars is not None and (type(max_record_chars) is not int or max_record_chars < 1):
+        raise ValueError("invalid_record_limit")
     decoder = json.JSONDecoder()
     buffer, eof = "", False
     with Path(path).open(encoding="utf-8") as handle:
@@ -41,8 +44,12 @@ def iter_json_records(path: Path, *, chunk_size: int = 65536, object_only: bool 
                 while True:
                     try:
                         record, end = decoder.raw_decode(buffer)
+                        if max_record_chars is not None and end > max_record_chars:
+                            raise ValueError("record_exceeds_limit")
                         break
                     except json.JSONDecodeError:
+                        if max_record_chars is not None and len(buffer) > max_record_chars + chunk_size:
+                            raise ValueError("record_exceeds_limit") from None
                         if eof:
                             raise ValueError("invalid_record_array") from None
                         refill()
