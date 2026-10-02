@@ -801,9 +801,14 @@ class Workflow:
         evidence = ("isolated_container_replay" if is_container_evidence else
                     "local_tool_replay" if result["status"] == "eligible" or result.get("negative")
                     else "unverified_source")
+        source_location = unit.get("source_location")
+        if source_location is None and unit.get("source_name") is not None:
+            source_location = {"file": unit["source_name"], "record": unit.get("location")}
+        provenance = {key: unit[key] for key in ("source_name", "location") if key in unit}
+        provenance["source_location"] = source_location
         row = {"id": unit["id"], "source_id": unit["source_id"],
                "status": result["status"], "evidence_level": evidence,
-               "source_location": unit.get("location"),
+               **provenance,
                "original_messages_sha256": digest(unit["messages"])}
         if result["status"] == "eligible":
             return [{**row, "messages": result["messages"], "tools": unit.get("tools", []),
@@ -815,7 +820,7 @@ class Workflow:
             row["unverified_turn"] = result["unverified_turn"]
         if result.get("negative"):
             row["negative"] = {**result["negative"], "source_id": unit["source_id"],
-                               "source_location": unit.get("location"), "id": unit["id"],
+                               **provenance, "id": unit["id"],
                                "original_messages_sha256": row["original_messages_sha256"]}
         return [row]
 

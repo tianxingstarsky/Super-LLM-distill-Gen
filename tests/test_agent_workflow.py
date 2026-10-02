@@ -10,6 +10,7 @@ from lib.infrastructure.training_workflow import Workflow, create_run, read_json
 from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
 from lib.io_utils import atomic_json
 from lib.infrastructure.training_workflow import digest
+from lib.presentation.streamlit.artifact_preview import render_training_sample
 
 
 def _call(call_id: str, expression: str) -> dict:
@@ -91,11 +92,63 @@ def test_replayed_multi_turn_trajectory_is_pruned_and_exported_without_model(tmp
     assert record["verification"]["verified_turns"] == [1, 2]
     assert record["verification"]["pruned_call_ids"] == ["b"]
     assert record["original_messages_sha256"]
+    assert training["verification"] == record["verification"]
+    assert training["source_location"] == {"file": "trajectory.jsonl", "record": 1}
+    assert "2 次有重放记录" in render_training_sample("agent", training)
+    assert "未附重放校验记录" not in render_training_sample("agent", training)
+    native = json.loads((path / "artifacts" / "agent.jsonl").read_text(encoding="utf-8"))
+    assert set(native) == {"messages"}
     assert app.artifact_preview(run_id, "agent_negative") == []
     trainer = read_json(path / "artifacts" / "quality.json")["trainer_exports"]["agent"]
     assert trainer["status"] == "incompatible"
     assert trainer["summary"]["reasons"] == {"trl_undefined_tool": 1}
     assert not (path / "artifacts" / "trl_agent.jsonl").exists()
+
+
+def test_agent_preview_rejects_evidence_from_a_different_training_row(tmp_path, monkeypatch):
+    messages = [{"role": "user", "content": "2+2"}, _call("a", "2+2"),
+                _result("a", "4"), {"role": "assistant", "content": "4"}]
+    _, path, app, run_id = _run(tmp_path, messages)
+    record = read_json(path / "artifacts" / "agent.records.json")[0]
+
+    def wrong_record(_path):
+        yield {**record, "messages": [{"role": "assistant", "content": "unrelated"}]}
+
+    from lib.infrastructure import workflow_driver
+    monkeypatch.setattr(workflow_driver, "iter_json_records", wrong_record)
+    with pytest.raises(ValueError, match="artifact_integrity_error"):
+        app.artifact_preview(run_id, "agent")
+
+
+def test_agent_records_keep_distinct_file_sources_at_the_same_record_number(tmp_path):
+    good = [{"role": "user", "content": "2+2"}, _call("a", "2+2"),
+            _result("a", "4"), {"role": "assistant", "content": "4"}]
+    wrong = [{"role": "user", "content": "3+3"}, _call("b", "3+3"),
+             _result("b", "7"), {"role": "assistant", "content": "7"}]
+    later = [{"role": "user", "content": "4+4"}, _call("c", "4+4"),
+             _result("c", "8"), {"role": "assistant", "content": "8"}]
+    first, second, third = (tmp_path / name for name in
+                            ("first.jsonl", "second.jsonl", "third.jsonl"))
+    first.write_text(json.dumps({"messages": good}) + "\n", encoding="utf-8")
+    second.write_text(json.dumps({"messages": wrong}) + "\n", encoding="utf-8")
+    third.write_text(json.dumps({"messages": later}) + "\n", encoding="utf-8")
+    output = tmp_path / "out"
+    run_id = create_run(output, sources=[first, second, third], targets=["agent"])
+    state = Workflow(output, run_id, tmp_path).execute()
+    assert state["status"] == "needs_attention"
+    path = run_path(output, run_id)
+    records = read_json(path / "artifacts" / "agent.records.json")
+    assert [(row["source_name"], row["location"], row["source_location"])
+            for row in records] == [
+                ("first.jsonl", 1, {"file": "first.jsonl", "record": 1}),
+                ("second.jsonl", 1, {"file": "second.jsonl", "record": 1}),
+                ("third.jsonl", 1, {"file": "third.jsonl", "record": 1})]
+    app = WorkflowApplication(FilesystemWorkflowDriver(tmp_path, output))
+    assert app.artifact_preview(run_id, "agent")[0]["source_name"] == "first.jsonl"
+    assert app.artifact_preview(run_id, "agent", limit=1, offset=1)[0]["source_name"] == "third.jsonl"
+    negative = app.artifact_preview(run_id, "agent_negative")[0]
+    assert negative["source_name"] == "second.jsonl"
+    assert negative["source_location"] == {"file": "second.jsonl", "record": 1}
 
 
 def test_wrong_calculator_observation_becomes_separate_negative_not_sft(tmp_path):

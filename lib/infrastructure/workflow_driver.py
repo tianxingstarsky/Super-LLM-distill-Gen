@@ -16,7 +16,41 @@ from lib.infrastructure import workflow_archive
 from lib.infrastructure import review_release_jobs
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.infrastructure.agent_docker_replay import IMAGE_ENV, validate_sandbox_image
+from lib.domain.workflow_targets import training_record
 from lib import workspace as WS
+
+
+def _agent_preview_with_evidence(run: Path, rows: list[dict], offset: int) -> list[dict]:
+    """Join verified Agent records to the requested native training page."""
+    records_path = run / "artifacts" / "agent.records.json"
+    if not rows or not records_path.is_file():
+        return rows
+    selected = []
+    position = 0
+    records = iter_json_records(records_path)
+    try:
+        for record in records:
+            if record.get("status") != "eligible":
+                continue
+            if position >= offset:
+                native = rows[position - offset]
+                try:
+                    matches = training_record("agent", record) == native
+                except (KeyError, TypeError, ValueError):
+                    matches = False
+                if not matches or not isinstance(record.get("verification"), dict):
+                    raise ValueError("artifact_integrity_error")
+                fields = ("source_id", "source_name", "location", "source_location",
+                          "evidence_level", "original_messages_sha256", "verification")
+                selected.append({**native, **{key: record[key] for key in fields if key in record}})
+                if len(selected) == len(rows):
+                    break
+            position += 1
+    finally:
+        records.close()
+    if len(selected) != len(rows):
+        raise ValueError("artifact_integrity_error")
+    return selected
 
 
 class FilesystemWorkflowDriver:
@@ -85,6 +119,8 @@ class FilesystemWorkflowDriver:
             raise ValueError("incomplete_artifact_manifest")
         from lib.infrastructure.jsonl_preview import read_rows
         rows = read_rows(path, offset, limit)
+        if target == "agent":
+            rows = _agent_preview_with_evidence(run, rows, offset)
         if inventory_identity(run) != identity:
             raise ValueError("preview_file_changed")
         return rows
