@@ -61,12 +61,16 @@ def chat_json(
     temperature: float = 0.2,
     retries: int = 3,
     thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> Dict[str, Any]:
     """严格 JSON 调用：response_format 解码层强制 + 容错解析 + 降温度重试。"""
+    if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
+        raise ValueError("max_tokens must be a positive integer")
     last_err: Exception | None = None
     for attempt in range(retries):
         temp = temperature if attempt == 0 else min(temperature, 0.3)
-        out = client.chat(messages, max_tokens=None, temperature=temp, thinking=thinking, json_mode=True)
+        out = client.chat(messages, max_tokens=max_tokens, temperature=temp,
+                          thinking=thinking, json_mode=True)
         try:
             return parse_json_robust(out)
         except Exception as e:  # noqa: BLE001

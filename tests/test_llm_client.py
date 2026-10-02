@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from lib.llm_client import ChatClient, chat_json, load_backend, parse_json_robust
 
 
@@ -45,6 +47,23 @@ def test_parse_json_robust_handles_fences_and_trailing():
     assert parse_json_robust('```json\n{"a": 1}\n```') == {"a": 1}
     assert parse_json_robust('{"a": 1} 尾随文本') == {"a": 1}
     assert parse_json_robust('前缀 {"a": [1, {"b": 2}]}') == {"a": [1, {"b": 2}]}
+
+
+def test_chat_json_can_bound_output_tokens_for_team_workers():
+    calls = []
+
+    class FakeClient:
+        def chat(self, messages, **kwargs):
+            calls.append(kwargs)
+            return '{"ok": true}'
+
+    client = FakeClient()
+    assert chat_json(client, [{"role": "user", "content": "JSON"}], max_tokens=2048) == {"ok": True}
+    assert calls[0]["max_tokens"] == 2048
+    for invalid in (True, 0, -1, "2048"):
+        with pytest.raises(ValueError):
+            chat_json(client, [], max_tokens=invalid)
+    assert len(calls) == 1
 
 
 def test_client_sets_no_proxy_before_httpx_construction(monkeypatch):
