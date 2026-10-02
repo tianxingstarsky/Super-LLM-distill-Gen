@@ -101,9 +101,16 @@ def cmd_stats(args) -> int:
 
 
 def cmd_preview(args) -> int:
+    from lib.bootstrap.releases import release_application
+
     path = pathlib.Path(args.file or (OUT_DIR / "rollout_samples.jsonl"))
-    lines = path.read_text(encoding="utf-8").splitlines()
-    samples = [json.loads(l) for l in lines if l.strip()]
+    limit = max(0, args.n)
+    samples = []
+    count = 0
+    for sample in release_application().replayable_samples(path):
+        if count < limit:
+            samples.append(sample)
+        count += 1
 
     if args.html:
         report = None
@@ -112,11 +119,12 @@ def cmd_preview(args) -> int:
             report = json.loads(report_path.read_text(encoding="utf-8"))
         from lib.render import render_preview_html
 
-        out = render_preview_html(samples, report, OUT_DIR / "preview.html", max_samples=args.n)
-        print(f"HTML 预览已生成（{min(args.n, len(samples))} 条）: {out}")
+        out = render_preview_html(samples, report, OUT_DIR / "preview.html",
+                                  max_samples=limit, total_samples=count)
+        print(f"HTML 预览已生成（{len(samples)} 条）: {out}")
         return 0
 
-    for sample in samples[: args.n]:
+    for sample in samples:
         last = sample["messages"][-1]
         content = str(last.get("content", ""))[:200]
         reasoning = str(last.get("reasoning_content", ""))[:120]
@@ -126,7 +134,7 @@ def cmd_preview(args) -> int:
             print(f"    思考: {reasoning}…" if len(reasoning) == 120 else f"    思考: {reasoning}")
         print(f"    正文: {content}")
         print()
-    print(f"（共 {len(samples)} 条，展示前 {min(args.n, len(samples))} 条）")
+    print(f"（共 {count} 条，展示前 {len(samples)} 条）")
     return 0
 
 
@@ -749,7 +757,7 @@ def cmd_quality_report(args) -> int:
     from lib.bootstrap.releases import release_application
     source = pathlib.Path(args.input) if args.input else OUT_DIR / "rollout_samples.jsonl"
     releases = release_application()
-    result = releases.quality_report_for_dataset(releases.read_samples(source), WS.dataset_name())
+    result = releases.quality_report_for_dataset(releases.replayable_samples(source), WS.dataset_name())
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

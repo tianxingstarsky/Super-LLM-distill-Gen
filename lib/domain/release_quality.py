@@ -50,7 +50,8 @@ def report(samples, decisions=(), *, on_fingerprint=None) -> dict:
     hashes: Counter[str] = Counter()
     ids: Counter[str] = Counter()
     languages: Counter[str] = Counter()
-    lengths: list[int] = []
+    length_count = length_sum = 0
+    length_min = length_max = 0
     source_hashes = {}
     count = 0
     for index, row in enumerate(samples):
@@ -86,7 +87,13 @@ def report(samples, decisions=(), *, on_fingerprint=None) -> dict:
         if any(error for error, _ in error_flags):
             issues.append({"sample": label, "code": "unresolved_tool_error"})
         text = "\n".join(message.get("content", "") for message in messages)
-        lengths.append(len(text))
+        length = len(text)
+        if not length_count or length < length_min:
+            length_min = length
+        if length > length_max:
+            length_max = length
+        length_count += 1
+        length_sum += length
         cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
         latin = bool(re.search(r"[a-zA-Z]", text))
         languages["mixed" if cjk and latin else "zh" if cjk else "en_or_other"] += 1
@@ -113,8 +120,8 @@ def report(samples, decisions=(), *, on_fingerprint=None) -> dict:
     return {
         "samples": count, "duplicate_content": duplicates, "duplicate_ids": duplicate_ids,
         "issue_count": len(issues), "issues": issues, "language_heuristic": dict(languages),
-        "length_chars": {"min": min(lengths, default=0), "max": max(lengths, default=0),
-                         "mean": round(sum(lengths) / len(lengths)) if lengths else 0},
+        "length_chars": {"min": length_min, "max": length_max,
+                         "mean": round(length_sum / length_count) if length_count else 0},
         "review_coverage": coverage, "review": summary,
         "ready_for_bulk": not blocks, "block_reasons": blocks,
         "limitations": "Structure and review evidence only; not proof of factual accuracy. Vision requires image-aware review.",

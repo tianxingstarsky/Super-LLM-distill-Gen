@@ -531,6 +531,7 @@ def render_preview_html(
     report: Optional[Dict[str, Any]] = None,
     out_path: str | Path = "data/output/preview.html",
     max_samples: int = 20,
+    total_samples: Optional[int] = None,
 ) -> Path:
     """把样本列表渲染为静态 HTML 预览页，返回文件路径。"""
     report = report or {}
@@ -539,7 +540,7 @@ def render_preview_html(
     stats_html = "".join(
         f'<span class="chip">{_esc(k)}: {_esc(v)}</span>'
         for k, v in {
-            "样本数": len(samples),
+            "样本数": len(samples) if total_samples is None else total_samples,
             "分类": report.get("counts", {}),
             "DPO 对": report.get("n_dpo_pairs", "—"),
             "LLM 调用": report.get("llm_usage", {}).get("calls", "—"),
