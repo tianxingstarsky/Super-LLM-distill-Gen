@@ -6,7 +6,12 @@ import re
 
 
 POLICY = "training-workflow-v2"
-SECRET = re.compile(r"(?:sk-[A-Za-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:api[_-]?key|password|密码|密钥)[\"']?\s*[:=]\s*[\"']?[^\s\"']{8,})", re.I)
+SECRET = re.compile(
+    r"(?:sk-[A-Za-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"(?:api[_-]?key|password|密码|密钥)[\"']?\s*[:=]\s*[\"']?[^\s\"']{8,}|"
+    r"(?<![A-Za-z0-9_-])authorization[\"']?\s*:\s*[\"']?\s*bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2})",
+    re.I,
+)
 PERSONAL_DATA = re.compile(
     r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)|"
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|"
