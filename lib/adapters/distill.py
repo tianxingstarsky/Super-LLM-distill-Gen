@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterator, List
 
 from lib.adapters.rollout_import import (
     _content_to_str,
@@ -53,7 +53,7 @@ def _norm_assistant(m: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
-def extract_dpo_pairs(records_path: str, cot_style: str = "separated") -> List[Dict[str, Any]]:
+def iter_dpo_pairs(records_path: str, cot_style: str = "separated") -> Iterator[Dict[str, Any]]:
     """从原始 rollout 记录提取 DPO 负样本对（免费、确定性）。
 
     构造（LLaVA-DPO"错误 vs 修正"思路，真实数据版）：
@@ -62,7 +62,6 @@ def extract_dpo_pairs(records_path: str, cot_style: str = "separated") -> List[D
       chosen   = 该记录最终的 assistant 回合（纠正后的正确操作）
     触发条件：历史中存在 isError=true 的工具结果（运行时事实）。
     """
-    pairs: List[Dict[str, Any]] = []
     seen = set()
 
     def _norm_msgs(msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -105,5 +104,9 @@ def extract_dpo_pairs(records_path: str, cot_style: str = "separated") -> List[D
             key = hash(digest)
             if key not in seen:
                 seen.add(key)
-                pairs.append(pair)
-    return pairs
+                yield pair
+
+
+def extract_dpo_pairs(records_path: str, cot_style: str = "separated") -> List[Dict[str, Any]]:
+    """保留原有列表接口；批量 CLI 使用 iter_dpo_pairs 流式提取。"""
+    return list(iter_dpo_pairs(records_path, cot_style))

@@ -313,7 +313,7 @@ def test_distill_reads_selected_folder_and_explicit_dir(ws_env, tmp_path, monkey
         seen.append(pathlib.Path(path))
         return [{"prompt": [], "chosen": [], "rejected": []}]
 
-    monkeypatch.setattr(distill_mod, "extract_dpo_pairs", fake_extract)
+    monkeypatch.setattr(distill_mod, "iter_dpo_pairs", fake_extract)
     monkeypatch.setattr(cli, "_gates", lambda: _Gate("approved"))
     monkeypatch.setattr("lib.monitor.trace_run", lambda *a, **k: None)
 

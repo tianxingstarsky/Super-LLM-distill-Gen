@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -165,58 +167,74 @@ def cmd_distill(args) -> int:
     import lib.adapters.distill as distill_mod
     from lib.prompts import get, render
 
-    samples = [
-        json.loads(l)
-        for l in pathlib.Path(OUT_DIR / "rollout_samples.jsonl").read_text(encoding="utf-8").splitlines()
-        if l.strip()
-    ]
-    report = distill_mod.classify_report(samples)
-    report["n_samples"] = len(samples)
+    samples_path = OUT_DIR / "rollout_samples.jsonl"
+
+    def samples():
+        with samples_path.open(encoding="utf-8") as source:
+            for line in source:
+                if line.strip():
+                    yield json.loads(line)
+
+    counts: dict[str, int] = {}
+    n_samples = 0
+    for sample in samples():
+        classification = distill_mod.classify_sample(sample)
+        key = f"{classification['tag']}/{classification['finish']}"
+        counts[key] = counts.get(key, 0) + 1
+        n_samples += 1
+    report = {"counts": dict(sorted(counts.items())), "n_samples": n_samples}
 
     sys.path.insert(0, str(ROOT / "scripts"))
     from import_rollout import source_files  # type: ignore  # 与 import 同源路由
 
-    pairs = []
-    for f in source_files(_rollout_source(args)):
-        pairs.extend(distill_mod.extract_dpo_pairs(str(f), "separated"))
-    report["n_dpo_pairs"] = len(pairs)
+    source_paths = source_files(_rollout_source(args))
+    fd, pending_name = tempfile.mkstemp(prefix=".dpo_pairs-", suffix=".jsonl", dir=OUT_DIR)
+    pending = pathlib.Path(pending_name)
+    try:
+        n_pairs = 0
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            for source_path in source_paths:
+                for pair in distill_mod.iter_dpo_pairs(str(source_path), "separated"):
+                    output.write(json.dumps(pair, ensure_ascii=False) + "\n")
+                    n_pairs += 1
+        report["n_dpo_pairs"] = n_pairs
 
-    llm_scores = []
-    check_n = args.llm_check if args.llm_check is not None else _pipeline("distill")["distill"]["llm_check_n"]
-    if check_n > 0:
-        _gates().require("G0")  # 调用云端 API 前必须过预算/模型闸
-        client, model = _client(args, judge=True)  # judge 角色：更稳的模型（默认 v4-pro）
-        candidates = sorted(
-            samples,
-            key=lambda s: (distill_mod.classify_sample(s)["tag"] != "recovery", -s["error_tool_steps"]),
-        )[: check_n]
-        print(f"LLM 打分 {len(candidates)} 条（模型 {model}）…")
-        for s in candidates:
-            last = s["messages"][-1]
-            goal = next((m["content"] for m in reversed(s["messages"]) if m["role"] == "user"), "")
-            try:
-                out = client.chat(
-                    [{"role": "user", "content": render(get("distill.summarizer"),
-                        goal=goal[:800],
-                        thinking=str(last.get("reasoning_content", ""))[:1500],
-                        final_answer=str(last.get("content", ""))[:1500],
-                    )}],
-                    max_tokens=None, temperature=0.2, thinking=False,  # 严格 JSON：禁用思考
-                )
-                llm_scores.append({"id": s["id"], "score": out})
-            except Exception as e:  # noqa: BLE001
-                llm_scores.append({"id": s["id"], "error": str(e)[:200]})
-        report["llm_scores"] = llm_scores
-        report["llm_usage"] = client.usage
+        llm_scores = []
+        check_n = args.llm_check if args.llm_check is not None else _pipeline("distill")["distill"]["llm_check_n"]
+        if check_n > 0:
+            _gates().require("G0")  # 调用云端 API 前必须过预算/模型闸
+            client, model = _client(args, judge=True)  # judge 角色：更稳的模型（默认 v4-pro）
+            candidates = heapq.nsmallest(
+                check_n, samples(),
+                key=lambda s: (distill_mod.classify_sample(s)["tag"] != "recovery", -s["error_tool_steps"]),
+            )
+            print(f"LLM 打分 {len(candidates)} 条（模型 {model}）…")
+            for s in candidates:
+                last = s["messages"][-1]
+                goal = next((m["content"] for m in reversed(s["messages"]) if m["role"] == "user"), "")
+                try:
+                    out = client.chat(
+                        [{"role": "user", "content": render(get("distill.summarizer"),
+                            goal=goal[:800],
+                            thinking=str(last.get("reasoning_content", ""))[:1500],
+                            final_answer=str(last.get("content", ""))[:1500],
+                        )}],
+                        max_tokens=None, temperature=0.2, thinking=False,  # 严格 JSON：禁用思考
+                    )
+                    llm_scores.append({"id": s["id"], "score": out})
+                except Exception as e:  # noqa: BLE001
+                    llm_scores.append({"id": s["id"], "error": str(e)[:200]})
+            report["llm_scores"] = llm_scores
+            report["llm_usage"] = client.usage
 
-    # 产物落盘
-    (OUT_DIR / "distill_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
-    if pairs:
-        (OUT_DIR / "dpo_pairs.jsonl").write_text(
-            "\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8"
+        # 全部输入已成功解析后才替换产物；失败时保留上一次结果。
+        (OUT_DIR / "distill_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
         )
+        if n_pairs:
+            os.replace(pending, OUT_DIR / "dpo_pairs.jsonl")
+    finally:
+        pending.unlink(missing_ok=True)
     from lib.monitor import trace_run
 
     trace_run(ROOT, "distill", {"report": report})
