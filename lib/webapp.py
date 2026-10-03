@@ -670,7 +670,12 @@ st.sidebar.selectbox("工作区", _workspace_options,
 st.sidebar.button("打开已有文件夹…", on_click=_request_folder_dialog, width="stretch")
 from lib.bootstrap.workflows import workflow_application as _sidebar_workflow_application
 from lib.presentation.streamlit.sidebar_tasks import render_sidebar_tasks
-render_sidebar_tasks(_sidebar_workflow_application(ROOT, _ws_out()), st.session_state["ws"])
+try:
+    _sidebar_output = _ws_out()
+except FileNotFoundError:
+    _sidebar_output = None
+if _sidebar_output is not None:
+    render_sidebar_tasks(_sidebar_workflow_application(ROOT, _sidebar_output), st.session_state["ws"])
 try:
     with st.sidebar.expander("文件夹位置"):
         st.code(WORKSPACES.folder(st.session_state['ws']).as_posix(), language=None)

@@ -321,32 +321,24 @@ def test_generation_preferences_use_guided_controls():
 
     view = app()
     navigate(view, "系统设置")
-    next(w for w in view.segmented_control if w.label == "系统设置视图").set_value("生成偏好").run()
     assert not view.exception
     labels = {w.label for w in view.slider}
     assert {"默认样本占比", "推理与反思", "长上下文利用", "工具使用", "双语与知识桥接"} <= labels
     assert any(w.label == "保存生成偏好" for w in view.button)
     assert any(w.label == "高级编辑：YAML 原始配置" for w in view.expander)
     rendered = "".join(str(node.value) for node in view.get("html"))
-    assert "当前已保存的生成倾向" in rendered
+    assert "高级命令已保存的生成倾向" in rendered
     configured = preference_summary((ROOT / "configs/preferences.yaml").read_text(encoding="utf-8"))
     assert f'默认 {configured["default_share"]:.0%}' in rendered
 
 
-def test_system_settings_gate_overview_reflects_work_area():
-    from lib.gates import GateKeeper
-    from lib import workspace as ws
-
-    gate = GateKeeper(ROOT / "configs/gates.yaml", ws.out("default") / "gates_state.json")
-    gate.propose("G1", {"rollout_dir": "test-rollouts", "default_backend": "test-backend"})
-
+def test_legacy_gate_route_opens_advanced_tools_in_task_center():
     view = app()
-    navigate(view, "系统设置")
+    navigate(view, "闸门")
     assert not view.exception
-    rendered = "".join(str(node.value) for node in view.get("html"))
-    assert 'data-kind="attention"><span>需处理</span><strong>1</strong>' in rendered
-    assert 'data-kind="approved"><span>已确认</span><strong>0</strong>' in rendered
-    assert "test-rollouts" in rendered
+    assert view.session_state["nav"] == "任务管理"
+    assert view.session_state["task-view:default"] == "命令管线"
+    assert any("这些工具可独立处理一项操作" in str(node.value) for node in view.get("html"))
 
 
 def test_home_shows_real_recent_task_and_source_entry(tmp_path):
