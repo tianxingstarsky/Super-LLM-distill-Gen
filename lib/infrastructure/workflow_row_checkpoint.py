@@ -40,14 +40,22 @@ def row_checkpoint(destination: Path, action, check_cancel):
     destination.parent.mkdir(parents=True, exist_ok=True)
     pending = rows_path.with_name('.' + rows_path.name + '.pending')
     count = 0
-    with pending.open('w', encoding='utf-8') as handle:
-        for row in action():
-            if count % 100 == 0:
-                check_cancel()
-            handle.write(canonical(row) + '\n')
-            count += 1
-    check_cancel()
-    pending.replace(rows_path)
-    data = {'storage': 'rows-v1', 'count': count, 'file_sha256': _file_hash(rows_path)}
-    atomic_json(destination, {'data': data, 'sha256': _digest(data)})
-    return WorkflowRows(rows_path, count)
+    promoted = completed = False
+    try:
+        with pending.open('w', encoding='utf-8') as handle:
+            for row in action():
+                if count % 100 == 0:
+                    check_cancel()
+                handle.write(canonical(row) + '\n')
+                count += 1
+        check_cancel()
+        pending.replace(rows_path)
+        promoted = True
+        data = {'storage': 'rows-v1', 'count': count, 'file_sha256': _file_hash(rows_path)}
+        atomic_json(destination, {'data': data, 'sha256': _digest(data)})
+        completed = True
+        return WorkflowRows(rows_path, count)
+    finally:
+        pending.unlink(missing_ok=True)
+        if promoted and not completed and not destination.exists():
+            rows_path.unlink(missing_ok=True)

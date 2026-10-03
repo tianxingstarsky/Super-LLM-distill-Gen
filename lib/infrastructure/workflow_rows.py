@@ -68,19 +68,25 @@ class RowSpool(WorkflowRows):
 
 def write_jsonl(path: Path, rows) -> None:
     temporary = path.with_name("." + path.name + ".pending")
-    with temporary.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(canonical(row) + "\n")
-    temporary.replace(path)
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(canonical(row) + "\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def write_json_array(path: Path, rows) -> None:
     temporary = path.with_name("." + path.name + ".pending")
-    with temporary.open("w", encoding="utf-8") as handle:
-        handle.write("[")
-        for index, row in enumerate(rows):
-            if index:
-                handle.write(",")
-            handle.write(canonical(row))
-        handle.write("]")
-    temporary.replace(path)
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write("[")
+            for index, row in enumerate(rows):
+                if index:
+                    handle.write(",")
+                handle.write(canonical(row))
+            handle.write("]")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)

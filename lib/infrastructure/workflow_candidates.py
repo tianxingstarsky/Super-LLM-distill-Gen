@@ -12,8 +12,10 @@ def prepare_generation_rows(path: Path, units, count, check_cancel):
     needs_variants = requested > len(units)
     pending = path.with_name('.' + path.name + '.pending')
     documents_path = path.with_name('.' + path.name + '.documents')
-    rows, documents = RowSpool(pending), RowSpool(documents_path)
+    rows = documents = None
     try:
+        rows = RowSpool(pending)
+        documents = RowSpool(documents_path)
         for row in islice(units, requested):
             if len(rows) % 100 == 0:
                 check_cancel()
@@ -28,8 +30,14 @@ def prepare_generation_rows(path: Path, units, count, check_cancel):
                     check_cancel()
                 rows.append(generation_variant(original, len(rows), len(documents)))
         check_cancel()
-    finally:
         rows.close()
         documents.close()
-    pending.replace(path)
-    return WorkflowRows(path, len(rows))
+        pending.replace(path)
+        return WorkflowRows(path, len(rows))
+    finally:
+        if rows is not None:
+            rows.close()
+        if documents is not None:
+            documents.close()
+        pending.unlink(missing_ok=True)
+        documents_path.unlink(missing_ok=True)

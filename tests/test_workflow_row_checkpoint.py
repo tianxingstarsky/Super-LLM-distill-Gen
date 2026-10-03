@@ -9,7 +9,7 @@ from lib.domain.workflow_quality import canonical
 from lib.domain.workflow_scale import generation_units
 from lib.infrastructure.workflow_candidates import prepare_generation_rows
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
-from lib.infrastructure.workflow_rows import WorkflowRows, write_jsonl
+from lib.infrastructure.workflow_rows import WorkflowRows, write_json_array, write_jsonl
 
 
 def noop():
@@ -85,7 +85,22 @@ def test_cancelled_checkpoint_has_no_complete_manifest_and_can_retry(tmp_path):
     with pytest.raises(RuntimeError, match='stopped'):
         row_checkpoint(destination, interrupted, noop)
     assert not destination.exists()
+    assert not (tmp_path / '.source.jsonl.pending').exists()
     assert list(row_checkpoint(destination, lambda: iter([{'id':'complete'}]), noop)) == [{'id':'complete'}]
+
+
+def test_failed_checkpoint_manifest_discards_uncommitted_rows(tmp_path, monkeypatch):
+    destination = tmp_path / 'source.json'
+
+    def fail_manifest(*_args, **_kwargs):
+        raise OSError('manifest unavailable')
+
+    monkeypatch.setattr('lib.infrastructure.workflow_row_checkpoint.atomic_json', fail_manifest)
+    with pytest.raises(OSError, match='manifest unavailable'):
+        row_checkpoint(destination, lambda: iter([{'id': 'private'}]), noop)
+    assert not destination.exists()
+    assert not destination.with_suffix('.jsonl').exists()
+    assert not (tmp_path / '.source.jsonl.pending').exists()
 
 
 @pytest.mark.parametrize('count', [None,1,2,3,17])
@@ -104,6 +119,48 @@ def test_recorded_conversations_are_never_repeated_to_fill_target(tmp_path):
     units = [{'id':'recorded','kind':'conversation','messages':[{'role':'user','content':'context'}],'status':'ready'}]
     rows = prepare_generation_rows(tmp_path/'generated.jsonl',units,50000,noop)
     assert len(rows) == 1 and list(rows) == units
+
+
+def test_generation_candidate_spools_are_removed_after_cancel_and_success(tmp_path):
+    destination = tmp_path / 'generated.jsonl'
+    destination.write_text('{"id":"previous"}\n', encoding='utf-8')
+    original = destination.read_bytes()
+    checks = 0
+
+    def cancel_after_first_batch():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise RuntimeError('cancelled')
+
+    units = [{'id':str(index),'kind':'document','text':'source','status':'ready'}
+             for index in range(200)]
+    with pytest.raises(RuntimeError, match='cancelled'):
+        prepare_generation_rows(destination, units, 250, cancel_after_first_batch)
+    assert destination.read_bytes() == original
+    assert not list(tmp_path.glob('.generated.jsonl.*'))
+
+    rows = prepare_generation_rows(destination,
+                                   [{'id':'new','kind':'document','text':'source','status':'ready'}],
+                                   3, noop)
+    assert len(rows) == 3
+    assert not list(tmp_path.glob('.generated.jsonl.*'))
+
+
+@pytest.mark.parametrize('writer,extension', [(write_jsonl, 'jsonl'), (write_json_array, 'json')])
+def test_interrupted_row_export_removes_partial_file_and_keeps_previous_result(
+        tmp_path, writer, extension):
+    destination = tmp_path / f'records.{extension}'
+    destination.write_text('previous result', encoding='utf-8')
+
+    def interrupted():
+        yield {'id': 'partial'}
+        raise RuntimeError('interrupted')
+
+    with pytest.raises(RuntimeError, match='interrupted'):
+        writer(destination, interrupted())
+    assert destination.read_text(encoding='utf-8') == 'previous result'
+    assert not destination.with_name('.' + destination.name + '.pending').exists()
 
 
 def test_fifty_thousand_checkpoint_rows_and_candidates_keep_bounded_memory(tmp_path):
