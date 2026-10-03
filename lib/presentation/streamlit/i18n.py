@@ -412,6 +412,7 @@ ZH_EN: dict[str, str] = {
     "角色槽位": "Role slots",
     "预算与用量": "Budget and usage",
     "清零预算": "Reset budget",
+    "仍有模型请求正在执行；待这些请求结算后再清零预算。": "Model requests are still running. Reset the budget after they finish.",
     "系统设置": "Settings",
     "管理质量确认点与生成偏好，控制数据进入审核和导出之前的检查。": "Manage quality checks and generation preferences before review and release.",
     "HITL 闸门": "Human review gates",

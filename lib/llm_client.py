@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import pathlib
 import time
+import uuid
 from typing import Any, Dict, List
 from urllib.parse import urlsplit
 
@@ -17,6 +19,10 @@ from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request
                                  validate_api_format)
 
 DEFAULT_NO_PROXY = "127.0.0.1,localhost"
+# A priced hard-stop request without an explicit model context is constrained
+# to the same conservative default used by workflow node bindings.
+DEFAULT_BUDGET_CONTEXT_TOKENS = 131_072
+DEFAULT_BUDGET_OUTPUT_TOKENS = 32_768
 
 
 def parse_json_robust(output: str) -> Dict[str, Any]:
@@ -90,42 +96,200 @@ class BudgetExceeded(RuntimeError):
 
 
 class BudgetGuard:
-    """预算守卫：按 token 价格累计成本，持久化到 data/output/budget.json。"""
+    """Cross-process budget with durable, live-locked request reservations.
+
+    A reservation remains in budget.json while its own OS file lock is held.
+    After a process dies the lock is released, so the next admission charges
+    that stale reservation at its full ceiling without expiring an active call.
+    """
 
     def __init__(self, root: pathlib.Path, limit_usd: float, hard_stop: bool = True):
         self.path = pathlib.Path(root) / "data" / "output" / "budget.json"
         self.limit = float(limit_usd)
+        if not math.isfinite(self.limit) or self.limit < 0:
+            raise ValueError("invalid_budget_limit")
         self.hard_stop = hard_stop
         self.spent = 0.0
+        self._held_reservations = {}
         if self.path.exists():
             try:
                 self.spent = float(json.loads(self.path.read_text(encoding="utf-8")).get("spent_usd", 0.0))
             except (json.JSONDecodeError, OSError):
                 self.spent = 0.0
 
+    def _state(self) -> dict:
+        state = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        if not isinstance(state, dict):
+            raise ValueError("invalid_budget_state")
+        spent = float(state.get("spent_usd", 0))
+        reservations = state.get("reservations", {})
+        if (not math.isfinite(spent) or spent < 0 or not isinstance(reservations, dict)
+                or any(not isinstance(key, str) or len(key) != 32 or
+                       any(char not in "0123456789abcdef" for char in key) or
+                       type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                       for key, value in reservations.items())):
+            raise ValueError("invalid_budget_state")
+        self.spent = spent
+        state["reservations"] = reservations
+        return state
+
+    def _reservation_path(self, token: str) -> pathlib.Path:
+        return self.path.with_name(f".{self.path.name}.{token}.lock")
+
+    def _prune_stale(self, state: dict) -> bool:
+        from filelock import FileLock, Timeout
+
+        changed = False
+        for token in tuple(state["reservations"]):
+            lock_path = self._reservation_path(token)
+            probe = FileLock(str(lock_path), timeout=0)
+            try:
+                probe.acquire()
+            except Timeout:
+                continue
+            else:
+                probe.release()
+                # A dead process may have sent a billable request before it
+                # crashed. Charge its full reserved ceiling; only a normal
+                # settlement can release unused capacity.
+                state["spent_usd"] = float(state.get("spent_usd", 0)) + state["reservations"].pop(token)
+                self.spent = state["spent_usd"]
+                lock_path.unlink(missing_ok=True)
+                changed = True
+        return changed
+
     def check(self) -> None:
-        if self.path.exists():
-            self.spent = float(json.loads(self.path.read_text(encoding="utf-8")).get("spent_usd", 0))
-        if self.hard_stop and self.spent >= self.limit:
-            raise BudgetExceeded("Budget exhausted; no request sent")
+        from filelock import FileLock
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self.path) + ".lock", timeout=30):
+            state = self._state()
+            changed = self._prune_stale(state)
+            if changed:
+                from lib.io_utils import atomic_json
+                atomic_json(self.path, state)
+            if self.hard_stop and (state.get("budget_bound_exceeded") or
+                                   self.spent + math.fsum(state["reservations"].values()) >= self.limit):
+                raise BudgetExceeded("Budget exhausted; no request sent")
+
+    def reserve(self, amount: float) -> str:
+        """Atomically admit one priced request; returns its durable token."""
+        from filelock import FileLock
+        from lib.io_utils import atomic_json
+
+        if not math.isfinite(amount) or amount <= 0:
+            raise ValueError("invalid_budget_reservation")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        lock_path = self._reservation_path(token)
+        live_lock = FileLock(str(lock_path), timeout=0)
+        live_lock.acquire()
+        try:
+            with FileLock(str(self.path) + ".lock", timeout=30):
+                state = self._state()
+                changed = self._prune_stale(state)
+                reserved = math.fsum(state["reservations"].values())
+                if (self.hard_stop and (state.get("budget_bound_exceeded") or
+                                        self.spent + reserved + amount > self.limit)):
+                    if changed:
+                        atomic_json(self.path, state)
+                    raise BudgetExceeded("Budget exhausted; no request sent")
+                state["reservations"][token] = amount
+                state["limit_usd"] = self.limit
+                atomic_json(self.path, state)
+            self._held_reservations[token] = live_lock
+            return token
+        except BaseException:
+            live_lock.release()
+            lock_path.unlink(missing_ok=True)
+            raise
+
+    def settle(self, token: str, amount: float) -> None:
+        """Record actual cost and release capacity, including on failed calls."""
+        from filelock import FileLock
+        from lib.io_utils import atomic_json
+
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("invalid_budget_settlement")
+        live_lock = self._held_reservations.pop(token)
+        try:
+            with FileLock(str(self.path) + ".lock", timeout=30):
+                state = self._state()
+                reserved = state["reservations"].pop(token, None)
+                state["spent_usd"] = self.spent + amount
+                state["limit_usd"] = self.limit
+                if (reserved is None or amount > reserved + 1e-9 or
+                        state["spent_usd"] + math.fsum(state["reservations"].values()) > self.limit + 1e-9):
+                    # The provider reported more than our configured upper bound,
+                    # or an external budget reset removed a live reservation.
+                    # Keep the charge and close admission until explicitly reset.
+                    state["budget_bound_exceeded"] = True
+                atomic_json(self.path, state)
+                self.spent = state["spent_usd"]
+                if state.get("budget_bound_exceeded"):
+                    raise BudgetExceeded("Budget estimate exceeded; future requests stopped")
+        finally:
+            live_lock.release()
+            self._reservation_path(token).unlink(missing_ok=True)
 
     def add_usd(self, amount: float) -> None:
         from filelock import FileLock
+        from lib.io_utils import atomic_json
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("invalid_budget_settlement")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.path) + '.lock', timeout=30):
-            if self.path.exists():
-                self.spent = float(json.loads(self.path.read_text(encoding="utf-8")).get("spent_usd", 0))
+            state = self._state()
+            self._prune_stale(state)
             self.spent += amount
-            self.save()
-        if self.hard_stop and self.spent >= self.limit:
+            state.update(spent_usd=self.spent, limit_usd=self.limit)
+            if self.hard_stop and self.spent + math.fsum(state["reservations"].values()) > self.limit:
+                state["budget_bound_exceeded"] = True
+            atomic_json(self.path, state)
+        if self.hard_stop and (self.spent >= self.limit or state.get("budget_bound_exceeded")):
             raise BudgetExceeded(
                 f"预算上限已到：累计 ${self.spent:.4f} ≥ ${self.limit}（data/output/budget.json 可查看/清零）"
             )
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        """Persist a legacy manual balance only when no request is in flight."""
+        from filelock import FileLock
         from lib.io_utils import atomic_json
-        atomic_json(self.path, {"spent_usd": round(self.spent, 6), "limit_usd": self.limit})
+
+        spent = self.spent
+        if not math.isfinite(spent) or spent < 0:
+            raise ValueError("invalid_budget_state")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self.path) + ".lock", timeout=30):
+            state = self._state()
+            self._prune_stale(state)
+            if state["reservations"]:
+                raise BudgetExceeded("Budget has active requests; cannot save balance")
+            if spent < self.spent:
+                raise BudgetExceeded("Budget balance reduction requires an audited reset")
+            state.update(spent_usd=spent, limit_usd=self.limit)
+            if self.hard_stop and spent > self.limit:
+                state["budget_bound_exceeded"] = True
+            atomic_json(self.path, state)
+            self.spent = spent
+
+    def reset(self, caller: str) -> float:
+        """Clear completed charges only after all live requests have settled."""
+        from filelock import FileLock
+        from lib.io_utils import atomic_json
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self.path) + ".lock", timeout=30):
+            state = self._state()
+            self._prune_stale(state)
+            if state["reservations"]:
+                raise BudgetExceeded("budget_reset_in_flight")
+            previous = self.spent
+            atomic_json(self.path, {"spent_usd": 0.0, "limit_usd": self.limit,
+                                    "reset_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                    "reset_by": caller})
+            self.spent = 0.0
+            return previous
 
 
 class ChatClient:
@@ -162,18 +326,22 @@ class ChatClient:
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
         self.price_input = price_input_per_1m
         self.price_output = price_output_per_1m
+        if any(not math.isfinite(price) or price < 0 for price in (self.price_input, self.price_output)):
+            raise ValueError("invalid_model_token_price")
         self.budget = budget
         # response_format 能力探测结果：None=未知 / True=支持 / False=不支持。
         # 首次 json_mode 调用被 API 拒绝后置 False，同会话后续自动降级为
         # "提示词要求 JSON + 容错解析"路径，不再硬重试（分层降级 L1→L3）。
         self.json_supported: bool | None = None
 
-    def _check_context(self, messages: List[Dict[str, Any]], max_tokens: int | None) -> None:
+    def _check_context(self, messages: List[Dict[str, Any]], max_tokens: int | None,
+                       *, context_limit: int | None = None) -> None:
         """Conservative text-only preflight; providers remain the final token authority."""
-        if self.context_window_tokens is None:
+        context_limit = self.context_window_tokens if context_limit is None else context_limit
+        if context_limit is None:
             return
         output = max_tokens or (ANTHROPIC_DEFAULT_MAX_TOKENS if self.api_format == "anthropic" else 0)
-        if output >= self.context_window_tokens:
+        if output >= context_limit:
             raise ValueError("max_output_tokens_exceeds_context_window")
         # UTF-8 bytes upper-bound byte-level text tokenization. Image payloads
         # have provider-specific token costs, so do not miscount base64 bytes.
@@ -185,8 +353,28 @@ class ChatClient:
             elif isinstance(content, list):
                 text_parts.extend(part.get("text", "") for part in content
                                   if isinstance(part, dict) and isinstance(part.get("text"), str))
-        if sum(len(part.encode("utf-8")) for part in text_parts) + output > self.context_window_tokens:
+        if sum(len(part.encode("utf-8")) for part in text_parts) + output > context_limit:
             raise ValueError("model_context_window_exceeded")
+
+    def _budget_request_bound(self, messages: List[Dict[str, Any]],
+                              max_tokens: int | None) -> tuple[int | None, float]:
+        """Reserve a full input context plus the explicit output ceiling.
+
+        The configured context must upper-bound provider-billed input tokens.
+        Unknown multimodal tokenization requires an explicit context setting.
+        A provider reporting usage beyond either bound closes future admission.
+        """
+        if not self.budget or not self.budget.hard_stop or not (self.price_input or self.price_output):
+            self._check_context(messages, max_tokens)
+            return max_tokens, 0.0
+        context = self.context_window_tokens or DEFAULT_BUDGET_CONTEXT_TOKENS
+        output = max_tokens or (ANTHROPIC_DEFAULT_MAX_TOKENS if self.api_format == "anthropic"
+                                else DEFAULT_BUDGET_OUTPUT_TOKENS)
+        if self.context_window_tokens is None and any(
+                not isinstance(message.get("content", ""), str) for message in messages):
+            raise ValueError("budget_multimodal_context_required")
+        self._check_context(messages, output, context_limit=context)
+        return output, (context * self.price_input + output * self.price_output) / 1e6
 
     def _request(self, messages: List[Dict[str, Any]], *, max_tokens: int | None,
                  temperature: float, thinking: bool, json_mode: bool) -> tuple[str, int, int]:
@@ -269,22 +457,34 @@ class ChatClient:
         """Return text through the selected protocol and count its usage."""
         if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
             raise ValueError("max_tokens must be a positive integer")
-        self._check_context(messages, max_tokens)
+        request_max_tokens, reservation_usd = self._budget_request_bound(messages, max_tokens)
         last_err: Exception | None = None
         attempts = 0
         while attempts < retries:
+            reservation = None
+            request_started = False
             try:
                 if self.budget:
-                    self.budget.check()
+                    if reservation_usd:
+                        reservation = self.budget.reserve(reservation_usd)
+                    else:
+                        self.budget.check()
+                request_started = True
                 content, prompt_tokens, completion_tokens = self._request(
-                    messages, max_tokens=max_tokens, temperature=temperature,
+                    messages, max_tokens=request_max_tokens, temperature=temperature,
                     thinking=thinking, json_mode=json_mode)
                 self.usage["calls"] += 1
                 self.usage["prompt_tokens"] += prompt_tokens
                 self.usage["completion_tokens"] += completion_tokens
                 if self.budget and (self.price_input or self.price_output):
-                    self.budget.add_usd(prompt_tokens / 1e6 * self.price_input
-                                        + completion_tokens / 1e6 * self.price_output)
+                    cost = (prompt_tokens * self.price_input + completion_tokens * self.price_output) / 1e6
+                    if reservation is not None:
+                        token, reservation = reservation, None
+                        # Some compatible endpoints omit usage. Charge the bound
+                        # rather than silently treating a priced call as free.
+                        self.budget.settle(token, cost if prompt_tokens or completion_tokens else reservation_usd)
+                    else:
+                        self.budget.add_usd(cost)
                 if content:
                     return content
                 last_err = ValueError("empty completion")
@@ -300,6 +500,11 @@ class ChatClient:
                     self.json_supported = False
                     continue
                 last_err = e
+            finally:
+                if reservation is not None:
+                    # A timeout/error may still have incurred provider charges.
+                    # Pessimistically book the reserved maximum before retrying.
+                    self.budget.settle(reservation, reservation_usd if request_started else 0.0)
             attempts += 1
             time.sleep(1.0)
         # Provider error messages may echo credentials or source material.

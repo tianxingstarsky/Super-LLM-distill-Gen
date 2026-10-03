@@ -171,8 +171,13 @@ def _budget(application: BackendApplication, info: dict) -> None:
         st.caption("仅重置本地累计额度，不会修改外部服务账单或预算上限。")
         confirm = st.checkbox("我确认清零预算（审计记录本次操作）", key="budget-reset-confirm")
         if st.button("清零预算", disabled=not confirm, width="stretch"):
-            previous = application.reset_budget("console")
-            st.success(f"预算已清零（原已用 ${previous:.4f}，已记审计）")
+            from lib.llm_client import BudgetExceeded
+            try:
+                previous = application.reset_budget("console")
+            except BudgetExceeded:
+                st.error("仍有模型请求正在执行；待这些请求结算后再清零预算。")
+            else:
+                st.success(f"预算已清零（原已用 ${previous:.4f}，已记审计）")
 
 
 def render_backend_page(application: BackendApplication, *, embedded: bool = False) -> None:

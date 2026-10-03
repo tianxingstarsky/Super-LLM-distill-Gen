@@ -88,7 +88,9 @@ class BackendApplication:
         if limit is None:
             limit = float((self.list_backends().get("budget") or {}).get("max_total_usd") or 0)
         spent = self._port.spent_usd()
-        self._port.write_budget_reset(caller, limit)
+        actual_spent = self._port.write_budget_reset(caller, limit)
+        if actual_spent is not None:
+            spent = actual_spent
         self._port.audit_budget_reset(caller, spent)
         return spent
 

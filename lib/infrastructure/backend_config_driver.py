@@ -49,12 +49,10 @@ class FilesystemBackendConfigDriver:
                 pass
         return 0.0
 
-    def write_budget_reset(self, caller: str, limit: float) -> None:
-        from lib.io_utils import atomic_json
+    def write_budget_reset(self, caller: str, limit: float) -> float:
+        from lib.llm_client import BudgetGuard
 
-        path = self.root / "data" / "output" / "budget.json"
-        atomic_json(path, {"spent_usd": 0.0, "limit_usd": limit,
-                           "reset_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "reset_by": caller})
+        return BudgetGuard(self.root, limit).reset(caller)
 
     def audit_budget_reset(self, caller: str, previous_spent: float) -> None:
         from lib.monitor import trace_run

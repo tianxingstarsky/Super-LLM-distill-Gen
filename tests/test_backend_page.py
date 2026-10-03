@@ -35,6 +35,7 @@ SCRIPT = '''
 import streamlit as st
 from lib.application.backend_service import BackendApplication
 from lib.presentation.streamlit.backend_page import render_backend_page
+from lib.llm_client import BudgetExceeded
 from lib.presentation.streamlit.i18n import install_streamlit_localization
 st.session_state['ui_language']='en'
 install_streamlit_localization()
@@ -54,6 +55,8 @@ class Port:
             raise RuntimeError('PRIVATE_TEST_ERROR')
         return {'models':['执行中']}
     def write_budget_reset(self,caller,limit):
+        if st.session_state.get('fixture-budget-active'):
+            raise BudgetExceeded('budget_reset_in_flight')
         st.session_state['fixture-budget-reset']=(caller,limit)
     def audit_budget_reset(self,caller,spent):
         st.session_state['fixture-budget-audit']=(caller,spent)
@@ -93,6 +96,18 @@ def test_service_page_budget_reset_uses_current_application_budget():
     assert not ui.exception
     assert ui.session_state['fixture-budget-reset']==('console',9.0)
     assert ui.session_state['fixture-budget-audit']==('console',1.25)
+
+
+def test_budget_reset_explains_active_requests_without_claiming_success():
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.session_state['fixture-budget-active'] = True
+    ui.checkbox(key='budget-reset-confirm').check().run()
+    next(button for button in ui.button if button.label == 'Reset budget').click().run()
+    assert not ui.exception
+    assert any('Model requests are still running. Reset the budget after they finish.' in item.value
+               for item in ui.error)
+    assert 'fixture-budget-reset' not in ui.session_state
+    assert 'fixture-budget-audit' not in ui.session_state
 
 
 def test_service_registration_saves_through_application_port():

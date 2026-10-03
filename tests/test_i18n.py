@@ -135,6 +135,9 @@ def test_translates_dynamic_metadata_and_html_accessibility_labels():
     assert translate("预算已清零（原已用 $1.2500，已记审计）", "en") == (
         "Budget reset (previous usage $1.2500; audit recorded)"
     )
+    assert translate("仍有模型请求正在执行；待这些请求结算后再清零预算。", "en") == (
+        "Model requests are still running. Reset the budget after they finish."
+    )
     assert translate("3 次调用已核对", "en") == "3 calls verified"
     assert translate("2 组重复调用已剪枝", "en") == "2 duplicate call groups pruned"
     assert translate("4 个工具定义", "en") == "4 tool definitions"
