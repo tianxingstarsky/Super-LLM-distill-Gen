@@ -52,7 +52,23 @@ def render_generation_settings(settings: GenerationSettingsApplication, show_tit
                 f'<div><span>推理输出 · SFT 默认</span><strong>{html.escape({"separated": "分字段", "tags": "原生 token", "plain": "合并正文", "drop": "仅答案"}.get(summary["cot_style"], summary["cot_style"]))}</strong><small>本次任务可在 SFT 节点覆盖</small></div>'
                 '</div>'
             )
-            with st.expander("高级命令配比与采样", expanded=False):
+            with st.container(border=True, key="settings-pref-output"):
+                section_heading("思考内容输出", "新任务默认值；本次任务在 SFT 节点确定。", "◇")
+                style_names = {"separated": "分字段保存", "tags": "模型原生思考 token（高级命令）",
+                               "plain": "合并到正文（高级命令）", "drop": "只保留答案"}
+                style = st.selectbox("输出方式", tuple(style_names),
+                                     index=tuple(style_names).index(summary["cot_style"]),
+                                     format_func=lambda value: translate_label(
+                                         style_names[value], st.session_state.get("ui_language", "zh")),
+                                     key="pref-cot-style")
+                if style == "tags" and not all(summary["think_tokens"]):
+                    st.warning("当前尚未配置模型原生思考 token。请在下方高级编辑里填写 think_tokens 后再保存此选项。")
+                if style in {"tags", "plain"}:
+                    st.warning("此输出方式暂不作用于自动工作流；分字段保存和只保留答案可作用于 SFT。")
+                save_primary = st.button("保存生成偏好", type="primary", key="pref-save-form")
+
+            section_heading("高级命令配比与采样", "以下参数仅用于高级单项工具，不会改变自动工作流。", "◎")
+            with st.container(border=True, key="settings-pref-command"):
                 share_labels = {
                     "default": ("默认", "#a9b9cf"), "reasoning": ("推理与反思", "#2375df"),
                     "context_use": ("长上下文", "#29acd0"), "tool_use": ("工具使用", "#1aaf86"),
@@ -96,33 +112,21 @@ def render_generation_settings(settings: GenerationSettingsApplication, show_tit
                     tagger = st.selectbox("分布标记来源", taggers, index=taggers.index(summary["correction_tagger"]),
                                           key="pref-tagger")
                     st.caption("校正会影响后续批次的采样权重，不会硬删已生成的数据。")
-            with st.container(border=True, key="settings-pref-output"):
-                section_heading("思考内容输出", "新任务默认值；本次任务在 SFT 节点确定。", "◇")
-                style_names = {"separated": "分字段保存", "tags": "模型原生思考 token（高级命令）",
-                               "plain": "合并到正文（高级命令）", "drop": "只保留答案"}
-                style = st.selectbox("输出方式", tuple(style_names),
-                                     index=tuple(style_names).index(summary["cot_style"]),
-                                     format_func=lambda value: translate_label(
-                                         style_names[value], st.session_state.get("ui_language", "zh")),
-                                     key="pref-cot-style")
-                if style == "tags" and not all(summary["think_tokens"]):
-                    st.warning("当前尚未配置模型原生思考 token。请在下方高级编辑里填写 think_tokens 后再保存此选项。")
-                if style in {"tags", "plain"}:
-                    st.warning("此输出方式暂不作用于自动工作流；分字段保存和只保留答案可作用于 SFT。")
-                if st.button("保存生成偏好", type="primary", key="pref-save-form"):
-                    try:
-                        updated = settings.save_form(
-                            snapshot, default_share=default_share / 100,
-                            relative_tendencies=tendencies, templates_per_dim=int(templates),
-                            shuffle_per_batch=shuffle, correction_enabled=correction,
-                            correction_threshold=threshold / 100, correction_tagger=tagger, cot_style=style,
-                        )
-                        st.session_state[f"pref-yaml:{area}"] = updated
-                        st.toast("生成偏好已保存，并已备份上一版本。")
-                        st.session_state["preference-refresh"] = True
-                        st.rerun()
-                    except (ValueError, OSError) as error:
-                        st.error(f"保存失败：{error}")
+            save_bottom = st.button("保存全部修改", type="primary", key="pref-save-bottom")
+            if save_primary or save_bottom:
+                try:
+                    updated = settings.save_form(
+                        snapshot, default_share=default_share / 100,
+                        relative_tendencies=tendencies, templates_per_dim=int(templates),
+                        shuffle_per_batch=shuffle, correction_enabled=correction,
+                        correction_threshold=threshold / 100, correction_tagger=tagger, cot_style=style,
+                    )
+                    st.session_state[f"pref-yaml:{area}"] = updated
+                    st.toast("生成偏好已保存，并已备份上一版本。")
+                    st.session_state["preference-refresh"] = True
+                    st.rerun()
+                except (ValueError, OSError) as error:
+                    st.error(f"保存失败：{error}")
     elif area == "思考风格":
         st.info("思考风格画像供高级命令使用；当前自动工作流不会读取此配置。")
         with st.container(border=True, key="settings-pref-styles"):

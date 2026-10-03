@@ -1658,6 +1658,10 @@ ZH_EN.update({
     "这里的 SFT 推理输出方式是新任务的默认值；每次任务可在 SFT 节点直接调整。配比、模板轮换与后验校正仅用于高级命令。": "This SFT reasoning output is the default for new tasks. Set it for each run in the SFT node. Mix, template rotation, and correction apply to advanced commands only.",
     "高级命令已保存的生成倾向": "Saved generation mix for advanced commands",
     "高级命令配比与采样": "Advanced command mix and sampling",
+    "以下参数仅用于高级单项工具，不会改变自动工作流。": "The settings below apply only to advanced single-task tools. They do not change data workflows.",
+    "保存全部修改": "Save all changes",
+    "分批生成 · 失败后可从逐条断点继续": "Generate in batches · resume from each saved example after a failure",
+    "输入范围与文档分块（可选）": "Input limits and document chunks (optional)",
     "默认样本占比 · 高级命令": "Default sample share · Advanced commands",
     "每维模板 · 高级命令": "Templates per dimension · Advanced commands",
     "后验校正 · 高级命令": "Post-run correction · Advanced commands",
@@ -1707,6 +1711,8 @@ ZH_EN.update({
     "此队列只读；失败记录不会混入正样本。": "This queue is read-only. Failed traces stay separate from positive examples.",
     "此候选缺少可独立复核的重放条件。可以退回，暂不能批准。": "This candidate lacks independently reviewable replay evidence. You can return it, but cannot approve it.",
     "已打开 {opened} / {total} 个轨迹片段。通过前请逐页核对消息与工具证据。": "Opened {opened} of {total} trace sections. Review each message and tool result before approval.",
+    "查看下个未核对片段": "Open next unchecked trace section",
+    "只复制到当前节点。模型服务、模型和 token 上限可继续分别调整。": "Copy only to this node. You can still adjust its service, model, and token limits.",
     "审核意见": "Review notes",
     "通过": "Approve",
     "退回时请说明问题；意见会与来源和证据版本一起保存。": "Explain the issue when returning a trace. Notes are saved with source and evidence versions.",
@@ -1863,6 +1869,9 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"([\d,]+) / ([\d,]+) 单元", value)
     if match:
         return f"{match.group(1)} / {match.group(2)} units"
+    match = re.fullmatch(r"沿用 ([A-Z0-9_]+) 节点的 (.+)", value)
+    if match:
+        return f"Use {match.group(1)}'s {match.group(2)}"
     match = re.fullmatch(r"显示 (\d+)–(\d+) / (\d+) 个文件", value)
     if match:
         return f"Files {match.group(1)}–{match.group(2)} of {match.group(3)}"
@@ -2319,9 +2328,9 @@ def install_streamlit_localization() -> None:
             formatter = translated_args[3] if positional_formatter else translated_kwargs.get("format_func")
             if callable(formatter):
                 mapper = translate_label if method_name == "radio" else translate
-                wrapped_formatter = lambda item, fn=formatter, map_value=mapper: map_value(fn(item), language)
+                wrapped_formatter = lambda item, fn=formatter, map_value=mapper: str(map_value(fn(item), language))
             else:
-                wrapped_formatter = lambda item: translate(item, language)
+                wrapped_formatter = lambda item: str(translate(item, language))
             if positional_formatter:
                 translated_args[3] = wrapped_formatter
             else:

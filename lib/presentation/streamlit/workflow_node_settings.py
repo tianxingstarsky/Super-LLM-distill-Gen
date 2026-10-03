@@ -26,6 +26,41 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
     return draft, endpoints
 
 
+def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) -> list[tuple[str, dict]]:
+    """Offer only usable models already chosen for the same role on another node."""
+    seen = set()
+    choices = []
+    for source, roles in bindings.items():
+        if source == node:
+            continue
+        binding = roles.get(role, {})
+        backend = binding.get("backend")
+        if backend not in endpoints or not binding.get("model"):
+            continue
+        signature = (backend, binding["model"], binding["context_window_tokens"],
+                     binding["max_output_tokens"])
+        if signature in seen:
+            continue
+        seen.add(signature)
+        choices.append((source, binding))
+    return choices
+
+
+def _reuse_binding(workspace: str, node: str, role: str, binding: dict) -> None:
+    """Copy an explicit choice into one node without changing the source node."""
+    draft_key = f"workflow-node-bindings:{workspace}"
+    draft = deepcopy(st.session_state.get(draft_key, {}))
+    copied = deepcopy(binding)
+    draft.setdefault(node, {})[role] = copied
+    st.session_state[draft_key] = draft
+    prefix = f"node-model:{workspace}:{node}:{role}"
+    backend, model = copied["backend"], copied["model"]
+    st.session_state[prefix + ":backend"] = backend
+    st.session_state[prefix + ":model:" + backend] = model
+    st.session_state[prefix + ":context:" + backend + ":" + model] = copied["context_window_tokens"]
+    st.session_state[prefix + ":output:" + backend + ":" + model] = copied["max_output_tokens"]
+
+
 def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings: dict,
                      endpoints: dict, application: BackendApplication | None) -> None:
     if application is None:
@@ -143,6 +178,14 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                 + ("生成模型" if role == "generation" else "独立质量评审模型") + '</strong></p>')
         binding = bindings.get(node, {}).get(role, {})
         prefix = f"node-model:{workspace}:{node}:{role}"
+        if not binding:
+            for source, reusable in _reusable_bindings(node, role, bindings, endpoints):
+                model_name = reusable["model"]
+                label = f"沿用 {source.upper()} 节点的 {model_name}"
+                st.button(label, key=prefix + ":reuse:" + source,
+                          on_click=_reuse_binding, args=(workspace, node, role, reusable),
+                          help="只复制到当前节点。模型服务、模型和 token 上限可继续分别调整。",
+                          use_container_width=True)
         names = list(endpoints)
         if binding.get("backend") and binding["backend"] not in endpoints:
             st.warning("原模型服务已不可用，请为此节点重新选择。")

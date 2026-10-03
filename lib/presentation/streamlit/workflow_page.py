@@ -783,12 +783,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         st.html('<div class="df-wb-selected"><b>已选目标 ' + str(len(targets)) + '</b><div>' +
                 (selected_labels or '<small>请从上方列表至少选择一类训练目标。</small>') + '</div></div>')
         graph_nodes, graph_edges = execution_graph(targets)
-        if targets:
+        st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
+        if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
-                st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
                 st.html(_planned_dependencies_html(graph_edges))
-        else:
-            st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if "agent" in targets:
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
@@ -896,9 +894,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     selected = st.multiselect("或选择当前文件夹内的来源", list(file_labels),
                                               format_func=lambda path: file_labels[path],
                                               key=sources_key, on_change=_save_draft_value, args=(ws, sources_key))
-                with st.expander("补充生成要求（可选）"):
-                    brief = _draft_brief("补充生成要求（可选）", placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
-                                         key=f"workflow-source-brief:{ws}:{source_mode}", label_visibility="collapsed")
+                brief = _draft_brief("补充生成要求（可选）",
+                                     placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
+                                     key=f"workflow-source-brief:{ws}:{source_mode}")
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
         with setup_col, st.container(border=True, key="workbench-parameters-panel"):
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
@@ -917,28 +915,29 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             conversation_turns = (_draft_number("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
                                                   help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
                                   if "multiturn" in targets else 3)
-            with st.expander("处理与批次设置", expanded=sample_count >= 5000):
-                st.caption("支持数万条候选。分批规划、增量统计；失败后可从逐条断点继续。")
-                a, b = st.columns(2, gap="small")
-                with a:
-                    concurrency = _draft_number("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
-                                              help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
-                with b:
-                    batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
-                                             help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
-                with a:
+            st.caption("分批生成 · 失败后可从逐条断点继续")
+            a, b = st.columns(2, gap="small")
+            with a:
+                concurrency = _draft_number("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
+                                          help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
+            with b:
+                batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
+                                         help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
+            with st.expander("输入范围与文档分块（可选）"):
+                range_col, chunk_col = st.columns(2, gap="small")
+                with range_col:
                     maximum = _draft_number("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
                                           help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
-                with b:
+                with chunk_col:
                     chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
                                if source_mode == "文档资料" else 2000)
-                planning_count = min(int(sample_count), int(maximum)) if source_mode == "开放需求" else int(sample_count)
-                if source_mode == "开放需求" and maximum < sample_count:
-                    st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
-                batch_summary, request_summary = st.columns(2, gap="small")
-                batch_summary.metric("每个生成目标的候选批次", f"{(planning_count + int(batch_size) - 1) // int(batch_size):,}")
-                request_summary.metric("同时处理的样本上限", f"{min(int(concurrency), int(batch_size)):,}")
-                st.caption("批次数按候选规模估算；不代表模型调用次数或合格数量。CPT 与导入轨迹按实际来源处理。")
+            planning_count = min(int(sample_count), int(maximum)) if source_mode == "开放需求" else int(sample_count)
+            if source_mode == "开放需求" and maximum < sample_count:
+                st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
+            batch_summary, request_summary = st.columns(2, gap="small")
+            batch_summary.metric("每个生成目标的候选批次", f"{(planning_count + int(batch_size) - 1) // int(batch_size):,}")
+            request_summary.metric("同时处理的样本上限", f"{min(int(concurrency), int(batch_size)):,}")
+            st.caption("批次数按候选规模估算；不代表模型调用次数或合格数量。CPT 与导入轨迹按实际来源处理。")
             evaluation_uploads = []
             if "cpt" in targets:
                 with st.expander("预训练评测集去污染（可选）"):

@@ -31,6 +31,22 @@ def setup_workspace(tmp_path, monkeypatch):
     return ws, name, source
 
 
+def test_workbench_keeps_flow_and_common_generation_controls_visible(tmp_path, monkeypatch):
+    _, workspace, _ = setup_workspace(tmp_path, monkeypatch)
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "自动工作流"
+    app.run()
+    assert not app.exception
+    assert any('class="df-wb-plan"' in str(item.value) for item in app.get("html"))
+    assert any(item.label == "补充生成要求（可选）" for item in app.text_area)
+    assert app.number_input(key=f"workflow-concurrency:{workspace}")
+    assert app.number_input(key=f"workflow-batch-size:{workspace}")
+    assert not any(item.label in {"补充生成要求（可选）", "处理与批次设置"}
+                   for item in app.expander)
+    assert any(item.label == "输入范围与文档分块（可选）" for item in app.expander)
+
+
 def test_next_incomplete_node_locates_panel_and_wraps_without_starting_run(tmp_path, monkeypatch):
     from lib.application.backend_service import BackendApplication
     _, workspace, _ = setup_workspace(tmp_path, monkeypatch)

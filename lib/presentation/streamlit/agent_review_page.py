@@ -146,8 +146,8 @@ def _load_page(application: WorkflowApplication, run_id: str, *, kind: str,
     return queue, page, pages
 
 
-def _opened_trace_fragments(item: dict, *, preview_key: str) -> tuple[int, int]:
-    """Record only fragments actually rendered for this candidate and evidence version."""
+def _opened_trace_fragments(item: dict, *, preview_key: str) -> tuple[int, int, int | None]:
+    """Record rendered fragments and locate the next one missing for this evidence version."""
     messages = item["native"].get("messages")
     total = max(1, len(message_windows("agent", messages if isinstance(messages, list) else [])))
     page = st.session_state.get(f"{preview_key}:message-page", 1)
@@ -158,7 +158,8 @@ def _opened_trace_fragments(item: dict, *, preview_key: str) -> tuple[int, int]:
     opened = {value for value in previous if type(value) is int and 1 <= value <= total}
     opened.add(page)
     st.session_state[opened_key] = sorted(opened)
-    return len(opened), total
+    next_unopened = next((index for index in range(1, total + 1) if index not in opened), None)
+    return len(opened), total, next_unopened
 
 
 def render_agent_review(application: WorkflowApplication, run_id: str, *, workspace_id: str) -> None:
@@ -241,7 +242,7 @@ def render_agent_review(application: WorkflowApplication, run_id: str, *, worksp
         render_sample_preview("agent" if kind == "positive" else "agent_negative", preview,
                               key=preview_key, widgets=st)
         if kind == "positive":
-            opened, fragments = _opened_trace_fragments(item, preview_key=preview_key)
+            opened, fragments, next_unopened = _opened_trace_fragments(item, preview_key=preview_key)
     with action_col, st.container(border=True):
         st.subheader("审核结论" if kind == "positive" else "失败说明")
         if kind == "negative":
@@ -255,6 +256,11 @@ def render_agent_review(application: WorkflowApplication, run_id: str, *, worksp
         if fragments > 1:
             st.caption(_copy("已打开 {opened} / {total} 个轨迹片段。通过前请逐页核对消息与工具证据。",
                              language, opened=opened, total=fragments))
+            if next_unopened is not None:
+                st.button(_copy("查看下个未核对片段", language),
+                          key=f"{prefix}:next-unopened:{candidate_id}",
+                          on_click=lambda: st.session_state.__setitem__(
+                              f"{preview_key}:message-page", next_unopened), width="stretch")
         current = item["review_status"]
         with st.form(f"{prefix}:form:{candidate_id}"):
             reason = st.text_area("审核意见", max_chars=2000, height=95,

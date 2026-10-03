@@ -38,11 +38,13 @@ def _trace(call_id: str, expression: str, result: str) -> list[dict]:
             {"role": "assistant", "content": result}]
 
 
-def _run(tmp_path, *, extra_good=0, long_good=False):
+def _run(tmp_path, *, extra_good=0, long_good=False, extra_trace_cycles=0):
     source = tmp_path / "traces.jsonl"
     good = _trace("good", "2+2", "4")
     if long_good:
         good += _trace("second", "4+4", "8") + _trace("third", "5+5", "10")
+    for number in range(6, 6 + extra_trace_cycles):
+        good += _trace(f"cycle-{number}", f"{number}+{number}", str(2 * number))
     traces = [good]
     traces.extend(_trace(f"more-{number}", f"{number}+{number}", str(2 * number))
                   for number in range(4, 4 + extra_good))
@@ -153,6 +155,29 @@ def test_agent_review_requires_each_trace_fragment_before_approval(tmp_path, mon
     ui.button(key=f"{prefix}:approve:{candidate_id}").click().run()
     assert not ui.exception
     assert FilesystemAgentReviewDriver(output).queue(run_id, decision="approved")["matched"] == 1
+
+
+def test_agent_review_opens_next_unchecked_fragment_after_out_of_order_jump(tmp_path):
+    output, run_id = _run(tmp_path, long_good=True, extra_trace_cycles=4)
+    candidate_id = FilesystemAgentReviewDriver(output).queue(run_id, limit=1)["items"][0]["candidate_id"]
+    prefix = f"agent-review:fixture:{run_id}"
+    preview_page_key = f"{prefix}:preview:{candidate_id}:message-page"
+    next_key = f"{prefix}:next-unopened:{candidate_id}"
+    approve_key = f"{prefix}:approve:{candidate_id}"
+
+    ui = _ui(output, run_id)
+    assert not ui.exception
+    assert ui.button(key=approve_key).disabled
+    ui.number_input(key=preview_page_key).set_value(3).run()
+    assert not ui.exception
+    assert ui.button(key=approve_key).disabled
+    assert any("2 / 3" in item.value for item in ui.caption)
+
+    ui.button(key=next_key).click().run()
+    assert not ui.exception
+    assert ui.session_state[preview_page_key] == 2
+    assert not ui.button(key=approve_key).disabled
+    assert not any(button.key == next_key for button in ui.button)
 
 
 def test_task_detail_opens_agent_review_without_page_navigation(tmp_path):

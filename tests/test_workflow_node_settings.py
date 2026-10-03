@@ -207,6 +207,31 @@ def test_node_token_limits_are_role_specific_and_saved_with_binding():
                                'context_window_tokens': 131_072, 'max_output_tokens': 48_000}
 
 
+def test_unconfigured_node_reuses_another_nodes_model_in_one_click_without_linking_changes():
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['fixture-local'] = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha'],
+                   'api_key_env': 'WRITER_KEY'},
+    }}
+    source = {'backend': 'writer', 'model': 'alpha',
+              'context_window_tokens': 196_608, 'max_output_tokens': 65_536}
+    ui.session_state['workflow-node-bindings:demo'] = {'cpt': {'generation': source}}
+    ui.run()
+    assert not ui.exception
+    reuse = ui.button(key='node-model:demo:sft:generation:reuse:cpt')
+    assert 'CPT' in reuse.label
+    reuse.click().run()
+    assert not ui.exception
+    draft = ui.session_state['workflow-node-bindings:demo']
+    assert draft['sft']['generation'] == source
+    assert draft['cpt']['generation'] == source
+    assert draft['sft']['generation'] is not draft['cpt']['generation']
+    assert ui.number_input(key='node-model:demo:sft:generation:output:writer:alpha').value == 65_536
+    assert not [button for button in ui.button if button.key == reuse.key]
+    ui.number_input(key='node-model:demo:sft:generation:output:writer:alpha').set_value(48_000).run()
+    assert ui.session_state['workflow-node-bindings:demo']['cpt']['generation']['max_output_tokens'] == 65_536
+
+
 def test_node_rejects_output_limit_at_or_above_context_window():
     ui = AppTest.from_string(SCRIPT)
     ui.session_state['fixture-local'] = {'backends': {

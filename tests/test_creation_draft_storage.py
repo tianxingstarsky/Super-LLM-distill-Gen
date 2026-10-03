@@ -6,7 +6,7 @@ from streamlit.testing.v1 import AppTest
 from lib.bootstrap.creation_drafts import creation_draft_application
 from lib.domain.creation_draft import validate_creation_draft
 from lib.infrastructure.creation_draft_file import CreationDraftFile
-from test_workflow_draft import SCRIPT, restore_canvas_renderer  # noqa: F401
+from test_workflow_draft import SCRIPT
 
 
 @pytest.mark.parametrize('key,value', [

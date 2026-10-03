@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from streamlit.testing.v1 import AppTest
+
 from lib.presentation.streamlit.i18n import (
     _localized_dataframe,
     canonical_navigation_route,
@@ -74,6 +76,19 @@ def test_translates_icon_prefixed_navigation_labels():
     assert translate_label("◈　数据生成", "en") == "◈　Create Data"
 
 
+def test_english_picker_can_render_numeric_options():
+    ui = AppTest.from_string('''
+import streamlit as st
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+st.session_state["ui_language"] = "en"
+install_streamlit_localization()
+st.selectbox("每页条数", (1, 3, 5), index=1)
+''').run()
+    assert not ui.exception
+    assert ui.selectbox[0].value == 3
+    assert ui.selectbox[0].label == "Rows per page"
+
+
 def test_navigation_recovers_localized_values_saved_by_old_widget():
     routes = ("首页", "总览", "系统设置")
     icons = {"首页": "⌂", "系统设置": "⚙"}
@@ -121,6 +136,8 @@ def test_translates_preference_controls_and_pipeline_copy():
 
 
 def test_translates_dynamic_metadata_and_html_accessibility_labels():
+    assert translate_label("沿用 CPT 节点的 customer-模型", "en") == "Use CPT's customer-模型"
+    assert translate("查看下个未核对片段", "en") == "Open next unchecked trace section"
     assert translate_label("预训练语料 · 1 项已选", "en") == "Pretraining text · 1 selected"
     assert translate("4 个步骤 · 6 条消息", "en") == "4 steps · 6 messages"
     assert translate("调用与返回 · 2 条消息", "en") == "Calls and results · 2 messages"
