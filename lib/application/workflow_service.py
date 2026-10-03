@@ -32,6 +32,10 @@ class WorkflowApplication:
     def web_research_capabilities(self) -> dict:
         return self._driver.web_research_capabilities()
 
+    def web_research_results(self, run_id: str) -> dict | None:
+        """Return checked public planning leads for this workspace's run."""
+        return self._driver.web_research_results(run_id)
+
     def check_agent_sandbox(self) -> dict:
         return self._driver.check_agent_sandbox()
 

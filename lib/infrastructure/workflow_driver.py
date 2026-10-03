@@ -8,7 +8,7 @@ from pathlib import Path
 
 from lib.infrastructure.training_workflow import (
     Workflow, cancel as cancel_run, create_run, is_active as run_is_active,
-    list_runs, read_json, resume as resume_run, run_path, verify_artifacts,
+    digest, list_runs, read_json, resume as resume_run, run_path, verify_artifacts,
 )
 from lib.infrastructure.release_catalog import list_releases as catalog_releases, release_file as catalog_file
 from lib.infrastructure.json_stream import iter_json_records
@@ -17,6 +17,7 @@ from lib.infrastructure import review_release_jobs
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.infrastructure.agent_docker_replay import IMAGE_ENV, validate_sandbox_image
 from lib.domain.workflow_targets import training_record
+from lib.domain.web_research import validate_web_research
 from lib import workspace as WS
 
 
@@ -65,6 +66,47 @@ class FilesystemWorkflowDriver:
         from lib.infrastructure.brave_web_research import configured
 
         return {"brave_configured": configured()}
+
+    def web_research_results(self, run_id: str) -> dict | None:
+        """Read only the bounded search checkpoint belonging to this run.
+
+        The checkpoint is available before the large training package finishes,
+        so reviewing the planning leads does not require loading that package.
+        """
+        from lib.infrastructure.brave_web_research import _plain, _public_url
+
+        run = run_path(self.output, run_id)
+        recipe = read_json(run / "recipe.json")
+        config = validate_web_research(recipe.get("web_research"),
+                                       brief=recipe.get("brief", ""),
+                                       sources=recipe.get("sources", ()),
+                                       targets=recipe.get("targets"))
+        if config is None:
+            return None
+        checkpoint = run / "checkpoints" / "ingest" / f"{digest(['web_research', config])}.json"
+        if not checkpoint.exists():
+            return None
+        if checkpoint.is_symlink() or not checkpoint.is_file():
+            raise ValueError("web_research_integrity_error")
+        saved = read_json(checkpoint)
+        document = saved.get("data") if isinstance(saved, dict) else None
+        if (not isinstance(document, dict) or saved.get("sha256") != digest(document)
+                or document.get("provider") != "brave" or document.get("query") != config["query"]):
+            raise ValueError("web_research_integrity_error")
+        results = document.get("results")
+        if not isinstance(results, list) or not 1 <= len(results) <= config["count"]:
+            raise ValueError("web_research_integrity_error")
+        safe = []
+        for row in results:
+            if not isinstance(row, dict):
+                raise ValueError("web_research_integrity_error")
+            url, title, snippet = row.get("url"), row.get("title"), row.get("snippet")
+            if (_public_url(url) != url or _plain(title, 200) != title
+                    or _plain(snippet, 500) != snippet or not title or not snippet):
+                raise ValueError("web_research_integrity_error")
+            safe.append({"title": title, "url": url, "snippet": snippet})
+        return {"query": config["query"], "results": safe,
+                "retrieved_at": document.get("retrieved_at", "")}
 
     def check_agent_sandbox(self) -> dict:
         from lib.infrastructure.agent_docker_replay import check_environment

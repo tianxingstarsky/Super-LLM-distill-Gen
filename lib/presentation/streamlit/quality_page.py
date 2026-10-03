@@ -76,11 +76,11 @@ def render_quality_page(workflow_app: WorkflowApplication, release_app: ReleaseA
     st.caption("文件：" + source_path.name + " · 本报告只说明结构与有效审核证据，不代表事实正确性。")
     left, right = st.columns([1.4, 1], gap="large")
     with left, st.container(border=True):
-        section_heading("审核覆盖与放量条件", "审核记录仅在绑定当前样本内容时计入覆盖率。", "◉")
+        section_heading("审核覆盖与导出检查", "审核记录仅在绑定当前样本内容时计入覆盖率。", "◉")
         coverage = float(data["review_coverage"])
         st.progress(coverage, text=f"有效审核覆盖 {coverage:.0%}")
         if data["ready_for_bulk"]:
-            st.success("达到当前自动放量检查条件；正式放量仍需人工确认 G3。")
+            st.success("当前样本通过批量导出检查。旧命令管线的批量导出还需执行前确认。")
         else:
             block_names = {
                 "empty_dataset": "空数据集", "structural_errors": "存在结构问题",

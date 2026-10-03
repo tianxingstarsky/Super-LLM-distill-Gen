@@ -48,6 +48,9 @@ def _select_setup_node(key: str, node: str) -> None:
 
 def _workflow_error(error) -> str:
     return {
+        "web_search_not_configured": "网页检索服务未配置。设置检索密钥后可从断点重试。",
+        "web_search_provider_error": "网页检索服务暂不可用。可从断点重试本次任务。",
+        "web_search_no_safe_results": "没有找到可用的公开检索结果。请新建任务并调整公开检索词。",
         "invalid_task_plan_duplicate_normalized_task": "规划批次包含重复任务，请重试当前批次。",
         "invalid_task_plan_task_too_long": "规划任务过长，请重试当前批次生成简洁任务。",
         "invalid_task_plan_wrong_task_count": "规划批次的任务数量不符，请重试当前批次。",
@@ -120,6 +123,7 @@ STAGE_GLYPHS = {"ingest": "▤", "cpt": "▥", "sft": "✎", "multiturn": "☷",
                 "preference": "⚖", "gsm8k": "∑", "cot": "◈", "package": "▣"}
 EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节点处理完成",
                 "model_started": "模型请求开始", "model_finished": "模型请求完成",
+                "web_search_started": "开始查找公开资料", "web_search_completed": "公开资料检索完成",
                 "run_finished": "工作流运行结束", "run_failed": "工作流运行失败",
                 "run_cancelled": "工作流已停止"}
 
@@ -265,6 +269,42 @@ def _open_package(run_id):
     st.session_state["nav"] = "输出打包"
 
 
+def _render_research_receipt(application, run_id, recipe, state):
+    """Keep the public query and its planning leads visible on the run page."""
+    config = recipe.get("web_research")
+    if not isinstance(config, dict):
+        return
+    with st.container(border=True, key=f"web-research-receipt:{run_id}"):
+        section_heading("联网资料", "仅用于开放需求的任务规划", "⌕")
+        st.caption("公开检索词")
+        st.code(UntranslatedText(str(config.get("query", ""))), language=None)
+        try:
+            document = application.web_research_results(run_id)
+        except (OSError, ValueError, KeyError, TypeError):
+            st.error("检索线索读取失败，请检查本次任务文件。")
+            return
+        if document is not None:
+            results = document["results"]
+            st.metric("公开线索", len(results))
+            st.caption("网页摘要只用于规划任务，不等于事实核验；系统未抓取来源网页正文。")
+            with st.expander("查看检索线索"):
+                for row in results:
+                    st.link_button(UntranslatedText(row["title"]), row["url"],
+                                   help="在浏览器中打开公开来源")
+                    st.caption(UntranslatedText(row["snippet"]))
+            return
+        research_state = state.get("web_research")
+        if isinstance(research_state, dict) and research_state.get("status") == "completed":
+            st.error("检索线索读取失败，请检查本次任务文件。")
+            return
+        if state.get("status") in {"failed", "cancelled"}:
+            return
+        if any(event.get("kind") == "web_search_started" for event in state.get("events", [])):
+            st.info("正在检索公开资料。结果会在这里显示。")
+        else:
+            st.caption("运行开始后会先检索公开资料，并在此展示规划线索。")
+
+
 @st.fragment(run_every=2)
 def render_run(application, run_id, begin, *, embedded=False):
     st.html(workflow_run_styles())
@@ -306,6 +346,7 @@ def render_run(application, run_id, begin, *, embedded=False):
         st.warning("运行已结束；有目标没有合格样本，或输入超过本次处理上限。查看下方质量报告。")
     else:
         st.info(LABELS.get(status, status))
+    _render_research_receipt(application, run_id, recipe, state)
     if active:
         if st.button("停止后续步骤", key=f"stop:{run_id}"):
             application.cancel(run_id)
@@ -526,10 +567,11 @@ def _draft_web_control(workspace, *, configured: bool):
     if enabled_key not in st.session_state:
         st.session_state[enabled_key] = st.session_state.get(consent_key, False)
     enabled = st.checkbox("联网查找公开资料", key=enabled_key,
-                          on_change=_save_web_consent, args=(workspace, enabled_key))
-    st.caption("仅将下方公开检索词发送给已配置的网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
+                          on_change=_save_web_consent, args=(workspace, enabled_key),
+                          help="仅将下方公开检索词发送给已配置的网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
     if not enabled:
         return None, False
+    st.caption("仅将下方公开检索词发送给已配置的网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
     query_key = f"workflow-web-research-query:{workspace}"
     if query_key not in st.session_state:
         st.session_state[query_key] = draft.get(query_key, "")
@@ -537,12 +579,13 @@ def _draft_web_control(workspace, *, configured: bool):
                           placeholder="例如：设备维护安全规范",
                           on_change=_save_draft_value, args=(workspace, query_key))
     count_key = f"workflow-web-research-count:{workspace}"
-    count = _draft_number("检索结果上限", 1, 5, 3, key=count_key)
+    with st.expander("更多检索设置（可选）"):
+        count = _draft_number("检索结果上限", 1, 5, 3, key=count_key)
     unavailable = not query.strip() or not configured
-    if not query.strip():
-        st.warning("请填写可公开的检索词，不要粘贴需求全文或私有资料。")
-    elif unavailable:
+    if not configured:
         st.warning("网页检索服务尚未配置，请先在运行环境设置检索密钥。")
+    elif not query.strip():
+        st.warning("请填写可公开的检索词，不要粘贴需求全文或私有资料。")
     return {"provider": "brave", "query": query.strip(), "count": int(count)}, unavailable
 
 
@@ -568,10 +611,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     st.html(
         '<div class="df-wizard-steps">'
-        '<div class="df-wizard-step active"><b>1</b><span><strong>添加来源</strong><small>文档、对话或需求</small></span></div>'
-        '<i></i><div class="df-wizard-step active"><b>2</b><span><strong>选择目标</strong><small>语料、对话、轨迹或偏好</small></span></div>'
-        '<i></i><div class="df-wizard-step"><b>3</b><span><strong>自动生成</strong><small>解析、生成与质检</small></span></div>'
-        '<i></i><div class="df-wizard-step"><b>4</b><span><strong>审核导出</strong><small>人工复核后发布</small></span></div>'
+        '<div class="df-wizard-step active"><b>1</b><span><strong>配置本次任务</strong><small>来源、目标与节点模型</small></span></div>'
+        '<i></i><div class="df-wizard-step"><b>2</b><span><strong>自动生成与质检</strong><small>实时查看阶段与结果</small></span></div>'
+        '<i></i><div class="df-wizard-step"><b>3</b><span><strong>审核与导出</strong><small>核对后生成训练包</small></span></div>'
         '</div>'
     )
     ws = st.session_state["ws"]
@@ -678,7 +720,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       snapshot_available_bindings(graph_nodes, source_mode, bindings, endpoints),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=source_mode),
                           selection_key, key=f"setup-canvas:{ws}")
-        with node_column, st.container(border=True):
+        with node_column, st.container(border=True, key="workbench-node-panel"):
             section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
             render_node_models(selected_node, source_mode, ws, bindings, endpoints)
             if selected_node == "agent":

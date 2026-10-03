@@ -8,6 +8,7 @@ from collections import Counter
 from itertools import islice
 from typing import Any
 from lib.domain.math_tasks import validate_math_candidate
+from lib.domain.workflow_quality import tool_error_flag
 
 from lib.domain.conversation_structure import (
     tool_result_user as _tool_result_user,
@@ -142,7 +143,9 @@ def _dialogue_flow(messages: list[dict], *, turn_offset: int = 0) -> str:
 
 
 def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
-                verified_call_ids: set[str] | None = None, step_offset: int = 0) -> str:
+                verified_call_ids: set[str] | None = None,
+                call_evidence: dict[str, dict] | None = None,
+                step_offset: int = 0) -> str:
     """Keep tool-call and matching result adjacent in a readable step timeline."""
     if not messages:
         return '<div class="df-artifact-muted">暂无轨迹消息</div>'
@@ -156,6 +159,10 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
         call_ids = _tool_call_ids(message) if names else []
         returned_ids = {call_id for result in messages[index + 1:end]
                         for call_id in _tool_result_ids(result)}
+        result_flags = [tool_error_flag(result) for result in messages[index:end]
+                        if result.get("role") == "tool" or _tool_result_user(result)]
+        recorded_error = any(error for error, _ in result_flags)
+        invalid_error_flag = any(issue for _, issue in result_flags)
         if names:
             kind, label = "tool", "工具调用"
             title = "、".join(dict.fromkeys(names))
@@ -172,9 +179,17 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
                         and all(id_counts[call_id] == 1 for call_id in call_ids))
         verified = bool(complete_ids and call_ids and verified_call_ids
                         and set(call_ids).issubset(returned_ids)
-                        and all(call_id in verified_call_ids for call_id in call_ids) and not failed)
+                        and all(call_id in verified_call_ids for call_id in call_ids)
+                        and not (failed or recorded_error or invalid_error_flag))
+        unmatched = kind == "tool" and not names
+        missing_result = bool(names and (not complete_ids or not set(call_ids).issubset(returned_ids)))
+        attention = failed or unmatched or missing_result or recorded_error or invalid_error_flag
         if failed:
             status = "失败截断点"
+        elif recorded_error:
+            status = "来源记录的工具执行失败"
+        elif invalid_error_flag:
+            status = "工具错误标记异常"
         elif verified:
             status = "本地重放已核对"
         elif names and not complete_ids:
@@ -187,20 +202,24 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
             status = f"调用与返回 · {end - index} 条消息"
         else:
             status = f"{end - index} 条消息"
-        expanded = failed or index == 0 or (end == len(messages) and kind == "answer")
+        expanded = attention or index == 0 or (end == len(messages) and kind == "answer")
         container = ('<details class="df-artifact-trace-card"' + (' open' if expanded else '') + '>'
                      if compact else '<section class="df-artifact-trace-card">')
         head_tag = "summary" if compact else "div"
         title_attributes = ' data-user-content' if names else ''
         card = (
             f'<div class="df-artifact-trace-item" data-kind="{kind}" data-failed="{str(failed).lower()}"'
-            f' data-verified="{str(verified).lower()}">'
+            f' data-verified="{str(verified).lower()}" data-attention="{str(attention).lower()}">'
             f'<span class="df-artifact-trace-marker">{"!" if failed else len(steps) + 1 + step_offset}</span>'
             + container + f'<{head_tag} class="df-artifact-trace-head">'
             f'<b>{label}</b><strong{title_attributes}>{_safe(title)}</strong>'
             f'<small>{_safe(status)}</small></{head_tag}>'
             '<div class="df-artifact-trace-body"><div class="bubbles">'
-            + render_message_sequence(messages[index:end]) + '</div></div>'
+            + render_message_sequence(messages[index:end]) + '</div>'
+            + _step_evidence(call_ids, returned_ids, complete_ids,
+                             failed or recorded_error or invalid_error_flag,
+                             verified_call_ids, call_evidence)
+            + '</div>'
             + ('</details>' if compact else '</section>') + '</div>'
         )
         steps.append(card)
@@ -229,6 +248,35 @@ def _verified_ids(verification: Any) -> set[str]:
             if isinstance(value, str) and value}
 
 
+def _call_evidence_by_id(verification: Any) -> dict[str, dict]:
+    """Bind unique replay records to IDs; ambiguous records stay in the aggregate view."""
+    verified_ids = _verified_ids(verification)
+    if not verified_ids or not isinstance(verification.get("call_evidence"), list):
+        return {}
+    evidence = [entry for entry in verification["call_evidence"]
+                if isinstance(entry, dict) and type(entry.get("call_id")) is str
+                and entry["call_id"] in verified_ids]
+    counts = Counter(entry["call_id"] for entry in evidence)
+    return {entry["call_id"]: entry for entry in evidence if counts[entry["call_id"]] == 1}
+
+
+def _step_evidence(call_ids: list[str], returned_ids: set[str], complete_ids: bool,
+                   failed: bool, verified_call_ids: set[str] | None,
+                   call_evidence: dict[str, dict] | None) -> str:
+    if failed or not complete_ids or not call_evidence or not verified_call_ids:
+        return ""
+    entries = [call_evidence[call_id] for call_id in call_ids
+               if call_id in returned_ids and call_id in verified_call_ids
+               and call_id in call_evidence]
+    if not entries:
+        return ""
+    return ('<details class="df-artifact-step-evidence">'
+            '<summary>此步骤的重放证据</summary>'
+            '<p>记录描述受限工具核对，不证明来源或快照的外部真实性。</p>'
+            + _text("当前片段调用证据", json.dumps(entries, ensure_ascii=False, indent=2, default=str))
+            + '</details>')
+
+
 def _agent_review_summary(messages: list[dict], verification: Any,
                           failure_step: int | None = None) -> str:
     """Summarize only visible recorded calls; metadata alone never proves a return."""
@@ -251,10 +299,12 @@ def _agent_review_summary(messages: list[dict], verification: Any,
         returned = {value for result in messages[start + 1:end]
                     for value in _tool_result_ids(result)}
         failed = type(failure_step) is int and start <= failure_step < end
+        flagged = any(tool_error_flag(result)[0] or tool_error_flag(result)[1]
+                      for result in messages[start + 1:end])
         for call_id in call_ids:
             if call_id not in returned:
                 missing += 1
-            elif call_id in verified_ids and not failed:
+            elif call_id in verified_ids and not (failed or flagged):
                 replayed += 1
             else:
                 needs_review += 1
@@ -303,7 +353,10 @@ def _agent_verification(row: dict) -> str:
             continue
         returned = {call_id for result in messages[start + 1:end]
                     for call_id in _tool_result_ids(result)}
-        paired_verified.update(set(ids) & returned & verified_ids)
+        flagged = any(tool_error_flag(result)[0] or tool_error_flag(result)[1]
+                      for result in messages[start + 1:end])
+        if not flagged:
+            paired_verified.update(set(ids) & returned & verified_ids)
     verified_count = len(paired_verified)
     pruned_count = len(pruned) if isinstance(pruned, list) else 0
     turn_count = len({turn for turn in turns if type(turn) is int and turn >= 0}) if isinstance(turns, list) else 0
@@ -313,10 +366,9 @@ def _agent_verification(row: dict) -> str:
         facts.append(f"{turn_count} 轮回答已核对")
     summary = '<div class="df-artifact-verification"><b>重放校验</b>' + ''.join(
         '<span>' + _safe(fact) + '</span>' for fact in facts) + '</div>'
-    visible_ids = {call_id for message in messages for call_id in _tool_call_ids(message)}
     evidence = verification.get("call_evidence")
     evidence = list(islice((entry for entry in evidence if isinstance(entry, dict)
-                           and str(entry.get("call_id")) in visible_ids), 17)) if isinstance(evidence, list) else []
+                           and str(entry.get("call_id")) in paired_verified), 17)) if isinstance(evidence, list) else []
     if not evidence and not pruned_count:
         return summary
     details = '<details class="df-artifact-more"><summary>查看重放与剪枝记录</summary><div>'
@@ -408,7 +460,11 @@ def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
             body = meta + _agent_review_summary(messages, verification, failure_step) + _agent_verification(row)
             if target == "agent_negative":
                 body += _failure_banner(row, message_offset=message_offset)
+                if row.get("evidence"):
+                    evidence = json.dumps(row["evidence"], ensure_ascii=False, indent=2, default=str)
+                    body += _text("执行证据", evidence)
             body += _trace_flow(messages, failure_step=failure_step, verified_call_ids=verified_ids,
+                                call_evidence=_call_evidence_by_id(verification),
                                 step_offset=step_offset)
         else:
             body = meta + _dialogue_flow(messages, turn_offset=turn_offset)
@@ -418,10 +474,6 @@ def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
                     body += ('<div class="df-artifact-verification">'
                              f'<span>{len(reviews)} 轮模型评估记录</span>'
                              '<span>事实未独立核验</span></div>')
-        if target == "agent_negative":
-            if row.get("evidence"):
-                evidence = json.dumps(row["evidence"], ensure_ascii=False, indent=2, default=str)
-                body += _text("执行证据", evidence)
     elif target in {"dpo", "orpo"}:
         body = (
             _conversation("共同提示上下文", row.get("prompt"))

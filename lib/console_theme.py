@@ -496,6 +496,9 @@ $theme_vars
 .df-gate-head b { flex: 0 0 auto; margin-left: auto; padding: 4px 6px; border-radius: 999px; background: #EAF2FF; color: var(--df-brand); font-size: 9px; white-space: nowrap; }
 .df-gate-head b[data-status="approved"] { background: #E8F7EF; color: #13805B; }
 .df-gate-head b[data-status="rejected"] { background: #FDECEF; color: #A8273E; }
+.df-sidebar-recent-task { display: grid; gap: 4px; min-width: 0; padding: 0 0 9px; }
+.df-sidebar-recent-task strong { overflow: hidden; color: var(--df-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.df-sidebar-recent-task small { color: #1769E0; font-size: 10px; }
 .df-trainer-row { display: grid; grid-template-columns: 65px 110px 75px minmax(0,1fr); align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid #EBF0F6; }
 .df-trainer-row strong { color: var(--df-text); font-size: 11px; }
 .df-trainer-row > span:not(.df-artifact-badge) { color: var(--df-text2); font-size: 10px; }

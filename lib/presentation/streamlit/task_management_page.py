@@ -176,8 +176,13 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                     '</div>')
         return None
     st.html(_summary_html(runs))
-    focus = st.toggle("放大工作流视图", key=f"task-center-focus:{workspace_id}",
-                      help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
+    focus_column, create_column = st.columns([1.9, 1], gap="small", vertical_alignment="center")
+    with focus_column:
+        focus = st.toggle("放大工作流视图", key=f"task-center-focus:{workspace_id}",
+                          help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
+    with create_column:
+        st.button("新建数据工作流", on_click=on_new_workflow,
+                  key=f"task-center-new:{workspace_id}", use_container_width=True)
     if focus:
         left, right = st.popover("选择任务"), st.container()
     else:
@@ -234,8 +239,6 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                               key=f"task-card:{workspace_id}:{run_id}", use_container_width=True,
                               on_click=_select_run, args=(selection_key, run_id))
                     st.html(detail)
-        st.button("新建数据工作流", on_click=on_new_workflow,
-                  key=f"task-center-new:{workspace_id}", use_container_width=True)
     with right:
         if selected_id:
             selected_run = next(run for run in visible if run["id"] == selected_id)

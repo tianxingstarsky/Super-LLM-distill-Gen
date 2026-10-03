@@ -185,6 +185,32 @@ def test_search_is_real_planning_input_cached_and_manifested(tmp_path, monkeypat
     assert calls == [CONFIG]
 
 
+def test_public_leads_are_reviewable_during_planning_and_reject_tampering(tmp_path, monkeypatch):
+    output = tmp_path / "out"
+    run_id = create_run(output, brief="设备维护训练题", targets=["sft"],
+                        max_units=1, tasks=1, web_research=CONFIG)
+    app = WorkflowApplication(FilesystemWorkflowDriver(tmp_path, output))
+    assert app.web_research_results(run_id) is None
+
+    monkeypatch.setattr(training_workflow, "search_web", lambda config: RESULTS)
+    Workflow(output, run_id, tmp_path).research()
+    assert app.web_research_results(run_id)["results"] == RESULTS
+
+    checkpoint = (run_path(output, run_id) / "checkpoints" / "ingest" /
+                  f"{training_workflow.digest(['web_research', CONFIG])}.json")
+    saved = read_json(checkpoint)
+    saved["data"]["results"][0]["url"] = "http://127.0.0.1/private"
+    saved["sha256"] = training_workflow.digest(saved["data"])
+    training_workflow.atomic_json(checkpoint, saved)
+    with pytest.raises(ValueError, match="^web_research_integrity_error$"):
+        app.web_research_results(run_id)
+
+    # A valid run ID from another workspace cannot resolve under this adapter.
+    other = WorkflowApplication(FilesystemWorkflowDriver(tmp_path, tmp_path / "other"))
+    with pytest.raises(FileNotFoundError):
+        other.web_research_results(run_id)
+
+
 def test_enabled_search_without_key_fails_before_model_call(tmp_path, monkeypatch):
     monkeypatch.delenv(brave_web_research.KEY_ENV, raising=False)
     output = tmp_path / "out"

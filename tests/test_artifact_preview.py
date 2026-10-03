@@ -307,6 +307,85 @@ def test_agent_review_summary_prioritizes_missing_and_unverified_calls():
     assert "1 条未配对结果" in preview
 
 
+def test_agent_step_evidence_stays_with_its_call_and_excludes_unpaired_metadata():
+    from lib.presentation.streamlit.i18n import translate_markup
+
+    messages = [
+        {"role": "assistant", "toolCalls": [{"id": "paired", "name": "lookup"}]},
+        {"role": "tool", "toolCallId": "paired", "content": "found"},
+        {"role": "assistant", "toolCalls": [{"id": "missing", "name": "lookup"}]},
+    ]
+    preview = render_training_sample("agent", {
+        "messages": messages,
+        "verification": {"method": "bounded_local_replay",
+                         "verified_call_ids": ["paired", "missing"],
+                         "call_evidence": [
+                             {"call_id": "paired", "proof": "PAIRED_EVIDENCE <script>x</script>"},
+                             {"call_id": "missing", "proof": "UNPAIRED_EVIDENCE"},
+                             {"call_id": "foreign", "proof": "FOREIGN_EVIDENCE"},
+                         ]},
+    })
+    assert preview.count('<details class="df-artifact-step-evidence">') == 1
+    assert "此步骤的重放证据" in preview
+    assert "PAIRED_EVIDENCE" in preview
+    assert "UNPAIRED_EVIDENCE" not in preview and "FOREIGN_EVIDENCE" not in preview
+    assert "<script>" not in preview and "&lt;script&gt;" in preview
+    assert "Replay evidence for this step" in translate_markup(preview)
+
+
+def test_recorded_tool_error_cannot_look_replay_verified_in_preview():
+    from lib.presentation.streamlit.i18n import translate_markup
+
+    for flag, status in ((True, "来源记录的工具执行失败"),
+                         ("false", "工具错误标记异常")):
+        preview = render_training_sample("agent", {
+            "messages": [
+                {"role": "assistant", "toolCalls": [{"id": "call", "name": "lookup"}]},
+                {"role": "tool", "toolCallId": "call", "content": "failed", "isError": flag},
+            ],
+            "verification": {"method": "bounded_local_replay",
+                             "verified_call_ids": ["call"],
+                             "call_evidence": [{"call_id": "call", "proof": "FALSE_PROOF"}]},
+        })
+        assert status in preview
+        assert 'data-attention="true"' in preview
+        assert 'data-kind="tool" data-failed="false" data-verified="true"' not in preview
+        assert "FALSE_PROOF" not in preview
+        assert status not in translate_markup(preview)
+
+
+def test_late_tool_evidence_is_reachable_on_its_step_after_aggregate_cap():
+    messages = []
+    evidence = []
+    for index in range(18):
+        call_id = f"call-{index}"
+        messages.extend([
+            {"role": "assistant", "toolCalls": [{"id": call_id, "name": "read"}]},
+            {"role": "tool", "toolCallId": call_id, "content": f"result-{index}"},
+        ])
+        evidence.append({"call_id": call_id, "proof": "LATE_EVIDENCE" if index == 17 else "checked"})
+    preview = render_training_sample("agent", {
+        "messages": messages,
+        "verification": {"method": "bounded_local_replay",
+                         "verified_call_ids": [f"call-{index}" for index in range(18)],
+                         "call_evidence": evidence},
+    })
+    assert "前 16 条调用证据" in preview
+    assert preview.count('<details class="df-artifact-step-evidence">') == 18
+    assert preview.count("LATE_EVIDENCE") == 1
+    assert preview.index("call-17") < preview.index("LATE_EVIDENCE")
+
+
+def test_negative_agent_failure_evidence_appears_before_the_trace():
+    preview = render_training_sample("agent_negative", {
+        "messages": [{"role": "assistant", "content": "Failed"}],
+        "failure": "recorded_tool_error", "failure_step": 0,
+        "evidence": {"observed": "FAILURE_EVIDENCE"},
+    })
+    assert preview.index("来源记录的工具执行失败") < preview.index("FAILURE_EVIDENCE")
+    assert preview.index("FAILURE_EVIDENCE") < preview.index("Agent 执行轨迹")
+
+
 def test_malformed_or_ambiguous_agent_call_ids_never_show_verified_badge():
     preview = render_training_sample("agent", {
         "messages": [
@@ -455,6 +534,18 @@ def test_long_trace_collapses_middle_but_keeps_failure_and_final_open():
     for index in range(8):
         assert preview.count(f'OBSERVATION_{index}') == 1
     assert 'FINAL_ANSWER' in preview and messages == original
+
+
+def test_long_trace_opens_structurally_broken_middle_step_without_failure_label():
+    import re
+
+    messages = _long_trace()
+    del messages[10]  # Call 4 is missing its recorded result.
+    preview = render_training_sample('agent', {'messages': messages})
+    states = re.findall(r'<details class="df-artifact-trace-card"( open)?>', preview)
+    assert len(states) == 10
+    assert [index for index, state in enumerate(states) if state] == [0, 5, 9]
+    assert 'data-attention="true"' in preview and '未记录工具返回' in preview
 
 
 def test_long_trace_controls_translate_but_tool_names_do_not():

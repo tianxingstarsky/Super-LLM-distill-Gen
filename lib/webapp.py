@@ -187,15 +187,6 @@ def page_overview():
                     open_folder=_request_folder_dialog, job_status=_job_status)
 
 
-def page_guide():
-    from lib.presentation.streamlit.guide_page import render_guide
-
-    ws = st.session_state["ws"]
-    render_guide(ws, WORKSPACES.label(ws),
-                 has_source_files=bool(WORKSPACES.source_files(ws, limit=1)),
-                 navigate=_select_page)
-
-
 def page_preview(show_title=True):
     from lib.bootstrap.workflows import workflow_application
     from lib.presentation.streamlit.dataset_browser_page import render_dataset_preview
@@ -330,6 +321,20 @@ def page_run(show_title=True):
                     argv.append(str(value))
             _begin(argv)
     _job_status()
+    gate = _gate()
+    focus_ids = [gid for gid in gate.defs if gate.status(gid) == "awaiting"]
+    job = st.session_state.get("job:" + st.session_state["ws"])
+    if job:
+        _, recent_lines = job.snapshot()
+        for gid in gate.defs:
+            if (gid not in focus_ids and any("闸门" in line and
+                    re.search(rf"\b{re.escape(gid)}\b", line) for line in recent_lines[-80:])):
+                focus_ids.append(gid)
+    show_legacy = bool(st.session_state.pop(f"command-confirm-open:{st.session_state['ws']}", False))
+    if focus_ids or show_legacy:
+        with st.expander("本次命令需要确认", expanded=True):
+            st.caption("仅在这次命令涉及模型预算、私有记录或批量导出时显示。")
+            page_gates(show_title=False, focus_ids=focus_ids)
 
 
 def page_review():
@@ -431,44 +436,46 @@ def page_backends():
     render_backend_page(backend_application(ROOT))
 
 
-def page_gates(show_title=True):
+def page_gates(show_title=True, focus_ids=None):
     if show_title:
-        page_header("质量闸门", "查看生成、人工审核与发布前的确认要求。", "HUMAN IN THE LOOP")
+        page_header("命令执行确认", "只处理高级命令实际需要的人工确认。", "ADVANCED COMMANDS")
     from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 
     st.html(SETTINGS_STYLE)
     gate = _gate()
-    statuses = {gid: gate.status(gid) for gid in gate.defs}
+    if not focus_ids:
+        st.info("当前没有待处理的命令确认。运行相关高级命令时，这里会显示具体要求。")
+        return
+    selected_ids = tuple(gid for gid in gate.defs if gid in focus_ids)
+    statuses = {gid: gate.status(gid) for gid in selected_ids}
     total = len(statuses)
-    approved = sum(status == "approved" for status in statuses.values())
-    attention = sum(status in ("awaiting", "rejected") for status in statuses.values())
-    pending = sum(status == "pending" for status in statuses.values())
     st.html(
-        '<div class="df-settings-section"><span><i>◇</i><span><strong>命令管线确认点</strong>'
-        '<small>预算、数据来源与放量操作的人工确认记录</small></span></span>'
-        f'<b>已确认 {approved} / {total}</b></div>'
-        '<div class="df-settings-overview">'
-        '<div class="df-settings-overview-main"><strong>确认进度</strong>'
-        '<small>根据当前工作区状态与闸门定义实时汇总</small>'
-        f'<div class="df-settings-progress"><i style="width:{approved / total * 100 if total else 0:.1f}%"></i></div></div>'
-        f'<div class="df-settings-stat" data-kind="approved"><span>已确认</span><strong>{approved}</strong></div>'
-        f'<div class="df-settings-stat" data-kind="attention"><span>需处理</span><strong>{attention}</strong></div>'
-        f'<div class="df-settings-stat"><span>尚未触发</span><strong>{pending}</strong></div>'
-        '</div>'
+        '<div class="df-settings-section"><span><i>◇</i><span><strong>当前命令确认</strong>'
+        '<small>请核对下面与当前命令有关的条件</small></span></span>'
+        f'<b>{total}</b></div>'
     )
-    columns = st.columns(3, gap="medium")
+    columns = st.columns(min(3, len(statuses)), gap="medium")
     status_labels = {"approved": "已确认", "awaiting": "待确认", "pending": "尚未触发", "rejected": "未通过"}
-    for column, (gid, definition) in zip(columns, gate.defs.items()):
+    titles = {"G0": "模型调用与预算", "G1": "私有记录导入", "G3": "批量导出"}
+    for column, gid in zip(columns, selected_ids):
+        definition = gate.defs[gid]
         status = statuses[gid]
         record = gate.records.get(gid)
         context = record.context if record else {}
+        language = st.session_state.get("ui_language", "zh")
+        templates_en = {
+            "G0": "Check the model and budget: {default_model} ({default_backend}), with a total limit of ${max_total_usd}. The run stops at the limit.",
+            "G1": "Import private conversation records from {rollout_dir} and send them to the {default_backend} cloud API. Check the source and upload permission.",
+            "G3": "Review the small-batch preview report before bulk export. Otherwise, keep only the candidates.",
+        }
+        prompt_template = templates_en.get(gid, definition.prompt) if language == "en" else definition.prompt
         prompt = re.sub(r"\{([a-zA-Z0-9_]+)\}",
-                        lambda match: str(context.get(match.group(1), "待任务提供")), definition.prompt)
+                        lambda match: str(context.get(match.group(1), "not provided" if language == "en" else "待任务提供")),
+                        prompt_template)
         with column, st.container(border=True, key=f"settings-gate-{gid}"):
             st.html('<div class="df-settings-gate-head" data-status="' + html.escape(status, quote=True) +
-                    '"><b>' + html.escape(gid) + '</b><div><strong>' +
-                    html.escape(definition.title) + '</strong><small>' + html.escape(definition.trigger) +
-                    '</small></div><span data-status="' + html.escape(status, quote=True) + '">' +
+                    '"><div><strong>' +
+                    html.escape(titles.get(gid, definition.title)) + '</strong></div><span data-status="' + html.escape(status, quote=True) + '">' +
                     html.escape(status_labels.get(status, status)) + '</span></div>')
             if status == "approved":
                 confirmed_scope = (prompt if all(context.get(field) not in (None, "")
@@ -481,12 +488,12 @@ def page_gates(show_title=True):
                             html.escape(record.decided_at[:19].replace("T", " ")) + '</div>')
             else:
                 st.html('<div class="df-settings-gate-prompt">' + html.escape(prompt) + '</div>')
-                confirmation = st.checkbox("我已核对上述条件", key="confirm:" + st.session_state["ws"] + ":" + gid)
-                if st.button("确认通过 " + gid, disabled=not confirmation, width="stretch"):
+                if st.button("确认此项", key=f"confirm-command:{gid}", width="stretch"):
                     gate.decide(gid, True, note="控制台人工确认")
                     st.rerun()
-    st.html('<div class="df-settings-footnote">这些闸门用于命令管线；自动数据工作流还有逐阶段质检与人工审核记录。'
-            '审核汇总不会自动放行 G3，批量导出仍需校验当前样本的审核覆盖。</div>')
+                st.caption("确认后请重新运行上方命令。")
+    st.html('<div class="df-settings-footnote">这些确认用于旧版命令与 AI 修订。'
+            '自动工作流在任务中执行质检与人工审核；批量导出仍会核对当前样本的审核覆盖。</div>')
 
 
 def page_assets(show_title=True):
@@ -540,7 +547,7 @@ def page_task_manager():
 
 
 def page_system_settings():
-    page_header("系统设置", "管理界面语言、生成偏好与人工确认点。任务模型在工作流节点选择。", "WORKSPACE SETTINGS")
+    page_header("系统设置", "管理界面语言与生成偏好。任务模型在工作流节点选择。", "WORKSPACE SETTINGS")
     from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 
     st.html(SETTINGS_STYLE)
@@ -550,32 +557,17 @@ def page_system_settings():
             "界面语言", ["简体中文", "English"], key="ui-language-choice",
             label_visibility="collapsed", on_change=_set_ui_language,
         )
-    with st.container(border=True, key="settings-guide-route"):
-        section_heading("设置导航", "不确定要去哪里？从使用指南按任务找到入口。", "?")
-        st.html('<div class="df-settings-guide-note">模型服务用于登记端点与凭据；'
-                '具体生成和评审模型在工作流节点内选择。</div>')
-        st.button("查看使用指南", key="settings-open-guide", on_click=_select_page,
-                  args=("使用指南",), width="stretch")
-    area = st.segmented_control(
-        "系统设置视图", ("HITL 闸门", "生成偏好"),
-        default="HITL 闸门", key="system-settings-view",
-        label_visibility="collapsed",
-    )
-    if area == "生成偏好":
-        page_prefs(show_title=False)
-    else:
-        page_gates(show_title=False)
+    page_prefs(show_title=False)
 
 
 PAGES = {
     "首页": page_overview, "总览": page_overview,
-    "使用指南": page_guide,
     "数据生成": page_workflow, "自动工作流": page_workflow,
     "数据管理": page_data_management, "资产管理": page_assets, "数据预览": page_preview,
     "人工审核": page_human_review, "任务管理": page_task_manager, "管线运行": page_run,
     "运行监控": page_monitor, "监控": page_monitor, "输出打包": page_output_packages, "质量报告": page_quality,
     "模型与密钥": page_backends, "系统设置": page_system_settings,
-    "闸门": page_gates, "偏好设置": page_prefs,
+    "偏好设置": page_prefs,
 }
 try:
     _workspace_options, _previous_workspace = _ws_choice()
@@ -610,6 +602,12 @@ if (isinstance(_preview_handoff, dict)
     st.session_state[f"data-preview-target:{_preview_ws}:{_preview_run}"] = str(_preview_handoff["target"])
 # 深链：?page=人工审核&record=<sample_id>（协作者可直接分享定位链接）
 _qp_page = st.query_params.get("page")
+if _qp_page == "使用指南" or st.session_state.get("nav") == "使用指南":
+    st.session_state["nav"] = "总览"
+elif _qp_page == "闸门" or st.session_state.get("nav") == "闸门":
+    st.session_state["nav"] = "任务管理"
+    st.session_state[f"task-view:{st.session_state['ws']}"] = "命令管线"
+    st.session_state[f"command-confirm-open:{st.session_state['ws']}"] = True
 _review_route = {"偏好审核": "DPO 偏好优化", "语料审核": "CPT 语料审核"}
 if _qp_page in _review_route:
     st.session_state["nav"] = "人工审核"
@@ -618,18 +616,16 @@ if _qp_page in PAGES and "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page
 visible_nav = [
     ("首页", "总览", {"首页", "总览"}),
-    ("使用指南", "使用指南", {"使用指南"}),
     ("数据生成", "自动工作流", {"数据生成", "自动工作流"}),
     ("数据管理", "数据管理", {"数据管理", "资产管理", "数据预览", "质量报告"}),
     ("人工审核", "人工审核", {"人工审核"}),
     ("任务管理", "任务管理", {"任务管理", "管线运行", "运行监控", "监控"}),
     ("输出打包", "输出打包", {"输出打包"}),
     ("模型服务", "模型与密钥", {"模型与密钥"}),
-    ("系统设置", "系统设置", {"系统设置", "闸门", "偏好设置"}),
+    ("系统设置", "系统设置", {"系统设置", "偏好设置"}),
 ]
 icons = {"首页": "⌂", "数据生成": "◈", "数据管理": "▤", "人工审核": "✓",
-         "任务管理": "⤴", "输出打包": "⇩", "模型与密钥": "⬡", "模型服务": "⬡", "系统设置": "⚙",
-         "使用指南": "?"}
+         "任务管理": "⤴", "输出打包": "⇩", "模型与密钥": "⬡", "模型服务": "⬡", "系统设置": "⚙"}
 if "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page if _qp_page in PAGES else "总览"
 # Older sessions could retain a formatted label from the former hidden radio
@@ -654,6 +650,9 @@ st.sidebar.caption("当前工作区")
 st.sidebar.selectbox("工作区", _workspace_options,
                      format_func=lambda ws: WORKSPACES.label(ws), key="ws", label_visibility="collapsed")
 st.sidebar.button("打开已有文件夹…", on_click=_request_folder_dialog, width="stretch")
+from lib.bootstrap.workflows import workflow_application as _sidebar_workflow_application
+from lib.presentation.streamlit.sidebar_tasks import render_sidebar_tasks
+render_sidebar_tasks(_sidebar_workflow_application(ROOT, _ws_out()), st.session_state["ws"])
 try:
     with st.sidebar.expander("文件夹位置"):
         st.code(WORKSPACES.folder(st.session_state['ws']).as_posix(), language=None)
@@ -667,6 +666,8 @@ st.session_state['last-workspace'] = st.session_state['ws']
 top_page = translate_label(page, st.session_state.get("ui_language", "zh"))
 st.html(f'<div class="df-topbar"><div><strong>数简立方</strong><span>　/　{html.escape(top_page)}</span></div><div class="df-topbar-meta">当前工作区　<strong>{html.escape(WORKSPACES.label(st.session_state["ws"]))}</strong>　·　数据简单生成</div></div>')
 st.query_params['page'] = page
+from lib.presentation.streamlit.context_guide import render_context_guide
+render_context_guide(page, _select_page)
 try:
     PAGES[page]()
 except (ValueError, OSError) as error:
