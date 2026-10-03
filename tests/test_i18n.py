@@ -59,6 +59,13 @@ def test_translates_known_copy_and_preserves_unknown_user_text():
     assert translate("用户上传的内容", "en") == "用户上传的内容"
 
 
+def test_task_shortcut_and_command_check_copy_has_english_labels():
+    assert translate("排队中", "en") == "Queued"
+    assert translate("本次命令需要确认", "en") == "This command needs confirmation"
+    assert translate_markup("<small>请核对下面与当前命令有关的条件</small>", "en") == (
+        "<small>Check the conditions for this command</small>")
+
+
 def test_translates_icon_prefixed_navigation_labels():
     assert translate_label("◈　数据生成", "en") == "◈　Create Data"
 

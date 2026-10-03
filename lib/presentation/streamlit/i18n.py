@@ -66,6 +66,7 @@ ZH_EN: dict[str, str] = {
     "本次命令需要确认": "This command needs confirmation",
     "仅在这次命令涉及模型预算、私有记录或批量导出时显示。": "Shown only when this command uses a model budget, private records, or bulk export.",
     "请核对下面与当前命令有关的条件": "Check the conditions for this command",
+    "排队中": "Queued",
     "旧版命令及 AI 修订会用到模型调用、私有记录或批量导出确认。自动工作流无需预先确认。": "Legacy commands and AI edits use checks for model calls, private records, or bulk exports. Workflows need no advance approval here.",
     "命令执行确认": "Command execution checks",
     "只处理高级命令实际需要的人工确认。": "Review only the checks needed by the advanced command.",
