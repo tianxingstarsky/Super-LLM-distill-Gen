@@ -783,7 +783,7 @@ def _action_ai(state: MutableMapping, event: Mapping[str, Any], event_id: Option
     if g0 != "approved" or g1 != "approved":
         raise PermissionError(
             f"AI 修订需要 G0 与 G1 均已通过（当前 G0={g0}, G1={g1}）；"
-            "请前往任务管理的命令管线，在“执行前确认”中核对；不会自动放行"
+            "人工审核可继续进行。AI 修订不会自动放行，请联系管理员核对确认记录。"
         )
     messages, warning = _messages_of(record)
     if messages is None:

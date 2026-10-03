@@ -98,6 +98,30 @@ def test_run_page_blocks_missing_required_input():
     assert not view.exception
 
 
+def test_legacy_command_routes_open_optional_tools_inside_task_center():
+    view = app()
+    for old_route in ("管线运行", "命令管线"):
+        navigate(view, old_route)
+        assert not view.exception
+        assert view.session_state["nav"] == "任务管理"
+        assert view.session_state["task-view:default"] == "命令管线"
+        assert any("这些工具可独立处理一项操作" in str(item.value) for item in view.get("html"))
+        assert any(widget.label == "任务" for widget in view.selectbox)
+    next(widget for widget in view.button if widget.key == "command-open-workflow").click().run()
+    assert not view.exception
+    assert view.session_state["nav"] == "自动工作流"
+
+
+def test_advanced_single_task_tools_explain_scope_in_english():
+    view = app()
+    view.session_state["ui_language"] = "en"
+    navigate(view, "管线运行")
+    assert not view.exception
+    assert any("These tools handle one operation at a time" in str(item.value)
+               for item in view.get("html"))
+    assert any(widget.label == "Open data workspace →" for widget in view.button)
+
+
 def test_monitor_shows_event_timeline_and_keeps_bad_rows_visible_as_warning(tmp_path):
     output = tmp_path / "app" / "data" / "output"
     output.mkdir(parents=True)

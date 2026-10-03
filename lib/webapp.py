@@ -212,7 +212,7 @@ def page_workflow():
 
 def page_run(show_title=True):
     if show_title:
-        page_header("高级命令工具", "按任务选择工具，只填写必要参数；运行记录会保留命令与输出。", "ADVANCED TOOLS")
+        page_header("高级单项工具", "按需独立运行文档整理、问答生成、质量报告或兼容导出。", "ADVANCED TOOLS")
     presets = {
         "minimind 兼容草稿导出": ("export", {"format": "minimind", "bulk": False}),
         "文档语料整理": ("doc2corpus", {}),
@@ -234,7 +234,9 @@ def page_run(show_title=True):
         "全部命令": "使用完整命令目录；适合熟悉命令行参数的操作者。",
     }
     with st.container(border=True):
-        section_heading("选择工具", "自动数据生成请使用“数据生成”；这里保留原有命令工具。", "⚙")
+        section_heading("选择单项工具", "这些工具可独立处理一项操作；日常 CPT、SFT、DPO 任务请在数据生成工作台运行。", "⚙")
+        st.button("进入数据生成工作台 →", key="command-open-workflow", on_click=_select_page,
+                  args=("自动工作流",))
         preset = st.selectbox("任务", list(presets), key=f"command-preset:{st.session_state['ws']}")
         st.caption(descriptions[preset])
     command, defaults = presets[preset]
@@ -525,19 +527,18 @@ def page_data_management():
 
 
 def page_task_manager():
-    page_header("任务管理", "集中查看多项自动工作流的进度与结果。", "TASK CENTER")
+    page_header("任务管理", "集中查看多项数据工作流的进度；高级单项工具和命令日志也在此页。", "TASK CENTER")
     area = st.segmented_control(
         "任务视图", ("数据工作流", "命令管线", "运行日志"),
         default="数据工作流", key=f"task-view:{st.session_state['ws']}",
         format_func=lambda value: translate_label(
-            {"命令管线": "高级工具", "运行日志": "命令日志"}.get(value, value),
+            {"命令管线": "高级单项工具", "运行日志": "命令日志"}.get(value, value),
             st.session_state.get("ui_language", "zh")),
         label_visibility="collapsed",
     )
     if area == "运行日志":
         page_monitor(show_title=False)
     elif area == "命令管线":
-        st.caption("高级工具用于旧版命令操作；日常训练数据生成请使用数据生成工作台。")
         page_run(show_title=False)
     else:
         from lib.bootstrap.workflows import workflow_application
@@ -573,6 +574,7 @@ PAGES = {
     "数据生成": page_workflow, "自动工作流": page_workflow,
     "数据管理": page_data_management, "资产管理": page_assets, "数据预览": page_preview,
     "人工审核": page_human_review, "任务管理": page_task_manager, "管线运行": page_run,
+    "命令管线": page_task_manager,
     "运行监控": page_monitor, "监控": page_monitor, "输出打包": page_output_packages, "质量报告": page_quality,
     "模型与密钥": page_system_settings, "系统设置": page_system_settings,
     "偏好设置": page_prefs,
@@ -616,6 +618,9 @@ elif _qp_page == "闸门" or st.session_state.get("nav") == "闸门":
     st.session_state["nav"] = "任务管理"
     st.session_state[f"task-view:{st.session_state['ws']}"] = "命令管线"
     st.session_state[f"command-confirm-open:{st.session_state['ws']}"] = True
+elif _qp_page in ("管线运行", "命令管线") or st.session_state.get("nav") in ("管线运行", "命令管线"):
+    st.session_state["nav"] = "任务管理"
+    st.session_state[f"task-view:{st.session_state['ws']}"] = "命令管线"
 elif _qp_page == "模型与密钥" or st.session_state.get("nav") == "模型与密钥":
     st.session_state["nav"] = "系统设置"
     st.session_state["open-model-admin"] = True

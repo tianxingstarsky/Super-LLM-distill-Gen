@@ -682,6 +682,8 @@ def test_ai_requires_g0_and_g1_and_never_touches_gates():
     assert ok is True
     assert state["ack"] == {"id": "ai-1", "ok": False, "action": "ai"}
     assert "G0" in state["notice"]["text"]
+    assert "人工审核可继续进行" in state["notice"]["text"]
+    assert "命令管线" not in state["notice"]["text"]
     assert calls == [] and gate.proposed == [] and gate.decided == []
     assert not [call for call in backend.calls if call[0] == "revise_field"]
 

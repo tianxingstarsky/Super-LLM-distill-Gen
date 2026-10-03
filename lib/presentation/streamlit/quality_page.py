@@ -80,7 +80,7 @@ def render_quality_page(workflow_app: WorkflowApplication, release_app: ReleaseA
         coverage = float(data["review_coverage"])
         st.progress(coverage, text=f"有效审核覆盖 {coverage:.0%}")
         if data["ready_for_bulk"]:
-            st.success("当前样本通过批量导出检查。旧命令管线的批量导出还需执行前确认。")
+            st.success("当前样本通过批量导出检查。")
         else:
             block_names = {
                 "empty_dataset": "空数据集", "structural_errors": "存在结构问题",
