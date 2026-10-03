@@ -38,3 +38,27 @@ def test_package_only_loads_selected_state_and_recovers_missing_selection():
     assert ui.session_state['review-mode:fixture']=='RLAIF 反馈审核'
     assert ui.session_state['preference-review-run:rlaif']=='b'
     assert ui.session_state['nav']=='人工审核'
+
+
+RELEASE_SCRIPT = '''
+import streamlit as st
+from lib.presentation.streamlit.package_page import render_package_page
+st.session_state.setdefault('ws', 'fixture')
+st.session_state.setdefault('download_reads', 0)
+class Application:
+    def task_runs(self): return []
+    def list_releases(self):
+        return [dict(id='export/one', name='one', kind='export', verified=True,
+                     path='C:/release', files=[dict(name='sft.jsonl', bytes=4,
+                     sha256='a'*64, path='C:/release/sft.jsonl')])]
+    def release_file(self, release_id, filename):
+        st.session_state['download_reads'] = st.session_state.get('download_reads', 0) + 1
+        raise AssertionError('download must be deferred until click')
+render_package_page(Application())
+'''
+
+
+def test_release_download_does_not_read_file_during_page_render():
+    ui = AppTest.from_string(RELEASE_SCRIPT).run()
+    assert not ui.exception
+    assert ui.session_state['download_reads'] == 0

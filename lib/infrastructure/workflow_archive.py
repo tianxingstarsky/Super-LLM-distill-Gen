@@ -4,13 +4,16 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from functools import lru_cache
 from pathlib import Path
+import time
 import zipfile
 
 from filelock import FileLock
 
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.infrastructure.training_workflow import atomic_json, file_hash, read_json, verify_artifacts
+from lib.infrastructure.verified_preview import LEASE_SECONDS
 
 
 def fingerprint(manifest: dict) -> str:
@@ -44,12 +47,12 @@ def verify_archive(data, manifest: dict, *, progress=None) -> None:
                 raise ValueError("archive_integrity_error")
 
 
-def _cached(run: Path, manifest: dict) -> dict | None:
-    key = fingerprint(manifest)
+def _cached_by_key(run: Path, key: str) -> dict | None:
     folder = run / "delivery"
     archive = folder / f"{key}.zip"
     reference = folder / f"{key}.json"
-    if not reference.is_file() or not archive.is_file() or archive.is_symlink():
+    if (not reference.is_file() or reference.is_symlink()
+            or not archive.is_file() or archive.is_symlink()):
         return None
     try:
         saved = read_json(reference)
@@ -62,8 +65,46 @@ def _cached(run: Path, manifest: dict) -> dict | None:
             "sha256": saved["sha256"], "path": str(archive.resolve())}
 
 
+def _cached(run: Path, manifest: dict) -> dict | None:
+    return _cached_by_key(run, fingerprint(manifest))
+
+
+def _file_identity(path: Path) -> tuple | None:
+    if path.is_symlink() or not path.is_file():
+        return None
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino
+
+
+def _delivery_identity(run: Path, key: str) -> tuple:
+    folder = run / "delivery"
+    return (_file_identity(folder / f"{key}.zip"),
+            _file_identity(folder / f"{key}.json"))
+
+
+@lru_cache(maxsize=16)
+def _display_cached(filename: str, key: str, identity: tuple, time_window: int) -> dict | None:
+    run = Path(filename)
+    reference = _cached_by_key(run, key)
+    if _delivery_identity(run, key) != identity:
+        raise ValueError("archive_file_changed")
+    return reference
+
+
+def display_prepared_bundle(run: Path, manifest: dict) -> dict | None:
+    """Show a recently checked ZIP; delivery still performs fresh full verification."""
+    run = Path(run)
+    key = fingerprint(manifest)
+    identity = _delivery_identity(run, key)
+    reference = _display_cached(str(run.resolve()), key, identity,
+                                int(time.monotonic() // LEASE_SECONDS))
+    if _delivery_identity(run, key) != identity:
+        raise ValueError("archive_file_changed")
+    return dict(reference) if reference is not None else None
+
+
 def prepared_bundle(run: Path, *, verified_manifest: dict | None = None) -> dict | None:
-    """Reuse the adapter's verified snapshot when rendering package contents."""
+    """Strictly verify a prepared archive and, unless supplied, its sources."""
     return _cached(run, verified_manifest if verified_manifest is not None else verify_artifacts(run))
 
 

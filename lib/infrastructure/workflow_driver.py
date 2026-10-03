@@ -242,12 +242,17 @@ class FilesystemWorkflowDriver:
         return {"manifest": manifest, "quality": self._verified_quality(path, manifest)}
 
     def package_contents(self, run_id: str) -> dict:
-        """Verify large artifacts once per page render, then read the two summaries."""
+        """Read a short-lived verified display snapshot and the two summaries."""
+        from lib.infrastructure.verified_preview import verified_snapshot, inventory_identity
+
         path = run_path(self.output, run_id)
-        manifest = verify_artifacts(path)
-        return {"manifest": manifest, "files": self._verified_files(path, manifest),
-                "quality": self._verified_quality(path, manifest),
-                "bundle": workflow_archive.prepared_bundle(path, verified_manifest=manifest)}
+        manifest, identity = verified_snapshot(path)
+        contents = {"manifest": manifest, "files": self._verified_files(path, manifest),
+                    "quality": self._verified_quality(path, manifest),
+                    "bundle": workflow_archive.display_prepared_bundle(path, manifest)}
+        if inventory_identity(path) != identity:
+            raise ValueError("package_files_changed")
+        return contents
 
     def artifact_location(self, run_id: str) -> str:
         return str(run_path(self.output, run_id) / "artifacts")

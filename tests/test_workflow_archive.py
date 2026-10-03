@@ -1,5 +1,6 @@
 """Archive delivery stays on disk and rejects stale or changed content."""
 import json
+import os
 from pathlib import Path
 import tracemalloc
 import zipfile
@@ -47,6 +48,32 @@ def test_prepared_archive_survives_session_and_is_reused(tmp_path, monkeypatch):
     assert archives.prepare_bundle(run) == reference
     assert Path(reference["path"]).stat().st_mtime_ns == stamp
     assert archives.bundle_bytes(run).startswith(b"PK")
+
+
+def test_display_archive_lease_reuses_hash_and_invalidates_on_change(tmp_path, monkeypatch):
+    run, _, manifest = fixture_run(tmp_path)
+    reference = archives.prepare_bundle(run)
+    calls = 0
+    original = archives.file_hash
+
+    def counted(path):
+        nonlocal calls
+        calls += 1
+        return original(path)
+
+    monkeypatch.setattr(archives, "file_hash", counted)
+    assert archives.display_prepared_bundle(run, manifest) == reference
+    assert archives.display_prepared_bundle(run, manifest) == reference
+    assert calls == 1
+
+    archive = Path(reference["path"])
+    before = archive.stat()
+    payload = archive.read_bytes()
+    archive.write_bytes(b"X" + payload[1:])
+    os.utime(archive, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    assert archives.display_prepared_bundle(run, manifest) is None
+    assert calls == 2
+    assert archives.prepared_bundle(run) is None
 
 
 def test_archive_tampering_is_detected_and_can_be_repaired(tmp_path):

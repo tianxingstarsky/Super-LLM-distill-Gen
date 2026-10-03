@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 import re
+import time
 
 from lib import workspace as WS
+from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
+from lib.infrastructure.verified_preview import LEASE_SECONDS
 
 
 _RUN_ID = re.compile(r"[a-f0-9]{32}")
@@ -55,6 +60,8 @@ def _inspect(output: Path, folder: Path, kind: str, run_id: str | None) -> dict:
         "unverified_files": [],
     }
     try:
+        if WS.is_linked(folder):
+            raise ValueError("版本目录不可用")
         if WS.is_linked(manifest_path) or not manifest_path.is_file():
             raise ValueError("清单文件不可用")
         manifest_bytes = manifest_path.read_bytes()
@@ -116,10 +123,54 @@ def _inspect(output: Path, folder: Path, kind: str, run_id: str | None) -> dict:
     return result
 
 
+def _release_identity(folder: Path) -> tuple:
+    """Cheap file identity, with a content fingerprint for the manifest."""
+    if WS.is_linked(folder):
+        raise ValueError("版本目录不可用")
+    items = []
+    for path in sorted(folder.iterdir()):
+        linked = WS.is_linked(path)
+        stat = path.lstat()
+        is_file = not linked and path.is_file()
+        manifest_hash = (hashlib.sha256(path.read_bytes()).hexdigest()
+                         if path.name == "manifest.json" and is_file
+                         else None)
+        items.append((path.name, linked, is_file, stat.st_mtime_ns,
+                      stat.st_ctime_ns, stat.st_size, stat.st_ino, manifest_hash))
+    return tuple(items)
+
+
+def _changed(row: dict) -> dict:
+    return {**row, "verified": False, "files": [],
+            "error": "版本文件在校验期间发生变化"}
+
+
+@lru_cache(maxsize=64)
+def _display_inspect(output_name: str, folder_name: str, kind: str,
+                     run_id: str | None, identity: tuple, time_window: int) -> dict:
+    output, folder = Path(output_name), Path(folder_name)
+    row = _inspect(output, folder, kind, run_id)
+    if _release_identity(folder) != identity:
+        return _changed(row)
+    return row
+
+
+def _display_release(output: Path, folder: Path, kind: str, run_id: str | None) -> dict:
+    try:
+        identity = _release_identity(folder)
+        row = _display_inspect(str(output), str(folder), kind, run_id,
+                               identity, int(time.monotonic() // LEASE_SECONDS))
+        if _release_identity(folder) != identity:
+            return _changed(row)
+        return deepcopy(row)
+    except (OSError, ValueError, TypeError):
+        return _inspect(output, folder, kind, run_id)
+
+
 def list_releases(output: Path) -> list[dict]:
-    """List releases in this output workspace, including damaged entries for diagnosis."""
+    """List recently verified releases; download always rechecks every file."""
     output = Path(output)
-    rows = [_inspect(output, folder, kind, run_id)
+    rows = [_display_release(output, folder, kind, run_id)
             for folder, kind, run_id in _release_dirs(output)]
     return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
 
@@ -136,7 +187,12 @@ def release_file(output: Path, release_id: str, filename: str) -> bytes:
         item = next((file for file in release["files"] if file["name"] == filename), None)
         if item is None:
             raise ValueError("此文件未列入可下载清单")
-        data = (folder / filename).read_bytes()
+        path = folder / filename
+        if item["bytes"] > DIRECT_DOWNLOAD_LIMIT_BYTES or path.stat().st_size > DIRECT_DOWNLOAD_LIMIT_BYTES:
+            raise ValueError("文件超过浏览器下载上限")
+        data = path.read_bytes()
+        if len(data) > DIRECT_DOWNLOAD_LIMIT_BYTES:
+            raise ValueError("文件超过浏览器下载上限")
         digest = item["sha256"] or release["manifest_sha256"]
         if hashlib.sha256(data).hexdigest() != digest:
             raise ValueError("文件在校验后发生变化，请刷新页面")

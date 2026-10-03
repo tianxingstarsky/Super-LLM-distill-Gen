@@ -241,7 +241,7 @@ def _render_releases(application: WorkflowApplication, releases: list[dict]) -> 
             for file in unverified:
                 st.code(file["path"], language=None)
         selected = st.selectbox(
-            "选择要打开或下载的已校验文件", [file["name"] for file in files],
+            "选择要打开或下载的文件", [file["name"] for file in files],
             key=f"package-release-file:{st.session_state['ws']}:{release_id}",
         )
         selected_file = next(file for file in files if file["name"] == selected)
@@ -251,15 +251,12 @@ def _render_releases(application: WorkflowApplication, releases: list[dict]) -> 
         if selected_file["bytes"] > DIRECT_DOWNLOAD_LIMIT_BYTES:
             st.caption("文件超过 50 MiB；为避免浏览器一次载入整个训练文件，请从上方本地路径读取。")
             return
-        try:
-            payload = application.release_file(release_id, selected)
-        except (OSError, ValueError, TypeError, KeyError) as error:
-            st.error(f"下载前文件校验失败：{error}")
-        else:
-            st.download_button("下载已校验文件", payload, file_name=selected,
-                               mime="application/json" if selected.endswith(".json")
-                               else "application/x-ndjson", key=f"package-release-download:{release_id}:{selected}",
-                               width="stretch")
+        st.download_button("校验并下载文件",
+                           lambda rid=release_id, name=selected: application.release_file(rid, name),
+                           file_name=selected,
+                           mime="application/json" if selected.endswith(".json")
+                           else "application/x-ndjson", key=f"package-release-download:{release_id}:{selected}",
+                           on_click="ignore", width="stretch")
         st.caption("manifest.json 记录训练文件的 SHA-256，可与下载文件独立核对。")
 
 
