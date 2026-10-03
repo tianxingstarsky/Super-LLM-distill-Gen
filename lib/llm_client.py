@@ -1,4 +1,4 @@
-"""ChatClient：OpenAI 兼容聊天客户端（空回复重试 + token 记账），配置来自 backends.yaml。"""
+"""One workflow client for Chat Completions, Responses, and Anthropic Messages."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,10 @@ import time
 from typing import Any, Dict, List
 
 import yaml
+
+from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request,
+                                 anthropic_text, response_text, responses_input,
+                                 validate_api_format)
 
 DEFAULT_NO_PROXY = "127.0.0.1,localhost"
 
@@ -52,7 +56,7 @@ def parse_json_robust(output: str) -> Dict[str, Any]:
             return json.loads(text[: last + 1])
         except json.JSONDecodeError:
             pass
-    raise ValueError(f"JSON 解析失败: {output[:200]!r}")
+    raise ValueError("JSON 解析失败")
 
 
 def chat_json(
@@ -75,7 +79,7 @@ def chat_json(
             return parse_json_robust(out)
         except Exception as e:  # noqa: BLE001
             last_err = e
-    raise RuntimeError(f"JSON 调用失败（{retries} 次重试后）: {last_err}")
+    raise RuntimeError(f"JSON 调用失败（{retries} 次重试后）: {type(last_err).__name__}") from None
 
 
 class BudgetExceeded(RuntimeError):
@@ -122,7 +126,7 @@ class BudgetGuard:
 
 
 class ChatClient:
-    """带空回复重试的 OpenAI 兼容客户端（DeepSeek V4 Flash 实测 ~20% 空 completion）。"""
+    """Text client with bounded retries, normalized output and token accounting."""
 
     def __init__(
         self,
@@ -132,14 +136,25 @@ class ChatClient:
         price_input_per_1m: float = 0.0,
         price_output_per_1m: float = 0.0,
         budget: BudgetGuard | None = None,
+        api_format: str = "chat",
+        context_window_tokens: int | None = None,
     ):
         # 本地端点绕代理（spike 报告 F2）：httpx 在 OpenAI 客户端构造时快照代理
         # 环境变量，必须在构造前设置；构造后再 setdefault 对本客户端无效。
         os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)
         os.environ.setdefault("no_proxy", DEFAULT_NO_PROXY)
-        from openai import OpenAI  # 延迟导入：离线测试无需该依赖路径
+        self.api_format = validate_api_format(api_format)
+        if context_window_tokens is not None and (type(context_window_tokens) is not int or context_window_tokens <= 0):
+            raise ValueError("context_window_tokens must be a positive integer")
+        self.context_window_tokens = context_window_tokens
+        if self.api_format == "anthropic":
+            from anthropic import Anthropic
 
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
+            self.client = Anthropic(base_url=base_url, api_key=api_key)
+        else:
+            from openai import OpenAI  # delayed import keeps offline domain tests lightweight
+
+            self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
         self.price_input = price_input_per_1m
@@ -150,6 +165,95 @@ class ChatClient:
         # "提示词要求 JSON + 容错解析"路径，不再硬重试（分层降级 L1→L3）。
         self.json_supported: bool | None = None
 
+    def _check_context(self, messages: List[Dict[str, Any]], max_tokens: int | None) -> None:
+        """Conservative text-only preflight; providers remain the final token authority."""
+        if self.context_window_tokens is None:
+            return
+        output = max_tokens or (ANTHROPIC_DEFAULT_MAX_TOKENS if self.api_format == "anthropic" else 0)
+        if output >= self.context_window_tokens:
+            raise ValueError("max_output_tokens_exceeds_context_window")
+        # UTF-8 bytes upper-bound byte-level text tokenization. Image payloads
+        # have provider-specific token costs, so do not miscount base64 bytes.
+        text_parts: list[str] = []
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                text_parts.append(content)
+            elif isinstance(content, list):
+                text_parts.extend(part.get("text", "") for part in content
+                                  if isinstance(part, dict) and isinstance(part.get("text"), str))
+        if sum(len(part.encode("utf-8")) for part in text_parts) + output > self.context_window_tokens:
+            raise ValueError("model_context_window_exceeded")
+
+    def _request(self, messages: List[Dict[str, Any]], *, max_tokens: int | None,
+                 temperature: float, thinking: bool, json_mode: bool) -> tuple[str, int, int]:
+        if self.api_format == "anthropic":
+            kwargs = anthropic_request(messages, json_mode=json_mode)
+            kwargs.update(model=self.model, temperature=temperature,
+                          max_tokens=max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS)
+            try:
+                response = self.client.messages.create(**kwargs)
+            except Exception as error:
+                if not _is_temperature_unsupported(error):
+                    raise
+                kwargs.pop("temperature")
+                response = self.client.messages.create(**kwargs)
+            usage = getattr(response, "usage", None)
+            return (anthropic_text(response), getattr(usage, "input_tokens", 0) or 0,
+                    getattr(usage, "output_tokens", 0) or 0)
+        if self.api_format == "responses":
+            kwargs: Dict[str, Any] = {"model": self.model, "input": responses_input(messages),
+                                      "temperature": temperature, "store": False}
+            if max_tokens is not None:
+                kwargs["max_output_tokens"] = max_tokens
+            if json_mode and self.json_supported is not False:
+                kwargs["text"] = {"format": {"type": "json_object"}}
+            try:
+                response = self.client.responses.create(**kwargs)
+            except Exception as error:
+                if not _is_temperature_unsupported(error):
+                    raise
+                kwargs.pop("temperature")
+                response = self.client.responses.create(**kwargs)
+            if json_mode and self.json_supported is None:
+                self.json_supported = True
+            usage = getattr(response, "usage", None)
+            return (response_text(response), getattr(usage, "input_tokens", 0) or 0,
+                    getattr(usage, "output_tokens", 0) or 0)
+        kwargs = {"model": self.model, "messages": messages, "temperature": temperature}
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        if json_mode and self.json_supported is not False:
+            kwargs["response_format"] = {"type": "json_object"}
+        if not thinking:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        for _ in range(4):
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+                break
+            except Exception as error:
+                if "max_tokens" in kwargs and _is_parameter_unsupported(error, "max_tokens"):
+                    kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+                elif "temperature" in kwargs and _is_temperature_unsupported(error):
+                    kwargs.pop("temperature")
+                elif "extra_body" in kwargs and _is_parameter_unsupported(error, "thinking"):
+                    kwargs.pop("extra_body")
+                else:
+                    raise
+        else:
+            raise RuntimeError("chat parameter negotiation failed")
+        if json_mode and self.json_supported is None:
+            self.json_supported = True
+        usage = getattr(response, "usage", None)
+        message = response.choices[0].message
+        content = (message.content or "").strip()
+        if not content:
+            reasoning = getattr(message, "reasoning_content", None)
+            if isinstance(reasoning, str):
+                content = reasoning.strip()
+        return (content, getattr(usage, "prompt_tokens", 0) or 0,
+                getattr(usage, "completion_tokens", 0) or 0)
+
     def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -159,67 +263,64 @@ class ChatClient:
         thinking: bool = True,
         json_mode: bool = False,
     ) -> str:
-        """max_tokens=None 时不限制输出长度（思考允许无限长度；正文在思考后输出）。
-        thinking=False 时请求 API 禁用思考（thinking: {type: disabled}）。
-        json_mode=True 时优先用 response_format json_object 解码层强制合法 JSON；
-        若 API 不支持（本实例已探测为 False 或调用被拒）则自动降级为纯提示词约束。"""
+        """Return text through the selected protocol and count its usage."""
+        if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
+            raise ValueError("max_tokens must be a positive integer")
+        self._check_context(messages, max_tokens)
         last_err: Exception | None = None
-        for _ in range(retries):
+        attempts = 0
+        while attempts < retries:
             try:
                 if self.budget:
                     self.budget.check()
-                kwargs: Dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature}
-                if max_tokens is not None:
-                    kwargs["max_tokens"] = max_tokens
-                if json_mode and self.json_supported is not False:
-                    kwargs["response_format"] = {"type": "json_object"}
-                if not thinking:
-                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                resp = self.client.chat.completions.create(**kwargs)
-                if json_mode and self.json_supported is None:
-                    self.json_supported = True  # 首次成功即确认能力
+                content, prompt_tokens, completion_tokens = self._request(
+                    messages, max_tokens=max_tokens, temperature=temperature,
+                    thinking=thinking, json_mode=json_mode)
                 self.usage["calls"] += 1
-                if resp.usage:
-                    self.usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
-                    self.usage["completion_tokens"] += resp.usage.completion_tokens or 0
-                    if self.budget and (self.price_input or self.price_output):
-                        cost = (
-                            (resp.usage.prompt_tokens or 0) / 1e6 * self.price_input
-                            + (resp.usage.completion_tokens or 0) / 1e6 * self.price_output
-                        )
-                        self.budget.add_usd(cost)
-                msg = resp.choices[0].message
-                content = (msg.content or "").strip()
-                # 思考型模型（v4-pro 等）长输入时思考可能吃满 max_tokens 导致 content 空；
-                # 兜底取 reasoning_content 作为输出
-                if not content:
-                    rc = getattr(msg, "reasoning_content", None)
-                    if rc:
-                        content = rc.strip()
+                self.usage["prompt_tokens"] += prompt_tokens
+                self.usage["completion_tokens"] += completion_tokens
+                if self.budget and (self.price_input or self.price_output):
+                    self.budget.add_usd(prompt_tokens / 1e6 * self.price_input
+                                        + completion_tokens / 1e6 * self.price_output)
                 if content:
                     return content
                 last_err = ValueError("empty completion")
             except BudgetExceeded:
                 raise
+            except ValueError:
+                raise
             except Exception as e:  # noqa: BLE001
                 # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
                 # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
-                if json_mode and self.json_supported is not False and _is_format_unsupported(e):
+                if (self.api_format != "anthropic" and json_mode
+                        and self.json_supported is not False and _is_format_unsupported(e)):
                     self.json_supported = False
                     continue
                 last_err = e
+            attempts += 1
             time.sleep(1.0)
-        raise RuntimeError(f"chat failed after {retries} retries: {last_err}")
+        # Provider error messages may echo credentials or source material.
+        raise RuntimeError(f"chat failed after {retries} retries: {type(last_err).__name__}") from None
 
 
 def _is_format_unsupported(err: Exception) -> bool:
     """判断异常是否为 'response_format 不支持' 类（400/BadRequest + 关键字）。"""
     text = str(err).lower()
-    if "response_format" in text:
+    if "response_format" in text or "text.format" in text or "json_object" in text:
         return True
     if "badrequest" in text and ("unsupported" in text or "unavailable" in text or "not supported" in text):
         return True
     return False
+
+
+def _is_temperature_unsupported(err: Exception) -> bool:
+    return _is_parameter_unsupported(err, "temperature")
+
+
+def _is_parameter_unsupported(err: Exception, parameter: str) -> bool:
+    text = str(err).lower()
+    return parameter in text and any(value in text for value in
+                                     ("unsupported", "not supported", "unavailable", "unknown parameter"))
 
 
 def load_backend(
@@ -230,6 +331,7 @@ def load_backend(
     base_url: str | None = None,
     role: str | None = None,
     allow_global_endpoint_override: bool = True,
+    context_window_tokens: int | None = None,
 ) -> tuple[ChatClient, str]:
     """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
 
@@ -275,7 +377,10 @@ def load_backend(
     # 环境变量级全局覆盖（任意命令的临时操作空间，无需加 CLI 参数）
     if allow_global_endpoint_override and not base_url and os.environ.get("LLM_BASE_URL"):
         b = {"base_url": os.environ["LLM_BASE_URL"], "api_key_env": "OPENAI_API_KEY", "models": []}
-    api_key = b.get("api_key") or os.environ.get(b.get("api_key_env") or "", "")
+    api_format = validate_api_format(b.get("api_format", "chat"))
+    default_key_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
+    configured_key_env = b.get("api_key_env") if "api_key_env" in b else default_key_env
+    api_key = b.get("api_key") or os.environ.get(configured_key_env or "", "")
     role_model = os.environ.get(f"{role.upper()}_MODEL") if role else None
     global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
     model = model or role_model or global_model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
@@ -289,6 +394,8 @@ def load_backend(
         base_url=b.get("base_url", ""),
         api_key=api_key,
         model=model,
+        api_format=api_format,
+        context_window_tokens=context_window_tokens,
         price_input_per_1m=float(prices.get("input_per_1m_usd", 0.0)),
         price_output_per_1m=float(prices.get("output_per_1m_usd", 0.0)),
         budget=guard,

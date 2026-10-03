@@ -139,17 +139,21 @@ def _command_meta():
 
 def _begin(command):
     ws = st.session_state["ws"]
-    key = "job:" + ws
+    job = Job(command, ws, ROOT)
+    key = "job:" + ws + (":" + job.run_id if job.run_id else "")
     existing = st.session_state.get(key)
     if existing and existing.snapshot()[0] is None:
-        st.warning("当前工作区已有运行任务")
+        st.warning("本次工作流已有运行任务" if job.run_id else "当前工作区已有运行任务")
         return
-    job = Job(command, ws, ROOT)
     try:
         job.start()
     except Timeout:
-        # 任务登记在浏览器会话里；换窗口/刷新后看不到旧任务，靠工作区级锁挡住并发写入
-        st.warning("该工作区已有任务在运行（可能在其他窗口启动），请等待完成后再试。")
+        # Session jobs disappear on refresh; filesystem locks cover other sessions.
+        st.warning("本次工作流已在其他窗口运行。" if job.run_id else
+                   "该工作区已有任务在运行（可能在其他窗口启动），请等待完成后再试。")
+        return
+    except ValueError:
+        st.error("无法启动任务，请刷新任务列表后重试。")
         return
     st.session_state[key] = job
 

@@ -5,6 +5,7 @@ from typing import Any
 
 from lib.application.backend_ports import BackendConfigPort
 from lib.domain.backend_config import key_display, merged_backends, validate_endpoint, validate_role
+from lib.model_protocols import validate_api_format
 
 
 class BackendApplication:
@@ -30,7 +31,8 @@ class BackendApplication:
         for name, backend in backends.items():
             users = sorted(role for role, slot in roles.items() if (slot.get("backend") or "") == name)
             rows.append({"name": name, "base_url": backend.get("base_url", ""),
-                         "models": backend.get("models") or [], "api_key": self.key_display(backend),
+                         "models": backend.get("models") or [],
+                         "api_format": backend["api_format"], "api_key": self.key_display(backend),
                          "roles": users, "is_default": name == default,
                          "prices": backend.get("prices") or {}})
         return {"backends": rows, "default_backend": default,
@@ -44,19 +46,21 @@ class BackendApplication:
             backend = {**backend, **overrides}
         if not backend.get("base_url"):
             raise ValueError("缺少 base_url")
+        backend["api_format"] = validate_api_format(backend.get("api_format", "chat"))
         return self._port.probe(name, backend)
 
     def save_endpoint(self, name: str, base_url: str, models: list[str],
                       api_key: str = "", api_key_env: str = "", prices: dict[str, float] | None = None,
-                      explicit_replace: bool = False) -> str:
-        validate_endpoint(name, base_url, models)
+                      explicit_replace: bool = False, api_format: str = "chat") -> str:
+        validate_endpoint(name, base_url, models, api_format)
         if api_key and api_key_env:
             raise ValueError("api_key 与 api_key_env 二选一；推荐环境变量方式")
         local = self.read_config("backends.local.yaml")
         backends = dict(local.get("backends") or {})
         if name in backends and not explicit_replace:
             raise FileExistsError(f"后端 {name} 已存在（explicit_replace=True 才覆盖；或换名字）")
-        entry: dict[str, Any] = {"base_url": base_url, "models": list(models)}
+        entry: dict[str, Any] = {"base_url": base_url, "models": list(models),
+                                 "api_format": api_format}
         if api_key:
             entry["api_key"] = api_key
         else:

@@ -58,6 +58,8 @@ def _workflow_error(error) -> str:
         "invalid_task_plan_potential_secret": "规划批次可能包含密钥，已阻止继续生成。",
         "invalid_task_plan_potential_personal_data": "规划批次可能包含个人信息，已阻止继续生成。",
         "invalid_task_plan_invalid_encoding": "规划批次包含无效文本，请重试当前批次。",
+        "model_context_window_exceeded": "输入超出节点设置的上下文窗口。请缩小单次输入，或新建任务调整节点限制。",
+        "max_output_tokens_exceeds_context_window": "单次输出上限必须小于上下文窗口。请新建任务调整节点限制。",
     }.get(str(error), str(error))
 
 
@@ -84,6 +86,9 @@ def _stage_configuration(key, recipe, state):
         binding = recipe.get("node_models", {}).get(key, {}).get("generation")
         if binding:
             details["生成模型"] = UntranslatedText(binding["backend"] + " / " + binding["model"])
+            if "context_window_tokens" in binding and "max_output_tokens" in binding:
+                details["生成上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
+                details["生成单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         return details
     if key in {"cpt", "sft", "multiturn", "agent", "preference", "cot"}:
         details = {"启用目标": [target.upper() for target in targets]}
@@ -95,6 +100,10 @@ def _stage_configuration(key, recipe, state):
             fallback = translate("旧版默认配置", st.session_state.get("ui_language", "zh"))
             details[label] = UntranslatedText((binding.get("backend") or recipe.get(prefix + "backend") or fallback)
                               + " / " + (binding.get("model") or recipe.get(prefix + "model") or fallback))
+            if "context_window_tokens" in binding and "max_output_tokens" in binding:
+                limit_label = "生成" if role == "generation" else "评审"
+                details[limit_label + "上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
+                details[limit_label + "单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         if node_roles(key, mode):
             details.update({"并发请求上限": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
         if key == "cpt":
@@ -346,6 +355,11 @@ def render_run(application, run_id, begin, *, embedded=False):
         st.warning("运行已结束；有目标没有合格样本，或输入超过本次处理上限。查看下方质量报告。")
     else:
         st.info(LABELS.get(status, status))
+    console_job = st.session_state.get(f"job:{st.session_state.get('ws', '')}:{run_id}")
+    if console_job is not None and status == "queued":
+        exit_code, _ = console_job.snapshot()
+        if exit_code not in (None, 0):
+            st.error("任务进程未能启动。请检查本机运行环境后从断点重试。")
     _render_research_receipt(application, run_id, recipe, state)
     if active:
         if st.button("停止后续步骤", key=f"stop:{run_id}"):

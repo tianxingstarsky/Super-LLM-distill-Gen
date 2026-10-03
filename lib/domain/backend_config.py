@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from lib.model_protocols import validate_api_format
+
 
 VALID_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 VALID_ROLES = frozenset({"generation", "judge", "jev", "vision", "refine", "simulate", "translation"})
@@ -17,7 +19,8 @@ def mask_key(key: str) -> str:
     return f"{key[:3]}***{key[-4:]}"
 
 
-def validate_endpoint(name: str, base_url: str, models: list[str]) -> None:
+def validate_endpoint(name: str, base_url: str, models: list[str], api_format: str = "chat") -> None:
+    validate_api_format(api_format)
     if not VALID_NAME.match(name or ""):
         raise ValueError("后端名只允许字母/数字/下划线/连字符（1-32）")
     if not re.match(r"^https?://", base_url or ""):
@@ -32,9 +35,11 @@ def validate_role(role: str) -> None:
 
 
 def merged_backends(base: dict, local: dict) -> dict[str, dict[str, Any]]:
-    merged = dict(base.get("backends", {}))
+    merged = {name: dict(value) for name, value in (base.get("backends") or {}).items()}
     for name, value in (local.get("backends") or {}).items():
         merged[name] = {**merged.get(name, {}), **value}
+    for backend in merged.values():
+        backend["api_format"] = validate_api_format(backend.get("api_format", "chat"))
     return merged
 
 

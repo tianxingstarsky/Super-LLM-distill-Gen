@@ -1,4 +1,5 @@
-# 模型后端配置（OpenAI 兼容协议）
+# 模型后端配置。每个后端可设置 api_format: chat / responses / anthropic；
+# 未填写时沿用 chat，以下预置端点均使用 Chat Completions 兼容格式。
 # API key 一律通过环境变量注入，不写入本文件（本文件可提交）。
 # 本地覆盖：configs/backends.local.yaml（已被 .gitignore 忽略）
 

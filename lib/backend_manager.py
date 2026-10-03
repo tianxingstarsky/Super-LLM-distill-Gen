@@ -48,7 +48,7 @@ def reset_budget(caller: str) -> float:
 
 
 def test_backend(name: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Probe an OpenAI-compatible endpoint through models.list."""
+    """Probe the configured API through its provider SDK model inventory."""
     return _application().test_backend(name, overrides)
 
 
@@ -58,10 +58,10 @@ def _build_merged() -> dict[str, dict[str, Any]]:
 
 def save_endpoint(name: str, base_url: str, models: list[str],
                   api_key: str = "", api_key_env: str = "", prices: dict[str, float] | None = None,
-                  explicit_replace: bool = False) -> str:
+                  explicit_replace: bool = False, api_format: str = "chat") -> str:
     """Add or replace one backend in gitignored backends.local.yaml."""
     return _application().save_endpoint(name, base_url, models, api_key, api_key_env,
-                                        prices, explicit_replace)
+                                        prices, explicit_replace, api_format)
 
 
 def set_role(role: str, backend: str, model: str) -> None:

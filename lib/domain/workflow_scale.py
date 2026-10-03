@@ -7,6 +7,9 @@ MAX_CANDIDATES = 100_000
 MAX_CONCURRENCY = 16
 MAX_BATCH_SIZE = 500
 PLAN_BATCH_SIZE = 50
+DEFAULT_CONTEXT_WINDOW_TOKENS = 131_072
+DEFAULT_MAX_OUTPUT_TOKENS = 32_768
+MAX_CONTEXT_WINDOW_TOKENS = 4_000_000
 NODE_ROLES = {
     "ingest": ("generation",), "cpt": ("generation", "jev"),
     "sft": ("generation", "jev"), "multiturn": ("generation", "jev"),
@@ -33,12 +36,19 @@ def validate_node_models(value: dict | None) -> dict:
         for role, binding in roles.items():
             if role not in NODE_ROLES[stage] or not isinstance(binding, dict):
                 raise ValueError("invalid_node_models")
-            if set(binding) != {"backend", "model"}:
+            if not {"backend", "model"} <= set(binding) or set(binding) - {
+                    "backend", "model", "context_window_tokens", "max_output_tokens"}:
                 raise ValueError("invalid_node_models")
-            for item in binding.values():
+            for item in (binding["backend"], binding["model"]):
                 if not isinstance(item, str) or not item.strip() or len(item) > 200 or any(ord(c) < 32 for c in item):
                     raise ValueError("invalid_node_models")
-            result[stage][role] = {key: item.strip() for key, item in binding.items()}
+            context = binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
+            output = binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
+            if (type(context) is not int or type(output) is not int or context <= 0 or output <= 0
+                    or context > MAX_CONTEXT_WINDOW_TOKENS or output >= context):
+                raise ValueError("invalid_node_model_token_limits")
+            result[stage][role] = {"backend": binding["backend"].strip(), "model": binding["model"].strip(),
+                                   "context_window_tokens": context, "max_output_tokens": output}
     return result
 
 

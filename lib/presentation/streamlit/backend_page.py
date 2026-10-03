@@ -8,9 +8,17 @@ import json
 import streamlit as st
 
 from lib.application.backend_service import BackendApplication
+from lib.model_protocols import API_FORMATS
 from lib.presentation.streamlit.i18n import UntranslatedText
 from lib.presentation.streamlit.backend_style import CSS
 from lib.presentation.streamlit.shared import page_header
+
+
+_API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
+                      "anthropic": "Anthropic Messages"}
+_DEFAULT_URLS = {"chat": "http://127.0.0.1:11434/v1", "responses": "https://api.openai.com/v1",
+                 "anthropic": "https://api.anthropic.com"}
+_DEFAULT_NAMES = {"chat": "local_gpu", "responses": "openai_responses", "anthropic": "anthropic"}
 
 
 def _safe(value: object) -> str:
@@ -57,6 +65,8 @@ def _endpoints(rows: list[dict]) -> None:
         return
     cards = []
     for row in rows:
+        api_format = row.get("api_format", "chat")
+        format_label = _API_FORMAT_LABELS.get(api_format, str(api_format))
         models = row.get("models") or []
         model_tags = ''.join('<span data-user-content>' + _safe(name) + '</span>' for name in models[:3])
         if len(models) > 3:
@@ -72,7 +82,7 @@ def _endpoints(rows: list[dict]) -> None:
             + ('<em>默认端点</em>' if row.get("is_default") else '') + '</div>'
             '<div class="df-model-endpoint-models">' + model_tags + '</div>'
             '<div class="df-model-endpoint-address" data-user-content title="' + _safe(row.get("base_url", "")) + '">'
-            + _safe(row.get("base_url", "")) + '</div>'
+            + _safe(format_label) + ' · ' + _safe(row.get("base_url", "")) + '</div>'
             '<div class="df-model-endpoint-foot"><span title="' + _safe(role_detail) + '">'
             + _safe(role_text) + '</span>'
             '<b data-ready="' + str(ready).lower() + '">' + ("密钥已配置" if ready else "密钥未配置") + '</b></div></div>'
@@ -84,11 +94,19 @@ def _endpoint_form(application: BackendApplication, *, inline: bool = False) -> 
     _panel_heading("配置端点", "保存到本地覆盖文件，自动保留上一个版本。", "＋")
     with (nullcontext() if inline else st.expander("新增或覆盖端点", expanded=False)):
         st.caption("推荐使用环境变量存放密钥。环境变量模式只保存变量名；手动密钥模式会写入本地配置。")
+        api_format = st.selectbox("API 协议", API_FORMATS, key="backend-add-api-format",
+                                  format_func=lambda value: _API_FORMAT_LABELS[value],
+                                  help="选择端点实际支持的调用协议。")
         with st.form("backend-add"):
             left, right = st.columns(2)
-            name = left.text_input("后端名", "local_gpu")
-            base_url = right.text_input("OpenAI 兼容地址", "http://127.0.0.1:11434/v1")
-            models = st.text_input("模型名（逗号分隔）", "qwen2.5:7b-instruct")
+            name = left.text_input("后端名", _DEFAULT_NAMES[api_format],
+                                   key=f"backend-add-name:{api_format}")
+            base_url = right.text_input("服务 API 地址", _DEFAULT_URLS[api_format],
+                                        key=f"backend-add-base-url:{api_format}")
+            models = st.text_input("模型名（逗号分隔）",
+                                   "qwen2.5:7b-instruct" if api_format == "chat" else "",
+                                   key=f"backend-add-models:{api_format}",
+                                   placeholder="填写所选服务提供的模型名")
             mode = st.radio("密钥来源", ["环境变量（推荐）", "写入本地配置"], horizontal=True)
             secret = st.text_input("密钥（环境变量名 或 密钥值）", type="password")
             prices = st.text_input("价格 JSON（可选，如 {\"input_per_1m_usd\": 0}）")
@@ -98,12 +116,13 @@ def _endpoint_form(application: BackendApplication, *, inline: bool = False) -> 
             try:
                 prices_obj = json.loads(prices) if prices.strip() else None
                 model_names = [part.strip() for part in models.split(",") if part.strip()]
+                default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
                 if mode.startswith("环境变量"):
-                    application.save_endpoint(name, base_url, model_names, api_key_env=secret or "OPENAI_API_KEY",
-                                     prices=prices_obj, explicit_replace=overwrite)
+                    application.save_endpoint(name, base_url, model_names, api_key_env=secret or default_env,
+                                     prices=prices_obj, explicit_replace=overwrite, api_format=api_format)
                 else:
                     application.save_endpoint(name, base_url, model_names, api_key=secret,
-                                     prices=prices_obj, explicit_replace=overwrite)
+                                     prices=prices_obj, explicit_replace=overwrite, api_format=api_format)
                 st.toast(f"已保存 {name}，原文件已备份")
                 st.rerun()
             except (ValueError, FileExistsError) as error:

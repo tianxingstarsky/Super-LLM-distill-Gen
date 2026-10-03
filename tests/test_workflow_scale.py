@@ -227,14 +227,16 @@ def test_node_clients_are_separate_and_usage_is_exact_under_concurrency(tmp_path
             self.usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
         def chat(self, messages, **kwargs):
+            assert kwargs["max_tokens"] == 32768
             time.sleep(.005)
             self.usage["calls"] += 1
             self.usage["prompt_tokens"] += 10
             self.usage["completion_tokens"] += 5
             return json.dumps({"status": "eligible"})
 
-    def load(root, *, backend, model, role, allow_global_endpoint_override):
+    def load(root, *, backend, model, role, allow_global_endpoint_override, context_window_tokens):
         assert allow_global_endpoint_override is False
+        assert context_window_tokens == 131072
         created.append((backend, model))
         return Client(backend, model), model
 

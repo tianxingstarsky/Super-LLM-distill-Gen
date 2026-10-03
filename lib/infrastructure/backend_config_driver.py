@@ -1,4 +1,4 @@
-"""YAML, environment and OpenAI-compatible adapters for backend administration."""
+"""YAML, environment and provider SDK adapters for backend administration."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,8 @@ import time
 from typing import Any
 
 import yaml
+
+from lib.model_protocols import validate_api_format
 
 
 class FilesystemBackendConfigDriver:
@@ -63,12 +65,17 @@ class FilesystemBackendConfigDriver:
         return bool(os.environ.get(name, ""))
 
     def probe(self, name: str, backend: dict[str, Any]) -> dict[str, Any]:
-        from openai import OpenAI
-
-        env_name = backend.get("api_key_env") or ""
-        api_key = (backend.get("api_key") or os.environ.get(env_name, "")
-                   or os.environ.get("OPENAI_API_KEY", "") or "sk-local")
-        client = OpenAI(base_url=backend["base_url"], api_key=api_key)
+        api_format = validate_api_format(backend.get("api_format", "chat"))
+        default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
+        configured_env = backend.get("api_key_env")
+        env_name = default_env if configured_env is None else str(configured_env)
+        api_key = backend.get("api_key") or os.environ.get(env_name, "") or "sk-local"
+        if api_format == "anthropic":
+            from anthropic import Anthropic
+            client = Anthropic(base_url=backend["base_url"], api_key=api_key)
+        else:
+            from openai import OpenAI
+            client = OpenAI(base_url=backend["base_url"], api_key=api_key)
         models = client.models.list().data
         return {"backend": name, "base_url": backend["base_url"],
-                "models": sorted(model.id for model in models)}
+                "api_format": api_format, "models": sorted(model.id for model in models)}

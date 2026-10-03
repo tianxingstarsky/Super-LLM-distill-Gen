@@ -58,12 +58,31 @@ def test_inventory_and_role_assignment_are_port_driven_and_secret_safe():
     inventory = app.list_backends()
     cloud, private = inventory["backends"]
     assert cloud["api_key"] == {"source": "env:CLOUD_KEY", "status": "存在"}
+    assert cloud["api_format"] == "chat"  # Existing connections remain compatible.
     assert private["api_key"] == {"source": "configs/backends.local.yaml", "status": "sk-***3456"}
     assert "sk-secret-123456" not in str(inventory)
     assert private["roles"] == ["jev"]
     assert inventory["spent"] == 2.5
     assert app.test_backend("private", {"base_url": "http://127.0.0.1:9010/v1"})["models"] == ["remote"]
     assert port.events[-1][2]["base_url"] == "http://127.0.0.1:9010/v1"
+    assert port.events[-1][2]["api_format"] == "chat"
+
+
+def test_api_format_is_saved_listed_and_validated_before_probe():
+    port = MemoryBackendPort()
+    app = BackendApplication(port)
+    app.save_endpoint("claude", "https://api.anthropic.com", ["claude-test"],
+                      api_key_env="ANTHROPIC_API_KEY", api_format="anthropic")
+    listed = next(row for row in app.list_backends()["backends"] if row["name"] == "claude")
+    assert listed["api_format"] == "anthropic"
+    assert port.files["backends.local.yaml"]["backends"]["claude"]["api_format"] == "anthropic"
+    assert app.test_backend("claude")["models"] == ["remote"]
+    assert port.events[-1][2]["api_format"] == "anthropic"
+    with pytest.raises(ValueError, match="invalid_api_format"):
+        app.save_endpoint("bad", "https://models.example.test/v1", ["x"], api_format="unknown")
+    with pytest.raises(ValueError, match="invalid_api_format"):
+        app.test_backend("claude", {"api_format": "unknown"})
+    assert len([event for event in port.events if isinstance(event, tuple) and event[0] == "probe"]) == 1
 
 
 def test_duplicate_protection_and_budget_reset_use_explicit_port_operations():

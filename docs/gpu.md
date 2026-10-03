@@ -6,7 +6,7 @@
 
 ## 接入方式（早已支持，无需新代码）
 
-DataForge 的所有 LLM 调用走 OpenAI 兼容网关（`lib/llm_client.load_backend`）：
+以下本地 GPU 接入示例使用 Chat Completions 兼容端点。工作流节点还可选择 OpenAI Responses 或 Anthropic Messages 协议；每个连接须明确指定实际支持的格式。
 
 ```bash
 # 方式 A：单次覆盖（任意命令）

@@ -38,6 +38,7 @@ def test_save_endpoint_merge_backup_and_validation(manager):
     info = manager.list_backends()
     row = next(r for r in info["backends"] if r["name"] == "local_gpu")
     assert row["api_key"]["source"] == "未配置" and row["api_key"]["status"] == "缺失"
+    assert row["api_format"] == "chat"
     # 覆盖保护
     with pytest.raises(FileExistsError):
         manager.save_endpoint("local_gpu", "http://x/v1", ["m"])
@@ -59,6 +60,16 @@ def test_save_endpoint_merge_backup_and_validation(manager):
         manager.save_endpoint("x", "ftp://x", ["m"])
     with pytest.raises(ValueError):
         manager.save_endpoint("x", "http://x/v1", [])
+
+
+def test_manager_forwards_api_format_to_saved_endpoint(manager):
+    manager.save_endpoint("claude", "https://api.anthropic.com", ["claude-test"],
+                          api_key_env="ANTHROPIC_API_KEY", api_format="anthropic")
+    row = next(r for r in manager.list_backends()["backends"] if r["name"] == "claude")
+    assert row["api_format"] == "anthropic"
+    import yaml
+    saved = yaml.safe_load((manager.ROOT / "configs/backends.local.yaml").read_text(encoding="utf-8"))
+    assert saved["backends"]["claude"]["api_format"] == "anthropic"
 
 
 def test_role_switch_and_reset_budget(manager, monkeypatch):

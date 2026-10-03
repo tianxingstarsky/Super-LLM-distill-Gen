@@ -329,10 +329,15 @@ class Workflow:
                 binding = self.recipe.get("node_models", {}).get(self.stage, {}).get(role, {})
                 client, _ = load_backend(self.root, backend=binding.get("backend") or self.recipe.get(prefix + "backend"),
                                          model=binding.get("model") or self.recipe.get(prefix + "model"), role=role,
-                                         allow_global_endpoint_override=not bool(binding))
+                                         allow_global_endpoint_override=not bool(binding),
+                                         context_window_tokens=binding.get("context_window_tokens"))
                 cache[cache_key] = client
+        endpoint_identity = str(getattr(getattr(client, "client", None), "base_url", "injected"))
+        api_format = str(getattr(client, "api_format", "chat"))
+        if api_format != "chat":
+            endpoint_identity += "|" + api_format
         identity = {"model": getattr(client, "model", type(client).__name__),
-                    "endpoint_hash": digest(str(getattr(getattr(client, "client", None), "base_url", "injected")))}
+                    "endpoint_hash": digest(endpoint_identity)}
         model_key = f"{self.stage}.{role}" if self.recipe.get("node_models", {}).get(self.stage, {}).get(role) else role
         with self._lock:
             pinned = self.state.setdefault("models", {}).get(model_key)
@@ -352,9 +357,11 @@ class Workflow:
                 before = dict(getattr(client, "usage", {}))
                 self.event("model_started", role=role)
                 try:
+                    binding = self.recipe.get("node_models", {}).get(self.stage, {}).get(role, {})
                     return chat_json(client, [
                         {"role": "system", "content": render(get("workflow.system")) + "\n" + render(get(prompt_id))},
-                        {"role": "user", "content": canonical(data)}])
+                        {"role": "user", "content": canonical(data)}],
+                        max_tokens=binding.get("max_output_tokens"))
                 finally:
                     after = getattr(client, "usage", {})
                     with self._lock:

@@ -5,7 +5,14 @@ import streamlit as st
 
 from lib.application.backend_service import BackendApplication
 from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
-from lib.domain.workflow_scale import node_roles
+from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
+                                       DEFAULT_MAX_OUTPUT_TOKENS,
+                                       MAX_CONTEXT_WINDOW_TOKENS, node_roles)
+from lib.model_protocols import API_FORMATS
+
+
+_API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
+                      "anthropic": "Anthropic Messages"}
 
 
 def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace):
@@ -31,17 +38,21 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
     missing_role = next((role for role in roles if not bindings.get(node, {}).get(role, {}).get("model")
                          or bindings[node][role].get("backend") not in endpoints), None)
     with st.expander("新增或更新服务连接", expanded=not endpoints):
-        st.caption("在当前节点登记兼容服务。保存后即可选用，无需离开工作流。")
+        st.caption("连接保存在本机供复用；本次任务使用哪个模型由当前节点决定。")
         with st.form(f"{form_prefix}:{epoch}", clear_on_submit=True):
             name = st.text_input("服务名称", placeholder="字母、数字、下划线或连字符")
-            base_url = st.text_input("兼容服务地址", placeholder="https://…/v1")
+            api_format = st.selectbox("API 协议", API_FORMATS,
+                                      format_func=lambda value: _API_FORMAT_LABELS[value],
+                                      help="选择服务实际支持的调用协议。")
+            base_url = st.text_input("服务 API 地址", placeholder="如 https://api.openai.com/v1 或 https://api.anthropic.com")
             model = st.text_input("模型名称", placeholder="填写服务提供的模型名")
             credential_mode = st.radio("凭据来源", ("环境变量（推荐）", "直接填写密钥"),
                                        horizontal=True,
                                        help="直接填写的密钥会保存到本机配置；推荐使用环境变量。")
             secret_key = f"{form_prefix}:secret:{epoch}"
             secret = st.text_input("环境变量名或密钥", type="password", key=secret_key,
-                                   placeholder="环境变量留空时使用 OPENAI_API_KEY")
+                                   placeholder="环境变量留空时使用 ANTHROPIC_API_KEY" if api_format == "anthropic"
+                                   else "环境变量留空时使用 OPENAI_API_KEY")
             replace = st.checkbox("覆盖同名连接")
             submit = st.form_submit_button("保存并用于当前节点" if missing_role else "保存连接",
                                            type="primary", width="stretch")
@@ -51,13 +62,14 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
             st.error("请填写密钥，或改用环境变量。")
             return
         try:
+            default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
             if credential_mode == "直接填写密钥":
                 application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
-                                          api_key=secret, explicit_replace=replace)
+                                          api_key=secret, explicit_replace=replace, api_format=api_format)
             else:
                 application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
-                                          api_key_env=secret.strip() or "OPENAI_API_KEY",
-                                          explicit_replace=replace)
+                                          api_key_env=secret.strip() or default_env,
+                                          explicit_replace=replace, api_format=api_format)
         except FileExistsError:
             st.error("服务名称已存在。如需更新，请勾选覆盖同名连接。")
             return
@@ -71,7 +83,11 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
         # replace a model the operator already selected on this node.
         target_role = missing_role
         if target_role is not None:
-            bindings.setdefault(node, {})[target_role] = {"backend": name.strip(), "model": model.strip()}
+            bindings.setdefault(node, {})[target_role] = {
+                "backend": name.strip(), "model": model.strip(),
+                "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+            }
             st.session_state[f"workflow-node-bindings:{workspace}"] = deepcopy(bindings)
             st.session_state[f"workflow-node-pending-binding:{workspace}:{node}"] = {
                 "role": target_role, "backend": name.strip(), "model": model.strip(),
@@ -117,7 +133,9 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             st.session_state[prefix + ":backend"] = None
         backend = st.selectbox("模型服务", names, index=names.index(binding["backend"])
                                if binding.get("backend") in names else None, key=prefix + ":backend",
-                               placeholder="选择模型服务")
+                               placeholder="选择模型服务",
+                               format_func=lambda name: name + " · " + _API_FORMAT_LABELS.get(
+                                   endpoints[name].get("api_format", "chat"), "Chat Completions"))
         if backend is None:
             if binding.get("backend") in endpoints:
                 bindings.setdefault(node, {}).pop(role, None)
@@ -130,11 +148,37 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                              accept_new_options=True, key=prefix + ":model:" + backend,
                              placeholder="选择或输入模型名")
         if model:
-            bindings.setdefault(node, {})[role] = {"backend": backend, "model": model}
+            same_model = binding.get("backend") == backend and binding.get("model") == model
+            context_default = (binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
+                               if same_model else DEFAULT_CONTEXT_WINDOW_TOKENS)
+            output_default = (binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
+                              if same_model else DEFAULT_MAX_OUTPUT_TOKENS)
+            context_col, output_col = st.columns(2, gap="small")
+            with context_col:
+                context_tokens = st.number_input(
+                    "上下文窗口（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS,
+                    value=int(context_default), step=1024,
+                    key=prefix + ":context:" + backend + ":" + model,
+                )
+            with output_col:
+                output_tokens = st.number_input(
+                    "单次输出上限（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS - 1,
+                    value=int(output_default), step=1024,
+                    key=prefix + ":output:" + backend + ":" + model,
+                )
+            if output_tokens >= context_tokens:
+                st.warning("单次输出上限必须小于上下文窗口。")
+                bindings.setdefault(node, {}).pop(role, None)
+                continue
+            bindings.setdefault(node, {})[role] = {
+                "backend": backend, "model": model,
+                "context_window_tokens": int(context_tokens),
+                "max_output_tokens": int(output_tokens),
+            }
         else:
             bindings.setdefault(node, {}).pop(role, None)
     st.session_state[f"workflow-node-bindings:{workspace}"] = deepcopy(bindings)
-    st.caption("每个节点独立保存选择；开始运行后，本次配置固定。")
+    st.caption("每个节点独立保存选择。默认上下文 131,072、单次输出 32,768 tokens；需按模型能力调整。开始运行后，本次配置固定。")
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()

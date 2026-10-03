@@ -1,6 +1,8 @@
 """The backend overview must display real counts without leaking key fragments."""
 from __future__ import annotations
 
+import pytest
+
 from lib.presentation.streamlit import backend_page
 from streamlit.testing.v1 import AppTest
 
@@ -99,5 +101,29 @@ def test_service_registration_saves_through_application_port():
     assert not ui.exception
     saved = ui.session_state['fixture-local']['backends']['local_gpu']
     assert saved['models']==['qwen2.5:7b-instruct']
+    assert saved['api_format']=='chat'
     assert saved['api_key_env']=='OPENAI_API_KEY'
     assert 'api_key' not in saved
+
+
+@pytest.mark.parametrize(('api_format', 'base_url', 'key_env', 'label'), [
+    ('responses', 'https://api.openai.com/v1', 'OPENAI_API_KEY', 'OpenAI Responses'),
+    ('anthropic', 'https://api.anthropic.com', 'ANTHROPIC_API_KEY', 'Anthropic Messages'),
+])
+def test_service_registration_saves_selected_api_format_and_shows_it(
+        api_format, base_url, key_env, label):
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.selectbox(key='backend-add-api-format').set_value(api_format).run()
+    assert not ui.exception
+    assert ui.text_input(key=f'backend-add-base-url:{api_format}').value == base_url
+    ui.text_input(key=f'backend-add-models:{api_format}').set_value('chosen-model')
+    next(button for button in ui.button if button.label == 'Save endpoint').click().run()
+    assert not ui.exception
+    saved = ui.session_state['fixture-local']['backends'][
+        'openai_responses' if api_format == 'responses' else 'anthropic']
+    assert saved['api_format'] == api_format
+    assert saved['base_url'] == base_url
+    assert saved['models'] == ['chosen-model']
+    assert saved['api_key_env'] == key_env
+    markup = ''.join(item.proto.body for item in ui.get('html'))
+    assert label in markup
