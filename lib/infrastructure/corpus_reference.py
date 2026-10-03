@@ -104,32 +104,45 @@ def snapshot_released_corpus(output: Path) -> list[dict]:
     return references
 
 
-def _released_indexes(output: Path, references: list[dict], *, include_near: bool
-                      ) -> tuple[dict[str, dict], CorpusNearDuplicateIndex | None, int]:
+def _released_indexes(output: Path, references: list[dict], *, include_near: bool,
+                      sqlite_path: Path | None = None
+                      ) -> tuple[dict[str, dict] | CorpusNearDuplicateIndex,
+                                 CorpusNearDuplicateIndex | None, int]:
     """Recheck pinned releases once before their text becomes a dedup reference."""
-    index: dict[str, dict] = {}
-    near_index = CorpusNearDuplicateIndex() if include_near else None
+    if sqlite_path is not None and not include_near:
+        raise ValueError("near_index_required_for_disk_backing")
+    near_index = CorpusNearDuplicateIndex(sqlite_path) if include_near else None
+    # The disk-backed near index also holds exact normalized references, so a
+    # second, unbounded SHA dictionary is unnecessary during CPT packaging.
+    index: dict[str, dict] | CorpusNearDuplicateIndex = (
+        near_index if sqlite_path is not None else {})
     total = 0
-    for reference in references:
-        try:
-            run_id, version = reference["run_id"], reference["version"]
-            folder = _release_path(Path(output), run_id, version)
-            def add(line: int, text: str) -> None:
-                fingerprint = hashlib.sha256(comparison_text(text).encode("utf-8")).hexdigest()
-                match = {"run_id": run_id, "version": version, "line": line,
-                         "corpus_sha256": reference["corpus_sha256"]}
-                index.setdefault(fingerprint, match)
-                if near_index is not None:
-                    release_id = f"{run_id}/cpt-v{version:04d}/{line}"
-                    near_index.add_reference(text, {"id": release_id, "source_name": release_id,
-                                                    "reference_release": match})
-            manifest, row_count, manifest_sha256 = _verified_rows(folder, run_id, version, on_text=add)
-            if (reference["manifest_sha256"] != manifest_sha256
-                    or reference["corpus_sha256"] != manifest["sha256"]["cpt.jsonl"]):
-                raise ValueError("release_snapshot_changed")
-        except (KeyError, TypeError, OSError, ValueError) as error:
-            raise ValueError("cpt_release_integrity_error") from error
-        total += row_count
+    try:
+        for reference in references:
+            try:
+                run_id, version = reference["run_id"], reference["version"]
+                folder = _release_path(Path(output), run_id, version)
+                def add(line: int, text: str) -> None:
+                    match = {"run_id": run_id, "version": version, "line": line,
+                             "corpus_sha256": reference["corpus_sha256"]}
+                    if isinstance(index, dict):
+                        fingerprint = hashlib.sha256(comparison_text(text).encode("utf-8")).hexdigest()
+                        index.setdefault(fingerprint, match)
+                    if near_index is not None:
+                        release_id = f"{run_id}/cpt-v{version:04d}/{line}"
+                        near_index.add_reference(text, {"id": release_id, "source_name": release_id,
+                                                        "reference_release": match})
+                manifest, row_count, manifest_sha256 = _verified_rows(folder, run_id, version, on_text=add)
+                if (reference["manifest_sha256"] != manifest_sha256
+                        or reference["corpus_sha256"] != manifest["sha256"]["cpt.jsonl"]):
+                    raise ValueError("release_snapshot_changed")
+            except (KeyError, TypeError, OSError, ValueError) as error:
+                raise ValueError("cpt_release_integrity_error") from error
+            total += row_count
+    except BaseException:
+        if near_index is not None:
+            near_index.close()
+        raise
     return index, near_index, total
 
 
@@ -139,14 +152,20 @@ def released_exact_index(output: Path, references: list[dict]) -> tuple[dict[str
     return exact, total
 
 
-def released_corpus_index(output: Path, references: list[dict]
-                          ) -> tuple[dict[str, dict], CorpusNearDuplicateIndex, int]:
+def released_corpus_index(output: Path, references: list[dict], *,
+                          sqlite_path: Path | None = None
+                          ) -> tuple[dict[str, dict] | CorpusNearDuplicateIndex,
+                                     CorpusNearDuplicateIndex, int]:
     """Return exact and conservative near indexes of verified pinned releases."""
-    exact, near, total = _released_indexes(output, references, include_near=True)
+    exact, near, total = _released_indexes(output, references, include_near=True,
+                                          sqlite_path=sqlite_path)
     assert near is not None
     return exact, near, total
 
 
-def exact_release_match(index: dict[str, dict], text: str) -> dict | None:
+def exact_release_match(index: dict[str, dict] | CorpusNearDuplicateIndex, text: str) -> dict | None:
+    if isinstance(index, CorpusNearDuplicateIndex):
+        reference = index.exact_reference(text)
+        return reference["reference_release"] if reference is not None else None
     fingerprint = hashlib.sha256(comparison_text(text).encode("utf-8")).hexdigest()
     return index.get(fingerprint)

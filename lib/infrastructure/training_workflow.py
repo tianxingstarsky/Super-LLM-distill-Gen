@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from collections import deque
-from contextlib import closing
+from contextlib import ExitStack, closing
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
 import uuid
 from itertools import islice
 import threading
@@ -27,7 +28,8 @@ from lib.application.trainer_export_service import prepare_trl_export
 from lib.domain.workflow_quality import POLICY, accepted, canonical, conversation_issue, same_answer, text_issue, tool_error_flag, verdict
 from lib.domain.agent_trajectory import REPLAY_POLICY_VERSION, assess_recorded_trajectory
 from lib.domain.source_conversation import source_conversation_issue
-from lib.domain.corpus_quality import CorpusNearDuplicateIndex, inspect_corpus, summarize_corpus_sources
+from lib.domain.corpus_quality import (CorpusClusterSizes, CorpusNearDuplicateIndex,
+                                       inspect_corpus, summarize_corpus_sources)
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_candidate
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_creation import validate_creation
@@ -51,7 +53,7 @@ from lib.infrastructure.evaluation_reference import load_evaluation_index, snaps
 from lib.infrastructure.agent_docker_replay import (DockerLedgerReplay, IMAGE_ENV, RUNNER_SHA256,
                                                     validate_sandbox_image)
 from lib.doc2corpus import SUPPORTED_EXTS, chunk_text, import_text
-from lib.io_utils import atomic_json
+from lib.io_utils import _replace_state, atomic_json
 from lib.llm_client import chat_json, load_backend, snapshot_backend_endpoint
 from lib.prompts import get, registry, render
 
@@ -102,6 +104,44 @@ def digest(value):
 def file_hash(path):
     with Path(path).open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def _write_quality_report(path: Path, report: dict, input_records: Path) -> None:
+    """Write the full issue list without retaining its rows in package memory."""
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".pending-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("{\n")
+            for position, (key, value) in enumerate(report.items()):
+                if position:
+                    handle.write(",\n")
+                handle.write("  " + json.dumps(key, ensure_ascii=False) + ": ")
+                if key == "input_issues":
+                    handle.write("[")
+                    first = True
+                    for row in iter_json_records(input_records):
+                        if row["status"] != "quarantined":
+                            continue
+                        issue = {"id": row["id"], "source_id": row["source_id"],
+                                 "source_name": row.get("source_name"),
+                                 "location": row.get("location"),
+                                 "source_location": row.get("source_location"),
+                                 "reason": row.get("reason")}
+                        handle.write("\n" if first else ",\n")
+                        handle.write("    " + json.dumps(issue, ensure_ascii=False, indent=2)
+                                     .replace("\n", "\n    "))
+                        first = False
+                    handle.write("\n  ]" if not first else "]")
+                else:
+                    handle.write(json.dumps(value, ensure_ascii=False, indent=2)
+                                 .replace("\n", "\n  "))
+            handle.write("\n}")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_state(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def prompt_versions():
@@ -1021,19 +1061,45 @@ class Workflow:
         evaluation_references = self.recipe.get("evaluation_references", [])
         evaluation_index = (load_evaluation_index(self.path, evaluation_references)
                             if "cpt" in self.recipe["targets"] else None)
+        with ExitStack() as cleanup:
+            if "cpt" in self.recipe["targets"]:
+                directory = self.path / "stage-results"
+                directory.mkdir(exist_ok=True)
+                release_path = directory / "package-released-cpt.sqlite3"
+                release_path.unlink(missing_ok=True)
+                cleanup.callback(release_path.unlink, missing_ok=True)
+                released_index, released_near_index, released_rows = released_corpus_index(
+                    self.path.parent.parent, self.recipe.get("cpt_reference_releases", []),
+                    sqlite_path=release_path)
+                cleanup.callback(released_near_index.close)
+
+                current_path = directory / "package-current-cpt.sqlite3"
+                current_path.unlink(missing_ok=True)
+                cleanup.callback(current_path.unlink, missing_ok=True)
+                corpus_index = CorpusNearDuplicateIndex(current_path)
+                cleanup.callback(corpus_index.close)
+
+                cluster_path = directory / "package-cpt-clusters.sqlite3"
+                cluster_path.unlink(missing_ok=True)
+                cleanup.callback(cluster_path.unlink, missing_ok=True)
+                cluster_index = CorpusClusterSizes(cluster_path)
+                cleanup.callback(cluster_index.close)
+            else:
+                released_index, released_near_index, released_rows = {}, None, 0
+                corpus_index = cluster_index = None
+            return self._package_collections(
+                collections, released_index, released_near_index, released_rows,
+                corpus_index, cluster_index, evaluation_index)
+
+    def _package_collections(self, collections, released_index, released_near_index,
+                             released_rows, corpus_index, cluster_index, evaluation_index):
+        evaluation_references = self.recipe.get("evaluation_references", [])
         destination = self.path / "artifacts"
         destination.mkdir(exist_ok=True)
         cpt_references = self.recipe.get("cpt_reference_releases", [])
-        released_index, released_near_index, released_rows = (
-            released_corpus_index(self.path.parent.parent, cpt_references)
-            if "cpt" in self.recipe["targets"] else ({}, None, 0))
         report = {"policy": POLICY, "targets": {}, "trainer_exports": {}, "human_review": "not_performed",
                   "input_summary": self.state.get("input_summary", {}),
-                  "input_issues": [{"id": u["id"], "source_id": u["source_id"],
-                                    "source_name": u.get("source_name"), "location": u.get("location"),
-                                    "source_location": u.get("source_location"), "reason": u.get("reason")}
-                                   for u in iter_json_records(self.path / "input_records.json")
-                                   if u["status"] == "quarantined"],
+                  "input_issues": None,  # streamed into quality.json after target packaging
                   "limitations": ["模型评审不等于事实证明", "字符分块不是 tokenizer 长度",
                                   "CPT 当前批次及同工作区已发布版本的近重复筛查不证明来源许可或事实正确",
                                   "CPT 跨批参照仅覆盖任务创建时同一工作区已发布且清单可校验的版本；不覆盖其他工作区或未审核候选",
@@ -1090,7 +1156,7 @@ class Workflow:
             records = RowSpool(self.path / "stage-results" / f"package-{target}-records.jsonl")
             training = RowSpool(self.path / "stage-results" / f"package-{target}-training.jsonl")
             seen = set()
-            corpus_index = CorpusNearDuplicateIndex() if target == "cpt" else None
+            target_corpus_index = corpus_index if target == "cpt" else None
             for original in collections[target]:
                 self.check_cancel()
                 row = deepcopy(original)
@@ -1099,7 +1165,7 @@ class Workflow:
                 if row["status"] == "eligible":
                     payload = preferred_training_record(
                         target, row, preferences, sft_output_style=node_style)
-                    if corpus_index is not None:
+                    if target_corpus_index is not None:
                         evaluation_hit = evaluation_index.inspect(row["text"]) if evaluation_index else None
                         if evaluation_hit:
                             row.update(status="quarantined", reason=evaluation_hit["reason"],
@@ -1130,7 +1196,7 @@ class Workflow:
                                 # lineage only; full CPT rows are already spooled to disk.
                                 reference = {key: row[key] for key in ("id", "source_name", "reference_release")
                                              if key in row}
-                                duplicate = corpus_index.check_and_add(row["text"], reference)
+                                duplicate = target_corpus_index.check_and_add(row["text"], reference)
                                 if duplicate:
                                     row.update(status="duplicate", duplicate_scope="current_run", **duplicate)
                                 else:
@@ -1146,21 +1212,9 @@ class Workflow:
             records.close()
             training.close()
             if target == "cpt":
-                cluster_sizes = {}
                 for row in records:
-                    if row["status"] in {"eligible", "duplicate"}:
-                        root_id = row.get("duplicate_of", row["id"])
-                        cluster_sizes[root_id] = cluster_sizes.get(root_id, 0) + 1
-                # A cross-run root is outside this candidate list, but still
-                # represents one verified exemplar in the displayed cluster.
-                for root_id in {row["duplicate_of"] for row in records
-                                if row.get("duplicate_scope") == "prior_cpt_release"}:
-                    cluster_sizes[root_id] += 1
-                def with_cluster(row):
-                    if row["status"] in {"eligible", "duplicate"}:
-                        row["duplicate_cluster_size"] = cluster_sizes[row.get("duplicate_of", row["id"])]
-                    return row
-                records = WorkflowRows(records.path, len(records), transform=with_cluster)
+                    cluster_index.add(row)
+                records = WorkflowRows(records.path, len(records), transform=cluster_index.annotate)
             # Atomic checkpoints hold metadata; files contain only the selected training schema.
             output = destination / f"{target}.jsonl"
             write_jsonl(output, training)
@@ -1221,7 +1275,8 @@ class Workflow:
                 sidecar = destination / "agent.negative.jsonl"
                 write_jsonl(sidecar, (row["negative"] for row in records if row.get("negative")))
                 report["targets"][target]["negative"] = negative_count
-        atomic_json(destination / "quality.json", report)
+        _write_quality_report(destination / "quality.json", report,
+                              self.path / "input_records.json")
         self.state["quality"] = {"policy": report["policy"], "targets": report["targets"],
                                  "human_review": report["human_review"],
                                  "trainer_exports": {target: {key: value for key, value in summary.items()
