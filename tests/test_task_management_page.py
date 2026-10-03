@@ -61,6 +61,47 @@ with patch.object(page, "render_run", lambda application, run_id, begin, embedde
     assert ui.session_state["task-center-search:fixture"] == ""
     assert ui.session_state["task-center-page:fixture"] == 2
     assert ui.session_state["task-center-run:fixture"] == "old-running"
+    assert ui.number_input(key="task-center-page:fixture:jump").value == 3
+
+
+def test_page_number_jump_opens_distant_tasks_and_tracks_navigation():
+    script = """
+import streamlit as st
+from unittest.mock import patch
+from lib.presentation.streamlit import task_management_page as page
+
+class Application:
+    def task_runs(self):
+        return [{"id": f"run-{number:05d}", "name": f"Task {number:05d}",
+                 "status": "completed", "created_at": "2026-10-03T12:00:00",
+                 "updated_at": "2026-10-03T12:00:00", "targets": ["sft"]}
+                for number in range(10_051)]
+
+st.session_state["ws"] = "fixture"
+with patch.object(page, "render_run", lambda application, run_id, begin, embedded=False: st.caption(f"DETAIL {run_id}")):
+    page.render_task_management(Application(), "fixture", lambda _: None, lambda: None)
+"""
+    ui = AppTest.from_string(script, default_timeout=30).run()
+    assert not ui.exception
+
+    jump = ui.number_input(key="task-center-page:fixture:jump")
+    assert jump.value == 1
+    jump.set_value(202).run()
+    assert not ui.exception
+    assert ui.session_state["task-center-page:fixture"] == 201
+    assert ui.session_state["task-center-run:fixture"] == "run-10050"
+    assert ui.button(key="task-card:fixture:run-10050")
+
+    ui.button(key="task-center-page:fixture:previous").click().run()
+    assert not ui.exception
+    assert ui.number_input(key="task-center-page:fixture:jump").value == 201
+    assert ui.session_state["task-center-run:fixture"] == "run-10000"
+
+    ui.text_input(key="task-center-search:fixture").set_value("Task 10050").run()
+    assert not ui.exception
+    assert ui.session_state["task-center-page:fixture"] == 0
+    assert ui.session_state["task-center-run:fixture"] == "run-10050"
+    assert not ui.get("number_input")
 
 
 def test_workspace_change_never_shows_other_workspaces_shortcuts():

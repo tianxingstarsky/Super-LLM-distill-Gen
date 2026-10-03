@@ -38,9 +38,12 @@ def _trace(call_id: str, expression: str, result: str) -> list[dict]:
             {"role": "assistant", "content": result}]
 
 
-def _run(tmp_path, *, extra_good=0):
+def _run(tmp_path, *, extra_good=0, long_good=False):
     source = tmp_path / "traces.jsonl"
-    traces = [_trace("good", "2+2", "4")]
+    good = _trace("good", "2+2", "4")
+    if long_good:
+        good += _trace("second", "4+4", "8") + _trace("third", "5+5", "10")
+    traces = [good]
     traces.extend(_trace(f"more-{number}", f"{number}+{number}", str(2 * number))
                   for number in range(4, 4 + extra_good))
     traces.append(_trace("bad", "3+3", "7"))
@@ -127,6 +130,29 @@ def test_unverified_candidate_cannot_be_approved_in_review_ui(tmp_path, monkeypa
     approve = ui.button(key=f"agent-review:fixture:{run_id}:approve:{candidate_id}")
     reject = ui.button(key=f"agent-review:fixture:{run_id}:reject:{candidate_id}")
     assert approve.disabled and not reject.disabled
+
+
+def test_agent_review_requires_each_trace_fragment_before_approval(tmp_path, monkeypatch):
+    from lib import review_management
+
+    output, run_id = _run(tmp_path, long_good=True)
+    monkeypatch.setattr(review_management, "reviewer_identity", lambda: "reviewer")
+    candidate_id = FilesystemAgentReviewDriver(output).queue(run_id, limit=1)["items"][0]["candidate_id"]
+    prefix = f"agent-review:fixture:{run_id}"
+    ui = _ui(output, run_id)
+    assert not ui.exception
+    assert ui.button(key=f"{prefix}:approve:{candidate_id}").disabled
+    assert not ui.button(key=f"{prefix}:reject:{candidate_id}").disabled
+    ui.session_state["ui_language"] = "en"
+    ui.run()
+    assert any("Opened 1 of 2 trace sections" in item.value for item in ui.caption)
+
+    ui.number_input(key=f"{prefix}:preview:{candidate_id}:message-page").set_value(2).run()
+    assert not ui.exception
+    assert not ui.button(key=f"{prefix}:approve:{candidate_id}").disabled
+    ui.button(key=f"{prefix}:approve:{candidate_id}").click().run()
+    assert not ui.exception
+    assert FilesystemAgentReviewDriver(output).queue(run_id, decision="approved")["matched"] == 1
 
 
 def test_task_detail_opens_agent_review_without_page_navigation(tmp_path):

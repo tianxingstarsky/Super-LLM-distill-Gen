@@ -1695,6 +1695,7 @@ ZH_EN.update({
     "失败原因见轨迹与执行证据。": "See the trace and execution evidence for the failure.",
     "此队列只读；失败记录不会混入正样本。": "This queue is read-only. Failed traces stay separate from positive examples.",
     "此候选缺少可独立复核的重放条件。可以退回，暂不能批准。": "This candidate lacks independently reviewable replay evidence. You can return it, but cannot approve it.",
+    "已打开 {opened} / {total} 个轨迹片段。通过前请逐页核对消息与工具证据。": "Opened {opened} of {total} trace sections. Review each message and tool result before approval.",
     "审核意见": "Review notes",
     "通过": "Approve",
     "退回时请说明问题；意见会与来源和证据版本一起保存。": "Explain the issue when returning a trace. Notes are saved with source and evidence versions.",

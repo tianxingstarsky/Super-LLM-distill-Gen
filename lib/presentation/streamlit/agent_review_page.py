@@ -8,6 +8,7 @@ import re
 import streamlit as st
 
 from lib.application.workflow_service import WorkflowApplication
+from lib.domain.conversation_structure import message_windows
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
 from lib.presentation.streamlit.sample_preview import render_sample_preview
 
@@ -145,6 +146,21 @@ def _load_page(application: WorkflowApplication, run_id: str, *, kind: str,
     return queue, page, pages
 
 
+def _opened_trace_fragments(item: dict, *, preview_key: str) -> tuple[int, int]:
+    """Record only fragments actually rendered for this candidate and evidence version."""
+    messages = item["native"].get("messages")
+    total = max(1, len(message_windows("agent", messages if isinstance(messages, list) else [])))
+    page = st.session_state.get(f"{preview_key}:message-page", 1)
+    page = page if type(page) is int and 1 <= page <= total else 1
+    opened_key = (f"{preview_key}:opened:{item['native_sha256']}:"
+                  f"{item['record_sha256']}:{item['review_version']}")
+    previous = st.session_state.get(opened_key, [])
+    opened = {value for value in previous if type(value) is int and 1 <= value <= total}
+    opened.add(page)
+    st.session_state[opened_key] = sorted(opened)
+    return len(opened), total
+
+
 def render_agent_review(application: WorkflowApplication, run_id: str, *, workspace_id: str) -> None:
     """Review one verified run in the task detail, without changing pages."""
     language = st.session_state.get("ui_language", "zh")
@@ -215,6 +231,7 @@ def render_agent_review(application: WorkflowApplication, run_id: str, *, worksp
     with content_col, st.container(border=True):
         st.subheader("对话与工具过程")
         st.html(_facts(item, kind, language))
+        preview_key = f"{prefix}:preview:{candidate_id}"
         if kind == "positive":
             record = item["record"]
             preview = {**row, **{field: record[field] for field in (
@@ -222,7 +239,9 @@ def render_agent_review(application: WorkflowApplication, run_id: str, *, worksp
         else:
             preview = row
         render_sample_preview("agent" if kind == "positive" else "agent_negative", preview,
-                              key=f"{prefix}:preview:{candidate_id}", widgets=st)
+                              key=preview_key, widgets=st)
+        if kind == "positive":
+            opened, fragments = _opened_trace_fragments(item, preview_key=preview_key)
     with action_col, st.container(border=True):
         st.subheader("审核结论" if kind == "positive" else "失败说明")
         if kind == "negative":
@@ -233,6 +252,9 @@ def render_agent_review(application: WorkflowApplication, run_id: str, *, worksp
         st.html(_history(item.get("review"), language))
         if not item["independent_replay"]:
             st.warning("此候选缺少可独立复核的重放条件。可以退回，暂不能批准。")
+        if fragments > 1:
+            st.caption(_copy("已打开 {opened} / {total} 个轨迹片段。通过前请逐页核对消息与工具证据。",
+                             language, opened=opened, total=fragments))
         current = item["review_status"]
         with st.form(f"{prefix}:form:{candidate_id}"):
             reason = st.text_area("审核意见", max_chars=2000, height=95,
@@ -240,7 +262,8 @@ def render_agent_review(application: WorkflowApplication, run_id: str, *, worksp
                                   help="退回时请说明问题；意见会与来源和证据版本一起保存。")
             approve = st.form_submit_button("通过", type="primary", width="stretch",
                                             key=f"{prefix}:approve:{candidate_id}",
-                                            disabled=not item["independent_replay"] or current == "approved")
+                                            disabled=(not item["independent_replay"] or current == "approved"
+                                                      or opened < fragments))
             reject = st.form_submit_button("退回", width="stretch", key=f"{prefix}:reject:{candidate_id}",
                                            disabled=current == "rejected")
         if approve or reject:

@@ -175,6 +175,11 @@ def _change_page(page_key: str, page: int) -> None:
     st.session_state[page_key] = page
 
 
+def _jump_to_page(page_key: str, jump_key: str) -> None:
+    """Convert the operator's one-based page number to the list's offset."""
+    st.session_state[page_key] = int(st.session_state[jump_key]) - 1
+
+
 def render_task_management(application: WorkflowApplication, workspace_id: str,
                            begin: Callable[[list[str]], None],
                            on_new_workflow: Callable[[], None]) -> str | None:
@@ -270,6 +275,13 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         st.session_state[page_key] = page
         visible = matches[page * 50:(page + 1) * 50]
         if page_count > 1:
+            jump_key = page_key + ":jump"
+            # Keep the editor aligned after filtering, shortcut selection, and
+            # Previous/Next callbacks. This runs before the widget is created.
+            st.session_state[jump_key] = page + 1
+            st.number_input("跳转页码", min_value=1, max_value=page_count, step=1,
+                            key=jump_key, on_change=_jump_to_page,
+                            args=(page_key, jump_key))
             previous, following = st.columns(2)
             previous.button("上一页任务", disabled=page == 0, key=page_key + ":previous",
                             on_click=_change_page, args=(page_key, page - 1), width="stretch")
