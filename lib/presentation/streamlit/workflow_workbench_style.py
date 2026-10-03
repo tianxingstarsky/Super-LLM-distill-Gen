@@ -71,6 +71,9 @@ WORKBENCH_STYLE = """<style>
   min-height:82px;background:#f8fbff;border-color:#b8d0ed}
 [class*="st-key-workbench-submit"] {margin:12px 0 0;border-color:#d9e6f5!important;
   background:linear-gradient(105deg,#f7fbff,#fff)!important}
+[class*="st-key-workflow-create"] button[kind="primary"]:disabled,
+[class*="st-key-workflow-create"] button[kind="primary"]:disabled:hover {
+  background:#e8eef6;border-color:#c9d6e5;color:#53657c;box-shadow:none;cursor:not-allowed;opacity:1}
 .df-wb-submit-summary {display:flex;align-items:center;flex-wrap:wrap;gap:8px 13px}
 .df-wb-submit-summary b {display:grid;place-items:center;padding:5px 8px;border-radius:6px;
   background:#e6f0ff;color:#1b67c4;font-size:11px}

@@ -213,19 +213,16 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                                if same_model else DEFAULT_CONTEXT_WINDOW_TOKENS)
             output_default = (binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
                               if same_model else DEFAULT_MAX_OUTPUT_TOKENS)
-            context_col, output_col = st.columns(2, gap="small")
-            with context_col:
-                context_tokens = st.number_input(
-                    "上下文窗口（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS,
-                    value=int(context_default), step=1024,
-                    key=prefix + ":context:" + backend + ":" + model,
-                )
-            with output_col:
-                output_tokens = st.number_input(
-                    "单次输出上限（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS - 1,
-                    value=int(output_default), step=1024,
-                    key=prefix + ":output:" + backend + ":" + model,
-                )
+            context_tokens = st.number_input(
+                "上下文窗口（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS,
+                value=int(context_default), step=1024,
+                key=prefix + ":context:" + backend + ":" + model,
+            )
+            output_tokens = st.number_input(
+                "单次输出上限（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS - 1,
+                value=int(output_default), step=1024,
+                key=prefix + ":output:" + backend + ":" + model,
+            )
             if output_tokens >= context_tokens:
                 st.warning("单次输出上限必须小于上下文窗口。")
                 bindings.setdefault(node, {}).pop(role, None)

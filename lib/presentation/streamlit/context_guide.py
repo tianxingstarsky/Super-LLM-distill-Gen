@@ -158,13 +158,27 @@ def _highlight(route: str, step: int, revision: int) -> None:
       .df-context-guide-target {
         outline:2px solid #2877e1!important; outline-offset:3px;
         box-shadow:0 0 0 7px rgba(40,119,225,.12)!important;
-        scroll-margin-top:110px; border-radius:10px;
+        scroll-margin-top:300px; border-radius:10px;
       }
       [class*="st-key-context-guide-tour"] {
-        position:sticky; top:76px; z-index:30;
+        /* Sticky cannot follow a target outside this top-of-page container. */
+        position:fixed!important; top:76px; right:20px; z-index:100;
+        width:min(680px,calc(100vw - 280px)); max-height:200px;
+        box-sizing:border-box; overflow-y:auto; overscroll-behavior:contain;
         border-color:#c9dff7!important; border-radius:11px!important;
         background:linear-gradient(105deg,#eef6ff,#fff)!important;
-        box-shadow:0 6px 18px rgba(37,104,191,.12)!important;
+        box-shadow:0 10px 32px rgba(37,104,191,.19)!important;
+      }
+      [class*="st-key-context-guide-tour"] .stButton button p {
+        white-space:normal!important; overflow:visible!important;
+        text-overflow:clip!important; line-height:1.2;
+      }
+      @media (max-width:800px) {
+        [class*="st-key-context-guide-tour"] {
+          top:64px; right:12px; width:calc(100vw - 24px);
+          max-height:180px;
+        }
+        .df-context-guide-target {scroll-margin-top:260px;}
       }
     </style><script>
     (() => {
@@ -192,7 +206,7 @@ def _highlight(route: str, step: int, revision: int) -> None:
             target.classList.add("df-context-guide-target");
             marked = target;
             if (window.__dfGuideScrolled !== token || index < bestIndex) {
-              target.scrollIntoView({behavior:"smooth", block:"center"});
+              target.scrollIntoView({behavior:"smooth", block:"start"});
               window.__dfGuideScrolled = token;
             }
           }
@@ -244,7 +258,7 @@ def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
     _highlight(route, step_index, st.session_state.get(f"{tour_key}:revision", 0))
     title, detail = steps[step_index]
     with st.container(border=True, key="context-guide-tour"):
-        text, previous, following, close = st.columns([5, 1, 1, 1], gap="small",
+        text, previous, following, close = st.columns([3.5, 1, 1.25, 1.25], gap="small",
                                                        vertical_alignment="center")
         with text:
             st.caption(translate("本页逐步引导", language) + f" · {step_index + 1}/{len(steps)}")
