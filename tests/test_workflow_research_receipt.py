@@ -17,9 +17,13 @@ class Application:
                 'web_research': {'status': 'completed', 'results': 1}}
     def recipe(self, run_id):
         return {'targets': ['sft'], 'sources': [], 'brief': 'Create maintenance tasks',
-                'web_research': {'provider': 'brave', 'query': 'equipment safety', 'count': 3}}
+                'web_research': {'provider': 'brave', 'query': 'equipment safety',
+                                 'more_queries': ['maintenance quality'], 'count': 3}}
     def web_research_results(self, run_id):
         return {'query': 'equipment safety',
+                'topic_retrieved_at': [
+                    {'query': 'equipment safety', 'retrieved_at': '2026-01-01T00:00:00Z'},
+                    {'query': 'maintenance quality', 'retrieved_at': '2026-01-02T00:00:00Z'}],
                 'results': [{'title': 'Public maintenance guide',
                              'url': 'https://example.org/guide',
                              'snippet': 'Check power before service.'}]}
@@ -33,6 +37,10 @@ SCRIPT = SCRIPT.encode('ascii', 'backslashreplace').decode('ascii')
 def test_run_shows_search_receipt_and_planning_lead_without_page_change():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
-    assert any(item.value == 'equipment safety' for item in ui.code)
+    assert any('equipment safety' in item.value and 'maintenance quality' in item.value
+               for item in ui.code)
     assert any(item.value == 'Check power before service.' for item in ui.caption)
     assert any(item.label == '公开线索' and item.value == '1' for item in ui.metric)
+    assert any(item.value == '各主题检索时间' for item in ui.caption)
+    assert any('maintenance quality' in item.proto.body and '2026-01-02' in item.proto.body
+               for item in ui.get('html'))

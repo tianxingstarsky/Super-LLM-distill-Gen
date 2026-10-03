@@ -243,6 +243,14 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         if selected_id:
             selected_run = next(run for run in visible if run["id"] == selected_id)
             st.html(_recent_events_html(selected_run))
+            if ("agent" in selected_run.get("targets", []) and
+                    selected_run.get("status") in {"completed", "needs_attention"}):
+                review_key = f"task-center-agent-review:{workspace_id}:{selected_id}"
+                if st.toggle("审查本任务 Agent 轨迹", key=review_key,
+                             help="直接在当前任务核对工具过程与重放证据，处理正样本并查看失败轨迹。"):
+                    from lib.presentation.streamlit.agent_review_page import render_agent_review
+
+                    render_agent_review(application, selected_id, workspace_id=workspace_id)
             render_run(application, selected_id, begin, embedded=True)
         else:
             st.html('<div class="df-task-no-match">选择左侧任务即可查看真实运行节点、配置、日志与产物。</div>')

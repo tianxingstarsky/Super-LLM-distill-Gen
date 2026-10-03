@@ -11,7 +11,7 @@ NUMBER_FIELDS = {
 }
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
                'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
-               'workflow-web-research-query': 160}
+               'workflow-web-research-query': 160, 'workflow-web-research-more': 700}
 
 
 def validate_creation_draft(values):

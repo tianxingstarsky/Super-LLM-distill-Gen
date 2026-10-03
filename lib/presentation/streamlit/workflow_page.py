@@ -18,7 +18,7 @@ from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
-from lib.domain.web_research import validate_web_research
+from lib.domain.web_research import MAX_QUERIES, validate_web_research
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
@@ -285,8 +285,10 @@ def _render_research_receipt(application, run_id, recipe, state):
         return
     with st.container(border=True, key=f"web-research-receipt:{run_id}"):
         section_heading("联网资料", "仅用于开放需求的任务规划", "⌕")
-        st.caption("公开检索词")
-        st.code(UntranslatedText(str(config.get("query", ""))), language=None)
+        st.caption("公开检索主题")
+        st.code(UntranslatedText("\n".join([str(config.get("query", "")),
+                                           *[str(query) for query in config.get("more_queries", [])]])),
+                language=None)
         try:
             document = application.web_research_results(run_id)
         except (OSError, ValueError, KeyError, TypeError):
@@ -296,8 +298,20 @@ def _render_research_receipt(application, run_id, recipe, state):
             results = document["results"]
             st.metric("公开线索", len(results))
             st.caption("网页摘要只用于规划任务，不等于事实核验；系统未抓取来源网页正文。")
+            topic_times = document.get("topic_retrieved_at")
+            if isinstance(topic_times, list) and topic_times:
+                st.caption("各主题检索时间")
+                st.html('<div class="df-research-topic-times">' + "".join(
+                    '<div><strong data-user-content>' + html.escape(str(item["query"]))
+                    + '</strong><span>' + html.escape(str(item["retrieved_at"]))
+                    + ' UTC</span></div>'
+                    for item in topic_times if isinstance(item, dict)
+                    and "query" in item and "retrieved_at" in item
+                ) + '</div>')
             with st.expander("查看检索线索"):
                 for row in results:
+                    if row.get("query"):
+                        st.caption(UntranslatedText(row["query"]))
                     st.link_button(UntranslatedText(row["title"]), row["url"],
                                    help="在浏览器中打开公开来源")
                     st.caption(UntranslatedText(row["snippet"]))
@@ -574,18 +588,20 @@ def _draft_brief(label, *, key, **options):
 
 
 def _draft_web_control(workspace, *, configured: bool):
-    """An explicit public query, never an implicit copy of the private brief."""
+    """Explicit public topics, never an implicit copy of the private brief."""
     draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     enabled_key = f"workflow-web-research-enabled:{workspace}"
     consent_key = f"workflow-web-research-session-consent:{workspace}"
     if enabled_key not in st.session_state:
         st.session_state[enabled_key] = st.session_state.get(consent_key, False)
+    if not configured:
+        st.caption("网页检索服务尚未就绪；管理员需设置 DATAFORGE_BRAVE_SEARCH_API_KEY 并重启服务。")
     enabled = st.checkbox("联网查找公开资料", key=enabled_key,
                           on_change=_save_web_consent, args=(workspace, enabled_key),
-                          help="仅将下方公开检索词发送给已配置的网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
+                          help="仅将你填写的公开检索主题发送给网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
     if not enabled:
         return None, False
-    st.caption("仅将下方公开检索词发送给已配置的网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
+    st.caption("仅将你填写的公开检索主题发送给网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
     query_key = f"workflow-web-research-query:{workspace}"
     if query_key not in st.session_state:
         st.session_state[query_key] = draft.get(query_key, "")
@@ -595,12 +611,27 @@ def _draft_web_control(workspace, *, configured: bool):
     count_key = f"workflow-web-research-count:{workspace}"
     with st.expander("更多检索设置（可选）"):
         count = _draft_number("检索结果上限", 1, 5, 3, key=count_key)
-    unavailable = not query.strip() or not configured
+        more_key = f"workflow-web-research-more:{workspace}"
+        if more_key not in st.session_state:
+            st.session_state[more_key] = draft.get(more_key, "")
+        more_text = st.text_area("补充公开检索主题（每行一个，最多 4 个）", value=None,
+                                 key=more_key, max_chars=700,
+                                 placeholder="例如：设备检修风险\n维护记录质量规范",
+                                 on_change=_save_draft_value, args=(workspace, more_key))
+        st.caption("每个主题最多保留所设数量的结果；大任务会轮换线索，不会把需求全文自动发送出去。")
+    more_queries = [line.strip() for line in more_text.splitlines() if line.strip()]
+    too_many = len(more_queries) >= MAX_QUERIES
+    if too_many:
+        st.warning("补充公开主题最多 4 个。请合并或删减后再开始。")
+    unavailable = not query.strip() or not configured or too_many
     if not configured:
         st.warning("网页检索服务尚未配置，请先在运行环境设置检索密钥。")
     elif not query.strip():
         st.warning("请填写可公开的检索词，不要粘贴需求全文或私有资料。")
-    return {"provider": "brave", "query": query.strip(), "count": int(count)}, unavailable
+    config = {"provider": "brave", "query": query.strip(), "count": int(count)}
+    if more_queries:
+        config["more_queries"] = more_queries
+    return config, unavailable
 
 
 def _save_web_consent(workspace, key):

@@ -182,6 +182,23 @@ def test_public_web_search_requires_explicit_query_and_configured_key(monkeypatc
     assert not ui.exception
 
 
+def test_public_search_topics_are_optional_but_bounded(monkeypatch):
+    monkeypatch.setenv('DATAFORGE_BRAVE_SEARCH_API_KEY', 'fixture-only')
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
+    ui.text_area(key='workflow-open-brief:fixture').set_value('Generate maintenance exercises').run()
+    ui.checkbox(key='workflow-web-research-enabled:fixture').check().run()
+    ui.text_input(key='workflow-web-research-query:fixture').set_value('设备维护安全规范').run()
+    extra = 'workflow-web-research-more:fixture'
+    ui.text_area(key=extra).set_value('设备检修风险\n维护记录质量规范').run()
+    assert not any('补充公开主题最多' in warning.value for warning in ui.warning)
+    assert ui.text_area(key=extra).value == '设备检修风险\n维护记录质量规范'
+    ui.text_area(key=extra).set_value('主题一\n主题二\n主题三\n主题四\n主题五').run()
+    assert any('补充公开主题最多' in warning.value for warning in ui.warning)
+    assert ui.button(key='workflow-create:fixture').disabled
+    assert not ui.exception
+
+
 def test_web_search_explains_private_query_and_agent_only_goal(monkeypatch):
     monkeypatch.setenv('DATAFORGE_BRAVE_SEARCH_API_KEY', 'fixture-only')
     ui = AppTest.from_string(SCRIPT).run()

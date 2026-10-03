@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -24,6 +25,7 @@ from lib.infrastructure.json_stream import iter_json_records
 from lib.infrastructure.training_workflow import (
     digest, file_hash, list_runs, read_json, run_path, verify_artifacts,
 )
+from lib.workspace import is_linked
 
 
 _SOURCE_FILES = ("agent.jsonl", "agent.records.json", "agent.negative.jsonl")
@@ -35,7 +37,7 @@ _REPLAY_METHODS = frozenset({
 })
 _DECISIONS = frozenset({"approved", "rejected"})
 _MAX_PAGE = 20
-_MAX_OFFSET = 50_000
+_MAX_OFFSET = 100_000
 _MAX_JSONL_ROW_BYTES = 4 * 1024 * 1024
 _MAX_RECORD_BYTES = 8 * 1024 * 1024
 _MAX_PAGE_BYTES = 16 * 1024 * 1024
@@ -65,10 +67,16 @@ def _page_budget(db, query: str, args: tuple):
 
 
 def _source(output: Path, run_id: str):
+    output = Path(output).absolute()
     path = run_path(output, run_id)
-    if (path.is_symlink() or (path / "artifacts").is_symlink()
-            or (path / "state.json").is_symlink()
-            or (path / "artifacts" / "manifest.json").is_symlink()):
+    workflows = output / "workflows"
+    # A check on the final run directory alone misses an ancestor junction or
+    # symlink. Keep the selected workspace's output as the lexical anchor.
+    required = (output, *output.parents, workflows, path, path / "artifacts",
+                path / "state.json", path / "artifacts" / "manifest.json")
+    if any(is_linked(item) for item in required):
+        raise ValueError("linked_agent_review_source")
+    if path.resolve(strict=True).parent != workflows.resolve(strict=True):
         raise ValueError("linked_agent_review_source")
     state = read_json(path / "state.json")
     if (state.get("id") != run_id or state.get("status") not in {"completed", "needs_attention"}
@@ -291,12 +299,13 @@ def _build(path: Path, manifest: dict, signature: str, destination: Path):
 def _open(output: Path, run_id: str):
     path, manifest, signature, source_hashes, manifest_hash = _source(output, run_id)
     folder = path / "human-review"
-    if folder.is_symlink():
+    if os.path.lexists(folder) and is_linked(folder):
         raise ValueError("linked_agent_review_store")
     folder.mkdir(exist_ok=True)
     destination = folder / "agent.sqlite"
     lock_path = folder / "agent.sqlite.lock"
-    if destination.is_symlink() or lock_path.is_symlink():
+    if any(is_linked(item) for item in (destination, lock_path)
+           if os.path.lexists(item)):
         raise ValueError("linked_agent_review_store")
     try:
         with FileLock(str(lock_path), timeout=30):

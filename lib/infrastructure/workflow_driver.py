@@ -73,7 +73,7 @@ class FilesystemWorkflowDriver:
         The checkpoint is available before the large training package finishes,
         so reviewing the planning leads does not require loading that package.
         """
-        from lib.infrastructure.brave_web_research import _plain, _public_url
+        from lib.infrastructure.brave_web_research import validate_search_document
 
         run = run_path(self.output, run_id)
         recipe = read_json(run / "recipe.json")
@@ -90,22 +90,15 @@ class FilesystemWorkflowDriver:
             raise ValueError("web_research_integrity_error")
         saved = read_json(checkpoint)
         document = saved.get("data") if isinstance(saved, dict) else None
-        if (not isinstance(document, dict) or saved.get("sha256") != digest(document)
-                or document.get("provider") != "brave" or document.get("query") != config["query"]):
+        if not isinstance(document, dict) or saved.get("sha256") != digest(document):
             raise ValueError("web_research_integrity_error")
-        results = document.get("results")
-        if not isinstance(results, list) or not 1 <= len(results) <= config["count"]:
-            raise ValueError("web_research_integrity_error")
-        safe = []
-        for row in results:
-            if not isinstance(row, dict):
-                raise ValueError("web_research_integrity_error")
-            url, title, snippet = row.get("url"), row.get("title"), row.get("snippet")
-            if (_public_url(url) != url or _plain(title, 200) != title
-                    or _plain(snippet, 500) != snippet or not title or not snippet):
-                raise ValueError("web_research_integrity_error")
-            safe.append({"title": title, "url": url, "snippet": snippet})
+        validate_search_document(config, document)
+        safe = [{**({"query": row["query"]} if "query" in row else {}),
+                 "title": row["title"], "url": row["url"], "snippet": row["snippet"]}
+                for row in document["results"]]
         return {"query": config["query"], "results": safe,
+                "queries": [config["query"], *config.get("more_queries", [])],
+                "topic_retrieved_at": document.get("topic_retrieved_at", []),
                 "retrieved_at": document.get("retrieved_at", "")}
 
     def check_agent_sandbox(self) -> dict:
@@ -281,3 +274,15 @@ class FilesystemWorkflowDriver:
                 continue
             result.append(str(artifact))
         return result
+
+    def agent_review_queue(self, run_id: str, *, kind: str, offset: int,
+                           limit: int, decision: str | None) -> dict:
+        from lib.infrastructure.agent_review_driver import FilesystemAgentReviewDriver
+
+        return FilesystemAgentReviewDriver(self.output).queue(
+            run_id, kind=kind, offset=offset, limit=limit, decision=decision)
+
+    def agent_review_decide(self, run_id: str, candidate_id: str, **decision) -> dict:
+        from lib.infrastructure.agent_review_driver import FilesystemAgentReviewDriver
+
+        return FilesystemAgentReviewDriver(self.output).decide(run_id, candidate_id, **decision)

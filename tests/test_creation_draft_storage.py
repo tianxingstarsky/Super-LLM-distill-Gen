@@ -15,6 +15,7 @@ from test_workflow_draft import SCRIPT, restore_canvas_renderer  # noqa: F401
     ('workflow-targets:w:p', ['unknown']), ('workflow-sources:w:p', [123]),
     ('api-key:w', 'credential'), ('workflow-node-model:w', {'model': 'writer'}),
     ('workflow-web-research-enabled:w', True),
+    ('workflow-web-research-more:w', 'x' * 701),
     ('workflow-open-brief:w', 'x' * 20001), ('workflow-name', 'No workspace'),
 ])
 def test_draft_rejects_invalid_or_non_form_values(key, value):
@@ -112,6 +113,7 @@ def test_public_query_restores_but_new_session_requires_fresh_web_consent(tmp_pa
     ui.checkbox(key='workflow-web-research-enabled:fixture').check().run()
     ui.text_input(key='workflow-web-research-query:fixture').set_value('设备维护安全规范').run()
     ui.number_input(key='workflow-web-research-count:fixture').set_value(4).run()
+    ui.text_area(key='workflow-web-research-more:fixture').set_value('设备检修风险\n维护记录质量规范').run()
     fresh = AppTest.from_string(script).run()
     assert not fresh.exception
     assert fresh.checkbox(key='workflow-web-research-enabled:fixture').value is False
@@ -119,6 +121,7 @@ def test_public_query_restores_but_new_session_requires_fresh_web_consent(tmp_pa
     fresh.checkbox(key='workflow-web-research-enabled:fixture').check().run()
     assert fresh.text_input(key='workflow-web-research-query:fixture').value == '设备维护安全规范'
     assert fresh.number_input(key='workflow-web-research-count:fixture').value == 4
+    assert fresh.text_area(key='workflow-web-research-more:fixture').value == '设备检修风险\n维护记录质量规范'
     assert creation_draft_application(tmp_path / 'other').load() == {}
 
 

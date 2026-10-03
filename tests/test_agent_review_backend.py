@@ -129,6 +129,26 @@ def test_review_history_cannot_move_to_another_run(tmp_path):
         FilesystemAgentReviewDriver(output_b).queue(run_b)
 
 
+@pytest.mark.parametrize("link_level", ["workflows", "output"])
+def test_linked_ancestor_cannot_read_another_workspace_review(tmp_path, link_level):
+    other = tmp_path / "other"
+    other.mkdir()
+    output_b, run_b, _ = _run(other, mixed=False)
+    alias = tmp_path / "alias"
+    try:
+        if link_level == "workflows":
+            alias.mkdir()
+            (alias / "workflows").symlink_to(output_b / "workflows", target_is_directory=True)
+            output_a = alias
+        else:
+            alias.symlink_to(output_b, target_is_directory=True)
+            output_a = alias
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f"directory links unavailable: {error}")
+    with pytest.raises(ValueError, match="linked_agent_review_source"):
+        FilesystemAgentReviewDriver(output_a).queue(run_b)
+
+
 def test_review_lock_symlink_is_rejected(tmp_path):
     output, run_id, path = _run(tmp_path, mixed=False)
     folder = path / "human-review"
@@ -149,7 +169,7 @@ def test_agent_review_page_bounds_and_filters(tmp_path):
     assert driver.queue(run_id, kind="positive", offset=0, limit=1)["next_offset"] is None
     assert driver.queue(run_id, kind="negative", offset=0, limit=1)["next_offset"] is None
     assert driver.queue(run_id, kind="positive", offset=1, limit=1)["items"] == []
-    for kwargs in ({"offset": -1}, {"offset": 50_001}, {"limit": 0}, {"limit": 21},
+    for kwargs in ({"offset": -1}, {"offset": 100_001}, {"limit": 0}, {"limit": 21},
                    {"decision": "unknown"}, {"kind": "unknown"},
                    {"kind": "negative", "decision": "approved"}):
         with pytest.raises(ValueError):

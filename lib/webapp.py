@@ -525,15 +525,19 @@ def page_data_management():
 
 
 def page_task_manager():
-    page_header("任务管理", "查看自动工作流进度、命令运行状态与最近事件。", "TASK CENTER")
+    page_header("任务管理", "集中查看多项自动工作流的进度与结果。", "TASK CENTER")
     area = st.segmented_control(
         "任务视图", ("数据工作流", "命令管线", "运行日志"),
         default="数据工作流", key=f"task-view:{st.session_state['ws']}",
+        format_func=lambda value: translate_label(
+            {"命令管线": "高级工具", "运行日志": "命令日志"}.get(value, value),
+            st.session_state.get("ui_language", "zh")),
         label_visibility="collapsed",
     )
     if area == "运行日志":
         page_monitor(show_title=False)
     elif area == "命令管线":
+        st.caption("高级工具用于旧版命令操作；日常训练数据生成请使用数据生成工作台。")
         page_run(show_title=False)
     else:
         from lib.bootstrap.workflows import workflow_application
