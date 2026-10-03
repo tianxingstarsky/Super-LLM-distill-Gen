@@ -23,6 +23,22 @@ def configured() -> bool:
     return bool(os.environ.get(KEY_ENV, "").strip())
 
 
+def check_connection() -> str:
+    """Probe Brave on request without returning credentials or provider text.
+
+    A fixed public query keeps private briefs and configured research topics out
+    of connection checks. A valid empty result is still a working connection.
+    """
+    key = os.environ.get(KEY_ENV, "").strip()
+    if not key:
+        return "not_configured"
+    try:
+        _search_one("Brave Search", 1, key)
+    except Exception:
+        return "unavailable"
+    return "ready"
+
+
 def _plain(value, max_chars: int) -> str | None:
     if not isinstance(value, str):
         return None

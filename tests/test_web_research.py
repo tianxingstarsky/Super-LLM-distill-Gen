@@ -110,6 +110,38 @@ def test_brave_adapter_uses_fixed_https_endpoint_and_never_follows_results(monke
     assert call["closed"]
 
 
+def test_connection_check_is_opt_in_and_uses_only_a_fixed_public_query(monkeypatch):
+    monkeypatch.delenv(brave_web_research.KEY_ENV, raising=False)
+    FakeConnection.calls = []
+    assert brave_web_research.check_connection() == "not_configured"
+    assert FakeConnection.calls == []
+
+    monkeypatch.setenv(brave_web_research.KEY_ENV, "private-test-key")
+    FakeConnection.response = FakeResponse(payload={"web": {"results": []}})
+    monkeypatch.setattr(brave_web_research.http.client, "HTTPSConnection", FakeConnection)
+    app = WorkflowApplication(FilesystemWorkflowDriver(".", "out"))
+    assert app.check_web_research_connection() == "ready"
+    assert len(FakeConnection.calls) == 1
+    call = FakeConnection.calls[0]
+    assert call["host"] == brave_web_research.HOST
+    assert "q=Brave+Search" in call["path"] and "count=1" in call["path"]
+    assert CONFIG["query"] not in call["path"]
+    assert "private-test-key" not in call["path"]
+    assert call["closed"]
+
+
+def test_connection_check_does_not_return_provider_error_or_key(monkeypatch):
+    monkeypatch.setenv(brave_web_research.KEY_ENV, "private-test-key")
+
+    class LeakingConnection(FakeConnection):
+        def request(self, method, path, headers):
+            raise RuntimeError("private-test-key; provider rejected query")
+
+    FakeConnection.calls = []
+    monkeypatch.setattr(brave_web_research.http.client, "HTTPSConnection", LeakingConnection)
+    assert brave_web_research.check_connection() == "unavailable"
+
+
 def test_multiple_explicit_queries_have_bounded_requests_and_deduped_leads(monkeypatch):
     monkeypatch.setenv(brave_web_research.KEY_ENV, "test-api-key")
     FakeConnection.calls = []

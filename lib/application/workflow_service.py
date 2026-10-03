@@ -36,6 +36,10 @@ class WorkflowApplication:
     def web_research_capabilities(self) -> dict:
         return self._driver.web_research_capabilities()
 
+    def check_web_research_connection(self) -> str:
+        """Check the optional public search provider without starting a run."""
+        return self._driver.check_web_research_connection()
+
     def web_research_results(self, run_id: str) -> dict | None:
         """Return checked public planning leads for this workspace's run."""
         return self._driver.web_research_results(run_id)

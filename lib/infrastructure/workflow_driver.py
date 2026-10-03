@@ -73,6 +73,11 @@ class FilesystemWorkflowDriver:
 
         return {"brave_configured": configured()}
 
+    def check_web_research_connection(self) -> str:
+        from lib.infrastructure.brave_web_research import check_connection
+
+        return check_connection()
+
     def web_research_results(self, run_id: str) -> dict | None:
         """Read only the bounded search checkpoint belonging to this run.
 

@@ -23,14 +23,19 @@ def test_overview_help_opens_workflow_without_a_separate_guide_route():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
     assert "Guide" not in [button.label for button in ui.button]
+    assert all(button.key != "context-guide-action:总览" for button in ui.button)
     ui.button(key="context-guide-start:总览").click().run()
     assert ui.session_state["context-guide-step:总览"] == 0
     assert "home-source-panel" in " ".join(item.proto.body for item in ui.get("html"))
-    ui.button(key="context-guide-next:总览").click().run()
-    assert ui.session_state["context-guide-step:总览"] == 1
+    # The last control is reachable directly from the in-page banner.
+    ui.button(key="context-guide-jump:总览:2").click().run()
+    assert ui.session_state["context-guide-step:总览"] == 2
+    assert "st-key-home-stats-panel" in _active_highlight(ui)
     ui.button(key="context-guide-action:总览").click().run()
     assert not ui.exception
     assert ui.session_state["nav"] == "自动工作流"
+    assert "context-guide-step:总览" not in ui.session_state
+    assert not any("const selectors =" in item.proto.body for item in ui.get("html"))
 
 
 def test_workflow_help_describes_node_models_in_place():
@@ -38,9 +43,12 @@ def test_workflow_help_describes_node_models_in_place():
     ui.session_state["current_page"] = "自动工作流"
     ui.run()
     assert not ui.exception
+    ui.button(key="context-guide-start:自动工作流").click().run()
+    assert "Set models on nodes" in ui.button(key="context-guide-jump:自动工作流:1").label
+    ui.button(key="context-guide-jump:自动工作流:1").click().run()
     content = " ".join(item.value for item in [*ui.markdown, *ui.caption])
-    assert "Set models on nodes" in content
     assert "Select a model node" in content
+    assert "st-key-workbench-node-panel" in _active_highlight(ui)
     assert all(button.key != "context-guide-action:自动工作流" for button in ui.button)
 
 
@@ -92,6 +100,25 @@ def test_review_walkthrough_follows_selected_queue_without_embedding_workspace_d
     body = _active_highlight(ui)
     assert "st-key-df-review-actions-dpo" in body
     assert "st-key-review-overview-open-dpo" in body
+
+
+def test_task_walkthrough_uses_the_run_graph_control_and_respects_the_active_view():
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state["current_page"] = "任务管理"
+    ui.session_state["ws"] = "fixture"
+    ui.run()
+    ui.button(key="context-guide-start:任务管理").click().run()
+    ui.button(key="context-guide-jump:任务管理:2").click().run()
+    body = _active_highlight(ui)
+    assert "st-key-workflow-follow-" in body
+    assert body.index("st-key-workflow-follow-") < body.index("st-key-task-center-focus-")
+    assert "fixture" not in body
+
+    ui.session_state["task-view:fixture"] = "命令管线"
+    ui.run()
+    body = _active_highlight(ui)
+    assert "st-key-task-view-" in body
+    assert "st-key-workflow-follow-" not in body
 
 
 def test_legacy_direct_subpages_do_not_inherit_nonexistent_composite_controls():

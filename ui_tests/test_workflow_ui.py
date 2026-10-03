@@ -439,6 +439,33 @@ def test_source_mode_switches_to_open_brief_without_file_controls(tmp_path, monk
     assert not any(widget.label == "或选择当前文件夹内的来源" for widget in app.multiselect)
 
 
+def test_open_brief_checks_brave_connection_in_place_without_rendering_key(tmp_path, monkeypatch):
+    from lib.infrastructure import brave_web_research
+
+    _, name, _ = setup_workspace(tmp_path, monkeypatch)
+    secret = "private-brave-test-key"
+    monkeypatch.setenv(brave_web_research.KEY_ENV, secret)
+    checks = []
+    monkeypatch.setattr(brave_web_research, "check_connection",
+                        lambda: checks.append(True) or "ready")
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = name
+    app.session_state["nav"] = "自动工作流"
+    app.run()
+    next(widget for widget in app.segmented_control
+         if widget.label == "选择来源类型").set_value("开放需求").run()
+    assert not app.exception and checks == []
+    assert not next(widget for widget in app.checkbox
+                    if widget.label == "联网查找公开资料").value
+
+    next(button for button in app.button if button.label == "检查 Brave 连接").click().run()
+    assert not app.exception and checks == [True]
+    assert any("Brave Search 连接可用" in item.value for item in app.success)
+    visible = "\n".join(str(item.value) for item in
+                        [*app.get("html"), *app.caption, *app.success, *app.warning, *app.error])
+    assert secret not in visible
+
+
 def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     ws, name, source = setup_workspace(tmp_path, monkeypatch)
     run_id = create_run(ws.out(name), sources=[source], targets=["cpt"], name="等待恢复的工作流")

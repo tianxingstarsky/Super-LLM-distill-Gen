@@ -97,8 +97,14 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
         if area != "数据工作流":
             return ("task-view:",)
         if step == 1 and not st.session_state.get(f"task-center-focus:{workspace}"):
-            return ("task-center-filter:", "task-center-create:")
-        return ("task-center-focus:", "task-center-create:")
+            return ("task-center-filter:", "task-center-create:", "task-center-new:")
+        if step == 1:
+            return ("task-center-focus:", "task-center-new:")
+        # The run graph has this control whenever a task is selected. An empty
+        # workspace still has its create button; the view switch is the last
+        # resort when the user is on an advanced task view.
+        return ("workflow-follow:", "task-center-create:",
+                "task-center-focus:", "task-view:")
     if route == "人工审核":
         kind = _REVIEW_KIND.get(st.session_state.get(f"review-mode:{workspace}"), "sft")
         queue_button = f"review-overview-open-{kind}"
@@ -123,6 +129,11 @@ def _set_tour_step(key: str, step: int | None) -> None:
         st.session_state["context-guide-clear"] = True
     else:
         st.session_state[key] = step
+
+
+def _navigate_from_tour(key: str, target: str, navigate: Callable[[str], None]) -> None:
+    _set_tour_step(key, None)
+    navigate(target)
 
 
 def _clear_highlight() -> None:
@@ -160,6 +171,8 @@ def _highlight(route: str, step: int, revision: int) -> None:
       const token = ''' + token + ''';
       const selectors = ''' + selector_json + ''';
       window.__dfGuideToken = token;
+      document.querySelectorAll(".df-context-guide-target").forEach(
+        element => element.classList.remove("df-context-guide-target"));
       let attempt = 0;
       let bestIndex = selectors.length;
       let marked = null;
@@ -216,17 +229,9 @@ def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
     language = st.session_state.get("ui_language", "zh")
     tour_key = f"context-guide-step:{route}"
     _, help_column = st.columns([6, 1], gap="small")
-    with help_column, st.popover("ⓘ 本页指引", key=f"context-guide:{route}", width="stretch"):
-        st.caption(translate("按当前页面操作", language))
-        st.button("开始逐步引导", key=f"context-guide-start:{route}",
+    with help_column:
+        st.button("ⓘ 本页指引", key=f"context-guide-start:{route}",
                   on_click=_set_tour_step, args=(tour_key, 0), width="stretch")
-        for number, (title, detail) in enumerate(steps, 1):
-            st.markdown(f"**{number:02d}　{translate(title, language)}**")
-            st.caption(translate(detail, language))
-        if action:
-            label, target = action
-            st.button(label, key=f"context-guide-action:{route}",
-                      on_click=navigate, args=(target,), width="stretch")
 
     step_index = st.session_state.get(tour_key)
     if not isinstance(step_index, int) or step_index < 0 or step_index >= len(steps):
@@ -260,3 +265,18 @@ def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
             if step_index + 1 < len(steps):
                 st.button("退出引导", key=f"context-guide-exit:{route}",
                           on_click=_set_tour_step, args=(tour_key, None), width="stretch")
+        # Jump straight to a relevant control without stepping through earlier
+        # instructions. The same banner remains on the current page.
+        jump_columns = st.columns(len(steps) + int(action is not None), gap="small")
+        for index, (jump_title, _) in enumerate(steps):
+            with jump_columns[index]:
+                st.button(f"{index + 1:02d}　{translate(jump_title, language)}",
+                          key=f"context-guide-jump:{route}:{index}",
+                          disabled=index == step_index,
+                          on_click=_set_tour_step, args=(tour_key, index), width="stretch")
+        if action:
+            label, target = action
+            with jump_columns[-1]:
+                st.button(label, key=f"context-guide-action:{route}",
+                          on_click=_navigate_from_tour,
+                          args=(tour_key, target, navigate), width="stretch")

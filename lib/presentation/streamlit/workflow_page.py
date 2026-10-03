@@ -618,15 +618,36 @@ def _draft_brief(label, *, key, **options):
                         on_change=_save_draft_value, args=(workspace, key), **options)
 
 
-def _draft_web_control(workspace, *, configured: bool):
+def _draft_web_control(workspace, application: WorkflowApplication, *, configured: bool):
     """Explicit public topics, never an implicit copy of the private brief."""
     draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     enabled_key = f"workflow-web-research-enabled:{workspace}"
     consent_key = f"workflow-web-research-session-consent:{workspace}"
     if enabled_key not in st.session_state:
         st.session_state[enabled_key] = st.session_state.get(consent_key, False)
-    if not configured:
-        st.caption("网页检索服务尚未就绪；管理员需设置 DATAFORGE_BRAVE_SEARCH_API_KEY 并重启服务。")
+    section_heading("联网资料", "输入解析节点的可选规划线索", "⌕")
+    status_column, check_column = st.columns([2, 1], vertical_alignment="center", gap="small")
+    with status_column:
+        if configured:
+            st.caption("Brave Search · 已检测到运行环境中的检索密钥")
+        else:
+            st.caption("Brave Search · 未配置。设置 DATAFORGE_BRAVE_SEARCH_API_KEY 并重启控制台。")
+    with check_column:
+        check_clicked = st.button("检查 Brave 连接", key=f"workflow-web-check:{workspace}",
+                                  use_container_width=True,
+                                  help="仅在点击时向 Brave 发送固定公开词 Brave Search；不会发送需求、上传资料或下方检索词。")
+    result_key = f"workflow-web-check-result:{workspace}"
+    if check_clicked:
+        with st.spinner("正在检查 Brave 连接…"):
+            st.session_state[result_key] = (configured, application.check_web_research_connection())
+    prior = st.session_state.get(result_key)
+    if isinstance(prior, tuple) and len(prior) == 2 and prior[0] == configured:
+        if prior[1] == "ready":
+            st.success("上次检查：Brave Search 连接可用。")
+        elif prior[1] == "not_configured":
+            st.warning("上次检查：未检测到检索密钥。")
+        elif prior[1] == "unavailable":
+            st.error("上次检查未通过；请检查密钥、网络或 Brave 服务状态。")
     enabled = st.checkbox("联网查找公开资料", key=enabled_key,
                           on_change=_save_web_consent, args=(workspace, enabled_key),
                           help="仅将你填写的公开检索主题发送给网页检索服务；需求全文和上传资料不会作为检索词发送。检索结果只作规划线索，不代表事实已核验。")
@@ -846,7 +867,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 brief = _draft_brief("开放性需求", key=f"workflow-open-brief:{ws}", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
                 with st.container(border=True, key=f"workbench-web-research:{ws}"):
                     web_research, web_unavailable = _draft_web_control(
-                        ws, configured=bool(application.web_research_capabilities().get("brave_configured")))
+                        ws, application,
+                        configured=bool(application.web_research_capabilities().get("brave_configured")))
                     if web_research and web_research["query"]:
                         try:
                             validate_web_research(web_research, brief=brief, targets=targets)

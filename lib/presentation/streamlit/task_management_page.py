@@ -171,6 +171,18 @@ def _switch_run(workspace_id: str, run_id: str) -> None:
     st.session_state[f"task-center-locate:{workspace_id}"] = run_id
 
 
+def _show_quick_group(workspace_id: str, status_filter: str) -> None:
+    """Expose the complete actionable group in this page's task list."""
+    if (st.session_state.get("ws", workspace_id) != workspace_id
+            or status_filter not in {"未结束", "待处理"}):
+        return
+    st.session_state[f"task-center-filter:{workspace_id}"] = status_filter
+    st.session_state[f"task-center-search:{workspace_id}"] = ""
+    st.session_state[f"task-center-page:{workspace_id}"] = 0
+    st.session_state[f"task-center-focus:{workspace_id}"] = False
+    st.session_state.pop(f"task-center-locate:{workspace_id}", None)
+
+
 def _change_page(page_key: str, page: int) -> None:
     st.session_state[page_key] = page
 
@@ -240,6 +252,11 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                     st.button(UntranslatedText(f"{name}  ·  {status}  {done}/{total}"),
                               key=f"task-quick:{workspace_id}:{run_id}",
                               on_click=_switch_run, args=(workspace_id, run_id),
+                              use_container_width=True)
+                if count > len(shortcuts):
+                    label = "查看全部待处理任务" if kind == "attention" else "查看全部未结束任务"
+                    st.button(translate(label, language), key=f"task-quick-all:{workspace_id}:{kind}",
+                              on_click=_show_quick_group, args=(workspace_id, title),
                               use_container_width=True)
     focus_column, create_column = st.columns([1.9, 1], gap="small", vertical_alignment="center")
     with focus_column:
