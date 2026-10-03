@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from lib.domain.backend_config import validate_backend_url, validate_credential_reference
+from lib.domain.backend_config import (validate_backend_url, validate_credential_reference,
+                                       validate_token_prices)
 from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request,
                                  anthropic_text, response_text, responses_input,
                                  validate_api_format)
@@ -550,7 +551,17 @@ def _configured_backends(root: pathlib.Path) -> Dict[str, Any]:
     return cfg
 
 
-def _endpoint_pin(name: str, model: str, backend: dict) -> dict:
+def _configured_token_prices(backend: dict, budget: dict) -> dict[str, float]:
+    """Never interpret an absent rate as a free model under a hard budget."""
+    raw = backend.get("prices")
+    if not raw and not (budget.get("max_total_usd")
+                        and budget.get("hard_stop", True)):
+        return {"input_per_1m_usd": 0.0, "output_per_1m_usd": 0.0}
+    return validate_token_prices(raw)
+
+
+def _endpoint_pin(name: str, model: str, backend: dict,
+                  prices: dict[str, float] | None = None) -> dict:
     """Keep only safe transport metadata and a digest of those public fields."""
     if not isinstance(backend, dict) or not backend.get("base_url"):
         raise ValueError("workflow_node_service_not_configured")
@@ -578,6 +589,8 @@ def _endpoint_pin(name: str, model: str, backend: dict) -> dict:
                "base_url_sha256": hashlib.sha256(base_url.encode("utf-8")).hexdigest(),
                "api_format": api_format, "models": sorted(set(models)),
                "credential_ref": credential_ref}
+    if prices is not None:
+        payload.update(version=2, prices=prices)
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return {**payload, "config_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest()}
 
@@ -586,7 +599,13 @@ def snapshot_backend_endpoint(root: pathlib.Path, backend: str, model: str) -> d
     """Pin a node's selected service before its queued run is created."""
     config = _configured_backends(pathlib.Path(root))
     selected = (config.get("backends") or {}).get(backend)
-    return _endpoint_pin(backend, model, selected)
+    budget = config.get("budget") or {}
+    prices = None
+    if isinstance(selected, dict):
+        rates = _configured_token_prices(selected, budget)
+        if budget.get("max_total_usd") and budget.get("hard_stop", True):
+            prices = rates
+    return _endpoint_pin(backend, model, selected, prices)
 
 
 def load_backend(
@@ -635,11 +654,16 @@ def load_backend(
     role_model = os.environ.get(f"{role.upper()}_MODEL") if role else None
     global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
     model = model or role_model or global_model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
+    budget_cfg = cfg.get("budget") or {}
+    prices = _configured_token_prices(b, budget_cfg)
     if expected_endpoint_pin is not None:
+        if type(expected_endpoint_pin) is not dict:
+            raise ValueError("workflow_endpoint_pin_invalid")
         if base_url or allow_global_endpoint_override:
             raise ValueError("workflow_endpoint_pin_invalid")
         try:
-            current_pin = _endpoint_pin(name, model, b)
+            current_pin = _endpoint_pin(
+                name, model, b, prices if expected_endpoint_pin.get("version") == 2 else None)
         except ValueError:
             raise ValueError("workflow_endpoint_changed_create_new_run") from None
         if current_pin != expected_endpoint_pin:
@@ -649,11 +673,9 @@ def load_backend(
     configured_key_env = b.get("api_key_env") if "api_key_env" in b else default_key_env
     api_key = b.get("api_key") or os.environ.get(configured_key_env or "", "")
 
-    budget_cfg = cfg.get("budget") or {}
     guard = None
     if budget_cfg.get("max_total_usd"):
         guard = BudgetGuard(root, budget_cfg["max_total_usd"], bool(budget_cfg.get("hard_stop", True)))
-    prices = b.get("prices") or {}
     client = ChatClient(
         base_url=b.get("base_url", ""),
         api_key=api_key,

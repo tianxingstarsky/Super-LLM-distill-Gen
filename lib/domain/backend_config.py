@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import math
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -11,6 +12,20 @@ from lib.model_protocols import validate_api_format
 VALID_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 VALID_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 VALID_ROLES = frozenset({"generation", "judge", "jev", "vision", "refine", "simulate", "translation"})
+TOKEN_PRICE_KEYS = frozenset({"input_per_1m_usd", "output_per_1m_usd"})
+
+
+def validate_token_prices(value: object) -> dict[str, float]:
+    """A budget needs both rates; an explicit pair of zeros means free service."""
+    if type(value) is not dict or set(value) != TOKEN_PRICE_KEYS:
+        raise ValueError("model_budget_prices_required")
+    prices = {}
+    for key in TOKEN_PRICE_KEYS:
+        rate = value[key]
+        if type(rate) not in (int, float) or not math.isfinite(rate) or rate < 0:
+            raise ValueError("model_budget_prices_required")
+        prices[key] = float(rate)
+    return prices
 
 
 def mask_key(key: str) -> str:

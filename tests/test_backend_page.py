@@ -112,6 +112,7 @@ def test_budget_reset_explains_active_requests_without_claiming_success():
 
 def test_service_registration_saves_through_application_port():
     ui = AppTest.from_string(SCRIPT).run()
+    ui.checkbox(key='backend-add-free').check()
     next(button for button in ui.button if button.label=='Save endpoint').click().run()
     assert not ui.exception
     saved = ui.session_state['fixture-local']['backends']['local_gpu']
@@ -119,6 +120,7 @@ def test_service_registration_saves_through_application_port():
     assert saved['api_format']=='chat'
     assert saved['api_key_env']=='OPENAI_API_KEY'
     assert 'api_key' not in saved
+    assert saved['prices'] == {'input_per_1m_usd': 0.0, 'output_per_1m_usd': 0.0}
 
 
 @pytest.mark.parametrize(('api_format', 'base_url', 'key_env', 'label'), [
@@ -132,6 +134,8 @@ def test_service_registration_saves_selected_api_format_and_shows_it(
     assert not ui.exception
     assert ui.text_input(key=f'backend-add-base-url:{api_format}').value == base_url
     ui.text_input(key=f'backend-add-models:{api_format}').set_value('chosen-model')
+    ui.number_input(key='backend-add-input-price').set_value(0.25)
+    ui.number_input(key='backend-add-output-price').set_value(1.0)
     next(button for button in ui.button if button.label == 'Save endpoint').click().run()
     assert not ui.exception
     saved = ui.session_state['fixture-local']['backends'][
@@ -140,5 +144,6 @@ def test_service_registration_saves_selected_api_format_and_shows_it(
     assert saved['base_url'] == base_url
     assert saved['models'] == ['chosen-model']
     assert saved['api_key_env'] == key_env
+    assert saved['prices'] == {'input_per_1m_usd': 0.25, 'output_per_1m_usd': 1.0}
     markup = ''.join(item.proto.body for item in ui.get('html'))
     assert label in markup

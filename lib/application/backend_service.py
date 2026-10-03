@@ -5,7 +5,7 @@ from typing import Any
 
 from lib.application.backend_ports import BackendConfigPort
 from lib.domain.backend_config import (key_display, merged_backends, validate_credential_reference,
-                                       validate_endpoint, validate_role)
+                                       validate_endpoint, validate_role, validate_token_prices)
 from lib.model_protocols import validate_api_format
 
 
@@ -57,6 +57,8 @@ class BackendApplication:
         if api_key and api_key_env:
             raise ValueError("api_key 与 api_key_env 二选一；推荐环境变量方式")
         validate_credential_reference(api_key_env)
+        if prices is not None:
+            prices = validate_token_prices(prices)
         local = self.read_config("backends.local.yaml")
         backends = dict(local.get("backends") or {})
         if name in backends and not explicit_replace:

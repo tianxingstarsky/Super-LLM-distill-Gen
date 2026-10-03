@@ -13,6 +13,7 @@ from filelock import Timeout
 from lib.application.workflow_service import WorkflowApplication
 from lib.application.creation_draft_service import CreationDraftApplication
 from lib.domain.workflow_graph import execution_graph
+from lib.domain.backend_config import validate_token_prices
 from lib.presentation.streamlit.i18n import UntranslatedText, translate, translate_label
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
@@ -70,9 +71,27 @@ def _workflow_error(error) -> str:
         "workflow_endpoint_url_or_protocol_invalid": "模型服务地址或接口格式无效。请检查服务连接后重试。",
         "workflow_endpoint_models_invalid": "模型服务的模型列表无效。请检查服务连接后重试。",
         "workflow_endpoint_credential_ref_invalid": "模型服务的密钥引用无效。请在服务连接中填写环境变量名。",
+        "model_budget_prices_required": "模型服务未配置输入和输出单价。请在节点连接中填写，或明确设为免费服务。",
         "workflow_endpoint_pin_invalid": "本次任务的模型配置快照无效。请新建任务。",
         "workflow_endpoint_changed_create_new_run": "模型服务配置已改变。为避免任务使用不同服务，请新建任务。",
     }.get(str(error), str(error))
+
+
+def _missing_budget_prices(nodes, source_mode, bindings, endpoints, budget):
+    if not (budget.get("max_total_usd") and budget.get("hard_stop", True)):
+        return []
+    missing = []
+    for node in nodes:
+        for role in node_roles(node, source_mode):
+            binding = bindings.get(node, {}).get(role, {})
+            endpoint = endpoints.get(binding.get("backend"))
+            if endpoint is None:
+                continue
+            try:
+                validate_token_prices(endpoint.get("prices"))
+            except ValueError:
+                missing.append((node, role))
+    return missing
 
 
 def _toggle_target_group(key: str, members: frozenset[str], defaults: tuple[str, ...]) -> None:
@@ -754,6 +773,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if "multiturn" in targets:
             st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
     model_issues = []
+    pricing_issues = []
     sft_output_style = None
     if "sft" in targets:
         style_key = f"workflow-sft-output-style:{ws}"
@@ -772,6 +792,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         st.session_state[selection_key] = selected_node
         bindings, endpoints = node_bindings(model_application, graph_nodes, source_mode, ws)
         model_issues = missing_bindings(graph_nodes, source_mode, bindings, endpoints)
+        if backend_application is not None:
+            pricing_issues = _missing_budget_prices(
+                graph_nodes, source_mode, bindings, endpoints,
+                backend_application.list_backends().get("budget") or {},
+            )
         if model_issues:
             st.warning("部分节点尚未选择可用模型，请点击这些节点完成配置。")
             pending_nodes = list(dict.fromkeys(node for node, _ in model_issues))
@@ -780,6 +805,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.button("配置下一个待完善节点", on_click=_select_setup_node,
                       args=(selection_key, next_node), key=f"workflow-next-config:{ws}")
             st.caption(_missing_model_role_summary(model_issues, st.session_state.get("ui_language", "zh")))
+        if pricing_issues:
+            st.warning("部分节点的模型服务缺少预算单价。请点击节点，在连接表单中更新输入和输出单价。")
         canvas_column, node_column = st.columns([2.25, 1], gap="medium")
         with canvas_column, st.container(border=True):
             section_heading("工作流节点配置", "点击节点查看步骤；需要模型的节点可在右侧选择。", "◇")
@@ -926,7 +953,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         '</strong><span>' + html.escape(run_summary) + '</span></div>')
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
-                submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues) or agent_unavailable or web_unavailable,
+                submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues)
+                                      or bool(pricing_issues) or agent_unavailable or web_unavailable,
                                       key=f"workflow-create:{ws}", width="stretch")
         if submitted:
             try:

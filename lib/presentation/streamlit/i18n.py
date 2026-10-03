@@ -1749,6 +1749,13 @@ ZH_EN.update({
     "本次新处理": "Processed this attempt",
     "处理进度包含已校验并复用的断点；新处理单元也可能复用此前保存的模型响应。": "Progress includes verified checkpoints. Newly processed units may also reuse saved model responses.",
     "继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。": "Continue with this run's saved sources and node settings. Saved checkpoints are verified before reuse. Create a new run to change models or generation settings.",
+    "硬预算需要输入、输出两项单价。按服务商报价填写每百万 tokens 的美元价格；一个连接有多个模型时按最高价填写。": "A hard budget needs input and output rates in USD per million tokens. If a connection has several models, use the highest rates.",
+    "输入单价（美元 / 百万 tokens）": "Input price (USD / million tokens)",
+    "输出单价（美元 / 百万 tokens）": "Output price (USD / million tokens)",
+    "此服务明确无需按 token 计费": "This service has no per-token charge",
+    "请填写输入和输出单价；明确免费的服务可勾选无需计费。": "Enter both rates. For a service with no charge, select the no-charge option.",
+    "模型服务未配置输入和输出单价。请在节点连接中填写，或明确设为免费服务。": "This model service has no input and output rates. Add them in the node connection, or mark the service as free.",
+    "部分节点的模型服务缺少预算单价。请点击节点，在连接表单中更新输入和输出单价。": "Some nodes use model services without budget rates. Select a node and update both rates in its connection form.",
 })
 
 

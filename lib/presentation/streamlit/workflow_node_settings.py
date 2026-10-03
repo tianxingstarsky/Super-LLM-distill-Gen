@@ -53,6 +53,15 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
             secret = st.text_input("环境变量名或密钥", type="password", key=secret_key,
                                    placeholder="环境变量留空时使用 ANTHROPIC_API_KEY" if api_format == "anthropic"
                                    else "环境变量留空时使用 OPENAI_API_KEY")
+            st.caption("硬预算需要输入、输出两项单价。按服务商报价填写每百万 tokens 的美元价格；一个连接有多个模型时按最高价填写。")
+            price_columns = st.columns(2, gap="small")
+            with price_columns[0]:
+                input_price = st.number_input("输入单价（美元 / 百万 tokens）", min_value=0.0,
+                                              value=None, step=0.01, format="%.4f")
+            with price_columns[1]:
+                output_price = st.number_input("输出单价（美元 / 百万 tokens）", min_value=0.0,
+                                               value=None, step=0.01, format="%.4f")
+            free_service = st.checkbox("此服务明确无需按 token 计费")
             replace = st.checkbox("覆盖同名连接")
             submit = st.form_submit_button("保存并用于当前节点" if missing_role else "保存连接",
                                            type="primary", width="stretch")
@@ -61,14 +70,22 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
         if credential_mode == "直接填写密钥" and not secret:
             st.error("请填写密钥，或改用环境变量。")
             return
+        if not free_service and (input_price is None or output_price is None
+                                 or input_price + output_price <= 0):
+            st.error("请填写输入和输出单价；明确免费的服务可勾选无需计费。")
+            return
+        prices = {"input_per_1m_usd": 0.0 if free_service else input_price,
+                  "output_per_1m_usd": 0.0 if free_service else output_price}
         try:
             default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
             if credential_mode == "直接填写密钥":
                 application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
-                                          api_key=secret, explicit_replace=replace, api_format=api_format)
+                                          api_key=secret, prices=prices,
+                                          explicit_replace=replace, api_format=api_format)
             else:
                 application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
                                           api_key_env=secret.strip() or default_env,
+                                          prices=prices,
                                           explicit_replace=replace, api_format=api_format)
         except FileExistsError:
             st.error("服务名称已存在。如需更新，请勾选覆盖同名连接。")

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import html
-import json
 
 import streamlit as st
 
@@ -109,12 +108,23 @@ def _endpoint_form(application: BackendApplication, *, inline: bool = False) -> 
                                    placeholder="填写所选服务提供的模型名")
             mode = st.radio("密钥来源", ["环境变量（推荐）", "写入本地配置"], horizontal=True)
             secret = st.text_input("密钥（环境变量名 或 密钥值）", type="password")
-            prices = st.text_input("价格 JSON（可选，如 {\"input_per_1m_usd\": 0}）")
+            price_left, price_right = st.columns(2)
+            input_price = price_left.number_input("输入单价（美元 / 百万 tokens）", min_value=0.0,
+                                                  value=None, step=0.01, format="%.4f",
+                                                  key="backend-add-input-price")
+            output_price = price_right.number_input("输出单价（美元 / 百万 tokens）", min_value=0.0,
+                                                     value=None, step=0.01, format="%.4f",
+                                                     key="backend-add-output-price")
+            free_service = st.checkbox("此服务明确无需按 token 计费", key="backend-add-free")
             overwrite = st.checkbox("覆盖同名后端")
             submit = st.form_submit_button("保存端点", type="primary")
         if submit:
             try:
-                prices_obj = json.loads(prices) if prices.strip() else None
+                if not free_service and (input_price is None or output_price is None
+                                         or input_price + output_price <= 0):
+                    raise ValueError("请填写输入和输出单价；明确免费的服务可勾选无需计费。")
+                prices_obj = {"input_per_1m_usd": 0.0 if free_service else input_price,
+                              "output_per_1m_usd": 0.0 if free_service else output_price}
                 model_names = [part.strip() for part in models.split(",") if part.strip()]
                 default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
                 if mode.startswith("环境变量"):
