@@ -606,7 +606,8 @@ def _restore_selection(workspace, key, default, choices):
 
 
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
-                     draft_application: CreationDraftApplication | None = None):
+                     draft_application: CreationDraftApplication | None = None,
+                     backend_application=None):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     st.html(
@@ -722,7 +723,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                           selection_key, key=f"setup-canvas:{ws}")
         with node_column, st.container(border=True, key="workbench-node-panel"):
             section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
-            render_node_models(selected_node, source_mode, ws, bindings, endpoints)
+            render_node_models(selected_node, source_mode, ws, bindings, endpoints,
+                               backend_application=backend_application)
             if selected_node == "agent":
                 render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
             if selected_node == "ingest":

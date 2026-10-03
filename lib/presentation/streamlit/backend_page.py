@@ -1,6 +1,7 @@
 """Model service credentials and budget administration for the console."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import html
 import json
 
@@ -79,9 +80,9 @@ def _endpoints(rows: list[dict]) -> None:
     st.html('<div class="df-model-endpoints">' + ''.join(cards) + '</div>')
 
 
-def _endpoint_form(application: BackendApplication) -> None:
+def _endpoint_form(application: BackendApplication, *, inline: bool = False) -> None:
     _panel_heading("配置端点", "保存到本地覆盖文件，自动保留上一个版本。", "＋")
-    with st.expander("新增或覆盖端点", expanded=False):
+    with (nullcontext() if inline else st.expander("新增或覆盖端点", expanded=False)):
         st.caption("推荐使用环境变量存放密钥。环境变量模式只保存变量名；手动密钥模式会写入本地配置。")
         with st.form("backend-add"):
             left, right = st.columns(2)
@@ -155,21 +156,23 @@ def _budget(application: BackendApplication, info: dict) -> None:
             st.success(f"预算已清零（原已用 ${previous:.4f}，已记审计）")
 
 
-def render_backend_page(application: BackendApplication) -> None:
-    """Render real, masked service inventory and credential administration."""
-    page_header("模型服务", "登记服务地址、凭据与预算；具体模型在工作流节点中选择。", "MODEL CONNECTIONS")
+def render_backend_page(application: BackendApplication, *, embedded: bool = False) -> None:
+    """Render shared connection and budget administration inside settings."""
+    if not embedded:
+        page_header("模型服务", "登记服务地址、凭据与预算；具体模型在工作流节点中选择。", "MODEL CONNECTIONS")
     st.html(CSS)
     info = application.list_backends()
     rows = info.get("backends") or []
     names = [row["name"] for row in rows]
-    _summary(info)
+    if not embedded:
+        _summary(info)
     endpoint_tab, budget_tab = st.tabs(["端点与连接", "预算与用量"])
     with endpoint_tab:
         with st.container(border=True):
             _endpoints(rows)
         left, right = st.columns([1.35, 1], gap="medium")
         with left, st.container(border=True):
-            _endpoint_form(application)
+            _endpoint_form(application, inline=embedded)
         with right, st.container(border=True):
             _connection_probe(application, names, info.get("default_backend", ""))
     with budget_tab:

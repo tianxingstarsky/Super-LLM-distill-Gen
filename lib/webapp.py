@@ -200,8 +200,10 @@ def page_workflow():
     from lib.presentation.streamlit.workflow_page import render_workbench
     from lib.bootstrap.workflow_node_models import workflow_node_models_application
     from lib.bootstrap.creation_drafts import creation_draft_application
+    from lib.bootstrap.backends import backend_application
     render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT),
-                     draft_application=creation_draft_application(_ws_out()))
+                     draft_application=creation_draft_application(_ws_out()),
+                     backend_application=backend_application(ROOT))
 
 
 def page_run(show_title=True):
@@ -429,13 +431,6 @@ def page_monitor(show_title=True):
                         _job_status, show_title=show_title)
 
 
-def page_backends():
-    from lib.bootstrap.backends import backend_application
-    from lib.presentation.streamlit.backend_page import render_backend_page
-
-    render_backend_page(backend_application(ROOT))
-
-
 def page_gates(show_title=True, focus_ids=None):
     if show_title:
         page_header("命令执行确认", "只处理高级命令实际需要的人工确认。", "ADVANCED COMMANDS")
@@ -558,6 +553,11 @@ def page_system_settings():
             label_visibility="collapsed", on_change=_set_ui_language,
         )
     page_prefs(show_title=False)
+    with st.expander("服务连接与预算（高级）", expanded=bool(st.session_state.pop("open-model-admin", False))):
+        st.caption("每次任务使用的模型在工作流节点选择；这里仅维护共用连接与预算。")
+        from lib.bootstrap.backends import backend_application
+        from lib.presentation.streamlit.backend_page import render_backend_page
+        render_backend_page(backend_application(ROOT), embedded=True)
 
 
 PAGES = {
@@ -566,7 +566,7 @@ PAGES = {
     "数据管理": page_data_management, "资产管理": page_assets, "数据预览": page_preview,
     "人工审核": page_human_review, "任务管理": page_task_manager, "管线运行": page_run,
     "运行监控": page_monitor, "监控": page_monitor, "输出打包": page_output_packages, "质量报告": page_quality,
-    "模型与密钥": page_backends, "系统设置": page_system_settings,
+    "模型与密钥": page_system_settings, "系统设置": page_system_settings,
     "偏好设置": page_prefs,
 }
 try:
@@ -608,6 +608,9 @@ elif _qp_page == "闸门" or st.session_state.get("nav") == "闸门":
     st.session_state["nav"] = "任务管理"
     st.session_state[f"task-view:{st.session_state['ws']}"] = "命令管线"
     st.session_state[f"command-confirm-open:{st.session_state['ws']}"] = True
+elif _qp_page == "模型与密钥" or st.session_state.get("nav") == "模型与密钥":
+    st.session_state["nav"] = "系统设置"
+    st.session_state["open-model-admin"] = True
 _review_route = {"偏好审核": "DPO 偏好优化", "语料审核": "CPT 语料审核"}
 if _qp_page in _review_route:
     st.session_state["nav"] = "人工审核"
@@ -621,7 +624,6 @@ visible_nav = [
     ("人工审核", "人工审核", {"人工审核"}),
     ("任务管理", "任务管理", {"任务管理", "管线运行", "运行监控", "监控"}),
     ("输出打包", "输出打包", {"输出打包"}),
-    ("模型服务", "模型与密钥", {"模型与密钥"}),
     ("系统设置", "系统设置", {"系统设置", "偏好设置"}),
 ]
 icons = {"首页": "⌂", "数据生成": "◈", "数据管理": "▤", "人工审核": "✓",
@@ -633,6 +635,9 @@ if "nav" not in st.session_state:
 _route_label = canonical_navigation_route(
     st.session_state.get("nav", "总览"), PAGES, icons,
 )
+if _route_label == "模型与密钥":
+    _route_label = "系统设置"
+    st.session_state["open-model-admin"] = True
 if st.session_state.get("nav") != _route_label:
     st.session_state["nav"] = _route_label
 page = _route_label

@@ -1,8 +1,9 @@
-"""Model choices belong to nodes; endpoint credentials remain in service settings."""
+"""Configure each node's models and service connection in the node panel."""
 from copy import deepcopy
 
 import streamlit as st
 
+from lib.application.backend_service import BackendApplication
 from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
 from lib.domain.workflow_scale import node_roles
 
@@ -18,7 +19,76 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
     return draft, endpoints
 
 
-def render_node_models(node, source_mode, workspace, bindings, endpoints):
+def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings: dict,
+                     endpoints: dict, application: BackendApplication | None) -> None:
+    if application is None:
+        return
+    form_prefix = f"node-service-connect:{workspace}:{node}"
+    old_secret_key = st.session_state.pop(form_prefix + ":clear-secret", None)
+    if old_secret_key:
+        st.session_state.pop(old_secret_key, None)
+    epoch = int(st.session_state.get(form_prefix + ":epoch", 0))
+    missing_role = next((role for role in roles if not bindings.get(node, {}).get(role, {}).get("model")
+                         or bindings[node][role].get("backend") not in endpoints), None)
+    with st.expander("新增或更新服务连接", expanded=not endpoints):
+        st.caption("在当前节点登记兼容服务。保存后即可选用，无需离开工作流。")
+        with st.form(f"{form_prefix}:{epoch}", clear_on_submit=True):
+            name = st.text_input("服务名称", placeholder="字母、数字、下划线或连字符")
+            base_url = st.text_input("兼容服务地址", placeholder="https://…/v1")
+            model = st.text_input("模型名称", placeholder="填写服务提供的模型名")
+            credential_mode = st.radio("凭据来源", ("环境变量（推荐）", "直接填写密钥"),
+                                       horizontal=True,
+                                       help="直接填写的密钥会保存到本机配置；推荐使用环境变量。")
+            secret_key = f"{form_prefix}:secret:{epoch}"
+            secret = st.text_input("环境变量名或密钥", type="password", key=secret_key,
+                                   placeholder="环境变量留空时使用 OPENAI_API_KEY")
+            replace = st.checkbox("覆盖同名连接")
+            submit = st.form_submit_button("保存并用于当前节点" if missing_role else "保存连接",
+                                           type="primary", width="stretch")
+        if not submit:
+            return
+        if credential_mode == "直接填写密钥" and not secret:
+            st.error("请填写密钥，或改用环境变量。")
+            return
+        try:
+            if credential_mode == "直接填写密钥":
+                application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
+                                          api_key=secret, explicit_replace=replace)
+            else:
+                application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
+                                          api_key_env=secret.strip() or "OPENAI_API_KEY",
+                                          explicit_replace=replace)
+        except FileExistsError:
+            st.error("服务名称已存在。如需更新，请勾选覆盖同名连接。")
+            return
+        except ValueError:
+            st.error("连接信息无效。请检查服务名称、地址和模型名。")
+            return
+        except OSError:
+            st.error("保存连接失败。请检查本机配置是否可写。")
+            return
+        # Fill only a missing role. Adding a connection must not silently
+        # replace a model the operator already selected on this node.
+        target_role = missing_role
+        if target_role is not None:
+            bindings.setdefault(node, {})[target_role] = {"backend": name.strip(), "model": model.strip()}
+            st.session_state[f"workflow-node-bindings:{workspace}"] = deepcopy(bindings)
+            st.session_state[f"workflow-node-pending-binding:{workspace}:{node}"] = {
+                "role": target_role, "backend": name.strip(), "model": model.strip(),
+            }
+        st.session_state[form_prefix + ":clear-secret"] = secret_key
+        st.session_state[form_prefix + ":epoch"] = epoch + 1
+        st.toast("连接已保存，并已用于当前节点。" if target_role else "连接已保存；可在当前节点选择使用。")
+        st.rerun()
+
+
+def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
+                       backend_application: BackendApplication | None = None):
+    pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
+    if pending and pending.get("role") in node_roles(node, source_mode):
+        prefix = f"node-model:{workspace}:{node}:{pending['role']}"
+        st.session_state[prefix + ":backend"] = pending["backend"]
+        st.session_state[prefix + ":model:" + pending["backend"]] = pending["model"]
     previous = deepcopy(bindings)
     roles = node_roles(node, source_mode)
     if not roles:
@@ -32,7 +102,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints):
         st.info(explanation)
         return
     if not endpoints:
-        st.warning("请先在模型服务中登记服务地址与凭据，再回到节点选择模型。")
+        st.info("当前没有可用的模型连接。请在下方登记服务地址和模型。")
+        _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
         return
     for role in roles:
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'
@@ -64,6 +135,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints):
             bindings.setdefault(node, {}).pop(role, None)
     st.session_state[f"workflow-node-bindings:{workspace}"] = deepcopy(bindings)
     st.caption("每个节点独立保存选择；开始运行后，本次配置固定。")
+    _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()
 
