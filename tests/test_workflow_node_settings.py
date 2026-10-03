@@ -191,3 +191,18 @@ def test_node_rejects_output_limit_at_or_above_context_window():
     assert not ui.exception
     assert any('单次输出上限必须小于上下文窗口' in item.value for item in ui.warning)
     assert 'generation' not in ui.session_state['workflow-node-bindings:demo']['sft']
+
+
+def test_node_model_picker_accepts_explicit_custom_names():
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['fixture-local'] = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha'],
+                   'api_key_env': 'WRITER_KEY'},
+    }}
+    ui.session_state['workflow-node-bindings:demo'] = {'sft': {
+        'generation': {'backend': 'writer', 'model': 'alpha'},
+    }}
+    ui.run()
+    assert not ui.exception
+    picker = ui.selectbox(key='node-model:demo:sft:generation:model:writer')
+    assert picker.proto.accept_new_options

@@ -19,8 +19,14 @@ def initialize_draft(nodes, source_mode, draft, initialized, inventory):
             endpoint = endpoints.get(backend)
             if endpoint is None:
                 continue
-            model = slot.get("model") or (inventory.get("default_model") if backend == inventory.get("default_backend") else "")
-            model = model or next(iter(endpoint.get("models") or []), "")
+            listed_models = endpoint.get("models") or []
+            suggested_model = slot.get("model") or (
+                inventory.get("default_model") if backend == inventory.get("default_backend") else "")
+            # Role defaults are suggestions, not proof that a model is usable.
+            # An unlisted custom name must be entered explicitly on the node.
+            if suggested_model and suggested_model not in listed_models:
+                continue
+            model = suggested_model or next(iter(listed_models), "")
             if model:
                 draft.setdefault(node, {})[role] = {"backend": backend, "model": model}
                 initialized.add(marker)

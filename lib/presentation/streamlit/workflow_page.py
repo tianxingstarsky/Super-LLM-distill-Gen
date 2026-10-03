@@ -46,6 +46,12 @@ def _select_setup_node(key: str, node: str) -> None:
     st.session_state[key] = node
 
 
+def _save_sft_output_style(workspace: str) -> None:
+    value = st.session_state.get(f"workflow-sft-output-style:{workspace}")
+    if value in {"separated", "drop"}:
+        st.session_state[f"workflow-sft-output-style-draft:{workspace}"] = value
+
+
 def _workflow_error(error) -> str:
     return {
         "web_search_not_configured": "网页检索服务未配置。设置检索密钥后可从断点重试。",
@@ -60,6 +66,12 @@ def _workflow_error(error) -> str:
         "invalid_task_plan_invalid_encoding": "规划批次包含无效文本，请重试当前批次。",
         "model_context_window_exceeded": "输入超出节点设置的上下文窗口。请缩小单次输入，或新建任务调整节点限制。",
         "max_output_tokens_exceeds_context_window": "单次输出上限必须小于上下文窗口。请新建任务调整节点限制。",
+        "workflow_node_service_not_configured": "节点选择的模型服务已不可用。请在该节点重新选择服务。",
+        "workflow_endpoint_url_or_protocol_invalid": "模型服务地址或接口格式无效。请检查服务连接后重试。",
+        "workflow_endpoint_models_invalid": "模型服务的模型列表无效。请检查服务连接后重试。",
+        "workflow_endpoint_credential_ref_invalid": "模型服务的密钥引用无效。请在服务连接中填写环境变量名。",
+        "workflow_endpoint_pin_invalid": "本次任务的模型配置快照无效。请新建任务。",
+        "workflow_endpoint_changed_create_new_run": "模型服务配置已改变。为避免任务使用不同服务，请新建任务。",
     }.get(str(error), str(error))
 
 
@@ -742,6 +754,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if "multiturn" in targets:
             st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
     model_issues = []
+    sft_output_style = None
+    if "sft" in targets:
+        style_key = f"workflow-sft-output-style:{ws}"
+        draft_key = f"workflow-sft-output-style-draft:{ws}"
+        if draft_key not in st.session_state:
+            st.session_state[draft_key] = application.default_sft_output_style()
+        if style_key not in st.session_state:
+            st.session_state[style_key] = st.session_state[draft_key]
+        sft_output_style = st.session_state[style_key]
     agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
     if targets:
         selection_key = f"workflow-setup-node:{ws}"
@@ -770,6 +791,17 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
             render_node_models(selected_node, source_mode, ws, bindings, endpoints,
                                backend_application=backend_application)
+            if selected_node == "sft":
+                sft_output_style = st.selectbox(
+                    "SFT 推理内容输出", ("separated", "drop"),
+                    key=f"workflow-sft-output-style:{ws}",
+                    on_change=_save_sft_output_style, args=(ws,),
+                    format_func=lambda value: translate_label(
+                        "分字段保留推理" if value == "separated" else "只保留答案",
+                        st.session_state.get("ui_language", "zh")),
+                    help="仅影响本次任务的 SFT 训练文件，不改写审核证据或其他目标。",
+                )
+                st.caption("当前 SFT 节点独立设置；不会改变其他任务的输出方式。")
             if selected_node == "agent":
                 render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
             if selected_node == "ingest":
@@ -872,15 +904,26 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                  and not agent_capabilities.get("isolated_configured"))
             if agent_unavailable:
                 st.warning("Agent 节点的隔离验证环境未配置，请检查该节点。")
+            style_summary = (translate("分字段保留推理" if sft_output_style == "separated"
+                                       else "只保留答案",
+                                       st.session_state.get("ui_language", "zh"))
+                             if "sft" in targets else "")
+            language = st.session_state.get("ui_language", "zh")
+            run_summary = translate(
+                f"{source_mode} · 已选 {len(targets)} 类目标 · 候选规模 {int(sample_count):,}"
+                f" · 并发 {int(concurrency)} · 每批 {int(batch_size)}",
+                language,
+            )
+            if "sft" in targets:
+                run_summary += f" · SFT {style_summary}"
+            if evaluation_uploads:
+                run_summary += (f" · {len(evaluation_uploads)} evaluation references" if language == "en"
+                                else f" · 评测参照 {len(evaluation_uploads)} 份")
             summary_col, action_col = st.columns([3, 1], vertical_alignment="center", gap="large")
             with summary_col:
                 st.html('<div class="df-wb-submit-summary"><b>运行配置摘要</b><strong>' +
-                        html.escape(name.strip() or "未命名任务") + '</strong><span>' +
-                        html.escape(source_mode) + ' · 已选 ' + str(len(targets)) +
-                        ' 类目标 · 候选规模 ' + f'{int(sample_count):,}' +
-                        ' · 并发 ' + str(int(concurrency)) + ' · 每批 ' + str(int(batch_size)) +
-                        (f' · 评测参照 {len(evaluation_uploads)} 份' if evaluation_uploads else '') +
-                        '</span></div>')
+                        html.escape(translate(name.strip() or "未命名任务", language)) +
+                        '</strong><span>' + html.escape(run_summary) + '</span></div>')
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
                 submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues) or agent_unavailable or web_unavailable,
@@ -913,6 +956,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),
                                         agent_replay_mode=agent_mode,
+                                        sft_output_style=sft_output_style,
                                         web_research=web_research,
                                         source_names=source_names,
                                         evaluation_sources=evaluation_sources,
@@ -925,7 +969,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.session_state["workflow-open-run"] = {"workspace": ws, "run_id": run_id}
                 st.rerun()
             except (ValueError, OSError, Timeout) as error:
-                st.error(str(error))
+                st.error(_workflow_error(error))
     runs = application.task_runs()
     if not runs:
         st.info("尚无运行记录。创建工作流后，这里会显示实时阶段、质量统计与产物。")

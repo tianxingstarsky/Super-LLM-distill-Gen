@@ -126,9 +126,41 @@ def test_application_driver_reads_settings_from_its_project_root(tmp_path):
     root = settings(tmp_path, style="drop")
     output = tmp_path / "output"
     driver = FilesystemWorkflowDriver(root, output)
+    assert driver.default_sft_output_style() == "drop"
     run_id = driver.create(sources=[source_file(tmp_path)], targets=["sft"])
     recipe = read_json(run_path(output, run_id) / "recipe.json")
     assert recipe["generation_preferences"]["values"]["cot_style"] == "drop"
+
+
+def test_sft_node_output_style_overrides_global_default_for_one_run(tmp_path):
+    root = settings(tmp_path, style="separated")
+    output = tmp_path / "output"
+    source = source_file(tmp_path)
+    chosen = create_run(output, sources=[source], targets=["sft"], settings_root=root,
+                        sft_output_style="drop")
+    default = create_run(output, sources=[source], targets=["sft"], settings_root=root)
+    chosen_recipe = read_json(run_path(output, chosen) / "recipe.json")
+    assert chosen_recipe["generation_preferences"]["values"]["cot_style"] == "separated"
+    assert chosen_recipe["sft_output_style"] == "drop"
+    chosen_folder, chosen_native, chosen_trl = execute(output, chosen, root)
+    _, default_native, _ = execute(output, default, root)
+    assert "reasoning_content" not in chosen_native["messages"][-1]
+    assert "thinking" not in chosen_trl["messages"][-1]
+    assert default_native["messages"][-1]["reasoning_content"] == REASONING
+    report = read_json(chosen_folder / "quality.json")["generation_preferences"]
+    assert report["style_source"] == "sft_node"
+    assert report["export_reasoning_style"] == "drop"
+    assert "cot.style" in report["unapplied_fields"]
+
+
+@pytest.mark.parametrize("style,targets", [("tags", ["sft"]), ("drop", ["cpt"])])
+def test_invalid_sft_node_style_rejected_before_writing_run(tmp_path, style, targets):
+    root = settings(tmp_path)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError, match="invalid_sft_output_style"):
+        create_run(output, sources=[source_file(tmp_path)], targets=targets,
+                   settings_root=root, sft_output_style=style)
+    assert not output.exists()
 
 
 def test_invalid_preference_file_rejects_run_before_creating_output(tmp_path):

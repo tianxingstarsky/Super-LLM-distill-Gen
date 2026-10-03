@@ -26,6 +26,10 @@ class WorkflowApplication:
         return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models,
                                       "web_research": research})
 
+    def default_sft_output_style(self) -> str:
+        """Suggest the current preference when configuring a new SFT run."""
+        return self._driver.default_sft_output_style()
+
     def agent_replay_capabilities(self) -> dict:
         return self._driver.agent_replay_capabilities()
 

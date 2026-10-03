@@ -1,6 +1,8 @@
-"""Short, page-specific help beside the work the operator is doing."""
+"""In-page walkthroughs that point to controls already rendered by each page."""
 from __future__ import annotations
 
+import json
+import re
 from typing import Callable
 
 import streamlit as st
@@ -8,7 +10,8 @@ import streamlit as st
 from lib.presentation.streamlit.i18n import translate
 
 
-# These are instructions for visible controls, not a second navigation tree.
+# Guide text describes visible controls. Counts and task names always come from
+# the page itself; a guide never supplies example data to a workspace.
 _GUIDES: dict[str, tuple[tuple[tuple[str, str], ...], tuple[str, str] | None]] = {
     "总览": (
         (("选择输入", "在生成类型中选择文档、Agent 上下文或开放需求。"),
@@ -23,66 +26,200 @@ _GUIDES: dict[str, tuple[tuple[tuple[str, str], ...], tuple[str, str] | None]] =
         None,
     ),
     "数据管理": (
-        (("查看来源与产物", "切换文件分类，定位当前工作区的输入与生成结果。"),
-         ("预览样本", "选择训练目标和任务，检查样本内容与质量结果。")),
+        (("切换数据视图", "在资产管理、数据预览和质量报告之间切换，留在当前页面。"),
+         ("查看当前内容", "文件库可按分类筛选；有样本时可在预览或质量视图选择任务与文件。")),
         None,
     ),
     "任务管理": (
-        (("跟踪运行", "选择任务后查看节点进度、日志、质量结果与失败原因。"),
-         ("处理结果", "任务完成后进入人工审核；需要调整时返回工作流配置。")),
+        (("切换任务视图", "日常生成任务在数据工作流中；高级工具和命令日志位于同页。"),
+         ("找到要处理的任务", "筛选任务并选择运行；如果列表为空，可在这里新建工作流。"),
+         ("查看运行过程", "所选任务的节点、日志与结果在右侧；Agent 任务完成后可在这里审查轨迹。")),
         ("进入人工审核", "人工审核"),
     ),
     "人工审核": (
         (("选择数据类型", "按 SFT、偏好对或 CPT 切换审核队列。"),
-         ("逐条处理", "核对来源与生成内容，再通过、修订或退回。"),
-         ("生成审核版本", "处理完当前队列后，在同一页面生成已审核版本。")),
+         ("打开审核队列", "上方卡片显示当前工作区的候选数，可直接打开对应队列。"),
+         ("审核并发布", "有候选时核对来源与内容，通过、修订或退回；处理完后在同页发布审核版本。")),
         ("查看输出打包", "输出打包"),
     ),
     "输出打包": (
-        (("选择完成的任务", "仅从当前工作区中选择已有结果，不会出现示例任务。"),
-         ("核对并导出", "检查实际文件、质量与来源信息，再生成可校验的数据包。")),
+        (("选择完成的任务", "从当前工作区选择已完成任务；若没有结果，先创建工作流。"),
+         ("核对并导出", "有结果时核对文件、质量与来源，再生成可校验的数据包；打包中可查看进度。")),
         None,
     ),
     "系统设置": (
-        (("调整通用偏好", "在此设置界面语言和默认生成偏好。"),
-         ("配置本次任务", "来源、目标、规模与模型都在数据生成工作台完成。"),
-         ("维护共用预算", "仅在需要时展开高级设置；模型接入与选择可直接在工作流节点完成。")),
+        (("选择界面语言", "在这里切换控制台语言。"),
+         ("调整生成偏好", "选择偏好类别；任务模型仍在工作流节点配置。")),
         ("前往数据生成", "自动工作流"),
     ),
 }
 
 _ALIASES = {
     "首页": "总览", "数据生成": "自动工作流",
-    "资产管理": "数据管理", "数据预览": "数据管理", "质量报告": "数据管理",
-    "管线运行": "任务管理", "运行监控": "任务管理", "监控": "任务管理",
-    "偏好设置": "系统设置", "模型与密钥": "系统设置", "闸门": "任务管理",
+    # These routes are redirected by webapp.py before this guide is rendered.
+    "模型与密钥": "系统设置", "闸门": "任务管理",
 }
 
-_TOUR_TARGETS = {
-    "总览": ("home-source-panel", "home-strategy-panel", "home-stats-panel"),
-    "自动工作流": ("workbench-targets", "workbench-node-panel", "workbench-submit"),
+_REVIEW_KIND = {
+    "SFT 数据调整": "sft", "DPO 偏好优化": "dpo",
+    "ORPO 偏好优化": "orpo", "RLAIF 反馈审核": "rlaif",
+    "CPT 语料审核": "cpt",
 }
+
+
+def _target_candidates(route: str, step: int) -> tuple[str, ...]:
+    """Return existing Streamlit widget/container key prefixes in priority order.
+
+    The later candidates are fallbacks for empty or in-progress states. They
+    are never synthesized from task IDs or names, so they cannot point to a
+    fictitious sample or leak workspace data into JavaScript.
+    """
+    workspace = st.session_state.get("ws", "default")
+    if route == "总览":
+        return (("home-source-panel",), ("home-strategy-panel",),
+                ("home-stats-panel",))[step]
+    if route == "自动工作流":
+        return (("workbench-targets",), ("workbench-node-panel",),
+                ("workbench-submit",))[step]
+    if route == "数据管理":
+        if step == 0:
+            return ("data-view:",)
+        area = st.session_state.get(f"data-view:{workspace}", "资产管理")
+        if area == "数据预览":
+            return ("preview-source:", "data-preview-run:", "preview-file:", "data-view:")
+        if area == "质量报告":
+            return ("quality-source:", "quality-file:", "data-view:")
+        return ("asset-category:",)
+    if route == "任务管理":
+        if step == 0:
+            return ("task-view:",)
+        area = st.session_state.get(f"task-view:{workspace}", "数据工作流")
+        if area != "数据工作流":
+            return ("task-view:",)
+        if step == 1 and not st.session_state.get(f"task-center-focus:{workspace}"):
+            return ("task-center-filter:", "task-center-create:")
+        return ("task-center-focus:", "task-center-create:")
+    if route == "人工审核":
+        kind = _REVIEW_KIND.get(st.session_state.get(f"review-mode:{workspace}"), "sft")
+        queue_button = f"review-overview-open-{kind}"
+        if step == 0:
+            return ("review-mode:",)
+        if step == 1:
+            return (queue_button,)
+        return (f"df-review-actions-{kind}", queue_button)
+    if route == "输出打包":
+        if step == 0:
+            return ("package-run:", "package-empty-workflow")
+        return ("prepare-package:", "stop-package:", "package-empty-workflow")
+    if route == "系统设置":
+        return (("ui-language-choice",), ("preference-area",))[step]
+    return ()
 
 
 def _set_tour_step(key: str, step: int | None) -> None:
+    st.session_state[f"{key}:revision"] = st.session_state.get(f"{key}:revision", 0) + 1
     if step is None:
         st.session_state.pop(key, None)
+        st.session_state["context-guide-clear"] = True
     else:
         st.session_state[key] = step
 
 
+def _clear_highlight() -> None:
+    # The script only removes our own decoration. It reads no page content.
+    st.html('<script>window.__dfGuideToken=null;'
+            'document.querySelectorAll(".df-context-guide-target").forEach('
+            'element=>element.classList.remove("df-context-guide-target"));'
+            '</script>', unsafe_allow_javascript=True)
+
+
+def _highlight(route: str, step: int, revision: int) -> None:
+    # Only hard-coded widget-key prefixes are interpolated. No workspace ID,
+    # task name, file content, or model response enters HTML or JavaScript.
+    candidates = _target_candidates(route, step)
+    # Streamlit 1.63 turns punctuation in keys (including ':') into '-'
+    # before adding the st-key-* CSS class.
+    selectors = [f'[class*="st-key-{re.sub(r"[^a-zA-Z0-9_-]", "-", key)}"]'
+                 for key in candidates]
+    token = json.dumps(f"{route}:{step}:{revision}", ensure_ascii=True)
+    selector_json = json.dumps(selectors, ensure_ascii=True)
+    st.html('''<style>
+      .df-context-guide-target {
+        outline:2px solid #2877e1!important; outline-offset:3px;
+        box-shadow:0 0 0 7px rgba(40,119,225,.12)!important;
+        scroll-margin-top:110px; border-radius:10px;
+      }
+      [class*="st-key-context-guide-tour"] {
+        position:sticky; top:76px; z-index:30;
+        border-color:#c9dff7!important; border-radius:11px!important;
+        background:linear-gradient(105deg,#eef6ff,#fff)!important;
+        box-shadow:0 6px 18px rgba(37,104,191,.12)!important;
+      }
+    </style><script>
+    (() => {
+      const token = ''' + token + ''';
+      const selectors = ''' + selector_json + ''';
+      window.__dfGuideToken = token;
+      let attempt = 0;
+      let bestIndex = selectors.length;
+      let marked = null;
+      function locate() {
+        if (window.__dfGuideToken !== token) return;
+        if (marked && !document.contains(marked)) {
+          marked = null;
+          bestIndex = selectors.length;
+        }
+        const matches = selectors.map(selector => document.querySelector(selector));
+        const index = matches.findIndex(Boolean);
+        if (index >= 0) {
+          const target = matches[index];
+          if (target !== marked || index < bestIndex) {
+            document.querySelectorAll(".df-context-guide-target").forEach(
+              element => element.classList.remove("df-context-guide-target"));
+            target.classList.add("df-context-guide-target");
+            marked = target;
+            if (window.__dfGuideScrolled !== token || index < bestIndex) {
+              target.scrollIntoView({behavior:"smooth", block:"center"});
+              window.__dfGuideScrolled = token;
+            }
+          }
+          bestIndex = Math.min(bestIndex, index);
+        }
+        // A fallback may appear before the main page has finished rerendering.
+        // Briefly recheck so the most specific control wins when it arrives.
+        if (++attempt < 8 || (bestIndex > 0 && attempt < 50))
+          window.setTimeout(locate, 100);
+      }
+      window.requestAnimationFrame(locate);
+    })();
+    </script>''', unsafe_allow_javascript=True)
+
+
 def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
-    """Keep help beside the work, with an optional highlighted walkthrough."""
+    """Render optional help and a step-by-step focus on the current page."""
     route = _ALIASES.get(page, page)
-    steps, action = _GUIDES.get(route, _GUIDES["总览"])
+    previous_route = st.session_state.get("context-guide-route")
+    if previous_route and previous_route != route:
+        st.session_state.pop(f"context-guide-step:{previous_route}", None)
+        st.session_state["context-guide-clear"] = True
+    st.session_state["context-guide-route"] = route
+
+    # Legacy direct subpages are still valid deep links, but they do not have
+    # the composite page's view switcher. Avoid an apparent tour target that
+    # cannot exist on those screens.
+    if route not in _GUIDES:
+        if st.session_state.pop("context-guide-clear", False):
+            _clear_highlight()
+        return
+
+    steps, action = _GUIDES[route]
     language = st.session_state.get("ui_language", "zh")
     tour_key = f"context-guide-step:{route}"
     _, help_column = st.columns([6, 1], gap="small")
     with help_column, st.popover("ⓘ 本页指引", key=f"context-guide:{route}", width="stretch"):
         st.caption(translate("按当前页面操作", language))
-        if route in _TOUR_TARGETS:
-            st.button("开始逐步引导", key=f"context-guide-start:{route}",
-                      on_click=_set_tour_step, args=(tour_key, 0), width="stretch")
+        st.button("开始逐步引导", key=f"context-guide-start:{route}",
+                  on_click=_set_tour_step, args=(tour_key, 0), width="stretch")
         for number, (title, detail) in enumerate(steps, 1):
             st.markdown(f"**{number:02d}　{translate(title, language)}**")
             st.caption(translate(detail, language))
@@ -92,23 +229,18 @@ def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
                       on_click=navigate, args=(target,), width="stretch")
 
     step_index = st.session_state.get(tour_key)
-    if route not in _TOUR_TARGETS or not isinstance(step_index, int):
+    if not isinstance(step_index, int) or step_index < 0 or step_index >= len(steps):
+        if isinstance(step_index, int):
+            _set_tour_step(tour_key, None)
+        if st.session_state.pop("context-guide-clear", False):
+            _clear_highlight()
         return
-    if step_index < 0 or step_index >= len(steps):
-        _set_tour_step(tour_key, None)
-        return
-    target = _TOUR_TARGETS[route][step_index]
-    st.html('<style>[class*="st-key-' + target + '"] {'
-            'outline:2px solid #2877e1!important;outline-offset:3px;'
-            'box-shadow:0 0 0 7px rgba(40,119,225,.12)!important;'
-            'scroll-margin-top:110px}'
-            '[class*="st-key-context-guide-tour"] {'
-            'border-color:#c9dff7!important;border-radius:11px!important;'
-            'background:linear-gradient(105deg,#eef6ff,#fff)!important;'
-            'box-shadow:0 6px 18px rgba(37,104,191,.08)!important}</style>')
+
+    _highlight(route, step_index, st.session_state.get(f"{tour_key}:revision", 0))
     title, detail = steps[step_index]
     with st.container(border=True, key="context-guide-tour"):
-        text, previous, following = st.columns([5, 1, 1], gap="small", vertical_alignment="center")
+        text, previous, following, close = st.columns([5, 1, 1, 1], gap="small",
+                                                       vertical_alignment="center")
         with text:
             st.caption(translate("本页逐步引导", language) + f" · {step_index + 1}/{len(steps)}")
             st.markdown(f"**{translate(title, language)}** · {translate(detail, language)}")
@@ -123,4 +255,8 @@ def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
                           on_click=_set_tour_step, args=(tour_key, step_index + 1), width="stretch")
             else:
                 st.button("完成引导", key=f"context-guide-finish:{route}",
+                          on_click=_set_tour_step, args=(tour_key, None), width="stretch")
+        with close:
+            if step_index + 1 < len(steps):
+                st.button("退出引导", key=f"context-guide-exit:{route}",
                           on_click=_set_tour_step, args=(tour_key, None), width="stretch")

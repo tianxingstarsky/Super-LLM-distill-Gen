@@ -62,6 +62,12 @@ class FilesystemWorkflowDriver:
     def create(self, **recipe) -> str:
         return create_run(self.output, settings_root=self.root, **recipe)
 
+    def default_sft_output_style(self) -> str:
+        from lib.infrastructure.training_workflow import preference_snapshot
+
+        style = preference_snapshot(self.root)["values"]["cot_style"]
+        return style if style in {"separated", "drop"} else "separated"
+
     def web_research_capabilities(self) -> dict:
         from lib.infrastructure.brave_web_research import configured
 

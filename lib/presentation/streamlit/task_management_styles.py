@@ -16,6 +16,22 @@ def task_management_styles() -> str:
 .df-task-summary-item[data-kind="completed"] i {background:#e1f7ed;color:#078b63}
 .df-task-summary-item[data-kind="attention"] i {background:#fff0e8;color:#d46b35}
 .df-task-summary-item[data-kind="processing"] i {background:#e8f1ff;color:#1768d5}
+.df-task-switch-head {display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  margin:-4px 0 7px;color:#234166}
+.df-task-switch-head strong {font-size:13px}
+.df-task-switch-head small {font-size:11px;color:#8191a8}
+[class*="st-key-task_quick_group_"] {padding:9px 12px 6px;margin-bottom:12px;
+  background:linear-gradient(130deg,#f8fbff,#fff 75%)}
+.df-task-switch-group {display:flex;align-items:center;gap:7px;margin-bottom:6px;
+  color:#355377;font-size:12px}
+.df-task-switch-group span {min-width:22px;padding:1px 6px;border-radius:100px;
+  background:#e8f2ff;color:#1769c7;text-align:center;font-size:10px;font-weight:700}
+.df-task-switch-group[data-kind="attention"] span {background:#fff0e7;color:#b86131}
+[class*="st-key-task_quick_group_"] .stButton button {justify-content:flex-start;min-height:31px;
+  margin-bottom:3px;padding:5px 10px;border-color:#e0e9f5;background:#fff;color:#345475;text-align:left}
+[class*="st-key-task_quick_group_"] .stButton button:hover {border-color:#80b1ee;background:#f3f8ff;color:#155da9}
+[class*="st-key-task_quick_group_"] .stButton button p {overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:11px}
 .df-task-list-head {display:flex;align-items:center;justify-content:space-between;gap:8px;margin:3px 0 11px}
 .df-task-list-head strong {color:#1c304d;font-size:16px;letter-spacing:.01em}
 .df-task-list-head small {color:#8291a7;font-size:12px;text-align:right}

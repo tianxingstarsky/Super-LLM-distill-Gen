@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from lib.application.backend_ports import BackendConfigPort
-from lib.domain.backend_config import key_display, merged_backends, validate_endpoint, validate_role
+from lib.domain.backend_config import (key_display, merged_backends, validate_credential_reference,
+                                       validate_endpoint, validate_role)
 from lib.model_protocols import validate_api_format
 
 
@@ -55,6 +56,7 @@ class BackendApplication:
         validate_endpoint(name, base_url, models, api_format)
         if api_key and api_key_env:
             raise ValueError("api_key 与 api_key_env 二选一；推荐环境变量方式")
+        validate_credential_reference(api_key_env)
         local = self.read_config("backends.local.yaml")
         backends = dict(local.get("backends") or {})
         if name in backends and not explicit_replace:

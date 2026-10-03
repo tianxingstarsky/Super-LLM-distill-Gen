@@ -6,6 +6,7 @@ module renders the data-workflow tab without duplicating workflow execution.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from heapq import nlargest
 import html
 import re
 from typing import Callable
@@ -15,7 +16,7 @@ import streamlit as st
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_graph import execution_graph
 from lib.presentation.streamlit.task_management_styles import task_management_styles
-from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.i18n import UntranslatedText, translate
 from lib.presentation.streamlit.workflow_page import EVENT_LABELS, LABELS, TARGET_LABELS, render_run
 
 
@@ -29,6 +30,9 @@ STATUS_GLYPHS = {"queued": "○", "running": "◉", "completed": "✓", "failed"
                  "cancelled": "■", "needs_attention": "◇"}
 MARKDOWN_META = re.compile(r"([\\`*_{}\[\]()#+.!|>~-])")
 LOCAL_TIMEZONE = timezone(timedelta(hours=8))
+QUICK_SWITCH_LIMIT = 3
+ACTIVE_STATUSES = frozenset({"queued", "running"})
+ATTENTION_STATUSES = frozenset({"failed", "cancelled", "needs_attention"})
 
 
 def _button_text(value: object) -> str:
@@ -131,8 +135,40 @@ def _summary_html(runs: list[dict]) -> str:
         for kind, glyph, label, number in cells) + '</div>'
 
 
+def _quick_switch_runs(runs: list[dict], limit: int = QUICK_SWITCH_LIMIT
+                       ) -> tuple[tuple[list[dict], int], tuple[list[dict], int]]:
+    """Pick a bounded, recent sample of actionable runs from this inventory."""
+    unique: dict[str, dict] = {}
+    for run in runs:
+        run_id = str(run.get("id") or "")
+        if not run_id:
+            continue
+        previous = unique.get(run_id)
+        if previous is None or str(run.get("updated_at") or "") > str(previous.get("updated_at") or ""):
+            unique[run_id] = run
+
+    def newest(rows: list[dict]) -> list[dict]:
+        return nlargest(max(0, limit), rows,
+                        key=lambda run: (str(run.get("updated_at") or run.get("created_at") or ""),
+                                         str(run.get("created_at") or ""), str(run["id"])))
+
+    attention = [run for run in unique.values() if run.get("status") in ATTENTION_STATUSES]
+    active = [run for run in unique.values() if run.get("status") in ACTIVE_STATUSES]
+    return (newest(attention), len(attention)), (newest(active), len(active))
+
+
 def _select_run(selection_key: str, run_id: str) -> None:
     st.session_state[selection_key] = run_id
+
+
+def _switch_run(workspace_id: str, run_id: str) -> None:
+    """Locate a shortcut's exact run without changing pages or workspaces."""
+    if st.session_state.get("ws", workspace_id) != workspace_id:
+        return
+    st.session_state[f"task-center-run:{workspace_id}"] = run_id
+    st.session_state[f"task-center-filter:{workspace_id}"] = "全部"
+    st.session_state[f"task-center-search:{workspace_id}"] = ""
+    st.session_state[f"task-center-locate:{workspace_id}"] = run_id
 
 
 def _change_page(page_key: str, page: int) -> None:
@@ -176,6 +212,30 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                     '</div>')
         return None
     st.html(_summary_html(runs))
+    attention, active = _quick_switch_runs(runs)
+    if attention[1] or active[1]:
+        language = st.session_state.get("ui_language", "zh")
+        heading = html.escape(translate("并行任务", language))
+        hint = html.escape(translate("直接切换正在运行或待处理的任务", language))
+        st.html(f'<div class="df-task-switch-head"><strong>{heading}</strong>'
+                f'<small>{hint}</small></div>')
+        groups = [("attention", "待处理", *attention), ("active", "未结束", *active)]
+        groups = [group for group in groups if group[3]]
+        columns = st.columns(len(groups), gap="small") if len(groups) > 1 else [st.container()]
+        for column, (kind, title, shortcuts, count) in zip(columns, groups):
+            with column, st.container(border=True, key=f"task_quick_group_{kind}_{workspace_id}"):
+                st.html(f'<div class="df-task-switch-group" data-kind="{kind}">'
+                        f'<strong>{html.escape(translate(title, language))}</strong>'
+                        f'<span>{count}</span></div>')
+                for run in shortcuts:
+                    run_id = str(run["id"])
+                    name = _button_text(run.get("name") or "未命名任务")
+                    status = translate(LABELS.get(str(run.get("status", "")), "待处理"), language)
+                    done, total = _stage_progress(run)
+                    st.button(UntranslatedText(f"{name}  ·  {status}  {done}/{total}"),
+                              key=f"task-quick:{workspace_id}:{run_id}",
+                              on_click=_switch_run, args=(workspace_id, run_id),
+                              use_container_width=True)
     focus_column, create_column = st.columns([1.9, 1], gap="small", vertical_alignment="center")
     with focus_column:
         focus = st.toggle("放大工作流视图", key=f"task-center-focus:{workspace_id}",

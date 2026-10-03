@@ -138,9 +138,32 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
 
 def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     ws, name, source = setup_workspace(tmp_path, monkeypatch)
+    from lib.application.backend_service import BackendApplication
+    from lib.bootstrap import workflows as workflow_bootstrap
     from lib.console_jobs import Job
     commands = []
     monkeypatch.setattr(Job, "start", lambda self: commands.append(self.command))
+    settings = tmp_path / "configs"
+    settings.mkdir()
+    (settings / "backends.yaml").write_text(
+        "backends:\n  writer:\n    base_url: https://models.example.test/v1\n"
+        "    api_format: chat\n    api_key_env: FIXTURE_ONLY_KEY\n"
+        "    models: [write-v1, judge-v1]\n",
+        encoding="utf-8",
+    )
+    (settings / "preferences.yaml").write_text(
+        (ROOT / "configs" / "preferences.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    real_workflow_application = workflow_bootstrap.workflow_application
+    monkeypatch.setattr(workflow_bootstrap, "workflow_application",
+                        lambda _root, output: real_workflow_application(tmp_path, output))
+    monkeypatch.setattr(BackendApplication, "list_backends", lambda self: {
+        "default_backend": "writer", "default_model": "write-v1",
+        "roles": {"generation": {"backend": "writer", "model": "write-v1"},
+                  "jev": {"backend": "writer", "model": "unlisted-judge"}},
+        "backends": [{"name": "writer", "models": ["write-v1", "judge-v1"]}],
+    })
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = name
     app.session_state["nav"] = "自动工作流"
@@ -161,6 +184,12 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
             widget.set_value(200)
     next(widget for widget in app.number_input if widget.label == "每段对话轮数").set_value(5)
     app.run()
+    app.session_state[f"setup-canvas:{name}"] = {"node": "multiturn", "serial": "choose-review-model"}
+    app.run()
+    assert next(b for b in app.button if b.label == "开始自动生成").disabled
+    app.selectbox(key=f"node-model:{name}:multiturn:jev:backend").set_value("writer").run()
+    app.selectbox(key=f"node-model:{name}:multiturn:jev:model:writer").set_value("judge-v1").run()
+    assert not next(b for b in app.button if b.label == "开始自动生成").disabled
     app.session_state[f"setup-canvas:{name}"] = {"node": "package", "serial": "scale-settings-check"}
     app.run()
     assert not app.exception
@@ -263,7 +292,8 @@ def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatc
     app.run()
     assert not app.exception
     assert any(widget.label == "Candidate count" for widget in app.number_input)
-    assert any(button.label == "⬡　Model Services" for button in app.sidebar.button)
+    assert any(button.key == "nav-button:系统设置" for button in app.sidebar.button)
+    assert not any(button.key == "nav-button:模型与密钥" for button in app.sidebar.button)
     spec = canvas(app, f"setup-canvas:{workspace}")
     assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
     markup = "".join(str(node.value) for node in app.get("html"))
@@ -273,7 +303,8 @@ def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatc
     assert not re.search(r"[\u4e00-\u9fff]", visible), visible
     app.session_state["nav"] = "模型与密钥"
     app.run()
-    assert not app.exception and any(item.value == "Model Services" for item in app.title)
+    assert not app.exception and app.session_state["nav"] == "系统设置"
+    assert any(item.label == "Connections and budget (advanced)" for item in app.expander)
     assert not any(widget.key == "backend-role-edit" for widget in app.selectbox)
 
 
@@ -463,6 +494,8 @@ def test_run_inspector_distinguishes_reused_units_in_english(tmp_path, monkeypat
     assert any("Create a new run to change models" in item.value for item in app.caption)
     markup = "".join(str(node.value) for node in app.get("html"))
     visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
+    # A task name is workspace data, so preserve its original language.
+    visible = re.sub(r"<strong data-user-content>.*?</strong>", "", visible, flags=re.S)
     visible = re.sub(r"<[^>]*>", "", visible)
     assert "No events for this stage yet" in visible
     assert not re.search(r"[\u4e00-\u9fff]", visible), visible

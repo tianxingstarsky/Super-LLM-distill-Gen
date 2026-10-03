@@ -1,19 +1,14 @@
 """Exercise workbench drafts without storage or paid model calls."""
 from streamlit.testing.v1 import AppTest
-import pytest
-from lib.presentation.streamlit import workflow_page
-
-
-@pytest.fixture(autouse=True)
-def restore_canvas_renderer(monkeypatch):
-    monkeypatch.setattr(workflow_page, "render_canvas", workflow_page.render_canvas)
 
 SCRIPT = '''
 import streamlit as st
+from unittest.mock import patch
 from lib.presentation.streamlit import workflow_page as page
 from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
 st.session_state.setdefault('ws','fixture')
 class Sources:
+    def default_sft_output_style(self): return 'separated'
     def source_files(self,*args,**kwargs):
         return [] if st.session_state.get('fixture-remove-source') else [{'path':'fixture.txt','label':'Fixture source'}]
     def task_runs(self): return []
@@ -30,10 +25,10 @@ def select_node(key,node):
 def canvas(spec,selection_key,**kwargs):
     for node in spec['nodes']:
         st.button(node['id'],key='fixture-node:'+node['id'],on_click=select_node,args=(selection_key,node['id']))
-page.render_canvas=canvas
 st.checkbox('Show workbench',value=True,key='fixture-show')
 if st.session_state['fixture-show']:
-    page.render_workbench(Sources(),lambda args:None,WorkflowNodeModelsApplication(Inventory()))
+    with patch.object(page,'render_canvas',canvas):
+        page.render_workbench(Sources(),lambda args:None,WorkflowNodeModelsApplication(Inventory()))
 '''
 
 SCRIPT=SCRIPT.encode('ascii','backslashreplace').decode('ascii')
@@ -41,6 +36,21 @@ SCRIPT=SCRIPT.encode('ascii','backslashreplace').decode('ascii')
 def test_large_run_inputs_survive_node_selection():
     ui=AppTest.from_string(SCRIPT).run()
     assert not ui.exception
+
+
+def test_sft_output_style_is_configured_in_node_and_kept_for_this_workspace():
+    ui = AppTest.from_string(SCRIPT).run()
+    key = 'workflow-sft-output-style:fixture'
+    assert ui.selectbox(key=key).value == 'separated'
+    ui.selectbox(key=key).set_value('drop').run()
+    ui.button(key='fixture-node:ingest').click().run()
+    assert ui.session_state['workflow-sft-output-style-draft:fixture'] == 'drop'
+    ui.button(key='fixture-node:sft').click().run()
+    assert ui.selectbox(key=key).value == 'drop'
+    assert any('只保留答案' in item.proto.body for item in ui.get('html'))
+    ui.session_state['ws'] = 'other'
+    ui.run()
+    assert ui.selectbox(key='workflow-sft-output-style:other').value == 'separated'
 
 
 def test_selected_goals_and_sources_survive_navigation_and_missing_file():

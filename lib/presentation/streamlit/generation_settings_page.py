@@ -37,7 +37,7 @@ def render_generation_settings(settings: GenerationSettingsApplication, show_tit
         st.warning(f"配置暂时无法解析：{snapshot.parse_error}。可在下方高级编辑中修复。")
 
     if area == "生成偏好":
-        st.info("自动工作流当前只使用 SFT 的推理内容输出方式。配比、模板轮换与后验校正用于高级命令，不影响自动工作流。")
+        st.info("这里的 SFT 推理输出方式是新任务的默认值；每次任务可在 SFT 节点直接调整。配比、模板轮换与后验校正仅用于高级命令。")
         try:
             summary = settings.summary(snapshot)
         except ValueError as error:
@@ -49,7 +49,7 @@ def render_generation_settings(settings: GenerationSettingsApplication, show_tit
                 f'<div><span>默认样本占比 · 高级命令</span><strong>{summary["default_share"]:.0%}</strong><small>保留无风格注入的基线</small></div>'
                 f'<div><span>每维模板 · 高级命令</span><strong>{summary["templates_per_dim"]}</strong><small>轮换生成，减少重复</small></div>'
                 f'<div><span>后验校正 · 高级命令</span><strong>{"已开启" if summary["correction_enabled"] else "已关闭"}</strong><small>偏差超过阈值时调整下批采样</small></div>'
-                f'<div><span>推理输出 · SFT</span><strong>{html.escape({"separated": "分字段", "tags": "原生 token", "plain": "合并正文", "drop": "仅答案"}.get(summary["cot_style"], summary["cot_style"]))}</strong><small>自动工作流仅支持分字段或仅答案</small></div>'
+                f'<div><span>推理输出 · SFT 默认</span><strong>{html.escape({"separated": "分字段", "tags": "原生 token", "plain": "合并正文", "drop": "仅答案"}.get(summary["cot_style"], summary["cot_style"]))}</strong><small>本次任务可在 SFT 节点覆盖</small></div>'
                 '</div>'
             )
             with st.expander("高级命令配比与采样", expanded=False):
@@ -97,7 +97,7 @@ def render_generation_settings(settings: GenerationSettingsApplication, show_tit
                                           key="pref-tagger")
                     st.caption("校正会影响后续批次的采样权重，不会硬删已生成的数据。")
             with st.container(border=True, key="settings-pref-output"):
-                section_heading("思考内容输出", "自动工作流的 SFT 样本支持分字段保存或只保留答案。", "◇")
+                section_heading("思考内容输出", "新任务默认值；本次任务在 SFT 节点确定。", "◇")
                 style_names = {"separated": "分字段保存", "tags": "模型原生思考 token（高级命令）",
                                "plain": "合并到正文（高级命令）", "drop": "只保留答案"}
                 style = st.selectbox("输出方式", tuple(style_names),

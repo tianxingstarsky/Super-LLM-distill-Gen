@@ -52,7 +52,7 @@ from lib.infrastructure.agent_docker_replay import (DockerLedgerReplay, IMAGE_EN
                                                     validate_sandbox_image)
 from lib.doc2corpus import SUPPORTED_EXTS, chunk_text, import_text
 from lib.io_utils import atomic_json
-from lib.llm_client import chat_json, load_backend
+from lib.llm_client import chat_json, load_backend, snapshot_backend_endpoint
 from lib.prompts import get, registry, render
 
 
@@ -76,10 +76,13 @@ def preference_snapshot(root):
             "values": preference_summary(text)}
 
 
-def preferred_training_record(target, row, preferences=None, *, reward_model=False):
+def preferred_training_record(target, row, preferences=None, *, reward_model=False,
+                              sft_output_style=None):
     """Drop SFT explanation fields without changing the scored answer text."""
     record = rlaif_reward_model_record(row) if reward_model else training_record(target, row)
-    if target != "sft" or not preferences or preferences["values"]["cot_style"] != "drop":
+    style = (sft_output_style if sft_output_style is not None else
+             preferences["values"]["cot_style"] if preferences else None)
+    if target != "sft" or style != "drop":
         return record
     record = deepcopy(record)
     for message in record["messages"]:
@@ -158,7 +161,8 @@ def verify_artifacts(path):
     return manifest
 
 
-def write_trainer_export(destination, target, records, preferences=None):
+def write_trainer_export(destination, target, records, preferences=None, *,
+                         sft_output_style=None):
     """Convert rows individually while retaining the all-or-nothing TRL gate."""
     output = destination / f"trl_{target}.jsonl"
     pending = destination / f".trl_{target}.pending"
@@ -169,7 +173,8 @@ def write_trainer_export(destination, target, records, preferences=None):
             if row["status"] != "eligible":
                 continue
             payload = {"id": row.get("id"), **preferred_training_record(
-                target, row, preferences, reward_model=target == "rlaif")}
+                target, row, preferences, reward_model=target == "rlaif",
+                sft_output_style=sft_output_style)}
             check = prepare_trl_export("dpo" if target == "rlaif" else target, [payload])
             if check["ready"]:
                 compatible += 1
@@ -200,7 +205,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                max_units=100, chunk_chars=2000, tasks=10, conversation_turns=3, source_names=None,
                evaluation_sources=(), evaluation_source_names=None,
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
-               agent_replay_mode="configured", web_research=None, settings_root=None):
+               agent_replay_mode="configured", web_research=None, settings_root=None,
+               sft_output_style=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -208,6 +214,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
+    if (sft_output_style is not None and
+            (type(sft_output_style) is not str or sft_output_style not in {"separated", "drop"}
+             or "sft" not in targets)):
+        raise ValueError("invalid_sft_output_style")
     preferences = preference_snapshot(settings_root or Path(__file__).resolve().parents[2])
     files = [Path(p).resolve(strict=True) for p in sources]
     if not files and not brief.strip():
@@ -229,6 +239,13 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:
         raise ValueError("agent_sandbox_not_configured")
     run_id = uuid.uuid4().hex
+    endpoint_pins = None
+    if settings_root is not None and node_models:
+        # A submitted node binding must not follow a mutable service name to a
+        # different URL, protocol or model inventory while waiting to run.
+        endpoint_pins = {stage: {role: snapshot_backend_endpoint(
+            Path(settings_root), binding["backend"], binding["model"])
+            for role, binding in roles.items()} for stage, roles in node_models.items()}
     path = run_path(output, run_id)
     (path / "inputs").mkdir(parents=True, exist_ok=False)
     evaluation_references = snapshot_evaluation_sources(
@@ -251,8 +268,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "agent_sandbox_image": agent_sandbox_image,
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
               "node_models": node_models, "web_research": web_research,
-              "generation_preferences": preferences,
+              "generation_preferences": preferences, "sft_output_style": sft_output_style,
               "prompts": prompt_versions()}
+    if endpoint_pins is not None:
+        recipe["endpoint_pins"] = endpoint_pins
     atomic_json(path / "recipe.json", recipe)
     atomic_json(path / "state.json", {"id": run_id, "name": name[:100], "created_at": now(), "updated_at": now(),
                 "status": "queued", "recipe_hash": digest(recipe), "targets": targets, "attempt": 0,
@@ -329,10 +348,21 @@ class Workflow:
             if client is None:
                 prefix = f"{role}_" if role in {"judge", "jev"} else ""
                 binding = self.recipe.get("node_models", {}).get(self.stage, {}).get(role, {})
+                pins = self.recipe.get("endpoint_pins")
+                if pins is not None and not isinstance(pins, dict):
+                    raise ValueError("workflow_endpoint_pin_invalid")
+                stage_pins = pins.get(self.stage, {}) if pins is not None else {}
+                if not isinstance(stage_pins, dict):
+                    raise ValueError("workflow_endpoint_pin_invalid")
+                pin = stage_pins.get(role)
+                if pins is not None and binding and (not isinstance(pin, dict) or
+                        pin.get("backend") != binding.get("backend") or pin.get("model") != binding.get("model")):
+                    raise ValueError("workflow_endpoint_pin_invalid")
                 client, _ = load_backend(self.root, backend=binding.get("backend") or self.recipe.get(prefix + "backend"),
                                          model=binding.get("model") or self.recipe.get(prefix + "model"), role=role,
                                          allow_global_endpoint_override=not bool(binding),
-                                         context_window_tokens=binding.get("context_window_tokens"))
+                                         context_window_tokens=binding.get("context_window_tokens"),
+                                         **({"expected_endpoint_pin": pin} if pin is not None else {}))
                 cache[cache_key] = client
         endpoint_identity = str(getattr(getattr(client, "client", None), "base_url", "injected"))
         api_format = str(getattr(client, "api_format", "chat"))
@@ -1013,19 +1043,26 @@ class Workflow:
                                   "TRL 格式相容不证明所选模型聊天模板或 tokenizer 可用于训练",
                                   "敏感信息规则不能覆盖所有隐私类型"]}
         preferences = self.recipe.get("generation_preferences")
+        node_style = self.recipe.get("sft_output_style")
+        if node_style is not None and node_style not in {"separated", "drop"}:
+            raise ValueError("invalid_sft_output_style")
         if preferences:
             sft_export = "sft" in self.recipe["targets"]
             configured_style = preferences["values"]["cot_style"]
             supported_style = configured_style in {"separated", "drop"}
+            export_style = (node_style if node_style is not None else
+                            configured_style if supported_style else "separated")
             report["generation_preferences"] = {
                 "source_sha256": preferences["sha256"],
                 "configured_reasoning_style": configured_style,
-                "export_reasoning_style": (configured_style if sft_export and supported_style
-                                           else "separated" if sft_export else None),
-                "applied_targets": ["sft"] if sft_export and supported_style else [],
+                "node_reasoning_style": node_style,
+                "export_reasoning_style": export_style if sft_export else None,
+                "style_source": ("sft_node" if node_style is not None else "generation_preferences"),
+                "applied_targets": ["sft"] if sft_export and (node_style is not None or supported_style) else [],
                 "unapplied_fields": [*UNAPPLIED_PREFERENCE_FIELDS,
                                      "cot.think_tokens",
-                                     *([] if sft_export and supported_style else ["cot.style"])],
+                                     *([] if sft_export and node_style is None and supported_style
+                                        else ["cot.style"])],
             }
             report["limitations"].append(
                 "生成偏好的权重、模板轮换和后验校正尚未用于自动工作流；"
@@ -1060,7 +1097,8 @@ class Workflow:
                 if target == "gsm8k" and row["status"] == "eligible" and not validate_math_candidate(row):
                     row.update(status="quarantined", reason="gsm8k_arithmetic_verification_failed")
                 if row["status"] == "eligible":
-                    payload = preferred_training_record(target, row, preferences)
+                    payload = preferred_training_record(
+                        target, row, preferences, sft_output_style=node_style)
                     if corpus_index is not None:
                         evaluation_hit = evaluation_index.inspect(row["text"]) if evaluation_index else None
                         if evaluation_hit:
@@ -1136,7 +1174,8 @@ class Workflow:
                 # A trainer export is complete only if every eligible native row converts.
                 # Keep the native target even when its optional TRL format is incompatible.
                 report["trainer_exports"][target] = write_trainer_export(
-                    destination, target, records, preferences)
+                    destination, target, records, preferences,
+                    sft_output_style=node_style)
             if target == "cpt":
                 selected_count = len(collections[target])
                 quality_passed = sum(row["status"] == "eligible" for row in collections[target])

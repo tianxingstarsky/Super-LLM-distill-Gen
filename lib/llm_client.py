@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import pathlib
 import time
 from typing import Any, Dict, List
+from urllib.parse import urlsplit
 
 import yaml
 
+from lib.domain.backend_config import validate_backend_url, validate_credential_reference
 from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request,
                                  anthropic_text, response_text, responses_input,
                                  validate_api_format)
@@ -323,23 +326,8 @@ def _is_parameter_unsupported(err: Exception, parameter: str) -> bool:
                                      ("unsupported", "not supported", "unavailable", "unknown parameter"))
 
 
-def load_backend(
-    root: pathlib.Path,
-    backend: str | None = None,
-    model: str | None = None,
-    judge: bool = False,
-    base_url: str | None = None,
-    role: str | None = None,
-    allow_global_endpoint_override: bool = True,
-    context_window_tokens: int | None = None,
-) -> tuple[ChatClient, str]:
-    """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
-
-    解析优先级：显式 backend/model/base_url > 角色专属环境变量 > role 槽位 > 默认配置。
-    role ∈ {generation, judge, jev, vision, refine, simulate, translation}。JEV 可用 JEV_BACKEND/JEV_MODEL 环境变量独立配置；
-    judge=True 等价 role='judge'。base_url 自定义端点（本地 Ollama/llama.cpp 等）
-    时 api_key 走 OPENAI_API_KEY 环境变量。
-    预算：backends.yaml 的 budget + 各后端 prices 生效，超限抛 BudgetExceeded。"""
+def _configured_backends(root: pathlib.Path) -> Dict[str, Any]:
+    """Read the same effective configuration for snapshots and requests."""
     local = root / "configs" / "backends.local.yaml"
     base = root / "configs" / "backends.yaml"
     cfg: Dict[str, Any] = {}
@@ -350,9 +338,71 @@ def load_backend(
         merged = dict(cfg.get("backends", {}))
         for key, value in local_cfg.get("backends", {}).items():
             base_backend = merged.get(key, {})
-            merged[key] = {**base_backend, **value, "prices": {**base_backend.get("prices", {}), **value.get("prices", {})}}
+            merged[key] = {**base_backend, **value, "prices": {**base_backend.get("prices", {}),
+                                                               **value.get("prices", {})}}
         cfg["backends"] = merged
         cfg.update({k: v for k, v in local_cfg.items() if k != "backends"})
+    return cfg
+
+
+def _endpoint_pin(name: str, model: str, backend: dict) -> dict:
+    """Keep only safe transport metadata and a digest of those public fields."""
+    if not isinstance(backend, dict) or not backend.get("base_url"):
+        raise ValueError("workflow_node_service_not_configured")
+    try:
+        base_url = validate_backend_url(backend["base_url"])
+        api_format = validate_api_format(backend.get("api_format", "chat"))
+    except ValueError:
+        raise ValueError("workflow_endpoint_url_or_protocol_invalid") from None
+    models = backend.get("models") or []
+    if not isinstance(models, list) or any(not isinstance(item, str) for item in models):
+        raise ValueError("workflow_endpoint_models_invalid")
+    default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
+    if backend.get("api_key"):
+        credential_ref = "inline"
+    else:
+        try:
+            env_name = validate_credential_reference(
+                backend.get("api_key_env") if "api_key_env" in backend else default_env)
+        except ValueError:
+            raise ValueError("workflow_endpoint_credential_ref_invalid") from None
+        credential_ref = "env:" + env_name
+    parsed = urlsplit(base_url)
+    payload = {"version": 1, "backend": name, "model": model,
+               "endpoint_origin": parsed.scheme + "://" + parsed.netloc,
+               "base_url_sha256": hashlib.sha256(base_url.encode("utf-8")).hexdigest(),
+               "api_format": api_format, "models": sorted(set(models)),
+               "credential_ref": credential_ref}
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {**payload, "config_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest()}
+
+
+def snapshot_backend_endpoint(root: pathlib.Path, backend: str, model: str) -> dict:
+    """Pin a node's selected service before its queued run is created."""
+    config = _configured_backends(pathlib.Path(root))
+    selected = (config.get("backends") or {}).get(backend)
+    return _endpoint_pin(backend, model, selected)
+
+
+def load_backend(
+    root: pathlib.Path,
+    backend: str | None = None,
+    model: str | None = None,
+    judge: bool = False,
+    base_url: str | None = None,
+    role: str | None = None,
+    allow_global_endpoint_override: bool = True,
+    context_window_tokens: int | None = None,
+    expected_endpoint_pin: dict | None = None,
+) -> tuple[ChatClient, str]:
+    """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
+
+    解析优先级：显式 backend/model/base_url > 角色专属环境变量 > role 槽位 > 默认配置。
+    role ∈ {generation, judge, jev, vision, refine, simulate, translation}。JEV 可用 JEV_BACKEND/JEV_MODEL 环境变量独立配置；
+    judge=True 等价 role='judge'。base_url 自定义端点（本地 Ollama/llama.cpp 等）
+    时 api_key 走 OPENAI_API_KEY 环境变量。
+    预算：backends.yaml 的 budget + 各后端 prices 生效，超限抛 BudgetExceeded。"""
+    cfg = _configured_backends(root)
 
     if judge and role is None:
         role = "judge"
@@ -377,13 +427,22 @@ def load_backend(
     # 环境变量级全局覆盖（任意命令的临时操作空间，无需加 CLI 参数）
     if allow_global_endpoint_override and not base_url and os.environ.get("LLM_BASE_URL"):
         b = {"base_url": os.environ["LLM_BASE_URL"], "api_key_env": "OPENAI_API_KEY", "models": []}
+    role_model = os.environ.get(f"{role.upper()}_MODEL") if role else None
+    global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
+    model = model or role_model or global_model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
+    if expected_endpoint_pin is not None:
+        if base_url or allow_global_endpoint_override:
+            raise ValueError("workflow_endpoint_pin_invalid")
+        try:
+            current_pin = _endpoint_pin(name, model, b)
+        except ValueError:
+            raise ValueError("workflow_endpoint_changed_create_new_run") from None
+        if current_pin != expected_endpoint_pin:
+            raise ValueError("workflow_endpoint_changed_create_new_run")
     api_format = validate_api_format(b.get("api_format", "chat"))
     default_key_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
     configured_key_env = b.get("api_key_env") if "api_key_env" in b else default_key_env
     api_key = b.get("api_key") or os.environ.get(configured_key_env or "", "")
-    role_model = os.environ.get(f"{role.upper()}_MODEL") if role else None
-    global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
-    model = model or role_model or global_model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
 
     budget_cfg = cfg.get("budget") or {}
     guard = None
