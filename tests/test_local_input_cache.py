@@ -13,6 +13,7 @@ from lib import workspace
 from lib.application import local_input_service as validation
 from lib.bootstrap.asset_catalog import asset_catalog_application
 from lib.bootstrap.local_inputs import local_input_application
+from lib.bootstrap.workflows import workflow_application
 from lib.infrastructure import local_input_cache
 from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
 
@@ -95,7 +96,7 @@ def test_content_survives_new_application_instances_and_is_deduplicated(cache_ro
 
 def test_same_batch_aliases_share_content_and_same_names_keep_distinct_versions(cache_root):
     rows = local_input_application(cache_root).store([
-        ("manual.txt", b"revision one"), ("alias.md", b"revision one"),
+        ("manual.txt", b"revision one"), ("alias.TXT", b"revision one"),
         ("manual.txt", b"revision two"),
     ])
     assert rows[0]["path"] == rows[1]["path"]
@@ -103,6 +104,48 @@ def test_same_batch_aliases_share_content_and_same_names_keep_distinct_versions(
     assert [Path(row["path"]).read_bytes() for row in rows] == [
         b"revision one", b"revision one", b"revision two",
     ]
+
+
+def test_same_content_uploaded_later_as_agent_jsonl_keeps_selectable_format(cache_root):
+    content = b'{"messages":[]}\n'
+    document = local_input_application(cache_root).store([("document.txt", content)])[0]
+    agent = local_input_application(cache_root).store([("agent.jsonl", content)])[0]
+    alias = local_input_application(cache_root).store([("renamed.JSONL", content)])[0]
+    document_path, agent_path = Path(document["path"]), Path(agent["path"])
+    assert document_path != agent_path
+    assert document_path.parent == agent_path.parent
+    assert document_path.read_bytes() == agent_path.read_bytes() == content
+    assert alias["path"] == agent["path"]
+    application = workflow_application(cache_root, cache_root / "data/output")
+    agent_options = application.source_files("default", frozenset({".json", ".jsonl"}))
+    document_options = application.source_files("default", frozenset({".pdf", ".docx", ".txt", ".md"}))
+    assert [row["path"] for row in agent_options] == [agent["path"]]
+    assert [row["path"] for row in document_options] == [document["path"]]
+
+
+def test_same_batch_content_retains_distinct_suffixes_but_reuses_case_aliases(cache_root):
+    content = b'{"messages":[]}\n'
+    rows = local_input_application(cache_root).store([
+        ("document.txt", content), ("agent.jsonl", content), ("agent-copy.JSONL", content),
+        ("document-copy.TXT", content),
+    ])
+    assert rows[0]["path"] == rows[3]["path"]
+    assert rows[1]["path"] == rows[2]["path"]
+    assert rows[0]["path"] != rows[1]["path"]
+    assert {path.suffix.casefold() for path in workspace.source_files("default")} == {".txt", ".jsonl"}
+    application = workflow_application(cache_root, cache_root / "data/output")
+    assert [row["path"] for row in application.source_files("default", frozenset({".json", ".jsonl"}))] == [rows[1]["path"]]
+
+
+def test_other_suffix_entries_are_still_checked_before_writing_an_agent_alias(cache_root):
+    content = b'{"messages":[]}\n'
+    corrupt = _path(cache_root, "document.txt", content)
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_bytes(b"corrupted")
+    with pytest.raises(ValueError, match="upload_cache_content_mismatch"):
+        local_input_application(cache_root).store([("agent.jsonl", content)])
+    assert list(corrupt.parent.iterdir()) == [corrupt]
+    assert corrupt.read_bytes() == b"corrupted"
 
 
 def test_default_composition_uses_source_directory_and_workflow_and_catalog_can_read(cache_root):
@@ -266,3 +309,27 @@ def test_interrupted_publish_does_not_expose_partial_source_or_leave_temporary_f
         local_input_application(cache_root).store([("document.txt", b"complete source")])
     assert workspace.source_files("default") == []
     assert not list((cache_root / "data").glob(".upload-*.tmp"))
+
+
+def test_concurrent_lock_cleanup_after_path_observation_does_not_reject_upload(cache_root, monkeypatch):
+    lock = cache_root / "data/.upload-cache.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_bytes(b"")
+    original_stat = Path.stat
+    observations = 0
+    removed = False
+
+    def concurrent_cleanup(path, *args, **kwargs):
+        nonlocal observations, removed
+        info = original_stat(path, *args, **kwargs)
+        if path == lock:
+            observations += 1
+            if observations == 2:
+                lock.unlink()
+                removed = True
+        return info
+
+    monkeypatch.setattr(Path, "stat", concurrent_cleanup)
+    row = local_input_application(cache_root).store([("document.txt", b"source")])[0]
+    assert removed
+    assert Path(row["path"]).read_bytes() == b"source"

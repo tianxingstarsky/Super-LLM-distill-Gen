@@ -272,3 +272,27 @@ def test_interrupted_atomic_write_keeps_current_and_existing_snapshot(tmp_path, 
     assert snapshot.read_bytes() == original
     assert list((tmp_path / '.creation-drafts').glob('*.json')) == [snapshot]
     assert not list(tmp_path.rglob('.pending-*.json'))
+
+
+def test_concurrent_lock_cleanup_after_path_observation_does_not_reject_draft(tmp_path, monkeypatch):
+    lock = tmp_path / '.creation-draft.json.lock'
+    lock.write_bytes(b'')
+    original_stat = Path.stat
+    observations = 0
+    removed = False
+
+    def concurrent_cleanup(path, *args, **kwargs):
+        nonlocal observations, removed
+        info = original_stat(path, *args, **kwargs)
+        if path == lock:
+            observations += 1
+            if observations == 2:
+                lock.unlink()
+                removed = True
+        return info
+
+    monkeypatch.setattr(Path, 'stat', concurrent_cleanup)
+    application = creation_draft_application(tmp_path)
+    application.update({'workflow-name:default': 'Persistent draft'})
+    assert removed
+    assert application.load() == {'workflow-name:default': 'Persistent draft'}

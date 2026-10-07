@@ -46,9 +46,9 @@ class FilesystemLocalInputCacheDriver:
         return True
 
     def _targets(self, uploads: tuple[tuple[str, bytes], ...]) -> list[tuple[Path, str, bytes]]:
-        """Resolve aliases by content before writing anything from this batch."""
+        """Resolve same-format content aliases before writing this batch."""
         targets: list[tuple[Path, str, bytes]] = []
-        chosen: dict[str, Path] = {}
+        chosen: dict[tuple[str, str], Path] = {}
         for name, content in uploads:
             digest = hashlib.sha256(content).hexdigest()
             directory = self._cache / digest
@@ -56,13 +56,15 @@ class FilesystemLocalInputCacheDriver:
             path = directory / name
             if path.parent != directory or path.name != name:
                 raise ValueError("invalid_upload_name")
+            suffix = path.suffix.casefold()
             if directory.exists():
                 existing = sorted(directory.iterdir(), key=lambda item: item.name)
                 for candidate in existing:
                     self._check_existing(candidate, content)
-                if existing:
-                    path = existing[0]
-            path = chosen.setdefault(digest, path)
+                matching = [candidate for candidate in existing if candidate.suffix.casefold() == suffix]
+                if matching:
+                    path = matching[0]
+            path = chosen.setdefault((digest, suffix), path)
             self._check_existing(path, content)
             targets.append((path, name, content))
         return targets
@@ -74,8 +76,13 @@ class FilesystemLocalInputCacheDriver:
         self._targets(uploads)
         lock_path = self._data / ".upload-cache.lock"
         _assert_unlinked(lock_path)
-        if lock_path.exists() and not lock_path.is_file():
-            raise ValueError("invalid_upload_cache_path")
+        try:
+            lock_info = lock_path.lstat()
+        except FileNotFoundError:
+            pass  # FileLock can remove a released lock between sessions.
+        else:
+            if not stat.S_ISREG(lock_info.st_mode):
+                raise ValueError("invalid_upload_cache_path")
         self._data.mkdir(parents=True, exist_ok=True)
         with FileLock(str(lock_path), timeout=10):
             # Another console session may have filled the cache while we waited.

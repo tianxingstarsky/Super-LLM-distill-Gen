@@ -68,8 +68,13 @@ class CreationDraftFile:
     def _lock(self) -> FileLock:
         _directory(self.path.parent)
         _unlinked(self._lock_path)
-        if self._lock_path.exists() and not self._lock_path.is_file():
-            raise ValueError('invalid_creation_draft')
+        try:
+            lock_info = self._lock_path.lstat()
+        except FileNotFoundError:
+            pass  # A different FileLock can remove its released lock.
+        else:
+            if not stat.S_ISREG(lock_info.st_mode):
+                raise ValueError('invalid_creation_draft')
         self.path.parent.mkdir(parents=True, exist_ok=True)
         return FileLock(str(self._lock_path), timeout=2)
 
