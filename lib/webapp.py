@@ -1,4 +1,4 @@
-"""Chinese operations console: session-isolated workspaces and schema-driven forms."""
+"""Local console: drop files into a persistent cache and create training data."""
 from __future__ import annotations
 
 import argparse
@@ -39,14 +39,6 @@ def _OUT(name):
     return _ws_out() / name
 
 
-def _request_folder_dialog():
-    st.session_state['open-folder-dialog'] = True
-
-
-def _close_folder_dialog():
-    st.session_state.pop('open-folder-dialog', None)
-
-
 def _select_page(page: str):
     st.session_state["nav"] = page
 
@@ -55,42 +47,15 @@ def _set_ui_language():
     set_language_from_choice(st, st.session_state.get("ui-language-choice", "简体中文"))
 
 
-@st.dialog("打开已有文件夹", width="large", on_dismiss=_close_folder_dialog)
-def _open_folder_dialog():
-    st.write("选择你已经准备好的目录。不会复制、搬走或重命名原文件。")
-    if st.button("浏览本机文件夹…", width="stretch"):
-        try:
-            from lib.folder_picker import choose_existing
-            selected = choose_existing()
-            if selected:
-                st.session_state['open-folder-path'] = selected
-        except Exception:
-            st.warning("当前环境没有本机目录选择器，请粘贴目录路径。")
-    with st.form("open-folder"):
-        path = st.text_input("已有文件夹路径", key="open-folder-path", placeholder="F:\\资料\\我的数据集")
-        submitted = st.form_submit_button("打开文件夹", type="primary", width="stretch")
-    if submitted:
-        try:
-            identifier = WORKSPACES.open_folder(path)
-            st.session_state['folder-to-open'] = identifier
-            _close_folder_dialog()
-            st.rerun()
-        except (ValueError, OSError) as error:
-            st.error(str(error))
-
-
-def _ws_choice():
+def _initialize_local_cache():
     st.sidebar.html(f'<div class="df-brand-line"><img class="df-brand-mark" src="data:image/png;base64,{_BRAND_MARK}" alt="" /><span><span class="df-brand">数简立方</span><span class="df-kicker">数据简单生成</span></span></div>')
-    options = WORKSPACES.available_workspaces()
-    if 'folder-to-open' in st.session_state:
-        st.session_state['ws'] = st.session_state.pop('folder-to-open')
-    if 'ws' not in st.session_state:
-        st.session_state['ws'] = st.query_params.get('ws') or WORKSPACES.resolve()
-    if st.session_state['ws'] not in options:
-        st.sidebar.warning("链接中的文件夹尚未在本机打开，请选择已有目录。")
-        st.session_state['ws'] = WORKSPACES.default_id
-    previous = st.session_state.get('last-workspace', st.session_state['ws'])
-    return options, previous
+    # Old links, CLI preferences and session values cannot switch cache roots.
+    if st.session_state.get('ws', WORKSPACES.default_id) != WORKSPACES.default_id:
+        st.query_params.pop('record', None)
+    st.session_state['ws'] = WORKSPACES.default_id
+    for key in ('folder-to-open', 'open-folder-dialog', 'open-folder-path', 'last-workspace'):
+        st.session_state.pop(key, None)
+    st.query_params.pop('ws', None)
 
 
 def _sample_files():
@@ -100,8 +65,7 @@ def _sample_files():
         candidates.update(Path(path).resolve() for path in workflow_application(ROOT, _ws_out()).reviewable_artifacts())
     except (OSError, ValueError):
         pass
-    if st.session_state['ws'] != WORKSPACES.default_id:
-        candidates.update(p.resolve() for p in WORKSPACES.source_files(st.session_state['ws'], suffixes=(".jsonl",)))
+    candidates.update(p.resolve() for p in WORKSPACES.source_files(st.session_state['ws'], suffixes=(".jsonl",)))
     return sorted(candidates)
 
 
@@ -117,7 +81,7 @@ def _load_normalized_samples(path_key: str, mtime_ns: int):
 def _selected_samples(key, *, preview_only=False):
     files = _sample_files()
     if not files:
-        st.info("当前工作区暂无样本")
+        st.info("本机暂无样本")
         return None, []
     source = st.selectbox("样本文件", files, format_func=lambda p: str(p.relative_to(WORKSPACES.folder(st.session_state['ws']))) if p.is_relative_to(WORKSPACES.folder(st.session_state['ws'])) else p.name,
                           key=f"{key}:{st.session_state['ws']}")
@@ -143,14 +107,14 @@ def _begin(command):
     key = "job:" + ws + (":" + job.run_id if job.run_id else "")
     existing = st.session_state.get(key)
     if existing and existing.snapshot()[0] is None:
-        st.warning("本次工作流已有运行任务" if job.run_id else "当前工作区已有运行任务")
+        st.warning("本次工作流已有运行任务" if job.run_id else "本机已有运行任务")
         return
     try:
         job.start()
     except Timeout:
         # Session jobs disappear on refresh; filesystem locks cover other sessions.
         st.warning("本次工作流已在其他窗口运行。" if job.run_id else
-                   "该工作区已有任务在运行（可能在其他窗口启动），请等待完成后再试。")
+                   "已有任务在其他窗口运行，请等待完成后再试。")
         return
     except ValueError:
         st.error("无法启动任务，请刷新任务列表后重试。")
@@ -188,7 +152,7 @@ def page_overview():
             continue
     render_overview(workflow_application(ROOT, _ws_out()), ws, inventory, len(paths), len(_sample_files()),
                     source.as_posix(), _ws_out().as_posix(), navigate=_select_page,
-                    open_folder=_request_folder_dialog, job_status=_job_status)
+                    job_status=_job_status)
 
 
 def page_preview(show_title=True):
@@ -201,11 +165,13 @@ def page_preview(show_title=True):
 
 def page_workflow():
     from lib.bootstrap.workflows import workflow_application
+    from lib.bootstrap.local_inputs import local_input_application
     from lib.presentation.streamlit.workflow_page import render_workbench
     from lib.bootstrap.workflow_node_models import workflow_node_models_application
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.bootstrap.backends import backend_application
     render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT),
+                     input_cache=local_input_application(),
                      draft_application=creation_draft_application(_ws_out()),
                      backend_application=backend_application(ROOT))
 
@@ -218,7 +184,7 @@ def page_run(show_title=True):
         "文档语料整理": ("doc2corpus", {}),
         "文档问答生成": ("doc2data", {}),
         "质量报告": ("quality-report", {}),
-        "AI 审核小队": ("dsh", {"team": True, "task": "先读取 review-team 技能，依据用户选定的工作区与审核配置派发子智能体。未提供配置先报告缺项，不创建账号、不自行放行。"}),
+        "AI 审核小队": ("dsh", {"team": True, "task": "先读取 review-team 技能，依据本机资料与审核配置派发子智能体。未提供配置先报告缺项，不创建账号、不自行放行。"}),
         "协作者拉取": ("review-remote", {"action": "pull"}),
         "环境自检": ("doctor", {}),
         "全部命令": (None, {}),
@@ -228,9 +194,9 @@ def page_run(show_title=True):
         "文档语料整理": "解析文档并清洗、分块，形成可追溯语料。",
         "文档问答生成": "从文档生成问答候选，并保留来源片段。",
         "质量报告": "统计已有样本的质量问题与检查结果。",
-        "AI 审核小队": "使用工作区审核配置处理需要专家复核的任务。",
+        "AI 审核小队": "使用本机审核配置处理需要专家复核的任务。",
         "协作者拉取": "拉取已配置协作服务中的待审核记录。",
-        "环境自检": "检查本机工作区与模型服务的运行条件。",
+        "环境自检": "检查本机缓存与模型服务的运行条件。",
         "全部命令": "使用完整命令目录；适合熟悉命令行参数的操作者。",
     }
     with st.container(border=True):
@@ -527,7 +493,8 @@ def page_data_management():
 
 
 def page_task_manager():
-    page_header("任务管理", "集中查看多项数据工作流的进度；高级单项工具和命令日志也在此页。", "TASK CENTER")
+    page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。", "WORK MANAGER")
+    st.caption("资料、草稿、运行记录与结果保存在本机，关闭浏览器或重启程序后仍然保留。")
     area = st.segmented_control(
         "任务视图", ("数据工作流", "命令管线", "运行日志"),
         default="数据工作流", key=f"task-view:{st.session_state['ws']}",
@@ -542,8 +509,11 @@ def page_task_manager():
         page_run(show_title=False)
     else:
         from lib.bootstrap.workflows import workflow_application
+        from lib.bootstrap.creation_drafts import creation_draft_application
+        from lib.presentation.streamlit.work_drafts import render_work_drafts
         from lib.presentation.streamlit.task_management_page import render_task_management
         application = workflow_application(ROOT, _ws_out())
+        render_work_drafts(creation_draft_application(_ws_out()), st.session_state["ws"], _select_page)
         render_task_management(
             application, st.session_state["ws"], _begin,
             lambda: _select_page("自动工作流"),
@@ -551,7 +521,7 @@ def page_task_manager():
 
 
 def page_system_settings():
-    page_header("系统设置", "管理界面语言与生成偏好。任务模型在工作流节点选择。", "WORKSPACE SETTINGS")
+    page_header("系统设置", "管理界面语言与生成偏好。任务模型在工作流节点选择。", "LOCAL SETTINGS")
     from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 
     st.html(SETTINGS_STYLE)
@@ -573,14 +543,14 @@ PAGES = {
     "首页": page_overview, "总览": page_overview,
     "数据生成": page_workflow, "自动工作流": page_workflow,
     "数据管理": page_data_management, "资产管理": page_assets, "数据预览": page_preview,
-    "人工审核": page_human_review, "任务管理": page_task_manager, "管线运行": page_run,
+    "人工审核": page_human_review, "任务管理": page_task_manager, "工作管理": page_task_manager, "管线运行": page_run,
     "命令管线": page_task_manager,
     "运行监控": page_monitor, "监控": page_monitor, "输出打包": page_output_packages, "质量报告": page_quality,
     "模型与密钥": page_system_settings, "系统设置": page_system_settings,
     "偏好设置": page_prefs,
 }
 try:
-    _workspace_options, _previous_workspace = _ws_choice()
+    _initialize_local_cache()
 except (ValueError, OSError) as error:
     st.error(str(error))
     st.stop()
@@ -635,11 +605,11 @@ visible_nav = [
     ("数据生成", "自动工作流", {"数据生成", "自动工作流"}),
     ("数据管理", "数据管理", {"数据管理", "资产管理", "数据预览", "质量报告"}),
     ("人工审核", "人工审核", {"人工审核"}),
-    ("任务管理", "任务管理", {"任务管理", "管线运行", "运行监控", "监控"}),
+    ("工作管理", "任务管理", {"工作管理", "任务管理", "管线运行", "运行监控", "监控"}),
     ("输出打包", "输出打包", {"输出打包"}),
     ("系统设置", "系统设置", {"系统设置", "偏好设置"}),
 ]
-icons = {"首页": "⌂", "数据生成": "◈", "数据管理": "▤", "人工审核": "✓",
+icons = {"首页": "⌂", "数据生成": "◈", "数据管理": "▤", "人工审核": "✓", "工作管理": "⤴",
          "任务管理": "⤴", "输出打包": "⇩", "模型与密钥": "⬡", "模型服务": "⬡", "系统设置": "⚙"}
 if "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page if _qp_page in PAGES else "总览"
@@ -648,6 +618,8 @@ if "nav" not in st.session_state:
 _route_label = canonical_navigation_route(
     st.session_state.get("nav", "总览"), PAGES, icons,
 )
+if _route_label == "工作管理":
+    _route_label = "任务管理"
 if _route_label == "模型与密钥":
     _route_label = "系统设置"
     st.session_state["open-model-admin"] = True
@@ -664,10 +636,7 @@ for label, target, active_pages in visible_nav:
         width="stretch",
     )
 st.sidebar.divider()
-st.sidebar.caption("当前工作区")
-st.sidebar.selectbox("工作区", _workspace_options,
-                     format_func=lambda ws: WORKSPACES.label(ws), key="ws", label_visibility="collapsed")
-st.sidebar.button("打开已有文件夹…", on_click=_request_folder_dialog, width="stretch")
+st.sidebar.caption("本机保存 · 关闭后仍保留")
 from lib.bootstrap.workflows import workflow_application as _sidebar_workflow_application
 from lib.presentation.streamlit.sidebar_tasks import render_sidebar_tasks
 try:
@@ -676,18 +645,9 @@ except FileNotFoundError:
     _sidebar_output = None
 if _sidebar_output is not None:
     render_sidebar_tasks(_sidebar_workflow_application(ROOT, _sidebar_output), st.session_state["ws"])
-try:
-    with st.sidebar.expander("文件夹位置"):
-        st.code(WORKSPACES.folder(st.session_state['ws']).as_posix(), language=None)
-except FileNotFoundError as error:
-    st.sidebar.warning(str(error))
 st.sidebar.html('<div class="df-sidebar-note"><span class="df-note-mark">✦</span><strong>从资料到训练数据</strong><small>自动生成 · 全程可追溯</small></div>')
-st.query_params['ws'] = st.session_state['ws']
-if st.session_state['ws'] != _previous_workspace:
-    st.query_params.pop('record', None)
-st.session_state['last-workspace'] = st.session_state['ws']
-top_page = translate_label(page, st.session_state.get("ui_language", "zh"))
-st.html(f'<div class="df-topbar"><div><strong>数简立方</strong><span>　/　{html.escape(top_page)}</span></div><div class="df-topbar-meta">当前工作区　<strong>{html.escape(WORKSPACES.label(st.session_state["ws"]))}</strong>　·　数据简单生成</div></div>')
+top_page = translate_label("工作管理" if page == "任务管理" else page, st.session_state.get("ui_language", "zh"))
+st.html(f'<div class="df-topbar"><div><strong>数简立方</strong><span>　/　{html.escape(top_page)}</span></div><div class="df-topbar-meta">本机缓存　·　数据简单生成</div></div>')
 st.query_params['page'] = page
 from lib.presentation.streamlit.context_guide import render_context_guide
 render_context_guide(page, _select_page)
@@ -695,5 +655,3 @@ try:
     PAGES[page]()
 except (ValueError, OSError) as error:
     st.error(str(error))
-if st.session_state.get('open-folder-dialog'):
-    _open_folder_dialog()

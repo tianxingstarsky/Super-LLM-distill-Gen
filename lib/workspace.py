@@ -99,6 +99,9 @@ def current(root=None):
 
 def resolve(ws=None, root=None):
     name = validate(ws if ws is not None else (os.environ.get("DF_WORKSPACE") or current(root)))
+    # The local cache exists independently of legacy folder registrations.
+    if name == DEFAULT:
+        return DEFAULT
     if name not in list_all(root):
         raise ValueError(f"尚未打开此文件夹：{name}。使用 workspace add <已有目录>，不会创建源文件夹。")
     return name

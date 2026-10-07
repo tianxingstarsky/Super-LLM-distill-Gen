@@ -46,8 +46,8 @@ def _display_time(value: object) -> str:
         moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         if moment.tzinfo is not None:
             moment = moment.astimezone(LOCAL_TIMEZONE)
-            return moment.strftime("%m-%d %H:%M") + " 北京时间"
-        return moment.strftime("%m-%d %H:%M")
+            return moment.strftime("%Y-%m-%d %H:%M") + " 北京时间"
+        return moment.strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return str(value or "")[:16].replace("T", " ")
 
@@ -74,7 +74,18 @@ def _run_card_html(run: dict) -> tuple[str, str]:
     heading = (f'<div class="df-task-card-top"><span class="df-task-status" data-status="{safe_status}">'
                f'<i>{STATUS_GLYPHS.get(status, "?")}</i>{html.escape(LABELS.get(status, status))}</span>'
                f'<time>{moment}</time></div>')
+    source_modes = {"document": "文档资料", "agent": "Agent 上下文", "brief": "开放需求"}
+    source_label = source_modes.get(run.get("source_mode"), "来源未知")
+    source_names = run.get("source_names", [])
+    source_text = "、".join(str(name) for name in source_names[:2])
+    if len(source_names) > 2:
+        source_text += f" · +{len(source_names) - 2}"
+    if not source_text:
+        source_text = str(run.get("source_brief") or "")
+    source_title = html.escape(source_text, quote=True)
     detail = (f'<div class="df-task-card-targets">{tags}</div>'
+              f'<div class="df-task-card-source"><b>{source_label}</b>'
+              f'<span data-user-content title="{source_title}">{html.escape(source_text)}</span></div>'
               f'<div class="df-task-card-progress"><span>已完成节点 <b>{done}/{total}</b></span>'
               f'<span>#{html.escape(str(run.get("id", ""))[:8])}</span></div>'
               f'<div class="df-task-meter" role="progressbar" aria-label="已完成节点" '
@@ -116,7 +127,11 @@ def _filtered_runs(runs: list[dict], status_filter: str, search: str) -> list[di
         if allowed is not None and run.get("status") not in allowed:
             continue
         haystack = " ".join([str(run.get("name", "")), str(run.get("id", "")),
-                             " ".join(str(target) for target in run.get("targets", []))]).casefold()
+                             " ".join(str(target) for target in run.get("targets", [])),
+                             " ".join(str(name) for name in run.get("source_names", [])),
+                             str(run.get("source_brief", "")),
+                             _display_time(run.get("created_at")),
+                             _display_time(run.get("updated_at"))]).casefold()
         if needle and needle not in haystack:
             continue
         result.append(run)
@@ -215,7 +230,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         left, right = st.columns([1.25, 1], gap="large")
         with left, st.container(border=True):
             st.html('<div class="df-task-empty"><span class="df-task-empty-icon">◈</span>'
-                    '<h3>当前工作区暂无自动工作流</h3>'
+                    '<h3>本机暂无自动工作流</h3>'
                     '<p>添加文档、Agent 上下文或开放需求后，这里会显示实际运行节点、质量结果与日志。</p></div>')
             st.button("新建数据工作流", type="primary", on_click=on_new_workflow,
                       key=f"task-center-create:{workspace_id}", use_container_width=True)
@@ -274,7 +289,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                 f'<small>共 {len(runs)} 条</small></div>')
         status_filter = st.segmented_control("筛选任务", FILTERS, default="全部",
                                              key=f"task-center-filter:{workspace_id}") or "全部"
-        search = st.text_input("搜索任务", placeholder="名称、任务 ID 或训练目标",
+        search = st.text_input("搜索任务", placeholder="任务名称、来源文件、日期或 ID",
                                key=f"task-center-search:{workspace_id}")
         matches = _filtered_runs(runs, status_filter, search)
         page_key = f"task-center-page:{workspace_id}"
@@ -340,7 +355,10 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                     from lib.presentation.streamlit.agent_review_page import render_agent_review
 
                     render_agent_review(application, selected_id, workspace_id=workspace_id)
-            render_run(application, selected_id, begin, embedded=True)
+            if selected_run.get("recipe_readable", True):
+                render_run(application, selected_id, begin, embedded=True)
+            else:
+                st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         else:
             st.html('<div class="df-task-no-match">选择左侧任务即可查看真实运行节点、配置、日志与产物。</div>')
     return selected_id

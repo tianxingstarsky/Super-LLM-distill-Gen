@@ -1781,6 +1781,69 @@ class UntranslatedText(str):
     """User-owned text passed through localized Streamlit label methods."""
 
 
+ZH_EN.update({
+    "本机缓存": "Local cache",
+    "本机缓存　·　数据简单生成": "Local cache · Data made simple",
+    "工作管理": "Work Manager",
+    "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。": "Find past work, continue drafts, and view running workflows and results.",
+    "资料、草稿、运行记录与结果保存在本机，关闭浏览器或重启程序后仍然保留。": "Files, drafts, run history, and results stay on this computer after you close the browser or restart the app.",
+    "本机保存 · 关闭后仍保留": "Saved locally · Kept after closing",
+    "未开始的工作": "Unfinished drafts",
+    "草稿和上传资料保存在本机，关闭或重启后仍可继续。": "Drafts and uploads stay on this computer. Continue after closing or restarting the app.",
+    "无法读取工作草稿，请检查本机存储后重试。": "Could not read work drafts. Check local storage and try again.",
+    "当前自动保存": "Current autosave",
+    "尚未命名的工作": "Untitled work",
+    "继续当前草稿": "Continue current draft",
+    "已保存的独立草稿": "Saved drafts",
+    "打开所选草稿": "Open selected draft",
+    "可在生成页保存独立草稿，分别准备多份工作。": "Save separate drafts in Data Generation to prepare several tasks.",
+    "上一页草稿": "Previous drafts",
+    "下一页草稿": "Next drafts",
+    "草稿未能打开，现有工作未改变。请检查本机存储后重试。": "Could not open the draft. Your current work is unchanged. Check local storage and try again.",
+    "保存为独立草稿": "Save a separate draft",
+    "保留这份配置，稍后可从工作管理打开。不会开始生成。": "Keep this setup and reopen it from Work Manager. Generation will not start.",
+    "独立草稿已保存，可从工作管理继续。": "Draft saved. Continue from Work Manager.",
+    "草稿未能保存，当前配置仍在。请检查本机存储后重试。": "Could not save the draft. Your current setup is still here. Check local storage and try again.",
+    "拖入文件即保存并选中，关闭或重启后仍可使用。": "Drop files to save and select them. They remain available after closing or restarting the app.",
+    "来源未知": "Unknown source",
+    "任务名称、来源文件、日期或 ID": "Task name, source file, date, or ID",
+    "历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。": "This task is still saved, but its full record could not be read. Check the task files.",
+    "本机缓存 · 上传即保存": "Local cache · Files saved on upload",
+    "本机暂无样本": "No local examples yet",
+    "本机已有运行任务": "A local task is already running",
+    "已有任务在其他窗口运行，请等待完成后再试。": "A task is running in another window. Try again when it finishes.",
+    "使用本机审核配置处理需要专家复核的任务。": "Use local review settings for tasks that need expert review.",
+    "检查本机缓存与模型服务的运行条件。": "Check whether the local cache and model services are ready.",
+    "本机任务的真实运行状态": "Live activity from local tasks",
+    "本机缓存中的部分输入资料": "Source files saved locally",
+    "上传资料 →": "Upload files →",
+    "本机还没有工作流任务。上传资料或选择训练策略，即可开始创建。": "No local workflows yet. Upload files or choose a training goal to get started.",
+    "已生成版本和本机缓存位置": "Released versions and local storage",
+    "本机缓存位置": "Local cache location",
+    "生成产物": "Generated results",
+    "文件扫描已达到安全上限，计数为当前已列出的数量；其余文件可从本机缓存目录查看。": "The scan reached its limit. Counts cover the listed files. Find other files in the local cache folder.",
+    "文件超过 50 MiB；请从本机缓存目录直接读取，或在输出打包中下载任务数据包。": "This file exceeds 50 MiB. Open it from the local cache or download the task package.",
+    "最近任务和工作流卡片会显示本机任务的真实状态。": "Recent Tasks and Workflow show live local task status.",
+    "上方卡片显示当前候选数，可直接打开对应队列。": "The cards show candidate counts. Open a queue from its card.",
+    "选择已完成的本机任务；若没有结果，先创建工作流。": "Choose a completed local task. Create a workflow first if there are no results.",
+    "浏览本机缓存中的对话文件": "Browse conversation files saved locally",
+    "本机暂无运行日志": "No local run logs yet",
+    "以上是当前可审候选量；通过、退回和待处理状态以具体队列为准。": "These counts show reviewable candidates. Each queue shows approved, returned, and pending items.",
+    "本机暂无自动工作流": "No local workflows yet",
+    "本机已完成的工作流": "Completed local workflows",
+    "暂无通过产物校验的 CPT 工作流。先在“自动工作流”生成 CPT 候选，再进入语料审核。": "No checked CPT workflow is available. Create CPT candidates in Workflows, then review them here.",
+    "暂无通过产物校验的 SFT 工作流。先在“自动工作流”生成 SFT 候选，再进入审核。": "No checked SFT workflow is available. Create SFT candidates in Workflows, then review them here.",
+    "无法读取或保存 Agent 轨迹审核；请检查产物完整性及本机缓存状态。": "Could not read or save this Agent trace review. Check artifact integrity and the local cache.",
+    "参数、目标、需求和已选资料保存在本机缓存；节点模型和联网检索需重新确认。": "Settings, goals, briefs, and selected files are saved locally. Reconfirm node models and web search when you reopen the app.",
+    "拖入文件即保存并选中，刷新后仍可使用。": "Drop files to save and select them. They remain available after a refresh.",
+    "本次使用的资料": "Sources for this run",
+    "资料未保存：单文件最多 50 MiB，一次上传合计最多 200 MiB。": "Files were not saved. Each file can be up to 50 MiB. Each upload batch can be up to 200 MiB.",
+    "资料未保存：文件内容为空，请选择有内容的文件。": "Files were not saved. Choose files that are not empty.",
+    "资料未保存：请检查文件名和格式，支持 PDF、DOCX、TXT、Markdown、JSON 和 JSONL。": "Files were not saved. Check their names and formats. Supported formats: PDF, DOCX, TXT, Markdown, JSON, and JSONL.",
+    "资料未保存：无法写入本机缓存，请检查存储位置后重新上传。": "Files were not saved. Check the local cache folder and upload them again.",
+})
+
+
 def translate(value: Any, language: str = "en") -> Any:
     """Translate an exact interface phrase and leave all other values intact."""
     if isinstance(value, UntranslatedText) or language_code(language) != "en" or not isinstance(value, str):
@@ -2086,14 +2149,14 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"显示最近\s*(\d+)\s*/\s*(\d+)\s*条", value)
     if match:
         return f"Showing the latest {match.group(1)} of {match.group(2)}"
-    match = re.fullmatch(r"当前工作区找到\s*(\d+)\s*个版本目录 ·\s*(\d+)\s*个版本通过文件校验", value)
+    match = re.fullmatch(r"(?:当前工作区|本机)找到\s*(\d+)\s*个版本目录 ·\s*(\d+)\s*个版本通过文件校验", value)
     if match:
         return f"Found {match.group(1)} release folders · {match.group(2)} passed file checks"
     match = re.fullmatch(r"生成成对回答并通过质量检查后，(DPO|ORPO|RLAIF) 候选会显示在这里供人工比较。", value)
     if match:
         return f"{match.group(1)} candidates appear here for review after paired answers pass quality checks."
     match = re.fullmatch(
-        r"当前工作区没有通过产物校验的 (CPT|SFT|DPO|ORPO) 工作流。先在“自动工作流”生成 \1 候选，再进入人工审核。",
+        r"(?:当前工作区没有|暂无)通过产物校验的 (CPT|SFT|DPO|ORPO) 工作流。先在“自动工作流”生成 \1 候选，再进入人工审核。",
         value,
     )
     if match:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from lib.infrastructure.training_workflow import Workflow, create_run
@@ -145,7 +146,7 @@ def test_empty_task_view_keeps_new_workflow_action(tmp_path):
     app = AppTest.from_function(task_screen, args=(str(tmp_path / "out"), "empty"), default_timeout=15)
     app.run()
     assert not app.exception
-    assert any("当前工作区暂无自动工作流" in item.value for item in app.get("html")
+    assert any("本机暂无自动工作流" in item.value for item in app.get("html")
                if isinstance(item.value, str))
     assert any("质检与候选打包" in item.value and "人工审核另行发布" in item.value
                for item in app.get("html") if isinstance(item.value, str))
@@ -199,3 +200,125 @@ def test_run_log_keeps_event_stage_and_escapes_untrusted_details():
     assert "Agent 轨迹" in markup and "节点处理完成" in markup
     assert "2026-09-23 00:00:00 UTC" in markup
     assert "&lt;script&gt;bad&lt;/script&gt;" in markup and "<script>" not in markup
+
+
+def test_reopened_history_finds_all_independent_runs_by_source_and_year(tmp_path):
+    from lib.infrastructure import workflow_task_inventory as inventory
+    from lib.infrastructure.training_workflow import atomic_json, read_json, run_path
+
+    source = tmp_path / "Maintenance-Guide.txt"
+    source.write_text("Keep each submitted task independent.", encoding="utf-8")
+    other_source = tmp_path / "Other-Guide.txt"
+    other_source.write_text("A separate source.", encoding="utf-8")
+    output = tmp_path / "out"
+    ids = [create_run(output, sources=[source], targets=["cpt"], name="Repeated source")
+           for _ in range(2)]
+    unrelated = create_run(output, sources=[other_source], targets=["cpt"], name="Other source")
+    old_state = run_path(output, ids[0]) / "state.json"
+    state = read_json(old_state)
+    atomic_json(old_state, {**state, "created_at": "2025-01-02T00:00:00+00:00",
+                            "updated_at": "2025-01-02T00:00:00+00:00"})
+    source.unlink()
+
+    app = AppTest.from_function(task_screen, args=(str(output), "history"), default_timeout=15).run()
+    assert not app.exception
+    app.text_input(key="task-center-search:history").set_value("maintenance-guide").run()
+    assert not app.exception
+    cards = {item.key.rsplit(":", 1)[1] for item in app.button
+             if item.key and item.key.startswith("task-card:history:")}
+    assert cards == set(ids) and unrelated not in cards
+    markup = "".join(str(item.value) for item in app.get("html"))
+    assert "Maintenance-Guide.txt" in markup and "文档资料" in markup
+    assert "2025-01-02 08:00" in markup
+
+    inventory._summary.cache_clear()
+    reopened = AppTest.from_function(task_screen, args=(str(output), "history"), default_timeout=15).run()
+    assert not reopened.exception
+    reopened.text_input(key="task-center-search:history").set_value("maintenance-guide").run()
+    reopened_cards = {item.key.rsplit(":", 1)[1] for item in reopened.button
+                      if item.key and item.key.startswith("task-card:history:")}
+    assert reopened_cards == set(ids)
+    reopened.text_input(key="task-center-search:history").set_value("2025-01-02").run()
+    assert not reopened.exception
+    assert reopened.session_state["task-center-run:history"] == ids[0]
+    assert reopened.button(key=f"task-card:history:{ids[0]}")
+    assert all((run_path(output, rid) / "inputs/0000.txt").is_file() for rid in ids)
+
+
+def test_task_source_summary_escapes_file_names_and_brief_content():
+    from lib.presentation.streamlit.task_management_page import _run_card_html
+
+    _, detail = _run_card_html({"id": "one", "source_mode": "document",
+                                "source_names": ['<img src=x onerror="alert(1)">.txt']})
+    assert "<img" not in detail and "&lt;img" in detail
+    assert "data-user-content" in detail
+    _, brief = _run_card_html({"id": "two", "source_mode": "brief",
+                               "source_brief": "<script>private requirement</script>"})
+    assert "<script>" not in brief and "&lt;script&gt;" in brief
+
+
+def test_unreadable_recipe_keeps_history_and_other_tasks_accessible(tmp_path):
+    from lib.infrastructure.training_workflow import run_path
+
+    source = tmp_path / "guide.txt"
+    source.write_text("A preserved task source.", encoding="utf-8")
+    output = tmp_path / "out"
+    healthy = create_run(output, sources=[source], targets=["cpt"], name="Healthy task")
+    damaged = create_run(output, sources=[source], targets=["cpt"], name="Damaged task")
+    recipe_path = run_path(output, damaged) / "recipe.json"
+    recipe_path.write_text("{", encoding="utf-8")
+    app = AppTest.from_function(task_screen, args=(str(output), "unreadable"), default_timeout=15).run()
+    assert not app.exception
+    assert app.button(key=f"task-card:unreadable:{damaged}")
+    assert app.button(key=f"task-card:unreadable:{healthy}")
+    assert any("历史任务仍已保留" in item.value for item in app.warning)
+    markup = "".join(str(item.value) for item in app.get("html"))
+    assert "来源未知" in markup
+    app.button(key=f"task-card:unreadable:{healthy}").click().run()
+    assert not app.exception and app.session_state["task-center-run:unreadable"] == healthy
+    assert app.button(key=f"task-card:unreadable:{damaged}")
+
+
+@pytest.mark.parametrize("filename", ["state.json", "recipe.json"])
+@pytest.mark.parametrize("changed_content", [None, "{", "{}"])
+def test_task_detail_handles_file_changes_after_history_scan(tmp_path, monkeypatch, filename, changed_content):
+    from lib.infrastructure.training_workflow import run_path
+    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+
+    source = tmp_path / "guide.txt"
+    source.write_text("A persisted source.", encoding="utf-8")
+    output = tmp_path / "out"
+    other_id = create_run(output, sources=[source], targets=["cpt"], name="Other task")
+    run_id = create_run(output, sources=[source], targets=["cpt"], name="Recoverable task")
+    changed_path = run_path(output, run_id) / filename
+    original_bytes = changed_path.read_bytes()
+    inventory = FilesystemWorkflowDriver.task_runs
+    changes = []
+
+    def change_after_scan(driver):
+        rows = inventory(driver)
+        if not changes:
+            changes.append(True)
+            assert next(row for row in rows if row["id"] == run_id)["recipe_readable"]
+            if changed_content is None:
+                changed_path.unlink()
+            else:
+                changed_path.write_text(changed_content, encoding="utf-8")
+        return rows
+
+    monkeypatch.setattr(FilesystemWorkflowDriver, "task_runs", change_after_scan)
+    app = AppTest.from_function(task_screen, args=(str(output), "race"), default_timeout=15)
+    app.session_state["task-center-run:race"] = run_id
+    app.run()
+    assert changes == [True] and not app.exception
+    assert app.button(key=f"task-card:race:{run_id}")
+    assert app.button(key=f"task-card:race:{other_id}")
+    assert any("历史任务仍已保留" in item.value for item in app.warning)
+    assert not any(button.key == f"resume:{run_id}" for button in app.button)
+    assert not any(button.key == f"stop:{run_id}" for button in app.button)
+
+    changed_path.write_bytes(original_bytes)
+    app.run()
+    assert not app.exception and app.session_state["task-center-run:race"] == run_id
+    assert any(item.value == "Recoverable task" for item in app.subheader)
+    assert app.button(key=f"resume:{run_id}")

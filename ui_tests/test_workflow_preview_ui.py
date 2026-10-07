@@ -28,12 +28,14 @@ def test_data_preview_renders_verified_orpo_comparison(tmp_path, monkeypatch):
 
     monkeypatch.setattr(WorkflowApplication, "list_runs", no_full_inventory)
 
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    source = tmp_path / "source"
-    source.mkdir()
-    name = ws.add_folder(source)
+    source = tmp_path / "data/seeds"
+    source.mkdir(parents=True)
+    name = ws.DEFAULT
     run_id = "f" * 32
     run = ws.out(name) / "workflows" / run_id
     artifacts = run / "artifacts"

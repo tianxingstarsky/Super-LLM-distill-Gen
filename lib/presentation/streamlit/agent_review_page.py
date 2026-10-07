@@ -127,7 +127,7 @@ def _error_message(error: Exception) -> str:
         return "此轨迹无法从候选内容独立重放，不能批准。"
     if code == "agent_review_busy_retry":
         return "另一位审阅者正在更新该任务，请稍后重试。"
-    return "无法读取或保存 Agent 轨迹审核；请检查产物完整性及工作区状态。"
+    return "无法读取或保存 Agent 轨迹审核；请检查产物完整性及本机缓存状态。"
 
 
 def _load_page(application: WorkflowApplication, run_id: str, *, kind: str,

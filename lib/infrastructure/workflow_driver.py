@@ -271,8 +271,17 @@ class FilesystemWorkflowDriver:
     @staticmethod
     def source_files(workspace_id: str, suffixes: frozenset[str], limit: int) -> list[dict]:
         folder = WS.folder(workspace_id)
-        return [{"path": str(path), "label": str(path.relative_to(folder))}
-                for path in WS.source_files(workspace_id, suffixes=suffixes, limit=limit)]
+        result = []
+        for path in WS.source_files(workspace_id, suffixes=suffixes, limit=limit):
+            relative = path.relative_to(folder)
+            # Cache fingerprints distinguish revisions without filling the
+            # source picker with a long storage path.
+            parts = relative.parts
+            label = (f"{path.name} · {parts[1][:8]}"
+                     if len(parts) == 3 and parts[0] == "uploads" and len(parts[1]) == 64
+                     else str(relative))
+            result.append({"path": str(path), "label": label})
+        return result
 
     def reviewable_artifacts(self) -> list[str]:
         """Expose only completed SFT conversations whose run bundle still verifies."""

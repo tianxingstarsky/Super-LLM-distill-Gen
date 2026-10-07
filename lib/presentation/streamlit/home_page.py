@@ -8,7 +8,7 @@ from lib.presentation.streamlit.i18n import UntranslatedText, translate
 
 
 def render_overview(application: WorkflowApplication, ws, inventory, source_total, sample_count,
-                    source_location, output_location, *, navigate, open_folder, job_status):
+                    source_location, output_location, *, navigate, job_status, open_folder=None):
     page_header("人工智能数据生成与管理平台", "从文档、智能体上下文和开放需求，构建可追溯的高质量训练数据。", "BETTER DATA　·　A BRIGHTER AI")
     st.html(HOME_STYLE)
 
@@ -86,7 +86,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                           key="overview-preset:auto", width="stretch")
         with stats_column:
             with st.container(border=True, key="home-stats-panel"):
-                section_heading("任务统计", "当前工作区的真实运行状态", "◷")
+                section_heading("任务统计", "本机任务的真实运行状态", "◷")
                 items = (("工作流总数", total, "blue"), ("已完成", completed, "green"),
                          ("处理中", processing, "amber"), ("需检查", attention, "red"))
                 st.html('<div class="df-home-kpis">' + ''.join(
@@ -119,7 +119,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
             st.button("进入人工审核", on_click=navigate, args=("人工审核",),
                       key="overview-review", width="stretch")
         with st.container(border=True):
-            section_heading("来源文件", "当前工作区中的部分输入资料", "▤")
+            section_heading("来源文件", "本机缓存中的部分输入资料", "▤")
             if inventory:
                 rows = []
                 for item in inventory[:6]:
@@ -136,8 +136,8 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                         '<small>可以在数据生成页上传文档，也可以用开放需求直接开始。</small></div>')
             st.button("打开数据管理", on_click=navigate, args=("数据管理",),
                       key="overview-assets", width="stretch")
-            st.button("打开已有文件夹", on_click=open_folder,
-                      key="overview-open-folder", width="stretch")
+            st.button("上传资料 →", on_click=navigate, args=("自动工作流",),
+                      key="overview-upload", width="stretch")
     with right:
         with st.container(border=True):
             section_heading("最近任务", "选择任务直接查看工作流过程", "◷")
@@ -163,13 +163,13 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                                       args=(row['id'],), width="stretch")
             else:
                 st.html('<div class="df-home-empty"><b>⌁</b><strong>暂无最近任务</strong>'
-                        '<small>当前工作区还没有工作流任务。选择来源或训练策略，即可开始创建。</small></div>')
+                        '<small>本机还没有工作流任务。上传资料或选择训练策略，即可开始创建。</small></div>')
         with st.container(border=True):
-            section_heading("输出与存储", "已生成版本和工作区位置", "⇩")
+            section_heading("输出与存储", "已生成版本和本机缓存位置", "⇩")
             st.html(f'<div class="df-home-summary"><span>本地发布版本 <b>{release_count}</b></span>'
                     f'<span>当前来源 <b>{source_count}</b></span></div>')
             st.button("查看输出打包", on_click=navigate, args=("输出打包",), width="stretch")
-            with st.expander("工作区路径与存储位置"):
+            with st.expander("本机缓存位置"):
                 language = st.session_state.get('ui_language', 'zh')
                 st.caption(UntranslatedText(f"{translate('来源目录', language)}　{source_location}"))
                 st.caption(UntranslatedText(f"{translate('任务及审核产物目录', language)}　{output_location}"))

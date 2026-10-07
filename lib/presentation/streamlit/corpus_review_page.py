@@ -70,7 +70,7 @@ def render_corpus_review(application: CorpusReviewApplication, *, show_header: b
                 "生成并验证文档语料后，可在这里逐条检查来源证据、修订结果并发布审核版本。",
                 "CPT 连续预训练语料",
             )
-            st.info("当前工作区没有通过产物校验的 CPT 工作流。先在“自动工作流”生成 CPT 候选，再进入语料审核。")
+            st.info("暂无通过产物校验的 CPT 工作流。先在“自动工作流”生成 CPT 候选，再进入语料审核。")
             if st.button("前往数据生成", type="primary", key="corpus-review-empty-workflow"):
                 st.session_state["nav"] = "自动工作流"
                 st.rerun()

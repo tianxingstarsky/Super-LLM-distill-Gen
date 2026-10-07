@@ -79,6 +79,6 @@ def render_monitor_page(application: MonitorApplication, workspace_id: str, job_
             with st.expander("查看原始事件记录"):
                 st.json(event)
     else:
-        st.html('<div class="df-empty-state"><span class="df-empty-state-icon">◷</span><strong>当前工作区暂无运行日志</strong><p>任务启动后，这里会显示阶段、耗时与执行结果。</p></div>')
+        st.html('<div class="df-empty-state"><span class="df-empty-state-icon">◷</span><strong>本机暂无运行日志</strong><p>任务启动后，这里会显示阶段、耗时与执行结果。</p></div>')
     job_status()
 

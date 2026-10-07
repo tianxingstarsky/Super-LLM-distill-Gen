@@ -1,88 +1,107 @@
-# 工作区与导出格式（文件夹优先；minimind 兼容）
+# 本机缓存与导出格式
 
-> 说明：本项目与 minimind（jingyaogong/minimind）**无任何关联、合作或依赖**。
-> minimind 只是一个**输出格式参照**（和 LLaMA-Factory 一样属于"格式规范来源"）：
-> 我们按用户要求产出与之加载侧字段一致的文件，方便直接喂对应训练脚本。
+## 开源控制台：上传资料后直接开始
 
-## 一、工作区 = 你已有的数据文件夹（不搬家、不改源文件）
+开源版面向本机使用。控制台不再要求选择工作区，也不需要先登记文件夹。
+用户在“自动工作流”上传文档或 Agent 上下文记录，或直接填写开放需求，然后配置节点并开始生成。
+首页、数据管理、审核、任务和打包页读取同一份本机记录。
 
-工作区是**你本机已准备好的目录**，不是仓库里的副本：`df workspace add <已有路径>` 只登记路径，
-返回稳定自动标识 `<目录名slug>-<路径哈希12位>`（同一台机器、同一路径恒定；目录名为中文等
-非 ASCII 时取 `folder-<哈希12位>`）。**不复制、不移动、不改名、不写入任何源文件**；
-运行产物只写进该目录下的隐藏目录 `.dataforge/output/`。
+| 内容 | 默认保存位置 |
+|---|---|
+| 上传的来源文件 | `data/seeds/uploads/` |
+| 生成任务、候选样本、审核记录与导出版本 | `data/output/` |
+| 历史来源资料 | `data/seeds/`（继续兼容） |
+
+上传后，来源文件会保存到本机缓存。刷新页面或重新打开控制台不会自动清理这些文件，
+也不会自动删除已有任务和审核记录。已经保存的来源会自动加入本次资料选择，
+重新打开后可直接选用本机资料，不必再次上传。
+
+## 工作管理：历史工作与独立草稿
+
+“工作管理”集中展示正在进行和已结束的工作。可以按任务名、来源文件名、日期或任务 ID 搜索，
+再查看原始来源、运行过程、审核与导出结果。关闭浏览器或重启程序不会清空历史。
+未完成的生成任务可从已保存的检查点继续，程序重启后不会自行恢复收费模型调用。
+
+生成页自动保存当前参数与资料选择。需要同时准备多份工作时，点击“保存为独立草稿”，
+随后在“工作管理”打开对应草稿。独立草稿各自保存，打开其中一份不会删除其他草稿或已生成任务。
+来源文件、当前草稿、独立草稿和运行记录均保存在硬盘；关闭页面不触发清理。
+节点模型和联网授权需在重新打开后确认。
+
+| 工作记录 | 保存位置 |
+|---|---|
+| 当前自动保存草稿 | `data/output/.creation-draft.json` |
+| 独立草稿 | `data/output/.creation-drafts/` |
+| 每次生成工作及来源快照 | `data/output/workflows/<任务 ID>/` |
+
+这些本机资料和运行记录不提交到 Git。
+
+缓存位于运行项目的机器上。闭源服务版部署在服务器上，按登录身份和服务端隔离规则管理资料与任务；
+服务版不会让使用者选择服务器上的本机文件夹。其存储和隔离方式由独立服务版实现。
+
+## 命令行和旧路径兼容
+
+控制台统一使用默认本机缓存。命令行保留 `df workspace` 和 `--ws`，供已有脚本和旧数据路径继续使用。
+它们属于兼容接口，不是控制台的前置步骤。
 
 ```bash
-df workspace add "F:\资料\我的数据"          # 打开已有目录 → 返回稳定标识（不创建目录，源文件原样）
-df workspace list                            # 全部工作区（default 恒在；旧工作区有标注）
-df workspace use folder-3f9a2c7b1d4e        # 持久化默认工作区（写入本机注册表 current）
-df workspace status --ws <标识>              # 指定工作区：输出目录/审核数据集/闸门状态
+df workspace add "F:\资料\我的数据"
+df workspace list
+df workspace use folder-3f9a2c7b1d4e
+df workspace status --ws <标识>
 
-df import --ws <标识>                        # 子命令后加 --ws（所有命令通用）
+df import --ws <标识>
 df export --format minimind --ws <标识>
-df review push --ws <标识>                   # 推送到 rollout_review_<标识>
-df review-remote pull --ws <标识>            # 协作者端同款：pull/submit 按工作区分流
+df review push --ws <标识>
+df review-remote pull --ws <标识>
 ```
 
-| 情况 | 输出目录 | 审核中心数据集 | 说明 |
-|---|---|---|---|
-| `default`（历史） | `data/output/` | `rollout_review` | 已有数据与审核记录不动，完全向后兼容 |
-| `add` 打开的新文件夹 | `<文件夹>/.dataforge/output/` | `rollout_review_<标识>` | 产物写在源文件夹内隐藏目录；源文件保持原样 |
-| 旧工作区（遗留 `data/workspaces/<名>/`） | `data/workspaces/<名>/output/` | `rollout_review_<名>` | 保留兼容：不迁移、不搬运、不重建 |
-| 闸门状态 G1/G3 | 各自输出目录下 `gates_state.json` | — | 按工作区独立 |
-| 协作审核收件箱 | 各自输出目录下 `review_batches/<哈希>.json` | — | 按 中心机+数据集+账号 隔离 |
-| **预算（G0 硬停）** | **全局**：`data/output/budget.json` | — | 不随工作区切换（刻意全局硬停） |
+`workspace add` 只登记一个已存在的本机文件夹。它不复制、移动、改名或改写源文件，
+也不会创建不存在的源目录。标识来自规范化路径，格式为 `<目录名slug>-<路径哈希12位>`；
+目录名无法形成 ASCII slug 时使用 `folder-<路径哈希12位>`。
 
-选择优先级：`--ws` 显式 > 环境变量 `DF_WORKSPACE`（控制台子进程注入/agent 可设）>
-`df workspace use` 持久化的 current > `default`。标识限字母/数字/下划线/连字符（1-48 位）。
-`add` 要求目录已存在（绝不创建）；`use` 会先校验源目录仍可用（已移走的目录不会被重建）。
+| 兼容来源 | 产物位置 | 审核中心数据集 |
+|---|---|---|
+| `default` | `data/output/` | `rollout_review` |
+| 命令行登记的已有文件夹 | `<文件夹>/.dataforge/output/` | `rollout_review_<标识>` |
+| 遗留 `data/workspaces/<名>/` | `data/workspaces/<名>/output/` | `rollout_review_<名>` |
 
-**打开后的读写边界**（`lib/workspace.py`）：
-- 源文件清点是**只读且有上限**（500 个）的清点：排除 `.dataforge/`、`.git/`、`.venv/`、
-  `node_modules/`、`__pycache__/`、符号链接/junction、输出目录本身与 `.gitkeep`——
-  不会自我摄取，也不会改动源文件。
-- `import`/`distill` 缺省读所选文件夹；`translate` 缺省读 `<文件夹>/topics.txt`；
-  `--rollout-dir`/`--input` 显式覆盖；`default` 保持历史回退（环境变量/配置解析）。
-- 放量（G3）按工作区独立：A 区审核达标放量不影响 B 区未达标状态；预算（花钱）不按工作区分。
+旧路径不自动迁移。命令行的选择优先级仍是：显式 `--ws`、`DF_WORKSPACE`、
+`df workspace use` 保存的默认值、`default`。标识限 1–48 位字母、数字、下划线和连字符。
+这些命令行设置不会让开源控制台重新出现工作区选择器。
 
-## 二、本机注册表（机器私有，不入库）
+源文件清点只读且有数量上限，排除 `.dataforge/`、`.git/`、`.venv/`、`node_modules/`、
+`__pycache__/`、符号链接、junction、输出目录本身和 `.gitkeep`，避免把生成产物当成来源重复读取。
+`import` 和 `distill` 可继续读取指定的旧来源路径；显式 `--rollout-dir` 或 `--input` 保持优先。
+`default` 保留已有配置和环境变量的回退行为。
 
-- `data/workspaces.json`：记录"标识 → 本机绝对路径"与 current，**机器私有**（含本机路径），
-  已 gitignore，连同并发锁 `data/workspaces.json.lock`。请勿手改；格式不对会明确报错且原文件不动。
-- 旧 `data/workspaces/` 目录与 `data/workspaces/current.json` 仅作**遗留回退**保留，不迁移不搬运。
+兼容注册表 `data/workspaces.json` 保存本机路径及命令行默认值，不进入 Git。
+其锁文件以及遗留的 `data/workspaces/current.json` 也保留兼容。
+登记路径无效或源文件夹已经移走时，命令会报错，不会重建该源文件夹。
 
-## 三、控制台（8501）：选择是会话级的
+## 远端审核兼容
 
-- 侧栏"打开文件夹…" = 调 `add`（只登记，不改全局默认）；下拉选择器只影响**当前会话**
-  （session_state + `?ws=` 链接参数），**不会**改写 `df workspace use` 的持久默认。
-- 总览/资产/预览/运行/审核/监控各页的读取路径与"管线运行"页的子进程调用都带显式 `--ws`
-  跟随所选文件夹；`?ws=` 指向本机未打开的文件夹时提示并回落 default。预算页恒显示全局预算。
+`configs/review_remote.yaml` 的 `dataset` 是实际使用的数据集 ID。
+仅当配置仍是通用默认值 `rollout_review`，且命令行显式使用非 `default` 标识时，
+才会映射为 `rollout_review_<标识>`。已配置的具体数据集 ID 直接生效。
 
-## 四、远端协作：中心数据集标识要显式配置
+本机路径的自动标识在不同机器上可能不同。连接同一个审核中心时，应显式配置中心的数据集 ID，
+并与推送方保持一致。远端批次缓存按中心地址、数据集和账号隔离；重复拉取复用缓存，提交保持幂等。
 
-- `configs/review_remote.yaml` 里的 `dataset` 是**权威值**：只有当配置仍是通用默认
-  `rollout_review`、且本机在用非 default 工作区时，CLI 才把它映射为 `rollout_review_<本地标识>`；
-  配置里写了具体数据集就按配置执行（`df review-remote setup` 写入 setup 时本机标识对应的数据集）。
-- **不要假设"同一绝对文件夹路径在不同主机得到同一标识"**：自动标识来自本机规范化路径的哈希，
-  换主机/换挂载点就会变。要审中心机的指定数据集，就在配置里显式写中心机数据集 ID，
-  并确保与推送方（`df review push --ws <标识>`）的数据集一致。
-- pull/auto/human/submit 支持 `--ws`；本地批次缓存按 中心机地址+数据集+账号 哈希隔离，
-  `submit` 幂等、重复 pull 复用缓存不覆盖。
+## minimind 兼容导出
 
-## 五、minimind 兼容格式（格式参照，非关联项目）
-
-字段以 minimind `dataset/lm_dataset.py` 加载侧为准（逐字段核对，仅为格式对齐）：
+本项目与 minimind（jingyaogong/minimind）无关联、合作或依赖。
+minimind 和 LLaMA-Factory 都只是导出格式的参照来源。
 
 | 文件 | 每行结构 | 说明 |
 |---|---|---|
-| `sft_t2t.jsonl` | `{"conversations": [{"role","content"[,"reasoning_content"][,"tool_calls"]}]}` | 思考保留在 `reasoning_content`（与 df 的 separated 模式天然对齐）；`tool_calls` 为 JSON 字符串，加载侧 json.loads 还原 |
-| `pretrain_t2t.jsonl` | `{"text": "…"}` | 由 `df doc2corpus` 的语料（`corpus/docs.jsonl`）转出，剥离 source/chunk_id |
-| `dpo.jsonl` | `{"chosen": [消息列表], "rejected": [消息列表]}` | chosen/rejected 为**含 prompt 前缀的完整对话**（minimind 直接 apply_chat_template） |
+| `sft_t2t.jsonl` | `{"conversations": [{"role", "content"[, "reasoning_content"][, "tool_calls"]}]}` | 思考内容单独保存在 `reasoning_content`；`tool_calls` 按目标格式保存为 JSON 字符串 |
+| `pretrain_t2t.jsonl` | `{"text": "…"}` | 从 CPT 语料导出，不带内部来源和分块字段 |
+| `dpo.jsonl` | `{"chosen": [消息列表], "rejected": [消息列表]}` | 两侧都是包含 prompt 前缀的完整对话 |
 
 ```bash
-df export --format minimind                    # 兼容格式三文件 → 当前工作区 output/export/
-df export --format minimind --ws <标识>        # 按工作区导出（语料/DPO 源取各自工作区）
-# 产物：sft_t2t.jsonl / pretrain_t2t.jsonl（有语料才写）/ dpo.jsonl（有 DPO 对才写）
+df export --format minimind
+df export --format minimind --ws <旧标识>
 ```
 
-真机验证（default 工作区，2026-09）：sft 250 行 / pretrain 17 行 / dpo 526 行，
-中文正常、字段结构与其加载代码逐条对上（格式参照）。
+默认导出位置为 `data/output/export/`。使用旧标识时，导出写入对应产物目录下的 `export/`。
+有相应数据时才生成预训练或偏好文件。

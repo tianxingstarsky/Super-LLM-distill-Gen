@@ -362,18 +362,31 @@ def _render_research_receipt(application, run_id, recipe, state):
 @st.fragment(run_every=2)
 def render_run(application, run_id, begin, *, embedded=False):
     st.html(workflow_run_styles())
-    state = application.state(run_id)
-    recipe = application.recipe(run_id)
-    active = application.is_active(run_id)
+    try:
+        # Inventory is only a snapshot. Read again inside the fragment so a
+        # removed or damaged task file cannot turn a refresh into a traceback.
+        state = application.state(run_id)
+        recipe = application.recipe(run_id)
+        active = application.is_active(run_id)
+        if (not isinstance(state, dict) or not isinstance(recipe, dict) or
+                not isinstance(state.get("name"), str) or not isinstance(state.get("status"), str) or
+                not isinstance(state.get("stages"), dict) or not state["stages"] or
+                any(not isinstance(stage, dict) for stage in state["stages"].values()) or
+                not isinstance(recipe.get("targets"), list)):
+            raise ValueError("unreadable_task_record")
+        attempt = int(state.get("attempt", 0))
+        graph_nodes, _ = execution_graph(recipe["targets"])
+    except (OSError, ValueError, TypeError, KeyError):
+        st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
+        return
     st.subheader(UntranslatedText(state["name"]))
     updated = str(state.get("updated_at") or "")[:19].replace("T", " ") or "—"
     st.html('<div class="df-run-meta">'
             f'<span>任务编号 <b>{html.escape(run_id[:8])}</b></span><i>·</i>'
-            f'<span>第 {int(state.get("attempt", 0))} 次运行</span><i>·</i>'
+            f'<span>第 {attempt} 次运行</span><i>·</i>'
             f'<span>更新于 {html.escape(updated)} UTC</span></div>')
     status = state["status"]
     stage_keys = list(state["stages"])
-    graph_nodes, _ = execution_graph(recipe["targets"])
     active_stages = set(graph_nodes)
     selection_key = f"workflow-stage:{run_id}"
     selected_stage = st.session_state.get(selection_key)
@@ -388,7 +401,7 @@ def render_run(application, run_id, begin, *, embedded=False):
             f'<span class="df-run-pill" data-status="{html.escape(status, quote=True)}">运行状态 <strong>{html.escape(LABELS.get(status, status))}</strong></span>'
             f'<span class="df-run-pill">已完成节点 <strong>{completed_stages} / {len(selected_stages)}</strong></span>'
             f'<span class="df-run-pill">本次目标 <strong>{len(state.get("targets", []))}</strong></span>'
-            f'<span class="df-run-pill">运行尝试 <strong>{int(state.get("attempt", 0))}</strong></span>'
+            f'<span class="df-run-pill">运行尝试 <strong>{attempt}</strong></span>'
             '</div>')
     if status == "running" and not active:
         st.warning("执行进程已中断。可从已完成的逐条断点继续。")
@@ -702,9 +715,38 @@ def _restore_selection(workspace, key, default, choices):
     _save_draft_value(workspace, key)
 
 
+def _cache_source_uploads(cache, workspace, source_mode):
+    """Save dropped files once, then select their durable paths for this task."""
+    key = f"workflow-upload:{workspace}:{source_mode}"
+    error_key = f"workflow-upload-error:{workspace}:{source_mode}"
+    uploads = st.session_state.get(key) or []
+    st.session_state.pop(error_key, None)
+    if not uploads:
+        return
+    try:
+        rows = cache.store((upload.name, upload.getvalue()) for upload in uploads)
+    except (ValueError, OSError, Timeout) as error:
+        st.session_state[error_key] = str(error)
+        return
+    sources_key = f"workflow-sources:{workspace}:{source_mode}"
+    selected = st.session_state.get(sources_key, [])
+    st.session_state[sources_key] = list(dict.fromkeys([*selected, *(row["path"] for row in rows)]))
+    _save_draft_value(workspace, sources_key)
+
+
+def _upload_cache_error(error):
+    if error in {"upload_too_large", "upload_batch_too_large"}:
+        return "资料未保存：单文件最多 50 MiB，一次上传合计最多 200 MiB。"
+    if error in {"empty_upload", "empty_upload_batch"}:
+        return "资料未保存：文件内容为空，请选择有内容的文件。"
+    if error in {"invalid_upload_name", "unsupported_upload_type", "invalid_upload_content"}:
+        return "资料未保存：请检查文件名和格式，支持 PDF、DOCX、TXT、Markdown、JSON 和 JSONL。"
+    return "资料未保存：无法写入本机缓存，请检查存储位置后重新上传。"
+
+
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
                      draft_application: CreationDraftApplication | None = None,
-                     backend_application=None):
+                     backend_application=None, input_cache=None):
     page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     st.html(
@@ -728,7 +770,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if st.session_state.get(f"workflow-draft-error:{ws}"):
             st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
         else:
-            st.caption("参数、目标与需求文本自动保存到当前工作区；上传文件、节点模型选择和联网检索需重新确认。")
+            st.caption("参数、目标、需求和已选资料保存在本机缓存；节点模型和联网检索需重新确认。")
     preset_key = f"workflow-preset:{ws}"
     _restore_selection(ws, preset_key, "自动推荐", PRESETS)
     preset = st.segmented_control(
@@ -883,17 +925,26 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.caption("导入完整的 JSON / JSONL 对话记录；工具轨迹需要真实观测。")
                 else:
                     st.caption("上传 PDF、DOCX、TXT 或 Markdown；解析时保留来源位置。")
-                source_upload, source_library = st.columns(2, gap="small")
-                with source_upload:
-                    uploaded = st.file_uploader("上传文档 / 上下文记录", type=sorted(e[1:] for e in source_extensions),
-                                                accept_multiple_files=True, max_upload_size=50,
-                                                key=f"workflow-upload:{ws}:{source_mode}")
-                with source_library:
-                    sources_key = f"workflow-sources:{ws}:{source_mode}"
-                    _restore_selection(ws, sources_key, [], file_labels)
-                    selected = st.multiselect("或选择当前文件夹内的来源", list(file_labels),
+                upload_options = ({"on_change": _cache_source_uploads, "args": (input_cache, ws, source_mode)}
+                                  if input_cache is not None else {})
+                uploaded = st.file_uploader("上传文档 / 上下文记录", type=sorted(e[1:] for e in source_extensions),
+                                            accept_multiple_files=True, max_upload_size=50,
+                                            key=f"workflow-upload:{ws}:{source_mode}", **upload_options)
+                if input_cache is not None:
+                    st.caption("拖入文件即保存并选中，关闭或重启后仍可使用。")
+                    # The callback already persisted and selected these uploads.
+                    uploaded = []
+                sources_key = f"workflow-sources:{ws}:{source_mode}"
+                _restore_selection(ws, sources_key, [], file_labels)
+                if file_labels:
+                    selected = st.multiselect("本次使用的资料", list(file_labels),
                                               format_func=lambda path: file_labels[path],
                                               key=sources_key, on_change=_save_draft_value, args=(ws, sources_key))
+                else:
+                    selected = []
+                upload_error = st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")
+                if upload_error:
+                    st.error(_upload_cache_error(upload_error))
                 brief = _draft_brief("补充生成要求（可选）",
                                      placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                      key=f"workflow-source-brief:{ws}:{source_mode}")
@@ -975,8 +1026,17 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
                 submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues)
-                                      or bool(pricing_issues) or agent_unavailable or web_unavailable,
+                                      or bool(pricing_issues) or agent_unavailable or web_unavailable
+                                      or bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")),
                                       key=f"workflow-create:{ws}", width="stretch")
+                if draft_application is not None:
+                    if st.button("保存为独立草稿", key=f"workflow-save-draft:{ws}", width="stretch",
+                                 help="保留这份配置，稍后可从工作管理打开。不会开始生成。"):
+                        try:
+                            draft_application.save_snapshot(name)
+                            st.success("独立草稿已保存，可从工作管理继续。")
+                        except (ValueError, OSError, Timeout):
+                            st.error("草稿未能保存，当前配置仍在。请检查本机存储后重试。")
         if submitted:
             try:
                 # Upload filenames never become filesystem paths; preserve only their extension.

@@ -181,7 +181,7 @@ def test_data_library_shows_real_sources_outputs_and_selected_excerpt(tmp_path):
     assert not view.exception
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
     assert "来源文件</span><strong>1" in html_blocks
-    assert "工作区产物</span><strong>2" in html_blocks
+    assert "生成产物</span><strong>2" in html_blocks
     assert "训练数据文件</span><strong>2" in html_blocks
     assert "偏好文件</span><strong>1" in html_blocks
     assert "manual&amp;notes.md" in html_blocks
@@ -199,10 +199,10 @@ def test_data_library_prioritizes_real_source_and_cpt_over_workflow_evidence(tmp
     """Nested workflow inputs stay traceable but never masquerade as source data."""
     from lib import workspace as ws
 
-    source = tmp_path / "cpt-source"
-    source.mkdir()
+    source = tmp_path / "app" / "data" / "seeds"
+    source.mkdir(parents=True)
     (source / "guide.txt").write_text("设备操作指南", encoding="utf-8")
-    output = source / ".dataforge" / "output"
+    output = tmp_path / "app" / "data" / "output"
     run = output / "workflows" / ("a" * 32)
     (run / "inputs").mkdir(parents=True)
     (run / "inputs" / "0000.txt").write_text("快照，不是原始来源", encoding="utf-8")
@@ -212,7 +212,6 @@ def test_data_library_prioritizes_real_source_and_cpt_over_workflow_evidence(tmp
     (run / "checkpoints" / "cpt").mkdir(parents=True)
     (run / "checkpoints" / "cpt" / "state.json").write_text("{}", encoding="utf-8")
     (run / "recipe.json").write_text("{}", encoding="utf-8")
-    ws.set_current(ws.add_folder(source, name="cpt-ui"))
 
     view = app()
     navigate(view, "数据管理")
@@ -285,26 +284,29 @@ def test_data_preview_reports_non_conversation_file_without_crashing(tmp_path):
     assert any("当前文件不是对话样本" in item.value for item in view.error)
 
 
-def test_sessions_choose_independent_workspaces(tmp_path):
+def test_console_uses_local_cache_despite_legacy_preferences(tmp_path, monkeypatch):
     from lib import workspace as ws
-    for name in ("alpha", "beta"):
-        source = tmp_path / name
-        source.mkdir()
-        ws.add_folder(source, name=name)
+    source = tmp_path / "other-folder"
+    source.mkdir()
+    (source / "private-other.txt").write_text("Other folder content", encoding="utf-8")
+    ws.add_folder(source, name="alpha")
     ws.set_current("alpha")
-    a, b = app(), app()
-    assert a.session_state["ws"] == "alpha"
-    b.sidebar.selectbox[0].set_value("beta").run()
-    a.run()
-    assert a.session_state["ws"] == "alpha"
-    assert b.session_state["ws"] == "beta"
+    monkeypatch.setenv("DF_WORKSPACE", "alpha")
+    view = app()
+    view.session_state["ws"] = "alpha"
+    view.query_params["ws"] = "alpha"
+    view.query_params["record"] = "old-private-record"
+    view.run()
+    assert not view.exception
+    assert view.session_state["ws"] == "default"
+    assert "ws" not in view.query_params and "record" not in view.query_params
+    assert not any(item.label == "工作区" for item in view.selectbox)
+    assert not any("打开已有文件夹" in item.label for item in view.button)
+    markup = "\n".join(str(item.value) for item in view.get("html"))
+    assert "private-other.txt" not in markup
     assert ws.current() == "alpha"
-    assert "DF_WORKSPACE" not in os.environ
-    a.sidebar.selectbox[0].set_value("default").run()
-    assert a.session_state["ws"] == "default"
-    assert not a.exception and not b.exception
+    assert os.environ["DF_WORKSPACE"] == "alpha"
     assert not ws.out("alpha").exists()
-    assert not ws.out("beta").exists()
 
 
 def test_backends_page_renders_without_exception():
@@ -390,7 +392,7 @@ def test_home_shows_real_recent_task_and_source_entry(tmp_path):
     markup = "\n".join(str(item.value) for item in view.get("html"))
     assert markup.index("持续更新任务") < markup.index("产品手册训练")
     assert "本地发布版本 <b>2</b>" in markup
-    assert any(item.label == "工作区路径与存储位置" for item in view.expander)
+    assert any(item.label == "本机缓存位置" for item in view.expander)
     assert any(item.label == "查看 →" for item in view.button)
 
 
@@ -398,7 +400,7 @@ def test_home_empty_workspace_shows_honest_next_steps():
     view = app()
     assert not view.exception
     markup = "\n".join(str(item.value) for item in view.get("html"))
-    assert "当前工作区还没有工作流任务" in markup
+    assert "本机还没有工作流任务" in markup
     assert "尚无来源文件" in markup
     assert "暂无最近任务" in markup
     assert "工作流总数</small><strong>0" in markup
@@ -587,18 +589,16 @@ def test_review_management_identity_and_denial_paths(tmp_path):
     assert not import_page.exception
     assert any("导入由本机管理员执行" in w.value for w in import_page.info)  # 非管理员不导入
 
-    # 未授权数据集：init_db 只为 rollout_review 自动授权，alpha 数据集对 outsider 无权 →
-    # render_workspace 上抛 PermissionError，webapp 走身份守卫（不渲染组件）
+    # A legacy CLI preference cannot redirect the local review dataset.
     source = tmp_path / "outsider-data"
     source.mkdir()
     ws.add_folder(source, name="alpha")
     ws.set_current("alpha")
-    denied = app()
-    denied.session_state["review-auth-key"] = outsider_key
-    navigate(denied, "人工审核")
-    assert not denied.exception
-    assert any("没有此数据集的权限" in w.value for w in denied.error)
-    assert not denied.get("bidi_component")
+    local = app()
+    local.session_state["review-auth-key"] = outsider_key
+    navigate(local, "人工审核")
+    assert not local.exception
+    assert local.session_state["ws"] == "default"
 
     bad_key = app()
     bad_key.session_state["review-auth-key"] = "agent.not-a-real-key"
@@ -607,30 +607,16 @@ def test_review_management_identity_and_denial_paths(tmp_path):
     assert any("没有此数据集的权限" in w.value for w in bad_key.error)
 
 
-def test_open_existing_folder_dialog(tmp_path):
-    from lib import workspace as ws
-    source = tmp_path / "现有 数据文件夹"
-    source.mkdir()
-    data = source / "dialogue.jsonl"
-    data.write_text(json.dumps({"conversations": [{"role": "user", "content": "现有文件"}, {"role": "assistant", "content": "只读预览"}]}, ensure_ascii=False), encoding="utf-8")
-    before = data.read_bytes()
+def test_home_upload_entry_opens_generation_without_folder_dialog():
     view = app()
-    assert all("新建工作区" not in w.label for w in view.expander)
-    next(w for w in view.button if w.label == "打开已有文件夹").click().run()
-    next(w for w in view.text_input if w.label == "已有文件夹路径").set_value(str(source))
-    next(w for w in view.button if w.label == "打开文件夹").click().run()
+    next(w for w in view.button if w.label == "上传资料 →").click().run()
     assert not view.exception
-    identifier = view.session_state["ws"]
-    assert ws.folder(identifier) == source
-    assert ws.current() == "default"
-    assert not ws.out(identifier).exists()
-    navigate(view, "数据预览")
-    assert not view.exception
-    assert any("file-" in w.value for w in view.caption)
-    assert data.read_bytes() == before
+    assert view.session_state["nav"] == "自动工作流"
+    assert any(w.label == "上传文档 / 上下文记录" for w in view.get("file_uploader"))
+    assert not any(w.label == "已有文件夹路径" for w in view.text_input)
 
 
-def test_unavailable_folder_is_recoverable(tmp_path):
+def test_unavailable_legacy_folder_does_not_block_local_cache(tmp_path):
     from lib import workspace as ws
     source = tmp_path / "source"
     source.mkdir()
@@ -638,10 +624,19 @@ def test_unavailable_folder_is_recoverable(tmp_path):
     source.rename(tmp_path / "moved")
     view = app()
     assert not view.exception
-    assert any("不可用" in w.value for w in view.warning)
-    view.sidebar.selectbox[0].set_value("default").run()
-    assert not view.exception
+    assert view.session_state["ws"] == "default"
+    assert not any("不可用" in w.value for w in view.warning)
     assert not source.exists()
+
+
+def test_corrupt_legacy_registry_does_not_block_local_cache():
+    from lib import workspace as ws
+    ws.REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ws.REGISTRY_PATH.write_text("broken", encoding="utf-8")
+    view = app()
+    assert not view.exception and not view.error
+    assert view.session_state["ws"] == "default"
+    assert ws.REGISTRY_PATH.read_text(encoding="utf-8") == "broken"
 
 
 def test_gui_form_and_environment_isolation(monkeypatch):

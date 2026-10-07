@@ -102,7 +102,8 @@ def test_new_ui_session_restores_bulk_settings_goals_and_cleared_brief(tmp_path)
     assert again.text_area(key='workflow-open-brief:fixture').value == ''
     again.session_state['fixture-remove-source'] = True
     again.segmented_control(key='workflow-source-mode:fixture').set_value('文档资料').run()
-    assert again.multiselect(key='workflow-sources:fixture:文档资料').value == []
+    assert again.session_state['workflow-sources:fixture:文档资料'] == []
+    assert not any(item.key == 'workflow-sources:fixture:文档资料' for item in again.multiselect)
     assert not again.exception
 
 

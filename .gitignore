@@ -11,6 +11,9 @@ node_modules/
 data/seeds/chatlogs/*
 data/seeds/images/*
 data/seeds/screenshots/*
+data/seeds/uploads/
+data/.upload-cache.lock
+data/.upload-*.tmp
 !data/seeds/chatlogs/.gitkeep
 !data/seeds/images/.gitkeep
 !data/seeds/screenshots/.gitkeep

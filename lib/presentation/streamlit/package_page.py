@@ -204,7 +204,7 @@ def _render_releases(application: WorkflowApplication, releases: list[dict]) -> 
     verified = sum(bool(row["verified"]) for row in releases)
     with st.container(border=True):
         st.html(_heading("◈", "已有本地发布版本",
-                         f"当前工作区找到 {len(releases)} 个版本目录 · {verified} 个版本通过文件校验"))
+                         f"本机找到 {len(releases)} 个版本目录 · {verified} 个版本通过文件校验"))
         labels = {row["id"]: row for row in releases}
         release_id = st.selectbox(
             "选择本地发布版本", list(labels), key=f"package-release:{st.session_state['ws']}",
@@ -548,7 +548,7 @@ def render_package_page(application: WorkflowApplication) -> None:
                           width="stretch")
                 st.caption("此入口仅显示本次任务中有合格原生样本的 CPT、SFT、DPO、ORPO、RLAIF 审核队列。")
         with st.container(border=True):
-            st.html(_heading("◷", "最近可导出任务", "当前工作区已完成的工作流"))
+            st.html(_heading("◷", "最近可导出任务", "本机已完成的工作流"))
             for recent in ready[:5]:
                 targets = "、".join(str(target).upper() for target in recent.get("targets", [])) or "—"
                 st.html('<div class="df-pack-recent"><strong data-user-content>' + _safe(recent.get("name", "未命名任务"))

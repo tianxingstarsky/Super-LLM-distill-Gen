@@ -36,13 +36,13 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
     st.html(
         '<div class="df-data-stats">'
         f'<div class="df-data-stat"><b>▤</b><span>来源文件</span><strong>{source_count:,}{more}</strong></div>'
-        f'<div class="df-data-stat"><b>◈</b><span>工作区产物</span><strong>{output_count:,}{more}</strong></div>'
+        f'<div class="df-data-stat"><b>◈</b><span>生成产物</span><strong>{output_count:,}{more}</strong></div>'
         f'<div class="df-data-stat"><b>◉</b><span>训练数据文件</span><strong>{training_count:,}{more}</strong></div>'
         f'<div class="df-data-stat"><b>◇</b><span>偏好文件</span><strong>{preference_count:,}{more}</strong></div>'
         '</div>'
     )
     if inventory.truncated:
-        st.caption("文件扫描已达到安全上限，计数为当前已列出的数量；请缩小工作区范围查看其余文件。")
+        st.caption("文件扫描已达到安全上限，计数为当前已列出的数量；其余文件可从本机缓存目录查看。")
     filter_col, search_col = st.columns([1.4, 1], vertical_alignment="bottom")
     with filter_col:
         category = st.selectbox("文件分类", category_names, key=f"asset-category:{workspace_id}")
@@ -106,7 +106,7 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
                 '<div class="df-data-detail">'
                 f'<div><span>文件</span><strong>{html.escape(selected.name)}</strong></div>'
                 f'<div><span>位置</span><strong>{html.escape(selected.label)}</strong></div>'
-                f'<div><span>来源</span><strong class="df-data-origin" data-origin="{origin}">{"已有资料" if origin == "source" else "工作区产物"}</strong></div>'
+                f'<div><span>来源</span><strong class="df-data-origin" data-origin="{origin}">{"已有资料" if origin == "source" else "生成产物"}</strong></div>'
                 f'<div><span>大小</span><strong>{_asset_size(selected.size)}</strong></div>'
                 f'<div><span>修改时间</span><strong>{datetime.fromtimestamp(selected.mtime_ns / 1_000_000_000).strftime("%Y-%m-%d %H:%M")}</strong></div>'
                 '</div>'
@@ -119,7 +119,7 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
                 except (OSError, ValueError) as error:
                     st.warning(f"文件已变化或无法下载：{error}")
             else:
-                st.caption("文件超过 50 MiB；请从工作区目录直接读取，或在输出打包中下载任务数据包。")
+                st.caption("文件超过 50 MiB；请从本机缓存目录直接读取，或在输出打包中下载任务数据包。")
             try:
                 excerpt, note = catalog.excerpt(workspace_id, selected)
                 st.caption("内容摘录")

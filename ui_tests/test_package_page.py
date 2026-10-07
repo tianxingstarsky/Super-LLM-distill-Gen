@@ -34,15 +34,17 @@ def test_active_package_poll_does_not_load_large_artifacts(tmp_path, monkeypatch
     from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
     from lib.infrastructure.training_workflow import Workflow, create_run
 
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    source = tmp_path / "source"
-    source.mkdir()
+    source = tmp_path / "data/seeds"
+    source.mkdir(parents=True)
     guide = source / "guide.txt"
     guide.write_text("Disconnect power before checking wiring.", encoding="utf-8")
-    name = ws.add_folder(source)
-    run_id = create_run(ws.out(name), sources=[guide], targets=["cpt"])
+    name = ws.DEFAULT
+    run_id = create_run(ws.out(name), sources=[guide], targets=["cpt"], name="Background package")
     Workflow(ws.out(name), run_id, ROOT).execute()
     driver = FilesystemWorkflowDriver(ROOT, ws.out(name))
     monkeypatch.setattr(jobs.subprocess, "Popen", lambda *args, **kwargs: None)
@@ -84,12 +86,14 @@ def test_review_entry_only_exposes_supported_nonempty_artifacts():
 def test_empty_workflow_state_shows_real_local_release(tmp_path, monkeypatch):
     from lib import workspace as ws
 
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    source = tmp_path / "source"
-    source.mkdir()
-    workspace_id = ws.add_folder(source)
+    source = tmp_path / "data/seeds"
+    source.mkdir(parents=True)
+    workspace_id = ws.DEFAULT
     folder = ws.out(workspace_id) / "export" / "published-one"
     folder.mkdir(parents=True)
     data = b'{"messages":[]}\n'
@@ -112,7 +116,7 @@ def test_empty_workflow_state_shows_real_local_release(tmp_path, monkeypatch):
     assert "published-one" in page
     assert "准备第一个训练数据包" not in page
     assert any(str(folder.resolve()) in str(item.value) for item in app.code)
-    assert any(item.label == "下载已校验文件" for item in app.download_button)
+    assert any(item.label == "校验并下载文件" for item in app.download_button)
 
 
 def test_post_bundle_check_rejects_changed_or_extra_files():
@@ -141,12 +145,14 @@ def test_post_bundle_check_rejects_changed_or_extra_files():
 def test_verified_workflow_outputs_can_be_prepared_for_download(tmp_path, monkeypatch):
     from lib import workspace as ws
 
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    source = tmp_path / "source"
-    source.mkdir()
-    name = ws.add_folder(source)
+    source = tmp_path / "data/seeds"
+    source.mkdir(parents=True)
+    name = ws.DEFAULT
     run_id = "c" * 32
     run = ws.out(name) / "workflows" / run_id
     artifacts = run / "artifacts"
@@ -227,12 +233,14 @@ def test_verified_workflow_outputs_can_be_prepared_for_download(tmp_path, monkey
 def test_orpo_package_opens_its_own_human_review_queue(tmp_path, monkeypatch):
     from lib import workspace as ws
 
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    source = tmp_path / "source"
-    source.mkdir()
-    name = ws.add_folder(source)
+    source = tmp_path / "data/seeds"
+    source.mkdir(parents=True)
+    name = ws.DEFAULT
     run_id = "e" * 32
     run = ws.out(name) / "workflows" / run_id
     artifacts = run / "artifacts"
@@ -275,12 +283,14 @@ def test_trl_sidecar_and_cached_zip_follow_verified_manifest(tmp_path, monkeypat
     from lib import workspace as ws
     from lib.infrastructure.workflow_archive import artifact_bytes
 
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    source = tmp_path / "source"
-    source.mkdir()
-    name = ws.add_folder(source)
+    source = tmp_path / "data/seeds"
+    source.mkdir(parents=True)
+    name = ws.DEFAULT
     run_id = "d" * 32
     run = ws.out(name) / "workflows" / run_id
     artifacts = run / "artifacts"

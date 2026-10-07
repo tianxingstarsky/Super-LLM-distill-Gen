@@ -79,7 +79,7 @@ def render_preference_review(application: PreferenceReviewApplication, *, show_h
                 f"生成成对回答并通过质量检查后，{label} 候选会显示在这里供人工比较。",
                 f"{label} 偏好对",
             )
-            st.info(f"当前工作区没有通过产物校验的 {label} 工作流。先在“自动工作流”生成 {label} 候选，再进入人工审核。")
+            st.info(f"暂无通过产物校验的 {label} 工作流。先在“自动工作流”生成 {label} 候选，再进入人工审核。")
             if st.button("前往数据生成", type="primary", key=_key("preference-review-empty-workflow", target)):
                 st.session_state["nav"] = "自动工作流"
                 st.rerun()

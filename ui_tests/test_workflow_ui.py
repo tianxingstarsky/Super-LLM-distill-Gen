@@ -20,14 +20,16 @@ def canvas(app, key):
 
 def setup_workspace(tmp_path, monkeypatch):
     from lib import workspace as ws
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    folder = tmp_path / "sources"
-    folder.mkdir()
+    folder = tmp_path / "data/seeds"
+    folder.mkdir(parents=True)
     source = folder / "guide.txt"
     source.write_text("操作前先断电，再检查线路。", encoding="utf-8")
-    name = ws.add_folder(folder)
+    name = ws.DEFAULT
     return ws, name, source
 
 
@@ -189,7 +191,7 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     inputs["训练目标"].set_value(["cpt", "multiturn"]).run()
     assert not app.exception
     inputs = {widget.label: widget for widget in app.multiselect}
-    inputs["或选择当前文件夹内的来源"].set_value([str(source)])
+    inputs["本次使用的资料"].set_value([str(source)])
     assert not any("留空使用" in widget.label for widget in app.text_input)
     for widget in app.number_input:
         if widget.label == "候选样本规模":
@@ -452,7 +454,7 @@ def test_source_mode_switches_to_open_brief_without_file_controls(tmp_path, monk
 
     assert not app.exception
     assert any(widget.label == "开放性需求" for widget in app.text_area)
-    assert not any(widget.label == "或选择当前文件夹内的来源" for widget in app.multiselect)
+    assert not any(widget.label == "本次使用的资料" for widget in app.multiselect)
 
 
 def test_open_brief_checks_brave_connection_in_place_without_rendering_key(tmp_path, monkeypatch):
@@ -596,4 +598,4 @@ def test_preference_review_page_explains_empty_queue(tmp_path, monkeypatch):
     app.run()
 
     assert not app.exception
-    assert any("没有通过产物校验的 DPO 工作流" in item.value for item in app.info)
+    assert any("暂无通过产物校验的 DPO 工作流" in item.value for item in app.info)

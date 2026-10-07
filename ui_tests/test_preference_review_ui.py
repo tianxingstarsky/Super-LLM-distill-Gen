@@ -17,12 +17,14 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_reviewer_can_approve_and_release_dpo_candidate(tmp_path, monkeypatch):
     from lib import workspace as ws
 
+    monkeypatch.setattr(ws, "ROOT", tmp_path)
+    monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
     monkeypatch.setattr(ws, "REGISTRY_PATH", tmp_path / "registry.json")
     monkeypatch.setattr(ws, "WORKSPACES_DIR", tmp_path / "legacy")
     monkeypatch.setattr(ws, "CURRENT_PATH", tmp_path / "current.json")
-    folder = tmp_path / "source"
-    folder.mkdir()
-    name = ws.add_folder(folder)
+    folder = tmp_path / "data/seeds"
+    folder.mkdir(parents=True)
+    name = ws.DEFAULT
     run_id = "b" * 32
     run = ws.out(name) / "workflows" / run_id
     artifacts = run / "artifacts"

@@ -38,7 +38,7 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
             return
     left, right = st.columns([1, 2.15], gap="large")
     with left, st.container(border=True):
-        section_heading("选择样本", "从当前工作区已有的对话文件浏览", "▤")
+        section_heading("选择样本", "浏览本机缓存中的对话文件", "▤")
         try:
             source, samples = selected_samples("preview-file")
         except (OSError, ValueError) as error:

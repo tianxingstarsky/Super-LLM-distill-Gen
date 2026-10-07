@@ -57,5 +57,5 @@ def render_review_overview(applications: Mapping[str, ReviewQueue], mode_key: st
                     f'<strong>{mode}</strong><span>{value}</span><small>{detail}</small></div>')
             st.button("打开审核队列 →", key=f"review-overview-open-{kind}",
                       on_click=_select_mode, args=(mode_key, mode), width="stretch")
-    st.caption("以上是当前工作区可审候选量；通过、退回和待处理状态以具体队列为准。")
+    st.caption("以上是当前可审候选量；通过、退回和待处理状态以具体队列为准。")
     return applications

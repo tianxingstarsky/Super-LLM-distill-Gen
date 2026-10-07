@@ -67,6 +67,10 @@ def task_management_styles() -> str:
 .df-task-card-targets {display:flex;flex-wrap:wrap;gap:4px;max-height:41px;overflow:hidden;margin:1px 0 9px}
 .df-task-card-targets span {display:inline-block;padding:2px 5px;border-radius:4px;
   background:#eff5ff;color:#5b7191;font-size:10px;line-height:1.3}
+.df-task-card-source {display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 8px;
+  color:#71839b;font-size:11px}
+.df-task-card-source b {flex:0 0 auto;color:#4c6c93;font-size:10px;font-weight:600}
+.df-task-card-source span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .df-task-card-progress b {color:#315a8e;font-size:11px}
 .df-task-meter {height:5px;margin-top:6px;border-radius:100px;background:#e8eff8;overflow:hidden}
 .df-task-meter i {display:block;height:100%;border-radius:100px;background:linear-gradient(90deg,#26a7db,#2469dd)}
