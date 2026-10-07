@@ -516,6 +516,7 @@ def page_task_manager():
         render_task_management(
             application, st.session_state["ws"], _begin,
             lambda: _select_page("自动工作流"),
+            draft_application=creation_draft_application(_ws_out()),
         )
 
 

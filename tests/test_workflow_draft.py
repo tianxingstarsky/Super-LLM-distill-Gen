@@ -183,10 +183,10 @@ def test_public_web_search_requires_explicit_query_and_configured_key(monkeypatc
     assert ui.button(key='workflow-create:fixture').disabled
     ui.text_input(key='workflow-web-research-query:fixture').set_value('设备维护安全规范').run()
     ui.number_input(key='workflow-web-research-count:fixture').set_value(5).run()
-    assert any('检索服务尚未配置' in warning.value for warning in ui.warning)
+    assert any('保存 Brave Search 密钥' in warning.value for warning in ui.warning)
     monkeypatch.setenv('DATAFORGE_BRAVE_SEARCH_API_KEY', 'fixture-only')
     ui.run()
-    assert not any('检索服务尚未配置' in warning.value for warning in ui.warning)
+    assert not any('保存 Brave Search 密钥' in warning.value for warning in ui.warning)
     assert ui.checkbox(key=enabled).value is True
     assert ui.text_input(key='workflow-web-research-query:fixture').value == '设备维护安全规范'
     assert ui.number_input(key='workflow-web-research-count:fixture').value == 5

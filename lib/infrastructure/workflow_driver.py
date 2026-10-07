@@ -69,14 +69,19 @@ class FilesystemWorkflowDriver:
         return style if style in {"separated", "drop"} else "separated"
 
     def web_research_capabilities(self) -> dict:
-        from lib.infrastructure.brave_web_research import configured
+        from lib.infrastructure.web_research_connection import connection_capabilities
 
-        return {"brave_configured": configured()}
+        return connection_capabilities(self.root)
+
+    def save_web_research_connection(self, api_key: str) -> dict:
+        from lib.infrastructure.web_research_connection import save_connection
+
+        return save_connection(self.root, api_key)
 
     def check_web_research_connection(self) -> str:
         from lib.infrastructure.brave_web_research import check_connection
 
-        return check_connection()
+        return check_connection(self.root)
 
     def web_research_results(self, run_id: str) -> dict | None:
         """Read only the bounded search checkpoint belonging to this run.
@@ -138,6 +143,13 @@ class FilesystemWorkflowDriver:
 
     def state(self, run_id: str) -> dict:
         return read_json(run_path(self.output, run_id) / "state.json")
+
+    def read_streams(self, run_id: str) -> list[dict]:
+        from lib.infrastructure.workflow_stream_journal import read_streams
+
+        run = run_path(self.output, run_id)
+        state = read_json(run / "state.json")
+        return read_streams(run, active=run_is_active(run), run_attempt=state.get("attempt", 0))
 
     def recipe(self, run_id: str) -> dict:
         return read_json(run_path(self.output, run_id) / "recipe.json")

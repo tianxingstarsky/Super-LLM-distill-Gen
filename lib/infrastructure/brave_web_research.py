@@ -5,31 +5,35 @@ import html
 import http.client
 import ipaddress
 import json
-import os
 import re
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from pathlib import Path
+from urllib.parse import unquote, urlencode, urlsplit, urlunsplit
 
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_quality import text_issue
+from lib.infrastructure.web_research_connection import (KEY_ENV, connection_capabilities,
+                                                         resolve_connection)
 
 
-KEY_ENV = "DATAFORGE_BRAVE_SEARCH_API_KEY"
 HOST = "api.search.brave.com"
 PATH = "/res/v1/web/search"
 MAX_RESPONSE_BYTES = 256 * 1024
 
 
-def configured() -> bool:
-    return bool(os.environ.get(KEY_ENV, "").strip())
+def configured(root: Path | None = None) -> bool:
+    return connection_capabilities(root)["brave_configured"]
 
 
-def check_connection() -> str:
+def check_connection(root: Path | None = None) -> str:
     """Probe Brave on request without returning credentials or provider text.
 
     A fixed public query keeps private briefs and configured research topics out
     of connection checks. A valid empty result is still a working connection.
     """
-    key = os.environ.get(KEY_ENV, "").strip()
+    try:
+        key = resolve_connection(root).api_key
+    except ValueError:
+        return "unavailable"
     if not key:
         return "not_configured"
     try:
@@ -84,8 +88,11 @@ def _search_one(query: str, count: int, key: str) -> list[dict[str, str]]:
     path = PATH + "?" + urlencode({"q": query, "count": count,
                                   "safesearch": "strict", "result_filter": "web",
                                   "spellcheck": "false", "text_decorations": "false"})
-    connection = http.client.HTTPSConnection(HOST, timeout=8)
+    connection = None
     try:
+        connection = http.client.HTTPSConnection(HOST, timeout=8)
+        # A host-wide http.client debug setting must never print auth headers.
+        connection.debuglevel = 0
         connection.request("GET", path, headers={"Accept": "application/json",
                                                     "X-Subscription-Token": key})
         response = connection.getresponse()
@@ -101,7 +108,8 @@ def _search_one(query: str, count: int, key: str) -> list[dict[str, str]]:
         raise ValueError("web_search_provider_error") from None
     finally:
         try:
-            connection.close()
+            if connection is not None:
+                connection.close()
         except Exception:
             pass
     web = data.get("web") if isinstance(data, dict) else None
@@ -116,7 +124,8 @@ def _search_one(query: str, count: int, key: str) -> list[dict[str, str]]:
         url = _public_url(row.get("url"))
         title = _plain(row.get("title"), 200)
         snippet = _plain(row.get("description"), 500)
-        if not url or not title or not snippet or url in seen:
+        if (not url or not title or not snippet or url in seen
+                or any(key in unquote(value) for value in (url, title, snippet))):
             continue
         seen.add(url)
         results.append({"title": title, "url": url, "snippet": snippet})
@@ -125,18 +134,19 @@ def _search_one(query: str, count: int, key: str) -> list[dict[str, str]]:
     return results
 
 
-def search(config: dict, *, before_query=None, allow_empty: bool = False) -> list[dict[str, str]]:
+def search(config: dict, *, root: Path | None = None, before_query=None,
+           allow_empty: bool = False) -> list[dict[str, str]]:
     """Search up to five explicit public topics; never fetch result pages."""
     config = validate_web_research(config, brief="enabled")
-    key = os.environ.get(KEY_ENV, "").strip()
-    if not key:
-        raise ValueError("web_search_not_configured")
     results = []
     seen = set()
     queries = [config["query"], *config.get("more_queries", [])]
     for query in queries:
         if before_query is not None:
             before_query()
+        key = resolve_connection(root).api_key
+        if not key:
+            raise ValueError("web_search_not_configured")
         for row in _search_one(query, config["count"], key):
             if row["url"] not in seen:
                 seen.add(row["url"])

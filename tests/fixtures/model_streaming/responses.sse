@@ -1,0 +1,12 @@
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"Check the source.","item_id":"reason-test","output_index":0,"summary_index":0,"sequence_number":1}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"{\"answer\":","item_id":"msg-test","output_index":1,"content_index":0,"sequence_number":2}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"\"ok\"}","item_id":"msg-test","output_index":1,"content_index":0,"sequence_number":3}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":4,"response":{"id":"resp-test","object":"response","created_at":1,"status":"completed","model":"writer","output":[],"usage":{"input_tokens":17,"output_tokens":8,"total_tokens":25}}}
+

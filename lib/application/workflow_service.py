@@ -36,6 +36,10 @@ class WorkflowApplication:
     def web_research_capabilities(self) -> dict:
         return self._driver.web_research_capabilities()
 
+    def save_web_research_connection(self, api_key: str) -> dict:
+        """Save only the local connection, without starting a probe or a run."""
+        return self._driver.save_web_research_connection(api_key)
+
     def check_web_research_connection(self) -> str:
         """Check the optional public search provider without starting a run."""
         return self._driver.check_web_research_connection()
@@ -61,6 +65,10 @@ class WorkflowApplication:
 
     def state(self, run_id: str) -> dict:
         return self._driver.state(run_id)
+
+    def read_streams(self, run_id: str) -> list[dict]:
+        """Return durable, bounded live previews, separate from training samples."""
+        return self._driver.read_streams(run_id)
 
     def recipe(self, run_id: str) -> dict:
         return self._driver.recipe(run_id)

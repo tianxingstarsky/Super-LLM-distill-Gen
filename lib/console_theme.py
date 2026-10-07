@@ -139,14 +139,23 @@ $theme_vars
 [data-testid="stMainBlockContainer"] [data-testid="stMultiSelect"] .react-aria-ComboBox [role="group"],
 [data-testid="stMainBlockContainer"] [data-testid="stNumberInput"] [role="group"],
 [data-testid="stMainBlockContainer"] [data-testid="stNumberInputContainer"],
-[data-testid="stMainBlockContainer"] [data-testid="stTextArea"] textarea {
+[data-testid="stMainBlockContainer"] [data-testid="stTextArea"] textarea,
+[data-testid="stPopoverBody"] [data-testid="stTextInputRootElement"],
+[data-testid="stPopoverBody"] [data-testid="stSelectbox"] .react-aria-ComboBox [role="group"],
+[data-testid="stPopoverBody"] [data-testid="stNumberInput"] [role="group"],
+[data-testid="stPopoverBody"] [data-testid="stNumberInputContainer"],
+[data-testid="stPopoverBody"] [data-testid="stTextArea"] textarea {
   border: 1px solid #D7E2F0 !important; border-radius: 9px !important; background: #fff !important;
 }
 [data-testid="stMainBlockContainer"] [data-testid="stTextInputRootElement"]:focus-within,
 [data-testid="stMainBlockContainer"] [data-testid="stSelectbox"] .react-aria-ComboBox [role="group"]:focus-within,
 [data-testid="stMainBlockContainer"] [data-testid="stMultiSelect"] .react-aria-ComboBox [role="group"]:focus-within,
 [data-testid="stMainBlockContainer"] [data-testid="stNumberInputContainer"]:focus-within,
-[data-testid="stMainBlockContainer"] [data-testid="stTextArea"] textarea:focus {
+[data-testid="stMainBlockContainer"] [data-testid="stTextArea"] textarea:focus,
+[data-testid="stPopoverBody"] [data-testid="stTextInputRootElement"]:focus-within,
+[data-testid="stPopoverBody"] [data-testid="stSelectbox"] .react-aria-ComboBox [role="group"]:focus-within,
+[data-testid="stPopoverBody"] [data-testid="stNumberInputContainer"]:focus-within,
+[data-testid="stPopoverBody"] [data-testid="stTextArea"] textarea:focus {
   border-color: #6FA2EB !important; box-shadow: 0 0 0 3px rgba(23,105,224,.12) !important;
 }
 [data-baseweb="popover"], [data-baseweb="menu"] { background: #fff; color: var(--df-text); }
@@ -163,6 +172,9 @@ $theme_vars
 [data-testid="stApp"] [data-testid="stSegmentedControl"] button { min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--df-text2); font-size: 12px; }
 [data-testid="stApp"] [data-testid="stSegmentedControl"] button[aria-pressed="true"] { background: #fff; color: var(--df-brand); box-shadow: 0 1px 4px rgba(30,60,100,.12); font-weight: 650; }
 [data-testid="stVerticalBlockBorderWrapper"] { border-color: #D8E3F0; border-radius: 11px; background: #fff; box-shadow: 0 2px 8px rgba(30,60,100,.035); }
+[data-testid="stMainBlockContainer"] [class*="st-key-workflow-run-"] {
+  border-color: #D8E3F0; border-radius: 11px; background: #fff;
+}
 /* data-test-wrap describes flex wrapping, not a bordered container. Styling it
    as a card paints every nested column and layout block as another white box. */
 [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] > [data-testid="stHtml"] > :is(.df-section-heading, .df-pack-heading)) {

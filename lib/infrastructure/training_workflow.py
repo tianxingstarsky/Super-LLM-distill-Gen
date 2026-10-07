@@ -54,7 +54,8 @@ from lib.infrastructure.agent_docker_replay import (DockerLedgerReplay, IMAGE_EN
                                                     validate_sandbox_image)
 from lib.doc2corpus import SUPPORTED_EXTS, chunk_text, import_text
 from lib.io_utils import _replace_state, atomic_json
-from lib.llm_client import chat_json, load_backend, snapshot_backend_endpoint
+from lib.llm_client import ChatClient, chat_json, load_backend, snapshot_backend_endpoint
+from lib.infrastructure.workflow_stream_journal import StreamJournal
 from lib.prompts import get, registry, render
 
 
@@ -421,7 +422,9 @@ class Workflow:
         return client
 
     def ask(self, key, role, prompt_id, data):
+        journal = None
         def invoke():
+            nonlocal journal
             self.check_cancel()
             client = self.client(role)
             with self._client_locks[id(client)]:
@@ -430,10 +433,21 @@ class Workflow:
                 self.event("model_started", role=role)
                 try:
                     binding = self.recipe.get("node_models", {}).get(self.stage, {}).get(role, {})
+                    streaming = {}
+                    if isinstance(client, ChatClient):
+                        first = key[0] if isinstance(key, (list, tuple)) and key else key
+                        unit = first if isinstance(first, str) and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", first) else digest(key)[:16]
+                        journal = StreamJournal(self.path, stage=self.stage, unit=unit, role=role,
+                                                run_attempt=self.state.get("attempt", 0),
+                                                checkpoint=digest(["call", key]))
+                        def received(event):
+                            self.check_cancel()
+                            journal(event)
+                        streaming["on_stream"] = received
                     return chat_json(client, [
                         {"role": "system", "content": render(get("workflow.system")) + "\n" + render(get(prompt_id))},
                         {"role": "user", "content": canonical(data)}],
-                        max_tokens=binding.get("max_output_tokens"))
+                        max_tokens=binding.get("max_output_tokens"), **streaming)
                 finally:
                     after = getattr(client, "usage", {})
                     with self._lock:
@@ -441,7 +455,21 @@ class Workflow:
                         for metric in ("calls", "prompt_tokens", "completion_tokens"):
                             usage[metric] = usage.get(metric, 0) + max(0, after.get(metric, 0) - before.get(metric, 0))
                         self.event("model_finished", role=role)
-        return self.checkpoint(["call", key], invoke)
+        try:
+            value = self.checkpoint(["call", key], invoke)
+        except BaseException:
+            if journal is not None:
+                try:
+                    journal.interrupted()
+                except (OSError, ValueError):
+                    pass  # Preserve the original failure, never its provider message.
+            raise
+        if journal is not None:
+            try:
+                journal.completed()
+            except (OSError, ValueError):
+                pass  # The trusted checkpoint is already durable and reusable.
+        return value
 
     def stage_items(self, stage, items, action, *, stream_sources=False):
         self.stage = stage
@@ -629,7 +657,8 @@ class Workflow:
             queries = [config["query"], *config.get("more_queries", [])]
             if len(queries) == 1:
                 return {"provider": "brave", "query": config["query"],
-                        "retrieved_at": now(), "results": search_web(config, before_query=self.check_cancel),
+                        "retrieved_at": now(), "results": search_web(config, root=self.root,
+                                                                      before_query=self.check_cancel),
                         "note": "Search snippets are planning leads, not independent fact verification."}
             topics = []
             for query in queries:
@@ -640,7 +669,7 @@ class Workflow:
                     raise ValueError("web_research_integrity_error")
                 def fetch_topic(topic_config=topic_config, query=query):
                     return {"provider": "brave", "query": query, "retrieved_at": now(),
-                            "results": search_web(topic_config, before_query=self.check_cancel,
+                            "results": search_web(topic_config, root=self.root, before_query=self.check_cancel,
                                                   allow_empty=True)}
                 if topic_path.exists():
                     topic = validate_search_topic_document(

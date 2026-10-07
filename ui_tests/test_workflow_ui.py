@@ -533,7 +533,7 @@ def test_open_brief_checks_brave_connection_in_place_without_rendering_key(tmp_p
     monkeypatch.setenv(brave_web_research.KEY_ENV, secret)
     checks = []
     monkeypatch.setattr(brave_web_research, "check_connection",
-                        lambda: checks.append(True) or "ready")
+                        lambda *args, **kwargs: checks.append(True) or "ready")
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = name
     app.session_state["nav"] = "自动工作流"

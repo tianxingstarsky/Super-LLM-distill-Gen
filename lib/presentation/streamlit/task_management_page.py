@@ -221,7 +221,7 @@ def _jump_to_page(page_key: str, jump_key: str) -> None:
 
 def render_task_management(application: WorkflowApplication, workspace_id: str,
                            begin: Callable[[list[str]], None],
-                           on_new_workflow: Callable[[], None]) -> str | None:
+                           on_new_workflow: Callable[[], None], *, draft_application=None) -> str | None:
     """Render the data-workflow task view and return the selected run ID.
 
     ``begin`` starts or resumes a persisted workflow, while
@@ -261,7 +261,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                          gap="small", vertical_alignment="center")
     focus_column, create_column = toolbar[0], toolbar[-1]
     with focus_column:
-        focus = st.toggle("放大工作流视图", key=f"task-center-focus:{workspace_id}",
+        focus = st.toggle("放大工作流视图", value=len(runs) <= 3, key=f"task-center-focus:{workspace_id}",
                           help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
     if len(toolbar) == 3:
         language = st.session_state.get("ui_language", "zh")
@@ -344,7 +344,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
             st.session_state[selection_key] = selected_id
         if not visible:
             st.html('<div class="df-task-no-match">没有符合当前筛选条件的任务。调整状态或搜索词后再查看。</div>')
-        with st.container(height=600, border=False):
+        with st.container(height=600 if len(visible) > 3 else "content", border=False):
             for run in visible:
                 run_id = str(run["id"])
                 status = str(run.get("status", "queued"))
@@ -369,7 +369,8 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
 
                     render_agent_review(application, selected_id, workspace_id=workspace_id)
             if selected_run.get("recipe_readable", True):
-                render_run(application, selected_id, begin, embedded=True)
+                render_run(application, selected_id, begin, embedded=True,
+                           **({"draft_application": draft_application} if draft_application is not None else {}))
             else:
                 st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         else:

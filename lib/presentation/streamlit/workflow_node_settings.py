@@ -72,7 +72,12 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
     epoch = int(st.session_state.get(form_prefix + ":epoch", 0))
     missing_role = next((role for role in roles if not bindings.get(node, {}).get(role, {}).get("model")
                          or bindings[node][role].get("backend") not in endpoints), None)
-    with st.expander("新增或更新服务连接", expanded=not endpoints):
+    # Adding a connection beside existing role controls makes a very long
+    # inspector. A popover keeps that occasional edit on the selected node.
+    # For the first connection, show the form directly to avoid another click.
+    connection_panel = (st.popover("新增或更新服务连接", width="stretch") if endpoints
+                        else st.expander("新增或更新服务连接", expanded=True))
+    with connection_panel:
         st.caption("连接保存在本机供复用；本次任务使用哪个模型由当前节点决定。")
         with st.form(f"{form_prefix}:{epoch}", clear_on_submit=True):
             name = st.text_input("服务名称", placeholder="字母、数字、下划线或连字符")
@@ -213,16 +218,19 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                                if same_model else DEFAULT_CONTEXT_WINDOW_TOKENS)
             output_default = (binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
                               if same_model else DEFAULT_MAX_OUTPUT_TOKENS)
-            context_tokens = st.number_input(
-                "上下文窗口（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS,
-                value=int(context_default), step=1024,
-                key=prefix + ":context:" + backend + ":" + model,
-            )
-            output_tokens = st.number_input(
-                "单次输出上限（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS - 1,
-                value=int(output_default), step=1024,
-                key=prefix + ":output:" + backend + ":" + model,
-            )
+            context_column, output_column = st.columns(2, gap="small")
+            with context_column:
+                context_tokens = st.number_input(
+                    "上下文窗口（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS,
+                    value=int(context_default), step=1024,
+                    key=prefix + ":context:" + backend + ":" + model,
+                )
+            with output_column:
+                output_tokens = st.number_input(
+                    "单次输出上限（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS - 1,
+                    value=int(output_default), step=1024,
+                    key=prefix + ":output:" + backend + ":" + model,
+                )
             if output_tokens >= context_tokens:
                 st.warning("单次输出上限必须小于上下文窗口。")
                 bindings.setdefault(node, {}).pop(role, None)

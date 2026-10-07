@@ -18,6 +18,7 @@ from lib.domain.backend_config import (validate_backend_url, validate_credential
 from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request,
                                  anthropic_text, response_text, responses_input,
                                  validate_api_format)
+from lib.model_streaming import StreamCallback, consume_stream
 
 DEFAULT_NO_PROXY = "127.0.0.1,localhost"
 # A priced hard-stop request without an explicit model context is constrained
@@ -76,6 +77,7 @@ def chat_json(
     retries: int = 3,
     thinking: bool = False,
     max_tokens: int | None = None,
+    on_stream: StreamCallback | None = None,
 ) -> Dict[str, Any]:
     """严格 JSON 调用：response_format 解码层强制 + 容错解析 + 降温度重试。"""
     if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
@@ -84,7 +86,8 @@ def chat_json(
     for attempt in range(retries):
         temp = temperature if attempt == 0 else min(temperature, 0.3)
         out = client.chat(messages, max_tokens=max_tokens, temperature=temp,
-                          thinking=thinking, json_mode=True)
+                          thinking=thinking, json_mode=True,
+                          **({"on_stream": on_stream} if on_stream else {}))
         try:
             return parse_json_robust(out)
         except Exception as e:  # noqa: BLE001
@@ -378,21 +381,27 @@ class ChatClient:
         return output, (context * self.price_input + output * self.price_output) / 1e6
 
     def _request(self, messages: List[Dict[str, Any]], *, max_tokens: int | None,
-                 temperature: float, thinking: bool, json_mode: bool) -> tuple[str, int, int]:
+                 temperature: float, thinking: bool, json_mode: bool,
+                 on_stream: StreamCallback | None = None) -> tuple[str, int, int]:
         if self.api_format == "anthropic":
             kwargs = anthropic_request(messages, json_mode=json_mode)
             kwargs.update(model=self.model, temperature=temperature,
                           max_tokens=max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS)
+            if on_stream and getattr(self, "stream_supported", None) is not False:
+                kwargs["stream"] = True
             try:
-                response = self.client.messages.create(**kwargs)
+                response = self._create(self.client.messages.create, kwargs)
             except Exception as error:
                 if not _is_temperature_unsupported(error):
                     raise
                 kwargs.pop("temperature")
-                response = self.client.messages.create(**kwargs)
+                response = self._create(self.client.messages.create, kwargs)
+            if on_stream and kwargs.get("stream"):
+                return consume_stream(response, self.api_format, on_stream)
             usage = getattr(response, "usage", None)
-            return (anthropic_text(response), getattr(usage, "input_tokens", 0) or 0,
-                    getattr(usage, "output_tokens", 0) or 0)
+            return self._full_result((anthropic_text(response), getattr(usage, "input_tokens", 0) or 0,
+                                      getattr(usage, "output_tokens", 0) or 0), on_stream,
+                                     getattr(response, "stop_reason", None), {"end_turn", "stop_sequence"})
         if self.api_format == "responses":
             kwargs: Dict[str, Any] = {"model": self.model, "input": responses_input(messages),
                                       "temperature": temperature, "store": False}
@@ -400,18 +409,23 @@ class ChatClient:
                 kwargs["max_output_tokens"] = max_tokens
             if json_mode and self.json_supported is not False:
                 kwargs["text"] = {"format": {"type": "json_object"}}
+            if on_stream and getattr(self, "stream_supported", None) is not False:
+                kwargs["stream"] = True
             try:
-                response = self.client.responses.create(**kwargs)
+                response = self._create(self.client.responses.create, kwargs)
             except Exception as error:
                 if not _is_temperature_unsupported(error):
                     raise
                 kwargs.pop("temperature")
-                response = self.client.responses.create(**kwargs)
+                response = self._create(self.client.responses.create, kwargs)
             if json_mode and self.json_supported is None:
                 self.json_supported = True
+            if on_stream and kwargs.get("stream"):
+                return consume_stream(response, self.api_format, on_stream)
             usage = getattr(response, "usage", None)
-            return (response_text(response), getattr(usage, "input_tokens", 0) or 0,
-                    getattr(usage, "output_tokens", 0) or 0)
+            return self._full_result((response_text(response), getattr(usage, "input_tokens", 0) or 0,
+                                      getattr(usage, "output_tokens", 0) or 0), on_stream,
+                                     getattr(response, "status", None), {"completed"})
         kwargs = {"model": self.model, "messages": messages, "temperature": temperature}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
@@ -419,9 +433,11 @@ class ChatClient:
             kwargs["response_format"] = {"type": "json_object"}
         if not thinking:
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        for _ in range(4):
+        if on_stream and getattr(self, "stream_supported", None) is not False:
+            kwargs.update(stream=True, stream_options={"include_usage": True})
+        for _ in range(5):
             try:
-                response = self.client.chat.completions.create(**kwargs)
+                response = self._create(self.client.chat.completions.create, kwargs)
                 break
             except Exception as error:
                 if "max_tokens" in kwargs and _is_parameter_unsupported(error, "max_tokens"):
@@ -430,12 +446,16 @@ class ChatClient:
                     kwargs.pop("temperature")
                 elif "extra_body" in kwargs and _is_parameter_unsupported(error, "thinking"):
                     kwargs.pop("extra_body")
+                elif "stream_options" in kwargs and _is_parameter_unsupported(error, "stream_options"):
+                    kwargs.pop("stream_options")
                 else:
                     raise
         else:
             raise RuntimeError("chat parameter negotiation failed")
         if json_mode and self.json_supported is None:
             self.json_supported = True
+        if on_stream and kwargs.get("stream"):
+            return consume_stream(response, self.api_format, on_stream)
         usage = getattr(response, "usage", None)
         message = response.choices[0].message
         content = (message.content or "").strip()
@@ -443,8 +463,36 @@ class ChatClient:
             reasoning = getattr(message, "reasoning_content", None)
             if isinstance(reasoning, str):
                 content = reasoning.strip()
-        return (content, getattr(usage, "prompt_tokens", 0) or 0,
-                getattr(usage, "completion_tokens", 0) or 0)
+        return self._full_result((content, getattr(usage, "prompt_tokens", 0) or 0,
+                                  getattr(usage, "completion_tokens", 0) or 0), on_stream,
+                                 getattr(response.choices[0], "finish_reason", None), {"stop"})
+
+    def _create(self, create, kwargs):
+        """Negotiate only an explicit pre-stream capability rejection."""
+        try:
+            return create(**kwargs)
+        except Exception as error:
+            status = getattr(error, "status_code", None)
+            if (kwargs.get("stream") and status in {400, 422}
+                    and "stream_options" not in str(error).lower()
+                    and _is_parameter_unsupported(error, "stream")):
+                kwargs.pop("stream")
+                kwargs.pop("stream_options", None)
+                self.stream_supported = False
+                return create(**kwargs)
+            raise
+
+    @staticmethod
+    def _full_result(result, on_stream, stop_reason, allowed):
+        if on_stream:
+            from lib.model_streaming import ModelStreamError
+            if stop_reason not in allowed:
+                raise ModelStreamError("model_stream_incomplete")
+            if result[0]:
+                on_stream({"type": "delta", "channel": "text", "text": result[0]})
+            on_stream({"type": "response_completed", "prompt_tokens": result[1],
+                       "completion_tokens": result[2]})
+        return result
 
     def chat(
         self,
@@ -454,12 +502,21 @@ class ChatClient:
         retries: int = 3,
         thinking: bool = True,
         json_mode: bool = False,
+        on_stream: StreamCallback | None = None,
     ) -> str:
         """Return text through the selected protocol and count its usage."""
         if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
             raise ValueError("max_tokens must be a positive integer")
         request_max_tokens, reservation_usd = self._budget_request_bound(messages, max_tokens)
         last_err: Exception | None = None
+        callback_error = None
+        def notify(event):
+            nonlocal callback_error
+            try:
+                on_stream(event)
+            except Exception as error:
+                callback_error = error
+                raise
         attempts = 0
         while attempts < retries:
             reservation = None
@@ -470,10 +527,13 @@ class ChatClient:
                         reservation = self.budget.reserve(reservation_usd)
                     else:
                         self.budget.check()
+                if on_stream:
+                    notify({"type": "start", "api_format": self.api_format})
                 request_started = True
                 content, prompt_tokens, completion_tokens = self._request(
                     messages, max_tokens=request_max_tokens, temperature=temperature,
-                    thinking=thinking, json_mode=json_mode)
+                    thinking=thinking, json_mode=json_mode,
+                    **({"on_stream": notify} if on_stream else {}))
                 self.usage["calls"] += 1
                 self.usage["prompt_tokens"] += prompt_tokens
                 self.usage["completion_tokens"] += completion_tokens
@@ -494,6 +554,8 @@ class ChatClient:
             except ValueError:
                 raise
             except Exception as e:  # noqa: BLE001
+                if e is callback_error:
+                    raise
                 # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
                 # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
                 if (self.api_format != "anthropic" and json_mode
@@ -529,7 +591,8 @@ def _is_temperature_unsupported(err: Exception) -> bool:
 def _is_parameter_unsupported(err: Exception, parameter: str) -> bool:
     text = str(err).lower()
     return parameter in text and any(value in text for value in
-                                     ("unsupported", "not supported", "unavailable", "unknown parameter"))
+                                     ("unsupported", "not supported", "unavailable", "unknown parameter",
+                                      "unexpected keyword argument"))
 
 
 def _configured_backends(root: pathlib.Path) -> Dict[str, Any]:

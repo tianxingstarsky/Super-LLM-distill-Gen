@@ -18,6 +18,7 @@ from lib.domain.backend_config import validate_token_prices
 from lib.presentation.streamlit.i18n import UntranslatedText, translate, translate_label
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
+from lib.presentation.streamlit.workflow_stream_view import render_stream_output
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.web_research import MAX_QUERIES, validate_web_research
@@ -60,7 +61,12 @@ def _workflow_error(error) -> str:
     return {
         "web_search_not_configured": "网页检索服务未配置。设置检索密钥后可从断点重试。",
         "web_search_provider_error": "网页检索服务暂不可用。可从断点重试本次任务。",
-        "web_search_no_safe_results": "没有找到可用的公开检索结果。请新建任务并调整公开检索词。",
+        "web_search_no_safe_results": "没有找到可用的公开检索结果。可重试，或复制配置后调整检索词。",
+        "web_search_connection_invalid": "本机检索连接无法读取。请检查本机存储后重新保存连接。",
+        "model_stream_interrupted": "模型输出连接中断。可重试当前样本，已完成样本保留断点。",
+        "model_stream_incomplete": "模型输出未完整结束。可重试，或复制配置后检查节点输出上限。",
+        "model_stream_invalid_event": "模型返回的流式内容无效。请检查模型服务后重试。",
+        "model_stream_storage_invalid": "实时输出缓存无法安全读写。请检查本机存储后重试。",
         "invalid_task_plan_duplicate_normalized_task": "规划批次包含重复任务，请重试当前批次。",
         "invalid_task_plan_task_too_long": "规划任务过长，请重试当前批次生成简洁任务。",
         "invalid_task_plan_wrong_task_count": "规划批次的任务数量不符，请重试当前批次。",
@@ -338,7 +344,7 @@ def _render_research_receipt(application, run_id, recipe, state):
 
 
 @st.fragment(run_every=2)
-def render_run(application, run_id, begin, *, embedded=False):
+def render_run(application, run_id, begin, *, embedded=False, draft_application=None):
     st.html(workflow_run_styles())
     try:
         # Inventory is only a snapshot. Read again inside the fragment so a
@@ -397,17 +403,34 @@ def render_run(application, run_id, begin, *, embedded=False):
         if exit_code not in (None, 0):
             st.error("任务进程未能启动。请检查本机运行环境后从断点重试。")
     _render_research_receipt(application, run_id, recipe, state)
-    if active:
-        if st.button("停止后续步骤", key=f"stop:{run_id}"):
-            application.cancel(run_id)
-            st.info("已请求停止；当前模型请求返回后，在下一断点停止。")
-    elif status in {"queued", "running", "failed", "cancelled"}:
+    resumable = not active and status in {"queued", "running", "failed", "cancelled"}
+    if resumable:
         st.caption("继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。")
-        if st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}"):
-            begin(["workflow", "--action", "resume", "--run-id", run_id])
+    if active or resumable:
+        action, copy_action = (st.columns(2, gap="small") if draft_application is not None
+                               else (st.container(), None))
+        with action:
+            if active:
+                if st.button("停止后续步骤", key=f"stop:{run_id}", width="stretch"):
+                    application.cancel(run_id)
+                    st.info("已请求停止；当前模型请求返回后，在下一断点停止。")
+            elif st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}", width="stretch"):
+                begin(["workflow", "--action", "resume", "--run-id", run_id])
+    elif draft_application is not None:
+        copy_action = st.container()
+    if draft_application is not None:
+        from lib.presentation.streamlit.workflow_reuse import reuse_run_as_draft
+        workspace = st.session_state["ws"]
+        with copy_action:
+            if st.button("复制配置并修改", key=f"workflow-reuse:{run_id}", width="stretch",
+                         help="保留当前未完成草稿，复制本次配置后调整；不会修改或启动原任务。"):
+                if reuse_run_as_draft(application, draft_application, workspace, run_id):
+                    st.rerun()
+        if error := st.session_state.pop(f"workflow-reuse-error:{workspace}", None):
+            st.error(error)
     flow, inspector = st.columns([2.25, 1], gap="medium")
     with flow:
-        with st.container(border=True):
+        with st.container(border=True, key=f"workflow-run-canvas:{run_id}"):
             st.html('<div class="df-run-section"><div><strong>工作流运行图</strong>'
                     '<small>点击节点卡，检查该步骤的状态、配置与日志。</small></div>'
                     '<span class="df-run-section-tag">实时进度</span></div>')
@@ -452,7 +475,7 @@ def render_run(application, run_id, begin, *, embedded=False):
         quarantined = int(selected_metrics.get("quarantined", 0) or 0)
         passed_label, quarantined_label = "通过质检", "隔离记录"
     with inspector:
-        with st.container(border=True):
+        with st.container(border=True, key=f"workflow-run-inspector:{run_id}"):
             st.html('<div class="df-run-section"><div><strong>节点配置</strong>'
                     '<small>所选节点的运行状态与实际配方</small></div></div>')
             st.html('<div class="df-run-inspector-head">'
@@ -485,7 +508,9 @@ def render_run(application, run_id, begin, *, embedded=False):
             if selected_metrics.get("error"):
                 st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
     selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
-    with flow, st.container(border=True):
+    with flow:
+        render_stream_output(application, run_id, selected_stage)
+    with flow, st.container(border=True, key=f"workflow-run-log:{run_id}"):
         st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
                 f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'
                 '</div><span class="df-run-section-tag">所选节点</span></div>')
@@ -612,30 +637,69 @@ def _draft_brief(label, *, key, **options):
                         on_change=_save_draft_value, args=(workspace, key), **options)
 
 
-def _draft_web_control(workspace, application: WorkflowApplication, *, configured: bool):
+def _save_web_connection(workspace, application):
+    key = f"workflow-web-api-key:{workspace}"
+    value = st.session_state.get(key, "").strip()
+    if not value:
+        st.session_state[f"workflow-web-save-result:{workspace}"] = "empty"
+        return
+    try:
+        application.save_web_research_connection(value)
+    except (OSError, ValueError, Timeout):
+        st.session_state[f"workflow-web-save-result:{workspace}"] = "error"
+    else:
+        st.session_state[f"workflow-web-save-result:{workspace}"] = "saved"
+        st.session_state.pop(f"workflow-web-check-result:{workspace}", None)
+    finally:
+        # The widget is a temporary entry field, not a second credential store.
+        st.session_state[key] = ""
+
+
+def _draft_web_control(workspace, application: WorkflowApplication, *, configured: bool,
+                       connection: dict | None = None):
     """Explicit public topics, never an implicit copy of the private brief."""
     draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     enabled_key = f"workflow-web-research-enabled:{workspace}"
     consent_key = f"workflow-web-research-session-consent:{workspace}"
     if enabled_key not in st.session_state:
         st.session_state[enabled_key] = st.session_state.get(consent_key, False)
+    connection = connection or {}
+    revision = connection.get("connection_revision", configured)
     section_heading("联网资料", "输入解析节点的可选规划线索", "⌕")
     status_column, check_column = st.columns([2, 1], vertical_alignment="center", gap="small")
     with status_column:
         if configured:
-            st.caption("Brave Search · 已检测到运行环境中的检索密钥")
+            st.caption("Brave Search · 已保存本机检索连接" if connection.get("key_source") == "local"
+                       else "Brave Search · 已检测到运行环境中的检索密钥")
         else:
-            st.caption("Brave Search · 未配置。设置 DATAFORGE_BRAVE_SEARCH_API_KEY 并重启控制台。")
+            st.caption("Brave Search · 未配置，可在下方保存检索连接。")
     with check_column:
         check_clicked = st.button("检查 Brave 连接", key=f"workflow-web-check:{workspace}",
                                   use_container_width=True,
+                                  disabled=not configured,
                                   help="仅在点击时向 Brave 发送固定公开词 Brave Search；不会发送需求、上传资料或下方检索词。")
+    with st.expander("配置检索连接", expanded=bool(st.session_state[enabled_key] and not configured)):
+        secret_key = f"workflow-web-api-key:{workspace}"
+        st.text_input("Brave Search API 密钥", type="password", key=secret_key,
+                      help="仅保存在本机连接中，不进入工作草稿、任务配方或导出文件。")
+        st.button("保存检索连接", key=f"workflow-web-save:{workspace}",
+                  on_click=_save_web_connection, args=(workspace, application), width="stretch")
+        st.caption("保存后立即生效，无需重启。保存不会发起检索。")
+    save_result = st.session_state.pop(f"workflow-web-save-result:{workspace}", None)
+    if save_result == "saved":
+        st.success("检索连接已保存，可检查连接或继续配置任务。")
+    elif save_result == "error":
+        st.error("检索连接未保存。请检查密钥与本机存储后重试。")
+    elif save_result == "empty":
+        st.warning("请先填写 Brave Search API 密钥。")
+    if connection.get("connection_error"):
+        st.warning("本机检索连接无法读取，请检查本机存储后重试。")
     result_key = f"workflow-web-check-result:{workspace}"
     if check_clicked:
         with st.spinner("正在检查 Brave 连接…"):
-            st.session_state[result_key] = (configured, application.check_web_research_connection())
+            st.session_state[result_key] = (revision, application.check_web_research_connection())
     prior = st.session_state.get(result_key)
-    if isinstance(prior, tuple) and len(prior) == 2 and prior[0] == configured:
+    if isinstance(prior, tuple) and len(prior) == 2 and prior[0] == revision:
         if prior[1] == "ready":
             st.success("上次检查：Brave Search 连接可用。")
         elif prior[1] == "not_configured":
@@ -671,7 +735,7 @@ def _draft_web_control(workspace, application: WorkflowApplication, *, configure
         st.warning("补充公开主题最多 4 个。请合并或删减后再开始。")
     unavailable = not query.strip() or not configured or too_many
     if not configured:
-        st.warning("网页检索服务尚未配置，请先在运行环境设置检索密钥。")
+        st.warning("请先展开配置检索连接，保存 Brave Search 密钥。")
     elif not query.strip():
         st.warning("请填写可公开的检索词，不要粘贴需求全文或私有资料。")
     config = {"provider": "brave", "query": query.strip(), "count": int(count)}
@@ -738,6 +802,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         '</div>'
     )
     ws = st.session_state["ws"]
+    if notice := st.session_state.pop(f"workflow-reuse-notice:{ws}", None):
+        st.success("已复制到新草稿，可直接修改后运行。联网检索需重新开启。")
+        if notice.get("missing_sources"):
+            st.warning("部分来源无法匹配本机文件，请重新选择或上传。")
+            st.caption(UntranslatedText("、".join(notice["missing_sources"][:5])))
+        if notice.get("evaluation_references_omitted"):
+            st.info("评测参照未复制，请在需要时重新添加。")
     if draft_application is not None:
         st.session_state[f"workflow-draft-application:{ws}"] = draft_application
         draft_key = f"workflow-form-draft:{ws}"
@@ -878,9 +949,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("描述任务、领域和使用场景，系统会规划并生成候选。")
                 brief = _draft_brief("开放性需求", key=f"workflow-open-brief:{ws}", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
                 with st.container(border=True, key=f"workbench-web-research:{ws}"):
+                    search_connection = application.web_research_capabilities()
                     web_research, web_unavailable = _draft_web_control(
                         ws, application,
-                        configured=bool(application.web_research_capabilities().get("brave_configured")))
+                        configured=bool(search_connection.get("brave_configured")),
+                        connection=search_connection)
                     if web_research and web_research["query"]:
                         try:
                             validate_web_research(web_research, brief=brief, targets=targets)

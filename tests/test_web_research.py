@@ -110,7 +110,7 @@ def test_brave_adapter_uses_fixed_https_endpoint_and_never_follows_results(monke
     assert call["closed"]
 
 
-def test_connection_check_is_opt_in_and_uses_only_a_fixed_public_query(monkeypatch):
+def test_connection_check_is_opt_in_and_uses_only_a_fixed_public_query(tmp_path, monkeypatch):
     monkeypatch.delenv(brave_web_research.KEY_ENV, raising=False)
     FakeConnection.calls = []
     assert brave_web_research.check_connection() == "not_configured"
@@ -119,7 +119,7 @@ def test_connection_check_is_opt_in_and_uses_only_a_fixed_public_query(monkeypat
     monkeypatch.setenv(brave_web_research.KEY_ENV, "private-test-key")
     FakeConnection.response = FakeResponse(payload={"web": {"results": []}})
     monkeypatch.setattr(brave_web_research.http.client, "HTTPSConnection", FakeConnection)
-    app = WorkflowApplication(FilesystemWorkflowDriver(".", "out"))
+    app = WorkflowApplication(FilesystemWorkflowDriver(tmp_path, tmp_path / "out"))
     assert app.check_web_research_connection() == "ready"
     assert len(FakeConnection.calls) == 1
     call = FakeConnection.calls[0]
@@ -232,7 +232,8 @@ def test_search_is_real_planning_input_cached_and_manifested(tmp_path, monkeypat
     assert read_json(path / "recipe.json")["web_research"] == CONFIG
     calls, prompts = [], []
 
-    def fake_search(config, *, before_query=None):
+    def fake_search(config, *, root=None, before_query=None):
+        assert root == tmp_path
         if before_query:
             before_query()
         calls.append(config)
