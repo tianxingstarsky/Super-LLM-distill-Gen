@@ -130,3 +130,65 @@ def test_failed_preservation_aborts_switch_without_changing_current_or_session(t
     assert any("现有工作未改变" in item.value for item in ui.error)
     assert "nav" not in ui.session_state
     assert {row["id"] for row in application.snapshots()} == {target}
+
+
+def test_switch_and_return_preserve_edits_ahead_of_failed_autosave(tmp_path):
+    application = creation_draft_application(tmp_path)
+    saved = {"workflow-name:default": "Saved task", "workflow-count:default": 1000}
+    application.update(saved)
+    target = application.save_snapshot()
+    application.update({"workflow-name:default": "Unfinished task"})
+    on_disk = application.load()
+    # This is the state kept by the workbench when its autosave failed.
+    edited = {**on_disk, "workflow-count:default": 50000,
+              "workflow-sft-output-style:default": "drop"}
+    ui = AppTest.from_function(screen, args=(str(tmp_path),)).run()
+    ui.session_state["workflow-form-draft:default"] = edited
+    ui.session_state["workflow-draft-error:default"] = True
+    ui.selectbox[0].set_value(target).run()
+    ui.button(key="work-draft-open:default").click().run()
+    assert not ui.exception and application.load() == saved
+    backup = ui.session_state["work-draft-switch-backup:default"]
+    # The backup must contain the actual editor values, not the older disk copy.
+    assert creation_draft_application(tmp_path).restore_snapshot(backup) == edited
+    application.restore_snapshot(target)
+    ui.button(key="work-draft-return:default").click().run()
+    assert not ui.exception and application.load() == edited
+    assert ui.session_state["workflow-form-draft:default"] == edited
+
+
+def test_current_draft_name_matches_this_session_when_other_session_changes_disk(tmp_path):
+    application = creation_draft_application(tmp_path)
+    mine = {"workflow-name:default": "This session", "workflow-count:default": 50000}
+    application.update(mine)
+    ui = AppTest.from_function(screen, args=(str(tmp_path),)).run()
+    ui.session_state["workflow-form-draft:default"] = mine
+    creation_draft_application(tmp_path).update({"workflow-name:default": "Another session"})
+    ui.run()
+    current = next(item.value for item in ui.get("html")
+                   if isinstance(item.value, str) and 'class="df-draft-current"' in item.value)
+    assert "This session" in current and "Another session" not in current
+    assert "当前编辑" in current and "当前自动保存" not in current
+    ui.button(key="work-draft-current:default").click().run()
+    assert not ui.exception and ui.session_state["nav"] == "自动工作流"
+    assert ui.session_state["workflow-form-draft:default"] == mine
+    # A genuinely fresh session still recovers the durable automatic draft.
+    fresh = AppTest.from_function(screen, args=(str(tmp_path),)).run()
+    current = next(item.value for item in fresh.get("html")
+                   if isinstance(item.value, str) and 'class="df-draft-current"' in item.value)
+    assert "Another session" in current and "当前自动保存" in current
+
+
+def test_unreadable_autosave_keeps_valid_session_draft_available(tmp_path):
+    ui = AppTest.from_function(screen, args=(str(tmp_path),)).run()
+    mine = {"workflow-name:default": "Current edits", "workflow-count:default": 50000}
+    ui.session_state["workflow-form-draft:default"] = mine
+    (tmp_path / '.creation-draft.json').write_text('Broken autosave', encoding='utf-8')
+    ui.run()
+    assert not ui.exception
+    assert any("当前修改仍保留在会话中" in item.value for item in ui.warning)
+    current = next(item.value for item in ui.get("html")
+                   if isinstance(item.value, str) and 'class="df-draft-current"' in item.value)
+    assert "Current edits" in current and "当前编辑" in current
+    ui.button(key="work-draft-current:default").click().run()
+    assert not ui.exception and ui.session_state["workflow-form-draft:default"] == mine

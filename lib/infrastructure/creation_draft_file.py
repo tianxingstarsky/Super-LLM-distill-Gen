@@ -93,6 +93,17 @@ class CreationDraftFile:
                 return
             _write(self.path, {'version': 1, 'values': values})
 
+    def replace(self, values: dict) -> None:
+        """Autosave one complete session form without inheriting another form."""
+        values = validate_creation_draft(values)
+        with self._lock():
+            # Keep unreadable existing drafts intact, as update does. A failed
+            # read must remain visible rather than silently discard recovery data.
+            previous = self.load()
+            if values == previous:
+                return
+            _write(self.path, {'version': 1, 'values': values})
+
     def _snapshot_path(self, identifier: str) -> Path:
         if not isinstance(identifier, str) or not _SNAPSHOT_ID.fullmatch(identifier):
             raise ValueError('invalid_creation_draft_id')
@@ -117,11 +128,15 @@ class CreationDraftFile:
             raise ValueError('invalid_creation_draft')
         return document
 
-    def save_snapshot(self, name: str | None = None) -> str:
+    def save_snapshot(self, name: str | None = None, *, values: dict | None = None) -> str:
         if name is not None and (not isinstance(name, str) or len(name) > 100):
             raise ValueError('invalid_creation_draft')
+        # A UI session may be ahead of autosave, or another session may have
+        # changed the shared automatic draft. Snapshot exactly the supplied
+        # validated form without replacing either session's current draft.
+        supplied = validate_creation_draft(values) if values is not None else None
         with self._lock():
-            values = self.load()
+            values = self.load() if supplied is None else supplied
             _directory(self._snapshots)
             for _ in range(16):
                 identifier = uuid.uuid4().hex

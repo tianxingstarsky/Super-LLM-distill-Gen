@@ -17,6 +17,8 @@ from tests.test_workflow_draft import SCRIPT
     ('workflow-web-research-enabled:w', True),
     ('workflow-web-research-more:w', 'x' * 701),
     ('workflow-open-brief:w', 'x' * 20001), ('workflow-name', 'No workspace'),
+    ('workflow-sft-output-style:w', 'DROP'), ('workflow-sft-output-style:w', True),
+    ('workflow-sft-output-style:w', None), ('workflow-sft-output-style:w', ['drop']),
 ])
 def test_draft_rejects_invalid_or_non_form_values(key, value):
     with pytest.raises(ValueError, match='invalid_creation_draft'):
@@ -135,3 +137,122 @@ def test_bad_disk_draft_shows_warning_and_keeps_session_changes(tmp_path):
     assert ui.number_input(key='workflow-count:fixture').value == 50000
     assert any('草稿未能' in warning.value for warning in ui.warning)
     assert path.read_text(encoding='utf-8') == 'broken JSON'
+
+
+def test_named_drafts_keep_sft_style_and_exact_session_values_across_restarts(tmp_path):
+    script = persistent_script(tmp_path)
+    first = AppTest.from_string(script).run()
+    first.text_input(key='workflow-name:fixture').set_value('First task').run()
+    first.number_input(key='workflow-count:fixture').set_value(50000).run()
+    first.selectbox(key='workflow-sft-output-style:fixture').set_value('drop').run()
+    first.button(key='workflow-save-draft:fixture').click().run()
+    application = creation_draft_application(tmp_path)
+    first_id = application.snapshots()[0]['id']
+
+    second = AppTest.from_string(script).run()
+    assert second.selectbox(key='workflow-sft-output-style:fixture').value == 'drop'
+    second.text_input(key='workflow-name:fixture').set_value('Second task').run()
+    second.number_input(key='workflow-count:fixture').set_value(1000).run()
+    second.selectbox(key='workflow-sft-output-style:fixture').set_value('separated').run()
+    second.button(key='workflow-save-draft:fixture').click().run()
+    second_id = application.snapshots()[0]['id']
+
+    # Saving the still-open first session must snapshot that session, even
+    # after another browser session has changed the shared automatic draft.
+    first.button(key='workflow-save-draft:fixture').click().run()
+    first_copy = application.snapshots()[0]['id']
+    assert len({first_id, second_id, first_copy}) == 3
+    for identifier, name, count, style in (
+            (first_id, 'First task', 50000, 'drop'),
+            (second_id, 'Second task', 1000, 'separated'),
+            (first_copy, 'First task', 50000, 'drop')):
+        restored = creation_draft_application(tmp_path).restore_snapshot(identifier)
+        fresh = AppTest.from_string(script).run()
+        assert not fresh.exception
+        assert fresh.text_input(key='workflow-name:fixture').value == name
+        assert fresh.number_input(key='workflow-count:fixture').value == count
+        assert fresh.selectbox(key='workflow-sft-output-style:fixture').value == style
+        assert restored['workflow-sft-output-style:fixture'] == style
+        assert not any('node-model' in key or 'consent' in key or 'api-key' in key for key in restored)
+    assert not first.exception and not second.exception
+
+
+def test_failed_autosave_edit_is_retried_before_clearing_its_warning(tmp_path, monkeypatch):
+    from lib.application.creation_draft_service import CreationDraftApplication
+
+    ui = AppTest.from_string(persistent_script(tmp_path)).run()
+    original = CreationDraftApplication.replace
+    attempts = []
+
+    def fail_once(self, values):
+        if values.get('workflow-count:fixture') == 50000:
+            attempts.append(values.copy())
+            if len(attempts) == 1:
+                raise OSError('Controlled transient autosave failure')
+        return original(self, values)
+
+    monkeypatch.setattr(CreationDraftApplication, 'replace', fail_once)
+    ui.number_input(key='workflow-count:fixture').set_value(50000).run()
+    assert not ui.exception
+    assert len(attempts) >= 2
+    assert creation_draft_application(tmp_path).load()['workflow-count:fixture'] == 50000
+    assert 'workflow-draft-error:fixture' not in ui.session_state
+
+
+def test_complete_autosave_replaces_other_fields_but_incremental_update_still_merges(tmp_path):
+    application = creation_draft_application(tmp_path)
+    application.update({'workflow-name:fixture': 'Other task',
+                        'workflow-open-brief:fixture': 'Other requirements',
+                        'workflow-sft-output-style:fixture': 'drop'})
+    current = {'workflow-name:fixture': 'Current task', 'workflow-count:fixture': 50000}
+    application.replace(current)
+    fresh = creation_draft_application(tmp_path)
+    assert fresh.load() == current
+    fresh.update({'workflow-batch-size:fixture': 250})
+    assert fresh.load() == {**current, 'workflow-batch-size:fixture': 250}
+
+
+def test_complete_autosave_rejects_secrets_and_keeps_unreadable_draft(tmp_path):
+    application = creation_draft_application(tmp_path)
+    original = {'workflow-name:fixture': 'Recoverable task'}
+    application.replace(original)
+    path = tmp_path / '.creation-draft.json'
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='invalid_creation_draft'):
+        application.replace({'api-key:fixture': 'Never save credentials'})
+    assert path.read_bytes() == before
+    path.write_text('Broken draft', encoding='utf-8')
+    with pytest.raises(ValueError):
+        application.replace(original)
+    assert path.read_text(encoding='utf-8') == 'Broken draft'
+
+
+def test_two_sessions_do_not_mix_sft_default_or_absent_brief_after_autosave_and_restart(tmp_path):
+    script = persistent_script(tmp_path)
+    mine = AppTest.from_string(script).run()
+    mine.text_input(key='workflow-name:fixture').set_value('My task').run()
+    assert mine.selectbox(key='workflow-sft-output-style:fixture').value == 'separated'
+    # An old/default form need not contain the newly supported optional field.
+    assert 'workflow-sft-output-style:fixture' not in mine.session_state['workflow-form-draft:fixture']
+
+    other = AppTest.from_string(script).run()
+    other.text_input(key='workflow-name:fixture').set_value('Other task').run()
+    other.selectbox(key='workflow-sft-output-style:fixture').set_value('drop').run()
+    other.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
+    other.text_area(key='workflow-open-brief:fixture').set_value('Other task requirements').run()
+
+    mine.number_input(key='workflow-count:fixture').set_value(50000).run()
+    assert not mine.exception and not other.exception
+    expected = mine.session_state['workflow-form-draft:fixture']
+    assert creation_draft_application(tmp_path).load() == expected
+    assert 'workflow-sft-output-style:fixture' not in expected
+    assert 'workflow-open-brief:fixture' not in expected
+    fresh = AppTest.from_string(script).run()
+    assert not fresh.exception
+    assert fresh.text_input(key='workflow-name:fixture').value == 'My task'
+    assert fresh.number_input(key='workflow-count:fixture').value == 50000
+    assert fresh.selectbox(key='workflow-sft-output-style:fixture').value == 'separated'
+    fresh.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
+    assert fresh.text_area(key='workflow-open-brief:fixture').value == ''
+    # The other session still owns its separate in-memory form.
+    assert other.session_state['workflow-form-draft:fixture']['workflow-sft-output-style:fixture'] == 'drop'

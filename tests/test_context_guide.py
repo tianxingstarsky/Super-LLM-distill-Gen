@@ -1,6 +1,9 @@
 """Page help stays with the task and uses the active route."""
 from __future__ import annotations
 
+import json
+import re
+
 from streamlit.testing.v1 import AppTest
 
 
@@ -26,11 +29,13 @@ def test_overview_help_opens_workflow_without_a_separate_guide_route():
     assert all(button.key != "context-guide-action:总览" for button in ui.button)
     ui.button(key="context-guide-start:总览").click().run()
     assert ui.session_state["context-guide-step:总览"] == 0
-    assert "home-source-panel" in " ".join(item.proto.body for item in ui.get("html"))
+    assert "home-source-entries" in " ".join(item.proto.body for item in ui.get("html"))
+    ui.button(key="context-guide-jump:总览:1").click().run()
+    assert "st-key-home-strategy-options" in _active_highlight(ui)
     # The last control is reachable directly from the in-page banner.
     ui.button(key="context-guide-jump:总览:2").click().run()
     assert ui.session_state["context-guide-step:总览"] == 2
-    assert "st-key-home-stats-panel" in _active_highlight(ui)
+    assert "st-key-home-recent-panel" in _active_highlight(ui)
     ui.button(key="context-guide-action:总览").click().run()
     assert not ui.exception
     assert ui.session_state["nav"] == "自动工作流"
@@ -58,6 +63,19 @@ def _active_highlight(ui):
     assert len(matches) == 1
     assert matches[0].unsafe_allow_javascript
     return matches[0].body
+
+
+def _resolved_highlight_key(ui):
+    """Resolve tour selectors against keys on the actual rendered page tree."""
+    script = _active_highlight(ui)
+    selectors = json.loads(re.search(r"const selectors = (\[.*?\]);", script).group(1))
+    keys = [node.key for node in ui if getattr(node, "key", None)]
+    for selector in selectors:
+        fragment = selector.split('"')[1]
+        for key in keys:
+            if fragment in "st-key-" + re.sub(r"[^a-zA-Z0-9_-]", "-", key):
+                return key
+    raise AssertionError(f"Tour points to no rendered control: {selectors}")
 
 
 def test_page_walkthroughs_target_real_key_prefixes_and_can_be_exited():
@@ -142,11 +160,21 @@ def navigate(page):
 
 class Application:
     def task_runs(self):
-        if st.session_state.get('package_state') == 'empty':
+        if st.session_state.get('package_state') in ('empty', 'release', 'large-release', 'unverified-release'):
             return []
         return [dict(id='run-1', name='Real run', status='completed',
                      targets=['sft'], created_at='2026-10-03T00:00:00Z')]
-    def list_releases(self): return []
+    def list_releases(self):
+        state = st.session_state.get('package_state')
+        if state not in ('release', 'large-release', 'unverified-release'):
+            return []
+        size = 51 * 1024 * 1024 if state == 'large-release' else 80
+        return [dict(id='release-1', name='Saved review', kind='review', target='sft',
+                     path='/fixture/release', created_at='2026-10-03T00:00:00Z',
+                     verified=state != 'unverified-release', error='file_hash_mismatch',
+                     files=[dict(name='data.jsonl', path='/fixture/release/data.jsonl',
+                                 bytes=size, sha256='a' * 64)])]
+    def release_file(self, *args): return b'{}'
     def bundle_job(self, run_id):
         if st.session_state.get('package_state') == 'busy':
             return dict(status='running', phase='archive', done=1, total=2,
@@ -187,3 +215,57 @@ def test_package_walkthrough_targets_controls_present_in_each_real_page_state():
                                     else "package-empty-workflow")
                    for item in ui.button)
         assert final_target in _active_highlight(ui)
+
+
+def test_package_walkthrough_handles_saved_releases_without_pointing_to_create():
+    for state, final_prefix in (
+        ("release", "package-release-download-"),
+        ("large-release", "package-release-file-"),
+        ("unverified-release", "package-releases-panel"),
+    ):
+        ui = AppTest.from_string(PACKAGE_SCRIPT)
+        ui.session_state["package_state"] = state
+        ui.run()
+        assert not ui.exception
+        assert ui.selectbox(key="package-release:fixture").value == "release-1"
+        ui.button(key="context-guide-start:输出打包").click().run()
+        ui.button(key="context-guide-next:输出打包").click().run()
+        assert not ui.exception
+        found = re.sub(r"[^a-zA-Z0-9_-]", "-", _resolved_highlight_key(ui))
+        assert found.startswith(final_prefix)
+        assert "package-empty-workflow" not in found
+
+
+HOME_SCRIPT = '''
+import streamlit as st
+from lib.presentation.streamlit.context_guide import render_context_guide
+from lib.presentation.streamlit.home_page import render_overview
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+st.session_state['ui_language'] = 'en'
+install_streamlit_localization()
+def navigate(page): st.session_state['nav'] = page
+class Application:
+    def task_runs(self):
+        return [] if st.session_state.get('empty') else [
+            dict(id='run-1', name='Saved task', status='completed', targets=['sft'])]
+    def list_releases(self): return []
+render_context_guide('总览', navigate)
+render_overview(Application(), 'fixture', [], 0, 0, '/fixture/input', '/fixture/out',
+                navigate=navigate, job_status=lambda: None)
+'''
+
+
+def test_every_home_tour_step_resolves_after_layout_changes_in_empty_and_populated_states():
+    for empty in (True, False):
+        ui = AppTest.from_string(HOME_SCRIPT)
+        ui.session_state['empty'] = empty
+        ui.run()
+        ui.button(key='context-guide-start:总览').click().run()
+        for index, target in enumerate(('home-source-entries', 'home-strategy-options', 'home-recent-panel')):
+            if index:
+                ui.button(key=f'context-guide-jump:总览:{index}').click().run()
+            assert not ui.exception
+            assert _resolved_highlight_key(ui) == target
+        ui.button(key='context-guide-finish:总览').click().run()
+        assert 'context-guide-step:总览' not in ui.session_state
+        assert not any('const selectors =' in item.proto.body for item in ui.get('html'))

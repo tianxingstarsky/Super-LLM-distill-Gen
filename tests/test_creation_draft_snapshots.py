@@ -55,6 +55,31 @@ def test_snapshot_is_an_independent_copy_and_restoring_does_not_change_it(tmp_pa
     assert (tmp_path / '.creation-drafts' / (identifier + '.json')).read_bytes() == before
 
 
+def test_explicit_session_snapshot_does_not_merge_or_replace_current_draft(tmp_path):
+    application = creation_draft_application(tmp_path)
+    current = {'workflow-name:default': 'Other session', 'workflow-open-brief:default': 'Other brief'}
+    application.update(current)
+    supplied = {'workflow-name:default': 'This session', 'workflow-sft-output-style:default': 'drop'}
+    identifier = application.save_snapshot(values=supplied)
+    supplied['workflow-name:default'] = 'Mutated after save'
+    assert application.load() == current
+    assert creation_draft_application(tmp_path).restore_snapshot(identifier) == {
+        'workflow-name:default': 'This session', 'workflow-sft-output-style:default': 'drop'}
+
+
+@pytest.mark.parametrize('values', [
+    {'api-key:default': 'excluded'}, {'workflow-web-research-enabled:default': True},
+    {'workflow-web-research-session-consent:default': True},
+    {'workflow-node-model:default': {'model': 'excluded'}},
+    {'workflow-sft-output-style:default': 'invalid'},
+])
+def test_explicit_snapshot_still_rejects_credentials_consent_and_invalid_style(tmp_path, values):
+    output = tmp_path / 'not-created'
+    with pytest.raises(ValueError, match='invalid_creation_draft'):
+        creation_draft_application(output).save_snapshot(values=values)
+    assert not output.exists()
+
+
 def test_snapshots_with_identical_names_are_independent_and_pagination_loses_none(tmp_path):
     application = creation_draft_application(tmp_path)
     expected = []

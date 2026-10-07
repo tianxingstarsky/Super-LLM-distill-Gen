@@ -187,7 +187,7 @@ def _render_releases(application: WorkflowApplication, releases: list[dict]) -> 
     if not releases:
         return
     verified = sum(bool(row["verified"]) for row in releases)
-    with st.container(border=True):
+    with st.container(border=True, key="package-releases-panel"):
         st.html(_heading("◈", "已有本地发布版本",
                          f"本机找到 {len(releases)} 个版本目录 · {verified} 个版本通过文件校验"))
         labels = {row["id"]: row for row in releases}

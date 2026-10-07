@@ -16,7 +16,7 @@ _GUIDES: dict[str, tuple[tuple[tuple[str, str], ...], tuple[str, str] | None]] =
     "总览": (
         (("选择输入", "在生成类型中选择文档、Agent 上下文或开放需求。"),
          ("选择目标", "可以直接选 CPT、SFT 或偏好数据；进入工作台后仍能调整。"),
-         ("查看进度", "最近任务和工作流卡片会显示本机任务的真实状态。")),
+         ("查看进度", "最近任务显示本机任务的真实状态；点击任务可查看工作流过程。")),
         ("开始生成", "自动工作流"),
     ),
     "自动工作流": (
@@ -43,8 +43,8 @@ _GUIDES: dict[str, tuple[tuple[tuple[str, str], ...], tuple[str, str] | None]] =
         ("查看输出打包", "输出打包"),
     ),
     "输出打包": (
-        (("选择完成的任务", "选择已完成的本机任务；若没有结果，先创建工作流。"),
-         ("核对并导出", "有结果时核对文件、质量与来源，再生成可校验的数据包；打包中可查看进度。")),
+        (("选择任务或版本", "选择已完成任务或已有本地发布版本；没有结果时可先创建工作流。"),
+         ("核对并导出", "核对文件、质量与来源。生成训练包，或打开已有版本的下载与本地路径。")),
         None,
     ),
     "系统设置": (
@@ -76,10 +76,10 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
     """
     workspace = st.session_state.get("ws", "default")
     if route == "总览":
-        return (("home-source-panel",), ("home-strategy-panel",),
-                ("home-stats-panel",))[step]
+        return (("home-source-entries",), ("home-strategy-options",),
+                ("home-recent-panel",))[step]
     if route == "自动工作流":
-        return (("workbench-targets",), ("workbench-node-panel",),
+        return (("workbench-targets",), ("workbench-node-panel", "workbench-targets"),
                 ("workbench-submit",))[step]
     if route == "数据管理":
         if step == 0:
@@ -115,8 +115,10 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
         return (f"df-review-actions-{kind}", queue_button)
     if route == "输出打包":
         if step == 0:
-            return ("package-run:", "package-empty-workflow")
-        return ("prepare-package:", "stop-package:", "package-empty-workflow")
+            return ("package-run:", "package-release:", "package-empty-workflow")
+        return ("download-package:", "prepare-package:", "stop-package:",
+                "package-release-download:", "package-release-file:",
+                "package-releases-panel", "package-empty-workflow")
     if route == "系统设置":
         return (("ui-language-choice",), ("preference-area",))[step]
     return ()
@@ -138,7 +140,8 @@ def _navigate_from_tour(key: str, target: str, navigate: Callable[[str], None]) 
 
 def _clear_highlight() -> None:
     # The script only removes our own decoration. It reads no page content.
-    st.html('<script>window.__dfGuideToken=null;'
+    st.html('<script>window.__dfGuideCleanup?.();window.__dfGuideCleanup=null;'
+            'window.__dfGuideToken=null;'
             'document.querySelectorAll(".df-context-guide-target").forEach('
             'element=>element.classList.remove("df-context-guide-target"));'
             '</script>', unsafe_allow_javascript=True)
@@ -158,12 +161,12 @@ def _highlight(route: str, step: int, revision: int) -> None:
       .df-context-guide-target {
         outline:2px solid #2877e1!important; outline-offset:3px;
         box-shadow:0 0 0 7px rgba(40,119,225,.12)!important;
-        scroll-margin-top:300px; border-radius:10px;
+        scroll-margin-top:380px; border-radius:10px;
       }
       [class*="st-key-context-guide-tour"] {
         /* Sticky cannot follow a target outside this top-of-page container. */
         position:fixed!important; top:76px; right:20px; z-index:100;
-        width:min(680px,calc(100vw - 280px)); max-height:200px;
+        width:min(680px,calc(100vw - 280px)); max-height:min(280px,calc(100dvh - 100px));
         box-sizing:border-box; overflow-y:auto; overscroll-behavior:contain;
         border-color:#c9dff7!important; border-radius:11px!important;
         background:linear-gradient(105deg,#eef6ff,#fff)!important;
@@ -176,20 +179,21 @@ def _highlight(route: str, step: int, revision: int) -> None:
       @media (max-width:800px) {
         [class*="st-key-context-guide-tour"] {
           top:64px; right:12px; width:calc(100vw - 24px);
-          max-height:180px;
+          max-height:min(280px,calc(100dvh - 88px));
         }
-        .df-context-guide-target {scroll-margin-top:260px;}
+        .df-context-guide-target {scroll-margin-top:360px;}
       }
     </style><script>
     (() => {
       const token = ''' + token + ''';
       const selectors = ''' + selector_json + ''';
+      window.__dfGuideCleanup?.();
       window.__dfGuideToken = token;
       document.querySelectorAll(".df-context-guide-target").forEach(
         element => element.classList.remove("df-context-guide-target"));
-      let attempt = 0;
       let bestIndex = selectors.length;
       let marked = null;
+      let frame = 0;
       function locate() {
         if (window.__dfGuideToken !== token) return;
         if (marked && !document.contains(marked)) {
@@ -200,24 +204,43 @@ def _highlight(route: str, step: int, revision: int) -> None:
         const index = matches.findIndex(Boolean);
         if (index >= 0) {
           const target = matches[index];
-          if (target !== marked || index < bestIndex) {
+          // React can replace the class attribute on the same DOM node.
+          if (target !== marked || index < bestIndex ||
+              !target.classList.contains("df-context-guide-target")) {
             document.querySelectorAll(".df-context-guide-target").forEach(
               element => element.classList.remove("df-context-guide-target"));
             target.classList.add("df-context-guide-target");
             marked = target;
-            if (window.__dfGuideScrolled !== token || index < bestIndex) {
+            const scrolledIndex = Number.isInteger(window.__dfGuideScrollIndex)
+              ? window.__dfGuideScrollIndex : selectors.length;
+            if (window.__dfGuideScrolled !== token || index < scrolledIndex) {
               target.scrollIntoView({behavior:"smooth", block:"start"});
               window.__dfGuideScrolled = token;
+              window.__dfGuideScrollIndex = index;
             }
           }
-          bestIndex = Math.min(bestIndex, index);
+          bestIndex = index;
         }
-        // A fallback may appear before the main page has finished rerendering.
-        // Briefly recheck so the most specific control wins when it arrives.
-        if (++attempt < 8 || (bestIndex > 0 && attempt < 50))
-          window.setTimeout(locate, 100);
       }
-      window.requestAnimationFrame(locate);
+      function schedule() {
+        if (frame || window.__dfGuideToken !== token) return;
+        frame = window.requestAnimationFrame(() => {frame = 0; locate();});
+      }
+      // Page widgets may arrive late or rerender after the initial script.
+      // Observe the active page until the step changes, without a timeout or
+      // repeated scrolling when only the decoration needs to be restored.
+      const observer = new MutationObserver(records => {
+        if (records.some(record => record.type === "childList" || record.target === marked))
+          schedule();
+      });
+      observer.observe(document.querySelector('[data-testid="stMainBlockContainer"]') || document.body,
+                       {subtree:true, childList:true, attributes:true, attributeFilter:["class"]});
+      window.__dfGuideCleanup = () => {
+        observer.disconnect();
+        if (frame) window.cancelAnimationFrame(frame);
+        frame = 0;
+      };
+      schedule();
     })();
     </script>''', unsafe_allow_javascript=True)
 

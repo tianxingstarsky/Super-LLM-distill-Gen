@@ -49,9 +49,11 @@ def _select_setup_node(key: str, node: str) -> None:
 
 
 def _save_sft_output_style(workspace: str) -> None:
-    value = st.session_state.get(f"workflow-sft-output-style:{workspace}")
+    key = f"workflow-sft-output-style:{workspace}"
+    value = st.session_state.get(key)
     if value in {"separated", "drop"}:
         st.session_state[f"workflow-sft-output-style-draft:{workspace}"] = value
+        _save_draft_value(workspace, key)
 
 
 def _workflow_error(error) -> str:
@@ -565,7 +567,10 @@ def _save_draft_value(workspace, key):
     application = st.session_state.get(f"workflow-draft-application:{workspace}")
     if application is not None:
         try:
-            application.update({key: st.session_state[key]})
+            # A previous autosave may have failed. Flush the whole validated
+            # session form before clearing its error, rather than silently
+            # dropping that earlier edit when an unrelated field saves.
+            application.replace(st.session_state[draft_key])
             st.session_state.pop(f"workflow-draft-error:{workspace}", None)
         except (OSError, ValueError, Timeout):
             st.session_state[f"workflow-draft-error:{workspace}"] = True
@@ -795,7 +800,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         style_key = f"workflow-sft-output-style:{ws}"
         draft_key = f"workflow-sft-output-style-draft:{ws}"
         if draft_key not in st.session_state:
-            st.session_state[draft_key] = application.default_sft_output_style()
+            saved = st.session_state.get(f"workflow-form-draft:{ws}", {})
+            st.session_state[draft_key] = saved.get(style_key, application.default_sft_output_style())
         if style_key not in st.session_state:
             st.session_state[style_key] = st.session_state[draft_key]
         sft_output_style = st.session_state[style_key]
@@ -1005,7 +1011,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     if st.button("保存为独立草稿", key=f"workflow-save-draft:{ws}", width="stretch",
                                  help="保留这份配置，稍后可从工作管理打开。不会开始生成。"):
                         try:
-                            draft_application.save_snapshot(name)
+                            draft_application.save_snapshot(
+                                name, values=st.session_state.get(f"workflow-form-draft:{ws}", {}))
                             st.success("独立草稿已保存，可从工作管理继续。")
                         except (ValueError, OSError, Timeout):
                             st.error("草稿未能保存，当前配置仍在。请检查本机存储后重试。")

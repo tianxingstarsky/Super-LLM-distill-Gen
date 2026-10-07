@@ -12,6 +12,7 @@ NUMBER_FIELDS = {
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
                'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
                'workflow-web-research-query': 160, 'workflow-web-research-more': 700}
+ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'})}
 
 
 def validate_creation_draft(values):
@@ -27,6 +28,8 @@ def validate_creation_draft(values):
             valid = type(value) is int and low <= value <= high
         elif field in TEXT_FIELDS:
             valid = isinstance(value, str) and len(value) <= TEXT_FIELDS[field]
+        elif field in ENUM_FIELDS:
+            valid = isinstance(value, str) and value in ENUM_FIELDS[field]
         elif field == 'workflow-targets':
             valid = isinstance(value, list) and len(value) <= len(TARGETS) and all(isinstance(v, str) and v in TARGETS for v in value)
         elif field == 'workflow-sources':

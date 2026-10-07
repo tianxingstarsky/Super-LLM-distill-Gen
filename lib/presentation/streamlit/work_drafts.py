@@ -7,6 +7,7 @@ import streamlit as st
 from filelock import Timeout
 
 from lib.application.creation_draft_service import CreationDraftApplication
+from lib.domain.creation_draft import validate_creation_draft
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
 
 
@@ -14,8 +15,10 @@ def _restore(application, identifier, workspace):
     try:
         # Restoring replaces the automatic draft on disk. Preserve unfinished
         # work first, including changes that were never saved as a named draft.
-        current = application.load()
-        backup = application.save_snapshot() if current else None
+        current = st.session_state.get(f"workflow-form-draft:{workspace}")
+        if current is None:
+            current = application.load()
+        backup = application.save_snapshot(values=current) if current else None
         values = application.restore_snapshot(identifier)
     except (OSError, ValueError, Timeout):
         st.session_state[f"work-drafts-error:{workspace}"] = True
@@ -61,14 +64,37 @@ def render_work_drafts(application: CreationDraftApplication, workspace: str, na
   flex:1.7 1 160px;min-width:min(160px,100%)}
 </style>''')
     with st.container(border=False, key="work-drafts"):
+        form_key = f"workflow-form-draft:{workspace}"
+        session_form = st.session_state.get(form_key)
+        invalid_session = False
+        if session_form is not None:
+            try:
+                session_form = validate_creation_draft(session_form)
+            except ValueError:
+                session_form, invalid_session = None, True
+        storage_error = False
         try:
-            current = application.load()
-            page_key = f"work-drafts-page:{workspace}"
-            page = st.session_state.get(page_key, 0)
-            saved = application.snapshots(limit=21, offset=page * 20)
+            automatic = application.load()
         except (OSError, ValueError, Timeout):
+            automatic, storage_error = None, True
+        current = session_form if session_form is not None else automatic
+        if current is None:
             st.warning("无法读取工作草稿，请检查本机存储后重试。")
             return
+        if invalid_session:
+            st.session_state[form_key] = current
+        page_key = f"work-drafts-page:{workspace}"
+        page = st.session_state.get(page_key, 0)
+        try:
+            saved = application.snapshots(limit=21, offset=page * 20)
+        except (OSError, ValueError, Timeout):
+            saved = []
+            st.warning("无法读取工作草稿，请检查本机存储后重试。")
+        autosave_error = st.session_state.get(f"workflow-draft-error:{workspace}", False)
+        if storage_error or autosave_error:
+            st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
+        current_label = ("当前自动保存" if current == automatic and not storage_error and not autosave_error
+                         else "当前编辑")
         language = st.session_state.get("ui_language", "zh")
         name = current.get(f"workflow-name:{workspace}") or translate("尚未命名的工作", language)
         previous = st.session_state.get(f"work-draft-switch-backup:{workspace}")
@@ -77,13 +103,14 @@ def render_work_drafts(application: CreationDraftApplication, workspace: str, na
         with columns[0], st.container(key="work-drafts-group-current"):
             title, action = st.columns([1.15, 1.25], gap="small", vertical_alignment="center")
             with title:
-                st.html('<div class="df-draft-current"><small>当前自动保存</small>'
+                st.html(f'<div class="df-draft-current"><small>{current_label}</small>'
                         f'<strong data-user-content title="{html.escape(str(name), quote=True)}">'
                         f'{html.escape(str(name))}</strong></div>')
             with action:
                 st.button("继续当前草稿", key=f"work-draft-current:{workspace}",
                           on_click=navigate, args=("自动工作流",), width="stretch",
-                          help="草稿和上传资料保存在本机，关闭或重启后仍可继续。")
+                          help=("草稿和上传资料保存在本机，关闭或重启后仍可继续。"
+                                if current_label == "当前自动保存" else None))
         by_id = {item["id"]: item for item in saved[:20]}
 
         def label(identifier):
