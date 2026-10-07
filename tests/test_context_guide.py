@@ -29,7 +29,7 @@ def test_overview_help_opens_workflow_without_a_separate_guide_route():
     assert all(button.key != "context-guide-action:总览" for button in ui.button)
     ui.button(key="context-guide-start:总览").click().run()
     assert ui.session_state["context-guide-step:总览"] == 0
-    assert "home-source-entries" in " ".join(item.proto.body for item in ui.get("html"))
+    assert "home-source-panel" in " ".join(item.proto.body for item in ui.get("html"))
     ui.button(key="context-guide-jump:总览:1").click().run()
     assert "st-key-home-strategy-options" in _active_highlight(ui)
     # The last control is reachable directly from the in-page banner.
@@ -261,7 +261,7 @@ def test_every_home_tour_step_resolves_after_layout_changes_in_empty_and_populat
         ui.session_state['empty'] = empty
         ui.run()
         ui.button(key='context-guide-start:总览').click().run()
-        for index, target in enumerate(('home-source-entries', 'home-strategy-options', 'home-recent-panel')):
+        for index, target in enumerate(('home-source-panel', 'home-strategy-options', 'home-recent-panel')):
             if index:
                 ui.button(key=f'context-guide-jump:总览:{index}').click().run()
             assert not ui.exception
@@ -269,3 +269,86 @@ def test_every_home_tour_step_resolves_after_layout_changes_in_empty_and_populat
         ui.button(key='context-guide-finish:总览').click().run()
         assert 'context-guide-step:总览' not in ui.session_state
         assert not any('const selectors =' in item.proto.body for item in ui.get('html'))
+
+
+MANUAL_SCRIPT = '''
+import streamlit as st
+from lib.presentation.streamlit.context_guide import render_context_guide
+from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
+st.session_state.setdefault('ws', 'fixture')
+def navigate(page): st.session_state['nav'] = page
+class Application:
+    def list_datasets(self):
+        return [] if st.session_state.get('empty') else [
+            {'id':'a'*32,'name':'Images','count':0,'updated_at':'2026-10-07'}]
+page = st.session_state.get('current_page', '自动工作流')
+render_context_guide(page, navigate)
+manual = (page == '自动工作流' and st.session_state.get('workflow-creation-mode:fixture') == '人工制作图文'
+          or page == '数据管理' and st.session_state.get('data-view:fixture') == '人工制作')
+if manual:
+    render_manual_datasets(Application(), 'fixture', show_title=False)
+'''
+
+
+def test_manual_mode_in_workflow_and_library_targets_actual_authoring_controls():
+    for page, mode_key, value in (
+        ('自动工作流', 'workflow-creation-mode:fixture', '人工制作图文'),
+        ('数据管理', 'data-view:fixture', '人工制作'),
+    ):
+        for empty in (True, False):
+            ui = AppTest.from_string(MANUAL_SCRIPT)
+            ui.session_state['current_page'] = page
+            ui.session_state[mode_key] = value
+            ui.session_state['empty'] = empty
+            ui.run()
+            assert not ui.exception
+            ui.button(key='context-guide-start:人工制作数据').click().run()
+            for step, target in enumerate(('manual-datasets-picker',
+                                            'manual-datasets-picker' if empty else 'manual-datasets-editor',
+                                            'manual-datasets-picker' if empty else 'manual-datasets-saved')):
+                if step:
+                    ui.button(key=f'context-guide-jump:人工制作数据:{step}').click().run()
+                assert not ui.exception
+                assert _resolved_highlight_key(ui) == target
+                body = _active_highlight(ui)
+                assert 'st-key-workbench-node-panel' not in body
+                assert 'st-key-asset-category-' not in body
+                assert 'fixture' not in body
+            assert not any(item.key == 'context-guide-action:人工制作数据' for item in ui.button)
+
+
+def test_switching_manual_and_automatic_modes_clears_previous_tour_and_highlight():
+    ui = AppTest.from_string(MANUAL_SCRIPT)
+    ui.run()
+    ui.button(key='context-guide-start:自动工作流').click().run()
+    ui.button(key='context-guide-jump:自动工作流:1').click().run()
+    assert 'st-key-workbench-node-panel' in _active_highlight(ui)
+    ui.session_state['workflow-creation-mode:fixture'] = '人工制作图文'
+    ui.run()
+    assert not ui.exception
+    assert 'context-guide-step:自动工作流' not in ui.session_state
+    assert not any('const selectors =' in item.proto.body for item in ui.get('html'))
+    ui.button(key='context-guide-start:人工制作数据').click().run()
+    assert _resolved_highlight_key(ui) == 'manual-datasets-picker'
+    ui.session_state['workflow-creation-mode:fixture'] = '自动生成'
+    ui.run()
+    assert not ui.exception
+    assert 'context-guide-step:人工制作数据' not in ui.session_state
+    assert not any('const selectors =' in item.proto.body for item in ui.get('html'))
+    assert any(item.key == 'context-guide-start:自动工作流' for item in ui.button)
+
+
+def test_switching_library_views_does_not_keep_manual_authoring_highlight():
+    ui = AppTest.from_string(MANUAL_SCRIPT)
+    ui.session_state['current_page'] = '数据管理'
+    ui.session_state['data-view:fixture'] = '人工制作'
+    ui.run()
+    ui.button(key='context-guide-start:人工制作数据').click().run()
+    ui.button(key='context-guide-jump:人工制作数据:2').click().run()
+    assert _resolved_highlight_key(ui) == 'manual-datasets-saved'
+    ui.session_state['data-view:fixture'] = '资产管理'
+    ui.run()
+    assert 'context-guide-step:人工制作数据' not in ui.session_state
+    assert not any('const selectors =' in item.proto.body for item in ui.get('html'))
+    ui.button(key='context-guide-start:数据管理').click().run()
+    assert 'st-key-data-view-' in _active_highlight(ui)

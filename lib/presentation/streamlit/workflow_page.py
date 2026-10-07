@@ -42,6 +42,7 @@ PRESETS = {
     "偏好对齐": ("sft", "orpo", "dpo", "rlaif"),
     "ORPO 数据生成": ("orpo",),
     "数学推理": ("sft", "gsm8k", "cot"),
+    "自选目标": (),
 }
 
 
@@ -803,9 +804,21 @@ def _upload_cache_error(error):
 
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
                      draft_application: CreationDraftApplication | None = None,
-                     backend_application=None, input_cache=None):
-    page_header("数据生成工作台", "上传文档、导入 Agent 上下文，或描述开放需求；系统会自动生成、质检并进入审核。", "DOCS　·　AGENT　·　OPEN BRIEF")
+                     backend_application=None, input_cache=None, manual_application=None):
+    page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
+    ws = st.session_state["ws"]
+    if manual_application is not None:
+        creation_key = f"workflow-creation-mode:{ws}"
+        if st.session_state.get(creation_key) not in {"自动生成", "人工制作图文"}:
+            st.session_state[creation_key] = "自动生成"
+        creation_mode = st.segmented_control(
+            "制作方式", ("自动生成", "人工制作图文"), default=None, key=creation_key,
+        )
+        if creation_mode == "人工制作图文":
+            from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
+            render_manual_datasets(manual_application, ws, show_title=False)
+            return
     st.html(
         '<div class="df-wizard-steps">'
         '<div class="df-wizard-step active"><b>1</b><span><strong>配置本次任务</strong><small>来源、目标与节点模型</small></span></div>'
@@ -813,7 +826,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         '<i></i><div class="df-wizard-step"><b>3</b><span><strong>审核与导出</strong><small>核对后生成训练包</small></span></div>'
         '</div>'
     )
-    ws = st.session_state["ws"]
     if notice := st.session_state.pop(f"workflow-reuse-notice:{ws}", None):
         st.success("已复制到新草稿，可直接修改后运行。联网检索需重新开启。")
         if notice.get("missing_sources"):
@@ -835,6 +847,17 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
         else:
             st.caption("参数、目标、需求和已选资料保存在本机缓存；节点模型和联网检索需重新确认。")
+    entry_target = st.session_state.pop(f"workflow-entry-target:{ws}", None)
+    if entry_target in TARGETS:
+        # A named entry chooses that exact output. Old edits to a quick plan
+        # must not silently override the goal the user has just selected.
+        entry_values = {f"workflow-preset:{ws}": "自选目标",
+                        f"workflow-targets:{ws}:自选目标": [entry_target]}
+        if entry_target in {"cpt", "agent"}:
+            entry_values[f"workflow-source-mode:{ws}"] = "文档资料" if entry_target == "cpt" else "Agent 上下文"
+        for entry_key, entry_value in entry_values.items():
+            st.session_state[entry_key] = entry_value
+            _save_draft_value(ws, entry_key)
     preset_key = f"workflow-preset:{ws}"
     _restore_selection(ws, preset_key, "自动推荐", PRESETS)
     preset = st.segmented_control(
@@ -858,13 +881,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         target_key = f"workflow-targets:{ws}:{preset}"
         target_defaults = [target for target in PRESETS[preset] if target in TARGETS]
         _restore_selection(ws, target_key, target_defaults, TARGETS)
-        targets = st.multiselect(
+        targets = st.pills(
             "训练目标", list(TARGETS), default=None,
             format_func=lambda target: TARGET_LABELS.get(target, target.upper()),
-            key=target_key,
+            key=target_key, selection_mode="multi", wrap=True,
             on_change=_save_draft_value, args=(ws, target_key),
-            help="可以同时选择多类目标；系统只会导出通过对应质量检查的样本。",
-        )
+            help="点击即可选中或取消，可以同时选择多类训练数据。",
+        ) or []
         graph_nodes, graph_edges = execution_graph(targets)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
@@ -982,9 +1005,19 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.caption("导入完整的 JSON / JSONL 对话记录；工具轨迹需要真实观测。")
                 else:
                     st.caption("上传 PDF、DOCX、TXT 或 Markdown；解析时保留来源位置。")
+                    format_key = f"workflow-upload-format:{ws}"
+                    if st.session_state.get(format_key) not in ("全部文档", "MD", "TXT"):
+                        st.session_state[format_key] = "全部文档"
+                    st.segmented_control("导入文档格式", ("全部文档", "MD", "TXT"), default=None,
+                                         key=format_key)
                 upload_options = ({"on_change": _cache_source_uploads, "args": (input_cache, ws, source_mode)}
                                   if input_cache is not None else {})
-                uploaded = st.file_uploader("上传文档 / 上下文记录", type=sorted(e[1:] for e in source_extensions),
+                upload_format = st.session_state.get(f"workflow-upload-format:{ws}", "全部文档")
+                upload_types = ([upload_format.lower()] if source_mode == "文档资料" and upload_format in {"MD", "TXT"}
+                                else sorted(e[1:] for e in source_extensions))
+                upload_label = ("导入 MD / TXT / PDF / DOCX 文档" if source_mode == "文档资料"
+                                else "导入 JSON / JSONL 上下文记录")
+                uploaded = st.file_uploader(upload_label, type=upload_types,
                                             accept_multiple_files=True, max_upload_size=50,
                                             key=f"workflow-upload:{ws}:{source_mode}", **upload_options)
                 if input_cache is not None:

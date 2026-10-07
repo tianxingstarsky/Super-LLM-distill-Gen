@@ -190,6 +190,14 @@ $theme_vars
 [data-testid="stMainBlockContainer"] .st-key-workbench-parameters-panel,
 [data-testid="stMainBlockContainer"] .st-key-workbench-submit,
 [data-testid="stMainBlockContainer"] .st-key-work-drafts { padding: 12px; }
+[data-testid="stMainBlockContainer"] :is(.st-key-manual-datasets-picker,
+  .st-key-manual-datasets-editor, .st-key-manual-datasets-preview, .st-key-manual-datasets-saved) {
+  padding: 12px; background: #fff; border-color: #D8E3F0; border-radius: 11px;
+}
+[data-testid="stMainBlockContainer"] :is(.st-key-manual-datasets-preview,
+  .st-key-manual-datasets-saved) [data-testid="stImage"] img {
+  max-height: 320px; object-fit: contain;
+}
 [data-testid="stExpander"] { background: #fff; border-color: var(--df-border2); border-radius: 11px; }
 .df-brand { font-size: 21px; font-weight: 720; letter-spacing: -.045em; margin-bottom: 4px; color: var(--df-text); }
 .df-kicker { font-size: 10px; letter-spacing: .13em; color: var(--df-text3); margin: 0 0 18px; }
@@ -311,7 +319,7 @@ $theme_vars
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(1)::before { content: "▤"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(2)::before { content: "◈"; background: #E8F7F1; color: #16845E; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::before { content: "✦"; background: #F1ECFC; color: #7350C8; }
-[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(1)::after { content: "PDF / DOCX / TXT · 保留原文来源"; }
+[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(1)::after { content: "MD / TXT / PDF / DOCX · 保留原文来源"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(2)::after { content: "对话、工具调用与真实观测"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::after { content: "描述任务领域和应用场景"; }
 @media (max-width: 760px) { [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] { grid-template-columns: 1fr; } }

@@ -8,6 +8,7 @@ from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.home_style import HOME_STYLE
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
+from lib.presentation.streamlit.workflow_page import TARGET_LABELS
 
 
 # Source illustrations are decorative. Native buttons remain the accessible,
@@ -50,10 +51,22 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
     def start_mode(mode: str, preset: str) -> None:
         st.session_state[f'workflow-source-mode:{ws}'] = mode
         st.session_state[f'workflow-preset:{ws}'] = preset
+        st.session_state[f'workflow-creation-mode:{ws}'] = '自动生成'
         st.session_state['nav'] = '自动工作流'
 
-    def start_strategy(preset: str) -> None:
-        st.session_state[f'workflow-preset:{ws}'] = preset
+    def start_target(target: str) -> None:
+        st.session_state[f'workflow-entry-target:{ws}'] = target
+        st.session_state[f'workflow-creation-mode:{ws}'] = '自动生成'
+        st.session_state['nav'] = '自动工作流'
+
+    def import_document(kind: str) -> None:
+        st.session_state[f'workflow-source-mode:{ws}'] = '文档资料'
+        st.session_state[f'workflow-upload-format:{ws}'] = kind
+        st.session_state[f'workflow-creation-mode:{ws}'] = '自动生成'
+        st.session_state['nav'] = '自动工作流'
+
+    def start_manual() -> None:
+        st.session_state[f'workflow-creation-mode:{ws}'] = '人工制作图文'
         st.session_state['nav'] = '自动工作流'
 
     def open_run(run_id: str) -> None:
@@ -80,11 +93,11 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
         source_column, recent_column = st.columns([1.15, 1], gap="small")
         with source_column:
             with st.container(border=True, key="home-source-panel"):
-                section_heading("生成类型", "选择输入来源，进入自动工作流。", "◈")
+                section_heading("开始制作数据", "导入资料，或直接选择要制作的数据类型。", "◈")
                 with st.container(key="home-source-entries"):
                     cards = st.columns(3, gap="small")
                     entries = (
-                        ("文档资料", "上传资料并保留原文位置。", "自动推荐", "documents"),
+                        ("文档资料", "MD / TXT / PDF / DOCX", "自动推荐", "documents"),
                         ("Agent 上下文", "导入对话、工具调用和观测。", "Agent 轨迹", "agent"),
                         ("开放需求", "描述场景，生成多样化候选。", "自动推荐", "brief"),
                     )
@@ -96,14 +109,19 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                             st.button(mode, key=f"overview:{mode}", on_click=start_mode,
                                       args=(mode, preset), width="stretch")
                             st.caption(detail)
+                md, txt, manual = st.columns(3, gap="small")
+                md.button("导入 MD", key="overview-import:MD", on_click=import_document,
+                          args=("MD",), width="stretch")
+                txt.button("导入 TXT", key="overview-import:TXT", on_click=import_document,
+                           args=("TXT",), width="stretch")
+                manual.button("人工制作图文", key="overview-manual", on_click=start_manual, width="stretch")
                 with st.container(key="home-strategy-options"):
-                    presets = st.columns(3, gap="small")
-                    for column, label, preset in zip(
-                            presets, ("CPT", "SFT", "ORPO"),
-                            ("预训练语料", "多轮对话", "ORPO 数据生成")):
-                        with column:
-                            st.button(f"选用 {label} →", key=f"overview-preset:{preset}",
-                                      on_click=start_strategy, args=(preset,), width="stretch")
+                    st.caption("按数据类型开始 · 工作台内可组合多类目标")
+                    targets = ("cpt", "sft", "dpo", "orpo", "rlaif", "agent", "multiturn", "cot", "gsm8k")
+                    for offset in range(0, len(targets), 3):
+                        for column, target in zip(st.columns(3, gap="small"), targets[offset:offset + 3]):
+                            column.button(TARGET_LABELS[target], key=f"overview-target:{target}",
+                                          on_click=start_target, args=(target,), width="stretch")
         with recent_column:
             with st.container(border=True, key="home-recent-panel"):
                 section_heading("最近任务", "选择任务直接查看工作流过程", "◷")

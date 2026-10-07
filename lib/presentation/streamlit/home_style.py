@@ -29,7 +29,8 @@ HOME_STYLE = """<style>
 .st-key-home-source-entries .stButton button:focus-visible { outline:2px solid currentColor; outline-offset:3px; }
 .st-key-home-source-entries [data-testid="stCaptionContainer"] { color:#64768B; overflow-wrap:anywhere; font-size:12px; line-height:1.6; }
 .st-key-home-strategy-options { padding-top:11px; border-top:1px solid #E8EEF6; }
-.st-key-home-strategy-options button { min-height:34px; }
+.st-key-home-strategy-options button { min-height:36px; height:100%; padding:6px 8px; }
+.st-key-home-strategy-options button p { white-space:normal; line-height:1.45; font-size:12px; }
 .df-home-task { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:4px 8px; padding:5px 0; }
 .df-home-task strong { color:#21344D; font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
 .df-home-task small { grid-column:1 / -1; color:#77879B; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }

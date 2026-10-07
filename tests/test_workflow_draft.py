@@ -1,4 +1,5 @@
 """Exercise workbench drafts without storage or paid model calls."""
+import pytest
 from streamlit.testing.v1 import AppTest
 
 SCRIPT = '''
@@ -38,6 +39,83 @@ def test_large_run_inputs_survive_node_selection():
     assert not ui.exception
 
 
+def test_training_targets_are_visible_multi_select_choices():
+    from lib.domain.workflow_targets import TARGETS
+    from lib.presentation.streamlit.workflow_page import TARGET_LABELS
+    from streamlit.proto.ButtonGroup_pb2 import ButtonGroup
+
+    ui = AppTest.from_string(SCRIPT).run()
+    assert not ui.exception
+    picker = ui.pills(key='workflow-targets:fixture:自动推荐')
+    assert picker.options == [TARGET_LABELS[target] for target in TARGETS]
+    assert picker.proto.click_mode == ButtonGroup.MULTI_SELECT
+    assert not any(widget.key.startswith('workflow-targets:') for widget in ui.multiselect)
+    picker.set_value(['cpt', 'dpo', 'cot']).run()
+    assert ui.pills(key='workflow-targets:fixture:自动推荐').value == ['cpt', 'dpo', 'cot']
+    ui.pills(key='workflow-targets:fixture:自动推荐').unselect('dpo').run()
+    assert ui.pills(key='workflow-targets:fixture:自动推荐').value == ['cpt', 'cot']
+    assert ui.session_state['workflow-form-draft:fixture']['workflow-targets:fixture:自动推荐'] == ['cpt', 'cot']
+    assert not ui.exception
+
+
+def test_each_direct_entry_selects_only_its_target_and_changes_source_only_when_needed():
+    from lib.domain.workflow_targets import TARGETS
+
+    ui = AppTest.from_string(SCRIPT).run()
+    for target in TARGETS:
+        ui.session_state['workflow-source-mode:fixture'] = '开放需求'
+        ui.session_state['workflow-entry-target:fixture'] = target
+        ui.run()
+        assert not ui.exception
+        assert ui.pills(key='workflow-targets:fixture:自选目标').value == [target]
+        expected_source = ('文档资料' if target == 'cpt' else
+                           'Agent 上下文' if target == 'agent' else '开放需求')
+        assert ui.segmented_control(key='workflow-source-mode:fixture').value == expected_source
+        assert 'workflow-entry-target:fixture' not in ui.session_state
+
+
+@pytest.mark.parametrize('old_targets', [[], ['sft']])
+def test_home_cpt_entry_overrides_stale_target_choice_and_keeps_bulk_draft(old_targets):
+    code = SCRIPT.replace(
+        "st.checkbox('Show workbench',value=True,key='fixture-show')\n"
+        "if st.session_state['fixture-show']:",
+        """from lib.presentation.streamlit.home_page import render_overview
+class Home:
+    def task_runs(self): return []
+    def list_releases(self): return []
+def navigate(page): st.session_state['nav'] = page
+if st.session_state.get('nav', 'home') == 'home':
+    render_overview(Home(), 'fixture', [], 0, 0, 'input', 'output',
+                    navigate=navigate, job_status=lambda: None)
+else:""",
+    )
+    ui = AppTest.from_string(code)
+    prior = {
+        'workflow-name:fixture': 'Keep this unfinished task',
+        'workflow-count:fixture': 50000,
+        'workflow-batch-size:fixture': 250,
+        'workflow-source-mode:fixture': 'Agent 上下文',
+        'workflow-sources:fixture:文档资料': ['fixture.txt'],
+        'workflow-targets:fixture:预训练语料': old_targets,
+    }
+    ui.session_state['workflow-form-draft:fixture'] = prior
+    ui.run()
+    ui.button(key='overview-target:cpt').click().run()
+    assert not ui.exception
+    assert ui.segmented_control(key='workflow-preset:fixture').value == '自选目标'
+    assert ui.pills(key='workflow-targets:fixture:自选目标').value == ['cpt']
+    assert ui.segmented_control(key='workflow-source-mode:fixture').value == '文档资料'
+    assert ui.text_input(key='workflow-name:fixture').value == prior['workflow-name:fixture']
+    assert ui.number_input(key='workflow-count:fixture').value == 50000
+    assert ui.number_input(key='workflow-batch-size:fixture').value == 250
+    assert ui.multiselect(key='workflow-sources:fixture:文档资料').value == ['fixture.txt']
+    assert 'workflow-entry-target:fixture' not in ui.session_state
+    # A subsequent user edit remains authoritative; the shortcut is consumed once.
+    ui.pills(key='workflow-targets:fixture:自选目标').set_value(['sft']).run()
+    assert ui.pills(key='workflow-targets:fixture:自选目标').value == ['sft']
+    assert not ui.exception
+
+
 def test_sft_output_style_is_configured_in_node_and_kept_for_this_workspace():
     ui = AppTest.from_string(SCRIPT).run()
     key = 'workflow-sft-output-style:fixture'
@@ -57,15 +135,15 @@ def test_selected_goals_and_sources_survive_navigation_and_missing_file():
     ui = AppTest.from_string(SCRIPT).run()
     targets = 'workflow-targets:fixture:自动推荐'
     sources = 'workflow-sources:fixture:文档资料'
-    ui.multiselect(key=targets).set_value(['orpo', 'rlaif']).run()
+    ui.pills(key=targets).set_value(['orpo', 'rlaif']).run()
     ui.multiselect(key=sources).set_value(['fixture.txt']).run()
     ui.checkbox(key='fixture-show').uncheck().run()
     ui.checkbox(key='fixture-show').check().run()
-    assert ui.multiselect(key=targets).value == ['orpo', 'rlaif']
+    assert ui.pills(key=targets).value == ['orpo', 'rlaif']
     assert ui.multiselect(key=sources).value == ['fixture.txt']
     ui.segmented_control(key='workflow-preset:fixture').set_value('多轮对话').run()
     ui.segmented_control(key='workflow-preset:fixture').set_value('自动推荐').run()
-    assert ui.multiselect(key=targets).value == ['orpo', 'rlaif']
+    assert ui.pills(key=targets).value == ['orpo', 'rlaif']
     ui.session_state['fixture-remove-source'] = True
     ui.run()
     assert not any(item.key == sources for item in ui.multiselect)
@@ -220,7 +298,7 @@ def test_web_search_explains_private_query_and_agent_only_goal(monkeypatch):
     assert any('检索词疑似包含私有信息' in warning.value for warning in ui.warning)
     assert ui.button(key='workflow-create:fixture').disabled
     ui.text_input(key='workflow-web-research-query:fixture').set_value('设备维护安全规范').run()
-    ui.multiselect(key='workflow-targets:fixture:自动推荐').set_value(['agent']).run()
+    ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['agent']).run()
     assert any('联网检索只为开放任务规划提供线索' in warning.value for warning in ui.warning)
     assert ui.button(key='workflow-create:fixture').disabled
     assert not ui.exception

@@ -89,7 +89,7 @@ def test_new_ui_session_restores_bulk_settings_goals_and_cleared_brief(tmp_path)
     ui = AppTest.from_string(script).run()
     ui.number_input(key='workflow-count:fixture').set_value(50000).run()
     ui.number_input(key='workflow-batch-size:fixture').set_value(250).run()
-    ui.multiselect(key='workflow-targets:fixture:自动推荐').set_value(['orpo', 'rlaif']).run()
+    ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['orpo', 'rlaif']).run()
     ui.multiselect(key='workflow-sources:fixture:文档资料').set_value(['fixture.txt']).run()
     ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
     ui.text_area(key='workflow-open-brief:fixture').set_value('设备维护对话').run()
@@ -97,7 +97,7 @@ def test_new_ui_session_restores_bulk_settings_goals_and_cleared_brief(tmp_path)
     assert not fresh.exception
     assert fresh.number_input(key='workflow-count:fixture').value == 50000
     assert fresh.number_input(key='workflow-batch-size:fixture').value == 250
-    assert fresh.multiselect(key='workflow-targets:fixture:自动推荐').value == ['orpo', 'rlaif']
+    assert fresh.pills(key='workflow-targets:fixture:自动推荐').value == ['orpo', 'rlaif']
     assert fresh.text_area(key='workflow-open-brief:fixture').value == '设备维护对话'
     fresh.text_area(key='workflow-open-brief:fixture').set_value('').run()
     again = AppTest.from_string(script).run()
@@ -126,6 +126,39 @@ def test_public_query_restores_but_new_session_requires_fresh_web_consent(tmp_pa
     assert fresh.number_input(key='workflow-web-research-count:fixture').value == 4
     assert fresh.text_area(key='workflow-web-research-more:fixture').value == '设备检修风险\n维护记录质量规范'
     assert creation_draft_application(tmp_path / 'other').load() == {}
+
+
+def test_direct_target_entry_survives_restart_without_replaying_the_shortcut(tmp_path):
+    application = creation_draft_application(tmp_path)
+    application.replace({
+        'workflow-name:fixture': 'Existing 50K source task',
+        'workflow-count:fixture': 50000,
+        'workflow-targets:fixture:预训练语料': [],
+        'workflow-source-mode:fixture': 'Agent 上下文',
+        'workflow-sources:fixture:文档资料': ['fixture.txt'],
+    })
+    script = persistent_script(tmp_path)
+    ui = AppTest.from_string(script)
+    ui.session_state['workflow-entry-target:fixture'] = 'cpt'
+    ui.run()
+    assert not ui.exception
+    assert ui.pills(key='workflow-targets:fixture:自选目标').value == ['cpt']
+    assert 'workflow-entry-target:fixture' not in ui.session_state
+    stored = application.load()
+    assert stored['workflow-preset:fixture'] == '自选目标'
+    assert stored['workflow-targets:fixture:自选目标'] == ['cpt']
+    assert not any('workflow-entry-target:' in key for key in stored)
+
+    fresh = AppTest.from_string(script).run()
+    assert not fresh.exception
+    assert fresh.pills(key='workflow-targets:fixture:自选目标').value == ['cpt']
+    assert fresh.text_input(key='workflow-name:fixture').value == 'Existing 50K source task'
+    assert fresh.number_input(key='workflow-count:fixture').value == 50000
+    assert fresh.multiselect(key='workflow-sources:fixture:文档资料').value == ['fixture.txt']
+    fresh.pills(key='workflow-targets:fixture:自选目标').set_value(['dpo']).run()
+    again = AppTest.from_string(script).run()
+    assert not again.exception
+    assert again.pills(key='workflow-targets:fixture:自选目标').value == ['dpo']
 
 
 def test_bad_disk_draft_shows_warning_and_keeps_session_changes(tmp_path):

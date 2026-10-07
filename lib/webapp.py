@@ -170,10 +170,12 @@ def page_workflow():
     from lib.bootstrap.workflow_node_models import workflow_node_models_application
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.bootstrap.backends import backend_application
+    from lib.bootstrap.manual_datasets import manual_dataset_application
     render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT),
                      input_cache=local_input_application(),
                      draft_application=creation_draft_application(_ws_out()),
-                     backend_application=backend_application(ROOT))
+                     backend_application=backend_application(ROOT),
+                     manual_application=manual_dataset_application(_ws_out()))
 
 
 def page_run(show_title=True):
@@ -480,7 +482,7 @@ def page_prefs(show_title=True):
 def page_data_management():
     page_header("数据管理", "统一浏览来源与产物，预览各类训练样本并查看质量检查结果。", "DATA LIBRARY")
     area = st.segmented_control(
-        "数据视图", ("资产管理", "数据预览", "质量报告"),
+        "数据视图", ("资产管理", "数据预览", "人工制作", "质量报告"),
         default="资产管理", key=f"data-view:{st.session_state['ws']}",
         label_visibility="collapsed",
     )
@@ -488,6 +490,10 @@ def page_data_management():
         page_preview(show_title=False)
     elif area == "质量报告":
         page_quality(show_title=False)
+    elif area == "人工制作":
+        from lib.bootstrap.manual_datasets import manual_dataset_application
+        from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
+        render_manual_datasets(manual_dataset_application(_ws_out()), st.session_state['ws'], show_title=False)
     else:
         page_assets(show_title=False)
 

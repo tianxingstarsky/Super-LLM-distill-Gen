@@ -60,9 +60,9 @@ def test_generation_controls_survive_node_layout_changes_and_empty_targets(tmp_p
     app.session_state["ui_language"] = "zh"
     app.run()
     assert not app.exception
-    targets_key = next(widget.key for widget in app.multiselect
+    targets_key = next(widget.key for widget in app.pills
                        if widget.key.startswith("workflow-targets:"))
-    app.multiselect(key=targets_key).set_value(["sft"]).run()
+    app.pills(key=targets_key).set_value(["sft"]).run()
     source_key = f"workflow-sources:{workspace}:文档资料"
     app.multiselect(key=source_key).set_value([str(source)]).run()
     expected_numbers = {
@@ -95,9 +95,9 @@ def test_generation_controls_survive_node_layout_changes_and_empty_targets(tmp_p
         assert_controls()
         assert canvas(app, f"setup-canvas:{workspace}")["selected"] == node
 
-    app.multiselect(key=targets_key).set_value([]).run()
+    app.pills(key=targets_key).set_value([]).run()
     assert_controls()
-    assert not app.multiselect(key=targets_key).value
+    assert not app.pills(key=targets_key).value
     assert app.button(key=f"workflow-create:{workspace}").disabled
     assert len([widget for widget in app.get("file_uploader")
                 if widget.key == f"workflow-upload:{workspace}:文档资料"]) == 1
@@ -142,7 +142,7 @@ def test_agent_node_retains_verification_choice_and_blocks_unconfigured_start(tm
     app.session_state["ws"] = name
     app.session_state["nav"] = "自动工作流"
     app.run()
-    next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(["agent"]).run()
+    next(widget for widget in app.pills if widget.label == "训练目标").set_value(["agent"]).run()
     app.session_state[f"setup-canvas:{name}"] = {"node": "agent", "serial": "agent-1"}
     app.run()
     next(widget for widget in app.selectbox if widget.label == "轨迹验证方式").set_value("isolated").run()
@@ -251,10 +251,10 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     app.session_state["nav"] = "自动工作流"
     app.run()
     assert not app.exception
-    inputs = {widget.label: widget for widget in app.multiselect}
+    inputs = {widget.label: widget for widget in [*app.multiselect, *app.pills]}
     inputs["训练目标"].set_value(["cpt", "multiturn"]).run()
     assert not app.exception
-    inputs = {widget.label: widget for widget in app.multiselect}
+    inputs = {widget.label: widget for widget in [*app.multiselect, *app.pills]}
     inputs["本次使用的资料"].set_value([str(source)])
     assert not any("留空使用" in widget.label for widget in app.text_input)
     for widget in app.number_input:
@@ -303,30 +303,33 @@ def test_quick_presets_keep_every_target_available_and_custom_choices_independen
     app.session_state["nav"] = "自动工作流"
     app.run()
 
-    target_picker = next(widget for widget in app.multiselect if widget.label == "训练目标")
+    target_picker = next(widget for widget in app.pills if widget.label == "训练目标")
     from lib.domain.workflow_targets import TARGETS
-    assert len(target_picker.options) == len(TARGETS)
+    from lib.presentation.streamlit.workflow_page import TARGET_LABELS
+    from streamlit.proto.ButtonGroup_pb2 import ButtonGroup
+    assert target_picker.options == [TARGET_LABELS[target] for target in TARGETS]
+    assert target_picker.proto.style == ButtonGroup.PILLS
+    assert target_picker.proto.click_mode == ButtonGroup.MULTI_SELECT
     target_picker.set_value(["orpo"]).run()
     assert not app.exception
     rendered = "".join(str(node.value) for node in app.get("html"))
-    assert not any(str(button.key).startswith("workbench-target-card-") for button in app.button)
     assert 'class="df-wb-selected"' not in rendered
     assert "SFT 中间候选" in rendered
-    assert next(widget for widget in app.multiselect if widget.label == "训练目标").value == ["orpo"]
+    assert next(widget for widget in app.pills if widget.label == "训练目标").value == ["orpo"]
 
     app.segmented_control(key=f"workflow-preset:{name}").set_value("偏好对齐").run()
     assert not app.exception
-    assert set(next(widget for widget in app.multiselect if widget.label == "训练目标").value) == {
+    assert set(next(widget for widget in app.pills if widget.label == "训练目标").value) == {
         "sft", "orpo", "dpo", "rlaif"}
-    next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(["rlaif"]).run()
+    next(widget for widget in app.pills if widget.label == "训练目标").set_value(["rlaif"]).run()
     app.segmented_control(key=f"workflow-preset:{name}").set_value("自动推荐").run()
     assert not app.exception
-    assert next(widget for widget in app.multiselect if widget.label == "训练目标").value == ["orpo"]
+    assert next(widget for widget in app.pills if widget.label == "训练目标").value == ["orpo"]
 
-    next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(["agent", "gsm8k"]).run()
+    next(widget for widget in app.pills if widget.label == "训练目标").set_value(["agent", "gsm8k"]).run()
     assert not app.exception
     rendered = "".join(str(node.value) for node in app.get("html"))
-    assert next(widget for widget in app.multiselect if widget.label == "训练目标").value == ["agent", "gsm8k"]
+    assert next(widget for widget in app.pills if widget.label == "训练目标").value == ["agent", "gsm8k"]
     assert "SFT 中间候选" not in rendered
     assert [node["id"] for node in canvas(app, f"setup-canvas:{name}")["nodes"]] == list(
         execution_graph(["agent", "gsm8k"])[0])
@@ -378,6 +381,9 @@ def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatc
     app.run()
     assert not app.exception
     assert any(widget.label == "Candidate count" for widget in app.number_input)
+    target_picker = app.pills(key=f"workflow-targets:{workspace}:自动推荐")
+    assert len(target_picker.options) == 9
+    assert not re.search(r"[\u4e00-\u9fff]", target_picker.label + " ".join(target_picker.options))
     assert any(button.key == "nav-button:系统设置" for button in app.sidebar.button)
     assert not any(button.key == "nav-button:模型与密钥" for button in app.sidebar.button)
     spec = canvas(app, f"setup-canvas:{workspace}")
@@ -488,7 +494,7 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
         return summary, detail
 
     assert_preview(["cpt", "sft", "orpo", "dpo"])
-    picker = next(widget for widget in app.multiselect if widget.label == "训练目标")
+    picker = next(widget for widget in app.pills if widget.label == "训练目标")
     picker.set_value(["orpo"]).run()
     assert not app.exception
     summary, detail = assert_preview(["orpo"])
@@ -496,14 +502,14 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
     assert any("仅用于下游目标的 SFT 中间候选不会单独导出。" in item.value for item in app.caption)
     assert 'data-from="sft" data-to="package"' not in detail
 
-    next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(
+    next(widget for widget in app.pills if widget.label == "训练目标").set_value(
         ["agent", "gsm8k"]).run()
     assert not app.exception
     summary, detail = assert_preview(["agent", "gsm8k"])
     assert "SFT 中间候选" not in summary
     assert 'data-from="agent" data-to="gsm8k"' not in detail
 
-    next(widget for widget in app.multiselect if widget.label == "训练目标").set_value([]).run()
+    next(widget for widget in app.pills if widget.label == "训练目标").set_value([]).run()
     assert not app.exception
     markup = [str(item.value) for item in app.get("html")]
     assert any('class="df-wb-plan df-wb-plan-empty"' in value for value in markup)

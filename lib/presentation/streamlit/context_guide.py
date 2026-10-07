@@ -14,8 +14,8 @@ from lib.presentation.streamlit.i18n import translate
 # the page itself; a guide never supplies example data to a workspace.
 _GUIDES: dict[str, tuple[tuple[tuple[str, str], ...], tuple[str, str] | None]] = {
     "总览": (
-        (("选择输入", "在生成类型中选择文档、Agent 上下文或开放需求。"),
-         ("选择目标", "可以直接选 CPT、SFT 或偏好数据；进入工作台后仍能调整。"),
+        (("开始制作数据", "在“开始制作数据”中导入 MD、TXT 或其他资料，也可以选择人工制作图文。"),
+         ("选择数据类型", "CPT、SFT、DPO 等入口就在下方；进入工作台后可以组合多个目标。"),
          ("查看进度", "最近任务显示本机任务的真实状态；点击任务可查看工作流过程。")),
         ("开始生成", "自动工作流"),
     ),
@@ -23,6 +23,12 @@ _GUIDES: dict[str, tuple[tuple[tuple[str, str], ...], tuple[str, str] | None]] =
         (("确定来源和目标", "选择来源类型与训练目标；文档或对话记录可在下方上传。"),
          ("配置节点模型", "点击工作流中的模型节点，在右侧为本次任务选择模型。"),
          ("开始运行", "填写需求或来源与规模后，直接点击“开始自动生成”。")),
+        None,
+    ),
+    "人工制作数据": (
+        (("选择或创建数据集", "在上方选择已有人工数据集，或填写名称创建一份新数据集。"),
+         ("添加图片与问答", "添加可选的 PNG、JPEG 或 WEBP 图片，填写问题与参考答案，在右侧核对预览。"),
+         ("保存与导出", "点击“保存并继续下一条”，样本会保存在本机；在已保存样本中查看并导出图片与样本包。")),
         None,
     ),
     "数据管理": (
@@ -67,6 +73,17 @@ _REVIEW_KIND = {
 }
 
 
+def _active_guide_route(page: str) -> str:
+    """Resolve help from the visible mode, without creating a navigation route."""
+    route = _ALIASES.get(page, page)
+    workspace = st.session_state.get("ws", "default")
+    if route == "自动工作流" and st.session_state.get(f"workflow-creation-mode:{workspace}") == "人工制作图文":
+        return "人工制作数据"
+    if route == "数据管理" and st.session_state.get(f"data-view:{workspace}") == "人工制作":
+        return "人工制作数据"
+    return route
+
+
 def _target_candidates(route: str, step: int) -> tuple[str, ...]:
     """Return existing Streamlit widget/container key prefixes in priority order.
 
@@ -76,8 +93,12 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
     """
     workspace = st.session_state.get("ws", "default")
     if route == "总览":
-        return (("home-source-entries",), ("home-strategy-options",),
+        return (("home-source-panel", "home-source-entries"), ("home-strategy-options",),
                 ("home-recent-panel",))[step]
+    if route == "人工制作数据":
+        return (("manual-datasets-picker",),
+                ("manual-datasets-editor", "manual-datasets-preview", "manual-datasets-picker"),
+                ("manual-datasets-saved", "manual-datasets-editor", "manual-datasets-picker"))[step]
     if route == "自动工作流":
         return (("workbench-targets",), ("workbench-node-panel", "workbench-targets"),
                 ("workbench-submit",))[step]
@@ -247,7 +268,7 @@ def _highlight(route: str, step: int, revision: int) -> None:
 
 def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
     """Render optional help and a step-by-step focus on the current page."""
-    route = _ALIASES.get(page, page)
+    route = _active_guide_route(page)
     previous_route = st.session_state.get("context-guide-route")
     if previous_route and previous_route != route:
         st.session_state.pop(f"context-guide-step:{previous_route}", None)

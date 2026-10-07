@@ -1,6 +1,7 @@
 """Home shortcuts and summaries use application data without filesystem reads."""
 from pathlib import Path
 import ast
+import re
 
 from streamlit.testing.v1 import AppTest
 
@@ -45,17 +46,26 @@ def test_home_uses_real_summaries_and_preserves_user_names():
     assert '<small>Total workflows</small><strong>6</strong>' in rendered
     assert '<strong data-user-content>工作流</strong>' in rendered
     assert '工作流.txt' in rendered
-    assert 'Choose ORPO' in [button.label.replace(' →','') for button in ui.button]
+    assert ui.button(key='overview-target:orpo')
 
 
-def test_home_orpo_shortcut_sets_only_its_workspace_recipe():
-    from lib.presentation.streamlit.workflow_page import PRESETS
+def test_home_exposes_every_target_and_shortcuts_do_not_replace_other_draft_fields():
+    from lib.domain.workflow_targets import TARGETS
     ui=AppTest.from_string(SCRIPT).run()
-    ui.button(key='overview-preset:ORPO 数据生成').click().run()
-    assert not ui.exception
-    assert ui.session_state['workflow-preset:fixture']=='ORPO 数据生成'
-    assert ui.session_state['nav']=='自动工作流'
-    assert PRESETS['ORPO 数据生成']==('orpo',)
+    draft = {'workflow-name:fixture': 'Current independent work',
+             'workflow-count:fixture': 50000}
+    ui.session_state['workflow-form-draft:fixture'] = draft
+    ui.session_state['workflow-entry-target:other'] = 'cot'
+    keys = {button.key for button in ui.button}
+    assert {f'overview-target:{target}' for target in TARGETS} <= keys
+    for target in TARGETS:
+        assert not re.search(r'[\u4e00-\u9fff]', ui.button(key=f'overview-target:{target}').label)
+        ui.button(key=f'overview-target:{target}').click().run()
+        assert not ui.exception
+        assert ui.session_state['workflow-entry-target:fixture'] == target
+        assert ui.session_state['nav'] == '自动工作流'
+        assert ui.session_state['workflow-form-draft:fixture'] == draft
+        assert ui.session_state['workflow-entry-target:other'] == 'cot'
 
 
 def test_home_agent_and_recent_task_shortcuts_keep_context():
@@ -66,3 +76,29 @@ def test_home_agent_and_recent_task_shortcuts_keep_context():
     ui.button(key='overview-run:0').click().run()
     assert ui.session_state['task-center-run:fixture']=='0'
     assert ui.session_state['nav']=='任务管理'
+
+
+def test_home_document_format_and_manual_entries_keep_draft_and_workspace_context():
+    ui = AppTest.from_string(SCRIPT).run()
+    draft = {'workflow-name:fixture': 'Independent work', 'workflow-count:fixture': 50000}
+    ui.session_state['workflow-form-draft:fixture'] = draft
+    ui.session_state['workflow-creation-mode:other'] = '人工制作图文'
+    ui.session_state['workflow-upload-format:other'] = 'TXT'
+    for kind in ('MD', 'TXT'):
+        ui.session_state['workflow-creation-mode:fixture'] = '人工制作图文'
+        ui.button(key=f'overview-import:{kind}').click().run()
+        assert not ui.exception
+        assert ui.session_state['workflow-source-mode:fixture'] == '文档资料'
+        assert ui.session_state['workflow-upload-format:fixture'] == kind
+        assert ui.session_state['workflow-creation-mode:fixture'] == '自动生成'
+        assert ui.session_state['nav'] == '自动工作流'
+        assert ui.session_state['workflow-form-draft:fixture'] == draft
+    ui.button(key='overview-manual').click().run()
+    assert not ui.exception
+    assert ui.session_state['workflow-creation-mode:fixture'] == '人工制作图文'
+    assert ui.session_state['nav'] == '自动工作流'
+    assert ui.session_state['workflow-form-draft:fixture'] == draft
+    assert ui.session_state['workflow-creation-mode:other'] == '人工制作图文'
+    assert ui.session_state['workflow-upload-format:other'] == 'TXT'
+    ui.button(key='overview-target:cpt').click().run()
+    assert ui.session_state['workflow-creation-mode:fixture'] == '自动生成'
