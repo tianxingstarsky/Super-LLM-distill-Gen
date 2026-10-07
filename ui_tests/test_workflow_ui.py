@@ -49,6 +49,70 @@ def test_workbench_keeps_flow_and_common_generation_controls_visible(tmp_path, m
     assert any(item.label == "输入范围与文档分块（可选）" for item in app.expander)
 
 
+def test_generation_controls_survive_node_layout_changes_and_empty_targets(tmp_path, monkeypatch):
+    from lib.application.backend_service import BackendApplication
+
+    _, workspace, source = setup_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(BackendApplication, "list_backends", lambda self: {"backends": []})
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "自动工作流"
+    app.session_state["ui_language"] = "zh"
+    app.run()
+    assert not app.exception
+    targets_key = next(widget.key for widget in app.multiselect
+                       if widget.key.startswith("workflow-targets:"))
+    app.multiselect(key=targets_key).set_value(["sft"]).run()
+    source_key = f"workflow-sources:{workspace}:文档资料"
+    app.multiselect(key=source_key).set_value([str(source)]).run()
+    expected_numbers = {
+        f"workflow-count:{workspace}": 50_000,
+        f"workflow-concurrency:{workspace}": 6,
+        f"workflow-batch-size:{workspace}": 200,
+    }
+    name_key = f"workflow-name:{workspace}"
+    run_name = "Preserve this bulk draft"
+    for key, value in expected_numbers.items():
+        app.number_input(key=key).set_value(value)
+    app.text_input(key=name_key).set_value(run_name).run()
+
+    def assert_controls():
+        assert not app.exception
+        for key, value in expected_numbers.items():
+            widgets = [widget for widget in app.number_input if widget.key == key]
+            assert len(widgets) == 1 and widgets[0].value == value
+        names = [widget for widget in app.text_input if widget.key == name_key]
+        assert len(names) == 1 and names[0].value == run_name
+        assert app.multiselect(key=source_key).value == [str(source)]
+
+    assert_controls()
+    assert canvas(app, f"setup-canvas:{workspace}")["selected"] == "sft"
+    for serial, node in enumerate(("ingest", "package", "sft"), start=1):
+        app.session_state[f"setup-canvas:{workspace}"] = {
+            "node": node, "serial": f"layout-switch-{serial}",
+        }
+        app.run()
+        assert_controls()
+        assert canvas(app, f"setup-canvas:{workspace}")["selected"] == node
+
+    app.multiselect(key=targets_key).set_value([]).run()
+    assert_controls()
+    assert not app.multiselect(key=targets_key).value
+    assert app.button(key=f"workflow-create:{workspace}").disabled
+    assert len([widget for widget in app.get("file_uploader")
+                if widget.key == f"workflow-upload:{workspace}:文档资料"]) == 1
+    assert not any(json.loads(item.proto.json_args).get("key") == f"setup-canvas:{workspace}"
+                   for item in app.get("component_instance"))
+    # With no target selected, source and parameter edits remain usable.
+    brief_key = f"workflow-source-brief:{workspace}:文档资料"
+    app.text_area(key=brief_key).set_value("Keep the source ready for the next target choice.")
+    run_name = "Editable draft with no target"
+    app.text_input(key=name_key).set_value(run_name).run()
+    assert_controls()
+    assert app.text_area(key=brief_key).value == "Keep the source ready for the next target choice."
+    assert app.button(key=f"workflow-create:{workspace}").disabled
+
+
 def test_next_incomplete_node_locates_panel_and_wraps_without_starting_run(tmp_path, monkeypatch):
     from lib.application.backend_service import BackendApplication
     _, workspace, _ = setup_workspace(tmp_path, monkeypatch)

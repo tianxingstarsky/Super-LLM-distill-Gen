@@ -1,6 +1,7 @@
 """Workflow workbench. All durable state lives in the workspace, not the UI."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import html
 import json
 import math
@@ -825,7 +826,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     # Keep each side as a continuous stack. A long model form must not push
     # the source inputs down to the bottom of an unrelated, shared-height row.
     with st.container(key="workbench-layout"):
-        source_col, setup_col = st.columns([1.65, 1], gap="medium")
+        if targets:
+            source_col, setup_col = st.columns([1.65, 1], gap="medium")
+        else:
+            source_col, setup_col = st.container(), None
     if targets:
         with source_col, st.container(border=True, key="workbench-canvas-panel"):
             section_heading("工作流节点配置", "点击节点查看步骤；需要模型的节点可在右侧选择。", "◇")
@@ -854,6 +858,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
             elif selected_node == "package":
                 st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
+    # A short, informational node leaves most of the inspector column unused.
+    # Put common controls there, while keeping long model/verification forms
+    # separate from the full-width controls below the workbench.
+    compact_parameters = bool(targets and selected_node != "agent"
+                              and not node_roles(selected_node, source_mode))
     with st.container(key=f"workbench-create:{ws}"):
         web_research, web_unavailable = None, False
         with source_col, st.container(border=True, key="workbench-source-panel"):
@@ -906,9 +915,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                      placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                      key=f"workflow-source-brief:{ws}:{source_mode}")
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
-        with st.container(border=True, key="workbench-parameters-panel"):
+        with (setup_col if compact_parameters else nullcontext()), st.container(
+                border=True, key="workbench-parameters-panel"):
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
-            scale_col, batch_col = st.columns(2, gap="medium")
+            scale_col, batch_col = ((st.container(), st.container()) if compact_parameters
+                                    else st.columns(2, gap="medium"))
             with scale_col:
                 default_run_name = ("Automatic data generation"
                                     if st.session_state.get("ui_language") == "en" else "自动数据生成")
@@ -935,7 +946,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
                                              help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
                 with st.expander("输入范围与文档分块（可选）"):
-                    range_col, chunk_col = st.columns(2, gap="small")
+                    range_col, chunk_col = (st.columns(2, gap="small") if source_mode == "文档资料"
+                                            else (nullcontext(), nullcontext()))
                     with range_col:
                         maximum = _draft_number("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
                                               help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
