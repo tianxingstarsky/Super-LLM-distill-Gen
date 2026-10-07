@@ -144,12 +144,22 @@ class FilesystemWorkflowDriver:
     def state(self, run_id: str) -> dict:
         return read_json(run_path(self.output, run_id) / "state.json")
 
-    def read_streams(self, run_id: str) -> list[dict]:
+    def read_streams(self, run_id: str, *, stage: str | None = None) -> list[dict]:
         from lib.infrastructure.workflow_stream_journal import read_streams
 
         run = run_path(self.output, run_id)
         state = read_json(run / "state.json")
-        return read_streams(run, active=run_is_active(run), run_attempt=state.get("attempt", 0))
+        return read_streams(run, active=run_is_active(run), run_attempt=state.get("attempt", 0), stage=stage)
+
+    def read_stream_delta(self, run_id: str, request_id: str, *, offset: int = 0,
+                          limit_bytes: int = 65536, stage: str | None = None) -> dict:
+        from lib.infrastructure.workflow_stream_journal import read_stream_delta
+
+        run = run_path(self.output, run_id)
+        state = read_json(run / "state.json")
+        return read_stream_delta(run, request_id, active=run_is_active(run),
+                                 run_attempt=state.get("attempt", 0), offset=offset,
+                                 limit_bytes=limit_bytes, stage=stage)
 
     def recipe(self, run_id: str) -> dict:
         return read_json(run_path(self.output, run_id) / "recipe.json")

@@ -48,3 +48,32 @@ def test_canvas_node_navigation_and_dependency_highlight():
                             input=json.dumps(specs), cwd=ROOT, capture_output=True,
                             text=True, encoding='utf-8', timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_clicking_a_live_node_opens_its_output_and_pauses_automatic_following():
+    from streamlit.testing.v1 import AppTest
+
+    script = '''
+import streamlit as st
+from unittest.mock import patch
+from lib.presentation.streamlit import workflow_canvas as canvas
+labels = {key:key for key in ('ingest','sft','package')}
+spec = canvas.canvas_spec(['sft'], {}, 'ingest', labels, labels, live=True)
+with patch.object(canvas, '_canvas', lambda **kw: st.session_state.get('event')):
+    canvas.render_canvas(spec, 'workflow-stage:run', key='live-canvas:run', follow_key='workflow-follow:run')
+'''
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception and 'canvas-open:live-canvas:run' not in ui.session_state
+    ui.session_state['event'] = {'node':'sft', 'serial':1}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['workflow-stage:run'] == 'sft'
+    assert ui.session_state['canvas-open:live-canvas:run'] is True
+    assert ui.session_state['canvas-pause:workflow-follow:run'] is True
+    # Closing must stay closed on a later refresh of the same canvas event.
+    ui.session_state['canvas-open:live-canvas:run'] = False
+    ui.run()
+    assert not ui.exception and ui.session_state['canvas-open:live-canvas:run'] is False
+    ui.session_state['event'] = {'node':'sft', 'serial':2}
+    ui.run()
+    assert ui.session_state['canvas-open:live-canvas:run'] is True

@@ -432,7 +432,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     with flow:
         with st.container(border=True, key=f"workflow-run-canvas:{run_id}"):
             st.html('<div class="df-run-section"><div><strong>工作流运行图</strong>'
-                    '<small>点击节点卡，检查该步骤的状态、配置与日志。</small></div>'
+                    '<small>点击节点，展开模型的实时输出；配置与日志保留在当前页。</small></div>'
                     '<span class="df-run-section-tag">实时进度</span></div>')
             follow_key = f"workflow-follow:{run_id}"
             if st.session_state.pop(f"canvas-pause:{follow_key}", False):
@@ -508,8 +508,20 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             if selected_metrics.get("error"):
                 st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
     selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
-    with flow:
-        render_stream_output(application, run_id, selected_stage)
+    output_open_key = f"canvas-open:live-canvas:{run_id}"
+    if st.session_state.get(output_open_key):
+        with flow, st.container(border=True, key=f"workflow-node-output:{run_id}:{selected_stage}"):
+            heading, close = st.columns([4, 1], vertical_alignment="center")
+            with heading:
+                st.html('<div class="df-run-section"><div><strong>'
+                        + html.escape(translate(GRAPH_LABELS.get(selected_stage, selected_stage),
+                                               st.session_state.get("ui_language", "zh")))
+                        + ' · ' + html.escape(translate("实时输出", st.session_state.get("ui_language", "zh")))
+                        + '</strong></div></div>')
+            with close:
+                st.button("收起输出", key=f"close-node-output:{run_id}",
+                          on_click=st.session_state.pop, args=(output_open_key, None), width="stretch")
+            render_stream_output(application, run_id, selected_stage)
     with flow, st.container(border=True, key=f"workflow-run-log:{run_id}"):
         st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
                 f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'

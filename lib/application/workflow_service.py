@@ -66,9 +66,15 @@ class WorkflowApplication:
     def state(self, run_id: str) -> dict:
         return self._driver.state(run_id)
 
-    def read_streams(self, run_id: str) -> list[dict]:
+    def read_streams(self, run_id: str, *, stage: str | None = None) -> list[dict]:
         """Return durable, bounded live previews, separate from training samples."""
-        return self._driver.read_streams(run_id)
+        return self._driver.read_streams(run_id, **({"stage": stage} if stage is not None else {}))
+
+    def read_stream_delta(self, run_id: str, request_id: str, *, offset: int = 0,
+                          limit_bytes: int = 65536, stage: str | None = None) -> dict:
+        """Read only a selected request's next bounded batch of original deltas."""
+        return self._driver.read_stream_delta(run_id, request_id, offset=offset,
+                                              limit_bytes=limit_bytes, stage=stage)
 
     def recipe(self, run_id: str) -> dict:
         return self._driver.recipe(run_id)

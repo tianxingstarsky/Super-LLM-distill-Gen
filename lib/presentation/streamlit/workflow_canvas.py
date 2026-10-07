@@ -64,9 +64,9 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                        "failed": "Failed" if english else "失败",
                                        "overview": f"{len(nodes)} nodes · {len(edges)} links" if english else
                                        f"{len(nodes)} 个节点 · {len(edges)} 条连线",
-                                       "hint": ("Select a node to inspect it. Drag to pan. Ctrl + scroll to zoom." if live else
+                                       "hint": ("Select a node to inspect live model output. Drag to pan. Ctrl + scroll to zoom." if live else
                                                  "Select a node to inspect its settings. Drag to pan. Ctrl + scroll to zoom.") if english else
-                                       ("点击节点查看运行详情 · 拖动平移 · Ctrl + 滚轮缩放" if live else
+                                       ("点击节点查看实时输出 · 拖动平移 · Ctrl + 滚轮缩放" if live else
                                          "点击节点查看配置 · 拖动平移 · Ctrl + 滚轮缩放"),
                                        "lineage": "Arrows show data dependencies. Stages run in order." if english else
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
@@ -83,4 +83,5 @@ def render_canvas(spec, selection_key, *, key, follow_key=None):
                 # The toggle already exists in this render. Apply the pause
                 # before creating it on the next rerun instead of mutating a widget.
                 st.session_state[f"canvas-pause:{follow_key}"] = True
+                st.session_state[f"canvas-open:{key}"] = True
             st.rerun()
