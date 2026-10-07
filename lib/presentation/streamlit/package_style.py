@@ -45,7 +45,7 @@ PACKAGE_STYLE = """<style>
 .df-pack-quality-row b { color:#276ABF; font-size:10px; }
 .df-pack-quality-row span { color:#657890; }
 .df-pack-quality-row strong { color:#1B825D; }
-.df-pack-quality-row small { overflow:hidden; color:#8492A6; text-overflow:ellipsis; white-space:nowrap; }
+.df-pack-quality-row small { min-width:0; color:#64768D; white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
 .df-pack-source { display:grid; gap:3px; padding:8px 0; border-bottom:1px solid #EDF1F7; }
 .df-pack-source strong { color:#263951; font-size:12px; }
 .df-pack-source small { overflow:hidden; color:#8593A5; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }

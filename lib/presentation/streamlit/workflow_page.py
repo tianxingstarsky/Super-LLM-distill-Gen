@@ -94,15 +94,6 @@ def _missing_budget_prices(nodes, source_mode, bindings, endpoints, budget):
     return missing
 
 
-def _toggle_target_group(key: str, members: frozenset[str], defaults: tuple[str, ...]) -> None:
-    """Keep the category card and detailed target picker in one state."""
-    current = {target for target in st.session_state.get(key, defaults) if target in TARGETS}
-    if members.issubset(current):
-        current.difference_update(members)
-    else:
-        current.update(members)
-    st.session_state[key] = [target for target in TARGETS if target in current]
-    _save_draft_value(st.session_state["ws"], key)
 ICONS = {"pending": "○", "queued": "○", "running": "◉", "completed": "✓", "failed": "!", "cancelled": "■", "skipped": "—"}
 STAGE_STATUS = {"pending": "待处理", "queued": "待启动", "running": "执行中", "completed": "已完成",
                 "failed": "失败", "cancelled": "已停止", "skipped": "已跳过"}
@@ -256,32 +247,16 @@ def _missing_model_role_summary(issues, language):
 
 
 def _planned_flow_html(targets, nodes: tuple[str, ...], edges: tuple[tuple[str, str], ...]) -> str:
-    """Summarize the planned nodes without implying an edge between neighbors."""
+    """Keep the summary compact; the canvas and dependency list show the nodes."""
     if not targets:
-        return ('<div class="df-wb-plan df-wb-plan-empty"><strong>运行前流程预览</strong>'
-                '<span>选择训练目标后，这里会显示本次的处理阶段与数据依赖。</span></div>')
-
-    stage_markup = []
-    for key in nodes:
-        intermediate = key == "sft" and "sft" not in targets
-        label = GRAPH_LABELS[key] + (" · 中间候选" if intermediate else "")
-        stage_markup.append(
-            f'<span class="df-wb-plan-node" data-stage="{key}" '
-            f'data-intermediate="{str(intermediate).lower()}">'
-            f'<i aria-hidden="true">{html.escape(STAGE_GLYPHS[key])}</i>'
-            f'<b>{html.escape(label)}</b></span>')
-    downstream = [GRAPH_LABELS[destination] for origin, destination in edges
-                  if origin == "sft" and destination in {"preference", "cot"}]
-    note = (f'<span>SFT 中间步骤会为{html.escape("、".join(downstream))}生成候选；'
-            '只有勾选 SFT 才会额外导出 SFT 文件。</span>'
-            if "sft" in nodes and "sft" not in targets else '')
+        return ('<div class="df-wb-plan df-wb-plan-empty">'
+                '<span>请从上方列表至少选择一类训练目标。</span></div>')
+    intermediate = ('<span class="df-wb-plan-intermediate">SFT 中间候选</span>'
+                    if "sft" in nodes and "sft" not in targets else '')
     return ('<div class="df-wb-plan">'
-            '<div class="df-wb-plan-head"><strong>运行前流程预览</strong>'
-            f'<small>{len(nodes)} 个阶段 · {len(edges)} 条数据依赖</small></div>'
-            '<div class="df-wb-plan-nodes" aria-label="本次包含的处理阶段">'
-            + ''.join(stage_markup) + '</div>'
-            '<div class="df-wb-plan-note">本次包含的阶段；节点间的实际连接见下方依赖详情。'
-            + note + '</div></div>')
+            '<strong>运行前流程预览</strong>'
+            f'<small>{len(nodes)} 个阶段 · {len(edges)} 条数据依赖</small>'
+            + intermediate + '</div>')
 
 
 def _planned_dependencies_html(edges: tuple[tuple[str, str], ...]) -> str:
@@ -778,7 +753,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         on_change=_save_draft_value, args=(ws, preset_key),
         help="选择常用目标组合。下面仍可逐项增删训练目标。",
     ) or "自动推荐"
-    st.html('<div class="df-wb-preset-help">快捷方案会预填下方目标；每个目标仍可单独增减。</div>')
     source_key = f"workflow-source-mode:{ws}"
     _restore_selection(ws, source_key, "文档资料", ("文档资料", "Agent 上下文", "开放需求"))
     source_mode = st.segmented_control(
@@ -791,28 +765,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     files = application.source_files(ws, suffixes=frozenset(source_extensions), limit=501) if source_extensions else []
     file_labels = {row["path"]: row["label"] for row in files}
     with st.container(border=True, key="workbench-targets"):
-        section_heading("选择训练目标", "点击分类卡快速启用或清空整组，下方可逐项调整。", "◈")
+        section_heading("选择训练目标", icon="◈")
         target_key = f"workflow-targets:{ws}:{preset}"
         target_defaults = [target for target in PRESETS[preset] if target in TARGETS]
         _restore_selection(ws, target_key, target_defaults, TARGETS)
-        targets = [target for target in st.session_state.get(target_key, target_defaults) if target in TARGETS]
-        target_groups = (
-            ("cpt", "预训练语料", "文档清洗、分块与去重", frozenset({"cpt"})),
-            ("dialogue", "对话与轨迹", "SFT、多轮与 Agent 轨迹", frozenset({"sft", "multiturn", "agent"})),
-            ("preference", "偏好对齐", "ORPO、DPO 与 RLAIF", frozenset({"orpo", "dpo", "rlaif"})),
-            ("reasoning", "推理与数学", "CoT 与算术核验", frozenset({"cot", "gsm8k"})),
-        )
-        for column, (slug, title, description, members) in zip(st.columns(4, gap="small"), target_groups):
-            count = len(members.intersection(targets))
-            with column:
-                st.button(
-                    f"{title} · {count} 项已选" if count else f"{title} · 未选",
-                    key=f"workbench-target-card-{slug}-{'on' if count else 'off'}",
-                    help=f"{description}。点击{'清空' if members.issubset(set(targets)) else '启用'}整组；下方可逐项调整。",
-                    on_click=_toggle_target_group,
-                    args=(target_key, members, tuple(target_defaults)),
-                    use_container_width=True,
-                )
         targets = st.multiselect(
             "训练目标", list(TARGETS), default=None,
             format_func=lambda target: TARGET_LABELS.get(target, target.upper()),
@@ -820,15 +776,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             on_change=_save_draft_value, args=(ws, target_key),
             help="可以同时选择多类目标；系统只会导出通过对应质量检查的样本。",
         )
-        selected_labels = ''.join(f'<span>{html.escape(TARGET_LABELS.get(target, target.upper()))}</span>'
-                                  for target in targets)
-        st.html('<div class="df-wb-selected"><b>已选目标 ' + str(len(targets)) + '</b><div>' +
-                (selected_labels or '<small>请从上方列表至少选择一类训练目标。</small>') + '</div></div>')
         graph_nodes, graph_edges = execution_graph(targets)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
                 st.html(_planned_dependencies_html(graph_edges))
+                if "sft" in graph_nodes and "sft" not in targets:
+                    st.caption("仅用于下游目标的 SFT 中间候选不会单独导出。")
         if "agent" in targets:
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:

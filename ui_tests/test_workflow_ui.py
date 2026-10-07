@@ -232,7 +232,7 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     assert recipe["conversation_turns"] == 5
 
 
-def test_target_group_cards_and_detailed_picker_share_state(tmp_path, monkeypatch):
+def test_quick_presets_keep_every_target_available_and_custom_choices_independent(tmp_path, monkeypatch):
     _, name, _ = setup_workspace(tmp_path, monkeypatch)
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = name
@@ -240,28 +240,32 @@ def test_target_group_cards_and_detailed_picker_share_state(tmp_path, monkeypatc
     app.run()
 
     target_picker = next(widget for widget in app.multiselect if widget.label == "训练目标")
+    from lib.domain.workflow_targets import TARGETS
+    assert len(target_picker.options) == len(TARGETS)
     target_picker.set_value(["orpo"]).run()
     assert not app.exception
     rendered = "".join(str(node.value) for node in app.get("html"))
-    assert any(button.key == "workbench-target-card-preference-on" for button in app.button)
-    assert any(button.key == "workbench-target-card-cpt-off" for button in app.button)
-    assert "已选目标 1" in rendered and "ORPO 偏好对" in rendered
-    assert "SFT 中间步骤" in rendered
+    assert not any(str(button.key).startswith("workbench-target-card-") for button in app.button)
+    assert 'class="df-wb-selected"' not in rendered
+    assert "SFT 中间候选" in rendered
+    assert next(widget for widget in app.multiselect if widget.label == "训练目标").value == ["orpo"]
 
-    next(button for button in app.button if button.key == "workbench-target-card-preference-on").click().run()
+    app.segmented_control(key=f"workflow-preset:{name}").set_value("偏好对齐").run()
     assert not app.exception
     assert set(next(widget for widget in app.multiselect if widget.label == "训练目标").value) == {
-        "orpo", "dpo", "rlaif"}
-    next(button for button in app.button if button.key == "workbench-target-card-preference-on").click().run()
+        "sft", "orpo", "dpo", "rlaif"}
+    next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(["rlaif"]).run()
+    app.segmented_control(key=f"workflow-preset:{name}").set_value("自动推荐").run()
     assert not app.exception
-    assert next(widget for widget in app.multiselect if widget.label == "训练目标").value == []
+    assert next(widget for widget in app.multiselect if widget.label == "训练目标").value == ["orpo"]
 
     next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(["agent", "gsm8k"]).run()
     assert not app.exception
     rendered = "".join(str(node.value) for node in app.get("html"))
-    assert "已选目标 2" in rendered
-    assert "Agent 验证轨迹" in rendered and "基础算术（GSM8K 格式）" in rendered
-    assert "SFT 中间步骤" not in rendered
+    assert next(widget for widget in app.multiselect if widget.label == "训练目标").value == ["agent", "gsm8k"]
+    assert "SFT 中间候选" not in rendered
+    assert [node["id"] for node in canvas(app, f"setup-canvas:{name}")["nodes"]] == list(
+        execution_graph(["agent", "gsm8k"])[0])
 
 
 def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_nodes(tmp_path, monkeypatch):
@@ -413,7 +417,7 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
         markup = [str(item.value) for item in app.get("html")]
         summary = next(value for value in markup if 'class="df-wb-plan"' in value)
         detail = next(value for value in markup if 'class="df-wb-plan-detail"' in value)
-        assert tuple(re.findall(r'data-stage="([^"]+)"', summary)) == nodes
+        assert tuple(node["id"] for node in canvas(app, f"setup-canvas:{name}")["nodes"]) == nodes
         assert tuple(re.findall(r'data-from="([^"]+)" data-to="([^"]+)"', detail)) == edges
         assert "各阶段仍按顺序执行" in detail
         assert f"{len(nodes)} 个阶段 · {len(edges)} 条数据依赖" in summary
@@ -424,15 +428,15 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
     picker.set_value(["orpo"]).run()
     assert not app.exception
     summary, detail = assert_preview(["orpo"])
-    assert 'data-stage="sft" data-intermediate="true"' in summary
-    assert "SFT 中间步骤" in summary
+    assert "SFT 中间候选" in summary
+    assert any("仅用于下游目标的 SFT 中间候选不会单独导出。" in item.value for item in app.caption)
     assert 'data-from="sft" data-to="package"' not in detail
 
     next(widget for widget in app.multiselect if widget.label == "训练目标").set_value(
         ["agent", "gsm8k"]).run()
     assert not app.exception
     summary, detail = assert_preview(["agent", "gsm8k"])
-    assert 'data-stage="sft"' not in summary
+    assert "SFT 中间候选" not in summary
     assert 'data-from="agent" data-to="gsm8k"' not in detail
 
     next(widget for widget in app.multiselect if widget.label == "训练目标").set_value([]).run()
@@ -540,7 +544,7 @@ def test_run_inspector_distinguishes_reused_units_in_english(tmp_path, monkeypat
     markup = "".join(str(node.value) for node in app.get("html"))
     visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
     # A task name is workspace data, so preserve its original language.
-    visible = re.sub(r"<strong data-user-content>.*?</strong>", "", visible, flags=re.S)
+    visible = re.sub(r"<strong\b(?=[^>]*\bdata-user-content\b)[^>]*>.*?</strong>", "", visible, flags=re.S)
     visible = re.sub(r"<[^>]*>", "", visible)
     assert "No events for this stage yet" in visible
     assert not re.search(r"[\u4e00-\u9fff]", visible), visible
@@ -551,9 +555,11 @@ def test_workflow_navigation_from_overview(tmp_path, monkeypatch):
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = name
     app.run()
-    next(b for b in app.button if b.label == "进入数据生成工作台 →").click().run()
+    app.button(key="overview:文档资料").click().run()
     assert not app.exception
     assert app.session_state["nav"] == "自动工作流"
+    assert app.session_state[f"workflow-source-mode:{name}"] == "文档资料"
+    assert app.session_state[f"workflow-preset:{name}"] == "自动推荐"
 
 
 def test_verified_workflow_sft_artifact_is_available_in_data_preview(tmp_path, monkeypatch):

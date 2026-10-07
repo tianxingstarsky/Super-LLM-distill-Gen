@@ -27,7 +27,7 @@ def _section_shortcuts(widgets, position_key, page, pages, failure_page=None):
                           args=(widgets, position_key, failure_page), key=position_key+':failure', width='stretch')
 
 
-def render_sample_preview(target, row, *, key, wrapper_class=None, widgets=st):
+def render_sample_preview(target, row, *, key, wrapper_class=None, widgets=st, expand_trace=False):
     messages = _messages(row.get('messages')) if isinstance(row,dict) else []
     windows = message_windows(target,messages) if target in {'sft','multiturn','agent','agent_negative'} else []
     start, end, step_offset = 0, len(messages), 0
@@ -85,7 +85,8 @@ def render_sample_preview(target, row, *, key, wrapper_class=None, widgets=st):
         turn_offset = sum(message.get('role') == 'user' and not tool_result_user(message)
                           for message in islice(messages, start))
     markup = render_training_sample(target,projected,message_offset=start,
-                                    turn_offset=turn_offset,step_offset=step_offset,response_offset=response_offset)
+                                    turn_offset=turn_offset,step_offset=step_offset,response_offset=response_offset,
+                                    expand_trace=expand_trace)
     if wrapper_class:
         markup = '<div class="'+wrapper_class+'">'+markup+'</div>'
     widgets.html(markup)

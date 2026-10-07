@@ -494,7 +494,6 @@ def page_data_management():
 
 def page_task_manager():
     page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。", "WORK MANAGER")
-    st.caption("资料、草稿、运行记录与结果保存在本机，关闭浏览器或重启程序后仍然保留。")
     area = st.segmented_control(
         "任务视图", ("数据工作流", "命令管线", "运行日志"),
         default="数据工作流", key=f"task-view:{st.session_state['ws']}",
@@ -645,7 +644,6 @@ except FileNotFoundError:
     _sidebar_output = None
 if _sidebar_output is not None:
     render_sidebar_tasks(_sidebar_workflow_application(ROOT, _sidebar_output), st.session_state["ws"])
-st.sidebar.html('<div class="df-sidebar-note"><span class="df-note-mark">✦</span><strong>从资料到训练数据</strong><small>自动生成 · 全程可追溯</small></div>')
 top_page = translate_label("工作管理" if page == "任务管理" else page, st.session_state.get("ui_language", "zh"))
 st.html(f'<div class="df-topbar"><div><strong>数简立方</strong><span>　/　{html.escape(top_page)}</span></div><div class="df-topbar-meta">本机缓存　·　数据简单生成</div></div>')
 st.query_params['page'] = page

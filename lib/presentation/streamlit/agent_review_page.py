@@ -240,7 +240,7 @@ def render_agent_review(application: WorkflowApplication, run_id: str, *, worksp
         else:
             preview = row
         render_sample_preview("agent" if kind == "positive" else "agent_negative", preview,
-                              key=preview_key, widgets=st)
+                              key=preview_key, widgets=st, expand_trace=True)
         if kind == "positive":
             opened, fragments, next_unopened = _opened_trace_fragments(item, preview_key=preview_key)
     with action_col, st.container(border=True):

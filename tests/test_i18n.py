@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import re
 
 from streamlit.testing.v1 import AppTest
 
@@ -176,14 +177,11 @@ def test_translates_dynamic_metadata_and_html_accessibility_labels():
     ) == '<button aria-label="Stages in this run" title="Source / 用户资料/说明.txt">Choose goals</button>'
 
 
-def test_workbench_card_copy_is_localized_for_english():
+def test_workbench_styles_keep_visible_copy_out_of_css():
     style = workbench_style("en")
-    assert 'content:"Clean, split, and deduplicate documents"' in style
-    assert 'content:"SFT, multi-turn, and agent traces"' in style
-    assert 'content:"ORPO, DPO, and RLAIF"' in style
-    assert 'content:"CoT and checked arithmetic"' in style
-    assert "文档清洗、分块与去重" not in style
-    assert 'content:"文档清洗、分块与去重"' in workbench_style("zh")
+    assert style == workbench_style("zh")
+    assert not re.search(r"[\u4e00-\u9fff]", style)
+    assert "content:" not in style
 
 
 def test_dataframe_localization_changes_headers_and_preserves_values():

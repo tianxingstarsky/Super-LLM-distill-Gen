@@ -67,7 +67,7 @@ def test_task_cards_select_real_run_and_show_its_nodes_and_events(tmp_path):
     assert not any(item.label == "查看数据生成流程" for item in app.selectbox)
     activity = [item.value for item in app.get("html") if isinstance(item.value, str)
                 and 'class="df-task-activity"' in item.value]
-    assert activity and "工作流运行结束" in activity[0]
+    assert not activity  # Recent events already appear in the selected run's real log.
 
 
 def test_english_pending_inspector_translates_status_without_changing_task_name(tmp_path):

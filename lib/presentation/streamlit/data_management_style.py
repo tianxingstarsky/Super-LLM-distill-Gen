@@ -1,14 +1,15 @@
 """Scoped visual language for the workspace data library."""
 
 DATA_MANAGEMENT_STYLE = """<style>
-.df-data-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:11px; margin:2px 0 13px; }
-.df-data-stat { display:grid; grid-template-columns:35px minmax(0,1fr); align-content:center; gap:2px 10px; min-height:87px; padding:13px 14px; border:1px solid #DFE8F5; border-radius:11px; background:linear-gradient(145deg,#fff,#F8FBFF); box-shadow:0 2px 9px rgba(30,70,120,.035); }
-.df-data-stat > b { grid-row:span 2; display:grid; place-items:center; width:35px; height:35px; border-radius:9px; background:#EAF2FF; color:#1769D2; font-size:15px; }
+.df-data-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; padding:12px 0; margin:0; border:1px solid #DFE8F5; border-radius:10px; background:#fff; }
+.df-data-stat { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:5px 10px; min-width:0; padding:0 14px; border-left:1px solid #E8EEF6; }
+.df-data-stat:first-child { border-left:0; }
+.df-data-stat > b { display:none; }
 .df-data-stat:nth-child(2) > b { background:#E9F7F0; color:#16805C; }
 .df-data-stat:nth-child(3) > b { background:#F1ECFC; color:#7350C8; }
 .df-data-stat:nth-child(4) > b { background:#FFF2E7; color:#B66B27; }
-.df-data-stat span { color:#73859B; font-size:11px; }
-.df-data-stat strong { color:#1D304B; font-size:22px; line-height:1.08; }
+.df-data-stat span { color:#64768C; font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+.df-data-stat strong { color:#1D304B; font-size:21px; line-height:1.3; }
 .df-data-list { max-height:610px; overflow:auto; border:1px solid #E1EAF5; border-radius:9px; background:#fff; }
 .df-data-list-head, .df-data-list-row { display:grid; grid-template-columns:minmax(0,1.7fr) 66px minmax(0,.9fr) 72px; align-items:center; gap:9px; padding:9px 11px; }
 .df-data-list-head { position:sticky; top:0; z-index:1; background:#F4F7FC; color:#8292A6; font-size:10px; font-weight:700; }
@@ -37,6 +38,6 @@ DATA_MANAGEMENT_STYLE = """<style>
 .df-data-sample-facts > div { display:grid; gap:3px; padding:10px; border:1px solid #E2EAF5; border-radius:9px; background:#FBFDFF; }
 .df-data-sample-facts span { color:#8292A6; font-size:10px; }
 .df-data-sample-facts b { overflow-wrap:anywhere; color:#253B55; font-size:12px; }
-@media(max-width:1080px) { .df-data-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:700px) { .df-data-stats { grid-template-columns:repeat(2,minmax(0,1fr)); row-gap:10px; } .df-data-stat:nth-child(3) { border-left:0; } }
 @media(max-width:720px) { .df-data-stats { grid-template-columns:1fr 1fr; } .df-data-list-head,.df-data-list-row { grid-template-columns:minmax(0,1fr) 58px 60px; } .df-data-list-head span:nth-child(3),.df-data-list-row > span:nth-child(3) { display:none; } }
 </style>"""

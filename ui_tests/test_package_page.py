@@ -85,6 +85,7 @@ def test_review_entry_only_exposes_supported_nonempty_artifacts():
 
 def test_empty_workflow_state_shows_real_local_release(tmp_path, monkeypatch):
     from lib import workspace as ws
+    from lib.infrastructure.training_workflow import create_run
 
     monkeypatch.setattr(ws, "ROOT", tmp_path)
     monkeypatch.setattr(ws, "SEEDS_DIR", tmp_path / "data/seeds")
@@ -103,6 +104,9 @@ def test_empty_workflow_state_shows_real_local_release(tmp_path, monkeypatch):
         "status": "complete", "format": "chat", "created_at": "2026-09-23T00:00:00+00:00",
         "sha256": {"sft.jsonl": hashlib.sha256(data).hexdigest()},
     }), encoding="utf-8")
+    guide = source / "guide.txt"
+    guide.write_text("Disconnect power before checking wiring.", encoding="utf-8")
+    create_run(ws.out(workspace_id), sources=[guide], targets=["cpt"], name="Unfinished workflow")
 
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = workspace_id
@@ -111,12 +115,22 @@ def test_empty_workflow_state_shows_real_local_release(tmp_path, monkeypatch):
 
     assert not app.exception
     page = "\n".join(str(item.value) for item in app.get("html"))
-    assert "暂无新的工作流训练包" in page
+    assert any(item.value == "暂无新的工作流训练包" for item in app.info)
     assert "已有本地发布版本" in page
     assert "published-one" in page
     assert "准备第一个训练数据包" not in page
     assert any(str(folder.resolve()) in str(item.value) for item in app.code)
     assert any(item.label == "校验并下载文件" for item in app.download_button)
+    elements = list(app.main)
+    release_position = next(index for index, item in enumerate(elements)
+                            if item.type == "html" and "已有本地发布版本" in str(item.value))
+    notice_position = next(index for index, item in enumerate(elements)
+                           if item.type == "info" and item.value == "暂无新的工作流训练包")
+    assert release_position < notice_position
+    visible = re.sub(r"<style\b[^>]*>.*?</style>", "", page, flags=re.S)
+    assert not any(label in visible for label in ("支持的训练目标", "导出前检查", "最近工作流"))
+    app.button(key="package-empty-history").click().run()
+    assert not app.exception and app.session_state["nav"] == "任务管理"
 
 
 def test_post_bundle_check_rejects_changed_or_extra_files():

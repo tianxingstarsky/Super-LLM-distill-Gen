@@ -70,10 +70,11 @@ def _run_card_html(run: dict) -> tuple[str, str]:
         tags += f'<span>另有 {len(targets) - 3} 项</span>'
     if not tags:
         tags = '<span>未指定目标</span>'
-    moment = html.escape(_display_time(run.get("updated_at") or run.get("created_at")))
+    moment = _display_time(run.get("updated_at") or run.get("created_at"))
+    compact_moment = html.escape(moment.replace(" 北京时间", ""))
     heading = (f'<div class="df-task-card-top"><span class="df-task-status" data-status="{safe_status}">'
                f'<i>{STATUS_GLYPHS.get(status, "?")}</i>{html.escape(LABELS.get(status, status))}</span>'
-               f'<time>{moment}</time></div>')
+               f'<time title="{html.escape(moment, quote=True)}">{compact_moment}</time></div>')
     source_modes = {"document": "文档资料", "agent": "Agent 上下文", "brief": "开放需求"}
     source_label = source_modes.get(run.get("source_mode"), "来源未知")
     source_names = run.get("source_names", [])
@@ -198,6 +199,17 @@ def _show_quick_group(workspace_id: str, status_filter: str) -> None:
     st.session_state.pop(f"task-center-locate:{workspace_id}", None)
 
 
+def _quick_choice(workspace_id: str, key: str) -> None:
+    selected = st.session_state.get(key)
+    if selected == "group:attention":
+        _show_quick_group(workspace_id, "待处理")
+    elif selected == "group:active":
+        _show_quick_group(workspace_id, "未结束")
+    elif selected:
+        _switch_run(workspace_id, selected)
+    st.session_state[key] = None
+
+
 def _change_page(page_key: str, page: int) -> None:
     st.session_state[page_key] = page
 
@@ -245,46 +257,48 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         return None
     st.html(_summary_html(runs))
     attention, active = _quick_switch_runs(runs)
-    if attention[1] or active[1]:
-        language = st.session_state.get("ui_language", "zh")
-        heading = html.escape(translate("并行任务", language))
-        hint = html.escape(translate("直接切换正在运行或待处理的任务", language))
-        st.html(f'<div class="df-task-switch-head"><strong>{heading}</strong>'
-                f'<small>{hint}</small></div>')
-        groups = [("attention", "待处理", *attention), ("active", "未结束", *active)]
-        groups = [group for group in groups if group[3]]
-        columns = st.columns(len(groups), gap="small") if len(groups) > 1 else [st.container()]
-        for column, (kind, title, shortcuts, count) in zip(columns, groups):
-            with column, st.container(border=True, key=f"task_quick_group_{kind}_{workspace_id}"):
-                st.html(f'<div class="df-task-switch-group" data-kind="{kind}">'
-                        f'<strong>{html.escape(translate(title, language))}</strong>'
-                        f'<span>{count}</span></div>')
-                for run in shortcuts:
-                    run_id = str(run["id"])
-                    name = _button_text(run.get("name") or "未命名任务")
-                    status = translate(LABELS.get(str(run.get("status", "")), "待处理"), language)
-                    done, total = _stage_progress(run)
-                    st.button(UntranslatedText(f"{name}  ·  {status}  {done}/{total}"),
-                              key=f"task-quick:{workspace_id}:{run_id}",
-                              on_click=_switch_run, args=(workspace_id, run_id),
-                              use_container_width=True)
-                if count > len(shortcuts):
-                    label = "查看全部待处理任务" if kind == "attention" else "查看全部未结束任务"
-                    st.button(translate(label, language), key=f"task-quick-all:{workspace_id}:{kind}",
-                              on_click=_show_quick_group, args=(workspace_id, title),
-                              use_container_width=True)
-    focus_column, create_column = st.columns([1.9, 1], gap="small", vertical_alignment="center")
+    toolbar = st.columns([1.4, 1.6, 1] if attention[1] or active[1] else [2.5, 1],
+                         gap="small", vertical_alignment="center")
+    focus_column, create_column = toolbar[0], toolbar[-1]
     with focus_column:
         focus = st.toggle("放大工作流视图", key=f"task-center-focus:{workspace_id}",
                           help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
+    if len(toolbar) == 3:
+        language = st.session_state.get("ui_language", "zh")
+        shortcuts = {str(run["id"]): run for run in [*attention[0], *active[0]]}
+        options = [None, *shortcuts]
+        if attention[1] > len(attention[0]):
+            options.append("group:attention")
+        if active[1] > len(active[0]):
+            options.append("group:active")
+
+        def quick_label(identifier):
+            if identifier is None:
+                return translate("选择任务", language)
+            if identifier in {"group:attention", "group:active"}:
+                return translate("查看全部待处理任务" if identifier == "group:attention"
+                                 else "查看全部未结束任务", language)
+            run = shortcuts[identifier]
+            name = str(run.get("name") or "未命名任务").replace("\r", " ").replace("\n", " ")
+            status = translate(LABELS.get(str(run.get("status", "")), "待处理"), language)
+            return UntranslatedText(f"{name} · {status}")
+
+        quick_key = f"task-quick-select:{workspace_id}"
+        if st.session_state.get(quick_key) not in options:
+            st.session_state[quick_key] = None
+        with toolbar[1]:
+            st.selectbox(translate("并行任务", language), options, key=quick_key, format_func=quick_label,
+                         label_visibility="collapsed", on_change=_quick_choice,
+                         args=(workspace_id, quick_key),
+                         help="直接切换正在运行或待处理的任务")
     with create_column:
         st.button("新建数据工作流", on_click=on_new_workflow,
                   key=f"task-center-new:{workspace_id}", use_container_width=True)
     if focus:
         left, right = st.popover("选择任务"), st.container()
     else:
-        left, right = st.columns([1.03, 2.7], gap="large")
-    with left:
+        left, right = st.columns([1.15, 2.7], gap="medium")
+    with left, st.container(key=f"task-center-list-{workspace_id}"):
         st.html('<div class="df-task-list-head"><strong>自动工作流</strong>'
                 f'<small>共 {len(runs)} 条</small></div>')
         status_filter = st.segmented_control("筛选任务", FILTERS, default="全部",
@@ -346,7 +360,6 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
     with right:
         if selected_id:
             selected_run = next(run for run in visible if run["id"] == selected_id)
-            st.html(_recent_events_html(selected_run))
             if ("agent" in selected_run.get("targets", []) and
                     selected_run.get("status") in {"completed", "needs_attention"}):
                 review_key = f"task-center-agent-review:{workspace_id}:{selected_id}"

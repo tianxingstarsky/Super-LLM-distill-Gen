@@ -5,75 +5,57 @@ from __future__ import annotations
 def task_management_styles() -> str:
     return """
 <style>
-.df-task-summary {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:4px 0 19px}
-.df-task-summary-item {position:relative;min-height:105px;padding:17px 18px 14px 58px;
-  border:1px solid #e0e9f5;border-radius:14px;background:linear-gradient(145deg,#fff,#f8fbff);
-  box-shadow:0 5px 18px rgba(31,85,148,.035)}
-.df-task-summary-item i {position:absolute;left:16px;top:17px;display:grid;place-items:center;width:30px;height:30px;
-  border-radius:9px;background:#e9f3ff;color:#1768d5;font-size:15px;font-style:normal}
-.df-task-summary-item strong {display:block;color:#17385f;font-size:27px;line-height:1.05;letter-spacing:-.04em}
-.df-task-summary-item span {display:block;color:#6c7f99;font-size:12px;margin-top:10px}
-.df-task-summary-item[data-kind="completed"] i {background:#e1f7ed;color:#078b63}
-.df-task-summary-item[data-kind="attention"] i {background:#fff0e8;color:#d46b35}
-.df-task-summary-item[data-kind="processing"] i {background:#e8f1ff;color:#1768d5}
-.df-task-switch-head {display:flex;align-items:baseline;justify-content:space-between;gap:12px;
-  margin:-4px 0 7px;color:#234166}
-.df-task-switch-head strong {font-size:13px}
-.df-task-switch-head small {font-size:11px;color:#8191a8}
-[class*="st-key-task_quick_group_"] {padding:9px 12px 6px;margin-bottom:12px;
-  background:linear-gradient(130deg,#f8fbff,#fff 75%)}
-.df-task-switch-group {display:flex;align-items:center;gap:7px;margin-bottom:6px;
-  color:#355377;font-size:12px}
-.df-task-switch-group span {min-width:22px;padding:1px 6px;border-radius:100px;
-  background:#e8f2ff;color:#1769c7;text-align:center;font-size:10px;font-weight:700}
-.df-task-switch-group[data-kind="attention"] span {background:#fff0e7;color:#b86131}
-[class*="st-key-task_quick_group_"] .stButton button {justify-content:flex-start;min-height:31px;
-  margin-bottom:3px;padding:5px 10px;border-color:#e0e9f5;background:#fff;color:#345475;text-align:left}
-[class*="st-key-task_quick_group_"] .stButton button:hover {border-color:#80b1ee;background:#f3f8ff;color:#155da9}
-[class*="st-key-task_quick_group_"] .stButton button p {overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;font-size:11px}
+.df-task-summary {display:flex;align-items:center;flex-wrap:wrap;gap:8px 0;
+  margin:0 0 10px;padding:8px 0;border-bottom:1px solid #dce6f1}
+.df-task-summary-item {display:inline-flex;align-items:baseline;gap:7px;padding:0 22px;
+  border-left:1px solid #e1e8f1;line-height:1.4}
+.df-task-summary-item:first-child {padding-left:0;border-left:0}
+.df-task-summary-item i {display:none}
+.df-task-summary-item strong {color:#23425f;font-size:17px;font-weight:700}
+.df-task-summary-item span {color:#72859b;font-size:12px}
+.df-task-summary-item[data-kind="completed"] strong {color:#087d5c}
+.df-task-summary-item[data-kind="attention"] strong {color:#b86131}
+.df-task-summary-item[data-kind="processing"] strong {color:#1768d5}
 .df-task-list-head {display:flex;align-items:center;justify-content:space-between;gap:8px;margin:3px 0 11px}
 .df-task-list-head strong {color:#1c304d;font-size:16px;letter-spacing:.01em}
 .df-task-list-head small {color:#8291a7;font-size:12px;text-align:right}
 [class*="st-key-task-center-filter"] {max-width:100%}
 [class*="st-key-task-center-filter"] [role="radiogroup"] {max-width:100%;box-sizing:border-box}
 [class*="st-key-task-center-filter"] [role="radio"] {min-width:0;padding:4px 7px;font-size:11px}
-[class*="st-key-task_card_"] {padding:11px 13px 12px;margin:0 0 9px;border:1px solid #dfebf7;
-  border-radius:13px;background:#fff;box-shadow:0 3px 12px rgba(27,80,151,.045);
-  transition:border-color .18s ease,box-shadow .18s ease,background .18s ease}
-[class*="st-key-task_card_"]:hover {border-color:#8ebaf2;box-shadow:0 6px 17px rgba(36,112,208,.11)}
-[class*="st-key-task_card_selected_"] {border-color:#3d8ce8;background:linear-gradient(115deg,#f0f7ff,#fff 80%);
-  box-shadow:0 0 0 2px rgba(49,124,225,.11)}
+[class*="st-key-task_card_"] {padding:8px 10px;margin:0;border:0;border-bottom:1px solid #e1e9f3;
+  border-left:3px solid transparent;border-radius:0;background:transparent;box-shadow:none;
+  transition:background .15s ease}
+[class*="st-key-task_card_"]:hover {background:#f5f8fc}
+[class*="st-key-task_card_selected_"] {border-left-color:#3d8ce8;background:#edf5ff;box-shadow:none}
 [class*="st-key-task_card_completed_"] {border-left:3px solid #15a97e}
 [class*="st-key-task_card_running_"] {border-left:3px solid #277fe4}
 [class*="st-key-task_card_failed_"], [class*="st-key-task_card_needs_attention_"] {border-left:3px solid #e4864b}
 .df-task-card-top,.df-task-card-progress {display:flex;align-items:center;justify-content:space-between;gap:7px}
 .df-task-card-top {flex-wrap:wrap}
-.df-task-card-top time,.df-task-card-progress {color:#8392a7;font-size:11px}
+.df-task-card-top time,.df-task-card-progress {color:#8392a7;font-size:10px}
 .df-task-status {display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:6px;
   background:#eaf3ff;color:#256ab9;font-size:11px;font-weight:700;line-height:1;white-space:nowrap;flex-shrink:0}
 .df-task-status i {font-size:12px;font-style:normal}
 .df-task-status[data-status="completed"] {background:#e2f7ee;color:#087d5c}
 .df-task-status[data-status="failed"],.df-task-status[data-status="needs_attention"] {background:#fff0e7;color:#b86131}
 .df-task-status[data-status="cancelled"] {background:#f0f2f6;color:#627184}
-[class*="st-key-task_card_"] .stButton button {display:block;width:100%;min-height:34px;padding:6px 0 4px;
+[class*="st-key-task_card_"] .stButton button {display:block;width:100%;min-height:29px;padding:4px 0 2px;
   border:0;border-radius:0;background:transparent;text-align:left;justify-content:flex-start;
   color:#20334f;box-shadow:none}
 [class*="st-key-task_card_"] .stButton button > div,
 [class*="st-key-task_card_"] .stButton button > div > span {justify-content:flex-start;width:100%}
 [class*="st-key-task_card_"] .stButton button:hover,
 [class*="st-key-task_card_"] .stButton button:focus {border:0;background:transparent;color:#145dad;box-shadow:none}
-[class*="st-key-task_card_"] .stButton button p {font-size:13px;line-height:1.4;font-weight:650;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.df-task-card-targets {display:flex;flex-wrap:wrap;gap:4px;max-height:41px;overflow:hidden;margin:1px 0 9px}
+[class*="st-key-task_card_"] .stButton button p {font-size:13px;line-height:1.4;font-weight:650}
+.df-task-card-targets {display:flex;flex-wrap:wrap;gap:4px;margin:0 0 4px}
 .df-task-card-targets span {display:inline-block;padding:2px 5px;border-radius:4px;
   background:#eff5ff;color:#5b7191;font-size:10px;line-height:1.3}
-.df-task-card-source {display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 8px;
+.df-task-card-source {display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 4px;
   color:#71839b;font-size:11px}
 .df-task-card-source b {flex:0 0 auto;color:#4c6c93;font-size:10px;font-weight:600}
 .df-task-card-source span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .df-task-card-progress b {color:#315a8e;font-size:11px}
-.df-task-meter {height:5px;margin-top:6px;border-radius:100px;background:#e8eff8;overflow:hidden}
+.df-task-meter {height:3px;margin-top:4px;border-radius:2px;background:#e8eff8;overflow:hidden}
 .df-task-meter i {display:block;height:100%;border-radius:100px;background:linear-gradient(90deg,#26a7db,#2469dd)}
 [class*="st-key-task_card_completed_"] .df-task-meter i {background:linear-gradient(90deg,#34c9a0,#139967)}
 .df-task-activity {display:grid;grid-template-columns:90px minmax(0,1fr);align-items:start;gap:15px;
@@ -107,7 +89,10 @@ def task_management_styles() -> str:
   background:#eaf2ff;color:#1769e0;font-size:11px}
 .df-task-empty-steps strong {display:block;color:#233951;font-size:13px}
 .df-task-empty-steps small {display:block;margin-top:3px;color:#75859a;font-size:12px}
-@media(max-width:850px) {.df-task-summary {grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(min-width:1100px) {
+  [data-testid="stColumn"]:has([class*="st-key-task-center-list-"]) {min-width:270px}
+}
+@media(max-width:850px) {.df-task-summary-item {padding:0 12px}
   .df-task-activity {grid-template-columns:1fr;gap:7px}.df-task-activity-list {width:100%}}
 </style>
 """

@@ -68,7 +68,8 @@ def test_selected_goals_and_sources_survive_navigation_and_missing_file():
     assert ui.multiselect(key=targets).value == ['orpo', 'rlaif']
     ui.session_state['fixture-remove-source'] = True
     ui.run()
-    assert ui.multiselect(key=sources).value == []
+    assert not any(item.key == sources for item in ui.multiselect)
+    assert ui.session_state['workflow-form-draft:fixture'][sources] == []
     assert not ui.exception
     ui.number_input(key='workflow-count:fixture').set_value(50000).run()
     ui.number_input(key='workflow-batch-size:fixture').set_value(250).run()

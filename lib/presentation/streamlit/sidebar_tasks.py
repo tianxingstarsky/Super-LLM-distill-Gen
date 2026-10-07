@@ -87,7 +87,7 @@ def render_sidebar_tasks(application, workspace_id: str) -> None:
     if not shortcuts:
         return
     language = st.session_state.get("ui_language", "zh")
-    with st.sidebar.container(border=True):
+    with st.sidebar.container(border=False, key="sidebar-recent-work", gap="small"):
         heading = ("进行中与待处理" if any(run.get("status") in
                    {"running", "queued", "needs_attention", "failed"} for run in shortcuts)
                    else "最近任务")
@@ -96,11 +96,15 @@ def render_sidebar_tasks(application, workspace_id: str) -> None:
             run_id = str(candidate["id"])
             status = translate(STATUS_LABELS.get(str(candidate.get("status")), "需检查"), language)
             name = str(candidate.get("name") or run_id).replace("\r", " ").replace("\n", " ")
-            st.html('<div class="df-sidebar-recent-task"><strong data-user-content>'
-                    + html.escape(name) + '</strong><small>' + html.escape(status)
-                    + '</small></div>')
-            st.button("查看 →", key=f"sidebar-task:{workspace_id}:{run_id}",
-                      on_click=_open_task, args=(workspace_id, run_id), width="stretch")
+            with st.container(horizontal=True, wrap=False, vertical_alignment="center", gap="small",
+                              key=f"sidebar-task-row-{workspace_id}-{run_id}"):
+                st.html('<div class="df-sidebar-recent-task"><strong data-user-content title="'
+                        + html.escape(name, quote=True) + '">' + html.escape(name)
+                        + '</strong><small data-status="'
+                        + html.escape(str(candidate.get("status", "")), quote=True) + '">'
+                        + html.escape(status) + '</small></div>')
+                st.button("查看 →", key=f"sidebar-task:{workspace_id}:{run_id}",
+                          on_click=_open_task, args=(workspace_id, run_id), width="content")
         remaining = len({str(run.get("id")) for run in runs if run.get("id")}) - len(shortcuts)
         if remaining > 0:
             st.caption(translate("另有 {count} 条任务可在任务管理中查看", language).format(count=remaining))

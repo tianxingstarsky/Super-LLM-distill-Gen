@@ -129,6 +129,10 @@ def _go_to_workflow() -> None:
     st.session_state["nav"] = "自动工作流"
 
 
+def _go_to_task_manager() -> None:
+    st.session_state["nav"] = "任务管理"
+
+
 _REVIEW_MODES = {
     "sft": ("SFT 数据调整", "sft-review-run"),
     "dpo": ("DPO 偏好优化", "preference-review-run"),
@@ -153,49 +157,19 @@ def _go_to_review(run_id: str, target: str) -> None:
     st.session_state["nav"] = "人工审核"
 
 
-def _render_empty(runs: list[dict], has_releases: bool) -> None:
-    left, right = st.columns([1.8, 1], gap="large")
-    with left:
-        with st.container(border=True):
-            st.html(_heading("⇩", "暂无新的工作流训练包", "完成的自动工作流会在这里列出可验证产物"))
-            st.html(
-                '<div class="df-pack-empty"><span>▣</span>'
-                '<strong>当前没有可打包的完成任务</strong>'
-                '<p>' + ('已有发布版本可在下方查看、校验和下载。' if has_releases else '')
-                + '上传文档、导入 Agent 上下文或描述开放需求，可生成新的训练数据包。</p>'
-                '</div>'
-            )
+def _render_empty(runs: list[dict]) -> None:
+    notice, actions = st.columns([2.1, 1.4], gap="small", vertical_alignment="center")
+    with notice:
+        st.info("暂无新的工作流训练包")
+    with actions:
+        workflow, history = st.columns(2, gap="small") if runs else (st.container(), None)
+        with workflow:
             st.button("前往自动工作流", type="primary", on_click=_go_to_workflow,
-                      key="package-empty-workflow")
-        with st.container(border=True):
-            st.html(_heading("◈", "支持的训练目标", "同一批来源可产出多类数据"))
-            st.html(
-                '<div class="df-pack-targets">'
-                '<div><b>CPT</b><strong>持续预训练</strong><small>文档清洗和语料整理</small></div>'
-                '<div><b>SFT</b><strong>指令与对话</strong><small>问答和多轮上下文</small></div>'
-                '<div><b>DPO</b><strong>偏好优化</strong><small>优选与对照回答</small></div>'
-                '<div><b>AGENT</b><strong>工具轨迹</strong><small>重放、剪枝与失败证据</small></div>'
-                '</div>'
-            )
-    with right:
-        with st.container(border=True):
-            st.html(_heading("✓", "导出前检查", "每个 ZIP 都附带校验清单"))
-            st.html(
-                '<div class="df-pack-steps">'
-                '<div><b>01</b><span><strong>确认任务完成</strong><small>仅展示完成或需检查的任务</small></span></div>'
-                '<div><b>02</b><span><strong>核对实际文件</strong><small>逐个匹配 SHA-256 指纹</small></span></div>'
-                '<div><b>03</b><span><strong>生成完整 ZIP</strong><small>包含训练、质量与来源证据</small></span></div>'
-                '</div>'
-            )
-            st.caption("自动检查产物仍需按用途进行人工复核。")
-    if runs:
-        with st.container(border=True):
-            st.html(_heading("◷", "最近工作流", "完成后可在这里校验并导出"))
-            for row in runs[:5]:
-                label = _STATUS.get(str(row.get("status")), ("未知", "muted"))[0]
-                st.html('<div class="df-pack-recent"><strong data-user-content>' + _safe(row.get("name", "未命名任务"))
-                        + '</strong><span>' + _safe(label) + '</span><small>'
-                        + _safe(_stamp(row.get("updated_at"))) + '</small></div>')
+                      key="package-empty-workflow", width="stretch")
+        if history is not None:
+            with history:
+                st.button("前往工作管理", on_click=_go_to_task_manager,
+                          key="package-empty-history", width="stretch")
 
 
 def _render_releases(application: WorkflowApplication, releases: list[dict]) -> None:
@@ -420,8 +394,8 @@ def render_package_page(application: WorkflowApplication) -> None:
     releases = application.list_releases()
     ready = [row for row in runs if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
     if not ready:
-        _render_empty(runs, any(row["verified"] for row in releases))
         _render_releases(application, releases)
+        _render_empty(runs)
         return
 
     labels = {row["id"]: row for row in ready}

@@ -2,12 +2,120 @@
 from __future__ import annotations
 
 import json
+from html.parser import HTMLParser
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
 from lib.infrastructure.agent_review_driver import FilesystemAgentReviewDriver
 from lib.infrastructure.training_workflow import Workflow, create_run
+
+
+class _VisiblePreview(HTMLParser):
+    """Inspect content hidden by closed disclosures separately from source HTML."""
+    def __init__(self, markup):
+        super().__init__()
+        self.disclosures = []
+        self.text = []
+        self.viewports = []
+        self.visible_tool_results = 0
+        self.feed(markup)
+
+    def handle_starttag(self, tag, attributes):
+        attributes = dict(attributes)
+        if tag == 'details':
+            self.disclosures.append('open' in attributes)
+        if attributes.get('tabindex') == '0' and attributes.get('style'):
+            self.viewports.append(attributes['style'])
+        if 'bub-tool' in attributes.get('class', '').split() and all(self.disclosures):
+            self.visible_tool_results += 1
+
+    def handle_endtag(self, tag):
+        if tag == 'details':
+            self.disclosures.pop()
+
+    def handle_data(self, content):
+        if all(self.disclosures):
+            self.text.append(content)
+
+
+def _parallel_run(tmp_path):
+    calls = [{'id': f'calc-{number}', 'type': 'function', 'function': {
+        'name': 'calculator', 'arguments': json.dumps({'expression': f'({number}+2)-{number}'})}}
+        for number in range(1, 15)]
+    messages = [{'role': 'user', 'content': '逐项核对所有计算值'},
+                {'role': 'assistant', 'content': '', 'tool_calls': calls,
+                 'reasoning_content': '原始推理：逐项核对来源记录，保留中文内容。'},
+                *[{'role': 'tool', 'tool_call_id': call['id'], 'content': '2'} for call in calls],
+                {'role': 'assistant', 'content': '2'}]
+    source = tmp_path / 'parallel.jsonl'
+    source.write_text(json.dumps({'messages': messages}, ensure_ascii=False) + '\n', encoding='utf-8')
+    output = tmp_path / 'output'
+    run_id = create_run(output, sources=[source], targets=['agent'])
+    assert Workflow(output, run_id, tmp_path).execute()['status'] == 'completed'
+    assert FilesystemAgentReviewDriver(output).queue(run_id, limit=1)['counts']['pending'] == 1
+    return output, run_id
+
+
+def test_review_reveals_parallel_tool_calls_results_and_recorded_reasoning_without_expanding(tmp_path):
+    output, run_id = _parallel_run(tmp_path)
+    ui = _ui(output, run_id)
+    assert not ui.exception
+    markup = ''.join(item.proto.body for item in ui.get('html'))
+    preview = _VisiblePreview(markup)
+    visible = ''.join(preview.text)
+    assert '原始推理：逐项核对来源记录，保留中文内容。' in visible
+    for number in range(1, 15):
+        assert f'({number}+2)-{number}' in visible
+        assert f'calc-{number}' in visible
+    assert preview.visible_tool_results == 14
+    assert any('max-height:' in viewport and 'overflow:auto' in viewport
+               for viewport in preview.viewports)
+
+
+def test_regular_preview_keeps_compact_disclosures_while_review_reveals_same_original_content(tmp_path):
+    from lib.presentation.streamlit.artifact_preview import render_training_sample
+
+    output, run_id = _parallel_run(tmp_path)
+    item = FilesystemAgentReviewDriver(output).queue(run_id, limit=1)['items'][0]
+    row = {**item['native'], 'verification': item['record']['verification']}
+    ordinary = render_training_sample('agent', row)
+    review = render_training_sample('agent', row, expand_trace=True)
+    assert '(14+2)-14' not in ''.join(_VisiblePreview(ordinary).text)
+    assert '原始推理：逐项核对来源记录，保留中文内容。' not in ''.join(_VisiblePreview(ordinary).text)
+    assert '(14+2)-14' in ''.join(_VisiblePreview(review).text)
+    assert '原始推理：逐项核对来源记录，保留中文内容。' in ''.join(_VisiblePreview(review).text)
+    assert '(14+2)-14' in ordinary and '(14+2)-14' in review
+    assert FilesystemAgentReviewDriver(output).queue(run_id, limit=1)['items'][0]['native'] == item['native']
+
+
+def test_expanded_review_still_renders_only_selected_bounded_trace_window():
+    script = '''
+import streamlit as st
+from lib.presentation.streamlit.sample_preview import render_sample_preview
+messages=[]
+for index in range(100):
+    messages.extend([{'role':'user','content':f'TASK_{index}_END'},
+                     {'role':'assistant','content':'', 'reasoning_content':f'THOUGHT_{index}_END',
+                      'tool_calls':[{'id':f'call-{index}', 'function':{'name':'calculator','arguments':'{}'}}]},
+                     {'role':'tool','tool_call_id':f'call-{index}','content':f'OBSERVATION_{index}_END'},
+                     {'role':'assistant','content':f'ANSWER_{index}_END'}])
+render_sample_preview('agent', {'messages':messages}, key='review', expand_trace=True)
+st.session_state['original_count']=len(messages)
+'''
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    first = ''.join(item.proto.body for item in ui.get('html'))
+    assert 'THOUGHT_0_END' in ''.join(_VisiblePreview(first).text)
+    assert 'OBSERVATION_0_END' in ''.join(_VisiblePreview(first).text)
+    assert 'TASK_99_END' not in first
+    ui.button(key='review:message-page:last').click().run()
+    assert not ui.exception
+    last = ''.join(item.proto.body for item in ui.get('html'))
+    assert 'THOUGHT_99_END' in ''.join(_VisiblePreview(last).text)
+    assert 'OBSERVATION_99_END' in ''.join(_VisiblePreview(last).text)
+    assert 'TASK_0_END' not in last
+    assert ui.session_state['original_count'] == 400
 
 
 def test_agent_review_english_labels_preserve_source_and_reviewer_text():

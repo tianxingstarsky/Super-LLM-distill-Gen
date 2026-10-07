@@ -405,7 +405,7 @@ def test_home_empty_workspace_shows_honest_next_steps():
     assert "暂无最近任务" in markup
     assert "工作流总数</small><strong>0" in markup
     assert "本地发布版本 <b>0</b>" in markup
-    assert any(button.label == "开始配置 →" for button in view.button)
+    assert any(button.label == "文档资料" for button in view.button)
     next(button for button in view.button if button.key == "overview:开放需求").click().run()
     assert not view.exception
     assert view.session_state["nav"] == "自动工作流"
@@ -609,7 +609,7 @@ def test_review_management_identity_and_denial_paths(tmp_path):
 
 def test_home_upload_entry_opens_generation_without_folder_dialog():
     view = app()
-    next(w for w in view.button if w.label == "上传资料 →").click().run()
+    view.button(key="overview:文档资料").click().run()
     assert not view.exception
     assert view.session_state["nav"] == "自动工作流"
     assert any(w.label == "上传文档 / 上下文记录" for w in view.get("file_uploader"))

@@ -37,9 +37,9 @@ _TARGET_TITLES = {
 }
 
 
-def render_message_sequence(messages):
+def render_message_sequence(messages, *, review_mode: bool = False):
     """Compact long messages without dropping any recorded content."""
-    return _render_message_sequence(messages, collapse_after=1600)
+    return _render_message_sequence(messages, collapse_after=1600, review_mode=review_mode)
 
 
 def _safe(value: Any) -> str:
@@ -145,12 +145,12 @@ def _dialogue_flow(messages: list[dict], *, turn_offset: int = 0) -> str:
 def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
                 verified_call_ids: set[str] | None = None,
                 call_evidence: dict[str, dict] | None = None,
-                step_offset: int = 0) -> str:
+                step_offset: int = 0, expand_steps: bool = False) -> str:
     """Keep tool-call and matching result adjacent in a readable step timeline."""
     if not messages:
         return '<div class="df-artifact-muted">暂无轨迹消息</div>'
     steps = []
-    compact = len(messages) > 12
+    compact = not expand_steps and len(messages) > 12
     id_counts = Counter(call_id for message in messages if message.get("role") == "assistant"
                         for call_id in _tool_call_ids(message))
     for index, end in trace_ranges(messages):
@@ -215,7 +215,7 @@ def _trace_flow(messages: list[dict], *, failure_step: int | None = None,
             f'<b>{label}</b><strong{title_attributes}>{_safe(title)}</strong>'
             f'<small>{_safe(status)}</small></{head_tag}>'
             '<div class="df-artifact-trace-body"><div class="bubbles">'
-            + render_message_sequence(messages[index:end]) + '</div>'
+            + render_message_sequence(messages[index:end], review_mode=expand_steps) + '</div>'
             + _step_evidence(call_ids, returned_ids, complete_ids,
                              failed or recorded_error or invalid_error_flag,
                              verified_call_ids, call_evidence)
@@ -429,7 +429,8 @@ def _text(label: str, value: Any, modifier: str = "") -> str:
 
 
 def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
-                           turn_offset: int = 0, step_offset: int = 0, response_offset: int = 0) -> str:
+                           turn_offset: int = 0, step_offset: int = 0, response_offset: int = 0,
+                           expand_trace: bool = False) -> str:
     """Project one training record into escaped, comparison-friendly HTML."""
     target = str(target).lower()
     title = _TARGET_TITLES.get(target, "训练样本")
@@ -465,7 +466,7 @@ def render_training_sample(target: str, row: dict, *, message_offset: int = 0,
                     body += _text("执行证据", evidence)
             body += _trace_flow(messages, failure_step=failure_step, verified_call_ids=verified_ids,
                                 call_evidence=_call_evidence_by_id(verification),
-                                step_offset=step_offset)
+                                step_offset=step_offset, expand_steps=expand_trace)
         else:
             body = meta + _dialogue_flow(messages, turn_offset=turn_offset)
             if target == "multiturn":

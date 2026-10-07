@@ -48,8 +48,8 @@ SETTINGS_STYLE = """<style>
 .df-settings-footnote {margin:15px 0 3px;padding:12px 14px;border-left:3px solid #4a93e7;
   border-radius:0 8px 8px 0;background:#f4f9ff;color:#59718e;font-size:11px;line-height:1.55}
 .df-settings-pref-overview {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:8px 0 14px}
-.df-settings-pref-overview > div {display:grid;gap:5px;min-height:104px;padding:15px 16px;border:1px solid #dce7f6;
-  border-radius:11px;background:linear-gradient(140deg,#fff,#f7fbff);box-shadow:0 3px 12px rgba(30,79,145,.035)}
+.df-settings-pref-overview > div {display:grid;align-content:start;min-width:0;gap:4px;padding:10px 12px;border:1px solid #dce7f6;
+  border-radius:9px;background:#fff;overflow-wrap:anywhere}
 .df-settings-pref-overview span {color:#71849d;font-size:11px}
 .df-settings-pref-overview strong {color:#1c3a61;font-size:22px;line-height:1.1}
 .df-settings-pref-overview small {color:#8797a9;font-size:11px;line-height:1.4}

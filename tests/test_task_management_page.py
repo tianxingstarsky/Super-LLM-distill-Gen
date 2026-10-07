@@ -44,12 +44,12 @@ with patch.object(page, "render_run", lambda application, run_id, begin, embedde
 """
     ui = AppTest.from_string(script, default_timeout=30).run()
     assert not ui.exception
-    show_all = ui.button(key="task-quick-all:fixture:active")
-    assert show_all.label == "View all unfinished tasks"
-    assert len([button for button in ui.button if button.key.startswith("task-quick:fixture:")]) == 3
+    switcher = ui.selectbox(key="task-quick-select:fixture")
+    assert "View all unfinished tasks" in switcher.options
+    assert len([option for option in switcher.options if option.startswith("Task ")]) == 3
     ui.toggle(key="task-center-focus:fixture").set_value(True).run()
     ui.text_input(key="task-center-search:fixture").set_value("nothing matches").run()
-    ui.button(key="task-quick-all:fixture:active").click().run()
+    ui.selectbox(key="task-quick-select:fixture").set_value("group:active").run()
     assert not ui.exception
     assert ui.session_state["task-center-filter:fixture"] == "未结束"
     assert ui.session_state["task-center-search:fixture"] == ""
@@ -84,12 +84,12 @@ with patch.object(page, "render_run", lambda application, run_id, begin, embedde
 """
     ui = AppTest.from_string(script, default_timeout=30).run()
     assert not ui.exception
-    assert ui.button(key="task-quick:fixture:old-running")
+    assert any("Older active request" in option for option in ui.selectbox(key="task-quick-select:fixture").options)
     ui.segmented_control(key="task-center-filter:fixture").set_value("已完成").run()
     ui.text_input(key="task-center-search:fixture").set_value("Finished").run()
     assert ui.session_state["task-center-run:fixture"] != "old-running"
 
-    ui.button(key="task-quick:fixture:old-running").click().run()
+    ui.selectbox(key="task-quick-select:fixture").set_value("old-running").run()
     assert not ui.exception
     assert ui.session_state["task-center-filter:fixture"] == "全部"
     assert ui.session_state["task-center-search:fixture"] == ""
@@ -161,11 +161,11 @@ with patch.object(page, "render_run", lambda application, run_id, begin, embedde
 """
     ui = AppTest.from_string(script, default_timeout=30).run()
     assert not ui.exception
-    assert ui.button(key="task-quick:alpha:alpha-run")
+    assert ui.selectbox(key="task-quick-select:alpha")
     ui.selectbox(key="ws").select("beta").run()
     assert not ui.exception
-    assert ui.button(key="task-quick:beta:beta-run")
-    assert not [button for button in ui.button if button.key.startswith("task-quick:alpha:")]
+    assert ui.selectbox(key="task-quick-select:beta")
+    assert not [widget for widget in ui.selectbox if widget.key.startswith("task-quick-select:alpha")]
     assert ui.session_state["task-center-run:beta"] == "beta-run"
     ui.button(key="stale-shortcut").click().run()
     assert not ui.exception
@@ -197,8 +197,7 @@ with patch.object(page, "render_run", lambda application, run_id, begin, embedde
 """
     ui = AppTest.from_string(script, default_timeout=30).run()
     assert not ui.exception
-    markup = "".join(item.proto.body for item in ui.get("html"))
-    assert "Concurrent tasks" in markup and "Unfinished" in markup
-    shortcut = ui.button(key="task-quick:fixture:one")
-    assert "客户任务 Keep 原文" in shortcut.label
-    assert "Running" in shortcut.label
+    shortcut = ui.selectbox(key="task-quick-select:fixture")
+    assert shortcut.label == "Concurrent tasks"
+    assert any("客户任务 Keep 原文" in option and "Running" in option for option in shortcut.options)
+    assert not [button for button in ui.button if button.key.startswith("task-quick:")]
