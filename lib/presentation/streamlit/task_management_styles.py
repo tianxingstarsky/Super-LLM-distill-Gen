@@ -48,9 +48,10 @@ def task_management_styles() -> str:
 [class*="st-key-task_card_running_"] {border-left:3px solid #277fe4}
 [class*="st-key-task_card_failed_"], [class*="st-key-task_card_needs_attention_"] {border-left:3px solid #e4864b}
 .df-task-card-top,.df-task-card-progress {display:flex;align-items:center;justify-content:space-between;gap:7px}
+.df-task-card-top {flex-wrap:wrap}
 .df-task-card-top time,.df-task-card-progress {color:#8392a7;font-size:11px}
 .df-task-status {display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:6px;
-  background:#eaf3ff;color:#256ab9;font-size:11px;font-weight:700;line-height:1}
+  background:#eaf3ff;color:#256ab9;font-size:11px;font-weight:700;line-height:1;white-space:nowrap;flex-shrink:0}
 .df-task-status i {font-size:12px;font-style:normal}
 .df-task-status[data-status="completed"] {background:#e2f7ee;color:#087d5c}
 .df-task-status[data-status="failed"],.df-task-status[data-status="needs_attention"] {background:#fff0e7;color:#b86131}
