@@ -2,9 +2,9 @@
 
 DATA_MANAGEMENT_STYLE = """<style>
 .df-data-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; padding:12px 0; margin:0; border:1px solid #DFE8F5; border-radius:10px; background:#fff; }
-.df-data-stat { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:5px 10px; min-width:0; padding:0 14px; border-left:1px solid #E8EEF6; }
+.df-data-stat { display:grid; grid-template-columns:26px minmax(0,1fr) auto; align-items:center; gap:9px; min-width:0; padding:0 14px; border-left:1px solid #E8EEF6; }
 .df-data-stat:first-child { border-left:0; }
-.df-data-stat > b { display:none; }
+.df-data-stat > b { display:grid; place-items:center; width:26px; height:26px; border-radius:7px; background:#EAF2FF; color:#1769D2; font-size:14px; line-height:1; }
 .df-data-stat:nth-child(2) > b { background:#E9F7F0; color:#16805C; }
 .df-data-stat:nth-child(3) > b { background:#F1ECFC; color:#7350C8; }
 .df-data-stat:nth-child(4) > b { background:#FFF2E7; color:#B66B27; }

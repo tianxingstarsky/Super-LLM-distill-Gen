@@ -9,13 +9,14 @@ import streamlit as st
 _HERO_CUBES = '<i><b></b><em></em><span></span></i>' * 3
 
 
-def page_header(title: str, description: str, tag: str = "") -> None:
+def page_header(title: str, description: str, tag: str = "", *, variant: str = "standard") -> None:
     """Render the common page masthead used across the primary workspaces."""
     # Keep a semantic Streamlit title for navigation and screen-reader/test support;
     # console_theme hides this framework heading and shows the richer masthead below.
     st.title(title)
+    hero_class = "df-page-hero df-page-hero--hub" if variant == "hub" else "df-page-hero"
     st.html(
-        '<section class="df-page-hero">'
+        f'<section class="{hero_class}">'
         '<div class="df-page-copy">'
         f'<h1>{html.escape(title)}</h1>'
         f'<p>{html.escape(description)}</p>'

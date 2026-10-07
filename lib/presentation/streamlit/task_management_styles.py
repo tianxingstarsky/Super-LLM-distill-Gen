@@ -6,11 +6,15 @@ def task_management_styles() -> str:
     return """
 <style>
 .df-task-summary {display:flex;align-items:center;flex-wrap:wrap;gap:8px 0;
-  margin:0 0 10px;padding:8px 0;border-bottom:1px solid #dce6f1}
-.df-task-summary-item {display:inline-flex;align-items:baseline;gap:7px;padding:0 22px;
+  margin:0 0 10px;padding:12px 16px;border:1px solid #dce6f1;border-radius:11px;
+  background:linear-gradient(110deg,#fff,#f7faff)}
+.df-task-summary-item {display:inline-flex;align-items:center;gap:8px;padding:0 22px;
   border-left:1px solid #e1e8f1;line-height:1.4}
 .df-task-summary-item:first-child {padding-left:0;border-left:0}
-.df-task-summary-item i {display:none}
+.df-task-summary-item i {display:grid;place-items:center;flex:0 0 29px;width:29px;height:29px;
+  border-radius:8px;background:#eaf2ff;color:#2475cf;font-size:15px;font-style:normal}
+.df-task-summary-item[data-kind="completed"] i {background:#e6f6ef;color:#148365}
+.df-task-summary-item[data-kind="attention"] i {background:#fff1e6;color:#aa6732}
 .df-task-summary-item strong {color:#23425f;font-size:17px;font-weight:700}
 .df-task-summary-item span {color:#72859b;font-size:12px}
 .df-task-summary-item[data-kind="completed"] strong {color:#087d5c}

@@ -493,7 +493,7 @@ def page_data_management():
 
 
 def page_task_manager():
-    page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。", "WORK MANAGER")
+    page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。", variant="hub")
     area = st.segmented_control(
         "任务视图", ("数据工作流", "命令管线", "运行日志"),
         default="数据工作流", key=f"task-view:{st.session_state['ws']}",

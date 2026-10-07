@@ -157,19 +157,30 @@ def _go_to_review(run_id: str, target: str) -> None:
     st.session_state["nav"] = "人工审核"
 
 
-def _render_empty(runs: list[dict]) -> None:
-    notice, actions = st.columns([2.1, 1.4], gap="small", vertical_alignment="center")
-    with notice:
-        st.info("暂无新的工作流训练包")
-    with actions:
-        workflow, history = st.columns(2, gap="small") if runs else (st.container(), None)
-        with workflow:
-            st.button("前往自动工作流", type="primary", on_click=_go_to_workflow,
-                      key="package-empty-workflow", width="stretch")
-        if history is not None:
-            with history:
-                st.button("前往工作管理", on_click=_go_to_task_manager,
-                          key="package-empty-history", width="stretch")
+def _render_empty(runs: list[dict], *, has_releases: bool = False) -> None:
+    # Keep persisted releases prominent; decorate only the otherwise empty page.
+    surface = st.container() if has_releases else st.container(key="package-empty-delivery")
+    with surface:
+        notice, actions = st.columns([2.1, 1.4], gap="small", vertical_alignment="center")
+        with notice:
+            if has_releases:
+                st.info("暂无新的工作流训练包")
+            else:
+                st.html(
+                    '<div class="df-pack-empty"><span aria-hidden="true">⇩</span><div>'
+                    '<strong>暂无新的工作流训练包</strong>'
+                    '<p>有结果时核对文件、质量与来源，再生成可校验的数据包；打包中可查看进度。</p>'
+                    '</div></div>'
+                )
+        with actions:
+            workflow, history = st.columns(2, gap="small") if runs else (st.container(), None)
+            with workflow:
+                st.button("前往自动工作流", type="primary", on_click=_go_to_workflow,
+                          key="package-empty-workflow", width="stretch")
+            if history is not None:
+                with history:
+                    st.button("前往工作管理", on_click=_go_to_task_manager,
+                              key="package-empty-history", width="stretch")
 
 
 def _render_releases(application: WorkflowApplication, releases: list[dict]) -> None:
@@ -395,7 +406,7 @@ def render_package_page(application: WorkflowApplication) -> None:
     ready = [row for row in runs if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
     if not ready:
         _render_releases(application, releases)
-        _render_empty(runs)
+        _render_empty(runs, has_releases=bool(releases))
         return
 
     labels = {row["id"]: row for row in ready}
