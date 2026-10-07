@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 WORKBENCH_STYLE = """<style>
+.st-key-workbench-layout [data-testid="stColumn"] {min-width:0}
 .df-wb-plan {display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;
   margin:0;color:#365579;font-size:12px;line-height:1.5}
 .df-wb-plan strong {color:#213b5f;font-size:12px}
@@ -28,6 +29,10 @@ WORKBENCH_STYLE = """<style>
   background:#e6f0ff;color:#1b67c4;font-size:11px}
 .df-wb-submit-summary strong {color:#1f3653;font-size:14px;overflow-wrap:anywhere}
 .df-wb-submit-summary span {color:#697f9b;font-size:11px;overflow-wrap:anywhere}
+@media(max-width:1050px) {
+  .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] {flex-wrap:wrap}
+  .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {flex:1 1 100%;width:100%;min-width:0}
+}
 @media(max-width:700px) {.df-wb-plan-edges {grid-template-columns:1fr}}
 </style>"""
 

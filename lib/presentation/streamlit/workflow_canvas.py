@@ -16,13 +16,17 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
     nodes, edges = execution_graph(targets)
     base = [key for key in BASE_STAGES if key in nodes]
     derived = [key for key in DERIVED_STAGES if key in nodes]
-    height = max(310, 100 + 100 * len(base))
+    # Center each column within its actual rows. Leave a clear outer lane for
+    # base outputs that bypass the derived column on their way to packaging.
+    bypass = bool(derived) and any(a in base and b == "package" for a, b in edges)
+    margin = 44 if bypass else 24
+    height = 2 * margin + 78 + 100 * (max(1, len(base), len(derived)) - 1)
     width = 1080 if derived else 810
-    positions = {"ingest": (24, height / 2 - 38), "package": (width - 242, height / 2 - 38)}
-    for index, key in enumerate(base):
-        positions[key] = (294, 70 + index * 100)
-    for index, key in enumerate(derived):
-        positions[key] = (564, (height - len(derived) * 100) / 2 + index * 100 + 10)
+    positions = {"ingest": (24, (height - 78) / 2), "package": (width - 242, (height - 78) / 2)}
+    for column, x in ((base, 294), (derived, 564)):
+        top = (height - (78 + 100 * (len(column) - 1))) / 2
+        for index, key in enumerate(column):
+            positions[key] = (x, top + index * 100)
     data = []
     for key in nodes:
         metrics = stages.get(key, {})

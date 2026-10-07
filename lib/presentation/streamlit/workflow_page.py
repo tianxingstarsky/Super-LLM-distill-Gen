@@ -822,14 +822,18 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.caption(_missing_model_role_summary(model_issues, st.session_state.get("ui_language", "zh")))
         if pricing_issues:
             st.warning("部分节点的模型服务缺少预算单价。请点击节点，在连接表单中更新输入和输出单价。")
-        canvas_column, node_column = st.columns([2.25, 1], gap="medium")
-        with canvas_column, st.container(border=True):
+    # Keep each side as a continuous stack. A long model form must not push
+    # the source inputs down to the bottom of an unrelated, shared-height row.
+    with st.container(key="workbench-layout"):
+        source_col, setup_col = st.columns([1.65, 1], gap="medium")
+    if targets:
+        with source_col, st.container(border=True, key="workbench-canvas-panel"):
             section_heading("工作流节点配置", "点击节点查看步骤；需要模型的节点可在右侧选择。", "◇")
             render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
                                       snapshot_available_bindings(graph_nodes, source_mode, bindings, endpoints),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=source_mode),
                           selection_key, key=f"setup-canvas:{ws}")
-        with node_column, st.container(border=True, key="workbench-node-panel"):
+        with setup_col, st.container(border=True, key="workbench-node-panel"):
             section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
             render_node_models(selected_node, source_mode, ws, bindings, endpoints,
                                backend_application=backend_application)
@@ -852,7 +856,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
     with st.container(key=f"workbench-create:{ws}"):
         web_research, web_unavailable = None, False
-        source_col, setup_col = st.columns([1.12, 1], gap="large")
         with source_col, st.container(border=True, key="workbench-source-panel"):
             section_heading("添加来源", f"本次来源类型：{source_mode}", "▤")
             if source_mode == "开放需求":
@@ -903,54 +906,57 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                      placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                      key=f"workflow-source-brief:{ws}:{source_mode}")
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
-        with setup_col, st.container(border=True, key="workbench-parameters-panel"):
+        with st.container(border=True, key="workbench-parameters-panel"):
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
-            default_run_name = ("Automatic data generation"
-                                if st.session_state.get("ui_language") == "en" else "自动数据生成")
-            name = _draft_name(default_run_name, ws)
-            st.caption("快捷规模 · 仍可输入自定义数量")
-            for size_column, count in zip(st.columns(3, gap="small"), (1000, 10000, 50000)):
-                with size_column:
-                    st.button(f"{count:,}", key=f"workflow-count-preset:{ws}:{count}",
-                              use_container_width=True, on_click=_select_candidate_count,
-                              args=(ws, count))
-            sample_count = _draft_number("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100, key=f"workflow-count:{ws}",
-                                           help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
-            tasks = sample_count
-            conversation_turns = (_draft_number("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
-                                                  help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
-                                  if "multiturn" in targets else 3)
-            st.caption("分批生成 · 失败后可从逐条断点继续")
-            a, b = st.columns(2, gap="small")
-            with a:
-                concurrency = _draft_number("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
-                                          help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
-            with b:
-                batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
-                                         help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
-            with st.expander("输入范围与文档分块（可选）"):
-                range_col, chunk_col = st.columns(2, gap="small")
-                with range_col:
-                    maximum = _draft_number("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
-                                          help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
-                with chunk_col:
-                    chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
-                               if source_mode == "文档资料" else 2000)
-            planning_count = min(int(sample_count), int(maximum)) if source_mode == "开放需求" else int(sample_count)
-            if source_mode == "开放需求" and maximum < sample_count:
-                st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
-            batch_summary, request_summary = st.columns(2, gap="small")
-            batch_summary.metric("每个生成目标的候选批次", f"{(planning_count + int(batch_size) - 1) // int(batch_size):,}")
-            request_summary.metric("同时处理的样本上限", f"{min(int(concurrency), int(batch_size)):,}")
-            st.caption("批次数按候选规模估算；不代表模型调用次数或合格数量。CPT 与导入轨迹按实际来源处理。")
-            evaluation_uploads = []
-            if "cpt" in targets:
-                with st.expander("预训练评测集去污染（可选）"):
-                    st.caption("上传自备 JSON / JSONL 评测参照，每条记录格式为 {\"text\": \"...\"}。"
-                               "只在本机对 CPT 候选查重，不作为训练来源，也不发送给模型；未上传时报告会标记未配置。")
-                    evaluation_uploads = st.file_uploader(
-                        "上传评测集参照", type=["json", "jsonl"], accept_multiple_files=True,
-                        max_upload_size=5, key=f"workflow-evaluations:{ws}")
+            scale_col, batch_col = st.columns(2, gap="medium")
+            with scale_col:
+                default_run_name = ("Automatic data generation"
+                                    if st.session_state.get("ui_language") == "en" else "自动数据生成")
+                name = _draft_name(default_run_name, ws)
+                st.caption("快捷规模 · 仍可输入自定义数量")
+                for size_column, count in zip(st.columns(3, gap="small"), (1000, 10000, 50000)):
+                    with size_column:
+                        st.button(f"{count:,}", key=f"workflow-count-preset:{ws}:{count}",
+                                  use_container_width=True, on_click=_select_candidate_count,
+                                  args=(ws, count))
+                sample_count = _draft_number("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100, key=f"workflow-count:{ws}",
+                                               help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
+                tasks = sample_count
+                conversation_turns = (_draft_number("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
+                                                      help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
+                                      if "multiturn" in targets else 3)
+            with batch_col:
+                st.caption("分批生成 · 失败后可从逐条断点继续")
+                a, b = st.columns(2, gap="small")
+                with a:
+                    concurrency = _draft_number("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
+                                              help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
+                with b:
+                    batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
+                                             help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
+                with st.expander("输入范围与文档分块（可选）"):
+                    range_col, chunk_col = st.columns(2, gap="small")
+                    with range_col:
+                        maximum = _draft_number("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
+                                              help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
+                    with chunk_col:
+                        chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
+                                   if source_mode == "文档资料" else 2000)
+                planning_count = min(int(sample_count), int(maximum)) if source_mode == "开放需求" else int(sample_count)
+                if source_mode == "开放需求" and maximum < sample_count:
+                    st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
+                batch_summary, request_summary = st.columns(2, gap="small")
+                batch_summary.metric("每个生成目标的候选批次", f"{(planning_count + int(batch_size) - 1) // int(batch_size):,}")
+                request_summary.metric("同时处理的样本上限", f"{min(int(concurrency), int(batch_size)):,}")
+                st.caption("批次数按候选规模估算；不代表模型调用次数或合格数量。CPT 与导入轨迹按实际来源处理。")
+                evaluation_uploads = []
+                if "cpt" in targets:
+                    with st.expander("预训练评测集去污染（可选）"):
+                        st.caption("上传自备 JSON / JSONL 评测参照，每条记录格式为 {\"text\": \"...\"}。"
+                                   "只在本机对 CPT 候选查重，不作为训练来源，也不发送给模型；未上传时报告会标记未配置。")
+                        evaluation_uploads = st.file_uploader(
+                            "上传评测集参照", type=["json", "jsonl"], accept_multiple_files=True,
+                            max_upload_size=5, key=f"workflow-evaluations:{ws}")
         with st.container(border=True, key="workbench-submit"):
             agent_mode = st.session_state.get(f"workflow-agent-mode:{ws}", "local")
             agent_unavailable = ("agent" in targets and agent_mode == "isolated"
