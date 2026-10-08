@@ -1,0 +1,17 @@
+Use case: ads-marketing.
+Asset type: Original premium GitHub repository cover / product hero for ShuJian Cube, landscape banner approximately 1600 x 700 pixels (wide 16:7 composition).
+Primary request: A refined, high-end blue-white product campaign banner for a data generation workspace. The brand means making training data simple to create. Combine crisp editorial typography on the left with a beautiful custom 3D data-flow illustration on the right. This is a conceptual brand illustration, not an application screenshot.
+
+Scene/backdrop: Airy white background with a whisper of icy blue and lavender. Fine precise pale-blue grid/guide lines limited to the illustration area, soft ambient shadows and quiet depth. Generous whitespace. Sophisticated enterprise software launch design, restrained and elegant.
+Subject: On the right, three distinct floating source objects—a folded document sheet, a stack of conversation cards, and an open brief card—flow along three slender curved luminous-blue paths into an open rounded cube. The cube uses sculptural cobalt-blue and pale-violet rounded faces with a small rounded triangular cyan accent in its open center, evoking turning raw knowledge into structured learning data. On the far right, a concise neat stack of structured data cards emerges, with blue and violet geometric rows and tiny line marks, no legible filler text. The transformation should be visually clear and striking, with original art direction.
+Style/medium: Premium product illustration with a mix of precise editorial graphics and soft physically rendered 3D. Clean rounded edges, frosted glass only as a restrained accent, ceramic-like solid cobalt surfaces, subtle embossed details. High-end polish, no generic stock technology imagery.
+Composition/framing: Wide horizontal cover. All required copy occupies the left 43% with at least 80 px safe margin. Main brand title at upper left-middle in a large bold dark-navy modern grotesk sans serif. Subtitle beneath in a clean medium-size sans serif, allowed on two short lines. Auxiliary source line beneath with ample breathing room. Small tasteful output-type line at lower left. Right 57% contains the original illustration with no text behind it. Leave a continuous clear gutter between copy and illustration. Everything fully inside frame with 64 px minimum outer margin.
+Lighting/mood: Soft daylight studio lighting; luminous, calm, confident, precise. Tiny crisp highlights and soft short shadows. No dramatic glow or darkness.
+Color palette: White, cloud blue, electric cobalt, deep navy text, restrained lavender and tiny cyan accents.
+Text (verbatim, render these four lines only with perfect spelling):
+"ShuJian Cube"
+"Make useful knowledge ready to learn."
+"Documents • Agent context • Open briefs"
+"CPT / SFT / DPO"
+Typography: The exact brand spelling is S-h-u-J-i-a-n space C-u-b-e. Large primary title. Sentence-case subtitle. Source line and output-type line smaller but comfortably readable. No other words, labels, symbols acting as text, numbers, watermarks, signatures, or badges.
+Constraints: Original sophisticated campaign artwork. Preserve clean legibility at GitHub README width. Do not create an interface screenshot. Do not invent quality scores, task counts, benchmarks, dates, or metrics. All typography must be fully visible, uncropped, not distorted, not over illustration. No robots, humanoids, brains, cheap neon, busy decorative particles, circuit-board clichés, gradients across the text, or excessive glassmorphism.

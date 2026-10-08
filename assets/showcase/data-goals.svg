@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Nine ways to shape useful data.</title>
+  <desc id="desc">ShuJian Cube supports CPT domain reading material, SFT instructions and answers, DPO preferred answer pairs, ORPO preference pairs, RLAIF AI feedback candidates, agent conversations with verified tools, multi-turn role-based conversations, visible CoT reasoning examples, and GSM8K-style basic arithmetic examples. Choose one goal or combine several in the workbench.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#eef5ff"/></linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#4c9aff"/><stop offset="1" stop-color="#3272dc"/></linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#31c4d4"/><stop offset="1" stop-color="#2299ba"/></linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#a38bea"/><stop offset="1" stop-color="#7e69ca"/></linearGradient>
+    <filter id="shadow" x="-10%" y="-20%" width="120%" height="150%"><feDropShadow dx="0" dy="8" stdDeviation="11" flood-color="#2356a8" flood-opacity=".06"/></filter>
+    <g id="book" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15 Q20 11 28 15 Q36 11 44 15 V39 Q36 35 28 39 Q20 35 12 39 Z M28 15 V39 M17 20 H23 M17 25 H23 M33 20 H39 M33 25 H39"/></g>
+    <g id="chat" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 15 H41 Q44 15 44 18 V34 Q44 37 41 37 H26 L17 43 V37 H15 Q12 37 12 34 V18 Q12 15 15 15 Z M19 23 H37 M19 29 H32"/></g>
+    <g id="pair" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17 H25 V38 H12 Z M31 17 H44 V38 H31 Z M16 27 19 30 22 24 M35 25 H40 M35 30 H40"/></g>
+    <g id="layers" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M28 12 45 21 28 30 11 21 Z M12 28 28 37 44 28 M12 35 28 44 44 35"/></g>
+    <g id="feedback" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 16 H34 V35 H23 L16 40 V35 H13 Z M36 15 38 21 44 23 38 25 36 31 34 25 28 23 34 21 Z M19 23 H23 M19 28 H27"/></g>
+    <g id="tools" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M35 12 A11 11 0 0 0 24 27 L12 39 Q10 41 13 44 Q16 46 18 44 L30 32 A11 11 0 0 0 44 20 L37 27 31 21 Z"/></g>
+    <g id="conversation" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 13 H34 V29 H22 L15 34 V29 H12 Z M25 34 H34 L41 40 V34 H44 V21 H39 M18 20 H28 M18 24 H24"/></g>
+    <g id="reasoning" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M28 19 V28 M28 28 H16 V36 M28 28 H40 V36"/><circle cx="28" cy="14" r="5"/><rect x="10" y="36" width="12" height="9" rx="3"/><rect x="34" y="36" width="12" height="9" rx="3"/></g>
+    <g id="math" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 13 V25 M11 19 H23 M34 14 43 23 M43 14 34 23 M12 36 H23 M34 33 H44 M34 39 H44"/></g>
+  </defs>
+  <rect width="1600" height="900" rx="32" fill="url(#background)"/>
+  <circle cx="1486" cy="87" r="190" fill="#eaf2ff" opacity=".6"/>
+  <circle cx="1510" cy="65" r="108" fill="#e5efff" opacity=".6"/>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif">
+    <text x="76" y="67" fill="#4676b5" font-size="13" font-weight="700" letter-spacing="3.4">SHUJIAN CUBE / TRAINING GOALS</text>
+    <text x="76" y="126" fill="#12254a" font-size="44" font-weight="750" letter-spacing="-1.4">Nine ways to shape useful data.</text>
+    <text x="78" y="167" fill="#61728e" font-size="21">Choose one goal, or combine several in the workbench.</text>
+
+    <g transform="translate(56 230)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#dae7f8" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#blue)"/><use href="#book" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">CPT</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Domain reading material</text>
+      <rect x="25" y="120" width="143" height="28" rx="14" fill="#eef5ff"/><text x="41" y="139" fill="#6483ae" font-size="12.5">Learn from text</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#c3d5ef" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(560 230)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#dae7f8" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#blue)"/><use href="#chat" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">SFT</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Instructions and answers</text>
+      <rect x="25" y="120" width="164" height="28" rx="14" fill="#eef5ff"/><text x="41" y="139" fill="#6483ae" font-size="12.5">Follow instructions</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#c3d5ef" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(1064 230)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#e2ddf5" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#violet)"/><use href="#pair" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">DPO</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Preferred answer pairs</text>
+      <rect x="25" y="120" width="156" height="28" rx="14" fill="#f3effd"/><text x="41" y="139" fill="#8b79af" font-size="12.5">Compare answers</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#d4c9ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(56 424)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#e2ddf5" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#violet)"/><use href="#layers" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">ORPO</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Preference pairs for ORPO</text>
+      <rect x="25" y="120" width="156" height="28" rx="14" fill="#f3effd"/><text x="41" y="139" fill="#8b79af" font-size="12.5">Compare answers</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#d4c9ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(560 424)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#e2ddf5" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#violet)"/><use href="#feedback" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">RLAIF</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">AI feedback candidates</text>
+      <rect x="25" y="120" width="185" height="28" rx="14" fill="#f3effd"/><text x="41" y="139" fill="#8b79af" font-size="12.5">Learn from feedback</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#d4c9ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(1064 424)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#d6eaf1" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#cyan)"/><use href="#tools" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">Agent</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Conversations with verified tools</text>
+      <rect x="25" y="120" width="103" height="28" rx="14" fill="#edf8fb"/><text x="41" y="139" fill="#6394a2" font-size="12.5">Use tools</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#bfdee7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(56 618)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#d6eaf1" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#cyan)"/><use href="#conversation" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">Multi-turn</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Role-based conversations</text>
+      <rect x="25" y="120" width="131" height="28" rx="14" fill="#edf8fb"/><text x="41" y="139" fill="#6394a2" font-size="12.5">Keep context</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#bfdee7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(560 618)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#dae7f8" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#blue)"/><use href="#reasoning" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">CoT</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Visible reasoning examples</text>
+      <rect x="25" y="120" width="156" height="28" rx="14" fill="#eef5ff"/><text x="41" y="139" fill="#6483ae" font-size="12.5">Explain reasoning</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#c3d5ef" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(1064 618)">
+      <rect width="480" height="170" rx="23" fill="#fff" stroke="#dae7f8" filter="url(#shadow)"/>
+      <rect x="25" y="29" width="56" height="56" rx="17" fill="url(#blue)"/><use href="#math" x="25" y="29"/>
+      <text x="103" y="56" fill="#19345e" font-size="27" font-weight="700">GSM8K-style</text>
+      <text x="103" y="86" fill="#70819b" font-size="18">Basic arithmetic examples</text>
+      <rect x="25" y="120" width="171" height="28" rx="14" fill="#eef5ff"/><text x="41" y="139" fill="#6483ae" font-size="12.5">Practice arithmetic</text>
+      <path d="M421 132 H447 M439 124 447 132 439 140" fill="none" stroke="#c3d5ef" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <text x="76" y="842" fill="#7d8ca4" font-size="15">Different goals. One visible workbench.</text>
+    <text x="76" y="872" fill="#8997ac" font-size="13">Generated examples are candidates. Review them before training or sharing.</text>
+    <text x="1524" y="872" fill="#8997ac" font-size="13" text-anchor="end">SHUJIAN CUBE</text>
+  </g>
+</svg>

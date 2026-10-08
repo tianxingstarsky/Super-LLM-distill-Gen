@@ -1,0 +1,23 @@
+Use case: ads-marketing
+Asset type: original GitHub project homepage feature infographic for ShuJian Cube, a training-data creation platform.
+Primary request: Create an exceptionally polished premium product capability board, landscape, approximately 1400 by 800 pixels, with four equal cards in a precise 2 by 2 grid. This is original conceptual product artwork, never a screenshot of existing software.
+Scene/backdrop: luminous almost-white background with a barely perceptible pale blue gradient, abundant breathing room, neat aligned margins and a subtle rounded rectangular frame. Small quiet brand wordmark "ShuJian Cube" at the top left, tiny rounded triangular cube mark beside it. Main headline below, left aligned and clearly dominant.
+Style/medium: sophisticated editorial technology branding; crisp navy typography, refined soft 3D miniature objects combined with clean diagram lines; pale blue rounded glass cards with extremely subtle shadows, slight cool gray border, restrained turquoise and violet accents. Cohesive handcrafted art direction, premium print-level finish.
+Composition: Four equal large cards, each with title and the one exact sentence near its top left, then a large elegant illustration in the lower area. Balanced spacing, cards never too dense, generous white space, all copy easy to read at GitHub README width. Headline takes approximately the top one fifth. Four illustrations are distinct but share soft translucent materials and lighting.
+Exact text, render verbatim with correct English spelling and punctuation:
+Brand: "ShuJian Cube"
+Main headline: "Create. Follow. Review. Keep."
+Top left card title: "Flexible sources"
+Top left card sentence: "Documents, conversations, and open briefs."
+Top right card title: "Visible work"
+Top right card sentence: "Follow each stage. Read live model output."
+Bottom left card title: "Human input"
+Bottom left card sentence: "Write image questions and reference answers."
+Bottom right card title: "Work that stays"
+Bottom right card sentence: "Save locally. Return later. Export with images."
+Illustration details:
+Flexible sources — three minimalist softly 3D paper objects: a document sheet, a speech conversation card, and an open brief task sheet; thin blue paper lines and a subtle violet tab, gracefully arranged.
+Visible work — a small original conceptual node path with four pale blue rounded nodes connected with precise blue arrows; inside the nodes are only simple icons, no words; beneath the path several tidy short blue lines and individual glowing tiny blue segments subtly suggest tokens arriving live. This is a conceptual illustration, not a software screenshot.
+Human input — an original rounded image frame displaying a small cobalt blue translucent cube against a pale blue backdrop; beside it two light blue question-and-answer speech bubbles with abstract horizontal lines only.
+Work that stays — a graceful clock/history ring next to a softly 3D folder and a compact zipped file package; one miniature image thumbnail integrated in the package, to suggest saved local work and image-inclusive export.
+Constraints: All exact text fully visible, no cropped text, no invented words, no extra captions. Conceptual promotion only: no product metrics, sample counts, scores, performance claims, cloud/team promises, or guarantees of automatic perfect quality. No people, no robots, no brains, no neon, no dark mode, no noisy networks, no fake UI screenshot, no stock-photo style, no watermark. The whole image must feel original, calm, high-end and inviting.

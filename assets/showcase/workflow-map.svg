@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">From your sources to training data.</title>
+  <desc id="desc">Documents, agent context, and open briefs flow through Prepare, Create, Check, and Export. Human review is an optional branch. Models are configured on nodes, with live output and saved progress. A separate manual path creates image and text questions and answers, previews and saves them, and exports them with original images. Manual samples stay unreviewed.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#eef5ff"/></linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#3287ff"/><stop offset="1" stop-color="#2257e7"/></linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#11bada"/><stop offset="1" stop-color="#2989ed"/></linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#a18bff"/><stop offset="1" stop-color="#7660db"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-25%" width="140%" height="160%"><feDropShadow dx="0" dy="9" stdDeviation="12" flood-color="#2356a8" flood-opacity=".07"/></filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto"><path d="M1 1 7 4 1 7" fill="none" stroke="#6795dc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="purpleArrow" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto"><path d="M1 1 7 4 1 7" fill="none" stroke="#9d88dd" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="1600" height="900" rx="32" fill="url(#background)"/>
+  <circle cx="1480" cy="100" r="190" fill="#eaf2ff" opacity=".6"/>
+  <circle cx="1520" cy="62" r="106" fill="#e5efff" opacity=".6"/>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif">
+    <text x="76" y="67" fill="#4676b5" font-size="13" font-weight="700" letter-spacing="3.4">SHUJIAN CUBE / THE PRODUCT FLOW</text>
+    <text x="76" y="126" fill="#12254a" font-size="44" font-weight="750" letter-spacing="-1.4">From your sources to training data.</text>
+    <text x="78" y="167" fill="#61728e" font-size="21">Choose your input. Follow the work. Keep useful results.</text>
+
+    <rect x="56" y="210" width="1488" height="389" rx="26" fill="#fff" stroke="#dce8f8" filter="url(#shadow)"/>
+    <rect x="82" y="234" width="211" height="29" rx="14.5" fill="#edf5ff"/>
+    <text x="98" y="253" fill="#336cba" font-size="12" font-weight="700" letter-spacing="1.6">AUTOMATIC GENERATION</text>
+
+    <g fill="none" stroke="#86a9dd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M334 321 H365 Q383 321 383 339 V471 Q383 489 365 489 H334"/>
+      <path d="M334 405 H452" marker-end="url(#arrow)"/>
+      <path d="M635 413 H678" marker-end="url(#arrow)"/>
+      <path d="M861 413 H904" marker-end="url(#arrow)"/>
+      <path d="M1087 413 H1274" marker-end="url(#arrow)"/>
+      <path d="M997 357 V320 Q997 302 1015 302 H1107" stroke="#a697d7" stroke-dasharray="5 6" marker-end="url(#purpleArrow)"/>
+      <path d="M1271 302 H1364 Q1382 302 1382 320 V354" stroke="#a697d7" stroke-dasharray="5 6" marker-end="url(#purpleArrow)"/>
+    </g>
+
+    <g>
+      <rect x="84" y="285" width="250" height="72" rx="16" fill="#f8fbff" stroke="#dfebfa"/>
+      <rect x="101" y="301" width="40" height="40" rx="12" fill="#e8f1ff"/>
+      <path d="M114 309 H124 L130 315 V333 H114 Z M124 309 V315 H130 M118 320 H126 M118 325 H126" fill="none" stroke="#3678d1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="156" y="317" fill="#19335b" font-size="18" font-weight="650">Documents</text>
+      <text x="156" y="339" fill="#7b8ba3" font-size="12.5">MD / TXT / PDF / DOCX</text>
+
+      <rect x="84" y="369" width="250" height="72" rx="16" fill="#f8fbff" stroke="#dfebfa"/>
+      <rect x="101" y="385" width="40" height="40" rx="12" fill="#e6f7fb"/>
+      <path d="M114 396 H128 Q132 396 132 400 V408 Q132 412 128 412 H121 L115 416 V412 H114 Q110 412 110 408 V400 Q110 396 114 396 Z M116 403 H126 M116 407 H123" fill="none" stroke="#1b9aba" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="156" y="401" fill="#19335b" font-size="18" font-weight="650">Agent context</text>
+      <text x="156" y="423" fill="#7b8ba3" font-size="12.5">Conversations and tool use</text>
+
+      <rect x="84" y="453" width="250" height="72" rx="16" fill="#f8fbff" stroke="#dfebfa"/>
+      <rect x="101" y="469" width="40" height="40" rx="12" fill="#f0ebff"/>
+      <path d="M116 479 H131 M116 485 H126 M116 491 H130 M111 479 H111.1 M111 485 H111.1 M111 491 H111.1 M121 497 H131" fill="none" stroke="#8871d2" stroke-width="2" stroke-linecap="round"/>
+      <text x="156" y="485" fill="#19335b" font-size="18" font-weight="650">Open briefs</text>
+      <text x="156" y="507" fill="#7b8ba3" font-size="12.5">A role, a topic, or a task</text>
+    </g>
+
+    <g>
+      <rect x="455" y="357" width="180" height="112" rx="20" fill="#f7faff" stroke="#cddff8"/>
+      <rect x="477" y="376" width="32" height="32" rx="10" fill="#e7efff"/>
+      <path d="M485 384 H501 M485 390 H495 M485 396 H498 M490 381 V399 M497 387 V393" fill="none" stroke="#3976d0" stroke-width="1.7" stroke-linecap="round"/>
+      <text x="521" y="398" fill="#19345e" font-size="22" font-weight="700">Prepare</text>
+      <text x="477" y="442" fill="#788aa4" font-size="14">Organize your sources</text>
+
+      <rect x="681" y="357" width="180" height="112" rx="20" fill="url(#blue)" filter="url(#shadow)"/>
+      <rect x="703" y="376" width="32" height="32" rx="10" fill="#fff" fill-opacity=".17"/>
+      <path d="M719 381 721.5 388.5 729 391 721.5 393.5 719 401 716.5 393.5 709 391 716.5 388.5 Z" fill="none" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"/>
+      <text x="747" y="398" fill="#fff" font-size="22" font-weight="700">Create</text>
+      <text x="703" y="442" fill="#e5efff" font-size="14">Generate selected goals</text>
+
+      <rect x="907" y="357" width="180" height="112" rx="20" fill="#f7faff" stroke="#cddff8"/>
+      <rect x="929" y="376" width="32" height="32" rx="10" fill="#e7f6fc"/>
+      <path d="M945 381 955 385 V392 Q954 399 945 403 Q936 399 935 392 V385 Z M940 391 944 395 950 388" fill="none" stroke="#2c99b5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="973" y="398" fill="#19345e" font-size="22" font-weight="700">Check</text>
+      <text x="929" y="442" fill="#788aa4" font-size="14">Inspect candidate quality</text>
+
+      <rect x="1111" y="267" width="160" height="70" rx="15" fill="#faf8ff" stroke="#e2d9f7"/>
+      <text x="1191" y="289" fill="#9a85c6" font-size="11" font-weight="700" text-anchor="middle" letter-spacing="1">OPTIONAL</text>
+      <text x="1191" y="315" fill="#6f5ba0" font-size="18" font-weight="650" text-anchor="middle">Human review</text>
+
+      <rect x="1277" y="357" width="210" height="112" rx="20" fill="#edf7fe" stroke="#bcdcf5"/>
+      <rect x="1299" y="376" width="32" height="32" rx="10" fill="url(#cyan)"/>
+      <path d="M1307 385 H1323 V400 H1307 Z M1311 381 H1319 V385 M1311 391 H1319 M1311 395 H1318" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1343" y="398" fill="#19345e" font-size="22" font-weight="700">Export</text>
+      <text x="1299" y="442" fill="#5c85a7" font-size="15">Training datasets</text>
+    </g>
+
+    <g font-size="13" fill="#6783aa">
+      <rect x="455" y="502" width="180" height="36" rx="18" fill="#eff5fe"/>
+      <circle cx="475" cy="520" r="4" fill="#5991df"/>
+      <text x="489" y="525">Models on nodes</text>
+      <rect x="681" y="502" width="180" height="36" rx="18" fill="#eff5fe"/>
+      <circle cx="701" cy="520" r="4" fill="#55bad1"/>
+      <text x="715" y="525">Live token output</text>
+      <rect x="907" y="502" width="180" height="36" rx="18" fill="#eff5fe"/>
+      <circle cx="927" cy="520" r="4" fill="#9282da"/>
+      <text x="941" y="525">Saved progress</text>
+    </g>
+
+    <rect x="56" y="633" width="1488" height="202" rx="26" fill="#fff" stroke="#e0e6f7" filter="url(#shadow)"/>
+    <rect x="82" y="655" width="143" height="29" rx="14.5" fill="#f1edff"/>
+    <text x="98" y="674" fill="#8670bc" font-size="12" font-weight="700" letter-spacing="1.6">MAKE BY HAND</text>
+    <text x="1487" y="675" fill="#9a85b7" font-size="15" text-anchor="end">Manual samples stay unreviewed.</text>
+
+    <g fill="none" stroke="#a899d0" stroke-width="2" stroke-linecap="round"><path d="M449 740 H500" marker-end="url(#purpleArrow)"/><path d="M868 740 H919" marker-end="url(#purpleArrow)"/></g>
+
+    <rect x="84" y="698" width="365" height="84" rx="18" fill="#faf8ff" stroke="#e6ddf7"/>
+    <rect x="103" y="717" width="46" height="46" rx="13" fill="url(#violet)"/>
+    <path d="M115 728 H137 V751 H115 Z M117 746 123 739 128 744 132 740 137 746 M131 734 H131.1" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="167" y="735" fill="#37466d" font-size="21" font-weight="650">Image + text Q&amp;A</text>
+    <text x="167" y="759" fill="#9290a6" font-size="13.5">Write a question and an answer</text>
+
+    <rect x="503" y="698" width="365" height="84" rx="18" fill="#faf8ff" stroke="#e6ddf7"/>
+    <rect x="522" y="717" width="46" height="46" rx="13" fill="#eee8fb"/>
+    <path d="M530 740 Q545 722 560 740 Q545 758 530 740 Z M551 740 A6 6 0 1 1 539 740 A6 6 0 1 1 551 740" fill="none" stroke="#957cc9" stroke-width="1.8" stroke-linejoin="round"/>
+    <text x="586" y="735" fill="#37466d" font-size="21" font-weight="650">Preview and save</text>
+    <text x="586" y="759" fill="#9290a6" font-size="13.5">Build a lasting local collection</text>
+
+    <rect x="922" y="698" width="565" height="84" rx="18" fill="#faf8ff" stroke="#e6ddf7"/>
+    <rect x="941" y="717" width="46" height="46" rx="13" fill="#eee8fb"/>
+    <path d="M954 735 V751 H974 V735 M964 726 V743 M959 738 964 743 969 738" fill="none" stroke="#957cc9" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1005" y="735" fill="#37466d" font-size="21" font-weight="650">Export with original images</text>
+    <text x="1005" y="759" fill="#9290a6" font-size="13.5">Questions, answers, and image files in one ZIP</text>
+
+    <text x="76" y="872" fill="#8997ac" font-size="13">Illustrated product flow. Generated candidates still need review.</text>
+    <text x="1524" y="872" fill="#8997ac" font-size="13" text-anchor="end">SHUJIAN CUBE</text>
+  </g>
+</svg>
