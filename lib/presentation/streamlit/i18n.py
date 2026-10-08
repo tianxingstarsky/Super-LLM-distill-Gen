@@ -1975,12 +1975,58 @@ ZH_EN.update({
 })
 
 
+ZH_EN.update({
+    "用于生成": "Use for generation",
+    "选择审核目标": "Review target",
+    "输入范围（可选）": "Input limits (optional)",
+    "预览来源": "Preview source",
+    "工作流产物": "Workflow results",
+    "已有对话文件": "Saved conversation files",
+    "逐条处理状态和来源证据": "Per-record status and source evidence",
+    "加入当前生成草稿，保留已有目标和节点模型配置。": "Add this file to the current draft. Keep its goals and node models.",
+    "导入资料": "Import sources",
+    "单次生成最多使用 200 份资料。请先在工作台减少已选资料，再添加新文件。": "Use up to 200 files per run. Remove some selected sources in the workbench before adding another.",
+    "资料未能加入生成草稿。请检查文件是否变化，或本机存储是否可用。": "Could not add the file to the draft. Check whether it changed and whether local storage is available.",
+    "无法读取或校验任务产物，请检查本次任务文件后重试。": "Could not read or verify the results. Check this run's files and try again.",
+    "来源分块预览": "Source chunk preview",
+    "按当前分块参数查看真实内容；不会调用模型。": "See real content with the current chunk settings. No model call is needed.",
+    "先在左侧添加并选择一份文档，即可在此预览。": "Add and select a document in Sources to preview it here.",
+    "预览文档": "Document to preview",
+    "预览解析与分块": "Preview parsing and chunks",
+    "正在本机解析文档…": "Parsing the document locally…",
+    "无法读取所选来源，请重新选择本机缓存中的文档。": "Could not read this source. Select a document from the local cache again.",
+    "来源或分块参数已变化，请重新预览。": "The source or chunk settings changed. Preview again.",
+    "按需预览单文件，最多 2 MiB、250,000 字符；PDF 最多 40 页。": "Preview one file on demand. Limits: 2 MiB, 250,000 characters, and 40 PDF pages.",
+    "文档未提取到文字；扫描 PDF 可能需要先做文字识别。": "No text was extracted. A scanned PDF may need text recognition first.",
+    "片段序号": "Chunk number",
+    "这里只展示解析与分块结果，尚未执行隐私筛查、去重或质量审核。": "This shows parsing and chunks. Privacy checks, deduplication, and quality review have not run yet.",
+    "预览限单文件 2 MiB；此限制不改变正式任务的输入范围。": "Preview accepts one file up to 2 MiB. This limit does not change the run's input scope.",
+    "解析文字超过预览上限 250,000 字符；请拆分文档后预览。": "Extracted text exceeds the 250,000-character preview limit. Split the document to preview it.",
+    "PDF 超过预览上限 40 页；请使用较短文档预览。": "The PDF exceeds the 40-page preview limit. Use a shorter document for preview.",
+    "DOCX 展开内容超过预览上限 4 MiB，或包含过多/加密附件。": "The DOCX exceeds 4 MiB when unpacked, or has too many or encrypted entries.",
+    "PDF 已加密；请先在本机解密后重新上传。": "The PDF is encrypted. Decrypt it locally, then upload it again.",
+    "当前环境缺少 PDF 或 DOCX 解析组件；MD / TXT 仍可预览。": "PDF or DOCX support is unavailable. MD and TXT previews still work.",
+    "来源文件已变化，请重新预览。": "The source file changed. Preview again.",
+    "文档解析失败。请检查文件是否损坏、编码或格式是否正确。": "Could not parse the document. Check its format, encoding, and file integrity.",
+    "仅列出前 5,000 份来源，已选资料会保留；更多文件可从资料库搜索后添加。": "The picker lists up to 5,000 sources. Selected files stay available. Find more files in Data Library to add them.",
+})
+
+
 def translate(value: Any, language: str = "en") -> Any:
     """Translate an exact interface phrase and leave all other values intact."""
     if isinstance(value, UntranslatedText) or language_code(language) != "en" or not isinstance(value, str):
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    preview_patterns = [
+        (r"有 (\d+) 份已选资料已失联、超限或不属于本机来源目录，已移出本次选择；请重新添加。", lambda m: f"Removed {m[1]} selected sources that are missing, too large, or outside the local source folder. Add them again."),
+        (r"解析字符数：([\d,]+) · 分块数：([\d,]+)", lambda m: f"Extracted characters: {m[1]} · Chunks: {m[2]}"),
+        (r"当前片段字符数：([\d,]+) · 来源位置：(document:chunk:\d+)", lambda m: f"Chunk characters: {m[1]} · Source location: {m[2]}"),
+    ]
+    for pattern, render in preview_patterns:
+        match = re.fullmatch(pattern, value)
+        if match:
+            return render(match)
     for prefix, english in {
         "无法读取或校验任务产物：": "Cannot read or verify task results: ",
         "无法生成或校验数据包：": "Cannot create or verify the package: ",

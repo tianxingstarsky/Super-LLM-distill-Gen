@@ -11,6 +11,7 @@ from lib.domain.workflow_targets import TARGETS
 from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.shared import section_heading
 from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.review_navigation import review_choices, open_verified_review, open_package
 
 
 TARGET_LABELS = {
@@ -48,8 +49,11 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
     left, right = st.columns([1, 2.15], gap="large")
     with left, st.container(border=True):
         section_heading("选择工作流产物", "仅预览当前任务中通过完整性校验的真实文件", "▤")
+        run_key = f"data-preview-run:{workspace_id}"
+        if st.session_state.get(run_key) not in by_id:
+            st.session_state.pop(run_key, None)
         run_id = st.selectbox(
-            "已完成任务", list(by_id), key=f"data-preview-run:{workspace_id}",
+            "已完成任务", list(by_id), key=run_key,
             format_func=lambda key: UntranslatedText(f"{by_id[key].get('name', '未命名任务')} · {key[:8]}"),
         )
         try:
@@ -61,8 +65,11 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         if not targets:
             st.info("这次任务没有通过质量检查的原生训练样本；请查看工作流质量报告。")
             return True
+        target_key = f"data-preview-target:{workspace_id}:{run_id}"
+        if st.session_state.get(target_key) not in targets:
+            st.session_state.pop(target_key, None)
         target = st.selectbox(
-            "训练目标", targets, key=f"data-preview-target:{workspace_id}:{run_id}",
+            "训练目标", targets, key=target_key,
             format_func=lambda value: "Agent 失败轨迹" if value == "agent_negative"
             else TARGET_LABELS.get(value, value.upper()),
         )
@@ -70,6 +77,8 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
                      if target == "agent_negative"
                      else (inventory["manifest"].get("counts") or {}).get(target, 0)))
         position_key = f"data-preview-position:{workspace_id}:{run_id}:{target}"
+        if position_key in st.session_state:
+            st.session_state[position_key] = min(count, max(1, int(st.session_state[position_key])))
         position = st.number_input("样本序号", 1, count,
                                    value=None if position_key in st.session_state else 1, key=position_key)
         try:
@@ -92,6 +101,15 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         if st.button("查看任务运行过程", key=f"data-preview-workflow:{workspace_id}:{run_id}", width="stretch"):
             st.session_state["workflow-open-run"] = {"workspace": workspace_id, "run_id": run_id}
             st.rerun()
+        available_reviews = dict(review_choices(by_id[run_id], inventory["manifest"]))
+        if target in available_reviews:
+            st.button("进入当前任务的人工审核", on_click=open_verified_review,
+                      args=(application, run_id, target), key=f"data-preview-review:{workspace_id}:{run_id}",
+                      width="stretch")
+        if st.session_state.pop(f"workflow-review-error:{run_id}", False):
+            st.error("无法读取或校验任务产物，请检查本次任务文件后重试。")
+        st.button("查看并打包本次训练数据", on_click=open_package, args=(run_id, target),
+                  key=f"data-preview-package:{workspace_id}:{run_id}", width="stretch")
     with right, st.container(border=True):
         heading, previous, following = st.columns([3, 1, 1], vertical_alignment="center")
         with heading:

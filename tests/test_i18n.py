@@ -125,6 +125,28 @@ def test_translates_data_library_metadata_without_changing_paths():
     assert translate("用户上传的内容", "en") == "用户上传的内容"
 
 
+def test_source_preview_and_shortcut_copy_has_no_chinese_interface_leaks():
+    from lib.presentation.streamlit.document_preview import _ERRORS
+    from lib.presentation.streamlit.i18n import UntranslatedText
+
+    phrases = [*_ERRORS.values(), "用于生成", "导入资料", "来源分块预览", "选择审核目标",
+               "预览文档", "预览解析与分块", "正在本机解析文档…", "片段序号",
+               "预览来源", "工作流产物", "已有对话文件", "逐条处理状态和来源证据",
+               "解析字符数：250,000 · 分块数：125",
+               "当前片段字符数：2,000 · 来源位置：document:chunk:7",
+               "有 2 份已选资料已失联、超限或不属于本机来源目录，已移出本次选择；请重新添加。",
+               "仅列出前 5,000 份来源，已选资料会保留；更多文件可从资料库搜索后添加。",
+               "单次生成最多使用 200 份资料。请先在工作台减少已选资料，再添加新文件。",
+               "资料未能加入生成草稿。请检查文件是否变化，或本机存储是否可用。",
+               "无法读取或校验任务产物，请检查本次任务文件后重试。"]
+    for phrase in phrases:
+        assert not re.search(r"[\u4e00-\u9fff]", translate(phrase, "en")), phrase
+        assert translate(phrase, "zh") == phrase
+    assert translate(UntranslatedText("来源分块预览"), "en") == "来源分块预览"
+    assert translate("当前片段字符数：2,000 · 来源位置：document:chunk:7", "en") == (
+        "Chunk characters: 2,000 · Source location: document:chunk:7")
+
+
 def test_translates_preference_controls_and_pipeline_copy():
     assert translate_label("默认样本占比", "en") == "Default example share"
     assert translate_label("推理与反思", "en") == "Reasoning and reflection"

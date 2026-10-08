@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter
 
 from lib.application.asset_catalog_ports import AssetCatalogDriver
-from lib.domain.dataset_assets import Asset, AssetInventory, asset_sort_key, common_asset
+from lib.domain.dataset_assets import Asset, AssetInventory, asset_sort_key, common_asset, generation_source_mode
 
 
 class AssetCatalogApplication:
@@ -31,3 +31,9 @@ class AssetCatalogApplication:
 
     def download(self, workspace_id: str, asset: Asset) -> bytes:
         return self._driver.download(workspace_id, asset)
+
+    def generation_source(self, workspace_id: str, asset: Asset) -> dict[str, str]:
+        """Resolve the selected version before opening it in the workbench."""
+        mode = generation_source_mode(asset)
+        return {"path": self._driver.source_path_for_generation(workspace_id, asset),
+                "source_mode": mode}

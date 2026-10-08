@@ -94,3 +94,60 @@ def test_catalog_limits_direct_download(tmp_path, monkeypatch):
 ])
 def test_output_classification(filename: str, expected: str):
     assert output_category(filename) == expected
+
+
+@pytest.mark.parametrize("suffix,mode", [
+    (".md", "文档资料"), (".txt", "文档资料"), (".pdf", "文档资料"), (".docx", "文档资料"),
+    (".json", "Agent 上下文"), (".jsonl", "Agent 上下文"),
+])
+def test_generation_source_resolves_existing_version_and_maps_mode(tmp_path, monkeypatch, suffix, mode):
+    _, source, name = _workspace(tmp_path, monkeypatch)
+    path = source / ("saved" + suffix)
+    path.write_bytes(b"original source")
+    app = AssetCatalogApplication(FilesystemAssetCatalogDriver())
+    asset = next(asset for asset in app.inventory(name).assets if asset.name == path.name)
+    assert app.generation_source(name, asset) == {"path": str(path.resolve()), "source_mode": mode}
+
+
+def test_generation_handoff_rejects_stale_forged_output_and_unsupported_assets(tmp_path, monkeypatch):
+    from lib.domain.dataset_assets import Asset
+    workspace, source, name = _workspace(tmp_path, monkeypatch)
+    path = source / "saved.txt"
+    path.write_text("source", encoding="utf-8")
+    output = workspace.out(name)
+    output.mkdir(parents=True)
+    (output / "sft.jsonl").write_text('{}\n', encoding="utf-8")
+    driver = FilesystemAssetCatalogDriver()
+    app = AssetCatalogApplication(driver)
+    assets = app.inventory(name).assets
+    asset = next(row for row in assets if row.origin == "source")
+    generated = next(row for row in assets if row.origin == "output")
+    unsupported = Asset("source/saved.csv", "source", "saved.csv", "来源文件", 0, 0)
+    for invalid in (generated, unsupported):
+        with pytest.raises(ValueError, match="asset_not_generation_source"):
+            app.generation_source(name, invalid)
+        with pytest.raises(ValueError, match="asset_not_generation_source"):
+            driver.source_path_for_generation(name, invalid)
+    forged = replace(asset, id="source/../outside.txt", relative_path="../outside.txt")
+    with pytest.raises(ValueError, match="invalid_asset_id"):
+        app.generation_source(name, forged)
+    path.write_text("changed source", encoding="utf-8")
+    with pytest.raises(ValueError, match="asset_changed_since_listing"):
+        app.generation_source(name, asset)
+
+
+def test_generation_source_rejects_a_file_replaced_with_link(tmp_path, monkeypatch):
+    _, source, name = _workspace(tmp_path, monkeypatch)
+    path = source / "saved.txt"
+    path.write_text("source", encoding="utf-8")
+    app = AssetCatalogApplication(FilesystemAssetCatalogDriver())
+    asset = app.inventory(name).assets[0]
+    outside = tmp_path / "private.txt"
+    outside.write_text("outside", encoding="utf-8")
+    path.unlink()
+    try:
+        path.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("This Windows account cannot create a file link")
+    with pytest.raises(ValueError, match="linked_asset_path"):
+        app.generation_source(name, asset)

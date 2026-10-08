@@ -33,6 +33,10 @@ Select a workflow node to choose its model. Set its context window and maximum o
 
 Each node keeps its own choices. Once a run starts, that run uses its saved configuration.
 
+Select **Parse input** to preview a document before running. Choose **Preview parsing and chunks**. Check the real text, character count, and chunk count. Move between chunks by number. This preview uses no model calls.
+
+If you change the document or chunk size, preview it again. Preview size limits do not change the run's input scope.
+
 ## Follow live work
 
 Open a running node to watch its response arrive as a token stream. Read its status, recent events, and available sample previews.
@@ -53,6 +57,8 @@ Find these collections under **Data Library → Manual datasets**. Export a ZIP 
 
 Automatic checks help find problems. They do not replace human review.
 
+Open a review queue directly from a completed task or its sample preview. The app keeps the selected task and data type. Agent traces open in the task's review area.
+
 ## Export a collection
 
 **Release Packages** shows available collections and their files. Inspect the contents before downloading. Candidate exports and reviewed releases have different review states. Check that state before training or sharing.
@@ -60,6 +66,8 @@ Automatic checks help find problems. They do not replace human review.
 ## Browse your library
 
 **Data Library** brings source files, sample previews, manual collections, and quality reports together. Search your files and inspect an item before using it.
+
+Choose **Use for generation** on a source file to add it to your current draft. Your goals and node model choices stay in place. **Import sources** opens the workbench's upload area.
 
 ## Settings
 

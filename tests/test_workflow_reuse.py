@@ -111,6 +111,41 @@ def test_agent_context_sources_keep_the_agent_picker_mode(tmp_path):
     assert copied["missing_sources"] == []
 
 
+def test_copy_can_find_a_document_beyond_the_old_picker_window(tmp_path, monkeypatch):
+    from lib.infrastructure.training_workflow import create_run
+    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+
+    selected = tmp_path / "manual.txt"
+    selected.write_text("Existing library document", encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = create_run(output, sources=[selected], targets=["cpt"])
+    inventory = [{"path": str(tmp_path / f"older-{i}.txt")} for i in range(600)]
+    inventory.append({"path": str(selected)})
+    limits = []
+
+    def bounded_inventory(_workspace, _suffixes, limit):
+        limits.append(limit)
+        return inventory[:limit]
+
+    monkeypatch.setattr(FilesystemWorkflowDriver, "source_files", staticmethod(bounded_inventory))
+    def copy_screen(output, run_id):
+        import streamlit as st
+        from pathlib import Path
+        from lib.bootstrap.workflows import workflow_application
+        from lib.bootstrap.creation_drafts import creation_draft_application
+        from lib.presentation.streamlit.workflow_reuse import reuse_run_as_draft
+        st.button("Copy", key="copy", on_click=reuse_run_as_draft,
+                  args=(workflow_application(Path(output).parent, Path(output)),
+                        creation_draft_application(Path(output)), "default", run_id))
+
+    ui = AppTest.from_function(copy_screen, args=(str(output), run_id)).run()
+    ui.button(key="copy").click().run()
+    assert not ui.exception
+    assert limits == [5000]
+    assert ui.session_state["workflow-form-draft:default"]["workflow-sources:default:文档资料"] == [str(selected)]
+    assert ui.session_state["workflow-reuse-notice:default"]["missing_sources"] == []
+
+
 def screen(output, run_id, inventory):
     import streamlit as st
     from pathlib import Path

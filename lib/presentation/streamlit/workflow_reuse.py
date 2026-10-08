@@ -143,9 +143,9 @@ def reuse_run_as_draft(application, draft_application, workspace: str, run_id: s
         state = application.state(run_id)
         mode = _source_mode(recipe)
         suffixes = _AGENT_SUFFIXES if mode == "Agent 上下文" else _DOCUMENT_SUFFIXES
-        # Match the workbench's mode-specific picker window. Selecting paths
-        # outside that window would make its next render silently drop them.
-        inventory = (application.source_files(workspace, suffixes, limit=501)
+        # Search the full bounded library rather than the former 501-row
+        # picker window. Content matching still verifies each candidate.
+        inventory = (application.source_files(workspace, suffixes, limit=5000)
                      if recipe.get("sources") else [])
         copied = recipe_to_draft(recipe, state.get("name", ""), workspace, inventory)
         current = st.session_state.get(f"workflow-form-draft:{workspace}")

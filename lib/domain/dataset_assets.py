@@ -8,6 +8,8 @@ from pathlib import PurePosixPath
 TRAINING_CATEGORIES = frozenset({"语料", "样本", "DPO 偏好对", "其他偏好数据"})
 OUTPUT_SUFFIXES = frozenset({".jsonl", ".json", ".html", ".txt", ".md", ".csv", ".xlsx", ".zip"})
 DIRECT_DOWNLOAD_LIMIT_BYTES = 50 * 1024 * 1024
+DOCUMENT_SOURCE_SUFFIXES = frozenset({".md", ".txt", ".pdf", ".docx"})
+CONVERSATION_SOURCE_SUFFIXES = frozenset({".json", ".jsonl"})
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,17 @@ class Asset:
 class AssetInventory:
     assets: tuple[Asset, ...]
     truncated: bool = False
+
+
+def generation_source_mode(asset: Asset) -> str:
+    """Only original, supported library inputs can enter a creation draft."""
+    if asset.origin != "source":
+        raise ValueError("asset_not_generation_source")
+    if asset.suffix in DOCUMENT_SOURCE_SUFFIXES:
+        return "文档资料"
+    if asset.suffix in CONVERSATION_SOURCE_SUFFIXES:
+        return "Agent 上下文"
+    raise ValueError("asset_not_generation_source")
 
 
 def output_category(relative_path: str) -> str:

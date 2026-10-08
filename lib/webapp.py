@@ -167,6 +167,7 @@ def page_workflow():
     from lib.bootstrap.workflows import workflow_application
     from lib.bootstrap.local_inputs import local_input_application
     from lib.presentation.streamlit.workflow_page import render_workbench
+    from lib.bootstrap.document_previews import document_preview_application
     from lib.bootstrap.workflow_node_models import workflow_node_models_application
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.bootstrap.backends import backend_application
@@ -175,7 +176,8 @@ def page_workflow():
                      input_cache=local_input_application(),
                      draft_application=creation_draft_application(_ws_out()),
                      backend_application=backend_application(ROOT),
-                     manual_application=manual_dataset_application(_ws_out()))
+                     manual_application=manual_dataset_application(_ws_out()),
+                     document_preview=document_preview_application(st.session_state["ws"]))
 
 
 def page_run(show_title=True):
@@ -467,9 +469,24 @@ def page_gates(show_title=True, focus_ids=None):
 
 def page_assets(show_title=True):
     from lib.bootstrap.asset_catalog import asset_catalog_application
+    from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.presentation.streamlit.asset_catalog_page import render_asset_catalog
+    from lib.presentation.streamlit.source_handoff import use_library_source
 
-    render_asset_catalog(asset_catalog_application(), st.session_state["ws"], show_title=show_title)
+    ws = st.session_state["ws"]
+    def import_sources():
+        st.session_state[f"workflow-source-mode:{ws}"] = "文档资料"
+        st.session_state[f"workflow-creation-mode:{ws}"] = "自动生成"
+        st.session_state[f"workflow-upload-format:{ws}"] = "全部文档"
+        st.session_state[f"workflow-setup-node:{ws}"] = "ingest"
+        st.session_state.pop(f"workflow-entry-target:{ws}", None)
+        _select_page("自动工作流")
+
+    render_asset_catalog(
+        asset_catalog_application(), ws, show_title=show_title,
+        on_use_source=lambda source: use_library_source(source, ws, creation_draft_application(_ws_out())),
+        on_import_sources=import_sources,
+    )
 
 
 def page_prefs(show_title=True):

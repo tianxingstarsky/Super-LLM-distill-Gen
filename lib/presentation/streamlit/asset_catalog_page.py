@@ -1,8 +1,10 @@
 """Data-library presentation using the application contract."""
 import html
 import streamlit as st
+from filelock import Timeout
 from lib.application.asset_catalog_service import AssetCatalogApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
+from lib.domain.dataset_assets import generation_source_mode
 
 
 def _move_page(key: str, delta: int):
@@ -17,13 +19,28 @@ def _asset_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, show_title=True):
+def _use_source(catalog, workspace_id, asset, on_use_source):
+    key = f"asset-handoff-error:{workspace_id}"
+    try:
+        on_use_source(catalog.generation_source(workspace_id, asset))
+    except (OSError, ValueError, Timeout, TypeError, KeyError) as error:
+        st.session_state[key] = ("单次生成最多使用 200 份资料。请先在工作台减少已选资料，再添加新文件。"
+                                 if str(error) == "generation_source_limit_exceeded"
+                                 else "资料未能加入生成草稿。请检查文件是否变化，或本机存储是否可用。")
+    else:
+        st.session_state.pop(key, None)
+
+
+def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, show_title=True, *,
+                         on_use_source=None, on_import_sources=None):
     if show_title:
         page_header("数据管理", "浏览来源、对话样本、偏好数据和工作流产物。", "DATA LIBRARY")
     from datetime import datetime
     from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES, TRAINING_CATEGORIES
     from lib.presentation.streamlit.data_management_style import DATA_MANAGEMENT_STYLE
     st.html(DATA_MANAGEMENT_STYLE)
+    if message := st.session_state.get(f"asset-handoff-error:{workspace_id}"):
+        st.error(message)
     inventory = catalog.inventory(workspace_id)
     categories = catalog.categories(inventory)
     source_count = categories.get("来源文件", 0)
@@ -43,12 +60,17 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
     )
     if inventory.truncated:
         st.caption("文件扫描已达到安全上限，计数为当前已列出的数量；其余文件可从本机缓存目录查看。")
-    filter_col, search_col = st.columns([1.4, 1], vertical_alignment="bottom")
+    controls = st.columns([1.4, 1, .55] if on_import_sources is not None else [1.4, 1],
+                          vertical_alignment="bottom")
+    filter_col, search_col = controls[:2]
     with filter_col:
         category = st.selectbox("文件分类", category_names, key=f"asset-category:{workspace_id}")
     with search_col:
         search = st.text_input("搜索文件", placeholder="按文件名或路径筛选…",
                                key=f"asset-search:{workspace_id}")
+    if on_import_sources is not None:
+        controls[2].button("导入资料", key=f"asset-import:{workspace_id}", width="stretch",
+                           on_click=on_import_sources)
     filtered = catalog.select(inventory, category, search)
     page_count = max(1, (len(filtered) + 99) // 100)
     page_key = f"asset-page:{workspace_id}:{category}:{search}"
@@ -111,6 +133,16 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
                 f'<div><span>修改时间</span><strong>{datetime.fromtimestamp(selected.mtime_ns / 1_000_000_000).strftime("%Y-%m-%d %H:%M")}</strong></div>'
                 '</div>'
             )
+            try:
+                generation_source_mode(selected)
+            except ValueError:
+                pass
+            else:
+                if on_use_source is not None:
+                    st.button("用于生成", key=f"asset-use:{workspace_id}:{selected.id}",
+                              type="primary", width="stretch", on_click=_use_source,
+                              args=(catalog, workspace_id, selected, on_use_source),
+                              help="加入当前生成草稿，保留已有目标和节点模型配置。")
             if selected.size <= DIRECT_DOWNLOAD_LIMIT_BYTES:
                 try:
                     payload = catalog.download(workspace_id, selected)

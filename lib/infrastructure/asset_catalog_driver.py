@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from lib import workspace
 from lib.domain.dataset_assets import (
     Asset, AssetInventory, DIRECT_DOWNLOAD_LIMIT_BYTES, OUTPUT_SUFFIXES, output_category,
+    generation_source_mode,
 )
 
 
@@ -123,6 +124,10 @@ class FilesystemAssetCatalogDriver:
             except ValueError:
                 pass
         return excerpt[:2000], "仅展示文件开头的摘录，未在这里校验全文件。"
+
+    def source_path_for_generation(self, workspace_id: str, asset: Asset) -> str:
+        generation_source_mode(asset)
+        return str(self._resolve(workspace_id, asset).resolve(strict=True))
 
     def download(self, workspace_id: str, asset: Asset) -> bytes:
         path = self._resolve(workspace_id, asset)

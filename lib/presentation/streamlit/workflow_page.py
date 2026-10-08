@@ -284,9 +284,10 @@ def _planned_dependencies_html(edges: tuple[tuple[str, str], ...]) -> str:
 
 
 def _open_sample_browser(run_id, target):
+    from lib.presentation.streamlit.review_navigation import request_app_navigation
     st.session_state["workflow-open-preview"] = {
         "workspace": st.session_state["ws"], "run_id": run_id, "target": target}
-    st.rerun()
+    request_app_navigation(run_id)
 
 
 def _open_package(run_id):
@@ -346,6 +347,8 @@ def _render_research_receipt(application, run_id, recipe, state):
 
 @st.fragment(run_every=2)
 def render_run(application, run_id, begin, *, embedded=False, draft_application=None):
+    from lib.presentation.streamlit.review_navigation import consume_app_navigation
+    consume_app_navigation(run_id)
     st.html(workflow_run_styles())
     try:
         # Inventory is only a snapshot. Read again inside the fragment so a
@@ -426,7 +429,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             if st.button("复制配置并修改", key=f"workflow-reuse:{run_id}", width="stretch",
                          help="保留当前未完成草稿，复制本次配置后调整；不会修改或启动原任务。"):
                 if reuse_run_as_draft(application, draft_application, workspace, run_id):
-                    st.rerun()
+                    st.rerun(scope="app")
         if error := st.session_state.pop(f"workflow-reuse-error:{workspace}", None):
             st.error(error)
     flow, inspector = st.columns([2.25, 1], gap="medium")
@@ -546,8 +549,34 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                "未通过原因": json.dumps(info["reasons"], ensure_ascii=False)}
                               for target, info in quality["targets"].items()], hide_index=True, width="stretch")
             if status in {"completed", "needs_attention"}:
-                st.button("查看并打包本次训练数据", on_click=_open_package, args=(run_id,),
-                          type="primary", key=f"zip:{run_id}")
+                from lib.presentation.streamlit.review_navigation import (
+                    review_choices, open_verified_review, open_package,
+                )
+                review_targets = dict(review_choices(state, {
+                    "counts": {target: item.get("eligible", 0)
+                               for target, item in quality["targets"].items()},
+                    "negative_counts": {"agent": quality["targets"].get("agent", {}).get("negative", 0)},
+                }))
+                package_action, review_action = (st.columns(2, gap="small") if review_targets
+                                                  else (st.container(), None))
+                with package_action:
+                    st.button("查看并打包本次训练数据", on_click=open_package, args=(run_id,),
+                              kwargs={"from_fragment": True},
+                              type="primary", key=f"zip:{run_id}", width="stretch")
+                if review_targets:
+                    with review_action:
+                        if len(review_targets) == 1:
+                            review_target = next(iter(review_targets))
+                        else:
+                            review_target = st.selectbox(
+                                "选择审核目标", list(review_targets),
+                                format_func=review_targets.__getitem__, key=f"workflow-review-target:{run_id}")
+                        st.button("进入当前任务的人工审核", on_click=open_verified_review,
+                                  args=(application, run_id, review_target), key=f"workflow-review:{run_id}",
+                                  kwargs={"from_fragment": True},
+                                  width="stretch")
+                if st.session_state.pop(f"workflow-review-error:{run_id}", False):
+                    st.error("无法读取或校验任务产物，请检查本次任务文件后重试。")
                 st.caption("按目标进入完整样本浏览，支持序号定位与连续翻阅。")
                 for target in state["targets"]:
                     eligible = int(quality["targets"].get(target, {}).get("eligible", 0))
@@ -804,7 +833,7 @@ def _upload_cache_error(error):
 
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
                      draft_application: CreationDraftApplication | None = None,
-                     backend_application=None, input_cache=None, manual_application=None):
+                     backend_application=None, input_cache=None, manual_application=None, document_preview=None):
     page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
@@ -874,8 +903,20 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     ) or "文档资料"
     source_extensions = ({".pdf", ".docx", ".txt", ".md"} if source_mode == "文档资料"
                          else {".json", ".jsonl"} if source_mode == "Agent 上下文" else set())
-    files = application.source_files(ws, suffixes=frozenset(source_extensions), limit=501) if source_extensions else []
+    files = application.source_files(ws, suffixes=frozenset(source_extensions), limit=5000) if source_extensions else []
     file_labels = {row["path"]: row["label"] for row in files}
+    sources_key = f"workflow-sources:{ws}:{source_mode}"
+    saved_sources = st.session_state.get(sources_key, st.session_state.get(f"workflow-form-draft:{ws}", {}).get(sources_key, []))
+    unavailable_sources = 0
+    # The bounded inventory must not silently erase valid selections from a
+    # saved draft or a library handoff beyond its first 5,000 files.
+    for saved_source in saved_sources if isinstance(saved_sources, list) and source_extensions and document_preview is not None else []:
+        if isinstance(saved_source, str) and saved_source not in file_labels:
+            try:
+                safe_source = document_preview.describe(saved_source, frozenset(source_extensions))
+                file_labels[saved_source] = safe_source["label"]
+            except (OSError, ValueError):
+                unavailable_sources += 1
     with st.container(border=True, key="workbench-targets"):
         section_heading("选择训练目标", icon="◈")
         target_key = f"workflow-targets:{ws}:{preset}"
@@ -973,7 +1014,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     # A short, informational node leaves most of the inspector column unused.
     # Put common controls there, while keeping long model/verification forms
     # separate from the full-width controls below the workbench.
-    compact_parameters = bool(targets and selected_node != "agent"
+    preview_in_input = bool(targets and selected_node == "ingest" and source_mode == "文档资料"
+                            and document_preview is not None)
+    compact_parameters = bool(targets and selected_node != "agent" and not preview_in_input
                               and not node_roles(selected_node, source_mode))
     with st.container(key=f"workbench-create:{ws}"):
         web_research, web_unavailable = None, False
@@ -1025,6 +1068,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     # The callback already persisted and selected these uploads.
                     uploaded = []
                 sources_key = f"workflow-sources:{ws}:{source_mode}"
+                if len(files) >= 5000:
+                    st.caption("仅列出前 5,000 份来源，已选资料会保留；更多文件可从资料库搜索后添加。")
+                if unavailable_sources:
+                    st.warning(f"有 {unavailable_sources} 份已选资料已失联、超限或不属于本机来源目录，已移出本次选择；请重新添加。")
                 _restore_selection(ws, sources_key, [], file_labels)
                 if file_labels:
                     selected = st.multiselect("本次使用的资料", list(file_labels),
@@ -1039,6 +1086,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                      placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                      key=f"workflow-source-brief:{ws}:{source_mode}")
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
+        if preview_in_input:
+            from lib.presentation.streamlit.document_preview import render_document_preview
+            with setup_col, st.container(border=True, key="workbench-source-preview"):
+                chunk_chars = _draft_number(
+                    "文档分块目标字符数", 200, 20000, 2000,
+                    key=f"workflow-chunk-chars:{ws}")
+                render_document_preview(document_preview, ws, selected, file_labels, int(chunk_chars))
         with (setup_col if compact_parameters else nullcontext()), st.container(
                 border=True, key="workbench-parameters-panel"):
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
@@ -1069,15 +1123,16 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 with b:
                     batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
                                              help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
-                with st.expander("输入范围与文档分块（可选）"):
-                    range_col, chunk_col = (st.columns(2, gap="small") if source_mode == "文档资料"
+                with st.expander("输入范围（可选）" if preview_in_input else "输入范围与文档分块（可选）"):
+                    range_col, chunk_col = (st.columns(2, gap="small") if source_mode == "文档资料" and not preview_in_input
                                             else (nullcontext(), nullcontext()))
                     with range_col:
                         maximum = _draft_number("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
                                               help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
-                    with chunk_col:
-                        chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
-                                   if source_mode == "文档资料" else 2000)
+                    if not preview_in_input:
+                        with chunk_col:
+                            chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
+                                           if source_mode == "文档资料" else 2000)
                 planning_count = min(int(sample_count), int(maximum)) if source_mode == "开放需求" else int(sample_count)
                 if source_mode == "开放需求" and maximum < sample_count:
                     st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")

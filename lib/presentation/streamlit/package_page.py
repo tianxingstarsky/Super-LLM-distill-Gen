@@ -14,6 +14,10 @@ from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.package_style import PACKAGE_STYLE
 from lib.presentation.streamlit.shared import page_header
 from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.review_navigation import (
+    REVIEW_MODES as _REVIEW_MODES, review_choices as _review_choices,
+    open_review as _go_to_review,
+)
 
 
 _STATUS = {
@@ -131,30 +135,6 @@ def _go_to_workflow() -> None:
 
 def _go_to_task_manager() -> None:
     st.session_state["nav"] = "任务管理"
-
-
-_REVIEW_MODES = {
-    "sft": ("SFT 数据调整", "sft-review-run"),
-    "dpo": ("DPO 偏好优化", "preference-review-run"),
-    "orpo": ("ORPO 偏好优化", "preference-review-run:orpo"),
-    "rlaif": ("RLAIF 反馈审核", "preference-review-run:rlaif"),
-    "cpt": ("CPT 语料审核", "corpus-review-run"),
-}
-
-
-def _review_choices(state: dict, manifest: dict) -> list[tuple[str, str]]:
-    """Offer only review queues backed by a verified, nonempty native artifact."""
-    counts = manifest.get("counts", {})
-    targets = set(state.get("targets", []))
-    return [(target, _REVIEW_MODES[target][0]) for target in _REVIEW_MODES
-            if target in targets and int(counts.get(target, 0)) > 0]
-
-
-def _go_to_review(run_id: str, target: str) -> None:
-    mode, selector_key = _REVIEW_MODES[target]
-    st.session_state[f"review-mode:{st.session_state['ws']}"] = mode
-    st.session_state[selector_key] = run_id
-    st.session_state["nav"] = "人工审核"
 
 
 def _render_empty(runs: list[dict], *, has_releases: bool = False) -> None:
@@ -320,8 +300,18 @@ def _render_previews(application: WorkflowApplication, run_id: str, state: dict,
     if not choices:
         return
     st.html(_heading("◫", "真实样本预览", "直接读取已校验的训练 JSONL，展示前两条记录"))
+    selection_key = f"package-preview:{run_id}"
+    requested = st.session_state.pop(f"package-target:{st.session_state['ws']}:{run_id}", None)
+    if requested is not None:
+        selected = next((choice for choice in choices if choice[0] == requested), None)
+        if selected is not None:
+            st.session_state[selection_key] = selected
+            if requested in dict(_review_choices(state, inventory["manifest"])):
+                st.session_state[f"package-review-target:{run_id}"] = requested
+    if st.session_state.get(selection_key) not in choices:
+        st.session_state.pop(selection_key, None)
     choice = st.selectbox("预览训练文件", choices, format_func=lambda pair: pair[1],
-                          key=f"package-preview:{run_id}")
+                          key=selection_key)
     try:
         rows = application.artifact_preview(run_id, choice[0], limit=2)
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
@@ -523,15 +513,17 @@ def render_package_page(application: WorkflowApplication) -> None:
                     st.html('<div class="df-pack-review-target"><b>' + _safe(review_target.upper())
                             + '</b><span>' + _safe(review_choices[0][1]) + '</span></div>')
                 else:
+                    target_key = f"package-review-target:{run_id}"
+                    if st.session_state.get(target_key) not in dict(review_choices):
+                        st.session_state.pop(target_key, None)
                     review_target = st.selectbox(
                         "选择审核目标", [target for target, _ in review_choices],
                         format_func=lambda target: _REVIEW_MODES[target][0],
-                        key=f"package-review-target:{run_id}",
+                        key=target_key,
                     )
                 st.button("进入当前任务的人工审核", on_click=_go_to_review,
                           args=(run_id, review_target), key=f"package-review:{run_id}",
                           width="stretch")
-                st.caption("此入口仅显示本次任务中有合格原生样本的 CPT、SFT、DPO、ORPO、RLAIF 审核队列。")
         with st.container(border=True):
             st.html(_heading("◷", "最近可导出任务", "本机已完成的工作流"))
             for recent in ready[:5]:
