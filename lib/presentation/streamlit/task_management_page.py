@@ -257,13 +257,16 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         return None
     st.html(_summary_html(runs))
     attention, active = _quick_switch_runs(runs)
-    toolbar = st.columns([1.4, 1.6, 1] if attention[1] or active[1] else [2.5, 1],
+    focus_key = f"task-center-focus:{workspace_id}"
+    show_quick_switch = bool((attention[1] or active[1])
+                             and (len(runs) > 3 or st.session_state.get(focus_key, len(runs) <= 3)))
+    toolbar = st.columns([1.4, 1.6, 1] if show_quick_switch else [2.5, 1],
                          gap="small", vertical_alignment="center")
     focus_column, create_column = toolbar[0], toolbar[-1]
     with focus_column:
-        focus = st.toggle("放大工作流视图", value=len(runs) <= 3, key=f"task-center-focus:{workspace_id}",
+        focus = st.toggle("放大工作流视图", value=len(runs) <= 3, key=focus_key,
                           help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
-    if len(toolbar) == 3:
+    if show_quick_switch:
         language = st.session_state.get("ui_language", "zh")
         shortcuts = {str(run["id"]): run for run in [*attention[0], *active[0]]}
         options = [None, *shortcuts]

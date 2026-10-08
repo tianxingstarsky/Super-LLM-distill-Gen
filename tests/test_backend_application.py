@@ -96,3 +96,19 @@ def test_duplicate_protection_and_budget_reset_use_explicit_port_operations():
     assert app.reset_budget("admin", 5.0) == 2.5
     assert port.events[-2:] == [("budget_reset", "admin", 5.0), ("audit", "admin", 2.5)]
     assert app.list_backends()["spent"] == 0.0
+
+
+def test_explicit_vision_capability_is_per_model_and_invalidates_on_connection_change():
+    from lib.domain.document_parser import supports_vision
+    port = MemoryBackendPort()
+    app = BackendApplication(port)
+    app.confirm_model_vision("cloud", "base", True)
+    endpoint = app.merged_backends()["cloud"]
+    assert supports_vision(endpoint, "base")
+    assert not supports_vision(endpoint, "unconfirmed-model")
+    assert not supports_vision({**endpoint, "base_url": "https://different.test/v1"}, "base")
+    inventory = app.list_backends()["backends"][0]
+    assert supports_vision(inventory, "base")
+    app.save_endpoint("cloud", "https://different.test/v1", ["base"], api_key_env="CLOUD_KEY",
+                      explicit_replace=True)
+    assert not supports_vision(app.merged_backends()["cloud"], "base")

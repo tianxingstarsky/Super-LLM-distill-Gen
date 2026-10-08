@@ -310,7 +310,7 @@ $theme_vars
 .df-workflow-targets-compact strong { font-size: 12px; }
 .df-workflow-targets-compact small { font-size: 10px; }
 [data-testid="stApp"] [class*="st-key-workflow-source-mode"], [data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] { width: 100%; }
-[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); width: 100%; max-width: none; gap: 12px; padding: 0; background: transparent; }
+[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); width: 100%; max-width: none; gap: 12px; padding: 0; background: transparent; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button { display: grid; grid-template-columns: 36px minmax(0,1fr); grid-template-rows: auto auto; align-content: center; column-gap: 10px; row-gap: 4px; min-height: 78px; padding: 11px 12px; border: 1px solid #DEE7F3; border-radius: 10px; background: linear-gradient(150deg,#FFF,#F8FBFF); color: var(--df-text); text-align: left; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button[data-selected="true"] { border-color: #75A9EC; background: #EFF6FF; color: #1263C9; box-shadow: 0 3px 10px rgba(30,105,205,.08); }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button::before { display: grid; grid-column: 1; grid-row: 1 / 3; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: #EAF2FF; color: #1769E0; font-size: 22px; }
@@ -318,10 +318,13 @@ $theme_vars
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button::after { grid-column: 2; grid-row: 2; align-self: start; color: #718198; font-size: 11px; font-weight: 450; line-height: 1.45; white-space: normal; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(1)::before { content: "▤"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(2)::before { content: "◈"; background: #E8F7F1; color: #16845E; }
-[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::before { content: "✦"; background: #F1ECFC; color: #7350C8; }
+[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::before { content: "⌕"; background: #E5F5FA; color: #147C9D; }
+[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(4)::before { content: "✦"; background: #F1ECFC; color: #7350C8; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(1)::after { content: "MD / TXT / PDF / DOCX · 保留原文来源"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(2)::after { content: "对话、工具调用与真实观测"; }
-[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::after { content: "描述任务领域和应用场景"; }
+[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::after { content: "本地知识库 / Qdrant · 检索正文"; }
+[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(4)::after { content: "描述任务领域和应用场景"; }
+@media (max-width: 1000px) { [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 760px) { [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] { grid-template-columns: 1fr; } }
 .df-package-recent { border-bottom: 1px solid #E9EEF5; padding: 9px 0; }
 .df-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #20A478; }

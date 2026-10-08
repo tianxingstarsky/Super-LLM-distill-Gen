@@ -48,6 +48,10 @@ See the path from source material to a finished collection. Each stage has a cle
 
 Open a model node to watch its response arrive as a token stream. For larger jobs, choose a batch size and follow progress. If a run fails, retry from saved checkpoints. Completed results remain available.
 
+Use a local knowledge base or an existing Qdrant collection as a source. Search a topic. Check the matched text and its origins. Generate from those passages. Saved tasks keep the retrieved text and source records.
+
+Scanned documents can use a model with confirmed image support. Choose it in the Input node. Read PDF pages, images, and pictures inside DOCX files. Check the extracted content before use.
+
 <p align="center">
   <img src="screenshots/workflow.jpg" width="1200" alt="The actual workflow canvas with a selected node and its model settings" />
 </p>

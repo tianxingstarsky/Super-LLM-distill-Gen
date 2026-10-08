@@ -1,7 +1,11 @@
 """Scoped visual language for the workspace data library."""
 
 DATA_MANAGEMENT_STYLE = """<style>
-.df-data-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; padding:12px 0; margin:0; border:1px solid #DFE8F5; border-radius:10px; background:#fff; }
+.df-data-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; padding:12px 0; margin:0; border:1px solid #DFE8F5; border-radius:10px; background:linear-gradient(110deg,#FFF,#F3F8FF); box-shadow:0 3px 12px #3A639509; }
+.st-key-asset-directory, .st-key-asset-details { padding:15px; border-radius:12px; box-shadow:0 3px 14px #305E9307; }
+.st-key-asset-directory { border-top:3px solid #6CA7E9; background:linear-gradient(145deg,#FFF 70%,#F5F9FF); }
+.st-key-asset-details { background:linear-gradient(135deg,#FCFEFF,#F7FAFF); }
+.st-key-asset-directory [data-testid="stDataFrame"] { border:1px solid #DBE6F4; border-radius:9px; overflow:hidden; }
 .df-data-stat { display:grid; grid-template-columns:26px minmax(0,1fr) auto; align-items:center; gap:9px; min-width:0; padding:0 14px; border-left:1px solid #E8EEF6; }
 .df-data-stat:first-child { border-left:0; }
 .df-data-stat > b { display:grid; place-items:center; width:26px; height:26px; border-radius:7px; background:#EAF2FF; color:#1769D2; font-size:14px; line-height:1; }

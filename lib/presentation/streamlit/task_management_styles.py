@@ -23,6 +23,8 @@ def task_management_styles() -> str:
 .df-task-list-head {display:flex;align-items:center;justify-content:space-between;gap:8px;margin:3px 0 11px}
 .df-task-list-head strong {color:#1c304d;font-size:16px;letter-spacing:.01em}
 .df-task-list-head small {color:#8291a7;font-size:12px;text-align:right}
+[class*="st-key-task-center-list-"] {padding:13px 14px;border:1px solid #dce7f4;border-radius:12px;
+  background:linear-gradient(145deg,#fff,#f7faff);box-shadow:0 3px 12px #35598106}
 [class*="st-key-task-center-filter"] {max-width:100%}
 [class*="st-key-task-center-filter"] [role="radiogroup"] {max-width:100%;box-sizing:border-box}
 [class*="st-key-task-center-filter"] [role="radio"] {min-width:0;padding:4px 7px;font-size:11px}
@@ -80,7 +82,11 @@ def task_management_styles() -> str:
 .df-task-activity-empty span {font-size:12px;color:#788ca5}
 .df-task-no-match {padding:22px;border:1px dashed #d5e2f2;border-radius:10px;color:#7889a0;
   background:#f9fcff;font-size:12px;text-align:center;line-height:1.6}
-.df-task-empty {padding:14px 8px 24px}
+.df-task-empty {position:relative;overflow:hidden;padding:22px 18px 28px;border:1px solid #e1eaf6;border-radius:12px;
+  background:radial-gradient(circle at 95% 8%,#e0edff,transparent 47%),linear-gradient(120deg,#fff,#f7fbff)}
+.df-task-empty::after {content:"";position:absolute;top:28px;right:20px;width:54px;height:54px;
+  border:1px solid #c7dcf5;border-radius:14px;transform:rotate(25deg);pointer-events:none;
+  background:linear-gradient(145deg,#ffffffbb,#93c2f526);box-shadow:9px 10px 0 -2px #d9e8fb66}
 .df-task-empty-icon {display:grid;place-items:center;width:54px;height:54px;margin-bottom:19px;border-radius:15px;
   background:linear-gradient(145deg,#dff0ff,#e9e8ff);color:#1769e0;font-size:28px}
 .df-task-empty h3 {margin:0 0 9px;color:#172b46;font-size:22px}

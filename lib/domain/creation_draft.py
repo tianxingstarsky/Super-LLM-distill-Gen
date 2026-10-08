@@ -8,11 +8,14 @@ NUMBER_FIELDS = {
     'workflow-turns': (2, 8), 'workflow-concurrency': (1, MAX_CONCURRENCY),
     'workflow-batch-size': (1, MAX_BATCH_SIZE), 'workflow-chunk-chars': (200, 20000),
     'workflow-web-research-count': (1, 5),
+    'workflow-knowledge-limit': (1, 50),
 }
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
                'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
-               'workflow-web-research-query': 160, 'workflow-web-research-more': 700}
-ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'})}
+               'workflow-web-research-query': 160, 'workflow-web-research-more': 700,
+               'workflow-knowledge-query': 2000}
+ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
+               'workflow-knowledge-provider': frozenset({'local', 'qdrant'})}
 
 
 def validate_creation_draft(values):

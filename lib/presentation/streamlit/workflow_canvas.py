@@ -33,7 +33,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         done, total = int(metrics.get("done", 0) or 0), int(metrics.get("total", 0) or 0)
         status = metrics.get("status", "pending")
         node_bindings = (bindings or {}).get(key, {})
-        role = node_bindings.get("generation") or node_bindings.get("jev")
+        role = node_bindings.get("generation") or node_bindings.get("jev") or node_bindings.get("vision")
         status_label = {"completed": "完成", "running": "执行中", "failed": "失败", "cancelled": "已停止",
                         "pending": "等待", "queued": "待启动"}.get(status, "等待")
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
@@ -43,7 +43,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                     translate_label("点击配置节点", language))
         models = []
         if not live:
-            for role_key, zh, en in (("generation", "生成", "Generate"), ("jev", "评审", "Review")):
+            for role_key, zh, en in (("generation", "生成", "Generate"), ("jev", "评审", "Review"), ("vision", "识别", "Read")):
                 binding = node_bindings.get(role_key)
                 if binding:
                     models.append(f"{en if language == 'en' else zh}: {binding['backend']} · {binding['model']}")

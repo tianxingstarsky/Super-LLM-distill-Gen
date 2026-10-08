@@ -4,7 +4,11 @@ Bring your sources. Choose your data goals. Follow each stage and review the res
 
 ## Home
 
-Start with documents, agent context, or an open brief. MD and TXT files have direct import shortcuts. You can also choose **Create image Q&A**.
+Start with documents, agent context, or an open brief. The document entry accepts MD, TXT, PDF, and DOCX. You can also choose **Create image Q&A**.
+
+Knowledge sources are available in the generation workspace. Build a persistent local index from your files, or connect an existing Qdrant collection in the Input node. Search a topic and inspect the matched passages before starting. Local search uses full-text ranking. Qdrant search uses the collection's embedding model and vector dimensions. The task keeps a snapshot of the retrieved text and its source evidence.
+
+The Input node also offers multimodal document reading. Confirm image support for the exact model before enabling it. PDF pages and images are read by that model. DOCX text is kept alongside readings of embedded images. You can follow the model output inside the running node. Extracted content still needs review.
 
 All nine training goals have visible shortcuts:
 

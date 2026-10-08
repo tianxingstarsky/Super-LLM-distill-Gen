@@ -1,9 +1,11 @@
 """Data-library presentation using the application contract."""
 import html
+import hashlib
 import streamlit as st
 from filelock import Timeout
 from lib.application.asset_catalog_service import AssetCatalogApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
+from lib.presentation.streamlit.i18n import translate
 from lib.domain.dataset_assets import generation_source_mode
 
 
@@ -17,6 +19,23 @@ def _asset_size(size: int) -> str:
     if size < 1024 * 1024:
         return f"{size / 1024:.1f} KB"
     return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _selection_asset(assets, positions, preferred_id=None):
+    """Resolve table positions only against their current, bounded page."""
+    if not assets:
+        return None
+    if (isinstance(positions, (list, tuple)) and len(positions) == 1
+            and type(positions[0]) is int and 0 <= positions[0] < len(assets)):
+        return assets[positions[0]]
+    return next((asset for asset in assets if asset.id == preferred_id), assets[0])
+
+
+def _table_identity(assets, context):
+    # Any change to row order or file version creates a fresh selection lease.
+    # An old browser event can therefore never select a different file by index.
+    value = (context, [(asset.id, asset.size, asset.mtime_ns) for asset in assets])
+    return hashlib.sha256(repr(value).encode("utf-8", "surrogatepass")).hexdigest()[:20]
 
 
 def _use_source(catalog, workspace_id, asset, on_use_source):
@@ -89,37 +108,29 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
     start = (int(page) - 1) * 100
     selected_rows = filtered[start:start + 100]
     list_col, detail_col = st.columns([1.55, 1], gap="large")
-    with detail_col:
-        detail_panel = st.container(border=True)
-    with detail_panel:
-        section_heading("文件详情", "查看路径、大小和内容摘录", "◉")
-        if selected_rows:
-            selected = st.selectbox(
-                "查看文件详情", selected_rows,
-                format_func=lambda asset: asset.label,
-                key=f"asset-selected:{workspace_id}:{category}:{search}:{page}",
-            )
-    with list_col, st.container(border=True):
-        section_heading("文件目录", f"{len(filtered)} 个匹配文件 · 来源优先", "▤")
+    with list_col, st.container(border=True, key="asset-directory"):
+        section_heading("文件目录", "点击文件行，查看详情或继续生成。", "▤")
         if not filtered:
             st.html('<div class="df-empty-state"><span class="df-empty-state-icon">▤</span><strong>没有匹配的文件</strong><p>清除搜索词，或切换文件分类。</p></div>')
         else:
-            rows = []
-            for asset in selected_rows:
-                ext = asset.suffix.upper().lstrip(".") or "FILE"
-                label = asset.label
-                size = _asset_size(asset.size)
-                rows.append(
-                    f'<div class="df-data-list-row" data-selected="{str(asset == selected).lower()}">'
-                    f'<div class="df-data-file"><b data-ext="{html.escape(ext, quote=True)}">{html.escape(ext[:5])}</b>'
-                    f'<span title="{html.escape(label, quote=True)}">{html.escape(asset.name)}</span></div>'
-                    f'<span>{html.escape(ext)}</span>'
-                    f'<span title="{html.escape(label, quote=True)}">{html.escape(label)}</span>'
-                    f'<span>{html.escape(size)}</span></div>'
-                )
-            st.html('<div class="df-data-list"><div class="df-data-list-head"><span>文件名</span><span>类型</span><span>来源 / 目录</span><span>大小</span></div>' + "".join(rows) + '</div>')
+            context = (workspace_id, category, search, int(page))
+            remember_key = "asset-current:" + _table_identity([], context)
+            preferred = _selection_asset(selected_rows, [], st.session_state.get(remember_key))
+            ui_language = st.session_state.get("ui_language", "zh")
+            rows = [{"文件名": asset.name, "类型": asset.suffix.upper().lstrip(".") or "FILE",
+                     "来源 / 目录": translate(asset.label, ui_language), "大小": _asset_size(asset.size)}
+                    for asset in selected_rows]
+            event = st.dataframe(
+                rows, hide_index=True, width="stretch", height=min(610, 42 + len(rows) * 44), row_height=44,
+                on_select="rerun", selection_mode="single-row",
+                selection_default={"selection": {"rows": [selected_rows.index(preferred)]}},
+                key=f"asset-table:{workspace_id}:" + _table_identity(selected_rows, context),
+            )
+            selected = _selection_asset(selected_rows, event.selection.rows, preferred.id)
+            st.session_state[remember_key] = selected.id
             st.caption(f"显示 {start + 1}–{start + len(selected_rows)} / {len(filtered)} 个文件")
-    with detail_panel:
+    with detail_col, st.container(border=True, key="asset-details"):
+        section_heading("文件详情", "查看路径、大小和内容摘录", "◉")
         if not filtered:
             st.caption("选择一个文件后，可在此查看详情并下载。")
         else:

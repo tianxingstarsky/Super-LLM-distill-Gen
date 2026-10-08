@@ -13,7 +13,7 @@ from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_scale import validate_node_models
 
 
-_DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md"})
+_DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"})
 _AGENT_SUFFIXES = frozenset({".json", ".jsonl"})
 _MAX_SOURCE_BYTES = 50 * 1024 * 1024
 _MAX_MATCH_BYTES = 200 * 1024 * 1024

@@ -7,6 +7,29 @@ from streamlit.testing.v1 import AppTest
 from lib.presentation.streamlit.task_management_page import _quick_switch_runs
 
 
+def test_small_visible_task_list_has_one_selector_but_focus_view_keeps_quick_switch():
+    script = '''
+import streamlit as st
+from unittest.mock import patch
+from lib.presentation.streamlit import task_management_page as page
+class Application:
+    def task_runs(self):
+        return [{"id": str(number), "name": "Task " + str(number), "status": "running",
+                 "targets": ["sft"]} for number in range(3)]
+st.session_state["ws"] = "fixture"
+st.session_state.setdefault("task-center-focus:fixture", False)
+with patch.object(page, "render_run", lambda *args, **kwargs: None):
+    page.render_task_management(Application(), "fixture", lambda _: None, lambda: None)
+'''
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    assert len([button for button in ui.button if button.key.startswith("task-card:fixture:")]) == 3
+    assert not any(widget.key == "task-quick-select:fixture" for widget in ui.selectbox)
+    ui.toggle(key="task-center-focus:fixture").set_value(True).run()
+    assert not ui.exception
+    assert ui.selectbox(key="task-quick-select:fixture")
+
+
 def test_quick_switch_shows_recent_distinct_actionable_runs_only():
     runs = [
         {"id": f"running-{number}", "status": "running",

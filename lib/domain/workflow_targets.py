@@ -5,7 +5,7 @@ from lib.domain.workflow_quality import accepted, same_answer, text_issue, verdi
 
 TARGETS = ("cpt", "sft", "dpo", "rlaif", "gsm8k", "cot", "orpo", "agent", "multiturn")
 PREFERENCE_TARGETS = frozenset({"dpo", "rlaif", "orpo"})
-INPUT_EXTENSIONS = frozenset({".md", ".txt", ".pdf", ".docx", ".json", ".jsonl"})
+INPUT_EXTENSIONS = frozenset({".md", ".txt", ".pdf", ".docx", ".json", ".jsonl", ".png", ".jpg", ".jpeg", ".webp"})
 STAGES = {
     "ingest": "解析与来源检查",
     "cpt": "CPT 语料整理",

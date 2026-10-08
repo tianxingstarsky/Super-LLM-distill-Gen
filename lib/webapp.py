@@ -168,6 +168,7 @@ def page_workflow():
     from lib.bootstrap.local_inputs import local_input_application
     from lib.presentation.streamlit.workflow_page import render_workbench
     from lib.bootstrap.document_previews import document_preview_application
+    from lib.bootstrap.knowledge import knowledge_application
     from lib.bootstrap.workflow_node_models import workflow_node_models_application
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.bootstrap.backends import backend_application
@@ -177,7 +178,8 @@ def page_workflow():
                      draft_application=creation_draft_application(_ws_out()),
                      backend_application=backend_application(ROOT),
                      manual_application=manual_dataset_application(_ws_out()),
-                     document_preview=document_preview_application(st.session_state["ws"]))
+                     document_preview=document_preview_application(st.session_state["ws"]),
+                     knowledge_application=knowledge_application(st.session_state["ws"]))
 
 
 def page_run(show_title=True):

@@ -25,7 +25,7 @@ from lib.domain.web_research import MAX_QUERIES, validate_web_research
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
-from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification
+from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
@@ -48,6 +48,11 @@ PRESETS = {
 
 def _select_setup_node(key: str, node: str) -> None:
     st.session_state[key] = node
+
+
+def _change_source_mode(workspace, key):
+    _save_draft_value(workspace, key)
+    st.session_state[f"workflow-setup-node:{workspace}"] = "ingest"
 
 
 def _save_sft_output_style(workspace: str) -> None:
@@ -84,6 +89,17 @@ def _workflow_error(error) -> str:
         "model_budget_prices_required": "模型服务未配置输入和输出单价。请在节点连接中填写，或明确设为免费服务。",
         "workflow_endpoint_pin_invalid": "本次任务的模型配置快照无效。请新建任务。",
         "workflow_endpoint_changed_create_new_run": "模型服务配置已改变。为避免任务使用不同服务，请新建任务。",
+        "document_model_vision_not_confirmed": "模型尚未确认图片输入能力，请在输入节点核实并保存确认。",
+        "document_vision_model_required": "请在输入节点选择多模态识别模型。",
+        "document_image_requires_vision_parser": "图片需要多模态识别，请在输入节点配置模型。",
+        "document_vision_requires_document_sources": "多模态识别需要文档或图片来源。",
+        "document_pdf_renderer_unavailable": "PDF 页面识别组件不可用，请重新安装项目依赖。",
+        "document_vision_page_limit": "单份文档最多识别 200 页或图片，请先拆分文件。",
+        "document_image_too_large": "图片尺寸过大，请缩小后重新上传。",
+        "invalid_document_image": "图片无法读取，请检查格式后重新上传。",
+        "document_pdf_page_invalid": "PDF 页面尺寸无效，请检查文件。",
+        "document_docx_expansion_limit": "DOCX 展开内容过大，请先拆分文件。",
+        "document_external_image_unsupported": "DOCX 包含外部图片，请将图片嵌入文件后再上传。",
     }.get(str(error), str(error))
 
 
@@ -244,7 +260,7 @@ def _missing_model_role_summary(issues, language):
     pending_roles = {}
     for node, role in issues:
         pending_roles.setdefault(node, []).append(role)
-    role_labels = {"generation": "生成模型", "jev": "独立质量评审模型"}
+    role_labels = {"generation": "生成模型", "jev": "独立质量评审模型", "vision": "多模态识别模型"}
     descriptions = []
     for node, roles in pending_roles.items():
         node_label = translate_label(GRAPH_LABELS[node], language)
@@ -833,7 +849,8 @@ def _upload_cache_error(error):
 
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
                      draft_application: CreationDraftApplication | None = None,
-                     backend_application=None, input_cache=None, manual_application=None, document_preview=None):
+                     backend_application=None, input_cache=None, manual_application=None, document_preview=None,
+                     knowledge_application=None):
     page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
@@ -889,19 +906,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             _save_draft_value(ws, entry_key)
     preset_key = f"workflow-preset:{ws}"
     _restore_selection(ws, preset_key, "自动推荐", PRESETS)
-    preset = st.segmented_control(
-        "快捷方案", tuple(PRESETS), default=None, key=preset_key,
-        on_change=_save_draft_value, args=(ws, preset_key),
-        help="选择常用目标组合。下面仍可逐项增删训练目标。",
-    ) or "自动推荐"
     source_key = f"workflow-source-mode:{ws}"
-    _restore_selection(ws, source_key, "文档资料", ("文档资料", "Agent 上下文", "开放需求"))
+    source_modes = ("文档资料", "Agent 上下文", "知识库检索", "开放需求")
+    _restore_selection(ws, source_key, "文档资料", source_modes)
     source_mode = st.segmented_control(
-        "选择来源类型", ("文档资料", "Agent 上下文", "开放需求"),
-        default=None, key=source_key, on_change=_save_draft_value, args=(ws, source_key),
+        "选择来源类型", source_modes,
+        default=None, key=source_key, on_change=_change_source_mode, args=(ws, source_key),
         help="按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。",
     ) or "文档资料"
-    source_extensions = ({".pdf", ".docx", ".txt", ".md"} if source_mode == "文档资料"
+    source_extensions = ({".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"} if source_mode == "文档资料"
                          else {".json", ".jsonl"} if source_mode == "Agent 上下文" else set())
     files = application.source_files(ws, suffixes=frozenset(source_extensions), limit=5000) if source_extensions else []
     file_labels = {row["path"]: row["label"] for row in files}
@@ -918,7 +931,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             except (OSError, ValueError):
                 unavailable_sources += 1
     with st.container(border=True, key="workbench-targets"):
-        section_heading("选择训练目标", icon="◈")
+        heading_col, preset_col = st.columns([2, 1], vertical_alignment="center")
+        with heading_col:
+            section_heading("选择训练目标", icon="◈")
+        with preset_col:
+            preset = st.selectbox("快捷方案", tuple(PRESETS), key=preset_key,
+                on_change=_save_draft_value, args=(ws, preset_key),
+                help="选择常用目标组合。下面仍可逐项增删训练目标。")
         target_key = f"workflow-targets:{ws}:{preset}"
         target_defaults = [target for target in PRESETS[preset] if target in TARGETS]
         _restore_selection(ws, target_key, target_defaults, TARGETS)
@@ -953,17 +972,29 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.session_state[style_key] = st.session_state[draft_key]
         sft_output_style = st.session_state[style_key]
     agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
+    document_parser = {"mode": "native"}
+    if source_mode == "文档资料" and document_parser_mode(ws) == "vision":
+        document_parser = {"mode": "vision"}
+        saved_binding = st.session_state.get(f"workflow-node-bindings:{ws}", {}).get("ingest", {}).get("vision")
+        if saved_binding:
+            document_parser["binding"] = saved_binding
     if targets:
         selection_key = f"workflow-setup-node:{ws}"
         selected_node = st.session_state.get(selection_key, "sft" if "sft" in graph_nodes else "ingest")
         if selected_node not in graph_nodes:
             selected_node = graph_nodes[0]
         st.session_state[selection_key] = selected_node
-        bindings, endpoints = node_bindings(model_application, graph_nodes, source_mode, ws)
-        model_issues = missing_bindings(graph_nodes, source_mode, bindings, endpoints)
+        model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else source_mode
+        bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws)
+        if document_parser.get("mode") == "vision" and document_parser.get("binding"):
+            from lib.domain.document_parser import supports_vision
+            vision_binding = document_parser["binding"]
+            if not supports_vision(endpoints.get(vision_binding["backend"], {}), vision_binding["model"]):
+                document_parser["unconfirmed"] = True
+        model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints)
         if backend_application is not None:
             pricing_issues = _missing_budget_prices(
-                graph_nodes, source_mode, bindings, endpoints,
+                graph_nodes, model_source_mode, bindings, endpoints,
                 backend_application.list_backends().get("budget") or {},
             )
         if model_issues:
@@ -987,13 +1018,20 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         with source_col, st.container(border=True, key="workbench-canvas-panel"):
             section_heading("工作流节点配置", "点击节点查看步骤；需要模型的节点可在右侧选择。", "◇")
             render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
-                                      snapshot_available_bindings(graph_nodes, source_mode, bindings, endpoints),
-                                      language=st.session_state.get("ui_language", "zh"), source_mode=source_mode),
+                                      snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints),
+                                      language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode),
                           selection_key, key=f"setup-canvas:{ws}")
         with setup_col, st.container(border=True, key="workbench-node-panel"):
             section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
-            render_node_models(selected_node, source_mode, ws, bindings, endpoints,
-                               backend_application=backend_application)
+            if selected_node == "ingest" and source_mode == "文档资料":
+                document_parser = render_document_parser(ws, bindings, endpoints,
+                    backend_application=backend_application)
+            elif selected_node == "ingest" and source_mode == "知识库检索" and knowledge_application is not None:
+                from lib.presentation.streamlit.knowledge_page import render_knowledge_settings
+                render_knowledge_settings(knowledge_application, ws)
+            else:
+                render_node_models(selected_node, source_mode, ws, bindings, endpoints,
+                                   backend_application=backend_application)
             if selected_node == "sft":
                 sft_output_style = st.selectbox(
                     "SFT 推理内容输出", ("separated", "drop"),
@@ -1007,7 +1045,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("当前 SFT 节点独立设置；不会改变其他任务的输出方式。")
             if selected_node == "agent":
                 render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
-            if selected_node == "ingest":
+            if selected_node == "ingest" and source_mode != "知识库检索":
                 st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
             elif selected_node == "package":
                 st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
@@ -1015,11 +1053,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     # Put common controls there, while keeping long model/verification forms
     # separate from the full-width controls below the workbench.
     preview_in_input = bool(targets and selected_node == "ingest" and source_mode == "文档资料"
-                            and document_preview is not None)
+                            and document_parser.get("mode") == "native" and document_preview is not None)
     compact_parameters = bool(targets and selected_node != "agent" and not preview_in_input
-                              and not node_roles(selected_node, source_mode))
+                              and source_mode != "知识库检索" and not node_roles(selected_node,
+                                  "多模态文档" if document_parser.get("mode") == "vision" else source_mode))
     with st.container(key=f"workbench-create:{ws}"):
         web_research, web_unavailable = None, False
+        knowledge_source_names = {}
         with source_col, st.container(border=True, key="workbench-source-panel"):
             section_heading("添加来源", f"本次来源类型：{source_mode}", "▤")
             if source_mode == "开放需求":
@@ -1043,22 +1083,26 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                             }
                             st.warning(messages.get(str(error), "联网检索配置无效，请检查公开检索词与目标。"))
                             web_unavailable = True
+            elif source_mode == "知识库检索":
+                uploaded = []
+                if knowledge_application is None:
+                    st.error("知识库服务未加载，请重新打开应用。")
+                    selected = []
+                else:
+                    from lib.presentation.streamlit.knowledge_page import render_knowledge_source
+                    knowledge_files = application.source_files(ws, suffixes=frozenset({".md", ".txt", ".pdf", ".docx"}), limit=5000)
+                    selected, knowledge_source_names = render_knowledge_source(knowledge_application, ws,
+                        knowledge_files, input_cache=input_cache, save_field=_save_draft_value)
+                brief = _draft_brief("补充生成要求（可选）", key=f"workflow-source-brief:{ws}:{source_mode}")
             else:
                 if source_mode == "Agent 上下文":
                     st.caption("导入完整的 JSON / JSONL 对话记录；工具轨迹需要真实观测。")
                 else:
-                    st.caption("上传 PDF、DOCX、TXT 或 Markdown；解析时保留来源位置。")
-                    format_key = f"workflow-upload-format:{ws}"
-                    if st.session_state.get(format_key) not in ("全部文档", "MD", "TXT"):
-                        st.session_state[format_key] = "全部文档"
-                    st.segmented_control("导入文档格式", ("全部文档", "MD", "TXT"), default=None,
-                                         key=format_key)
+                    st.caption("上传文档或图片；扫描件可在输入节点选择多模态识别。")
                 upload_options = ({"on_change": _cache_source_uploads, "args": (input_cache, ws, source_mode)}
                                   if input_cache is not None else {})
-                upload_format = st.session_state.get(f"workflow-upload-format:{ws}", "全部文档")
-                upload_types = ([upload_format.lower()] if source_mode == "文档资料" and upload_format in {"MD", "TXT"}
-                                else sorted(e[1:] for e in source_extensions))
-                upload_label = ("导入 MD / TXT / PDF / DOCX 文档" if source_mode == "文档资料"
+                upload_types = sorted(e[1:] for e in source_extensions)
+                upload_label = ("导入文档或图片" if source_mode == "文档资料"
                                 else "导入 JSON / JSONL 上下文记录")
                 uploaded = st.file_uploader(upload_label, type=upload_types,
                                             accept_multiple_files=True, max_upload_size=50,
@@ -1079,6 +1123,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                               key=sources_key, on_change=_save_draft_value, args=(ws, sources_key))
                 else:
                     selected = []
+                if (source_mode == "文档资料" and document_parser.get("mode") == "native"
+                        and any(Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in selected)):
+                    st.warning("图片需要多模态识别，请在输入解析节点选择并确认图片输入模型。")
                 upload_error = st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")
                 if upload_error:
                     st.error(_upload_cache_error(upload_error))
@@ -1092,7 +1139,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 chunk_chars = _draft_number(
                     "文档分块目标字符数", 200, 20000, 2000,
                     key=f"workflow-chunk-chars:{ws}")
-                render_document_preview(document_preview, ws, selected, file_labels, int(chunk_chars))
+                native_sources = [path for path in selected if Path(path).suffix.lower() in {".md", ".txt", ".pdf", ".docx"}]
+                if document_parser.get("mode") == "vision":
+                    st.caption("此处展示本地提取文字；多模态识别结果在运行时的输入节点实时展示。")
+                render_document_preview(document_preview, ws, native_sources, file_labels, int(chunk_chars))
+        if targets and source_mode == "知识库检索":
+            from lib.presentation.streamlit.knowledge_page import render_knowledge_preview
+            with setup_col, st.container(border=True, key="workbench-knowledge-preview"):
+                render_knowledge_preview(ws)
         with (setup_col if compact_parameters else nullcontext()), st.container(
                 border=True, key="workbench-parameters-panel"):
             section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
@@ -1176,8 +1230,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         '</strong><span>' + html.escape(run_summary) + '</span></div>')
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
+                parser_unavailable = (document_parser.get("mode") == "vision" and
+                    (not document_parser.get("binding") or document_parser.get("unconfirmed")))
+                parser_unavailable = parser_unavailable or (source_mode == "文档资料" and document_parser.get("mode") == "native"
+                    and any(Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in selected))
                 submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues)
                                       or bool(pricing_issues) or agent_unavailable or web_unavailable
+                                      or parser_unavailable or source_mode == "知识库检索" and not selected
                                       or bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")),
                                       key=f"workflow-create:{ws}", width="stretch")
                 if draft_application is not None:
@@ -1194,7 +1253,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 # Upload filenames never become filesystem paths; preserve only their extension.
                 with tempfile.TemporaryDirectory(prefix="dataforge-upload-") as temporary:
                     sources = [Path(path) for path in selected]
-                    source_names = {}
+                    source_names = dict(knowledge_source_names)
                     for index, upload in enumerate(uploaded or []):
                         path = Path(temporary) / f"upload-{index}{Path(upload.name).suffix.lower()}"
                         path.write_bytes(upload.getvalue())
@@ -1219,6 +1278,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         agent_replay_mode=agent_mode,
                                         sft_output_style=sft_output_style,
                                         web_research=web_research,
+                                        document_parser=document_parser,
+                                        knowledge_retrieval=(st.session_state.get(f"knowledge-result:{ws}", (None, None))[1]
+                                                             if source_mode == "知识库检索" else None),
                                         source_names=source_names,
                                         evaluation_sources=evaluation_sources,
                                         evaluation_source_names=evaluation_source_names)
@@ -1231,18 +1293,3 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.rerun()
             except (ValueError, OSError, Timeout) as error:
                 st.error(_workflow_error(error))
-    runs = application.task_runs()
-    if not runs:
-        st.info("尚无运行记录。创建工作流后，这里会显示实时阶段、质量统计与产物。")
-        return
-    lookup = {r["id"]: r for r in runs}
-    history_language = st.session_state.get("ui_language", "zh")
-    selected_id = st.selectbox("运行记录", list(lookup), key=f"workflow-selected:{ws}",
-                              format_func=lambda rid: UntranslatedText(
-                                  f"{lookup[rid]['name']} · "
-                                  + translate(LABELS.get(lookup[rid]['status'], lookup[rid]['status']),
-                                              history_language)
-                                  + f" · {rid[:8]}"))
-    if st.button("查看所选任务", key=f"workflow-open-history:{ws}"):
-        st.session_state["workflow-open-run"] = {"workspace": ws, "run_id": selected_id}
-        st.rerun()

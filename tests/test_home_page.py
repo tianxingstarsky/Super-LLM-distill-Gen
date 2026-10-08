@@ -78,21 +78,20 @@ def test_home_agent_and_recent_task_shortcuts_keep_context():
     assert ui.session_state['nav']=='任务管理'
 
 
-def test_home_document_format_and_manual_entries_keep_draft_and_workspace_context():
+def test_home_document_and_manual_entries_keep_draft_and_workspace_context_without_format_duplicates():
     ui = AppTest.from_string(SCRIPT).run()
     draft = {'workflow-name:fixture': 'Independent work', 'workflow-count:fixture': 50000}
     ui.session_state['workflow-form-draft:fixture'] = draft
     ui.session_state['workflow-creation-mode:other'] = '人工制作图文'
     ui.session_state['workflow-upload-format:other'] = 'TXT'
-    for kind in ('MD', 'TXT'):
-        ui.session_state['workflow-creation-mode:fixture'] = '人工制作图文'
-        ui.button(key=f'overview-import:{kind}').click().run()
-        assert not ui.exception
-        assert ui.session_state['workflow-source-mode:fixture'] == '文档资料'
-        assert ui.session_state['workflow-upload-format:fixture'] == kind
-        assert ui.session_state['workflow-creation-mode:fixture'] == '自动生成'
-        assert ui.session_state['nav'] == '自动工作流'
-        assert ui.session_state['workflow-form-draft:fixture'] == draft
+    assert not any((button.key or '').startswith('overview-import:') for button in ui.button)
+    ui.session_state['workflow-creation-mode:fixture'] = '人工制作图文'
+    ui.button(key='overview:文档资料').click().run()
+    assert not ui.exception
+    assert ui.session_state['workflow-source-mode:fixture'] == '文档资料'
+    assert ui.session_state['workflow-creation-mode:fixture'] == '自动生成'
+    assert ui.session_state['nav'] == '自动工作流'
+    assert ui.session_state['workflow-form-draft:fixture'] == draft
     ui.button(key='overview-manual').click().run()
     assert not ui.exception
     assert ui.session_state['workflow-creation-mode:fixture'] == '人工制作图文'

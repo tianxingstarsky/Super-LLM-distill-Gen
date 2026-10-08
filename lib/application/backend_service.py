@@ -35,6 +35,7 @@ class BackendApplication:
                          "models": backend.get("models") or [],
                          "api_format": backend["api_format"], "api_key": self.key_display(backend),
                          "roles": users, "is_default": name == default,
+                         "model_capabilities": backend.get("model_capabilities") or {},
                          "prices": backend.get("prices") or {}})
         return {"backends": rows, "default_backend": default,
                 "default_model": local.get("default_model") or base.get("default_model", ""),
@@ -64,7 +65,7 @@ class BackendApplication:
         if name in backends and not explicit_replace:
             raise FileExistsError(f"后端 {name} 已存在（explicit_replace=True 才覆盖；或换名字）")
         entry: dict[str, Any] = {"base_url": base_url, "models": list(models),
-                                 "api_format": api_format}
+                                 "api_format": api_format, "model_capabilities": {}}
         if api_key:
             entry["api_key"] = api_key
         else:
@@ -84,6 +85,23 @@ class BackendApplication:
         roles = dict(local.get("model_roles") or {})
         roles[role] = {"backend": backend, "model": model}
         local["model_roles"] = roles
+        self._port.write_local(local)
+
+    def confirm_model_vision(self, backend: str, model: str, supported: bool) -> None:
+        """Save an explicit per-model image-input declaration, never a name guess."""
+        if type(supported) is not bool or not isinstance(model, str) or not model.strip() or len(model) > 200:
+            raise ValueError("invalid_model_capability")
+        endpoint = self.merged_backends().get(backend)
+        if endpoint is None:
+            raise ValueError("workflow_node_service_not_configured")
+        local = self.read_config("backends.local.yaml")
+        entries = local.setdefault("backends", {})
+        entry = entries.setdefault(backend, {})
+        capabilities = dict(endpoint.get("model_capabilities") or {})
+        from lib.domain.document_parser import vision_connection_signature
+        capabilities[model] = {**(capabilities.get(model) or {}), "vision": supported,
+                               "connection_sha256": vision_connection_signature(endpoint)}
+        entry["model_capabilities"] = capabilities
         self._port.write_local(local)
 
     def reset_budget(self, caller: str, limit: float | None = None) -> float:

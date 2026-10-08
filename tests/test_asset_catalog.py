@@ -98,6 +98,7 @@ def test_output_classification(filename: str, expected: str):
 
 @pytest.mark.parametrize("suffix,mode", [
     (".md", "文档资料"), (".txt", "文档资料"), (".pdf", "文档资料"), (".docx", "文档资料"),
+    (".PNG", "文档资料"), (".jpg", "文档资料"), (".JPEG", "文档资料"), (".webp", "文档资料"),
     (".json", "Agent 上下文"), (".jsonl", "Agent 上下文"),
 ])
 def test_generation_source_resolves_existing_version_and_maps_mode(tmp_path, monkeypatch, suffix, mode):
@@ -109,10 +110,11 @@ def test_generation_source_resolves_existing_version_and_maps_mode(tmp_path, mon
     assert app.generation_source(name, asset) == {"path": str(path.resolve()), "source_mode": mode}
 
 
-def test_generation_handoff_rejects_stale_forged_output_and_unsupported_assets(tmp_path, monkeypatch):
+@pytest.mark.parametrize("suffix", [".txt", ".PNG"])
+def test_generation_handoff_rejects_stale_forged_output_and_unsupported_assets(tmp_path, monkeypatch, suffix):
     from lib.domain.dataset_assets import Asset
     workspace, source, name = _workspace(tmp_path, monkeypatch)
-    path = source / "saved.txt"
+    path = source / ("saved" + suffix)
     path.write_text("source", encoding="utf-8")
     output = workspace.out(name)
     output.mkdir(parents=True)
@@ -136,6 +138,14 @@ def test_generation_handoff_rejects_stale_forged_output_and_unsupported_assets(t
         app.generation_source(name, asset)
 
 
+def test_generated_images_cannot_be_reused_as_library_sources():
+    from lib.domain.dataset_assets import Asset, generation_source_mode
+
+    generated = Asset("output/scan.png", "output", "scan.png", "报告与状态", 10, 1)
+    with pytest.raises(ValueError, match="asset_not_generation_source"):
+        generation_source_mode(generated)
+
+
 def test_generation_source_rejects_a_file_replaced_with_link(tmp_path, monkeypatch):
     _, source, name = _workspace(tmp_path, monkeypatch)
     path = source / "saved.txt"
@@ -151,3 +161,22 @@ def test_generation_source_rejects_a_file_replaced_with_link(tmp_path, monkeypat
         pytest.skip("This Windows account cannot create a file link")
     with pytest.raises(ValueError, match="linked_asset_path"):
         app.generation_source(name, asset)
+
+
+def test_directory_selection_uses_current_rows_and_preserves_file_identity():
+    from lib.domain.dataset_assets import Asset
+    from lib.presentation.streamlit.asset_catalog_page import _selection_asset, _table_identity
+    first = Asset("source/first.txt", "source", "first.txt", "来源文件", 10, 1)
+    second = Asset("source/second.txt", "source", "second.txt", "来源文件", 11, 2)
+    rows = [first, second]
+    assert _selection_asset(rows, [1]) == second
+    for expired in ([2], [-1], [True], [0, 1], [], None):
+        assert _selection_asset(rows, expired, second.id) == second
+    assert _selection_asset([first], [1], second.id) == first
+    assert _selection_asset([], [0], first.id) is None
+    context = ("default", "来源文件", "", 1)
+    identity = _table_identity(rows, context)
+    assert identity != _table_identity(list(reversed(rows)), context)
+    assert identity != _table_identity([first, replace(second, mtime_ns=3)], context)
+    assert identity != _table_identity(rows, ("default", "来源文件", "second", 1))
+    assert identity != _table_identity(rows, ("default", "来源文件", "", 2))

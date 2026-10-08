@@ -43,9 +43,35 @@ def test_handoff_preserves_unsaved_session_edits_and_uses_current_source_selecti
                                   "workflow-sources:w:Agent 上下文": ["current.jsonl", "new.json"]}
 
 
+@pytest.mark.parametrize("suffix", [".PNG", ".jpg", ".JPEG", ".webp"])
+def test_image_handoff_preserves_targets_models_and_explicit_parser_choice(tmp_path, monkeypatch, suffix):
+    application = creation_draft_application(tmp_path)
+    saved = {"workflow-preset:w": "自选目标", "workflow-targets:w:自选目标": ["cpt", "sft"],
+             "workflow-sources:w:文档资料": ["guide.md"], "workflow-count:w": 50000}
+    application.replace(saved)
+    parser_state = {"workflow-document-parse-mode:w": "native",
+                    "workflow-document-parse-mode-draft:w": "native"}
+    models = {"sft": {"generation": {"backend": "local", "model": "writer"}}}
+    state = {**parser_state, "workflow-node-bindings:w": deepcopy(models), "nav": "数据管理"}
+    monkeypatch.setattr(source_handoff.st, "session_state", state)
+
+    source_handoff.use_library_source({"path": "scan" + suffix, "source_mode": "文档资料"}, "w", application)
+
+    expected = {**saved, "workflow-source-mode:w": "文档资料",
+                "workflow-sources:w:文档资料": ["guide.md", "scan" + suffix]}
+    assert application.load() == expected
+    assert state["workflow-form-draft:w"] == expected
+    assert state["workflow-node-bindings:w"] == models
+    assert {key: state[key] for key in parser_state} == parser_state
+    assert state["workflow-setup-node:w"] == "ingest"
+    assert state["nav"] == "自动工作流"
+
+
 @pytest.mark.parametrize("item", [
     {"path": "file.md", "source_mode": "Agent 上下文"},
     {"path": "file.jsonl", "source_mode": "文档资料"},
+    {"path": "file.png", "source_mode": "Agent 上下文"},
+    {"path": "file.gif", "source_mode": "文档资料"},
     {"path": "file.csv", "source_mode": "文档资料"},
     {"path": "file.md", "source_mode": "文档资料", "unknown": True},
     {"path": None, "source_mode": "文档资料"},
@@ -137,3 +163,12 @@ def test_catalog_stale_source_keeps_user_in_library_and_shows_safe_error():
     assert "handoff" not in ui.session_state
     assert any("资料未能加入生成草稿" in message.value for message in ui.error)
     assert not any("PRIVATE_PATH" in message.value for message in ui.error)
+
+
+@pytest.mark.parametrize("suffix", [".PNG", ".jpg", ".JPEG", ".webp"])
+def test_catalog_image_details_offer_generation_handoff(suffix):
+    screen = _CATALOG_SCREEN.replace("guide.md", "scan" + suffix)
+    ui = AppTest.from_string(screen).run()
+    ui.button(key="asset-use:fixture:source/scan" + suffix).click().run()
+    assert not ui.exception
+    assert ui.session_state["handoff"] == {"path": "saved/scan" + suffix, "source_mode": "文档资料"}

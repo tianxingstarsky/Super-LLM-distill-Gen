@@ -33,6 +33,7 @@ from lib.domain.corpus_quality import (CorpusClusterSizes, CorpusNearDuplicateIn
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_candidate
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_creation import validate_creation
+from lib.domain.document_parser import validate_document_parser
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
@@ -247,7 +248,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                evaluation_sources=(), evaluation_source_names=None,
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
                agent_replay_mode="configured", web_research=None, settings_root=None,
-               sft_output_style=None):
+               sft_output_style=None, document_parser=None, knowledge_retrieval=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -261,6 +262,15 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         raise ValueError("invalid_sft_output_style")
     preferences = preference_snapshot(settings_root or Path(__file__).resolve().parents[2])
     files = [Path(p).resolve(strict=True) for p in sources]
+    document_parser = validate_document_parser(document_parser)
+    if document_parser["mode"] == "vision":
+        from lib.infrastructure.document_vision import require_vision_model
+        if settings_root is None or not files or any(path.suffix.lower() in {".json", ".jsonl"} for path in files):
+            raise ValueError("document_vision_requires_document_sources")
+        require_vision_model(Path(settings_root), document_parser["binding"])
+        node_models.setdefault("ingest", {})["vision"] = document_parser["binding"]
+    elif any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in files):
+        raise ValueError("document_image_requires_vision_parser")
     if not files and not brief.strip():
         raise ValueError("请上传来源文件或填写开放性需求")
     if "agent" in targets and not files and not (set(targets) - {"agent"}):
@@ -274,6 +284,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             raise ValueError(f"来源超过 50 MiB：{path.name}")
     if sum(path.stat().st_size for path in files) > 200 * 1024 * 1024:
         raise ValueError("单次运行来源总大小最多 200 MiB，请拆分批次")
+    from lib.infrastructure.knowledge_receipt import validate_knowledge_receipt
+    if knowledge_retrieval is not None:
+        validate_knowledge_receipt(knowledge_retrieval, [
+            {"file": f"{index:04d}{source.suffix.lower()}", "sha256": file_hash(source)}
+            for index, source in enumerate(files)])
     references = snapshot_released_corpus(Path(output)) if "cpt" in targets else []
     agent_sandbox_image = (validate_sandbox_image(os.environ.get(IMAGE_ENV))
                            if "agent" in targets and agent_replay_mode != "local" else None)
@@ -309,10 +324,13 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "agent_sandbox_image": agent_sandbox_image,
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
               "node_models": node_models, "web_research": web_research,
+              "document_parser": document_parser,
               "generation_preferences": preferences, "sft_output_style": sft_output_style,
               "prompts": prompt_versions()}
     if endpoint_pins is not None:
         recipe["endpoint_pins"] = endpoint_pins
+    if knowledge_retrieval is not None:
+        recipe["knowledge_retrieval"] = validate_knowledge_receipt(knowledge_retrieval, snapshots)
     atomic_json(path / "recipe.json", recipe)
     atomic_json(path / "state.json", {"id": run_id, "name": name[:100], "created_at": now(), "updated_at": now(),
                 "status": "queued", "recipe_hash": digest(recipe), "targets": targets, "attempt": 0,
@@ -331,6 +349,10 @@ class Workflow:
         self.root = Path(root)
         self.state = read_json(self.path / "state.json")
         self.recipe = read_json(self.path / "recipe.json")
+        parser = validate_document_parser(self.recipe.get("document_parser"))
+        if parser["mode"] == "vision":
+            from lib.infrastructure.document_vision import require_vision_model
+            require_vision_model(self.root, parser["binding"])
         self.generator, self.judge = generator, judge
         # Keep the earlier judge injection point usable while all new workflow
         # calls and accounting use the dedicated JEV role.
@@ -378,6 +400,10 @@ class Workflow:
         return value
 
     def client(self, role):
+        if role == "vision":
+            from lib.infrastructure.document_vision import require_vision_model
+            parser = validate_document_parser(self.recipe.get("document_parser"))
+            require_vision_model(self.root, parser["binding"])
         field = {"judge": "judge", "jev": "jev"}.get(role, "generator")
         client = getattr(self, field)
         if client is None:
@@ -421,7 +447,7 @@ class Workflow:
             self.save(force=False)
         return client
 
-    def ask(self, key, role, prompt_id, data):
+    def ask(self, key, role, prompt_id, data, *, image=None):
         journal = None
         def invoke():
             nonlocal journal
@@ -446,7 +472,9 @@ class Workflow:
                         streaming["on_stream"] = received
                     return chat_json(client, [
                         {"role": "system", "content": render(get("workflow.system")) + "\n" + render(get(prompt_id))},
-                        {"role": "user", "content": canonical(data)}],
+                        {"role": "user", "content": canonical(data) if image is None else [
+                            {"type": "text", "text": canonical(data)},
+                            {"type": "image_url", "image_url": {"url": image}}]}],
                         max_tokens=binding.get("max_output_tokens"), **streaming)
                 finally:
                     after = getattr(client, "usage", {})
@@ -570,6 +598,30 @@ class Workflow:
                     else unit(f"{index}:chunk:{i}", source_location={"file": source["name"],
                               "record": index, "chunk": i}, kind="document", text=chunk, status="ready")
                     for i, chunk in enumerate(chunk_text(text, self.recipe["chunk_chars"]))]
+        if (self.recipe.get("document_parser", {}).get("mode") == "vision"
+                and path.suffix in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"}):
+            from lib.infrastructure.document_vision import visual_parts
+            for part in visual_parts(path):
+                self.check_cancel()
+                location = part["location"]
+                if "image" in part:
+                    result = self.ask([source_id, location, part["image_sha256"], "document_vision"],
+                                      "vision", "workflow.document_vision",
+                                      {"source": source["name"], "location": location}, image=part["image"])
+                    if (not isinstance(result, dict) or result.get("uncertain") is not False
+                            or not isinstance(result.get("text"), str) or len(result["text"]) > 120_000):
+                        yield unit(location, status="quarantined", reason="document_vision_uncertain",
+                                   source_location={"file": source["name"], "record": location})
+                        continue
+                    text = result["text"]
+                else:
+                    text = part["text"]
+                for row in documents(text, location):
+                    if "image" in part:
+                        row["document_reading"] = {"mode": "vision", "image_sha256": part["image_sha256"],
+                                                   "evidence_level": "model_transcribed_visual_source"}
+                    yield row
+            return
         if path.suffix in SUPPORTED_EXTS:
             try:
                 content = import_text(path)
@@ -785,7 +837,8 @@ class Workflow:
             if not quality["keep"]:
                 return [{**unit, "status": "quarantined", "reason": quality["reason"], "quality": quality}]
             return [{**unit, "status": "eligible", "text": unit["text"], "quality": quality,
-                     "retention_reason": "source_text_passed_deterministic_checks", "evidence_level": "source_text"}]
+                     "retention_reason": "source_text_passed_deterministic_checks", "evidence_level": (
+                         "model_transcribed_visual_source" if unit.get("document_reading") else "source_text")}]
         data = self.ask([unit["id"], "corpus"], "generation", "workflow.corpus", unit)
         text = data.get("text") if isinstance(data, dict) else None
         quality = inspect_corpus(text)
@@ -843,7 +896,8 @@ class Workflow:
                 return [{"id": unit["id"], "source_id": unit["source_id"], "status": "eligible", "messages": messages,
                          "tools": unit.get("tools", []), "quotes": quotes, "judge": check, "source_context": unit,
                          "repair_attempts": attempt, "reasoning_origin": "source" if messages is history else "synthetic_explanation",
-                         "evidence_level": "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed"}]
+                         "evidence_level": ("model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
+                                            else "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed")}]
             feedback = check["reason"]
         return [{**self.rejected(unit, "sft_quality_failed_after_repair"), "feedback": feedback}]
 
@@ -864,10 +918,12 @@ class Workflow:
                       "kind": unit["kind"]}
         source_context = {"provenance": provenance, "task": unit.get("text"),
                           "brief": self.recipe.get("brief", ""), "tools": unit.get("tools", [])}
-        evidence_level = ("recorded_context_model_assessed" if unit["kind"] == "conversation"
+        evidence_level = ("model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
+                          else "recorded_context_model_assessed" if unit["kind"] == "conversation"
                           else "source_and_model_assessed" if unit["kind"] == "document"
                           else "model_assessed_synthetic")
-        source_verification = ("recorded_unverified" if unit["kind"] == "conversation"
+        source_verification = ("visual_transcription_not_independently_verified" if unit.get("document_reading")
+                               else "recorded_unverified" if unit["kind"] == "conversation"
                                else "exact_quote_presence_only" if unit["kind"] == "document"
                                else "no_external_source")
         reviews = []
@@ -1126,6 +1182,8 @@ class Workflow:
         destination = self.path / "artifacts"
         destination.mkdir(exist_ok=True)
         cpt_references = self.recipe.get("cpt_reference_releases", [])
+        if self.recipe.get("knowledge_retrieval") is not None:
+            atomic_json(destination / "knowledge_retrieval.json", self.recipe["knowledge_retrieval"])
         report = {"policy": POLICY, "targets": {}, "trainer_exports": {}, "human_review": "not_performed",
                   "input_summary": self.state.get("input_summary", {}),
                   "input_issues": None,  # streamed into quality.json after target packaging

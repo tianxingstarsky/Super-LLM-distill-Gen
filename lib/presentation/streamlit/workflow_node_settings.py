@@ -180,7 +180,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         return
     for role in roles:
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'
-                + ("生成模型" if role == "generation" else "独立质量评审模型") + '</strong></p>')
+                + ("多模态识别模型" if role == "vision" else "生成模型" if role == "generation" else "独立质量评审模型") + '</strong></p>')
         binding = bindings.get(node, {}).get(role, {})
         prefix = f"node-model:{workspace}:{node}:{role}"
         if not binding:
@@ -252,6 +252,61 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
 def snapshot_available_bindings(nodes, source_mode, bindings, endpoints):
     return {node: {role: bindings[node][role] for role in node_roles(node, source_mode)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
+
+
+def document_parser_mode(workspace):
+    """Keep the chosen parser when Streamlit removes an unrendered widget."""
+    draft_key = f"workflow-document-parse-mode-draft:{workspace}"
+    mode = st.session_state.get(draft_key, st.session_state.get(
+        f"workflow-document-parse-mode:{workspace}", "native"))
+    if mode not in {"native", "vision"}:
+        mode = "native"
+    st.session_state[draft_key] = mode
+    return mode
+
+
+def _save_document_parser_mode(workspace):
+    mode = st.session_state.get(f"workflow-document-parse-mode:{workspace}", "native")
+    if mode in {"native", "vision"}:
+        st.session_state[f"workflow-document-parse-mode-draft:{workspace}"] = mode
+
+
+def render_document_parser(workspace, bindings, endpoints, *, backend_application=None):
+    """Configure document reading on the input node and require explicit vision support."""
+    from lib.domain.document_parser import supports_vision, vision_connection_signature
+    key = f"workflow-document-parse-mode:{workspace}"
+    saved_mode = document_parser_mode(workspace)
+    if key not in st.session_state:
+        st.session_state[key] = saved_mode
+    mode = st.radio("文档解析方式", ("native", "vision"), horizontal=True, key=key,
+                    on_change=_save_document_parser_mode, args=(workspace,),
+                    format_func=lambda value: "本地文本解析" if value == "native" else "多模态识别")
+    if mode == "native":
+        st.caption("读取文档文字，不调用模型。扫描 PDF 与图片请使用多模态识别。")
+        return {"mode": "native"}
+    st.caption("PDF 按页识别，图片直接识别，DOCX 保留文字并识别内嵌图片。所选资料会发送至节点模型服务。")
+    render_node_models("ingest", "多模态文档", workspace, bindings, endpoints,
+                       backend_application=backend_application)
+    binding = bindings.get("ingest", {}).get("vision")
+    if not binding:
+        return {"mode": "vision"}
+    endpoint = endpoints.get(binding["backend"], {})
+    if not supports_vision(endpoint, binding["model"]):
+        confirmation = st.checkbox("我已核实所选模型支持图片输入", key=(
+            f"node-vision-confirm:{workspace}:{binding['backend']}:{binding['model']}:"
+            f"{vision_connection_signature(endpoint)}"))
+        if st.button("保存多模态能力确认", disabled=not confirmation or backend_application is None,
+                     key=f"node-vision-save:{workspace}"):
+            try:
+                backend_application.confirm_model_vision(binding["backend"], binding["model"], True)
+            except (OSError, ValueError):
+                st.error("模型能力确认未保存，请检查本机配置后重试。")
+            else:
+                st.rerun()
+        st.warning("此模型尚未确认图片输入能力，无法开始多模态识别。模型名称不作为能力判断依据。")
+        return {"mode": "vision", "binding": deepcopy(binding), "unconfirmed": True}
+    st.caption("图片输入能力：用户已核实并在本机确认。识别结果仍需核对原文。")
+    return {"mode": "vision", "binding": deepcopy(binding)}
 
 
 def render_agent_verification(workspace, capabilities, check_environment=None):

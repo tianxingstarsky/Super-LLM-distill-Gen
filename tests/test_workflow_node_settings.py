@@ -1,4 +1,6 @@
 """A model service can be connected without leaving the selected workflow node."""
+import pytest
+
 from streamlit.testing.v1 import AppTest
 
 
@@ -261,3 +263,103 @@ def test_node_model_picker_accepts_explicit_custom_names():
     assert not ui.exception
     picker = ui.selectbox(key='node-model:demo:sft:generation:model:writer')
     assert picker.proto.accept_new_options
+
+
+DOCUMENT_SCRIPT = SCRIPT.replace('render_node_models\n', 'render_document_parser\n').replace(
+    "render_node_models('sft', '文档资料', 'demo', bindings, endpoints,\n"
+    "                   backend_application=application)",
+    "st.session_state['fixture-parser'] = render_document_parser('demo', bindings, endpoints,\n"
+    "                   backend_application=application)",
+)
+
+
+def _document_ui(script=DOCUMENT_SCRIPT):
+    ui = AppTest.from_string(script)
+    ui.session_state['fixture-local'] = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha', 'beta'],
+                   'api_key_env': 'WRITER_KEY'},
+    }}
+    ui.session_state['workflow-node-bindings:demo'] = {'ingest': {
+        'vision': {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS},
+    }}
+    return ui.run()
+
+
+def test_document_node_defaults_to_local_text_without_a_model_form():
+    ui = _document_ui()
+    assert not ui.exception
+    assert ui.session_state['fixture-parser'] == {'mode': 'native'}
+    assert not ui.selectbox
+    assert not ui.button
+
+
+def test_document_node_requires_user_confirmation_for_exact_model_and_connection():
+    ui = _document_ui()
+    ui.radio(key='workflow-document-parse-mode:demo').set_value('vision').run()
+    assert not ui.exception
+    assert ui.session_state['fixture-parser']['unconfirmed'] is True
+    assert ui.button(key='node-vision-save:demo').disabled
+    next(box for box in ui.checkbox if box.label == '我已核实所选模型支持图片输入').check().run()
+    ui.button(key='node-vision-save:demo').click().run()
+    assert not ui.exception
+    assert 'unconfirmed' not in ui.session_state['fixture-parser']
+    capabilities = ui.session_state['fixture-local']['backends']['writer']['model_capabilities']
+    assert capabilities['alpha']['vision'] is True
+    assert 'beta' not in capabilities
+    ui.selectbox(key='node-model:demo:ingest:vision:model:writer').set_value('beta').run()
+    assert ui.session_state['fixture-parser']['unconfirmed'] is True
+    assert ui.button(key='node-vision-save:demo').disabled
+    ui.selectbox(key='node-model:demo:ingest:vision:model:writer').set_value('alpha').run()
+    local = ui.session_state['fixture-local']
+    local['backends']['writer']['base_url'] = 'https://replacement.example.test/v1'
+    ui.session_state['fixture-local'] = local
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['fixture-parser']['unconfirmed'] is True
+    assert ui.button(key='node-vision-save:demo').disabled
+
+
+DOCUMENT_NAVIGATION_SCRIPT = DOCUMENT_SCRIPT.replace(
+    'from lib.presentation.streamlit.workflow_node_settings import render_document_parser',
+    'from lib.presentation.streamlit.workflow_node_settings import render_document_parser, document_parser_mode',
+).replace(
+    "st.session_state['fixture-parser'] = render_document_parser('demo', bindings, endpoints,\n"
+    "                   backend_application=application)",
+    "page = st.radio('Page', ('workflow', 'work_management'), key='fixture-page')\n"
+    "creation = st.radio('Creation', ('auto', 'manual'), key='fixture-creation')\n"
+    "node = st.radio('Node', ('ingest', 'sft'), key='fixture-node')\n"
+    "st.session_state['fixture-active-parser-mode'] = document_parser_mode('demo')\n"
+    "if page == 'workflow' and creation == 'auto' and node == 'ingest':\n"
+    "    st.session_state['fixture-parser'] = render_document_parser('demo', bindings, endpoints,\n"
+    "                       backend_application=application)",
+)
+
+
+@pytest.mark.parametrize('control, away, original', [
+    ('fixture-node', 'sft', 'ingest'),
+    ('fixture-creation', 'manual', 'auto'),
+    ('fixture-page', 'work_management', 'workflow'),
+])
+def test_document_parser_mode_survives_widget_cleanup_and_restores_on_return(control, away, original):
+    ui = _document_ui(DOCUMENT_NAVIGATION_SCRIPT)
+    ui.radio(key='workflow-document-parse-mode:demo').set_value('vision').run()
+    assert not ui.exception
+    assert ui.session_state['workflow-document-parse-mode-draft:demo'] == 'vision'
+    ui.radio(key=control).set_value(away).run()
+    # A real navigation removes the radio and lets Streamlit discard its key.
+    assert 'workflow-document-parse-mode:demo' not in ui.session_state
+    ui.run()
+    assert ui.session_state['fixture-active-parser-mode'] == 'vision'
+    assert ui.session_state['workflow-document-parse-mode-draft:demo'] == 'vision'
+    ui.radio(key=control).set_value(original).run()
+    assert not ui.exception
+    assert ui.radio(key='workflow-document-parse-mode:demo').value == 'vision'
+    assert ui.session_state['fixture-parser']['mode'] == 'vision'
+    assert ui.session_state['fixture-parser']['binding']['model'] == 'alpha'
+    assert ui.session_state['fixture-parser']['unconfirmed'] is True
+    # Returning to native must replace the saved choice, not resurrect vision later.
+    ui.radio(key='workflow-document-parse-mode:demo').set_value('native').run()
+    ui.radio(key=control).set_value(away).run()
+    ui.radio(key=control).set_value(original).run()
+    assert ui.radio(key='workflow-document-parse-mode:demo').value == 'native'
+    assert ui.session_state['fixture-parser'] == {'mode': 'native'}

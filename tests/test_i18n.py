@@ -203,7 +203,7 @@ def test_workbench_styles_keep_visible_copy_out_of_css():
     style = workbench_style("en")
     assert style == workbench_style("zh")
     assert not re.search(r"[\u4e00-\u9fff]", style)
-    assert "content:" not in style
+    assert not re.search(r"(?:^|[;{])\s*content\s*:", style)
 
 
 def test_dataframe_localization_changes_headers_and_preserves_values():

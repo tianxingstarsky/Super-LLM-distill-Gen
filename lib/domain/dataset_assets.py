@@ -8,7 +8,8 @@ from pathlib import PurePosixPath
 TRAINING_CATEGORIES = frozenset({"语料", "样本", "DPO 偏好对", "其他偏好数据"})
 OUTPUT_SUFFIXES = frozenset({".jsonl", ".json", ".html", ".txt", ".md", ".csv", ".xlsx", ".zip"})
 DIRECT_DOWNLOAD_LIMIT_BYTES = 50 * 1024 * 1024
-DOCUMENT_SOURCE_SUFFIXES = frozenset({".md", ".txt", ".pdf", ".docx"})
+# Reusable input types only; image parsing still requires explicit vision setup.
+DOCUMENT_SOURCE_SUFFIXES = frozenset({".md", ".txt", ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"})
 CONVERSATION_SOURCE_SUFFIXES = frozenset({".json", ".jsonl"})
 
 

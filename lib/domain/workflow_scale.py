@@ -11,13 +11,15 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 131_072
 DEFAULT_MAX_OUTPUT_TOKENS = 32_768
 MAX_CONTEXT_WINDOW_TOKENS = 4_000_000
 NODE_ROLES = {
-    "ingest": ("generation",), "cpt": ("generation", "jev"),
+    "ingest": ("generation", "vision"), "cpt": ("generation", "jev"),
     "sft": ("generation", "jev"), "multiturn": ("generation", "jev"),
     "preference": ("generation", "jev"), "cot": ("jev",),
 }
 
 
 def node_roles(stage: str, source_mode: str) -> tuple[str, ...]:
+    if stage == "ingest":
+        return ("vision",) if source_mode == "多模态文档" else (("generation",) if source_mode == "开放需求" else ())
     if stage in {"ingest", "cpt"} and source_mode != "开放需求":
         return ()
     return NODE_ROLES.get(stage, ())

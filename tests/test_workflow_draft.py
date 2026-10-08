@@ -102,7 +102,7 @@ else:""",
     ui.run()
     ui.button(key='overview-target:cpt').click().run()
     assert not ui.exception
-    assert ui.segmented_control(key='workflow-preset:fixture').value == '自选目标'
+    assert ui.selectbox(key='workflow-preset:fixture').value == '自选目标'
     assert ui.pills(key='workflow-targets:fixture:自选目标').value == ['cpt']
     assert ui.segmented_control(key='workflow-source-mode:fixture').value == '文档资料'
     assert ui.text_input(key='workflow-name:fixture').value == prior['workflow-name:fixture']
@@ -141,8 +141,8 @@ def test_selected_goals_and_sources_survive_navigation_and_missing_file():
     ui.checkbox(key='fixture-show').check().run()
     assert ui.pills(key=targets).value == ['orpo', 'rlaif']
     assert ui.multiselect(key=sources).value == ['fixture.txt']
-    ui.segmented_control(key='workflow-preset:fixture').set_value('多轮对话').run()
-    ui.segmented_control(key='workflow-preset:fixture').set_value('自动推荐').run()
+    ui.selectbox(key='workflow-preset:fixture').set_value('多轮对话').run()
+    ui.selectbox(key='workflow-preset:fixture').set_value('自动推荐').run()
     assert ui.pills(key=targets).value == ['orpo', 'rlaif']
     ui.session_state['fixture-remove-source'] = True
     ui.run()
@@ -164,12 +164,12 @@ def test_selected_goals_and_sources_survive_navigation_and_missing_file():
 
 def test_conditional_settings_survive_goal_and_source_changes():
     ui=AppTest.from_string(SCRIPT).run()
-    ui.segmented_control(key='workflow-preset:fixture').set_value('多轮对话').run()
+    ui.selectbox(key='workflow-preset:fixture').set_value('多轮对话').run()
     ui.number_input(key='workflow-turns:fixture').set_value(6).run()
     ui.number_input(key='workflow-chunk-chars:fixture').set_value(4800).run()
-    ui.segmented_control(key='workflow-preset:fixture').set_value('ORPO 数据生成').run()
+    ui.selectbox(key='workflow-preset:fixture').set_value('ORPO 数据生成').run()
     ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
-    ui.segmented_control(key='workflow-preset:fixture').set_value('多轮对话').run()
+    ui.selectbox(key='workflow-preset:fixture').set_value('多轮对话').run()
     ui.segmented_control(key='workflow-source-mode:fixture').set_value('文档资料').run()
     assert not ui.exception
     assert ui.number_input(key='workflow-turns:fixture').value==6

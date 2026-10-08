@@ -7,7 +7,7 @@ from typing import Iterable
 from lib.application.local_input_ports import LocalInputCachePort
 
 
-ALLOWED_UPLOAD_SUFFIXES = frozenset({"pdf", "docx", "txt", "md", "json", "jsonl"})
+ALLOWED_UPLOAD_SUFFIXES = frozenset({"pdf", "docx", "txt", "md", "json", "jsonl", "png", "jpg", "jpeg", "webp"})
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_UPLOAD_BATCH_BYTES = 200 * 1024 * 1024
 _UNSAFE_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f\ud800-\udfff]')

@@ -4,6 +4,20 @@ from __future__ import annotations
 
 WORKBENCH_STYLE = """<style>
 .st-key-workbench-layout [data-testid="stColumn"] {min-width:0}
+.st-key-workbench-canvas-panel {position:relative;background:radial-gradient(ellipse at 90% 0%,#e9f3ff,transparent 55%),#fff}
+.st-key-workbench-canvas-panel .df-panel-icon {background:linear-gradient(145deg,#edf5ff,#dbeaff);box-shadow:0 3px 9px #bdd5f44d}
+.st-key-workbench-targets {background:linear-gradient(110deg,#fff,#f7faff);border-color:#d7e5f5}
+.st-key-workbench-node-panel {border-top:3px solid #78acf1;background:linear-gradient(160deg,#f9fcff,#fff 45%)}
+.st-key-workbench-source-preview {border-top:3px solid #83c9bf}
+.df-knowledge-route {position:relative;overflow:hidden;padding:18px 12px 14px;border:1px solid #dbe9f6;
+  border-radius:12px;background:radial-gradient(circle at 85% 10%,#e0efff,transparent 45%),#f8fbff;text-align:center}
+.df-knowledge-route > i {display:grid;place-items:center;margin:0 auto 10px;width:52px;height:52px;border-radius:15px;
+  background:linear-gradient(145deg,#78b4fa,#246ed6);color:white;font-size:34px;font-style:normal;box-shadow:0 7px 16px #367fe62b}
+.df-knowledge-route > strong {display:block;color:#25496e;font-size:14px}
+.df-knowledge-route p {color:#6a819a;font-size:12px;margin:7px 0 14px}
+.df-knowledge-route > div {display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap}
+.df-knowledge-route span {padding:5px 8px;border:1px solid #d9e7f6;border-radius:7px;background:#fff;color:#41658b;font-size:11px}
+.df-knowledge-route b {color:#7e9fc5;font-weight:400}
 .df-wb-plan {display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;
   margin:0;color:#365579;font-size:12px;line-height:1.5}
 .df-wb-plan strong {color:#213b5f;font-size:12px}

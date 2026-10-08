@@ -59,12 +59,6 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
         st.session_state[f'workflow-creation-mode:{ws}'] = '自动生成'
         st.session_state['nav'] = '自动工作流'
 
-    def import_document(kind: str) -> None:
-        st.session_state[f'workflow-source-mode:{ws}'] = '文档资料'
-        st.session_state[f'workflow-upload-format:{ws}'] = kind
-        st.session_state[f'workflow-creation-mode:{ws}'] = '自动生成'
-        st.session_state['nav'] = '自动工作流'
-
     def start_manual() -> None:
         st.session_state[f'workflow-creation-mode:{ws}'] = '人工制作图文'
         st.session_state['nav'] = '自动工作流'
@@ -109,12 +103,12 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                             st.button(mode, key=f"overview:{mode}", on_click=start_mode,
                                       args=(mode, preset), width="stretch")
                             st.caption(detail)
-                md, txt, manual = st.columns(3, gap="small")
-                md.button("导入 MD", key="overview-import:MD", on_click=import_document,
-                          args=("MD",), width="stretch")
-                txt.button("导入 TXT", key="overview-import:TXT", on_click=import_document,
-                           args=("TXT",), width="stretch")
-                manual.button("人工制作图文", key="overview-manual", on_click=start_manual, width="stretch")
+                with st.container(key="home-manual-entry"):
+                    description, action = st.columns([1.6, 1], gap="small", vertical_alignment="center")
+                    with description:
+                        st.html('<div class="df-home-manual"><b>✎</b><span><strong>图片 + 文字</strong>'
+                                '<small>添加图片，编写问题与参考答案。</small></span></div>')
+                    action.button("人工制作图文", key="overview-manual", on_click=start_manual, width="stretch")
                 with st.container(key="home-strategy-options"):
                     st.caption("按数据类型开始 · 工作台内可组合多类目标")
                     targets = ("cpt", "sft", "dpo", "orpo", "rlaif", "agent", "multiturn", "cot", "gsm8k")
@@ -145,7 +139,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                                 st.button("查看 →", key=f"overview-run:{row['id']}", on_click=open_run,
                                           args=(row['id'],), width="stretch")
                 else:
-                    st.html('<div class="df-home-empty"><strong>暂无最近任务</strong>'
+                    st.html('<div class="df-home-empty df-home-empty-work"><span aria-hidden="true">◈</span><strong>暂无最近任务</strong>'
                             '<small>本机还没有工作流任务。上传资料或选择训练策略，即可开始创建。</small></div>')
                 st.button("查看全部任务 →", on_click=navigate, args=("任务管理",),
                           key="overview-all-tasks", width="stretch")
