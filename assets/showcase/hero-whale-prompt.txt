@@ -1,0 +1,19 @@
+Use case: compositing / ads-marketing.
+Asset type: GitHub README main promotional hero for ShuJian Cube, wide landscape banner matching Image 1's aspect ratio, approximately 2.28:1.
+Input images: Image 1 is the existing hero and EDIT TARGET. Preserve its left-side brand typography, copy, airy blue-white background, and source-to-rounded-cube idea. Image 2 is a CHARACTER DESIGN REFERENCE ONLY for the community DeepSeek whale girl. Ignore its magenta background and original pose. Draw a new pose and original scene using the recognizable character traits.
+
+Primary request: Change the hero's right-side illustration into a playful, polished anime scene: the ShuJian rounded cube processes the document/conversation/open-brief source cards and produces fluffy cooked WHITE RICE. The DeepSeek whale girl holds a bowl directly under the cube's outlet and happily catches the falling white rice. The action must be instantly clear: source cards -> cube -> actual white rice -> bowl held by whale girl.
+
+Composition: Keep all four English text elements on the left, sharp, legible, unchanged, fully inside generous safe margins. No illustration overlaps the left copy. The right 57% contains a compact coherent scene: two or three small source cards feeding the open cobalt rounded cube around center-right; the whale girl stands to the cube's right and holds a white ceramic bowl forward beneath the outlet with both hands. Show a small generous stream of distinct soft white cooked rice grains dropping from the cube into a visible heaped bowl, with very subtle steam. Keep her expressive face, both hands, bowl, fin ears, hair, and curved whale tail fully visible and uncropped. Her gaze is focused happily on the bowl, not facing away. Nothing spills onto the ground. Keep the rice white against a pale blue or shaded contrast area so it reads clearly.
+
+Character: Recognizable community DeepSeek whale-girl fan art with cute rounded chibi anime proportions similar to Image 2, flowing layered long blue hair, deep-blue to ocean-blue hair tones, large clear blue eyes, soft rounded cheeks, a white ruffled maid headband, distinct blue WHALE FIN ears (not cat ears), a thick curved blue whale tail ending in two broad tail flukes, and a navy-and-white frilled maid dress and white apron with a subtle tiny blue whale emblem. Fully clothed, wholesome, charming, eager happy expression. Use tasteful character detail and a clean silhouette, no exaggerated anatomy. Exactly one character. Exactly two hands naturally supporting the bowl.
+
+Style: High-end promotional anime illustration with clean confident linework, refined soft cel shading, attractive light and hair highlights. Harmonize the character and rice with the rounded cube's softly rendered 3D materials. Whimsical but premium and organized, not a meme collage. The blue-white-cyan palette should tie the entire banner together. Airy white and icy-blue background, restrained lavender accent, soft grounding shadow, subtle blue guide lines only in the scene area. No magenta, no kitchen set, no extra characters, no speech bubbles, no stock art, no watermark, no signature, no UI screenshot, no invented metrics. Rice must be cooked white rice, not coins, pellets, cubes, colored data cards, or confetti. Remove the output stack of data cards from Image 1 and replace it with the rice-and-bowl interaction.
+
+Text (preserve these four strings exactly, no new text):
+"ShuJian Cube"
+"Make useful knowledge ready to learn."
+"Documents • Agent context • Open briefs"
+"CPT / SFT / DPO"
+Brand spelling: S-h-u-J-i-a-n space C-u-b-e. Dark navy clean modern sans-serif typography. Preserve the existing title/subtitle hierarchy, line wrapping, and reading order.
+Constraints: Keep the conceptual data-generation narrative and existing branding. The whale girl is a fan-art character in a new composition, not an official endorsement. No DeepSeek wordmark or official-cooperation badge.

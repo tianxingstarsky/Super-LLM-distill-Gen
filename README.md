@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/showcase/hero.png" width="1200" alt="ShuJian Cube — make training data simpler to create" />
+  <img src="assets/showcase/hero-whale.png" width="1200" alt="ShuJian Cube turns sources into white rice, caught in a bowl by the DeepSeek whale girl" />
 </p>
 
 <h1 align="center">ShuJian Cube</h1>
@@ -87,4 +87,4 @@ Generated data can be wrong. Review accuracy, safety, and privacy before trainin
 
 ## License and notices
 
-ShuJian Cube is available under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for third-party acknowledgments. Screenshots show the real app with local demo files. Promotional illustrations explain the product and do not report measured results.
+ShuJian Cube is available under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for third-party acknowledgments. Screenshots show the real app with local demo files. Promotional illustrations explain the product and do not report measured results. The hero uses community-inspired DeepSeek whale-girl fan art. See the [art references](assets/showcase/hero-whale-sources.md).
