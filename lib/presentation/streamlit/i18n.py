@@ -2596,12 +2596,66 @@ ZH_EN.update({
 })
 
 
+ZH_EN.update({
+    "文本": "Text", "图片": "Images", "原生 PDF": "Native PDF", "能力": " capability",
+    "图片能力": "Image capability", "原生 PDF能力": "Native PDF capability", "工具调用能力": "Tool capability",
+    "支持": "Supported", "不支持": "Unsupported", "未知": "Unknown", "未确认": "Unconfirmed",
+    "手动设置": "Manual setting", "服务返回": "Service information", "公开元数据": "Public metadata",
+    "调用测试": "Call test", "调用测试：": "Call tests: ", "测试时间：": "Tested at: ",
+    "上下文容量": "Context capacity", "最大输出容量": "Output capacity",
+    "模型上下文容量": "Model context capacity", "模型最大输出容量": "Model output capacity",
+    "获取模型": "Get models", "获取可用模型": "Get available models", "获取到的模型": "Available models",
+    "正在获取模型列表…": "Getting the model list…", "模型列表已更新。": "Model list updated.",
+    "先获取模型，或手动填写模型名称": "Get models or enter a model name",
+    "从当前服务获取可用模型。保留已选模型与当前节点参数。": "Get models from this service. Keep the selected model and node settings.",
+    "服务未返回模型列表，仍可手动输入模型名。": "The service returned no model list. You can enter a model name.",
+    "未能获取模型列表，请检查地址、协议和凭据。仍可手动输入模型名。": "Could not get models. Check the address, protocol, and credentials. You can enter a model name.",
+    "采用建议上限": "Use suggested limits", "仅更新当前节点。已有草稿不会自动覆盖。": "Update this node only. Saved drafts keep their settings.",
+    "服务未提供容量信息，可调整下方节点上限。短请求测试不能证明完整上下文容量。": "No capacity information was returned. Set the node limits below. Short tests cannot verify the full context capacity.",
+    "测试项目": "Test features", "测试模型调用": "Test model calls",
+    "正在发送少量测试内容，验证所选模型能力…": "Sending small test inputs to check this model…",
+    "模型测试未完成，请检查服务连接后重试。": "Model testing did not finish. Check the connection and try again.",
+    "测试会发送少量测试内容，并可能产生调用费用。公开信息与实测结果分别显示；短请求不验证最大容量。": "Tests use small inputs and may incur API charges. Published information and test results are shown separately. Short tests do not verify maximum capacity.",
+    "手动编辑能力": "Edit capabilities", "保存能力设置": "Save capabilities",
+    "手动声明与调用测试分别保存；恢复未知会清除当前手动覆盖。": "Manual settings and test results are saved separately. Select Unknown to clear a manual override.",
+    "能力设置未保存，请检查数值和本机配置后重试。": "Capabilities were not saved. Check the values and local settings, then try again.",
+    "图片输入能力已确认，识别结果仍需核对原文。": "Image input is confirmed. Check extracted content against the original.",
+    "公开元数据仅作参考，图片输入需调用测试或手动确认。": "Public metadata is a reference. Test image input or confirm it manually.",
+    "模型列表过长或响应超时，仅显示已获取的模型。": "The list was too long or the request timed out. Only fetched models are shown.",
+    "结果未通过内容核验": "The reply did not match the test input",
+    "测试输出不完整": "The test output was incomplete",
+    "服务拒绝该输入能力": "The service rejected this input feature",
+    "凭据校验失败": "Authentication failed", "服务权限不足": "Permission denied",
+    "服务请求限流": "Rate limited", "调用超时": "Request timed out",
+    "服务连接失败": "Connection failed", "模型服务暂不可用": "Model service is unavailable",
+    "服务未找到该模型": "Model not found", "服务拒绝测试请求": "The service rejected the test request",
+    "模型测试发生异常": "An unexpected test error occurred", "缺少调用依赖": "Required SDK is unavailable",
+    "测试连接配置无效": "Invalid test connection settings", "本次未选择": "Not selected for this test",
+    "文本连接失败，已跳过后续测试": "Text connection failed. Remaining tests were skipped",
+    "前序调用失败，已跳过后续测试": "An earlier call failed. Remaining tests were skipped",
+    "请先为此连接填写单价；硬预算不会调用价格未知的模型。": "Enter prices for this connection first. A hard budget blocks tests when prices are unknown.",
+    "预算不足，未发送模型测试。请检查剩余额度。": "No model test was sent. Check the remaining budget.",
+    "测试用量超过预留预算，已记录费用。请检查计费记录后再调用。": "Test usage exceeded the reserved budget. Charges are recorded. Check billing records before another call.",
+    "测试期间连接已变更，结果未用于当前模型。请重新测试。": "The connection changed during testing. The result was not applied. Run the test again.",
+    "请先选择或填写有效模型名称。": "Select or enter a valid model name first.",
+})
+
+
 def translate(value: Any, language: str = "en") -> Any:
     """Translate an exact interface phrase and leave all other values intact."""
     if isinstance(value, UntranslatedText) or language_code(language) != "en" or not isinstance(value, str):
         return value
     if value in ZH_EN:
         return ZH_EN[value]
+    match = re.fullmatch(r"(图片|原生 PDF|工具调用) · (支持|不支持|未知) · (手动设置|服务返回|公开元数据|调用测试|未知)", value)
+    if match:
+        return " · ".join(ZH_EN[part] for part in match.groups())
+    if value.startswith("调用测试："):
+        statuses = {"通过": "Passed", "失败": "Failed", "不支持": "Unsupported", "未确认": "Unconfirmed", "已跳过": "Skipped"}
+        parts = value[len("调用测试："):].split("；")
+        matches = [re.fullmatch(r"(文本|图片|原生 PDF|工具调用) · (通过|失败|不支持|未确认|已跳过)", part) for part in parts]
+        if all(matches):
+            return "Call tests: " + "; ".join(ZH_EN[match[1]] + " · " + statuses[match[2]] for match in matches)
     preview_patterns = [
         (r"本地全文检索 · ([\d,]+) 份资料 · ([\d,]+) 个片段", lambda m: f"Local full-text retrieval · {m[1]} sources · {m[2]} passages"),
         (r"索引已保存 · ([\d,]+) 份资料 · ([\d,]+) 个片段", lambda m: f"Index saved · {m[1]} sources · {m[2]} passages"),

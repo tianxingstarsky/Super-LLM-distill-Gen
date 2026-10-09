@@ -38,6 +38,36 @@ def test_absent_services_do_not_mark_empty_drafts_initialized():
     assert not missing_bindings(["sft"], "文档", recovered, endpoints)
 
 
+def test_discovered_model_capacity_initializes_new_role_without_rewriting_saved_draft():
+    port = Inventory()
+    writer = port.value["backends"][0]
+    writer["discovered_models"] = ["discovered-writer"]
+    writer["model_info"] = {"discovered-writer": {
+        "context_window_tokens": 200_000, "max_output_tokens": 8192}}
+    port.value["default_model"] = "discovered-writer"
+    app = WorkflowNodeModelsApplication(port)
+    draft, initialized, _ = app.prepare_draft(["sft"], "文档", {}, [])
+    assert draft["sft"]["generation"] == {
+        "backend": "writer", "model": "discovered-writer",
+        "context_window_tokens": 200_000, "max_output_tokens": 8192}
+    writer["model_info"]["discovered-writer"]["max_output_tokens"] = 65_536
+    draft["sft"]["generation"]["context_window_tokens"] = 150_000
+    saved, _, _ = app.prepare_draft(["sft", "preference"], "文档", draft, initialized)
+    assert saved["sft"]["generation"]["context_window_tokens"] == 150_000
+    assert saved["sft"]["generation"]["max_output_tokens"] == 8192
+    assert saved["preference"]["generation"]["max_output_tokens"] == 32_768
+    assert writer["models"] == ["write-v1", "write-v2"]
+
+
+def test_invalid_discovery_limits_do_not_break_initial_draft():
+    port = Inventory()
+    port.value["backends"][0]["model_info"] = {"write-v2": {
+        "context_window_tokens": True, "max_output_tokens": -1}}
+    draft, _, _ = WorkflowNodeModelsApplication(port).prepare_draft(["sft"], "文档", {}, [])
+    assert draft["sft"]["generation"]["context_window_tokens"] == 131_072
+    assert draft["sft"]["generation"]["max_output_tokens"] == 32_768
+
+
 def test_unlisted_role_default_requires_an_explicit_node_model_choice():
     port = Inventory()
     port.value["roles"]["jev"] = {"backend": "review", "model": "custom-judge"}

@@ -1,5 +1,6 @@
 """Configure each node's models and service connection in the node panel."""
 from copy import deepcopy
+import hashlib
 
 import streamlit as st
 from filelock import Timeout
@@ -12,6 +13,9 @@ from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
                                        validate_node_models)
 from lib.model_protocols import API_FORMATS
 from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.workflow_model_capabilities import (
+    discovered_choices, model_info, render_model_capabilities,
+    render_model_discovery, suggested_tokens)
 
 
 _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
@@ -77,7 +81,7 @@ def _set_binding_widgets(workspace: str, node: str, role: str, binding: dict) ->
     st.session_state[prefix + ":output:" + backend + ":" + model] = binding["max_output_tokens"]
 
 
-def _save_model_selection(workspace: str, node: str, role: str) -> None:
+def _save_model_selection(workspace: str, node: str, role: str, application=None) -> None:
     """Capture widget edits before a simultaneous node switch hides them."""
     draft = deepcopy(st.session_state.get(f"workflow-node-bindings:{workspace}", {}))
     previous = draft.get(node, {}).get(role, {})
@@ -88,15 +92,16 @@ def _save_model_selection(workspace: str, node: str, role: str) -> None:
         model = model.strip()
     if backend and model:
         same_model = previous.get("backend") == backend and previous.get("model") == model
+        suggested_context, suggested_output = suggested_tokens(model_info(application, backend, model))
         binding = {"backend": backend, "model": model,
                    "context_window_tokens": st.session_state.get(
                        prefix + ":context:" + backend + ":" + model,
                        previous.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
-                       if same_model else DEFAULT_CONTEXT_WINDOW_TOKENS),
+                       if same_model else suggested_context),
                    "max_output_tokens": st.session_state.get(
                        prefix + ":output:" + backend + ":" + model,
                        previous.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
-                       if same_model else DEFAULT_MAX_OUTPUT_TOKENS)}
+                       if same_model else suggested_output)}
         try:
             binding = validate_node_models({node: {role: binding}})[node][role]
         except ValueError:
@@ -185,7 +190,7 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
                         else st.expander("新增或更新服务连接", expanded=True))
     with connection_panel:
         st.caption("连接保存在本机供复用；本次任务使用哪个模型由当前节点决定。")
-        with st.form(f"{form_prefix}:{epoch}", clear_on_submit=True):
+        with st.form(f"{form_prefix}:{epoch}", clear_on_submit=False):
             name = st.text_input("服务名称", placeholder="字母、数字、下划线或连字符")
             api_format = st.selectbox("API 协议", API_FORMATS,
                                       format_func=lambda value: _API_FORMAT_LABELS[value],
@@ -199,6 +204,21 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
             secret = st.text_input("环境变量名或密钥", type="password", key=secret_key,
                                    placeholder="环境变量留空时使用 ANTHROPIC_API_KEY" if api_format == "anthropic"
                                    else "环境变量留空时使用 OPENAI_API_KEY")
+            discovered_key = form_prefix + ":discovered"
+            discovered = st.session_state.get(discovered_key) or {}
+            current_connection = (base_url.strip(), api_format, credential_mode, secret)
+            # A connection fingerprint excludes the secret itself from cached
+            # results while invalidating choices when form credentials change.
+            connection_key = hashlib.sha256(repr(current_connection).encode()).hexdigest()
+            choices = ((discovered.get("models") or [])
+                       if discovered.get("connection") == connection_key else [])
+            selected_discovered = st.selectbox("获取到的模型", choices, index=None,
+                                               key=f"{form_prefix}:discovered-choice:{epoch}",
+                                               placeholder="先获取模型，或手动填写模型名称") if choices else None
+            if discovered.get("connection") == connection_key and discovered.get("truncated"):
+                st.warning("模型列表过长或响应超时，仅显示已获取的模型。")
+            discover = (st.form_submit_button("获取模型", width="stretch")
+                        if hasattr(application, "discover_models") else False)
             st.caption("硬预算需要输入、输出两项单价。按服务商报价填写每百万 tokens 的美元价格；一个连接有多个模型时按最高价填写。")
             price_columns = st.columns(2, gap="small")
             with price_columns[0]:
@@ -211,7 +231,34 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
             replace = st.checkbox("覆盖同名连接")
             submit = st.form_submit_button("保存并用于当前节点" if missing_role else "保存连接",
                                            type="primary", width="stretch")
+        if discover:
+            if credential_mode == "直接填写密钥" and not secret:
+                st.error("请填写密钥，或改用环境变量。")
+                return
+            overrides = {"base_url": base_url.strip(), "api_format": api_format, "models": []}
+            if credential_mode == "直接填写密钥":
+                overrides["api_key"] = secret
+            else:
+                overrides["api_key_env"] = secret.strip() or ("ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY")
+            try:
+                with st.spinner("正在获取模型列表…"):
+                    result = application.discover_models(name.strip() or "preview", overrides=overrides)
+            except (OSError, ValueError, RuntimeError):
+                st.warning("未能获取模型列表，请检查地址、协议和凭据。仍可手动输入模型名。")
+            else:
+                if result.get("ok", True) and isinstance(result.get("models"), list):
+                    st.session_state[discovered_key] = {"models": result["models"], "connection": connection_key,
+                                                        "model_info": deepcopy(result.get("model_info") or {}),
+                                                        "truncated": bool(result.get("truncated"))}
+                    st.rerun()
+                else:
+                    st.warning("未能获取模型列表，请检查地址、协议和凭据。仍可手动输入模型名。")
+            return
         if not submit:
+            return
+        model = model.strip() or selected_discovered or ""
+        if not model.strip() or len(model) > 200 or any(ord(character) < 32 for character in model):
+            st.error("请先选择或填写有效模型名称。")
             return
         if credential_mode == "直接填写密钥" and not secret:
             st.error("请填写密钥，或改用环境变量。")
@@ -246,10 +293,15 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
         # replace a model the operator already selected on this node.
         target_role = missing_role
         if target_role is not None:
+            info = model_info(application, name.strip(), model.strip())
+            if discovered.get("connection") == connection_key:
+                temporary_info = (discovered.get("model_info") or {}).get(model.strip()) or {}
+                info = {**info, **{field: value for field, value in temporary_info.items() if value is not None}}
+            context_tokens, output_tokens = suggested_tokens(info)
             bindings.setdefault(node, {})[target_role] = {
                 "backend": name.strip(), "model": model.strip(),
-                "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
-                "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+                "context_window_tokens": context_tokens,
+                "max_output_tokens": output_tokens,
             }
             _persist_bindings(workspace, bindings)
             st.session_state[f"workflow-node-pending-binding:{workspace}:{node}"] = {
@@ -307,23 +359,28 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             st.caption(UntranslatedText(binding["backend"] + " · " + binding.get("model", "")))
         if prefix + ":backend" in st.session_state and st.session_state[prefix + ":backend"] not in names:
             st.session_state[prefix + ":backend"] = None
-        backend = st.selectbox("模型服务", names, index=names.index(binding["backend"])
-                               if binding.get("backend") in names else None, key=prefix + ":backend",
-                               placeholder="选择模型服务",
-                               on_change=_save_model_selection, args=(workspace, node, role),
-                               format_func=lambda name: name + " · " + _API_FORMAT_LABELS.get(
-                                   endpoints[name].get("api_format", "chat"), "Chat Completions"))
+        service_column, discovery_column = st.columns([3, 1], gap="small", vertical_alignment="bottom")
+        with service_column:
+            backend = st.selectbox("模型服务", names, index=names.index(binding["backend"])
+                                   if binding.get("backend") in names else None, key=prefix + ":backend",
+                                   placeholder="选择模型服务",
+                                   on_change=_save_model_selection, args=(workspace, node, role, backend_application),
+                                   format_func=lambda name: name + " · " + _API_FORMAT_LABELS.get(
+                                       endpoints[name].get("api_format", "chat"), "Chat Completions"))
+        if backend is not None:
+            with discovery_column:
+                endpoints[backend] = render_model_discovery(backend_application, backend, endpoints[backend], key=prefix + ":discover")
         if backend is None:
             if binding.get("backend") in endpoints:
                 bindings.setdefault(node, {}).pop(role, None)
             continue
-        models = list(endpoints[backend].get("models") or [])
+        models = discovered_choices(endpoints[backend])
         if binding.get("backend") == backend and binding.get("model") not in models and binding.get("model"):
             models.append(binding["model"])
         model = st.selectbox("模型", models, index=models.index(binding["model"])
                              if binding.get("backend") == backend and binding.get("model") in models else None,
                              accept_new_options=True, key=prefix + ":model:" + backend,
-                             on_change=_save_model_selection, args=(workspace, node, role),
+                             on_change=_save_model_selection, args=(workspace, node, role, backend_application),
                              placeholder="选择或输入模型名")
         if model:
             if (len(model) > 200 or not model.strip() or any(ord(character) < 32 for character in model)):
@@ -331,25 +388,30 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                 bindings.setdefault(node, {}).pop(role, None)
                 continue
             model = model.strip()
+            info = model_info(backend_application, backend, model, endpoints[backend])
             same_model = binding.get("backend") == backend and binding.get("model") == model
+            suggested_context, suggested_output = suggested_tokens(info)
             context_default = (binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
-                               if same_model else DEFAULT_CONTEXT_WINDOW_TOKENS)
+                               if same_model else suggested_context)
             output_default = (binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
-                              if same_model else DEFAULT_MAX_OUTPUT_TOKENS)
+                              if same_model else suggested_output)
+            render_model_capabilities(backend_application, backend, model, info, prefix=prefix,
+                                      save_selection=_save_model_selection,
+                                      save_args=(workspace, node, role, backend_application))
             context_column, output_column = st.columns(2, gap="small")
             with context_column:
                 context_tokens = st.number_input(
                     "上下文窗口（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS,
                     value=int(context_default), step=1024,
                     key=prefix + ":context:" + backend + ":" + model,
-                    on_change=_save_model_selection, args=(workspace, node, role),
+                    on_change=_save_model_selection, args=(workspace, node, role, backend_application),
                 )
             with output_column:
                 output_tokens = st.number_input(
                     "单次输出上限（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS - 1,
                     value=int(output_default), step=1024,
                     key=prefix + ":output:" + backend + ":" + model,
-                    on_change=_save_model_selection, args=(workspace, node, role),
+                    on_change=_save_model_selection, args=(workspace, node, role, backend_application),
                 )
             if output_tokens >= context_tokens:
                 st.warning("单次输出上限必须小于上下文窗口。")
@@ -441,7 +503,7 @@ def render_document_parser(workspace, bindings, endpoints, *, backend_applicatio
                 st.rerun()
         st.warning("此模型尚未确认图片输入能力，无法开始多模态识别。模型名称不作为能力判断依据。")
         return {"mode": "vision", "binding": deepcopy(binding), "unconfirmed": True}
-    st.caption("图片输入能力：用户已核实并在本机确认。识别结果仍需核对原文。")
+    st.caption("图片输入能力已确认，识别结果仍需核对原文。")
     return {"mode": "vision", "binding": deepcopy(binding)}
 
 

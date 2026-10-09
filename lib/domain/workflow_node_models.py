@@ -1,7 +1,10 @@
 """Pure rules for node-scoped model drafts and validated run snapshots."""
 from copy import deepcopy
 
-from lib.domain.workflow_scale import node_roles, validate_node_models
+from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
+                                       DEFAULT_MAX_OUTPUT_TOKENS,
+                                       MAX_CONTEXT_WINDOW_TOKENS, node_roles,
+                                       validate_node_models)
 
 
 def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_generation=None,
@@ -21,7 +24,9 @@ def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_
             endpoint = endpoints.get(backend)
             if endpoint is None:
                 continue
-            listed_models = endpoint.get("models") or []
+            listed_models = list(dict.fromkeys([
+                *(endpoint.get("models") or []), *(endpoint.get("discovered_models") or []),
+            ]))
             suggested_model = slot.get("model") or (
                 inventory.get("default_model") if backend == inventory.get("default_backend") else "")
             # Role defaults are suggestions, not proof that a model is usable.
@@ -30,7 +35,18 @@ def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_
                 continue
             model = suggested_model or next(iter(listed_models), "")
             if model:
-                draft.setdefault(node, {})[role] = {"backend": backend, "model": model}
+                info = (endpoint.get("model_info") or {}).get(model) or {}
+                context = info.get("context_window_tokens")
+                output = info.get("max_output_tokens")
+                if type(context) is not int or not 1 < context <= MAX_CONTEXT_WINDOW_TOKENS:
+                    context = DEFAULT_CONTEXT_WINDOW_TOKENS
+                if type(output) is not int or output <= 0:
+                    output = DEFAULT_MAX_OUTPUT_TOKENS
+                output = min(output, DEFAULT_MAX_OUTPUT_TOKENS, context - 1)
+                draft.setdefault(node, {})[role] = {
+                    "backend": backend, "model": model,
+                    "context_window_tokens": context, "max_output_tokens": output,
+                }
                 initialized.add(marker)
     return validate_node_models(draft), sorted(initialized), endpoints
 

@@ -68,8 +68,11 @@ def validate_endpoint(name: str, base_url: str, models: list[str], api_format: s
     if not VALID_NAME.match(name or ""):
         raise ValueError("后端名只允许字母/数字/下划线/连字符（1-32）")
     validate_backend_url(base_url)
-    if not models:
+    if not isinstance(models, list) or not models:
         raise ValueError("至少填一个模型名（models）")
+    if any(type(model) is not str or not model.strip() or len(model) > 200
+           or any(ord(character) < 32 for character in model) for model in models):
+        raise ValueError("invalid_model_capability")
 
 
 def validate_role(role: str) -> None:
