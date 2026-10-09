@@ -21,13 +21,14 @@ from lib.render import MESSAGE_CSS, render_message_sequence
 from lib.console_jobs import Job
 from lib.bootstrap.workspaces import workspace_application
 from lib.presentation.streamlit.shared import page_header, section_heading
+from lib.presentation.streamlit.page_motion import PAGE_MOTION_CSS, page_surface_key
 
 st.set_page_config(page_title="数简立方 · ShuJian Cube", layout="wide", initial_sidebar_state="expanded")
 initialize_language(st)
 install_streamlit_localization()
 from lib.console_theme import CSS as CHROME_CSS
 # Keep Streamlit's native sidebar controls in charge of opening and closing it.
-st.html(f"<style>{MESSAGE_CSS}\n{CHROME_CSS}</style>")
+st.html(f"<style>{MESSAGE_CSS}\n{CHROME_CSS}\n{PAGE_MOTION_CSS}</style>")
 WORKSPACES = workspace_application()
 
 
@@ -692,6 +693,8 @@ st.query_params['page'] = page
 from lib.presentation.streamlit.context_guide import render_context_guide
 render_context_guide(page, _select_page)
 try:
-    PAGES[page]()
+    _page_renderer = PAGES[page]
+    with st.container(key=page_surface_key(st.session_state, _page_renderer.__name__)):
+        _page_renderer()
 except (ValueError, OSError) as error:
     st.error(str(error))
