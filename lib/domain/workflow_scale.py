@@ -12,6 +12,7 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 131_072
 DEFAULT_MAX_OUTPUT_TOKENS = 32_768
 MAX_CONTEXT_WINDOW_TOKENS = 4_000_000
 NODE_ROLES = {
+    "director": ("generation",),
     "ingest": ("generation", "vision"), "cpt": ("generation", "jev"),
     "sft": ("generation", "jev"), "multiturn": ("generation", "jev"),
     "preference": ("generation", "jev"), "cot": ("generation", "jev"),
@@ -72,20 +73,31 @@ def validate_node_models(value: dict | None) -> dict:
     return result
 
 
-def generation_variant(original: dict, index: int, document_count: int) -> dict:
+def generation_variant(original: dict, index: int, document_count: int, *, policy_version: int = 2) -> dict:
     """Make one candidate variant while preserving the original source."""
     from lib.domain.workflow_quality import canonical
     import hashlib
     focuses = ("概念解释", "操作步骤", "条件与边界", "故障诊断", "对比判断", "应用场景")
     unit = deepcopy(original)
     unit['id'] = hashlib.sha256(canonical([original['id'], 'variant', index]).encode()).hexdigest()
-    unit['generation_variant'] = {'index': index // document_count + 1,
-                                  'focus': focuses[index % len(focuses)],
+    if policy_version == 1:
+        # Recipe versions through 10 pin item checkpoints to the complete unit
+        # hash. Preserve their exact metadata when resuming old paid work.
+        unit['generation_variant'] = {'index': index // document_count + 1,
+                                      'focus': focuses[index % len(focuses)],
+                                      'instruction': '依据同一来源生成不同问题；不要重复已有问法或编造新事实。'}
+        return unit
+    if policy_version != 2:
+        raise ValueError("invalid_generation_variant_policy")
+    variant_index = index // document_count
+    unit['generation_variant'] = {'index': variant_index + 1,
+                                  'source_unit_id': original['id'],
+                                  'focus': focuses[variant_index % len(focuses)],
                                   'instruction': '依据同一来源生成不同问题；不要重复已有问法或编造新事实。'}
     return unit
 
 
-def generation_units(units: list[dict], count: int | None) -> list[dict]:
+def generation_units(units: list[dict], count: int | None, *, policy_version: int = 2) -> list[dict]:
     """Expand document candidates only. Recorded conversations stay intact."""
     if count is None or not units:
         return units
@@ -95,5 +107,5 @@ def generation_units(units: list[dict], count: int | None) -> list[dict]:
         return result
     for index in range(len(result), count):
         original = documents[(index - len(units)) % len(documents)]
-        result.append(generation_variant(original, index, len(documents)))
+        result.append(generation_variant(original, index, len(documents), policy_version=policy_version))
     return result

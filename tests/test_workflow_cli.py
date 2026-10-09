@@ -48,18 +48,23 @@ def test_workflow_cli_forwards_generation_and_trim_files(monkeypatch, tmp_path):
     generation = {'cot': {'enabled': True, 'style': 'structured', 'instruction': '保留必要依据。'}}
     trim = {'enabled': True, 'template': 'leakage'}
     node_prompts = {'cot': {'workflow.cot_generate': 'Preserve facts. Return {"reasoning":"...","answer":"..."}.'}}
+    director = {'enabled': True, 'question_rules': 'Cover edge cases.', 'answer_rules': 'Preserve visible evidence.'}
     generation_file = tmp_path / 'generation.json'
     trim_file = tmp_path / 'trim.json'
     prompts_file = tmp_path / 'prompts.json'
+    director_file = tmp_path / 'director.json'
     generation_file.write_text(json.dumps(generation, ensure_ascii=False), encoding='utf-8')
     trim_file.write_text(json.dumps(trim), encoding='utf-8')
     prompts_file.write_text(json.dumps(node_prompts), encoding='utf-8')
+    director_file.write_text(json.dumps(director), encoding='utf-8-sig')
     args = cli.build_parser().parse_args([
         'workflow', '--brief', 'Generate sourced examples', '--targets', 'cot',
         '--node-generation', str(generation_file), '--reasoning-trim', str(trim_file),
         '--node-prompts', str(prompts_file),
+        '--qa-director', str(director_file),
     ])
     assert args.func(args) == 0
     assert captured['node_generation'] == generation
     assert captured['reasoning_trim'] == trim
     assert captured['node_prompts'] == node_prompts
+    assert captured['qa_director'] == director

@@ -77,6 +77,12 @@ REASON_LABELS = {
     "cot_generation_failed_after_repair": "修订后风格化推理仍未通过",
     "reasoning_trim_failed_after_repair": "修订后推理修剪仍未通过",
     "package_ai_review_rejected": "AI 打包评审未通过",
+    "duplicate_qa_contract": "问题与可见条件重复",
+    "duplicate_qa_contract_in_batch": "同批问答任务重复",
+    "released_qa_contract_duplicate": "与历史合格问答重复",
+    "directed_sft_quality_failed_after_repair": "修订后问答规则仍未通过",
+    "preference_qa_contract_rejected": "优选回答未遵循问答规则",
+    "cot_qa_contract_rejected": "推理样本未遵循问答规则",
 }
 
 

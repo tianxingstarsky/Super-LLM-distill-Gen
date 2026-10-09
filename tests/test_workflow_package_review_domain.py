@@ -11,7 +11,7 @@ from lib.application.workflow_node_models_service import WorkflowNodeModelsAppli
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_node_prompts import (
-    LEGACY_NODE_PROMPT_IDS, active_node_prompt_ids, builtin_node_prompt,
+    LEGACY_NODE_PROMPT_IDS, VERSION_10_NODE_PROMPT_IDS, active_node_prompt_ids, builtin_node_prompt,
     snapshot_node_prompts, validate_node_prompt_snapshot,
 )
 from lib.domain.workflow_package_review import validate_package_review
@@ -105,7 +105,12 @@ def test_snapshot_accepts_exact_legacy_catalog_without_adding_new_templates():
     with pytest.raises(ValueError, match="invalid_node_prompt_snapshot"):
         validate_node_prompt_snapshot(legacy, system, recipe_version=10)
     current = snapshot_node_prompts({"package": {"workflow.package_review": "CUSTOM {literal}"}})
-    assert validate_node_prompt_snapshot(current, system, recipe_version=10) == current
+    version_10 = {stage: {prompt_id: current[stage][prompt_id] for prompt_id in ids}
+                  for stage, ids in VERSION_10_NODE_PROMPT_IDS.items()}
+    assert validate_node_prompt_snapshot(version_10, system, recipe_version=10) == version_10
+    assert validate_node_prompt_snapshot(current, system, recipe_version=11) == current
+    with pytest.raises(ValueError, match="invalid_node_prompt_snapshot"):
+        validate_node_prompt_snapshot(current, system, recipe_version=10)
     assert current["package"]["workflow.package_review"] == "CUSTOM {literal}"
     with pytest.raises(ValueError, match="invalid_node_prompt_snapshot"):
         validate_node_prompt_snapshot(current, system, recipe_version=9)

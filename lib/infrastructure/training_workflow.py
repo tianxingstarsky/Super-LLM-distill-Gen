@@ -42,6 +42,7 @@ from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.domain.workflow_generation import validate_node_generation, style_for_sample
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
 from lib.domain.workflow_package_review import validate_package_review
+from lib.domain.workflow_qa_director import validate_qa_director
 from lib.domain.workflow_node_prompts import (
     validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
 )
@@ -55,6 +56,7 @@ from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
 from lib.infrastructure.workflow_candidates import prepare_generation_rows
 from lib.infrastructure.planning_identities import PlanningIdentities
+from lib.infrastructure.workflow_qa_director import WorkflowQADirector
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -71,8 +73,8 @@ from lib.prompts import get, registry, render
 
 EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
-RECIPE_VERSION = 10
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10})
+RECIPE_VERSION = 11
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -259,7 +261,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
-               package_review=None):
+               package_review=None, qa_director=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -267,11 +269,12 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources, node_generation=node_generation,
         reasoning_trim=reasoning_trim, node_prompts=node_prompts,
-        package_review=package_review)
+        package_review=package_review, qa_director=qa_director)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
     reasoning_trim = validate_reasoning_trim(reasoning_trim)
     package_review = validate_package_review(package_review)
+    qa_director = validate_qa_director(qa_director)
     node_prompts = validate_node_prompts(node_prompts)
     node_prompt_templates = snapshot_node_prompts(node_prompts)
     node_prompt_system = render(get("workflow.system"))
@@ -358,6 +361,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "node_generation_prompts": generation_prompts,
               "reasoning_trim": reasoning_trim,
               "package_review": package_review,
+              "qa_director": qa_director,
               "reasoning_trim_prompt": (trim_prompt(reasoning_trim) if (reasoning_trim or {}).get("enabled") else None),
               "generation_preferences": preferences, "sft_output_style": sft_output_style,
               "prompts": prompt_versions()}
@@ -370,6 +374,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                 "status": "queued", "recipe_hash": digest(recipe), "targets": targets, "attempt": 0,
                 "reasoning_trim_enabled": bool((reasoning_trim or {}).get("enabled")),
                 "package_review_enabled": package_review["enabled"],
+                "qa_director_enabled": qa_director["enabled"],
                 "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0} for key, label in STAGES.items()},
                 "events": [], "usage": {}})
     return run_id
@@ -379,7 +384,7 @@ class Cancelled(Exception):
     pass
 
 
-class Workflow:
+class Workflow(WorkflowQADirector):
     def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)
@@ -602,8 +607,11 @@ class Workflow:
                     metrics["eta_seconds"] = round((metrics["total"] - metrics["done"]) * elapsed / processed)
                 self.save(force=False)
             return value
-        iterator = iter(enumerate(items))
-        with pending.open("w", encoding="utf-8") as handle, ThreadPoolExecutor(max_workers=workers) as executor:
+        source_iterator = iter(items)
+        iterator = enumerate(source_iterator)
+        with ExitStack() as resources, pending.open("w", encoding="utf-8") as handle, ThreadPoolExecutor(max_workers=workers) as executor:
+            if callable(close_iterator := getattr(source_iterator, "close", None)):
+                resources.callback(close_iterator)
             while batch := list(islice(iterator, batch_size)):
                 self.check_cancel()
                 futures = {executor.submit(process, index, item): index for index, item in batch}
@@ -634,7 +642,8 @@ class Workflow:
     def rejected(self, unit, reason):
         provenance = {key: unit[key] for key in ("source_name", "location", "source_location") if key in unit}
         return {"id": unit["id"], "source_id": unit.get("source_id", unit["id"]),
-                **provenance, "status": "quarantined", "reason": reason}
+                **provenance, "status": "quarantined", "reason": reason,
+                **self.qa_metadata(unit)}
 
     def parse_source(self, source):
         """Compatibility entry point; execution consumes the streaming iterator."""
@@ -954,6 +963,8 @@ class Workflow:
                  "evidence_level": "model_assessed_synthetic"}]
 
     def sft(self, unit):
+        if unit.get("qa_contract") is not None:
+            return self.directed_sft(unit)
         if unit.get("verification_status") == "synthetic_unverified":
             return [self.rejected(unit, "simulated_tool_observation_not_verified_sft")]
         if any(tool_error_flag(message)[0] or tool_error_flag(message)[1]
@@ -1041,6 +1052,12 @@ class Workflow:
                       "kind": unit["kind"]}
         source_context = {"provenance": provenance, "task": unit.get("text"),
                           "brief": self.recipe.get("brief", ""), "tools": unit.get("tools", [])}
+        contract = unit.get("qa_contract")
+        if contract is not None:
+            source_context.update(qa_contract=contract,
+                question_rules=self.recipe["qa_director"]["question_rules"],
+                answer_rules=self.recipe["qa_director"]["answer_rules"],
+                teacher_evidence_not_learner_context=True)
         evidence_level = ("model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
                           else "recorded_context_model_assessed" if unit["kind"] == "conversation"
                           else "source_and_model_assessed" if unit["kind"] == "document"
@@ -1070,18 +1087,26 @@ class Workflow:
             for turn_index in range(self.recipe.get("conversation_turns", 3)):
                 feedback = None
                 for attempt in range(2):
-                    user_data = self.ask([unit["id"], "multiturn_user", turn_index, attempt],
-                        "generation", "workflow.multiturn_user",
-                        {**source_context, "turn": turn_index + 1, "total_turns": self.recipe.get("conversation_turns", 3),
-                         "previous_messages": messages, "feedback": feedback})
+                    if contract is not None and turn_index == 0:
+                        user_data = {"message": contract["question"]}
+                    else:
+                        user_data = self.ask([unit["id"], "multiturn_user", turn_index, attempt],
+                            "generation", "workflow.multiturn_user",
+                            {**source_context, "turn": turn_index + 1, "total_turns": self.recipe.get("conversation_turns", 3),
+                             "previous_messages": messages, "feedback": feedback},
+                            **({"instruction": "遵循问答指导契约和提问规则。隐藏的教师资料不得自动成为用户可见线索；"
+                                "无线索题的后续问题必须自包含，不引用读者不可见的来源。"} if contract is not None else {}))
                     user_text = user_data.get("message") if isinstance(user_data, dict) else None
-                    if text_issue(user_text) or len(user_text) > 6000:
+                    if text_issue(user_text) or len(user_text) > (12000 if contract is not None and turn_index == 0 else 6000):
                         feedback = "用户消息为空、含敏感信息或过长"
                         continue
                     if any(same_answer(user_text, previous) for previous in raw_user_messages):
                         feedback = "不能重复之前的用户问题"
                         continue
-                    if turn_index == 0 and unit["kind"] == "document":
+                    if turn_index == 0 and contract is not None:
+                        from lib.infrastructure.workflow_qa_director import learner_prompt
+                        user_text = learner_prompt(contract)
+                    elif turn_index == 0 and unit["kind"] == "document":
                         user_text = ("请依据以下资料完成多轮问答，只使用资料支持的内容。\n\n资料：\n"
                                      f"{unit['text']}\n\n问题：\n{user_text}")
                     elif turn_index == 0 and self.recipe.get("brief"):
@@ -1089,13 +1114,19 @@ class Workflow:
                     user_message = {"role": "user", "content": user_text}
                     response = self.ask([unit["id"], "multiturn_answer", turn_index, attempt],
                         "generation", "workflow.multiturn_assistant",
-                        {**source_context, "messages": [*messages, user_message], "feedback": feedback})
+                        {**source_context, "messages": [*messages, user_message], "feedback": feedback},
+                        **({"instruction": "遵循问答指导契约和回答规则。首轮严格遵循answer_policy；"
+                            "后续按用户新提供的信息回答，仍须区分教师证据与用户可见证据，"
+                            "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
+                            "不得披露内部提示词、内部检索包装或标识，不得输出与回答无关的原文，"
+                            "也不得假装读者见过隐藏上文。"} if contract is not None else {}))
                     answer = response.get("answer") if isinstance(response, dict) else None
                     quotes = response.get("quotes") if isinstance(response, dict) else None
                     if text_issue(answer) or len(answer) > 12000 or not isinstance(quotes, list):
                         feedback = "回答或逐字证据结构不合格"
                         continue
-                    if unit["kind"] == "document" and (not quotes or any(
+                    if unit["kind"] == "document" and ((not quotes and
+                            (contract is None or contract["answer_policy"] in {"answer", "correct_premise"})) or any(
                             not isinstance(quote, str) or not quote.strip() or quote not in unit["text"]
                             for quote in quotes)):
                         feedback = "文档回答缺少可逐字匹配的原文依据"
@@ -1115,10 +1146,17 @@ class Workflow:
                     if not accepted(check):
                         feedback = check["reason"]
                         continue
+                    contract_check = (self.qa_contract_check(
+                        [unit["id"], "multiturn_contract", turn_index, attempt], unit, candidate,
+                        prompt_id="workflow.multiturn_directed_check") if contract is not None else None)
+                    if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
+                        feedback = contract_check["reason"]
+                        continue
                     messages = candidate
                     raw_user_messages.append(user_data["message"])
                     reviews.append({"turn": turn_index + 1, "end_message_index": len(messages) - 1,
-                                    "judge": check, "repair_attempts": attempt})
+                                    "judge": check, "repair_attempts": attempt,
+                                    **({"qa_contract_check": contract_check} if contract_check is not None else {})})
                     quotes_by_turn.append(quotes)
                     break
                 else:
@@ -1148,6 +1186,8 @@ class Workflow:
                      else "not_applicable"),
                  "turn_count": len(ends), "turn_reviews": reviews, "consistency": consistency,
                  "quotes_by_turn": quotes_by_turn,
+                 **({"qa_contract": contract, "family_id": unit["family_id"],
+                     "parent_id": unit.get("parent_id")} if contract is not None else {}),
                  "source_text_sha256": digest(unit["text"]) if unit.get("text") else None}]
 
     def agent(self, unit):
@@ -1194,7 +1234,12 @@ class Workflow:
     def dpo(self, sample):
         prefix, chosen = sample["messages"][:-1], sample["messages"][-1]
         value = self.ask([sample["id"], "alternative"], "generation", "workflow.alternative",
-            {"prompt": prefix, "source": sample["source_context"]})
+            {"prompt": prefix, "source": sample["source_context"],
+             **({"qa_contract": sample["qa_contract"],
+                 "question_rules": self.recipe["qa_director"]["question_rules"],
+                 "answer_rules": self.recipe["qa_director"]["answer_rules"]} if sample.get("qa_contract") else {})},
+            **({"instruction": "保持指导员题面、可见线索与回答策略不变。按question_rules和answer_rules认真回答，"
+                "不要故意制造坏答案；隐藏教师来源不能成为训练输入或回答中的来源指代。"} if sample.get("qa_contract") else {}))
         if not isinstance(value, dict) or any(text_issue(value.get(k)) for k in ("answer", "reasoning")):
             return [self.rejected(sample, "invalid_dpo_candidate")]
         alternative = {"role": "assistant", "content": value["answer"], "reasoning_content": value["reasoning"]}
@@ -1213,10 +1258,17 @@ class Workflow:
         low, high = choices
         if not accepted(high[0]) or high[0]["correctness"] - low[0]["correctness"] < 2:
             return [{**self.rejected(sample, "insufficient_preference_evidence"), "checks": [low[0], high[0]]}]
+        contract_check = (self.qa_contract_check([sample["id"], "preference_directed_contract"],
+            sample, [*prefix, high[1]], prompt_id="workflow.preference_directed_check")
+            if sample.get("qa_contract") else None)
+        if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
+            return [{**self.rejected(sample, "preference_qa_contract_rejected"),
+                     **self.qa_metadata(sample, contract_check)}]
         return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible", "prompt": prefix,
                  "chosen": [high[1]], "rejected": [low[1]], "tools": sample.get("tools", []),
                  "preference": {"dimension": "correctness", "chosen": high[0], "rejected": low[0], "minimum_gap": 2},
-                 "evidence_level": sample["evidence_level"]}]
+                 "evidence_level": sample["evidence_level"],
+                 **self.qa_metadata(sample, contract_check)}]
 
     def gsm8k(self, item):
         seed = int(item["id"][:8], 16)
@@ -1253,10 +1305,16 @@ class Workflow:
             raise
         if not accepted(check):
             return [{**self.rejected(sample, "cot_reasoning_rejected"), "judge": check}]
+        contract_check = (self.qa_contract_check([sample["id"], "cot_directed_contract"], sample, messages,
+            prompt_id="workflow.cot_directed_check") if sample.get("qa_contract") else None)
+        if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
+            return [{**self.rejected(sample, "cot_qa_contract_rejected"),
+                     **self.qa_metadata(sample, contract_check)}]
         steps = [part.strip() for part in re.split(r"(?<=[。.!?])\s*", reasoning) if part.strip()]
         return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                  "question": messages[:-1], "reasoning": steps or [reasoning], "answer": answer,
-                 "judge": check, "evidence_level": sample["evidence_level"]}]
+                 "judge": check, "evidence_level": sample["evidence_level"],
+                 **self.qa_metadata(sample, contract_check)}]
 
     def styled_cot(self, sample, style):
         """Author a new explicit rationale; never copy a provider reasoning channel."""
@@ -1268,7 +1326,11 @@ class Workflow:
         task = {"prompt": self.without_source_reasoning(messages[:-1]), "source": source,
                 "quotes": sample.get("quotes", []), "reference_answer": messages[-1]["content"],
                 "generation_style": style}
-        feedback, check, style_check = None, None, None
+        if sample.get("qa_contract"):
+            task.update(qa_contract=sample["qa_contract"],
+                question_rules=self.recipe["qa_director"]["question_rules"],
+                answer_rules=self.recipe["qa_director"]["answer_rules"])
+        feedback, check, style_check, contract_check = None, None, None, None
         for attempt in range(2):
             value = self.ask([sample["id"], "cot_generate_v1", attempt], "generation",
                              "workflow.cot_generate", {**task, "feedback": feedback},
@@ -1282,20 +1344,29 @@ class Workflow:
                                       prompt_id="workflow.rationale_check", allow_reasoning_fallback=False)
             style_check = self.style_check([sample["id"], "cot_style_v1", attempt], style,
                                           value["reasoning"], value["answer"])
-            if accepted(check) and style_check["keep"] and style_check["adherence"] >= 4:
+            contract_check = (self.qa_contract_check([sample["id"], "cot_generated_directed_contract", attempt],
+                sample, [*task["prompt"], {"role": "assistant", "content": value["answer"],
+                    "reasoning_content": value["reasoning"]}], prompt_id="workflow.cot_directed_check")
+                if sample.get("qa_contract") else None)
+            if (accepted(check) and style_check["keep"] and style_check["adherence"] >= 4
+                    and (contract_check is None or (contract_check["keep"] and contract_check["adherence"] >= 4))):
                 return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                          "question": task["prompt"], "reasoning": [value["reasoning"]], "answer": value["answer"],
                          "source_context": source, "quotes": sample.get("quotes", []),
                          "judge": check, "style_check": style_check, "generation_style": style,
                          "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation",
-                         "evidence_level": sample["evidence_level"]}]
+                         "evidence_level": sample["evidence_level"],
+                         **self.qa_metadata(sample, contract_check)}]
             feedback = {"correctness": check["reason"] if not accepted(check) else None,
                         "style": style_check["reason"] if not (style_check["keep"] and
                                   style_check["adherence"] >= 4) else None}
+            if contract_check is not None:
+                feedback["contract"] = (contract_check["reason"] if
+                    not (contract_check["keep"] and contract_check["adherence"] >= 4) else None)
         return [{**self.rejected(sample, "cot_generation_failed_after_repair"),
                  "generation_style": style, "judge": check, "style_check": style_check,
                  "feedback": feedback, "repair_attempts": 1,
-                 "reasoning_origin": "prompt_styled_generation"}]
+                 "reasoning_origin": "prompt_styled_generation", **self.qa_metadata(sample, contract_check)}]
 
     def trim_reasoning(self, item):
         """Transform only explicit SFT/CoT reasoning, retaining immutable answers."""
@@ -1338,9 +1409,22 @@ class Workflow:
                     {"prompt": prompt, "original_reasoning": original,
                      "replacement_reasoning": replacement["reasoning"], "final_answer": answer},
                     instruction=instruction)
-                if accepted(check) and rules_check["keep"] and rules_check["adherence"] >= 4:
+                contract_check = None
+                if row.get("qa_contract"):
+                    if target == "sft":
+                        contract_messages = deepcopy(row["messages"])
+                        contract_messages[index]["reasoning_content"] = replacement["reasoning"]
+                    else:
+                        contract_messages = [*row["question"], {"role": "assistant", "content": answer,
+                                             "reasoning_content": replacement["reasoning"]}]
+                    contract_check = self.qa_contract_check([*key, "qa_contract"], row, contract_messages,
+                        prompt_id="workflow.trim_directed_check")
+                if (accepted(check) and rules_check["keep"] and rules_check["adherence"] >= 4
+                        and (contract_check is None or (contract_check["keep"] and contract_check["adherence"] >= 4))):
                     receipts.append({"field": field, "input_sha256": original_hash, "judge": check,
                                      "rules_check": rules_check, "repair_attempts": attempt})
+                    if contract_check is not None:
+                        row["qa_contract_check"] = contract_check
                     if target == "sft":
                         row["messages"][index]["reasoning_content"] = replacement["reasoning"]
                     else:
@@ -1349,6 +1433,9 @@ class Workflow:
                 feedback = {"meaning": check["reason"] if not accepted(check) else None,
                             "rules": rules_check["reason"] if not (rules_check["keep"] and
                                       rules_check["adherence"] >= 4) else None}
+                if contract_check is not None:
+                    feedback["contract"] = (contract_check["reason"] if
+                        not (contract_check["keep"] and contract_check["adherence"] >= 4) else None)
             else:
                 return [{**self.rejected(sample, "reasoning_trim_failed_after_repair"), "trim_target": target,
                          "reasoning_trim": {"version": 1, "template": config["template"], "status": "rejected",
@@ -1622,6 +1709,17 @@ class Workflow:
                                      "custom": prompt_id in self.recipe.get("node_prompts", {}).get(stage, {})}
                         for prompt_id, text in templates.items()}
                 for stage, templates in self.recipe["node_prompt_templates"].items()}
+        if self.recipe.get("qa_director", {}).get("enabled"):
+            report["qa_director"] = deepcopy(self.state.get("qa_director", {}))
+            report["qa_director"].update(
+                question_rules_sha256=digest(self.recipe["qa_director"]["question_rules"]),
+                answer_rules_sha256=digest(self.recipe["qa_director"]["answer_rules"]),
+                type_weights=self.recipe["qa_director"]["type_weights"],
+                planning_rows="stage-results/director.jsonl",
+                noise_policy="explicit_distractor_context_and_independent_answer_policy_review")
+            report["limitations"].append(
+                "问答指导的历史检索为有界词法候选召回；精确契约去重不等于语义去重，"
+                "AI 契约评审不能证明事实正确或清除全部隐含来源泄漏。开放需求产生的情境与答案为模型评估的合成数据。")
         if (self.recipe.get("reasoning_trim") or {}).get("enabled"):
             report["reasoning_trim"] = {
                 "enabled": True, "template": self.recipe["reasoning_trim"]["template"],
@@ -1661,130 +1759,142 @@ class Workflow:
             report["limitations"].append("打包 AI 评审只代表模型判断；抽检未选中的样本未经过该项评审，不能把抽检通过率当作全量正确率")
         else:
             report["package_review"] = {"enabled": False, "status": "disabled"}
-        for target in self.recipe["targets"]:
-            self.check_cancel()
-            records = RowSpool(self.path / "stage-results" / f"package-{target}-records.jsonl")
-            training = RowSpool(self.path / "stage-results" / f"package-{target}-training.jsonl")
-            try:
-                for index, row in enumerate(candidates[target]):
-                    self.check_cancel()
-                    if row["status"] == "eligible":
-                        payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
-                        if review_config["enabled"]:
-                            selected = selections[target] is None or index in selections[target]
-                            if selected:
-                                if next_review is None or (next_review["target"], next_review["index"]) != (target, index):
-                                    raise ValueError("package_review_checkpoint_mismatch")
-                                row["package_review"] = next_review["package_review"]
-                                if row["package_review"]["candidate_sha256"] != digest(payload):
-                                    raise ValueError("package_review_checkpoint_mismatch")
-                                plan = review_plans[target]
-                                plan["reviewed"] += 1
-                                if row["package_review"]["status"] == "accepted":
-                                    plan["accepted"] += 1
-                                else:
-                                    plan["rejected"] += 1
-                                    row.update(status="quarantined", reason="package_ai_review_rejected")
-                                next_review = next(review_iterator, None)
-                            else:
-                                row["package_review"] = {"status": "not_selected", "mode": review_config["mode"],
-                                                         "candidate_sha256": digest(payload)}
+        with self.qa_publication_guard() as qa_history:
+            for target in self.recipe["targets"]:
+                self.check_cancel()
+                records = RowSpool(self.path / "stage-results" / f"package-{target}-records.jsonl")
+                training = RowSpool(self.path / "stage-results" / f"package-{target}-training.jsonl")
+                try:
+                    for index, row in enumerate(candidates[target]):
+                        self.check_cancel()
                         if row["status"] == "eligible":
-                            training.append(payload)
-                    records.append(row)
-            finally:
-                records.close()
-                training.close()
-            if target == "cpt":
+                            payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
+                            if review_config["enabled"]:
+                                selected = selections[target] is None or index in selections[target]
+                                if selected:
+                                    if next_review is None or (next_review["target"], next_review["index"]) != (target, index):
+                                        raise ValueError("package_review_checkpoint_mismatch")
+                                    row["package_review"] = next_review["package_review"]
+                                    if row["package_review"]["candidate_sha256"] != digest(payload):
+                                        raise ValueError("package_review_checkpoint_mismatch")
+                                    plan = review_plans[target]
+                                    plan["reviewed"] += 1
+                                    if row["package_review"]["status"] == "accepted":
+                                        plan["accepted"] += 1
+                                    else:
+                                        plan["rejected"] += 1
+                                        row.update(status="quarantined", reason="package_ai_review_rejected")
+                                    next_review = next(review_iterator, None)
+                                else:
+                                    row["package_review"] = {"status": "not_selected", "mode": review_config["mode"],
+                                                             "candidate_sha256": digest(payload)}
+                            if row["status"] == "eligible":
+                                duplicate = self.final_qa_duplicate(row, target, qa_history)
+                                if duplicate:
+                                    row.update(status="quarantined", reason="released_qa_contract_duplicate",
+                                               duplicate_of=duplicate["id"], duplicate_scope="published_qa_history")
+                            if row["status"] == "eligible":
+                                training.append(payload)
+                        records.append(row)
+                finally:
+                    records.close()
+                    training.close()
+                if target == "cpt":
+                    for row in records:
+                        cluster_index.add(row)
+                    records = WorkflowRows(records.path, len(records), transform=cluster_index.annotate)
+                # Atomic checkpoints hold metadata; files contain only the selected training schema.
+                output = destination / f"{target}.jsonl"
+                write_jsonl(output, training)
+                write_json_array(destination / f"{target}.records.json", records)
+                reasons = {}
                 for row in records:
-                    cluster_index.add(row)
-                records = WorkflowRows(records.path, len(records), transform=cluster_index.annotate)
-            # Atomic checkpoints hold metadata; files contain only the selected training schema.
-            output = destination / f"{target}.jsonl"
-            write_jsonl(output, training)
-            write_json_array(destination / f"{target}.records.json", records)
-            reasons = {}
-            for row in records:
-                if row.get("reason"):
-                    reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
-            report["targets"][target] = {"eligible": len(training), "total": len(records), "reasons": reasons}
-            if review_config["enabled"]:
-                report["targets"][target]["package_review"] = review_plans[target]
-            if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:
-                # A trainer export is complete only if every eligible native row converts.
-                # Keep the native target even when its optional TRL format is incompatible.
-                report["trainer_exports"][target] = write_trainer_export(
-                    destination, target, records, preferences,
-                    sft_output_style=node_style)
-            if target == "cpt":
-                selected_count = len(collections[target])
-                quality_passed = sum(row["status"] == "eligible" for row in collections[target])
-                input_summary = self.state.get("input_summary", {})
-                def rate(numerator, denominator):
-                    return round(numerator / denominator, 4) if denominator else None
-                report["targets"][target]["retention"] = {
-                    "parsed_units": input_summary.get("units", 0),
-                    "parsed_ready": input_summary.get("ready", 0),
-                    "selected": selected_count,
-                    "quality_passed": quality_passed,
-                    "exact_duplicates": reasons.get("exact_duplicate_corpus", 0),
-                    "near_duplicates": reasons.get("near_duplicate_corpus", 0),
-                    "released_exact_duplicates": reasons.get("released_corpus_exact_duplicate", 0),
-                    "released_near_duplicates": reasons.get("released_corpus_near_duplicate", 0),
-                    "exported": len(training),
-                    "parse_rate": rate(input_summary.get("ready", 0), input_summary.get("units", 0)),
-                    "quality_rate": rate(quality_passed, selected_count),
-                    "dedup_rate": rate(len(training), quality_passed),
-                    "overall_rate": rate(len(training), selected_count),
-                }
-                report["targets"][target]["filter_policy"] = {
-                    "near_duplicate": "NFC + whitespace-folded character 7-gram Jaccard",
-                    "minimum_chars": 300, "jaccard_threshold": 0.90,
-                    "short_text": "exact normalized deduplication only",
-                    "structure_sensitive": "code, tables and equations use exact deduplication only",
-                    "scope": ("current run exact/near; pinned same-workspace CPT releases exact/near"
-                              if self.recipe["version"] >= 4 else "legacy current-run exact/near only"),
-                    "reference_releases": cpt_references,
-                    "reference_rows": released_rows,
-                }
-                report["targets"][target]["decontamination"] = {
-                    "status": "checked" if evaluation_index is not None else "not_configured",
-                    "reference_files": len(evaluation_references),
-                    "reference_rows": evaluation_index.reference_rows if evaluation_index else 0,
-                    "short_for_embedded": evaluation_index.short_for_embedded if evaluation_index else 0,
-                    "verbatim_overlaps": reasons.get("evaluation_verbatim_overlap", 0),
-                    "near_overlaps": reasons.get("evaluation_near_overlap", 0),
-                }
-                report["targets"][target]["source_breakdown"] = summarize_corpus_sources(records)
-            if target == "agent":
-                negative_count = sum(bool(row.get("negative")) for row in records)
-                sidecar = destination / "agent.negative.jsonl"
-                write_jsonl(sidecar, (row["negative"] for row in records if row.get("negative")))
-                report["targets"][target]["negative"] = negative_count
-        if next_review is not None:
-            raise ValueError("package_review_checkpoint_mismatch")
-        _write_quality_report(destination / "quality.json", report,
-                              self.path / "input_records.json")
-        self.state["quality"] = {"policy": report["policy"], "targets": report["targets"],
-                                 "human_review": report["human_review"],
-                                 "package_review": report["package_review"],
-                                 "trainer_exports": {target: {key: value for key, value in summary.items()
-                                                            if key != "failures"}
-                                                     for target, summary in report["trainer_exports"].items()}}
-        for pending in destination.glob(".*.pending"):
-            pending.unlink(missing_ok=True)
-        files = {p.name: file_hash(p) for p in destination.iterdir() if p.is_file() and p.name != "manifest.json"}
-        atomic_json(destination / "manifest.json", {"status": "complete", "run_id": self.state["id"],
-                    "recipe_hash": self.state["recipe_hash"], "policy": POLICY, "models": self.state.get("models", {}),
-                    "sources": self.recipe["sources"], "counts": {t: v["eligible"] for t, v in report["targets"].items()},
-                    "trainer_counts": {t: v["summary"]["compatible"] for t, v in report["trainer_exports"].items()
-                                       if v["status"] == "ready"},
-                    "negative_counts": {t: v["negative"] for t, v in report["targets"].items() if v.get("negative")},
-                    "package_review": report["package_review"],
-                    "cpt_reference_releases": cpt_references,
-                    "evaluation_references": evaluation_references,
-                    "sha256": files, "created_at": now(), "release_kind": "automatically_checked_candidate"})
-        return []
+                    if row.get("reason"):
+                        reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
+                report["targets"][target] = {"eligible": len(training), "total": len(records), "reasons": reasons}
+                if review_config["enabled"]:
+                    report["targets"][target]["package_review"] = review_plans[target]
+                if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:
+                    # A trainer export is complete only if every eligible native row converts.
+                    # Keep the native target even when its optional TRL format is incompatible.
+                    report["trainer_exports"][target] = write_trainer_export(
+                        destination, target, records, preferences,
+                        sft_output_style=node_style)
+                if target == "cpt":
+                    selected_count = len(collections[target])
+                    quality_passed = sum(row["status"] == "eligible" for row in collections[target])
+                    input_summary = self.state.get("input_summary", {})
+                    def rate(numerator, denominator):
+                        return round(numerator / denominator, 4) if denominator else None
+                    report["targets"][target]["retention"] = {
+                        "parsed_units": input_summary.get("units", 0),
+                        "parsed_ready": input_summary.get("ready", 0),
+                        "selected": selected_count,
+                        "quality_passed": quality_passed,
+                        "exact_duplicates": reasons.get("exact_duplicate_corpus", 0),
+                        "near_duplicates": reasons.get("near_duplicate_corpus", 0),
+                        "released_exact_duplicates": reasons.get("released_corpus_exact_duplicate", 0),
+                        "released_near_duplicates": reasons.get("released_corpus_near_duplicate", 0),
+                        "exported": len(training),
+                        "parse_rate": rate(input_summary.get("ready", 0), input_summary.get("units", 0)),
+                        "quality_rate": rate(quality_passed, selected_count),
+                        "dedup_rate": rate(len(training), quality_passed),
+                        "overall_rate": rate(len(training), selected_count),
+                    }
+                    report["targets"][target]["filter_policy"] = {
+                        "near_duplicate": "NFC + whitespace-folded character 7-gram Jaccard",
+                        "minimum_chars": 300, "jaccard_threshold": 0.90,
+                        "short_text": "exact normalized deduplication only",
+                        "structure_sensitive": "code, tables and equations use exact deduplication only",
+                        "scope": ("current run exact/near; pinned same-workspace CPT releases exact/near"
+                                  if self.recipe["version"] >= 4 else "legacy current-run exact/near only"),
+                        "reference_releases": cpt_references,
+                        "reference_rows": released_rows,
+                    }
+                    report["targets"][target]["decontamination"] = {
+                        "status": "checked" if evaluation_index is not None else "not_configured",
+                        "reference_files": len(evaluation_references),
+                        "reference_rows": evaluation_index.reference_rows if evaluation_index else 0,
+                        "short_for_embedded": evaluation_index.short_for_embedded if evaluation_index else 0,
+                        "verbatim_overlaps": reasons.get("evaluation_verbatim_overlap", 0),
+                        "near_overlaps": reasons.get("evaluation_near_overlap", 0),
+                    }
+                    report["targets"][target]["source_breakdown"] = summarize_corpus_sources(records)
+                if target == "agent":
+                    negative_count = sum(bool(row.get("negative")) for row in records)
+                    sidecar = destination / "agent.negative.jsonl"
+                    write_jsonl(sidecar, (row["negative"] for row in records if row.get("negative")))
+                    report["targets"][target]["negative"] = negative_count
+            if next_review is not None:
+                raise ValueError("package_review_checkpoint_mismatch")
+            _write_quality_report(destination / "quality.json", report,
+                                  self.path / "input_records.json")
+            self.state["quality"] = {"policy": report["policy"], "targets": report["targets"],
+                                     "human_review": report["human_review"],
+                                     "package_review": report["package_review"],
+                                     "trainer_exports": {target: {key: value for key, value in summary.items()
+                                                                if key != "failures"}
+                                                         for target, summary in report["trainer_exports"].items()}}
+            if "qa_director" in report:
+                self.state["quality"]["qa_director"] = report["qa_director"]
+            for pending in destination.glob(".*.pending"):
+                pending.unlink(missing_ok=True)
+            files = {p.name: file_hash(p) for p in destination.iterdir() if p.is_file() and p.name != "manifest.json"}
+            atomic_json(destination / "manifest.json", {"status": "complete", "run_id": self.state["id"],
+                        "recipe_hash": self.state["recipe_hash"], "policy": POLICY, "models": self.state.get("models", {}),
+                        "sources": self.recipe["sources"], "counts": {t: v["eligible"] for t, v in report["targets"].items()},
+                        "trainer_counts": {t: v["summary"]["compatible"] for t, v in report["trainer_exports"].items()
+                                           if v["status"] == "ready"},
+                        "negative_counts": {t: v["negative"] for t, v in report["targets"].items() if v.get("negative")},
+                        "package_review": report["package_review"],
+                        **({"qa_director": {"coverage": report["qa_director"]["coverage"],
+                                            "batches_planned": report["qa_director"]["batches_planned"]}}
+                           if "qa_director" in report else {}),
+                        "cpt_reference_releases": cpt_references,
+                        "evaluation_references": evaluation_references,
+                        "sha256": files, "created_at": now(), "release_kind": "automatically_checked_candidate"})
+            self.publish_qa_history(destination)
+            return []
 
     def execute(self, resume_run=False):
         with FileLock(str(self.path / ".run.lock"), timeout=0):
@@ -1843,20 +1953,28 @@ class Workflow:
                 selected = eligible if isinstance(eligible, WorkflowRows) else eligible[:self.recipe["max_units"]]
                 needs_generated_candidates = bool(selected_targets & (PREFERENCE_TARGETS | {'sft', 'multiturn', 'cot'}))
                 generated = (prepare_generation_rows(self.path / "stage-results" / "generation-inputs.jsonl",
-                                                     selected, self.recipe.get("sample_count"), self.check_cancel)
+                                                     selected, self.recipe.get("sample_count"), self.check_cancel,
+                                                     variant_policy_version=2 if self.recipe["version"] >= 11 else 1)
                              if needs_generated_candidates else [])
                 self.state["input_summary"]["generation_candidates"] = len(generated)
                 collections = {}
                 needs_sft = bool(selected_targets & (PREFERENCE_TARGETS | {"sft", "cot"}))
                 collections["cpt"] = self.stage_items("cpt", selected, self.cpt) if "cpt" in selected_targets else []
-                collections["sft"] = self.stage_items("sft", generated, self.sft) if needs_sft else []
+                directed = (self.directed_generation(generated, needs_sft=needs_sft,
+                            needs_multiturn="multiturn" in selected_targets)
+                            if self.recipe.get("qa_director", {}).get("enabled") else None)
+                if directed is None:
+                    self.state["stages"].setdefault("director", {"label": STAGES["director"], "done": 0, "total": 0})
+                    self.state["stages"]["director"]["status"] = "skipped"
+                collections["sft"] = (directed.get("sft", []) if directed is not None else
+                                      self.stage_items("sft", generated, self.sft) if needs_sft else [])
                 if not needs_sft:
                     self.state["stages"]["sft"]["status"] = "skipped"
 
                 self.state["stages"].setdefault("multiturn", {"label": STAGES["multiturn"],
                     "status": "pending", "done": 0, "total": 0})
-                collections["multiturn"] = (self.stage_items("multiturn", generated, self.multiturn)
-                                            if "multiturn" in selected_targets else [])
+                collections["multiturn"] = (directed.get("multiturn", []) if directed is not None else
+                    self.stage_items("multiturn", generated, self.multiturn) if "multiturn" in selected_targets else [])
                 if "multiturn" not in selected_targets:
                     self.state["stages"]["multiturn"]["status"] = "skipped"
 

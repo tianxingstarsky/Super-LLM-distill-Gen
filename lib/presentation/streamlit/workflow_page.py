@@ -28,6 +28,10 @@ from lib.domain.workflow_node_prompts import active_node_prompt_ids
 from lib.presentation.streamlit.workflow_package_review_settings import (
     package_review_snapshot, render_package_review_toggle, render_package_review_settings,
 )
+from lib.presentation.streamlit.workflow_director_settings import (
+    director_snapshot, director_has_issue, render_director_toggle,
+    render_director_settings, render_director_rules, TYPE_LABELS,
+)
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
 from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 from lib.presentation.streamlit.workflow_generation_settings import (
@@ -79,6 +83,35 @@ def _save_sft_output_style(workspace: str) -> None:
 def _workflow_error(error) -> str:
     return {
         "invalid_package_review": "AI 打包评审配置无效，请检查质检打包节点。",
+        "invalid_qa_director": "问答指导员配置无效，请检查题型配比与规则。",
+        "invalid_qa_director_batch_size": "每批指导任务数应为 1 到 50，请调整指导员节点。",
+        "invalid_qa_director_history_limit": "相似历史参考数应为 0 到 20，请调整指导员节点。",
+        "invalid_qa_director_type_weights": "题型配比应为 0 到 100，且至少一种大于 0，请调整指导员节点。",
+        "invalid_qa_director_rules": "指导员规则不能为空或含无效字符，且每项最多 12,000 字符。",
+        "invalid_qa_director_schedule": "指导员无法分配本批题型，请检查题型配比或复制配置后新建任务。",
+        "qa_director_requires_qa_target": "请先选择问答或偏好训练目标，再开启问答指导员。",
+        "invalid_qa_director_plan": "指导员返回的任务不符合本次规则，请重试当前批次。",
+        "invalid_qa_director_batch": "指导员返回的任务数量或结构无效，请重试当前批次。",
+        "invalid_qa_director_task": "指导员任务字段无效，请检查节点提示词后重试。",
+        "qa_director_type_mismatch": "指导员返回的题型与本批分配不符，请调整指导员提示词后新建任务。",
+        "qa_director_id_mismatch": "指导员返回的任务标识与来源不符，请检查指导员提示词并保留任务记录。",
+        "qa_director_batch_id_mismatch": "指导员返回了重复或不匹配的任务标识，请调整指导员提示词后新建任务。",
+        "invalid_qa_director_answer_policy": "指导员返回了不支持的回答策略，请检查指导员提示词要求的输出字段。",
+        "qa_director_closed_book_contract": "无线索任务包含了可见资料，请调整指导员提示词，或选择有线索题型。",
+        "qa_director_visible_evidence_required": "本题型缺少必要的可见线索，请补充来源资料或调整指导员提示词。",
+        "invalid_qa_director_evidence": "指导员返回的证据格式无效，请检查来源资料与指导员提示词。",
+        "qa_director_multiple_evidence_required": "多线索任务需要至少两段不同的来源证据，请补充资料或调整题型配比。",
+        "qa_director_recorded_conversation_changed": "已有对话不应交由指导员改写，请保留任务记录并复制配置后新建任务。",
+        "invalid_qa_director_judge_schema": "契约评审没有返回有效结果，请检查评审提示词后重试。",
+        "qa_director_context_too_small": "指导员上下文不足，请减小每批任务数或精简规则和提示词。",
+        "qa_director_visible_context_not_in_source": "可见线索不在本次来源中，已阻止使用虚构资料。",
+        "qa_director_evidence_not_in_source": "指导任务的引文无法在来源中找到，请重试当前批次。",
+        "qa_director_evidence_not_visible": "所需证据没有加入样本的可见线索，请重试当前批次。",
+        "qa_history_question_required": "历史问答缺少有效问题，请检查指导员任务与本机历史记录。",
+        "qa_history_question_too_long": "历史问答的问题过长，请精简指导员的问题生成要求。",
+        "qa_history_dimension_too_long": "历史问答的题型或策略字段过长，请检查指导员返回格式。",
+        "qa_history_sample_id_required": "历史问答缺少有效样本标识，请保留任务记录并重新运行。",
+        "qa_history_sample_id_conflict": "样本标识对应的历史问答已发生变化，请保留任务记录并新建任务。",
         "package_review_checkpoint_mismatch": "打包评审检查点与当前样本不一致，请保留任务记录并重新运行。",
         "web_search_not_configured": "网页检索服务未配置。设置检索密钥后可从断点重试。",
         "web_search_provider_error": "网页检索服务暂不可用。可从断点重试本次任务。",
@@ -162,7 +195,7 @@ def _stage_configuration(key, recipe, state):
                 details["生成上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details["生成单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         return details
-    if key in {"cpt", "sft", "multiturn", "agent", "preference", "cot", "trim", "package"}:
+    if key in {"director", "cpt", "sft", "multiturn", "agent", "preference", "cot", "trim", "package"}:
         details = {"启用目标": [target.upper() for target in targets]}
         mode = "文档资料" if recipe.get("sources") else "开放需求"
         # Old CoT runs only checked an existing explanation and had no writer.
@@ -181,7 +214,15 @@ def _stage_configuration(key, recipe, state):
                 details[limit_label + "单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         if roles:
             details.update({"并发请求上限": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
-        if key == "cpt":
+        if key == "director":
+            config = recipe.get("qa_director") or {}
+            details.update({"每批指导任务数": config.get("batch_size"),
+                            "相似历史参考数": config.get("history_limit"),
+                            "问答调度指令": UntranslatedText(config.get("question_rules") or "—"),
+                            "回答规则": UntranslatedText(config.get("answer_rules") or "—")})
+            details.update({TYPE_LABELS.get(name, name): weight for name, weight in
+                            config.get("type_weights", {}).items()})
+        elif key == "cpt":
             details.update({"分块目标字符数": recipe.get("chunk_chars"), "去重": "精确去重与保守近重复检查"})
         elif key == "multiturn":
             details.update({"每段对话轮数": recipe.get("conversation_turns", 3),
@@ -231,7 +272,7 @@ def _stage_configuration(key, recipe, state):
     return {"启用目标": [target.upper() for target in targets]}
 
 
-STAGE_GLYPHS = {"ingest": "▤", "cpt": "▥", "sft": "✎", "multiturn": "☷", "agent": "◇",
+STAGE_GLYPHS = {"ingest": "▤", "director": "⌘", "cpt": "▥", "sft": "✎", "multiturn": "☷", "agent": "◇",
                 "preference": "⚖", "gsm8k": "∑", "cot": "◈", "trim": "✂", "package": "▣"}
 EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节点处理完成",
                 "model_started": "模型请求开始", "model_finished": "模型请求完成",
@@ -306,7 +347,7 @@ def _quality_html(targets):
     return '<div class="df-run-quality-grid">' + "".join(cards) + "</div>"
 
 
-GRAPH_LABELS = {"ingest": "输入解析", "cpt": "CPT 语料", "sft": "SFT 生成",
+GRAPH_LABELS = {"ingest": "输入解析", "director": "问答指导员", "cpt": "CPT 语料", "sft": "SFT 生成",
                 "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
                 "preference": "偏好评审", "cot": "CoT 推理生成", "trim": "推理链修剪", "package": "质检打包"}
 
@@ -435,7 +476,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             raise ValueError("unreadable_task_record")
         attempt = int(state.get("attempt", 0))
         reasoning_trim_enabled = bool((recipe.get("reasoning_trim") or {}).get("enabled"))
-        graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled)
+        graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
+                                         qa_director=recipe.get("qa_director"))
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
@@ -532,7 +574,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
                                       language=st.session_state.get("ui_language", "zh"), live=True,
                                       reasoning_trim=reasoning_trim_enabled,
-                                      node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review")),
+                                      node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
+                                      qa_director=recipe.get("qa_director")),
                           selection_key, key=f"live-canvas:{run_id}", follow_key=follow_key)
     selected_metrics = state["stages"][selected_stage]
     selected_status, done, total, percent = _stage_numbers(selected_metrics)
@@ -546,6 +589,9 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         passed = int(state.get("input_summary", {}).get("ready", selected_metrics.get('eligible', 0)) or 0)
         quarantined = int(state.get("input_summary", {}).get("quarantined", selected_metrics.get('quarantined', 0)) or 0)
         passed_label, quarantined_label = "可处理输入", "隔离输入"
+    elif selected_stage == "director":
+        passed, quarantined = done, max(0, total - done)
+        passed_label, quarantined_label = "已规划任务", "待规划任务"
     elif selected_stage == "package":
         if selected_status == "running" and selected_metrics.get("phase") in {"ai_review", "writing_artifacts"}:
             passed = int(selected_metrics.get("eligible", 0) or 0)
@@ -597,6 +643,17 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                     f'<div class="df-run-stat"><b>{max(0, passed)}</b><span>{passed_label}</span></div>'
                     f'<div class="df-run-stat"><b>{max(0, quarantined)}</b><span>{quarantined_label}</span></div>'
                     '</div>')
+            if selected_stage == "director" and state.get("qa_director", {}).get("coverage"):
+                language = st.session_state.get("ui_language", "zh")
+                coverage = state["qa_director"]["coverage"]
+                st.dataframe([
+                    {translate_label("问答类型", language): translate_label(TYPE_LABELS.get(kind, kind), language),
+                     **{translate_label(label, language): counts.get(field, 0) for field, label in
+                        (("planned", "已规划任务"), ("assigned", "已调度"),
+                         ("accepted", "生成通过"), ("rejected", "生成隔离"))}}
+                    for kind, counts in coverage.items()
+                ], hide_index=True, width="stretch")
+                st.caption("规划数按任务统计；调度与生成验收数包含 SFT 和多轮目标。最终导出数量另见打包结果。")
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
             render_run_node_prompts(selected_stage, recipe, run_id)
             if selected_metrics.get("error"):
@@ -1023,7 +1080,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             help="点击即可选中或取消，可以同时选择多类训练数据。",
         ) or []
         reasoning_trim = render_trim_toggle(ws, targets, save_field=_save_draft_value)
-        graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"])
+        qa_director = render_director_toggle(ws, targets, save_field=_save_draft_value)
+        graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
+                                                   qa_director=qa_director)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
@@ -1034,6 +1093,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
             st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
+        if qa_director["enabled"] and source_mode == "Agent 上下文":
+            st.caption("已有完整对话保留原文并绕过指导员；指导员只安排文档与开放需求生成的问答。")
     model_issues = []
     pricing_issues = []
     sft_output_style = None
@@ -1095,7 +1156,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                                                   node_generation=node_generation, package_review=package_review),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
-                                      reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review),
+                                      reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review,
+                                      qa_director=qa_director),
                           selection_key, key=f"setup-canvas:{ws}",
                           inspector_key="workbench-node-panel", expanded=True)
         with workbench, st.container(border=True, key="workbench-node-panel"):
@@ -1110,12 +1172,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if selected_node == "package":
                 render_package_review_toggle(ws, save_field=_save_draft_value)
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
-                                                      node_generation=node_generation, package_review=package_review))
+                                                      node_generation=node_generation, package_review=package_review,
+                                                      qa_director=qa_director))
             settings_tab, prompts_tab = (st.tabs(["节点设置", "提示词与风格"]) if has_prompts
                                         else (nullcontext(), nullcontext()))
             with settings_tab:
                 if selected_node == "package":
                     render_package_review_settings(ws, save_field=_save_draft_value)
+                elif selected_node == "director":
+                    render_director_settings(ws, save_field=_save_draft_value)
                 if selected_node == "ingest" and source_mode == "文档资料":
                     document_parser = render_document_parser(ws, bindings, endpoints,
                         backend_application=backend_application)
@@ -1148,8 +1213,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     render_generation_settings(selected_node, ws, save_field=_save_draft_value)
                 elif selected_node == "trim":
                     render_trim_settings(ws, save_field=_save_draft_value)
+                elif selected_node == "director":
+                    render_director_rules(ws, save_field=_save_draft_value)
                 render_node_prompts(selected_node, model_source_mode, ws,
-                                    save_field=_save_draft_value, node_generation=node_generation, package_review=package_review)
+                                    save_field=_save_draft_value, node_generation=node_generation, package_review=package_review,
+                                    qa_director=qa_director)
     # Source previews and common run controls stay in normal document flow.
     # Only the node-local form follows the selected graph node.
     with workbench:
@@ -1158,8 +1226,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     generation_invalid = generation_issues(node_generation)
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
     trim_invalid = trim_has_issue(reasoning_trim)
+    director_invalid = director_has_issue(qa_director)
     node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
-                                       node_generation=node_generation, package_review=package_review) if targets else {}
+                                       node_generation=node_generation, package_review=package_review,
+                                       qa_director=qa_director) if targets else {}
     prompts_invalid = node_prompt_has_issue(node_prompts)
     # Pair source input with either its preview or the common run settings.
     # Node forms have no influence on the height of these normal-flow columns.
@@ -1321,6 +1391,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.warning("风格配置尚未完成，请在对应节点填写有效的自定义指令。")
             if trim_invalid:
                 st.warning("修剪配置尚未完成，请在修剪节点填写有效的自定义模板。")
+            if director_invalid:
+                st.warning("请至少保留一种问答类型，并检查指导员规则。")
             if prompts_invalid:
                 st.warning("节点提示词尚未完成，请在对应节点填写有效正文或恢复内置提示词。")
             style_summary = (translate("分字段保留推理" if sft_output_style == "separated"
@@ -1339,6 +1411,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 run_summary += " · " + generation_summary(node_generation, language)
             if reasoning_trim["enabled"]:
                 run_summary += " · " + translate("推理链修剪", language)
+            if qa_director["enabled"]:
+                run_summary += " · " + translate("问答指导员", language)
             if package_review["enabled"]:
                 run_summary += " · " + translate("AI 抽检" if package_review["mode"] == "sample" else "AI 全量评审", language)
             if evaluation_uploads:
@@ -1357,7 +1431,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     and any(Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in selected))
                 submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues)
                                       or bool(pricing_issues) or agent_unavailable or web_unavailable
-                                      or bool(generation_invalid) or trim_invalid or prompts_invalid
+                                      or bool(generation_invalid) or trim_invalid or prompts_invalid or director_invalid
                                       or parser_unavailable or source_mode == "知识库检索" and not selected
                                       or bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")),
                                       key=f"workflow-create:{ws}", width="stretch")
@@ -1401,6 +1475,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         agent_replay_mode=agent_mode,
                                         sft_output_style=sft_output_style,
                                         node_generation=node_generation,
+                                        qa_director=qa_director,
                                         package_review=package_review,
                                         node_prompts=node_prompts,
                                         reasoning_trim=reasoning_trim,

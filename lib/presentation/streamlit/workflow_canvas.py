@@ -12,8 +12,9 @@ _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__
 
 
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
-                source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None):
-    nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim)
+                source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
+                qa_director=None):
+    nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director)
     base = [key for key in BASE_STAGES if key in nodes]
     derived = [key for key in DERIVED_STAGES if key in nodes]
     # Center each column within its actual rows. Leave a clear outer lane for
@@ -21,11 +22,14 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
     bypass = bool(derived or "trim" in nodes) and any(a in base and b == "package" for a, b in edges)
     margin = 44 if bypass else 24
     height = 2 * margin + 78 + 100 * (max(1, len(base), len(derived)) - 1)
-    width = (1080 if derived else 810) + (270 if "trim" in nodes else 0)
+    director_width = 270 if "director" in nodes else 0
+    width = (1080 if derived else 810) + (270 if "trim" in nodes else 0) + director_width
     positions = {"ingest": (24, (height - 78) / 2), "package": (width - 242, (height - 78) / 2)}
+    if "director" in nodes:
+        positions["director"] = (294, (height - 78) / 2)
     if "trim" in nodes:
         positions["trim"] = (width - 512, (height - 78) / 2)
-    for column, x in ((base, 294), (derived, 564)):
+    for column, x in ((base, 294 + director_width), (derived, 564 + director_width)):
         top = (height - (78 + 100 * (len(column) - 1))) / 2
         for index, key in enumerate(column):
             positions[key] = (x, top + index * 100)

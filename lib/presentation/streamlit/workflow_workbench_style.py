@@ -13,8 +13,10 @@ WORKBENCH_STYLE = """<style>
   border:1px solid #c8dbf2;border-top:3px solid #4e95ec;border-radius:14px;
   padding:0 16px 14px;background:#fff;box-shadow:0 16px 50px #183e7030,0 3px 12px #264e7012;
   overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#bfd2e9 transparent;gap:10px}
-.st-key-workbench-node-panel[data-workflow-inspector="floating"] .st-key-workbench-node-header {
+.st-key-workbench-node-panel[data-workflow-inspector="floating"] > [data-testid="stLayoutWrapper"]:has(> .st-key-workbench-node-header) {
   position:sticky;top:0;z-index:2;background:linear-gradient(110deg,#f2f7ff,#fff);
+}
+.st-key-workbench-node-panel[data-workflow-inspector="floating"] .st-key-workbench-node-header {
   padding:13px 0 8px;border-bottom:1px solid #e3edf8}
 .st-key-workbench-node-header .df-section-heading {margin-bottom:0;padding-bottom:0;border-bottom:0}
 .st-key-workbench-node-header button {min-height:30px;padding:2px;color:#6681a2;border-color:#e3ebf6;background:#fff}

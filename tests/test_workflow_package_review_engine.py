@@ -245,7 +245,10 @@ def test_version_nine_prompt_snapshot_runs_without_new_ai_review(tmp_path):
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = 9
     recipe.pop("package_review")
-    recipe["node_prompt_templates"] = {stage: recipe["node_prompt_templates"][stage] for stage in LEGACY_NODE_PROMPT_IDS}
+    recipe["node_prompt_templates"] = {
+        stage: {prompt_id: recipe["node_prompt_templates"][stage][prompt_id] for prompt_id in prompt_ids}
+        for stage, prompt_ids in LEGACY_NODE_PROMPT_IDS.items()
+    }
     atomic_json(path / "recipe.json", recipe)
     state = engine.read_json(path / "state.json")
     state["recipe_hash"] = engine.digest(recipe)

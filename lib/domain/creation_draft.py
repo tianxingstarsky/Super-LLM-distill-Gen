@@ -15,6 +15,8 @@ NUMBER_FIELDS = {
     'workflow-web-research-count': (1, 5),
     'workflow-knowledge-limit': (1, 50),
     'workflow-package-review-limit': (1, MAX_PACKAGE_REVIEW_SAMPLES),
+    'workflow-director-batch': (1, 50), 'workflow-director-history': (0, 20),
+    'workflow-director-weight': (0, 100),
 }
 DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT, 100)}
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
@@ -24,6 +26,8 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
                'workflow-generation-instruction': MAX_GENERATION_INSTRUCTION_CHARS,
                'workflow-trim-instruction': MAX_TRIM_INSTRUCTION_CHARS,
                'workflow-trim-prompt': MAX_TRIM_PROMPT_CHARS,
+               'workflow-director-question-rules': 12000,
+               'workflow-director-answer-rules': 12000,
                'workflow-node-prompt': MAX_NODE_PROMPT_CHARS}
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
@@ -31,7 +35,7 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'})}
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
-                  'workflow-package-review-enabled'}
+                  'workflow-package-review-enabled', 'workflow-director-enabled'}
 NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
                           'workflow-generation-instruction'}
 
@@ -51,6 +55,11 @@ def validate_creation_draft(values):
             parts = key.split(':')
             if (len(parts) != 4 or not parts[1] or parts[2] not in NODE_PROMPT_IDS
                     or parts[3] not in NODE_PROMPT_IDS[parts[2]]):
+                raise ValueError('invalid_creation_draft')
+        if field == 'workflow-director-weight':
+            parts = key.split(':')
+            if (len(parts) != 3 or not parts[1] or parts[2] not in
+                    {'closed_book', 'grounded', 'partial', 'multi_source', 'distractor'}):
                 raise ValueError('invalid_creation_draft')
         valid = False
         if field in BOOLEAN_FIELDS:

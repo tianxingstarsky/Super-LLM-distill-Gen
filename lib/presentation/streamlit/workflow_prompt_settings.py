@@ -31,6 +31,13 @@ PROMPT_LABELS = {
     "workflow.trim_check": "语义保留核验",
     "workflow.trim_rules_check": "修剪规则核验",
     "workflow.package_review": "打包前 AI 评审",
+    "workflow.qa_director": "问答任务调度",
+    "workflow.sft_directed": "按指导任务生成问答",
+    "workflow.sft_directed_check": "问答规则与线索核验",
+    "workflow.multiturn_directed_check": "整段问答规则核验",
+    "workflow.preference_directed_check": "偏好优选契约检查",
+    "workflow.cot_directed_check": "CoT 问答契约检查",
+    "workflow.trim_directed_check": "修剪后问答契约检查",
 }
 _MAX_UPLOAD_BYTES = 128 * 1024
 
@@ -44,11 +51,13 @@ def _field(workspace: str, key: str, default):
     return draft.get(key, st.session_state.get(key, default))
 
 
-def node_prompt_snapshot(workspace: str, nodes, source_mode: str, *, node_generation=None, package_review=None) -> dict:
+def node_prompt_snapshot(workspace: str, nodes, source_mode: str, *, node_generation=None, package_review=None,
+                         qa_director=None) -> dict:
     """Submit only active overrides; inactive edits stay in the local draft."""
     result = {}
     for node in nodes:
-        for prompt_id in active_node_prompt_ids(node, source_mode, node_generation=node_generation, package_review=package_review):
+        for prompt_id in active_node_prompt_ids(node, source_mode, node_generation=node_generation,
+                                                package_review=package_review, qa_director=qa_director):
             default = builtin_node_prompt(prompt_id)
             body = _field(workspace, _prompt_key(workspace, node, prompt_id), default)
             if body != default:
@@ -99,9 +108,10 @@ def _import_prompt(workspace: str, node: str, prompt_id: str, save_field) -> Non
 
 
 def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_field,
-                        node_generation=None, package_review=None) -> None:
+                        node_generation=None, package_review=None, qa_director=None) -> None:
     """Show the active processing prompt beside this node's model settings."""
-    prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation, package_review=package_review)
+    prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation,
+                                    package_review=package_review, qa_director=qa_director)
     if not prompts:
         return
     language = st.session_state.get("ui_language", "zh")
@@ -143,7 +153,8 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
         return
     mode = ("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
             else "文档资料" if recipe.get("sources") else "开放需求")
-    active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"))
+    active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"),
+                                   package_review=recipe.get("package_review"), qa_director=recipe.get("qa_director"))
     prompts = {key: pinned[key] for key in active if key in pinned}
     if not prompts:
         return

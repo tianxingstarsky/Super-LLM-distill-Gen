@@ -18,7 +18,16 @@ LEGACY_NODE_PROMPT_IDS = {
     "cot": ("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check"),
     "trim": ("workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"),
 }
-NODE_PROMPT_IDS = {**LEGACY_NODE_PROMPT_IDS, "package": ("workflow.package_review",)}
+VERSION_10_NODE_PROMPT_IDS = {**LEGACY_NODE_PROMPT_IDS, "package": ("workflow.package_review",)}
+NODE_PROMPT_IDS = {
+    **VERSION_10_NODE_PROMPT_IDS,
+    "director": ("workflow.qa_director",),
+    "sft": (*LEGACY_NODE_PROMPT_IDS["sft"], "workflow.sft_directed", "workflow.sft_directed_check"),
+    "multiturn": (*LEGACY_NODE_PROMPT_IDS["multiturn"], "workflow.multiturn_directed_check"),
+    "preference": (*LEGACY_NODE_PROMPT_IDS["preference"], "workflow.preference_directed_check"),
+    "cot": (*LEGACY_NODE_PROMPT_IDS["cot"], "workflow.cot_directed_check"),
+    "trim": (*LEGACY_NODE_PROMPT_IDS["trim"], "workflow.trim_directed_check"),
+}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -29,8 +38,11 @@ def builtin_node_prompt(prompt_id: str) -> str:
 
 
 def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None,
-                           package_review=None) -> tuple[str, ...]:
+                           package_review=None, qa_director=None) -> tuple[str, ...]:
     """Only offer templates that the selected node can actually call."""
+    # Prompt editing must remain available while users are clearing a rule or
+    # adjusting the final type weight. Creation validates the complete recipe.
+    directed = isinstance(qa_director, dict) and qa_director.get("enabled") is True
     if stage == "package":
         return NODE_PROMPT_IDS[stage] if validate_package_review(package_review)["enabled"] else ()
     if stage == "ingest":
@@ -41,11 +53,20 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
     config = (node_generation or {}).get(stage) or {}
     styled = config.get("enabled", True) if config else False
     if stage == "sft":
+        if directed:
+            return (("workflow.sft_directed", "workflow.sft_directed_check", "workflow.jev_score", "workflow.style_check")
+                    if styled else ("workflow.sft_directed", "workflow.sft_directed_check", "workflow.jev_score"))
         return (("workflow.sft_styled", "workflow.jev_score", "workflow.style_check")
                 if styled else ("workflow.sft", "workflow.jev_score"))
+    if stage == "multiturn":
+        return (NODE_PROMPT_IDS[stage] if directed
+                else LEGACY_NODE_PROMPT_IDS[stage])
     if stage == "cot":
-        return (("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check")
-                if styled else ("workflow.rationale_check",))
+        prompts = (("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check")
+                   if styled else ("workflow.rationale_check",))
+        return (*prompts, "workflow.cot_directed_check") if directed else prompts
+    if stage in {"preference", "trim"}:
+        return NODE_PROMPT_IDS[stage] if directed else LEGACY_NODE_PROMPT_IDS[stage]
     return NODE_PROMPT_IDS.get(stage, ())
 
 
@@ -77,10 +98,11 @@ def snapshot_node_prompts(value: dict | None) -> dict:
             for stage, prompt_ids in NODE_PROMPT_IDS.items()}
 
 
-def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 10) -> dict:
+def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
     templates = validate_node_prompts(value)
-    catalog = LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else NODE_PROMPT_IDS
+    catalog = (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
+               VERSION_10_NODE_PROMPT_IDS if recipe_version == 10 else NODE_PROMPT_IDS)
     if (set(templates) != set(catalog)
             or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):

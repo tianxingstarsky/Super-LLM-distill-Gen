@@ -13,6 +13,7 @@ from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_scale import validate_node_models
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.workflow_package_review import validate_package_review
+from lib.domain.workflow_qa_director import validate_qa_director
 from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_node_prompts import validate_node_prompts, active_node_prompt_ids
 from lib.domain.workflow_graph import execution_graph
@@ -136,11 +137,23 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-package-review-mode:{workspace}"] = package_review["mode"]
         values[f"workflow-package-review-percent:{workspace}"] = package_review["sample_percent"]
         values[f"workflow-package-review-limit:{workspace}"] = package_review["max_samples_per_target"]
+    director = validate_qa_director(recipe.get("qa_director"))
+    if "qa_director" in recipe:
+        values[f"workflow-director-enabled:{workspace}"] = director["enabled"]
+    if director["enabled"]:
+        values[f"workflow-director-batch:{workspace}"] = director["batch_size"]
+        values[f"workflow-director-history:{workspace}"] = director["history_limit"]
+        values[f"workflow-director-question-rules:{workspace}"] = director["question_rules"]
+        values[f"workflow-director-answer-rules:{workspace}"] = director["answer_rules"]
+        for name, weight in director["type_weights"].items():
+            values[f"workflow-director-weight:{workspace}:{name}"] = weight
     prompt_mode = ("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision" else mode)
     copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")))
-    prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")))
+    prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")),
+                                     qa_director=director)
     for node in prompt_nodes:
-        for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"), package_review=package_review):
+        for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
+                                                package_review=package_review, qa_director=director):
             if prompt_id in copied_prompts.get(node, {}):
                 values[f"workflow-node-prompt:{workspace}:{node}:{prompt_id}"] = copied_prompts[node][prompt_id]
     research = recipe.get("web_research")

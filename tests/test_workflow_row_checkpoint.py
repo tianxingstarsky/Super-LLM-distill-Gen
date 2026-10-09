@@ -115,6 +115,16 @@ def test_disk_candidates_match_existing_source_and_variant_contract(tmp_path,cou
     assert list(WorkflowRows(source,len(units))) == units
 
 
+def test_generation_spool_can_replay_legacy_variant_policy(tmp_path):
+    units = [{'id': f'doc-{index}', 'source_id': f'source-{index}',
+              'kind': 'document', 'text': f'Document {index}', 'status': 'ready'}
+             for index in range(6)]
+    rows = prepare_generation_rows(tmp_path / 'legacy.jsonl', units, 42, noop,
+                                   variant_policy_version=1)
+    assert list(rows) == generation_units(units, 42, policy_version=1)
+    assert all('source_unit_id' not in row['generation_variant'] for row in list(rows)[6:])
+
+
 def test_recorded_conversations_are_never_repeated_to_fill_target(tmp_path):
     units = [{'id':'recorded','kind':'conversation','messages':[{'role':'user','content':'context'}],'status':'ready'}]
     rows = prepare_generation_rows(tmp_path/'generated.jsonl',units,50000,noop)
