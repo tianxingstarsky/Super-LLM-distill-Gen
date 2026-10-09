@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "createdDate": "2026-10-09",
+  "generator": "built-in image_gen.imagegen",
+  "transparentBackground": true,
+  "deliveryPolicy": "Selected built-in tool output PNGs copied byte-for-byte into the workspace. No Python, canvas, crop, resize, alpha filtering, or other pixel postprocessing.",
+  "styleReferencesInspectedOnly": [
+    "assets/studio/entry-documents-v1.png",
+    "assets/studio/hero-data-flow-v1.png"
+  ],
+  "intendedDisplaySizeCssPixels": "80–120",
+  "assets": [
+    {
+      "file": "assets/studio/quality-review-v1.png",
+      "description": "White porcelain document protected by a pale-green rounded triangular glass shield with a green check and two ice-blue data cubes.",
+      "dimensions": {
+        "width": 1254,
+        "height": 1254
+      },
+      "generationPrompt": "Use case: stylized-concept\nAsset type: transparent PNG decorative illustration for a Chinese data-workbench review empty state, displayed at 80–120 CSS pixels.\nPrimary request: Create a completely new compact sculptural 3D icon depicting one soft white porcelain document protected by one transparent pale-green rounded triangular shield, with a small green geometric check symbol and two small ice-blue data cubes beside it, expressing quality review and traceability.\nScene/backdrop: Actual alpha-transparent canvas with no environment, no floor, no platform and no cast ground shadow.\nSubject: A single unified, tidy cluster. White porcelain document has soft thick rounded corners and a subtle folded upper corner. The glass shield is a softly rounded inverted triangle, pale mint green, tilted slightly in front of the document. Its green check is a clean simple solid geometric symbol. Two rounded ice-blue glass cubes tuck beside the document near its lower corner.\nStyle/medium: Premium clean 3D product sculpture, white porcelain, thick transparent glass, restrained soft highlights and cool blue reflections. Friendly and elegant, consistent with a pale blue and white productivity workbench.\nComposition/framing: Square image, slightly elevated three-quarter view. Center the complete cluster and fit its widest extent into about 70% of the canvas with generous clean transparent margins. Strong silhouette and large readable forms suitable for a tiny UI decoration.\nLighting/mood: Soft bright studio illumination on the objects only, calm reassuring mood.\nColor palette: Warm-neutral porcelain white, very light ice blue, pale mint green for the shield, restrained brighter green check.\nMaterials/textures: Smooth porcelain and clear softly tinted thick glass, physically plausible gentle reflections, no texture grain.\nText: none.\nConstraints: This is a new original subject composition. No letters, digits, words, labels, metrics, watermark or logos. No separate decorative particles or floating confetti. No orbit lines, no base, no pedestals, no floor, no shadow blob. All outer canvas pixels must be truly transparent. Keep all object edges completely inside the canvas. Do not render a checkerboard background.",
+      "refinementPrompt": "Use case: background-extraction\nAsset type: final transparent PNG illustration for an 80–120px review empty-state decoration.\nInput image: existing original generated document, pale-green rounded triangular shield with green check, two ice-blue cubes; this is the edit target.\nPrimary request: Preserve the exact subject, proportions, sculptural white porcelain and tinted transparent glass materials, colors, perspective and lighting. Change only the surrounding transparency and framing. Center the complete unified object so its visible width and height are each approximately 68–70% of a square canvas.\nBackground correction: The current file has faint low-alpha specks around its outer canvas and a rough pale edge. Remove all detached stray pixels, dust and fringe residue, and give a perfectly clean true alpha-transparent exterior. A generous margin outside the silhouette must be entirely zero-alpha, including every pixel at all four canvas edges. Keep clean antialiasing tightly around the actual object.\nConstraints: Preserve one document, rounded triangular mint shield, check symbol and two glass cubes. Do not add or change the contents. No text, digits, labels, logos, watermarks. No floor, platform, pedestal, ground shadow, shadow blob, checkerboard, backdrop, glow field or floating particles. All outside space is actual transparent alpha.",
+      "refinementType": "background-extraction; one built-in image_gen edit",
+      "initialToolOutput": "C:/Users/tianx/.codex/generated_images/01a1207a-7840-7e72-bb6f-f4994792002b/exec-f18a20f6-bf5e-4bd1-8852-22000678e65e.png",
+      "selectedToolOutput": "C:/Users/tianx/.codex/generated_images/01a1207a-7840-7e72-bb6f-f4994792002b/exec-6935b1c2-8abf-4c4a-b26c-bff208810e9f.png",
+      "sha256": "0CC23E7F6BCC1C387728B43AAD5DCCB35DA1A325444D1E1033ECFBC6B437CBE8",
+      "inspection": {
+        "alpha16Bounds": [
+          208,
+          203,
+          1067,
+          1072
+        ],
+        "subjectWidthRatio": 0.686,
+        "subjectHeightRatio": 0.694,
+        "fullyTransparentPixels": 1030190,
+        "outerBorderNonzeroAlphaPixels": 111,
+        "outerBorderMaxAlpha": 1,
+        "note": "Subject and transparent margins visually clear; outer border has only tool-native 1/255 alpha residue. Original pixels are preserved.",
+        "visualChecks": [
+          "No words, digits, metrics, watermark, logos",
+          "No floor, platform, ground shadow or shadow blob",
+          "Complete document, shield, check and cubes inside canvas"
+        ]
+      }
+    },
+    {
+      "file": "assets/studio/delivery-package-v1.png",
+      "description": "Open rounded porcelain package containing four neatly arranged ice-blue glass cubes and two slim blue-glass cards.",
+      "dimensions": {
+        "width": 1254,
+        "height": 1254
+      },
+      "generationPrompt": "Use case: stylized-concept\nAsset type: transparent PNG decorative illustration for a Chinese data-workbench output packaging explanation, displayed at 80–120 CSS pixels.\nPrimary request: Create a completely new compact sculptural 3D icon of an open white porcelain package with soft rounded edges, containing neatly arranged transparent ice-blue data cubes and a few inserted blue-glass data cards, expressing clean organized data delivery.\nScene/backdrop: Actual alpha-transparent canvas with no environment, no floor, no platform and no cast ground shadow.\nSubject: A single unified tidy sculptural cluster. The package is a white porcelain open box with a thick rounded rim and softly rounded walls. Its connected hinged lid is opened behind the box so the opening is obvious. Four rounded clear ice-blue cubes sit neatly in the box, and two slim translucent cool-blue rounded rectangular cards are inserted in a back row. Everything belongs to the same compact assembly. No markings on the cards.\nStyle/medium: Premium clean 3D product sculpture, white porcelain, thick transparent glass, restrained soft highlights and cool blue reflections. Friendly and elegant, consistent with a pale blue and white productivity workbench.\nComposition/framing: Square image, slightly elevated three-quarter view revealing the contents. Center the entire complete cluster and fit its widest extent into about 70% of the canvas with generous clean transparent margins. Strong silhouette and large readable forms suitable for a tiny UI decoration.\nLighting/mood: Soft bright studio illumination on the objects only, calm orderly mood.\nColor palette: Warm-neutral porcelain white, very light ice blue, restrained clear cool-blue accents.\nMaterials/textures: Smooth porcelain and clear softly tinted thick glass, physically plausible gentle reflections, no texture grain.\nText: none.\nConstraints: This is a new original subject composition. No letters, digits, words, labels, metrics, watermark or logos. No separate decorative particles or floating confetti. No orbit lines, no base, no pedestals, no floor, no shadow blob. All outer canvas pixels must be truly transparent. Keep all object edges completely inside the canvas. Do not render a checkerboard background.",
+      "refinementPrompt": "Use case: background-extraction\nAsset type: final transparent PNG illustration for an 80–120px output-delivery decoration.\nInput image: existing original generated open porcelain package, four ice-blue cubes and two blue-glass cards; this is the edit target.\nPrimary request: Preserve the exact subject, proportions, sculptural white porcelain and tinted transparent glass materials, colors, perspective and lighting. Change only the surrounding transparency and framing. Reduce and center the entire package and open lid as a single unified object so its visible height is approximately 68–70% of a square canvas; its width should remain proportional. Leave generous transparent padding on all sides.\nBackground correction: The current file has faint low-alpha specks around its outer canvas and a rough pale edge. Remove all detached stray pixels, dust and fringe residue, and give a perfectly clean true alpha-transparent exterior. A generous margin outside the silhouette must be entirely zero-alpha, including every pixel at all four canvas edges. Keep clean antialiasing tightly around the actual object.\nConstraints: Preserve the open porcelain package, attached lid, four neatly arranged rounded glass cubes and two blue-glass cards. Do not add or change the contents. No text, digits, labels, logos, watermarks. No floor, platform, pedestal, ground shadow, shadow blob, checkerboard, backdrop, glow field or floating particles. All outside space is actual transparent alpha.",
+      "refinementType": "background-extraction; one built-in image_gen edit",
+      "initialToolOutput": "C:/Users/tianx/.codex/generated_images/01a1207a-7840-7e72-bb6f-f4994792002b/exec-68297304-6add-48f5-8626-73b8b77b6c2c.png",
+      "selectedToolOutput": "C:/Users/tianx/.codex/generated_images/01a1207a-7840-7e72-bb6f-f4994792002b/exec-67f05ebf-da28-4ddf-948a-5be798c1c51d.png",
+      "sha256": "E224412142A6A18F341CC78A64A259B37EC51BF30835275835338BB1118D6CC5",
+      "inspection": {
+        "alpha16Bounds": [
+          244,
+          221,
+          1032,
+          1104
+        ],
+        "subjectWidthRatio": 0.629,
+        "subjectHeightRatio": 0.705,
+        "fullyTransparentPixels": 1077009,
+        "outerBorderNonzeroAlphaPixels": 0,
+        "outerBorderMaxAlpha": 0,
+        "note": "Every outer border pixel is zero-alpha. Subject, open lid and transparent margins are visually clear. Original pixels are preserved.",
+        "visualChecks": [
+          "No words, digits, metrics, watermark, logos",
+          "No floor, platform, ground shadow or shadow blob",
+          "Complete package, lid, cubes and cards inside canvas"
+        ]
+      }
+    }
+  ]
+}

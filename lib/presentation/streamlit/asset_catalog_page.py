@@ -79,6 +79,15 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
     )
     if inventory.truncated:
         st.caption("文件扫描已达到安全上限，计数为当前已列出的数量；其余文件可从本机缓存目录查看。")
+    if not inventory.assets:
+        with st.container(key="asset-empty"):
+            st.html('<div class="df-data-empty"><span aria-hidden="true">▤</span><div>'
+                    '<strong>还没有来源或生成文件</strong>'
+                    '<p>导入资料后，可在这里查看文件和生成结果。</p></div></div>')
+            if on_import_sources is not None:
+                st.button("导入资料", key=f"asset-import:{workspace_id}", type="primary",
+                          on_click=on_import_sources)
+        return
     controls = st.columns([1.4, 1, .55] if on_import_sources is not None else [1.4, 1],
                           vertical_alignment="bottom")
     filter_col, search_col = controls[:2]
@@ -91,6 +100,12 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
         controls[2].button("导入资料", key=f"asset-import:{workspace_id}", width="stretch",
                            on_click=on_import_sources)
     filtered = catalog.select(inventory, category, search)
+    if not filtered:
+        with st.container(key="asset-empty"):
+            st.html('<div class="df-data-empty"><span aria-hidden="true">⌕</span><div>'
+                    '<strong>没有匹配的文件</strong>'
+                    '<p>清除搜索词，或切换文件分类。</p></div></div>')
+        return
     page_count = max(1, (len(filtered) + 99) // 100)
     page_key = f"asset-page:{workspace_id}:{category}:{search}"
     st.session_state[page_key] = min(max(1, st.session_state.get(page_key, 1)), page_count)
@@ -117,11 +132,21 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
             remember_key = "asset-current:" + _table_identity([], context)
             preferred = _selection_asset(selected_rows, [], st.session_state.get(remember_key))
             ui_language = st.session_state.get("ui_language", "zh")
-            rows = [{"文件名": asset.name, "类型": asset.suffix.upper().lstrip(".") or "FILE",
-                     "来源 / 目录": translate(asset.label, ui_language), "大小": _asset_size(asset.size)}
+            headings = {label: translate(label, ui_language)
+                        for label in ("文件名", "类型", "来源 / 目录", "大小")}
+            rows = [{headings["文件名"]: asset.name,
+                     headings["类型"]: asset.suffix.upper().lstrip(".") or "FILE",
+                     headings["来源 / 目录"]: translate(asset.label, ui_language),
+                     headings["大小"]: _asset_size(asset.size)}
                     for asset in selected_rows]
             event = st.dataframe(
                 rows, hide_index=True, width="stretch", height=min(610, 42 + len(rows) * 44), row_height=44,
+                column_config={
+                    headings["文件名"]: st.column_config.TextColumn(headings["文件名"], width=250),
+                    headings["类型"]: st.column_config.TextColumn(headings["类型"], width=64),
+                    headings["来源 / 目录"]: st.column_config.TextColumn(headings["来源 / 目录"], width=170),
+                    headings["大小"]: st.column_config.TextColumn(headings["大小"], width=72, alignment="right"),
+                },
                 on_select="rerun", selection_mode="single-row",
                 selection_default={"selection": {"rows": [selected_rows.index(preferred)]}},
                 key=f"asset-table:{workspace_id}:" + _table_identity(selected_rows, context),
@@ -137,7 +162,7 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
             origin = selected.origin
             st.html(
                 '<div class="df-data-detail">'
-                f'<div><span>文件</span><strong>{html.escape(selected.name)}</strong></div>'
+                f'<div><span>文件</span><strong data-user-content>{html.escape(selected.name)}</strong></div>'
                 f'<div><span>位置</span><strong>{html.escape(selected.label)}</strong></div>'
                 f'<div><span>来源</span><strong class="df-data-origin" data-origin="{origin}">{"已有资料" if origin == "source" else "生成产物"}</strong></div>'
                 f'<div><span>大小</span><strong>{_asset_size(selected.size)}</strong></div>'

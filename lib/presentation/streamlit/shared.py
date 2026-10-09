@@ -8,13 +8,16 @@ import streamlit as st
 from lib.presentation.streamlit.brand_art import STUDIO_ART_URI, studio_art_url
 
 
-def page_header(title: str, description: str, tag: str = "", *, variant: str = "standard") -> None:
+def page_header(title: str, description: str, tag: str = "", *, variant: str = "standard",
+                art_kind: str | None = None) -> None:
     """Render the common page masthead used across the primary workspaces."""
     # Keep a semantic Streamlit title for navigation and screen-reader/test support;
     # console_theme hides this framework heading and shows the richer masthead below.
     st.title(title)
     hero_class = "df-page-hero df-page-hero--hub" if variant == "hub" else "df-page-hero"
-    art_url = studio_art_url("hero") if variant == "hub" else STUDIO_ART_URI
+    if art_kind:
+        hero_class += " df-page-hero--illustrated"
+    art_url = studio_art_url(art_kind or "hero") if art_kind or variant == "hub" else STUDIO_ART_URI
     st.html(
         f'<section class="{hero_class}">'
         '<div class="df-page-copy">'
@@ -50,7 +53,6 @@ def review_empty_state(title: str, description: str, target: str) -> None:
     st.html(
         '<section class="df-review-empty" aria-label="审核队列状态">'
         '<div class="df-review-empty-main">'
-        '<span class="df-review-empty-icon" aria-hidden="true">✎</span>'
         '<span class="df-review-empty-kicker">REVIEW QUEUE</span>'
         f'<strong>{safe_title}</strong>'
         f'<p>{safe_description}</p>'

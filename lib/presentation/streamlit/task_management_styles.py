@@ -106,5 +106,30 @@ def task_management_styles() -> str:
 }
 @media(max-width:850px) {.df-task-summary-item {padding:0 12px}
   .df-task-activity {grid-template-columns:1fr;gap:7px}.df-task-activity-list {width:100%}}
+@media(max-width:720px) {
+  /* Match the page's own rows by their existing content/key. Nested runtime
+     forms and the floating node inspector keep their independent layouts. */
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [class*="st-key-task-center-list-"]),
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [class*="st-key-task-center-new"]),
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .df-task-empty) {
+    display:grid !important;grid-template-columns:minmax(0,1fr);gap:14px;
+  }
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [class*="st-key-task-center-list-"]) > [data-testid="stColumn"],
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [class*="st-key-task-center-new"]) > [data-testid="stColumn"],
+  [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .df-task-empty) > [data-testid="stColumn"] {
+    flex:none !important;width:100% !important;min-width:0 !important;max-width:100%;
+  }
+  [class*="st-key-task-center-new"] button,
+  [class*="st-key-task-center-create"] button {min-height:44px}
+  [class*="st-key-task-center-list-"] {padding:16px 14px}
+  [class*="st-key-task-center-filter"] [role="radiogroup"] {
+    display:grid !important;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;
+  }
+  [class*="st-key-task-center-filter"] [role="radio"] {
+    width:100%;min-width:0;min-height:36px;padding:7px 8px;white-space:normal;
+  }
+  .df-task-empty {padding:21px}
+  .df-task-empty h3 {font-size:20px}
+}
 </style>
 """

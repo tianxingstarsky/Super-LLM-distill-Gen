@@ -142,5 +142,43 @@ def workflow_run_styles() -> str:
 @media(max-width:900px) {.df-run-event-head {flex-wrap:wrap}
   .df-run-lane {flex-wrap:wrap}
   .df-dag-canvas {margin-left:0}}
+@media(max-width:720px) {
+  /* These rows belong to the persisted-run inspector. Never target generic
+     columns or the node configuration popup in the authoring workbench. */
+  [class*="st-key-workflow-run-layout"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"],
+  [class*="st-key-workflow-run-actions"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"],
+  [class*="st-key-workflow-run-delivery-actions"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"],
+  [class*="st-key-workflow-run-output-heading"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] {
+    display:grid !important;grid-template-columns:minmax(0,1fr);gap:12px;
+  }
+  [class*="st-key-workflow-run-cache-statistics"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"],
+  [class*="st-key-workflow-run-input-statistics"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] {
+    display:grid !important;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;
+  }
+  :is([class*="st-key-workflow-run-layout"],[class*="st-key-workflow-run-actions"],
+      [class*="st-key-workflow-run-delivery-actions"],[class*="st-key-workflow-run-output-heading"],
+      [class*="st-key-workflow-run-cache-statistics"],[class*="st-key-workflow-run-input-statistics"])
+      > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    flex:none !important;width:100% !important;min-width:0 !important;max-width:100%;
+  }
+  [class*="st-key-workflow-run-actions"] button,
+  [class*="st-key-workflow-run-delivery-actions"] button,
+  [class*="st-key-workflow-run-output-heading"] button {min-height:44px}
+  .df-run-overview {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px}
+  .df-run-overview .df-run-pill {min-width:0;align-items:flex-start;flex-direction:column;gap:3px;padding:6px 8px;border:0;font-weight:500;line-height:1.5}
+  .df-run-section {flex-wrap:wrap;gap:8px}
+  .df-run-section > div {min-width:0;flex:1 1 180px}
+  .df-run-section .df-run-section-tag {align-self:flex-start}
+  .df-run-inspector-head {align-items:flex-start}
+  .df-run-inspector-head > b {flex:0 0 36px}
+  .df-run-inspector-head > div {min-width:0;overflow-wrap:anywhere}
+  .df-run-stat-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .df-run-stat b {overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+  .df-run-stat span {line-height:1.5;overflow-wrap:anywhere}
+  .df-run-config div {display:grid;grid-template-columns:minmax(0,1fr);gap:3px}
+  .df-run-config strong {text-align:left}
+  .df-run-log {padding:3px 12px}
+  .df-run-event {gap:8px;padding:12px 0}
+}
 </style>
 """

@@ -185,46 +185,64 @@ def _render_releases(application: WorkflowApplication, releases: list[dict]) -> 
         target = str(release.get("target") or "—").upper()
         st.html(
             '<div class="df-pack-release-title" data-verified="'
-            + str(release["verified"]).lower() + '"><span>✓</span><div><small>'
+            + str(release["verified"]).lower() + '"><span>'
+            + ("✓" if release["verified"] else "!") + '</span><div><small>'
             + _safe(kind) + ' · ' + _safe(target) + '</small><strong>'
             + '<span data-user-content>' + _safe(release["name"]) + '</span></strong><small>创建于 '
             + _safe(_stamp(release.get("created_at"))) + '</small></div></div>'
         )
-        st.caption("本地版本目录（复制后可在文件管理器中打开）")
-        st.code(release["path"], language=None)
+        selected_file = None
         if not release["verified"]:
             st.warning("此版本的文件暂不可下载：" + str(release.get("error", "校验未通过")))
-            return
-        files = release["files"]
-        st.html('<div class="df-pack-release-files">' + ''.join(
-            '<div><strong data-user-content>' + _safe(file["name"]) + '</strong><span>'
-            + _safe(_size(file["bytes"])) + '</span><code>'
-            + _safe(file["sha256"][:12] + "…" if file["sha256"] else "清单文件")
-            + '</code></div>' for file in files
-        ) + '</div>')
+        else:
+            files = release["files"]
+            if files:
+                with st.container(key=f"package-release-action:{release_id}"):
+                    picker, download = st.columns([2.5, 1], gap="small", vertical_alignment="bottom")
+                    with picker:
+                        selected = st.selectbox(
+                            "选择要打开或下载的文件", [file["name"] for file in files],
+                            key=f"package-release-file:{st.session_state['ws']}:{release_id}",
+                        )
+                    selected_file = next(file for file in files if file["name"] == selected)
+                    with download:
+                        if selected_file["bytes"] <= DIRECT_DOWNLOAD_LIMIT_BYTES:
+                            st.download_button("校验并下载文件",
+                                               lambda rid=release_id, name=selected: application.release_file(rid, name),
+                                               file_name=selected,
+                                               mime="application/json" if selected.endswith(".json")
+                                               else "application/x-ndjson", key=f"package-release-download:{release_id}:{selected}",
+                                               on_click="ignore", width="stretch", type="primary",
+                                               icon=":material/download:")
+                        else:
+                            st.caption(_size(selected_file["bytes"]))
+                if selected_file["bytes"] > DIRECT_DOWNLOAD_LIMIT_BYTES:
+                    st.info("文件超过 50 MiB；为避免浏览器一次载入整个训练文件，请从下方本地路径读取。")
+                st.caption("manifest.json 记录训练文件的 SHA-256，可与下载文件独立核对。")
+            st.html('<div class="df-pack-release-files">' + ''.join(
+                '<div data-selected="'
+                + str(selected_file is not None and file["name"] == selected_file["name"]).lower()
+                + '"><strong data-user-content title="' + _safe(file["name"]) + '">'
+                + _safe(file["name"]) + '</strong><span>' + _safe(_size(file["bytes"]))
+                + '</span><code title="' + _safe(file["sha256"]) + '">'
+                + _safe(file["sha256"][:12] + "…" if file["sha256"] else "清单文件")
+                + '</code></div>' for file in files
+            ) + '</div>')
         unverified = release.get("unverified_files", [])
         if unverified:
             st.caption("以下历史文件未列入原始 SHA-256 清单，因此未提供已校验下载：")
-            for file in unverified:
-                st.code(file["path"], language=None)
-        selected = st.selectbox(
-            "选择要打开或下载的文件", [file["name"] for file in files],
-            key=f"package-release-file:{st.session_state['ws']}:{release_id}",
-        )
-        selected_file = next(file for file in files if file["name"] == selected)
-        st.caption("本地文件路径（可在文件管理器中打开）")
-        st.code(selected_file["path"], language=None)
-        from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
-        if selected_file["bytes"] > DIRECT_DOWNLOAD_LIMIT_BYTES:
-            st.caption("文件超过 50 MiB；为避免浏览器一次载入整个训练文件，请从上方本地路径读取。")
-            return
-        st.download_button("校验并下载文件",
-                           lambda rid=release_id, name=selected: application.release_file(rid, name),
-                           file_name=selected,
-                           mime="application/json" if selected.endswith(".json")
-                           else "application/x-ndjson", key=f"package-release-download:{release_id}:{selected}",
-                           on_click="ignore", width="stretch")
-        st.caption("manifest.json 记录训练文件的 SHA-256，可与下载文件独立核对。")
+        with st.expander("本地位置与校验详情",
+                         expanded=not release["verified"] or bool(
+                             selected_file and selected_file["bytes"] > DIRECT_DOWNLOAD_LIMIT_BYTES)):
+            if selected_file is not None:
+                st.caption("本地文件路径（可在文件管理器中打开）")
+                st.code(selected_file["path"], language=None)
+            st.caption("本地版本目录（复制后可在文件管理器中打开）")
+            st.code(release["path"], language=None)
+            if unverified:
+                st.caption("未校验的历史文件")
+                for file in unverified:
+                    st.code(file["path"], language=None)
 
 
 def _render_summary(run: dict, state: dict, manifest: dict, quality: dict) -> None:
@@ -335,7 +353,8 @@ def _render_previews(application: WorkflowApplication, run_id: str, state: dict,
     st.caption(f"{choice[1]} · 展示 {len(rows)} 条，完整记录请下载 ZIP。")
     for index, row in enumerate(rows, start=1):
         st.html('<div class="df-pack-preview-index">样本 ' + str(index) + '</div>')
-        render_sample_preview(choice[0], row, key=f"package-messages:{run_id}:{choice[0]}:{index}")
+        render_sample_preview(choice[0], row, key=f"package-messages:{run_id}:{choice[0]}:{index}",
+                              wrapper_class="df-package-sample")
 
 
 def _render_trainer_exports(application, run_id, quality: dict, inventory: dict, manifest: dict,
@@ -402,7 +421,8 @@ def _render_format_cards(inventory: dict) -> None:
 
 def render_package_page(application: WorkflowApplication) -> None:
     st.html(PACKAGE_STYLE)
-    page_header("输出打包", "核对真实训练文件、质量证据和来源信息，导出可校验的完整数据包。", "DATASET RELEASE　·　完整性校验")
+    page_header("输出打包", "核对真实训练文件、质量证据和来源信息，导出可校验的完整数据包。", "DATASET RELEASE　·　完整性校验",
+                art_kind="delivery")
     runs = application.task_runs()
     releases = application.list_releases()
     ready = [row for row in runs if has_deliverable_results(row) and row.get("id")]
@@ -473,7 +493,7 @@ def render_package_page(application: WorkflowApplication) -> None:
             else:
                 st.warning("本次运行有目标缺少合格样本或达到处理上限。质量记录和隔离原因仍会保留在 ZIP 中。")
         with st.container(border=True):
-            st.html(_heading("⇩", "导出格式与交付内容", "根据当前任务已验证的文件展示可用格式"))
+            st.html(_heading("⇩", "交付包与所含文件", "已验证的文件组成；生成完整 ZIP 后即可交付。"))
             _render_format_cards(inventory)
             st.caption(f"完整 ZIP 包含 {len(manifest.get('sha256', {}))} 个已校验文件和 manifest.json · "
                        f"{len(manifest.get('sources', []))} 个输入来源")
@@ -554,7 +574,8 @@ def render_package_page(application: WorkflowApplication) -> None:
             st.html(_heading("◷", "最近可导出任务", "本机已完成的工作流"))
             for recent in ready[:5]:
                 targets = "、".join(str(target).upper() for target in recent.get("targets", [])) or "—"
-                st.html('<div class="df-pack-recent"><strong data-user-content>' + _safe(recent.get("name", "未命名任务"))
+                st.html('<div class="df-pack-recent"><strong data-user-content title="'
+                        + _safe(recent.get("name", "未命名任务")) + '">' + _safe(recent.get("name", "未命名任务"))
                         + '</strong>' + _badge(str(recent.get("status", "completed"))) + '<small>'
                         + _safe(targets) + ' · ' + _safe(_stamp(recent.get("updated_at"))) + '</small></div>')
     _render_releases(application, releases)

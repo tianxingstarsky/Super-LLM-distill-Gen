@@ -80,7 +80,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
 
 
-def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=None, expanded=False):
+def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=None, expanded=False,
+                  reveal_key=None):
     # Keep the real Streamlit form mounted when the window is closed. Widget
     # values and callbacks remain owned by Streamlit; the canvas only positions it.
     spec = dict(spec, expanded=expanded)
@@ -88,7 +89,26 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
         spec["inspector"] = {"key": inspector_key,
                              "open": bool(st.session_state.get(f"canvas-open:{key}", False)),
                              "wide": bool(st.session_state.get(f"canvas-wide:{key}", False))}
+    reveal = st.session_state.get(reveal_key) if reveal_key is not None else None
+    if (isinstance(reveal, dict) and reveal.get("node") == spec["selected"]
+            and type(reveal.get("serial")) in (str, int) and reveal["serial"] != ""
+            and spec.get("inspector", {}).get("open")):
+        spec["reveal"] = dict(reveal, key="workbench-canvas-panel")
+    elif reveal_key is not None and reveal is not None:
+        # Closing the native form or selecting another node cancels navigation
+        # even if its component cancellation event was superseded by a click.
+        st.session_state.pop(reveal_key, None)
+        reveal = None
     event = _canvas(spec=spec, key=key, default=None)
+    # The bridge owns this UI-only receipt. Keep a request through extra reruns
+    # until it explicitly completes or the user interrupts it. A stale receipt
+    # cannot consume a newer click on the same unresolved configuration issue.
+    if isinstance(event, dict) and event.get("action") == "reveal":
+        if (isinstance(reveal, dict) and event.get("node") == reveal.get("node")
+                and event.get("request_serial") == reveal.get("serial")
+                and event.get("outcome") in ("completed", "cancelled")):
+            st.session_state.pop(reveal_key, None)
+        return
     if (isinstance(event, dict) and event.get("node") in {node["id"] for node in spec["nodes"]}
             and type(event.get("serial")) in (str, int) and event["serial"] != ""
             and event.get("action") in (None, "close")
@@ -96,6 +116,8 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
         consumed_key = f"canvas-event:{key}"
         if event.get("serial") != st.session_state.get(consumed_key):
             st.session_state[consumed_key] = event.get("serial")
+            if reveal_key is not None:
+                st.session_state.pop(reveal_key, None)
             if event.get("action") == "close":
                 if inspector_key is not None:
                     st.session_state[f"canvas-open:{key}"] = False

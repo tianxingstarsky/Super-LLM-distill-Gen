@@ -62,6 +62,8 @@ _GENERATED_ART = {
     "documents": "entry-documents-v1.png",
     "agent": "entry-agent-v1.png",
     "brief": "entry-brief-v1.png",
+    "review": "quality-review-v1.png",
+    "delivery": "delivery-package-v1.png",
 }
 
 

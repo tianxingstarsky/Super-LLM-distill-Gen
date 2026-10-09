@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 
 import pytest
+from streamlit.testing.v1 import AppTest
 
 from lib.application.asset_catalog_service import AssetCatalogApplication
 from lib.domain.dataset_assets import output_category
@@ -180,3 +182,66 @@ def test_directory_selection_uses_current_rows_and_preserves_file_identity():
     assert identity != _table_identity([first, replace(second, mtime_ns=3)], context)
     assert identity != _table_identity(rows, ("default", "来源文件", "second", 1))
     assert identity != _table_identity(rows, ("default", "来源文件", "", 2))
+
+
+_CATALOG_SCREEN = '''
+import streamlit as st
+from lib.application.asset_catalog_service import AssetCatalogApplication
+from lib.domain.dataset_assets import Asset, AssetInventory
+from lib.presentation.streamlit.asset_catalog_page import render_asset_catalog
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+st.session_state.setdefault('ui_language', 'zh')
+install_streamlit_localization()
+class Driver:
+    def inventory(self, workspace):
+        return AssetInventory(() if st.session_state.get('empty') else (
+            Asset('source/guide.txt', 'source', 'guide.txt', '来源文件', 10, 1),))
+    def excerpt(self, *args): return ('saved source', 'excerpt')
+    def download(self, *args): return b'saved source'
+def import_sources(): st.session_state['imported'] = True
+render_asset_catalog(AssetCatalogApplication(Driver()), 'fixture', show_title=False,
+                     on_import_sources=import_sources)
+'''
+
+
+def _catalog_html(ui):
+    return ''.join(element.proto.body for element in ui.get('html'))
+
+
+def test_empty_library_has_one_import_action_and_no_meaningless_file_filters():
+    ui = AppTest.from_string(_CATALOG_SCREEN)
+    ui.session_state['empty'] = True
+    ui.run()
+    assert not ui.exception
+    assert [button.key for button in ui.button] == ['asset-import:fixture']
+    assert not ui.selectbox and not ui.text_input and not ui.dataframe
+    assert '还没有来源或生成文件' in _catalog_html(ui)
+    assert '没有匹配的文件' not in _catalog_html(ui)
+
+
+def test_search_without_matches_keeps_filters_and_does_not_show_empty_library_or_details():
+    ui = AppTest.from_string(_CATALOG_SCREEN).run()
+    ui.text_input(key='asset-search:fixture').input('missing filename').run()
+    assert not ui.exception
+    assert ui.selectbox(key='asset-category:fixture').value == '常用文件'
+    assert not ui.dataframe
+    markup = _catalog_html(ui)
+    assert '没有匹配的文件' in markup
+    assert '还没有来源或生成文件' not in markup
+    assert '文件详情' not in markup
+    assert len([button for button in ui.button if button.key == 'asset-import:fixture']) == 1
+
+
+def test_english_file_table_column_settings_match_localized_headings_and_keep_names_intact():
+    ui = AppTest.from_string(_CATALOG_SCREEN)
+    ui.session_state['ui_language'] = 'en'
+    ui.run()
+    assert not ui.exception
+    table = ui.dataframe[0]
+    assert list(table.value.columns) == ['File name', 'Type', 'Source / folder', 'Size']
+    assert table.value['File name'].tolist() == ['guide.txt']
+    config = json.loads(table.proto.columns)
+    for column in table.value.columns:
+        assert config[column]['label'] == column
+    assert config['File name']['width'] > config['Source / folder']['width']
+    assert config['Size']['alignment'] == 'right'

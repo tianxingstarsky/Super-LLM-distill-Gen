@@ -9,6 +9,13 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "还没有来源或生成文件": "No source or output files yet",
+    "导入资料后，可在这里查看文件和生成结果。": "Import sources to browse files and generated results here.",
+    "本地位置与校验详情": "Local paths and verification details",
+    "交付包与所含文件": "Package and included files",
+    "已验证的文件组成；生成完整 ZIP 后即可交付。": "These files are verified. Create a complete ZIP to deliver them.",
+    "未校验的历史文件": "Unverified legacy files",
+    "文件超过 50 MiB；为避免浏览器一次载入整个训练文件，请从下方本地路径读取。": "This file exceeds 50 MiB. Use the local path below to avoid loading the full file in the browser.",
     "模型服务缺少预算单价，点击检查服务连接": "Budget rates are missing. Open the service connection.",
     "图片输入能力尚未确认，点击核实模型能力": "Image support is unconfirmed. Check the model capabilities.",
     "图片需要多模态识别，点击配置输入模型": "Images need image reading. Configure the input model.",
@@ -1186,6 +1193,7 @@ ZH_EN: dict[str, str] = {
     "合格量来自已校验清单；原因来自本次运行记录": "Accepted counts come from the checked manifest. Reasons come from this run.",
     "以上是当前工作区可审候选量；通过、退回和待处理状态以具体队列为准。": "These are reviewable examples in this workspace. Queue counts show approved, returned, and pending items.",
     "打开审核队列 →": "Open review queue →",
+    "队列暂不可读取": "Review queue is unavailable",
     "查看生成、人工审核与发布前的确认要求。": "View generation, review, and release checks.",
     "查看任务运行过程": "View task progress",
     "内容摘录": "Content excerpt",

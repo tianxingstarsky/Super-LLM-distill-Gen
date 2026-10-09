@@ -8,6 +8,7 @@ from PIL import Image
 import streamlit as st
 
 from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.manual_dataset_style import MANUAL_DATASET_STYLE
 from lib.presentation.streamlit.shared import page_header, section_heading
 
 
@@ -180,6 +181,7 @@ def _saved_samples(application: Any, dataset: dict, prefix: str) -> None:
 
 def render_manual_datasets(application: Any, workspace: Any, *, show_title: bool = True) -> None:
     """Render the manual authoring mode within the existing generation workspace."""
+    st.html(MANUAL_DATASET_STYLE)
     workspace_id = str(getattr(workspace, "id", workspace))
     prefix = f"manual-datasets:{workspace_id}"
     if show_title:
@@ -227,7 +229,8 @@ def render_manual_datasets(application: Any, workspace: Any, *, show_title: bool
     draft = f"{prefix}:draft:{dataset_id}:{revision}"
     content_key = f"{prefix}:content:{dataset_id}"
     content = st.session_state.get(content_key, {})
-    editor, preview = st.columns([1.05, 1], gap="medium")
+    with st.container(key="manual-datasets-workbench"):
+        editor, preview = st.columns([1.05, 1], gap="medium")
     with editor, st.container(border=True, key="manual-datasets-editor"):
         section_heading("制作一条样本", "图片可选 · 问题与参考答案必填", "✎")
         files = st.file_uploader("添加图片", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True,

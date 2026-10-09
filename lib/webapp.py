@@ -356,7 +356,7 @@ def page_corpus_review():
 
 
 def page_human_review():
-    page_header("人工审核 / 模型对齐", "在发布前检查样本质量、修订内容并保留审核历史。", "CPT　·　SFT　·　DPO　·　ORPO　·　RLAIF")
+    page_header("人工审核 / 模型对齐", "在发布前检查样本质量、修订内容并保留审核历史。", "CPT　·　SFT　·　DPO　·　ORPO　·　RLAIF", art_kind="review")
     modes = ("SFT 数据调整", "DPO 偏好优化", "ORPO 偏好优化", "RLAIF 反馈审核", "CPT 语料审核")
     mode_key = f"review-mode:{st.session_state['ws']}"
     from lib.presentation.streamlit.review_overview import render_review_overview

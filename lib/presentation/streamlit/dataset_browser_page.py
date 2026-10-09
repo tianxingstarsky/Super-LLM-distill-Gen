@@ -94,12 +94,12 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
             '</div>'
             '<p class="df-data-note">文件浏览仅展示原有样本内容；是否可用于训练请查看质量报告与人工审核。</p>'
         )
-        st.caption("样本 ID: " + str(sample.get("id", index)))
     with right, st.container(border=True):
         section_heading("样本内容", "按对话轮次展开上下文与工具调用", "◉")
         st.html('<div class="df-data-sample-head"><strong data-user-content>' + html.escape(source.name if source else "样本")
                 + '</strong><span>第 ' + str(index) + ' / ' + str(len(samples)) + ' 条</span></div>')
         from lib.presentation.streamlit.sample_preview import render_sample_preview
-        render_sample_preview(target, sample, key=f"file-messages:{workspace_id}:{source}:{index}")
+        render_sample_preview(target, sample, key=f"file-messages:{workspace_id}:{source}:{index}",
+                              wrapper_class="df-library-sample")
 
 

@@ -81,6 +81,10 @@ def _select_setup_node(key: str, node: str, tab: str = "settings", prompt_id: st
     st.session_state[key] = node
     workspace = key.removeprefix("workflow-setup-node:")
     st.session_state[f"canvas-open:setup-canvas:{workspace}"] = True
+    serial_key = f"workflow-setup-reveal-sequence:{workspace}"
+    serial = st.session_state.get(serial_key, 0) + 1
+    st.session_state[serial_key] = serial
+    st.session_state[f"workflow-setup-reveal:{workspace}"] = {"node": node, "serial": serial}
     language = st.session_state.get("ui_language", "zh")
     label = "提示词与风格" if tab == "prompts" else "节点设置"
     st.session_state[f"workflow-node-tabs:{workspace}:{node}"] = translate_label(label, language)
@@ -655,8 +659,9 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     if resumable:
         st.caption("继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。")
     if active or resumable:
-        action, copy_action = (st.columns(2, gap="small") if draft_application is not None
-                               else (st.container(), None))
+        with st.container(key=f"workflow-run-actions:{run_id}"):
+            action, copy_action = (st.columns(2, gap="small") if draft_application is not None
+                                   else (st.container(), None))
         with action:
             if active:
                 if st.button("停止后续步骤", key=f"stop:{run_id}", width="stretch"):
@@ -676,7 +681,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                     st.rerun(scope="app")
         if error := st.session_state.pop(f"workflow-reuse-error:{workspace}", None):
             st.error(error)
-    flow, inspector = st.columns([2.25, 1], gap="medium")
+    with st.container(key=f"workflow-run-layout:{run_id}"):
+        flow, inspector = st.columns([2.25, 1], gap="medium")
     with flow:
         with st.container(border=True, key=f"workflow-run-canvas:{run_id}"):
             st.html('<div class="df-run-section"><div><strong>工作流运行图</strong>'
@@ -756,7 +762,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                     st.caption(phase_label)
             if "cached" in selected_metrics:
                 cached = min(done, max(0, int(selected_metrics.get("cached", 0) or 0)))
-                reused, processed = st.columns(2)
+                with st.container(key=f"workflow-run-cache-statistics:{run_id}"):
+                    reused, processed = st.columns(2)
                 reused.metric("已复用断点", f"{cached:,}")
                 processed.metric("本次新处理", f"{max(0, done - cached):,}")
                 st.caption("处理进度包含已校验并复用的断点；新处理单元也可能复用此前保存的模型响应。")
@@ -791,7 +798,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     output_open_key = f"canvas-open:live-canvas:{run_id}"
     if st.session_state.get(output_open_key):
         with flow, st.container(border=True, key=f"workflow-node-output:{run_id}:{selected_stage}"):
-            heading, close = st.columns([4, 1], vertical_alignment="center")
+            with st.container(key=f"workflow-run-output-heading:{run_id}:{selected_stage}"):
+                heading, close = st.columns([4, 1], vertical_alignment="center")
             with heading:
                 st.html('<div class="df-run-section"><div><strong>'
                         + html.escape(translate(GRAPH_LABELS.get(selected_stage, selected_stage),
@@ -809,7 +817,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         st.html(_events_html(selected_events))
     summary = state.get("input_summary", {})
     if summary:
-        cols = st.columns(4)
+        with st.container(key=f"workflow-run-input-statistics:{run_id}"):
+            cols = st.columns(4)
         for col, (label, key) in zip(cols, [("解析单元", "units"), ("可处理", "ready"), ("输入隔离", "quarantined"), ("超出上限", "deferred")]):
             col.metric(label, summary.get(key, 0))
     tabs = st.tabs(["产物与质量", "全部事件", "来源与配方"])
@@ -833,8 +842,9 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                for target, item in quality["targets"].items()},
                     "negative_counts": {"agent": quality["targets"].get("agent", {}).get("negative", 0)},
                 }))
-                package_action, review_action = (st.columns(2, gap="small") if review_targets
-                                                  else (st.container(), None))
+                with st.container(key=f"workflow-run-delivery-actions:{run_id}"):
+                    package_action, review_action = (st.columns(2, gap="small") if review_targets
+                                                      else (st.container(), None))
                 with package_action:
                     st.button("查看并打包本次训练数据", on_click=open_package, args=(run_id,),
                               kwargs={"from_fragment": True},
@@ -1335,7 +1345,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                                       qa_director=qa_director),
                           selection_key, key=f"setup-canvas:{ws}",
-                          inspector_key="workbench-node-panel", expanded=True)
+                          inspector_key="workbench-node-panel", expanded=True,
+                          reveal_key=f"workflow-setup-reveal:{ws}")
         with workbench, st.container(border=True, key="workbench-node-panel"):
             with st.container(key="workbench-node-header"):
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
@@ -1722,3 +1733,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.rerun()
             except (ValueError, OSError, Timeout) as error:
                 st.error(_workflow_error(error))
+    # A normal field edit, canvas click, or refresh never asks to move the page.
+    # Keep the request until the canvas bridge acknowledges it. This plain HTML
+    # receipt marks the end of the committed form without relying on a one-shot
+    # JavaScript effect that Streamlit can remove during an additional rerun.
+    reveal = st.session_state.get(f"workflow-setup-reveal:{ws}")
+    if targets and isinstance(reveal, dict) and reveal.get("node") == selected_node:
+        serial = html.escape(str(reveal["serial"]), quote=True)
+        st.html(f'<span class="df-workflow-setup-reveal" data-serial="{serial}" hidden></span>')

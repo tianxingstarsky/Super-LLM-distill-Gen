@@ -48,8 +48,10 @@ st.session_state.setdefault('download_reads', 0)
 class Application:
     def task_runs(self): return []
     def list_releases(self):
-        return [dict(id='export/one', name='one', kind='export', verified=True,
-                     path='C:/release', files=[dict(name='sft.jsonl', bytes=4,
+        return [dict(id='export/one', name='one', kind='export',
+                     verified=not st.session_state.get('unverified'), error='file_hash_mismatch',
+                     path='C:/release', files=[dict(name='sft.jsonl',
+                     bytes=51*1024*1024 if st.session_state.get('large') else 4,
                      sha256='a'*64, path='C:/release/sft.jsonl')])]
     def release_file(self, release_id, filename):
         st.session_state['download_reads'] = st.session_state.get('download_reads', 0) + 1
@@ -61,4 +63,32 @@ render_package_page(Application())
 def test_release_download_does_not_read_file_during_page_render():
     ui = AppTest.from_string(RELEASE_SCRIPT).run()
     assert not ui.exception
+    assert ui.session_state['download_reads'] == 0
+
+
+def test_unverified_release_keeps_warning_and_local_evidence_without_download():
+    ui = AppTest.from_string(RELEASE_SCRIPT)
+    ui.session_state['unverified'] = True
+    ui.run()
+    assert not ui.exception
+    assert not ui.download_button
+    assert any('file_hash_mismatch' in warning.value for warning in ui.warning)
+    details = next(item for item in ui.get('expander') if item.label == '本地位置与校验详情')
+    assert details.proto.expanded
+    assert 'C:/release' in [item.value for item in details.get('code')]
+    assert ui.session_state['download_reads'] == 0
+
+
+def test_large_release_opens_selected_file_path_without_browser_download_or_eager_read():
+    ui = AppTest.from_string(RELEASE_SCRIPT)
+    ui.session_state['large'] = True
+    ui.run()
+    assert not ui.exception
+    assert ui.selectbox(key='package-release-file:fixture:export/one').value == 'sft.jsonl'
+    assert not ui.download_button
+    details = next(item for item in ui.get('expander') if item.label == '本地位置与校验详情')
+    assert details.proto.expanded
+    paths = [item.value for item in details.get('code')]
+    assert 'C:/release/sft.jsonl' in paths and 'C:/release' in paths
+    assert any('50 MiB' in info.value for info in ui.info)
     assert ui.session_state['download_reads'] == 0

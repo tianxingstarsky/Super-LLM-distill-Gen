@@ -119,8 +119,8 @@ HOME_STYLE = """<style>
   .st-key-home-source-entries [class*="st-key-home-entry-"]:is(:hover,:focus-within) .df-home-entry-art > span { transform:none; }
 }
 @media(max-width:1050px) {
-  .st-key-home-main > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
-  .st-key-home-main > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { flex:1 1 100%; width:100%; min-width:0; }
+  .st-key-home-main > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:minmax(0,1fr); gap:16px; }
+  .st-key-home-main > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { flex:none !important; width:100% !important; min-width:0 !important; max-width:100%; }
 }
 @media(max-width:600px) {
   .df-home-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 0; }
@@ -129,14 +129,35 @@ HOME_STYLE = """<style>
   .df-home-kpi strong { font-size:25px; }
   [data-testid="stMainBlockContainer"] .st-key-home-source-panel, [data-testid="stMainBlockContainer"] .st-key-home-recent-panel, [data-testid="stMainBlockContainer"] .st-key-home-library-panel, [data-testid="stMainBlockContainer"] .st-key-home-results-panel { padding:15px; }
   .st-key-home-source-entries [data-testid="stCaptionContainer"] { min-height:0; }
-  .st-key-home-source-entries > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-direction:column; flex-wrap:nowrap; gap:9px; }
-  .st-key-home-source-entries [data-testid="stColumn"] { width:100%; flex:0 0 auto; }
+  .st-key-home-source-entries > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:minmax(0,1fr); gap:9px; }
+  .st-key-home-source-entries [data-testid="stColumn"] { width:100% !important; min-width:0 !important; max-width:100%; flex:none !important; }
   .st-key-home-source-entries [class*="st-key-home-entry-"] { display:grid; grid-template-columns:64px minmax(0,1fr); gap:2px 10px; padding:12px 36px 12px 12px; }
-  .st-key-home-source-entries [class*="st-key-home-entry-"] > [data-testid="stElementContainer"]:first-child { grid-column:1; grid-row:1 / 3; align-self:center; }
-  .st-key-home-source-entries [class*="st-key-home-entry-"] > [data-testid="stElementContainer"]:nth-child(2),
-  .st-key-home-source-entries [class*="st-key-home-entry-"] > [data-testid="stElementContainer"]:nth-child(3) { grid-column:2; }
+  .st-key-home-source-entries [class*="st-key-home-entry-"] > :is([data-testid="stElementContainer"],[data-testid="stLayoutWrapper"]):first-child { grid-column:1; grid-row:1 / 3; align-self:center; }
+  .st-key-home-source-entries [class*="st-key-home-entry-"] > :is([data-testid="stElementContainer"],[data-testid="stLayoutWrapper"]):nth-child(2),
+  .st-key-home-source-entries [class*="st-key-home-entry-"] > :is([data-testid="stElementContainer"],[data-testid="stLayoutWrapper"]):nth-child(3) { grid-column:2; }
   .st-key-home-source-entries [class*="st-key-home-entry-"] .df-home-entry-art,
   .st-key-home-source-entries [class*="st-key-home-entry-"] .df-home-entry-art img { width:64px; height:64px; }
   .st-key-home-source-entries [class*="st-key-home-entry-"] .df-home-entry-art > span { position:absolute; top:10px; right:10px; }
+  /* Native columns retain percentage widths even when the row wraps. These
+     keyed rows use a grid and reset only their direct column children. */
+  .st-key-home-manual-entry [data-testid="stHorizontalBlock"],
+  .st-key-home-results-panel > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:minmax(0,1fr); gap:12px; }
+  .st-key-home-targets-primary [data-testid="stHorizontalBlock"],
+  .st-key-home-targets-secondary [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .st-key-home-manual-entry [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  .st-key-home-results-panel [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  .st-key-home-targets-primary [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  .st-key-home-targets-secondary [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { flex:none !important; width:100% !important; min-width:0 !important; max-width:100%; }
+  .st-key-home-results-panel [data-testid="stColumn"] [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .st-key-home-targets-primary [data-testid="stColumn"]:last-child,
+  .st-key-home-targets-secondary [data-testid="stColumn"]:last-child { grid-column:1 / -1; }
+  .st-key-home-targets-primary .stButton button,
+  .st-key-home-targets-secondary .stButton button { min-height:44px; padding:8px 10px; }
+  [class*="st-key-home-task-row-"] [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:minmax(0,1fr) auto; gap:10px; }
+  [class*="st-key-home-task-row-"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { flex:none !important; width:100% !important; min-width:0 !important; max-width:100%; }
+  [class*="st-key-home-task-row-"] [data-testid="stColumn"]:last-child { width:auto !important; }
+  .st-key-home-manual-entry .stButton button,
+  .st-key-home-recent-panel [class*="st-key-home-task-row-"] .stButton button,
+  .st-key-home-results-panel .stButton button { min-height:44px; }
 }
 </style>"""

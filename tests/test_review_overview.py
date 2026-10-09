@@ -27,3 +27,20 @@ def test_queue_statistics_and_switch_use_injected_applications():
     ui.button(key='review-overview-open-orpo').click().run()
     assert ui.session_state['mode'] == 'ORPO 偏好优化'
     assert not ui.exception
+
+
+def test_unavailable_queue_keeps_english_copy_and_unknown_count():
+    setup = '''
+import streamlit as st
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+st.session_state["ui_language"] = "en"
+install_streamlit_localization()
+'''
+    ui = AppTest.from_string((setup + SCRIPT).encode('ascii', 'backslashreplace').decode('ascii')).run()
+    assert not ui.exception
+    html = '\n'.join(item.proto.body for item in ui.get('html'))
+    assert '<span>—</span><small>Review queue is unavailable</small>' in html
+    assert '队列暂不可读取' not in html
+    ui.button(key='review-overview-open-rlaif').click().run()
+    assert ui.session_state['mode'] == 'RLAIF 反馈审核'
+    assert not ui.exception

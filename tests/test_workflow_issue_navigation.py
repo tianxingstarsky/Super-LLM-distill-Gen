@@ -7,6 +7,96 @@ from streamlit.testing.v1 import AppTest
 from tests.test_workflow_draft import SCRIPT
 
 
+def _reveal_receipts(ui):
+    return [element.proto.body for element in ui.get("html")
+            if "df-workflow-setup-reveal" in element.proto.body]
+
+
+def _issue_bridge_app():
+    code = SCRIPT.replace("'backends':[{'name':'local','models':['writer','judge']}]", "'backends':[]")
+    code = code.replace("def canvas(spec,selection_key,**kwargs):", '''def canvas(spec,selection_key,**kwargs):
+    from copy import deepcopy
+    from lib.presentation.streamlit import workflow_canvas as bridge
+    def component(**values):
+        st.session_state['fixture-canvas-spec'] = deepcopy(values['spec'])
+        return st.session_state.get('fixture-canvas-event')
+    with patch.object(bridge, '_canvas', component):
+        bridge.render_canvas(spec, selection_key, **kwargs)''')
+    return AppTest.from_string(code).run()
+
+
+@pytest.mark.parametrize("outcome", ["completed", "cancelled"])
+def test_issue_navigation_survives_extra_reruns_until_the_exact_bridge_receipt(outcome):
+    ui = _issue_bridge_app()
+    assert not ui.exception and not _reveal_receipts(ui)
+    assert "reveal" not in ui.session_state["fixture-canvas-spec"]
+    ui.button(key="fixture-node:ingest").click().run()
+    assert not _reveal_receipts(ui), "ordinary canvas selection must preserve page scroll"
+    ui.text_input(key="workflow-name:fixture").set_value("Keep this unfinished work").run()
+    assert not _reveal_receipts(ui), "editing a draft must preserve page scroll"
+    ui.button(key="workflow-config-fix:fixture:model:sft").click().run()
+    _assert_open(ui, "sft", "节点设置")
+    request = ui.session_state["workflow-setup-reveal:fixture"]
+    assert len(_reveal_receipts(ui)) == 1
+    assert ui.session_state["fixture-canvas-spec"]["reveal"] == dict(request, key="workbench-canvas-panel")
+    assert ui.text_input(key="workflow-name:fixture").value == "Keep this unfinished work"
+    ui.run()
+    assert not ui.exception and len(_reveal_receipts(ui)) == 1
+    assert ui.session_state["workflow-setup-reveal:fixture"] == request, "an extra React/server rerun cannot drop navigation before it runs"
+    ui.session_state["fixture-canvas-event"] = {"action": "reveal", "node": "sft",
+        "request_serial": request["serial"], "outcome": outcome, "serial": "ack-1"}
+    ui.run()
+    assert not ui.exception and not _reveal_receipts(ui)
+    assert "workflow-setup-reveal:fixture" not in ui.session_state
+    _assert_open(ui, "sft", "节点设置")
+    assert ui.text_input(key="workflow-name:fixture").value == "Keep this unfinished work"
+    ui.run()
+    assert not _reveal_receipts(ui), "completed or cancelled navigation never repeats on refresh"
+    ui.button(key="workflow-config-fix:fixture:model:sft").click().run()
+    newer = ui.session_state["workflow-setup-reveal:fixture"]
+    assert newer["serial"] > request["serial"]
+    assert len(_reveal_receipts(ui)) == 1, "an old receipt cannot consume a deliberate new click"
+
+
+@pytest.mark.parametrize("event", [
+    {"action": "reveal", "node": "ingest", "request_serial": 1, "outcome": "completed"},
+    {"action": "reveal", "node": "sft", "request_serial": 0, "outcome": "completed"},
+    {"action": "reveal", "node": "sft", "request_serial": 1, "outcome": "invalid"},
+])
+def test_invalid_reveal_receipts_do_not_clear_the_pending_issue_or_change_node(event):
+    ui = _issue_bridge_app()
+    ui.button(key="workflow-config-fix:fixture:model:sft").click().run()
+    request = ui.session_state["workflow-setup-reveal:fixture"]
+    ui.session_state["fixture-canvas-event"] = event
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state["workflow-setup-reveal:fixture"] == request
+    _assert_open(ui, "sft", "节点设置")
+
+
+@pytest.mark.parametrize("action", [None, "close"])
+def test_direct_canvas_actions_cancel_a_pending_setup_reveal(action):
+    ui = _issue_bridge_app()
+    ui.button(key="workflow-config-fix:fixture:model:sft").click().run()
+    ui.session_state["fixture-canvas-event"] = {"action": action, "node": "sft" if action else "ingest", "serial": "direct-1"}
+    ui.run()
+    assert not ui.exception and not _reveal_receipts(ui)
+    assert "workflow-setup-reveal:fixture" not in ui.session_state
+    assert ui.session_state["workflow-setup-node:fixture"] == ("sft" if action else "ingest")
+    assert ui.session_state["canvas-open:setup-canvas:fixture"] is (action is None)
+
+
+def test_closing_native_settings_cancels_pending_navigation_before_a_later_reopen():
+    ui = _issue_bridge_app()
+    ui.button(key="workflow-config-fix:fixture:model:sft").click().run()
+    ui.button(key="workflow-close-config:fixture").click().run()
+    assert not ui.exception and not _reveal_receipts(ui)
+    assert "workflow-setup-reveal:fixture" not in ui.session_state
+    ui.session_state["canvas-open:setup-canvas:fixture"] = True
+    ui.run()
+    assert not _reveal_receipts(ui), "ordinary reopening does not resurrect cancelled navigation"
+
+
 def _assert_open(ui, node, tab):
     assert not ui.exception
     assert ui.session_state["workflow-setup-node:fixture"] == node

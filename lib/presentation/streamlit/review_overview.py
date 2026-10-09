@@ -38,6 +38,15 @@ _STYLE = """<style>
 [data-testid="stVerticalBlock"][class*="st-key-review-overview-"] {flex:1}
 [data-testid="stVerticalBlock"][class*="st-key-review-overview-"] > [data-testid="stElementContainer"]:last-child,
 [data-testid="stVerticalBlock"][class*="st-key-review-overview-"] > [data-testid="stLayoutWrapper"]:last-child {margin-top:auto}
+@media(max-width:1100px) {
+  [data-testid="stHorizontalBlock"]:has(.df-review-overview) {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  [data-testid="stHorizontalBlock"]:has(.df-review-overview) > [data-testid="stColumn"] {width:100%;min-width:0;flex:none}}
+@media(max-width:700px) {
+  [data-testid="stHorizontalBlock"]:has(.df-review-overview) {grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  [class*="st-key-review-overview-"] .df-review-overview {grid-template-columns:32px minmax(0,1fr);gap:3px 7px}
+  .df-review-overview b {width:30px;height:32px}
+  .df-review-overview strong {font-size:13px;overflow-wrap:anywhere}
+  [class*="st-key-review-overview-"] button {min-height:44px}}
 @media(prefers-reduced-motion:reduce) {
   [data-testid="stVerticalBlock"][class*="st-key-review-overview-"] {transition:none;transform:none!important}}
 </style>"""

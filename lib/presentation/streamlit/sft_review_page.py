@@ -77,7 +77,6 @@ def render_sft_review(application: SftReviewApplication, *, legacy_review: Calla
                 "先生成包含高质量问答的 SFT 工作流。通过自动质量检查的对话会进入这里，审核通过后可单独发布。",
                 "SFT 指令与高质量回答",
             )
-            st.info("暂无通过产物校验的 SFT 工作流。先在“自动工作流”生成 SFT 候选，再进入审核。")
             if st.button("前往数据生成", type="primary", key="sft-review-empty-workflow"):
                 st.session_state["nav"] = "自动工作流"
                 st.rerun()

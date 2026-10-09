@@ -110,7 +110,7 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
             return ("preview-source:", "data-preview-run:", "preview-file:", "data-view:")
         if area == "质量报告":
             return ("quality-source:", "quality-file:", "data-view:")
-        return ("asset-category:",)
+        return ("asset-category:", "asset-import:", "asset-empty", "data-view:")
     if route == "任务管理":
         if step == 0:
             return ("task-view:",)

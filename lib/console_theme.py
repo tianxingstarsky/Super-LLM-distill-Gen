@@ -177,9 +177,11 @@ $theme_vars
 [data-testid="stMetricValue"] { font-size: 1.65rem; font-weight: 700; color: var(--df-text); }
 [data-testid="stForm"] { background: #fff; border: 1px solid var(--df-border2); border-radius: 12px; padding: 18px; }
 [data-testid="stDataFrame"] { border: 1px solid var(--df-border); border-radius: 10px; overflow: hidden; }
-[data-testid="stApp"] [data-testid="stSegmentedControl"] { padding: 4px; border-radius: 11px; background: #EAF0F7; }
-[data-testid="stApp"] [data-testid="stSegmentedControl"] button { min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--df-text2); font-size: 12px; }
-[data-testid="stApp"] [data-testid="stSegmentedControl"] button[aria-pressed="true"] { background: #fff; color: var(--df-brand); box-shadow: 0 1px 4px rgba(30,60,100,.12); font-weight: 650; }
+[data-testid="stApp"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) { display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 100%; padding: 4px; border: 1px solid #DEE8F4; border-radius: 12px; background: #EAF0F7; }
+[data-testid="stApp"] [data-testid="stButtonGroup"] button[data-variant="segmented_control"] { min-height: 38px; padding: 7px 15px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--df-text2); transition: background .16s ease, border-color .16s ease, box-shadow .16s ease; }
+[data-testid="stApp"] [data-testid="stButtonGroup"] button[data-variant="segmented_control"][aria-checked="true"] { border-color: #CADCF3; background: #fff; color: var(--df-brand); box-shadow: 0 2px 6px rgba(30,60,100,.09); font-weight: 650; }
+[data-testid="stApp"] [data-testid="stButtonGroup"] button[data-variant="segmented_control"]:hover:not(:disabled) { background: #F8FBFF; border-color: #C5D8F0; }
+[data-testid="stApp"] [data-testid="stButtonGroup"] button[data-variant="segmented_control"]:focus-visible { outline: 2px solid var(--df-brand); outline-offset: 2px; }
 [data-testid="stVerticalBlockBorderWrapper"] { border-color: #D8E3F0; border-radius: 14px; background: #fff; box-shadow: 0 3px 12px rgba(30,60,100,.035),0 1px 2px rgba(30,60,100,.025); }
 [data-testid="stMainBlockContainer"] [class*="st-key-workflow-run-"] {
   border-color: #D8E3F0; border-radius: 11px; background: #fff;
@@ -368,6 +370,9 @@ $theme_vars
 .df-page-tag { flex: 0 1 auto; max-width: 100%; padding: 6px 9px; color: #175CB3; font-size: 11px; font-weight: 650; letter-spacing: .035em; overflow-wrap: anywhere; border: 1px solid rgba(133,177,232,.25); border-radius: 6px; background: rgba(255,255,255,.65); }
 .df-page-hero .df-hero-art { inset: -12px -16px -14px auto; width: 280px; opacity: .21; overflow: hidden; border-radius: inherit; }
 .df-page-hero .df-hero-art img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.df-page-hero--illustrated { min-height: 130px; padding-right: 184px; }
+.df-page-hero--illustrated .df-hero-art { inset: -30px -8px -30px auto; width: 185px; opacity: 1; }
+.df-page-hero--illustrated .df-page-tag { align-self: flex-start; margin-top: 7px; }
 /* Navigation hubs have room for a brand illustration. Dense workspaces keep
    the standard masthead so that forms, samples and logs retain their space. */
 .df-page-hero--hub { min-height: 148px; padding: 24px 28px; background: linear-gradient(105deg,#FCFDFF 12%,#F0F7FF 60%,#E1EEFF 100%); }
@@ -462,16 +467,15 @@ $theme_vars
 .df-artifact-step b { color: #C17725; font-size: 10px; }
 .df-artifact-muted { color: var(--df-text3); font-size: 11px; }
 .df-artifact-failure { padding: 8px 10px; border: 1px solid #F0D5DD; border-radius: 8px; background: #FFF7F8; color: #9E253E; font-size: 11px; }
-.df-review-empty { display: grid; grid-template-columns: minmax(240px,.85fr) minmax(0,1.7fr); gap: 22px; align-items: stretch; padding: 23px; border: 1px solid #D9E6F6; border-radius: 14px; background: linear-gradient(115deg,#F8FBFF 0%,#F1F7FF 58%,#EAF3FF 100%); }
+.df-review-empty { display: grid; grid-template-columns: minmax(240px,.85fr) minmax(0,1.7fr); gap: 26px; align-items: center; padding: 21px; border: 1px solid #D9E6F6; border-radius: 14px; background: linear-gradient(115deg,#F8FBFF 0%,#F1F7FF 58%,#EAF3FF 100%); }
 .df-review-empty-main { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; padding: 4px 8px; }
-.df-review-empty-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 11px; border-radius: 12px; background: linear-gradient(145deg,#E7F1FF,#D6E8FF); color: #1769E0; font-size: 20px; box-shadow: 0 4px 12px rgba(23,105,224,.09); }
 .df-review-empty-kicker { margin-bottom: 6px; color: #3977C8; font-size: 9px; font-weight: 800; letter-spacing: .16em; }
 .df-review-empty-main > strong { color: var(--df-text); font-size: 17px; }
 .df-review-empty-main > p { max-width: 430px; margin: 6px 0 13px; color: var(--df-text2); font-size: 14px; line-height: 1.7; }
 .df-review-empty-count { display: flex; align-items: baseline; gap: 8px; padding-top: 10px; border-top: 1px solid #DDE7F4; width: 100%; color: var(--df-text3); font-size: 12px; }
 .df-review-empty-count b { color: #1769E0; font-size: 24px; line-height: 1; }
-.df-review-route { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 11px; padding: 42px 18px 22px; border: 1px solid rgba(192,212,240,.6); border-radius: 12px; background: rgba(255,255,255,.74); }
-.df-review-route-title { position: absolute; top: 18px; left: 18px; color: var(--df-text2); font-size: 12px; font-weight: 600; }
+.df-review-route { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 11px; padding: 34px 6px 16px; }
+.df-review-route-title { position: absolute; top: 0; left: 6px; color: var(--df-text2); font-size: 12px; font-weight: 600; }
 .df-review-route > div { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .df-review-route > div > b { display: grid; place-items: center; width: 31px; height: 31px; flex: 0 0 auto; border-radius: 9px; background: #E8F1FF; color: #1769E0; font-size: 10px; }
 .df-review-route > div:nth-of-type(2) > b { background: #E6F7EF; color: #14805D; }
@@ -665,13 +669,17 @@ $theme_vars
 [data-testid="stMainBlockContainer"] [class*="st-key-workflow-run-issue-"] button:hover { border-color: #CB988F; background: #FFECE6; color: #843A2F; box-shadow: 0 4px 12px rgba(146,70,55,.06); }
 @media (prefers-reduced-motion: reduce) {
   [data-testid="stApp"] [data-testid="stButton"] button,
-  [data-testid="stApp"] [data-testid="stFormSubmitButton"] button { transition: none; }
+  [data-testid="stApp"] [data-testid="stFormSubmitButton"] button,
+  [data-testid="stApp"] [data-testid="stButtonGroup"] button[data-variant="segmented_control"] { transition: none; }
   [data-testid="stApp"] [data-testid="stButton"] button:active:not(:disabled) { transform: none; }
   [data-testid="stMainBlockContainer"] :is(.st-key-home-source-panel,.st-key-home-recent-panel,.st-key-home-library-panel,.st-key-home-results-panel,.st-key-asset-directory,.st-key-asset-details,.st-key-settings-workflow-defaults,.st-key-package-releases-panel,[class*="st-key-task-center-list-"]),
   [data-testid="stSidebar"] [class*="st-key-sidebar-task-row-"],
   [data-testid="stMainBlockContainer"] [class*="st-key-workflow-config-issue-"] button::after { transition: none; }
 }
 @media (max-width: 700px) {
+  .df-page-hero--illustrated { padding-right: 14px !important; }
+  .df-page-hero--illustrated .df-hero-art { width: 150px; opacity: .14 !important; }
+  [data-testid="stApp"] [data-testid="stButtonGroup"] button[data-variant="segmented_control"] { min-height: 44px; padding-inline: 12px; }
   [data-testid="stApp"] [data-testid="stMainBlockContainer"] { padding: 4.5rem 14px 1.5rem; }
   .df-topbar { padding-right: 145px; gap: 0; }
   .df-topbar-meta { display: none; }
@@ -697,6 +705,8 @@ $theme_vars
   .df-artifact-compare { grid-template-columns: 1fr; }
   [data-testid="stApp"] [role="radiogroup"]:is([aria-label="选择来源类型"],[aria-label="Choose source type"]) { flex-direction: column; }
   .df-page-hero .df-hero-art { opacity: .2; }
+  .df-page-hero--illustrated { padding-right: 120px; }
+  .df-page-hero--illustrated .df-hero-art { width: 160px; opacity: .6; }
   .df-asset-head, .df-asset-row { grid-template-columns: minmax(150px,1.5fr) minmax(60px,.5fr) minmax(90px,1fr); }
   .df-asset-head span:nth-child(3), .df-asset-row > span:nth-child(3) { display: none; }
   .df-overview-flow { align-items: stretch; flex-direction: column; }
