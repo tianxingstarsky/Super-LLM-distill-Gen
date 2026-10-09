@@ -1,6 +1,7 @@
 """Model discovery and evidence stay in the selected workflow node."""
 import re
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from lib.presentation.streamlit.workflow_model_capabilities import suggested_tokens
@@ -17,10 +18,14 @@ class Application:
     def discover_models(self, name, overrides=None):
         st.session_state['fixture-discovery-name'] = name
         st.session_state['fixture-discovery-overrides'] = overrides
-        if overrides is None:
-            st.session_state['fixture-discovered'] = ['beta', 'alpha']
-        return {'ok': True, 'models': ['beta', 'alpha'],
-                'model_info': st.session_state.get('fixture-discovery-info', st.session_state.get('fixture-info', {}))}
+        if st.session_state.get('fixture-discovery-error'):
+            raise ValueError('fixture discovery failure')
+        result = st.session_state.get('fixture-discovery-result', {
+            'ok': True, 'models': ['beta', 'alpha'],
+            'model_info': st.session_state.get('fixture-discovery-info', st.session_state.get('fixture-info', {}))})
+        if overrides is None and result.get('ok', True) and isinstance(result.get('models'), list):
+            st.session_state['fixture-discovered'] = result['models']
+        return deepcopy(result)
     def test_model(self, backend, model, features=None):
         st.session_state['fixture-test-selection'] = (backend, model, features)
         tests = {feature: {'status': 'passed' if feature in ('text', 'vision') else 'unsupported',
@@ -87,6 +92,47 @@ def test_discovery_offers_remote_models_without_replacing_binding_or_limits():
     assert ui.session_state['workflow-node-bindings:demo']['sft']['generation'] == {
         'backend': 'writer', 'model': 'alpha', 'context_window_tokens': 12_000, 'max_output_tokens': 2_000}
     assert ui.session_state['fixture-discovery-overrides'] is None
+    assert any(item.value == '模型列表已更新。' for item in ui.success)
+    assert any(item.proto.body == '模型列表已更新。' for item in ui.get('toast'))
+
+
+def test_discovery_keeps_unsaved_capabilities_and_connection_fields():
+    ui = _ui()
+    prefix = 'node-model:demo:sft:generation'
+    ui.selectbox(key=prefix + ':manual:writer:alpha:vision').set_value(True)
+    ui.number_input(key=prefix + ':manual:writer:alpha:context_window_tokens').set_value(98_304)
+    next(item for item in ui.text_input if item.label == '服务名称').set_value('draft-service')
+    next(item for item in ui.text_input if item.label == '服务 API 地址').set_value('https://draft.example.test/v1')
+    next(item for item in ui.text_input if item.label == '模型名称').set_value('draft-model')
+    ui.button(key=prefix + ':discover').click().run()
+    assert not ui.exception
+    assert ui.selectbox(key=prefix + ':manual:writer:alpha:vision').value is True
+    assert ui.number_input(key=prefix + ':manual:writer:alpha:context_window_tokens').value == 98_304
+    assert next(item for item in ui.text_input if item.label == '服务名称').value == 'draft-service'
+    assert next(item for item in ui.text_input if item.label == '服务 API 地址').value == 'https://draft.example.test/v1'
+    assert next(item for item in ui.text_input if item.label == '模型名称').value == 'draft-model'
+    assert ui.selectbox(key=prefix + ':model:writer').options == ['alpha', 'beta']
+    assert 'fixture-capability-save' not in ui.session_state
+    assert 'fixture-new-endpoint' not in ui.session_state
+
+
+@pytest.mark.parametrize(('result', 'failed', 'message_type', 'message'), [
+    ({'ok': True, 'models': []}, False, 'info', '服务未返回模型列表，仍可手动输入模型名。'),
+    ({'ok': True, 'models': ['beta'], 'truncated': True}, False, 'warning', '模型列表过长或响应超时，仅显示已获取的模型。'),
+    ({'ok': False, 'models': []}, False, 'warning', '未能获取模型列表，请检查地址、协议和凭据。仍可手动输入模型名。'),
+    ({}, True, 'warning', '未能获取模型列表，请检查地址、协议和凭据。仍可手动输入模型名。'),
+])
+def test_discovery_feedback_survives_full_render_without_changing_selected_model(result, failed, message_type, message):
+    ui = _ui()
+    ui.session_state['fixture-discovery-result'] = result
+    ui.session_state['fixture-discovery-error'] = failed
+    ui.button(key='node-model:demo:sft:generation:discover').click().run()
+    assert not ui.exception
+    assert any(item.value == message for item in ui.get(message_type))
+    assert ui.selectbox(key='node-model:demo:sft:generation:model:writer').value == 'alpha'
+    assert ui.session_state['workflow-node-bindings:demo']['sft']['generation']['max_output_tokens'] == 2_000
+    if result.get('ok'):
+        assert any(item.proto.body == message for item in ui.get('toast'))
 
 
 def test_english_capability_badges_translate_states_and_keep_unknown_source_compact():
@@ -99,11 +145,44 @@ def test_english_capability_badges_translate_states_and_keep_unknown_source_comp
     assert len(badge_html) == 1
     badges = badge_html[0]
     assert 'Images · Unknown' in badges
-    assert 'Native PDF · Unsupported · Public metadata' in badges
-    assert 'Tool calls · Supported · Service information' in badges
+    assert '>Native PDF · Unsupported</span>' in badges
+    assert '>Tool calls · Supported</span>' in badges
+    assert 'title="Public metadata"' in badges
+    assert 'title="Service information"' in badges
     # Unknown capability evidence does not repeat an unknown provenance label.
     assert badges.count('Unknown') == 1
     assert not re.search(r'[\u3400-\u9fff]', badges)
+
+
+def test_diagnostics_are_grouped_while_selection_limits_and_confirmation_stay_visible():
+    ui = _ui()
+    diagnostics = next(item for item in ui.get('popover') if item.proto.popover.label == '模型检测')
+    nested_keys = {getattr(item, 'key', None) for item in diagnostics}
+    prefix = 'node-model:demo:sft:generation'
+    assert prefix + ':discover' in nested_keys
+    assert prefix + ':test-features' in nested_keys
+    assert prefix + ':test' in nested_keys
+    assert prefix + ':manual:writer:alpha:vision' in nested_keys
+    assert prefix + ':apply-limits' in nested_keys
+    assert [item.label for item in diagnostics.get('tab')] == ['调用检测', '能力设置']
+    for key in (prefix + ':backend', prefix + ':model:writer', prefix + ':context:writer:alpha',
+                prefix + ':output:writer:alpha', 'node-model-confirm:demo:sft'):
+        assert key not in nested_keys
+    assert 'fixture-test-selection' not in ui.session_state
+
+
+def test_discovery_remains_available_after_clearing_model_without_reselecting_it():
+    ui = _ui()
+    model_key = 'node-model:demo:sft:generation:model:writer'
+    ui.selectbox(key=model_key).set_value(None).run()
+    assert not ui.exception
+    assert not ui.session_state['workflow-node-bindings:demo'].get('sft', {}).get('generation')
+    ui.button(key='node-model:demo:sft:generation:discover').click().run()
+    assert not ui.exception
+    assert ui.selectbox(key=model_key).options == ['alpha', 'beta']
+    assert ui.selectbox(key=model_key).value is None
+    assert not ui.session_state['workflow-node-bindings:demo'].get('sft', {}).get('generation')
+    assert 'fixture-test-selection' not in ui.session_state
 
 
 def test_new_selection_uses_public_limits_while_saved_limits_stay_unchanged():

@@ -12,10 +12,11 @@ def workflow_run_styles() -> str:
 .df-run-summary-title h3 {flex:1 1 auto;min-width:0;margin:0;padding:0;color:#172842;
   font-size:21px;line-height:1.4;font-weight:650;letter-spacing:-.3px;overflow-wrap:anywhere}
 .df-run-status {display:inline-flex;align-items:center;gap:6px;border-radius:6px;padding:3px 8px;
-  font-size:12px;font-weight:600;line-height:1.5;color:#376ca7;background:#edf5ff}
+  font-size:12px;font-weight:600;line-height:1.5;color:#376ca7;background:linear-gradient(180deg,#f2f8ff,#e8f2ff);
+  border:1px solid #d8e7f6;box-shadow:inset 0 1px 0 #ffffffc4,0 1px 2px #305f890a}
 .df-run-status::before {content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
-.df-run-status[data-status="completed"] {color:#18805f;background:#edf8f2}
-.df-run-status[data-status="failed"],.df-run-status[data-status="cancelled"] {color:#b34856;background:#fff2f3}
+.df-run-status[data-status="completed"] {color:#18805f;background:linear-gradient(180deg,#f1fbf6,#e6f6ee);border-color:#cfeadd}
+.df-run-status[data-status="failed"],.df-run-status[data-status="cancelled"] {color:#b34856;background:linear-gradient(180deg,#fff8f9,#ffedf0);border-color:#efd3d9}
 .df-run-stage-count {color:#63758b;font-size:12px;line-height:1.5;white-space:nowrap}
 .df-run-stage-count b {color:#47617e;font-weight:650;font-variant-numeric:tabular-nums}
 [data-testid="stMainBlockContainer"] :is([class*="st-key-workflow-run-layout-"],
@@ -123,21 +124,25 @@ def workflow_run_styles() -> str:
 [class*="st-key-flow_node_failed_"], [class*="st-key-flow_node_cancelled_"] {border-color:#f0c2c7;background:#fffafa}
 .df-run-inspector-head {display:flex;align-items:center;gap:11px;padding:3px 0 13px;border-bottom:1px solid #edf1f7}
 .df-run-inspector-head b {display:grid;place-items:center;width:36px;height:36px;border-radius:10px;
-  background:#eaf3ff;color:#2376db;font-size:17px}
+  background:linear-gradient(145deg,#f9fcff,#d5e8ff);border:1px solid #c7def7;
+  box-shadow:inset 0 1px 0 #fff,0 3px 6px #346f9f1c;color:#2376db;font-size:17px}
 .df-run-inspector-head strong {display:block;font-size:15px;color:#172842}
 .df-run-inspector-head small {display:block;margin-top:2px;font-size:12px;color:#74859e}
 .df-run-stat-grid {display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 22px;margin:12px 0}
 .df-run-stat {display:inline-flex;align-items:baseline;gap:7px;padding:0;border:0;background:transparent}
 .df-run-stat b {font-size:18px;color:#184b8e;line-height:1.2;font-variant-numeric:tabular-nums}
 .df-run-stat span {font-size:12px;color:#63758b}
-.df-run-config {display:grid;gap:0;margin:8px 0 0;border:0;border-radius:11px;overflow:hidden;background:#f4f7fc}
+.df-run-config {display:grid;gap:0;margin:8px 0 0;border:1px solid #dce6f2;border-radius:12px;overflow:hidden;
+  background:linear-gradient(140deg,#f1f6fc,#f8fbff);box-shadow:inset 0 1px 0 #fff,inset 0 2px 5px #38669405}
 .df-run-config div {display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:9px 11px;
   background:transparent;border-bottom:1px solid #e3eaf4;font-size:12px;line-height:1.6}
 .df-run-config div:last-child {border-bottom:none}
+.df-run-config div:nth-child(even) {background:#ffffff6b}
 .df-run-config span {flex:0 0 38%;color:#71829a}
 .df-run-config strong {flex:1;color:#263b59;text-align:right;font-weight:600;overflow-wrap:anywhere}
 .df-run-log {display:grid;gap:0;margin:0 0 16px;padding:3px 15px;
-  border:1px solid #e1eaf6;border-radius:12px;background:#fff}
+  border:1px solid #d8e5f3;border-radius:15px;background:linear-gradient(150deg,#fff,#f5f9ff);
+  box-shadow:inset 0 1px 0 #fff,0 2px 4px #2e5c8907,0 10px 24px -18px #3d6c9b38}
 .df-run-event {position:relative;display:grid;grid-template-columns:14px minmax(0,1fr);align-items:start;gap:10px;
   padding:14px 0;font-size:13px;color:#4d617e;line-height:1.6}
 .df-run-event:not(:last-child) {border-bottom:1px solid #edf2f8}
@@ -154,12 +159,14 @@ def workflow_run_styles() -> str:
 .df-run-event-sub {display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;margin-top:4px;
   color:#7b8ca3;overflow-wrap:anywhere;line-height:1.5}
 .df-run-event-sub b {display:inline-block;padding:2px 6px;border-radius:5px;background:#edf5ff;
-  color:#4373ad;font-size:12px;font-weight:650}
+  border:1px solid #dce9f7;box-shadow:inset 0 1px 0 #ffffffc4;color:#4373ad;font-size:12px;font-weight:650}
 .df-run-event-sub span {min-width:0;flex:1}
 .df-run-empty {padding:19px 14px;border:1px dashed #d7e4f3;border-radius:10px;background:#f9fcff;
   color:#74859d;font-size:13px;text-align:center}
 .df-run-quality-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px;margin:10px 0 16px}
-.df-run-quality-card {padding:15px;border:1px solid #e1e8f2;border-radius:14px;background:#fff;box-shadow:0 4px 16px #1a3e6d04}
+.df-run-quality-card {padding:15px;border:1px solid #d5e3f1;border-radius:15px;
+  background:radial-gradient(ellipse at 100% 0,#e4f2ff91,transparent 65%),linear-gradient(145deg,#fff,#f4f9ff);
+  box-shadow:var(--df-shadow-panel,0 2px 3px #31598208,0 12px 26px -18px #39689738,inset 0 1px 0 #fff)}
 .df-run-quality-card small {display:block;color:#697e9c;font-size:12px}
 .df-run-quality-card b {display:block;color:#1d5eab;font-size:23px;line-height:1.35;margin-top:5px}
 .df-run-quality-card span {display:block;color:#7b8ca1;font-size:12px;margin-top:2px}
@@ -169,24 +176,30 @@ def workflow_run_styles() -> str:
 [data-workflow-inspector-host="floating"]:has([class*="st-key-workflow-run-node-panel-"]) {
   height:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:visible!important;
 }
-[class*="st-key-workflow-run-node-panel-"][data-workflow-inspector="floating"] {
-  box-sizing:border-box;border:1px solid #cbdcf0;border-top:2px solid #2c7de2;border-radius:16px;
-  padding:0 18px 18px;background:#fff;box-shadow:0 20px 60px #152e501f,0 5px 15px #264e7010;
+[data-testid="stApp"] [class*="st-key-workflow-run-node-panel-"][data-workflow-inspector="floating"] {
+  box-sizing:border-box;border:1px solid #bdd4ed;border-top:2px solid #4d94e8;border-radius:19px;
+  padding:0 18px 18px;background:linear-gradient(155deg,#fcfeff 0%,#f5f9fff5 52%,#fffffffa 100%);
+  box-shadow:inset 0 1px 0 #fff,0 0 0 4px #ffffff8c,0 6px 14px -4px #284e782b,0 25px 65px -15px #244e804d;
+  backdrop-filter:blur(16px) saturate(1.12);
   overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b5c9e2 transparent;gap:14px;
 }
 [class*="st-key-workflow-run-node-panel-"][data-workflow-inspector="floating"]
   > [data-testid="stLayoutWrapper"]:has(> [class*="st-key-workflow-run-node-header-"]) {
-  position:sticky;top:0;z-index:2;background:#fff;
+  position:sticky;top:0;z-index:2;background:linear-gradient(180deg,#fcfeff,#f5f9ff);
 }
-[class*="st-key-workflow-run-node-header-"] {padding:14px 0 12px;border-bottom:1px solid #e3ebf5;gap:10px}
+[class*="st-key-workflow-run-node-header-"] {padding:14px 0 12px;border-bottom:1px solid #d9e5f2;box-shadow:0 1px 0 #fff;gap:10px}
 [class*="st-key-workflow-run-node-header-"] .df-run-inspector-head {padding:0;border:0}
 [class*="st-key-workflow-run-node-header-"] .df-run-inspector-head > b {flex:0 0 36px}
 [class*="st-key-workflow-run-node-header-"] .df-run-inspector-head > div {min-width:0;overflow-wrap:anywhere}
 [class*="st-key-workflow-run-node-header-"] .df-run-inspector-head strong {font-size:17px;line-height:1.4}
 [class*="st-key-workflow-run-node-header-"] .df-run-inspector-head small {font-size:13px;color:#60748d}
 [class*="st-key-workflow-run-node-header-"] button {min-height:38px;padding:5px 10px;
-  color:#47627f;border-color:#dce6f2;background:#f9fbfe}
-[class*="st-key-workflow-run-node-header-"] button:hover {background:#eef5ff;border-color:#a8c8ee;color:#185fad}
+  color:#3c5c80;border-color:#d0e0ef;background:linear-gradient(180deg,#fff,#f0f6fd);
+  box-shadow:inset 0 1px 0 #fff,0 2px 3px #315c850d;
+  transition:background .18s,box-shadow .18s,border-color .18s,transform .18s}
+[class*="st-key-workflow-run-node-header-"] button:hover {background:linear-gradient(180deg,#fff,#e8f3ff);border-color:#a8c8ee;color:#185fad;
+  box-shadow:inset 0 1px 0 #fff,0 4px 9px #3d78b21a;transform:translateY(-1px)}
+[class*="st-key-workflow-run-node-header-"] button:active {transform:translateY(1px);box-shadow:inset 0 2px 4px #315e8b14}
 [class*="st-key-workflow-run-node-panel-"] [data-testid="stMarkdownContainer"] p {font-size:14px;line-height:1.6}
 [class*="st-key-workflow-run-node-panel-"] [data-testid="stCaptionContainer"] p {font-size:12px;line-height:1.6;color:#60748d}
 [class*="st-key-workflow-run-node-panel-"] .df-run-reader-heading {margin:0}
@@ -196,7 +209,10 @@ def workflow_run_styles() -> str:
 [class*="st-key-workflow-run-node-panel-"] .df-run-config div {font-size:13px;gap:12px;padding:9px 11px}
 [class*="st-key-workflow-run-node-panel-"] .df-run-config span {color:#60748d}
 [class*="st-key-workflow-run-node-panel-"] .df-run-stat-grid {margin:0}
-@media(prefers-reduced-motion:reduce) {[class*="st-key-flow_node_"] {transition:none} [class*="st-key-flow_node_"]:hover {transform:none}}
+@media(prefers-reduced-motion:reduce) {
+  [class*="st-key-flow_node_"],[class*="st-key-workflow-run-node-header-"] button {transition:none}
+  [class*="st-key-flow_node_"]:hover,[class*="st-key-workflow-run-node-header-"] button:is(:hover,:active) {transform:none}
+}
 @media(max-width:900px) {.df-run-event-head {flex-wrap:wrap}
   .df-run-lane {flex-wrap:wrap}
   .df-dag-canvas {margin-left:0}}

@@ -1170,21 +1170,26 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                      draft_application: CreationDraftApplication | None = None,
                      backend_application=None, input_cache=None, manual_application=None, document_preview=None,
                      knowledge_application=None, prompt_library=None):
-    page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL")
+    page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL", art_kind="hero")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
+    with st.container(key="workbench-entry-bar"):
+        mode_column, journey_column = (st.columns([1.6, 3.2], gap="medium", vertical_alignment="center")
+                                        if manual_application is not None else (None, st.container()))
     if manual_application is not None:
         creation_key = f"workflow-creation-mode:{ws}"
         if st.session_state.get(creation_key) not in {"自动生成", "人工制作图文"}:
             st.session_state[creation_key] = "自动生成"
-        creation_mode = st.segmented_control(
-            "制作方式", ("自动生成", "人工制作图文"), default=None, key=creation_key,
-        )
+        with mode_column:
+            creation_mode = st.segmented_control(
+                "制作方式", ("自动生成", "人工制作图文"), default=None, key=creation_key,
+                label_visibility="collapsed",
+            )
         if creation_mode == "人工制作图文":
             from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
             render_manual_datasets(manual_application, ws, show_title=False)
             return
-    st.html(
+    journey_column.html(
         '<div class="df-wizard-steps">'
         '<div class="df-wizard-step active"><b>1</b><span><strong>配置本次任务</strong><small>来源、目标与节点模型</small></span></div>'
         '<i></i><div class="df-wizard-step"><b>2</b><span><strong>自动生成与质检</strong><small>实时查看阶段与结果</small></span></div>'
@@ -1233,6 +1238,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         default=None, key=source_key, on_change=_change_source_mode, args=(ws, source_key),
         help="按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。",
     ) or "文档资料"
+    # The first action belongs before the canvas. Keep its original callback
+    # and draft keys; the source details below remain available for edits.
+    upload_slot = (st.container(key="workbench-upload-entry")
+                   if source_mode in {"文档资料", "Agent 上下文"} else None)
     # Reserve the visual workbench near the source switch. Populate it only
     # after the existing target and model calculations below; widget ownership,
     # callbacks and draft restoration keep their original execution order.
@@ -1506,9 +1515,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 upload_types = sorted(e[1:] for e in source_extensions)
                 upload_label = ("导入文档或图片" if source_mode == "文档资料"
                                 else "导入 JSON / JSONL 上下文记录")
-                uploaded = st.file_uploader(upload_label, type=upload_types,
-                                            accept_multiple_files=True, max_upload_size=50,
-                                            key=f"workflow-upload:{ws}:{source_mode}", **upload_options)
+                with upload_slot if upload_slot is not None else nullcontext():
+                    uploaded = st.file_uploader(upload_label, type=upload_types,
+                                                accept_multiple_files=True, max_upload_size=50,
+                                                help="选择文件或拖入此处。单文件最多 50 MiB，本次来源合计最多 200 MiB。",
+                                                key=f"workflow-upload:{ws}:{source_mode}", **upload_options)
+                    st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
                 if input_cache is not None:
                     st.caption("拖入文件即保存并选中，关闭或重启后仍可使用。")
                     # The callback already persisted and selected these uploads.
@@ -1538,7 +1550,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 brief = _draft_brief("补充生成要求（可选）",
                                      placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                      key=f"workflow-source-brief:{ws}:{source_mode}")
-                st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
         if preview_in_input:
             from lib.presentation.streamlit.document_preview import render_document_preview
             with source_previews, st.container(border=True, key="workbench-source-preview"):

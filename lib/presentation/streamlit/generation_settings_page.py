@@ -6,9 +6,20 @@ import html
 import streamlit as st
 
 from lib.application.generation_settings_service import GenerationSettingsApplication
-from lib.presentation.streamlit.i18n import translate_label
+from lib.presentation.streamlit.i18n import language_code, translate_label
 from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 from lib.presentation.streamlit.shared import page_header, section_heading
+
+
+_WORKFLOW_STYLE_DRAFT = "workflow-default-sft-style-value"
+_WORKFLOW_STYLE_BASELINE = "workflow-default-sft-style-saved"
+_WORKFLOW_STYLES = ("separated", "drop")
+
+
+def _remember_workflow_style(widget_key: str) -> None:
+    value = st.session_state.get(widget_key)
+    if value in _WORKFLOW_STYLES:
+        st.session_state[_WORKFLOW_STYLE_DRAFT] = value
 
 
 def render_workflow_defaults(settings: GenerationSettingsApplication) -> None:
@@ -24,15 +35,28 @@ def render_workflow_defaults(settings: GenerationSettingsApplication) -> None:
         # Match the effective workflow default: command-only styles fall back
         # to separate fields when creating an automatic workflow.
         saved_style = "drop" if summary["cot_style"] == "drop" else "separated"
+        # The frontend caches a selected option's formatted text. Recreate only
+        # the display widget on language changes; keep its semantic draft apart
+        # from widget state so cleanup cannot discard an unsaved selection.
+        language = language_code(st.session_state.get("ui_language", "zh"))
+        style_key = f"workflow-default-sft-style:{language}"
+        draft = st.session_state.get(
+            _WORKFLOW_STYLE_DRAFT, st.session_state.get("workflow-default-sft-style", saved_style))
+        if draft not in _WORKFLOW_STYLES or draft == st.session_state.get(_WORKFLOW_STYLE_BASELINE, saved_style):
+            draft = saved_style
+        st.session_state[_WORKFLOW_STYLE_DRAFT] = draft
+        st.session_state[_WORKFLOW_STYLE_BASELINE] = saved_style
+        if st.session_state.get(style_key) != draft:
+            st.session_state[style_key] = draft
         with st.container(key="settings-default-format"):
             format_col, action_col = st.columns([3, 1.15], gap="medium", vertical_alignment="bottom")
             with format_col:
                 style = st.selectbox(
-                    "SFT 默认训练文件格式", ("separated", "drop"),
-                    index=0 if saved_style == "separated" else 1,
+                    "SFT 默认训练文件格式", _WORKFLOW_STYLES,
                     format_func=lambda value: translate_label(
                         "分字段保留推理" if value == "separated" else "只保留答案",
-                        st.session_state.get("ui_language", "zh")), key="workflow-default-sft-style")
+                        language), key=style_key, on_change=_remember_workflow_style,
+                    args=(style_key,))
             with action_col:
                 save = st.button("保存工作流默认值", key="workflow-defaults-save", type="primary", width="stretch")
         if save:
@@ -46,6 +70,7 @@ def render_workflow_defaults(settings: GenerationSettingsApplication) -> None:
                     correction_threshold=summary["correction_threshold"],
                     correction_tagger=summary["correction_tagger"], cot_style=style)
                 saved_style = style
+                st.session_state[_WORKFLOW_STYLE_BASELINE] = style
                 st.toast("工作流默认值已保存，已创建的任务保持原配置。")
             except (OSError, ValueError):
                 st.error("默认值未能保存，请检查配置文件后重试。")

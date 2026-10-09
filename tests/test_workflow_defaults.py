@@ -39,7 +39,7 @@ def test_normal_defaults_do_not_expose_command_sampling_and_preserve_it_on_save(
     before = ui.session_state["summary"]
     assert not ui.slider and not ui.number_input
     assert len(ui.selectbox) == 1
-    ui.selectbox(key="workflow-default-sft-style").set_value("drop").run()
+    ui.selectbox(key="workflow-default-sft-style:zh").set_value("drop").run()
     ui.button(key="workflow-defaults-save").click().run()
     assert not ui.exception
     after = ui.session_state["summary"]
@@ -53,9 +53,9 @@ def test_workflow_default_status_tracks_unsaved_changes_and_successful_save():
     assert not ui.exception
     before = ui.session_state["summary"]
     assert 'data-state="saved"' in _format_note(ui)
-    current = ui.selectbox(key="workflow-default-sft-style").value
+    current = ui.selectbox(key="workflow-default-sft-style:zh").value
     changed = "drop" if current == "separated" else "separated"
-    ui.selectbox(key="workflow-default-sft-style").set_value(changed).run()
+    ui.selectbox(key="workflow-default-sft-style:zh").set_value(changed).run()
     assert not ui.exception
     assert 'data-state="changed"' in _format_note(ui)
     assert "未保存修改" in _format_note(ui)
@@ -72,8 +72,8 @@ def test_workflow_default_status_tracks_unsaved_changes_and_successful_save():
 def test_failed_default_save_retains_unsaved_status_and_current_preferences():
     ui = _defaults_ui()
     before = ui.session_state["summary"]
-    current = ui.selectbox(key="workflow-default-sft-style").value
-    ui.selectbox(key="workflow-default-sft-style").set_value(
+    current = ui.selectbox(key="workflow-default-sft-style:zh").value
+    ui.selectbox(key="workflow-default-sft-style:zh").set_value(
         "drop" if current == "separated" else "separated").run()
     ui.session_state["fail-save"] = True
     ui.button(key="workflow-defaults-save").click().run()
@@ -88,9 +88,9 @@ def test_english_default_status_and_format_description_are_localized():
     ui = _defaults_ui("en")
     assert not ui.exception
     assert "Current default" in _format_note(ui)
-    current = ui.selectbox(key="workflow-default-sft-style").value
+    current = ui.selectbox(key="workflow-default-sft-style:en").value
     changed = "drop" if current == "separated" else "separated"
-    ui.selectbox(key="workflow-default-sft-style").set_value(changed).run()
+    ui.selectbox(key="workflow-default-sft-style:en").set_value(changed).run()
     assert not ui.exception
     assert "Unsaved change" in _format_note(ui)
     expected = ("Training files keep only the final answer." if changed == "drop" else

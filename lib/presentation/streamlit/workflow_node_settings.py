@@ -16,7 +16,7 @@ from lib.model_protocols import API_FORMATS
 from lib.presentation.streamlit.i18n import UntranslatedText
 from lib.presentation.streamlit.workflow_model_capabilities import (
     discovered_choices, model_info, render_model_capabilities,
-    render_model_discovery, suggested_tokens)
+    suggested_tokens)
 
 
 _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
@@ -510,16 +510,12 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             st.session_state[prefix + ":backend"] = None
         if prefix + ":backend" not in st.session_state:
             st.session_state[prefix + ":backend"] = binding.get("backend") if binding.get("backend") in names else None
-        service_column, discovery_column = st.columns([3, 1], gap="small", vertical_alignment="bottom")
+        service_column, model_column = st.columns([2, 3], gap="small", vertical_alignment="bottom")
         with service_column:
             backend = st.selectbox("模型服务", names, index=None, key=prefix + ":backend",
                                    placeholder="选择模型服务",
                                    on_change=_save_model_selection, args=(workspace, node, role, backend_application),
-                                   format_func=lambda name: name + " · " + _API_FORMAT_LABELS.get(
-                                       endpoints[name].get("api_format", "chat"), "Chat Completions"))
-        if backend is not None:
-            with discovery_column:
-                endpoints[backend] = render_model_discovery(backend_application, backend, endpoints[backend], key=prefix + ":discover")
+                                   format_func=lambda name: UntranslatedText(name))
         if backend is None:
             if binding.get("backend") in endpoints:
                 bindings.setdefault(node, {}).pop(role, None)
@@ -532,10 +528,11 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             st.session_state[model_key] = binding.get("model") if binding.get("backend") == backend else None
         # A non-empty default index makes Streamlit deserialize a clear action
         # back to that default. Restore through state so None remains explicit.
-        model = st.selectbox("模型", models, index=None,
-                             accept_new_options=True, key=model_key,
-                             on_change=_save_model_selection, args=(workspace, node, role, backend_application),
-                             placeholder="选择或输入模型名")
+        with model_column:
+            model = st.selectbox("模型", models, index=None,
+                                 accept_new_options=True, key=model_key,
+                                 on_change=_save_model_selection, args=(workspace, node, role, backend_application),
+                                 placeholder="选择或输入模型名")
         if model:
             if (len(model) > 200 or not model.strip() or any(ord(character) < 32 for character in model)):
                 st.warning("模型名称无效，请填写不超过 200 个字符的模型名。")
@@ -574,10 +571,13 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                 "max_output_tokens": int(output_tokens),
             }
             render_model_capabilities(backend_application, backend, model, info, prefix=prefix,
+                                      endpoint=endpoints[backend],
                                       save_selection=_save_model_selection,
                                       save_args=(workspace, node, role, backend_application))
         else:
             bindings.setdefault(node, {}).pop(role, None)
+            render_model_capabilities(backend_application, backend, None, {}, prefix=prefix,
+                                      endpoint=endpoints[backend])
     _persist_bindings(workspace, bindings)
     copies = _missing_role_copies(node, workspace, bindings, endpoints)
     if copies:
@@ -588,7 +588,6 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                   width="stretch")
         st.caption(UntranslatedText("、".join(targets)))
     st.caption("同一模型可用于多个节点，也可同时用于生成和评审；各角色的参数分别保存。")
-    st.caption("模型和 token 上限随草稿保存在本机；默认上下文 131,072、单次输出 32,768 tokens。开始运行后，本次配置固定。")
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()
