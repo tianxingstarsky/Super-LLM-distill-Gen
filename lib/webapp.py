@@ -521,15 +521,27 @@ def page_data_management():
 
 
 def page_task_manager():
-    page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。", variant="hub")
-    area = st.segmented_control(
-        "任务视图", ("数据工作流", "命令管线", "运行日志"),
-        default="数据工作流", key=f"task-view:{st.session_state['ws']}",
-        format_func=lambda value: translate_label(
-            {"命令管线": "高级单项工具", "运行日志": "命令日志"}.get(value, value),
-            st.session_state.get("ui_language", "zh")),
-        label_visibility="collapsed",
-    )
+    from lib.bootstrap.creation_drafts import creation_draft_application
+    from lib.presentation.streamlit.work_drafts import render_work_drafts
+    from lib.presentation.streamlit.task_management_styles import task_management_styles
+
+    page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。",
+                art_kind="hero")
+    st.html(task_management_styles())
+    draft_application = creation_draft_application(_ws_out())
+    with st.container(key="task-manager-navigation"):
+        modes, drafts = st.columns([4, 1], gap="small", vertical_alignment="center")
+        with modes:
+            area = st.segmented_control(
+                "任务视图", ("数据工作流", "命令管线", "运行日志"),
+                default="数据工作流", key=f"task-view:{st.session_state['ws']}",
+                format_func=lambda value: translate_label(
+                    {"命令管线": "高级单项工具", "运行日志": "命令日志"}.get(value, value),
+                    st.session_state.get("ui_language", "zh")),
+                label_visibility="collapsed",
+            )
+        with drafts, st.popover("工作草稿", use_container_width=True):
+            render_work_drafts(draft_application, st.session_state["ws"], _select_page)
     if area == "运行日志":
         page_monitor(show_title=False)
     elif area == "命令管线":
@@ -538,15 +550,12 @@ def page_task_manager():
             page_prefs(show_title=False)
     else:
         from lib.bootstrap.workflows import workflow_application
-        from lib.bootstrap.creation_drafts import creation_draft_application
-        from lib.presentation.streamlit.work_drafts import render_work_drafts
         from lib.presentation.streamlit.task_management_page import render_task_management
         application = workflow_application(ROOT, _ws_out())
-        render_work_drafts(creation_draft_application(_ws_out()), st.session_state["ws"], _select_page)
         render_task_management(
             application, st.session_state["ws"], _begin,
             lambda: _select_page("自动工作流"),
-            draft_application=creation_draft_application(_ws_out()),
+            draft_application=draft_application,
         )
 
 

@@ -67,11 +67,16 @@ body{margin:0;font:14px "Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-se
 .footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px 16px;min-height:42px;padding:10px 14px;background:#fff;color:#586f8b;font-size:12px;border-top:1px solid #e2ebf5;line-height:1.5}
 #lineage{flex:1 1 270px}#overview{white-space:nowrap}#scale{min-width:44px;padding:2px 7px;border:1px solid #e1eaf4;background:#f5f8fc;border-radius:6px;text-align:center;color:#42648b;font-variant-numeric:tabular-nums;font-weight:600}
 #lineage[data-preview="true"]{color:#345d8c;font-weight:500}
-.legend{justify-content:flex-start;gap:18px;border-top:0;padding-top:0}.legend span{display:inline-flex;align-items:center;gap:6px}.legend i{display:inline-block;width:6px;height:6px;background:#1db181;border-radius:50%}
+.legend{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:14px}.legend span{display:inline-flex;align-items:center;gap:6px}.legend i{display:inline-block;width:6px;height:6px;background:#1db181;border-radius:50%}
+.shell[data-live="true"] .toolbar #hint{display:none}
+.shell[data-live="true"] .toolbar{padding:10px 12px}
+.shell[data-live="true"] .footer{gap:8px 14px;padding:9px 12px}
+.shell[data-live="true"] .copy strong{font-size:18px;line-height:20px;max-height:40px}
+.shell[data-live="true"] .copy small{font-size:15px;line-height:18px;max-height:36px}
 @keyframes edge-flow{to{stroke-dashoffset:-28}}
 @media(max-width:720px){.toolbar{gap:9px;padding:10px}.canvas-tools{gap:5px;flex-wrap:wrap;max-width:100%}.toolbar button{padding:0 9px;font-size:12px;height:44px}#plus,#minus{width:44px}#focus{margin-left:0}.toolbar #hint{max-width:none;flex-basis:100%;text-align:left;margin:0}.toolbar select{flex:1;min-width:120px;height:44px}.footer{font-size:12px;padding:10px}#lineage{flex-basis:100%}}
 @media(prefers-reduced-motion:reduce){.edge-flow{animation:none}.node,.toolbar button,.track i,.edge{transition:none}}
-</style></head><body><div class="shell"><div class="toolbar"><div class="canvas-tools"><button id="minus">−</button><button id="plus">+</button><button id="reset">100%</button><button id="fit"></button><button id="focus"></button></div><select id="node-picker"></select><span id="hint"></span></div><div class="viewport" id="view"><div class="space" id="space"><div class="canvas" id="canvas"></div></div></div><div class="footer"><span id="lineage"></span><span id="overview"></span><span id="scale"></span></div><div class="footer legend" id="legend" hidden></div></div>
+</style></head><body><div class="shell"><div class="toolbar"><div class="canvas-tools"><button id="minus">−</button><button id="plus">+</button><button id="reset">100%</button><button id="fit"></button><button id="focus"></button></div><select id="node-picker"></select><span id="hint"></span></div><div class="viewport" id="view"><div class="space" id="space"><div class="canvas" id="canvas"></div></div></div><div class="footer"><span id="lineage"></span><span id="overview"></span><span id="scale"></span><div class="legend" id="legend" hidden></div></div></div>
 <script>
 const post=(type,data={})=>parent.postMessage({isStreamlitMessage:true,type,...data},"*");
 const view=document.getElementById("view"), canvas=document.getElementById("canvas"), space=document.getElementById("space");
@@ -270,11 +275,15 @@ function fit(readable=readableFit){
  readableFit=readable;
  // Width drives the fit; using the current height here would feed each
  // ResizeObserver notification back into another viewport size change.
- const padding=12,maxHeight=spec.expanded?600:560;
+ const padding=spec.live?32:12,maxHeight=spec.expanded?600:560;
  // Long workflows open with readable labels and horizontal panning. The
  // explicit Fit control still offers the complete overview at a smaller scale.
- scale=Math.max(readable ? (spec.expanded ? .82 : .68) : .35,Math.min(1,(view.clientWidth-padding)/spec.width,(maxHeight-padding)/spec.height));
- view.style.height=Math.ceil(Math.max(spec.expanded?420:0,spec.height*scale+padding))+"px";
+ const readableMinimum=spec.live&&view.clientWidth>=720?.68:spec.expanded?.82:.68;
+ scale=Math.max(readable?readableMinimum:.35,Math.min(1,(view.clientWidth-padding)/spec.width,(maxHeight-padding)/spec.height));
+ // Running graphs follow their content; the editing canvas keeps its larger
+ // workspace. Do not let a short run reserve an empty editing-sized panel.
+ const minimumHeight=spec.live?260:spec.expanded?420:0;
+ view.style.height=Math.ceil(Math.max(minimumHeight,spec.height*scale+padding))+"px";
  resize();
 }
 function zoom(value,x=view.clientWidth/2,y=view.clientHeight/2){if(!spec)return;const worldX=(view.scrollLeft+x-canvas.offsetLeft)/scale,worldY=(view.scrollTop+y-canvas.offsetTop)/scale;fitMode=false;scale=Math.max(.35,Math.min(1.8,value));resize();view.scrollLeft=worldX*scale+canvas.offsetLeft-x;view.scrollTop=worldY*scale+canvas.offsetTop-y}
@@ -291,6 +300,7 @@ function selectedIsVisible(){return nodeIsVisible(spec?.selected)}
 function moveFocus(n,key){const right=key==="ArrowRight",vertical=key==="ArrowUp"||key==="ArrowDown",sign=right||key==="ArrowDown"?1:-1;const candidates=spec.nodes.filter(other=>other.id!==n.id).map(other=>{const dx=other.x-n.x,dy=other.y-n.y;return{other,forward:(vertical?dy:dx)*sign,cross:Math.abs(vertical?dx:dy)}}).filter(item=>item.forward>1).sort((a,b)=>(a.forward+2*a.cross)-(b.forward+2*b.cross));const target=key==="Home"?spec.nodes[0]:key==="End"?spec.nodes[spec.nodes.length-1]:candidates[0]?.other;if(target){const button=[...canvas.querySelectorAll("button")].find(b=>b.dataset.node===target.id);button?.focus({preventScroll:true});if(!nodeIsVisible(target.id))locate({smooth:true,node:target.id})}}
 function chooseNode(node){post("streamlit:setComponentValue",{dataType:"json",value:{node,serial:Date.now()+"-"+(++serial)}})}
 function render(next){const priorFocus=document.activeElement?.dataset?.node;if(spec?.inspector?.open&&next.inspector&&!next.inspector.open)restoreNodeFocus=true;spec=next;indexRelations();if(!incoming.has(hoveredNode))hoveredNode="";if(!incoming.has(focusedNode))focusedNode="";document.documentElement.lang=spec.language==="en"?"en":"zh-CN";canvas.style.width=spec.width+"px";canvas.style.height=spec.height+"px";canvas.replaceChildren();
+ document.querySelector(".shell").dataset.live=String(Boolean(spec.live));view.title=spec.labels.hint;
  const ns="http://www.w3.org/2000/svg",svg=document.createElementNS(ns,"svg");svg.classList.add("connections");svg.setAttribute("width",spec.width);svg.setAttribute("height",spec.height);canvas.append(svg);
  const byId=Object.fromEntries(spec.nodes.map(n=>[n.id,n]));
  for(const [a,b] of spec.edges){const from=byId[a],to=byId[b],x=from.x+218,y=from.y+39,ex=to.x,ey=to.y+39,path=document.createElementNS(ns,"path");const bypass=b==="package"&&ex-x>300,rail=from.y===Math.min(...spec.nodes.filter(n=>n.x===from.x).map(n=>n.y))?16:spec.height-16;path.setAttribute("d",bypass?`M ${x} ${y} C ${x+24} ${y},${x+24} ${rail},${x+42} ${rail} L ${ex-35} ${rail} C ${ex-18} ${rail},${ex-18} ${ey},${ex-7} ${ey}`:`M ${x} ${y} C ${x+30} ${y},${ex-30} ${ey},${ex-7} ${ey}`);path.dataset.from=a;path.dataset.to=b;path.classList.add("edge");path.setAttribute("fill","none");path.setAttribute("stroke",to.status==="running"?"#3a88e2":from.status==="completed"&&to.status==="completed"?"#56ac94":"#b5c6db");path.setAttribute("stroke-width",a===spec.selected||b===spec.selected?"3":"2");if(a===spec.selected||b===spec.selected)path.setAttribute("stroke","#247ae4");svg.append(path);if(spec.live&&to.status==="running"){const flow=path.cloneNode();flow.classList.add("edge-flow");flow.setAttribute("stroke","#1c68c5");flow.setAttribute("stroke-width","2.4");svg.append(flow)}const arrow=document.createElementNS(ns,"path");arrow.setAttribute("d",`M ${ex-8} ${ey-4} L ${ex-1} ${ey} L ${ex-8} ${ey+4}`);arrow.dataset.from=a;arrow.dataset.to=b;arrow.classList.add("edge","edge-arrow");arrow.setAttribute("fill","none");arrow.setAttribute("stroke-width","1.8");arrow.setAttribute("stroke",path.getAttribute("stroke"));svg.append(arrow)}

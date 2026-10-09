@@ -34,6 +34,8 @@ SCENARIOS = (
     "consumed_cursor_receipt_is_exact_and_retries_are_throttled_without_replay",
     "receipt_does_not_lock_selection_and_uses_the_accepted_selection_epoch",
     "empty_terminal_delta_completes_and_invalid_cursors_never_get_receipts",
+    "reader_height_override_restores_default_without_touching_pinned_content",
+    "reader_height_changes_preserve_delta_prefix_request_pin_and_receipts",
 )
 
 

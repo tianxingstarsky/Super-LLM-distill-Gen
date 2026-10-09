@@ -2,6 +2,7 @@
 from pathlib import Path
 from itertools import combinations
 import json
+import re
 import shutil
 import subprocess
 import pytest
@@ -81,9 +82,12 @@ with patch.object(canvas, '_canvas', lambda **kw: st.session_state.get('event'))
     assert ui.session_state['canvas-open:live-canvas:run'] is True
 
 
-def _inspector_app(*, live=False, expanded=False):
+def _inspector_app(*, live=False, expanded=False, reveal_target_key=None):
     from streamlit.testing.v1 import AppTest
 
+    reveal_options = {'reveal_key': 'fixture-reveal'}
+    if reveal_target_key is not None:
+        reveal_options['reveal_target_key'] = reveal_target_key
     script = f'''
 from copy import deepcopy
 import streamlit as st
@@ -102,7 +106,8 @@ def component(**kwargs):
 with patch.object(canvas, '_canvas', component):
     canvas.render_canvas(spec, 'selected-node', key='fixture-canvas',
                          follow_key={'workflow-follow:fixture' if live else None!r},
-                         inspector_key='fixture-inspector', expanded={expanded!r})
+                         inspector_key='fixture-inspector', expanded={expanded!r},
+                         **{reveal_options!r})
 '''
     return AppTest.from_string(script).run()
 
@@ -186,4 +191,81 @@ def test_invalid_close_event_does_not_consume_or_change_node_state(event):
     assert ui.session_state['selected-node'] == 'sft'
     assert ui.session_state['canvas-pause:workflow-follow:fixture'] is False
     assert ui.session_state['canvas-event:fixture-canvas'] == 1
+    _assert_node_drafts_preserved(ui)
+
+
+def test_runtime_panel_selectors_are_safe_stable_and_distinct_for_arbitrary_run_ids():
+    from lib.presentation.streamlit.workflow_page import _run_panel_keys
+
+    run_ids = ('run:one', 'run/one', 'run-one', '运行 一', 'run.one', 'run_one', '', '☷/节点:1')
+    seen = set()
+    for run_id in run_ids:
+        keys = _run_panel_keys(run_id)
+        assert keys == _run_panel_keys(run_id), 'refreshes must target the same mounted native panels'
+        assert set(keys) == {'canvas', 'node', 'header'}
+        assert len(set(keys.values())) == 3
+        assert all(re.fullmatch(r'[A-Za-z0-9_-]+', value) for value in keys.values())
+        assert not seen.intersection(keys.values()), 'distinct run IDs must not alias after selector sanitization'
+        seen.update(keys.values())
+
+
+@pytest.mark.parametrize('target_key', [None, 'workflow-run-canvas-runtime-hash'])
+def test_reveal_uses_the_default_or_custom_runtime_canvas_target_without_changing_the_node(target_key):
+    ui = _inspector_app(live=True, expanded=True, reveal_target_key=target_key)
+    ui.session_state['selected-node'] = 'sft'
+    ui.session_state['canvas-open:fixture-canvas'] = True
+    ui.session_state['canvas-wide:fixture-canvas'] = True
+    ui.session_state['canvas-pause:workflow-follow:fixture'] = False
+    ui.session_state['fixture-reveal'] = {'node': 'sft', 'serial': 1}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['captured-spec']['reveal'] == {
+        'node': 'sft', 'serial': 1, 'key': target_key or 'workbench-canvas-panel'}
+    assert ui.session_state['captured-spec']['inspector'] == {
+        'key': 'fixture-inspector', 'open': True, 'wide': True}
+    assert ui.session_state['captured-spec']['expanded'] is True
+    ui.run()
+    assert not ui.exception and ui.session_state['fixture-reveal'] == {'node': 'sft', 'serial': 1}
+    assert ui.session_state['selected-node'] == 'sft'
+    assert ui.session_state['canvas-pause:workflow-follow:fixture'] is False
+    _assert_node_drafts_preserved(ui)
+
+
+@pytest.mark.parametrize('outcome', ['completed', 'cancelled'])
+@pytest.mark.parametrize('request_serial,receipt_serial,accepted', [
+    (1, 1, True),
+    (1, True, False),
+    (1, 1.0, False),
+    (1, '1', False),
+    (1, 0, False),
+    ('1', '1', True),
+    ('1', 1, False),
+])
+def test_reveal_receipt_requires_the_exact_nonce_type_and_preserves_live_inspector_state(
+        request_serial, receipt_serial, accepted, outcome):
+    ui = _inspector_app(live=True, expanded=True,
+                        reveal_target_key='workflow-run-canvas-runtime-hash')
+    request = {'node': 'sft', 'serial': request_serial}
+    ui.session_state['selected-node'] = 'sft'
+    ui.session_state['canvas-open:fixture-canvas'] = True
+    ui.session_state['canvas-wide:fixture-canvas'] = True
+    ui.session_state['canvas-pause:workflow-follow:fixture'] = False
+    ui.session_state['fixture-reveal'] = request
+    ui.session_state['event'] = {'action': 'reveal', 'node': 'sft', 'request_serial': receipt_serial,
+                                 'outcome': outcome, 'serial': 'bridge-ack'}
+    ui.run()
+    assert not ui.exception
+    if accepted:
+        assert 'fixture-reveal' not in ui.session_state
+        ui.run()
+        assert not ui.exception and 'reveal' not in ui.session_state['captured-spec']
+    else:
+        assert ui.session_state['fixture-reveal'] == request
+        assert ui.session_state['captured-spec']['reveal'] == {
+            **request, 'key': 'workflow-run-canvas-runtime-hash'}
+    assert ui.session_state['selected-node'] == 'sft'
+    assert ui.session_state['canvas-open:fixture-canvas'] is True
+    assert ui.session_state['canvas-wide:fixture-canvas'] is True
+    assert ui.session_state['canvas-pause:workflow-follow:fixture'] is False
+    assert 'canvas-event:fixture-canvas' not in ui.session_state
     _assert_node_drafts_preserved(ui)

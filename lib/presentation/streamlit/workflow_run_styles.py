@@ -7,15 +7,40 @@ def workflow_run_styles() -> str:
 .df-run-meta {display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:0 0 9px;
   color:#63758b;font-size:12px;line-height:1.5}
 .df-run-meta b {color:#47617e;font-weight:650}.df-run-meta i {color:#b4c0ce;font-style:normal}
-.df-run-overview {display:flex;flex-wrap:wrap;align-items:center;gap:0;padding:14px 7px;margin:4px 0 17px;
-  border:1px solid #e1e8f2;border-radius:14px;background:#fff}
-.df-run-overview .df-run-pill {display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
-  background:transparent;border:0;border-right:1px solid #e5ebf3;border-radius:0;color:#526780;font-size:13px;font-weight:600}
-.df-run-overview .df-run-pill:last-child {border-right:0}
-.df-run-overview .df-run-pill strong {color:#1769d7;font-weight:750}
-.df-run-overview .df-run-pill[data-status="completed"] strong {color:#16815c}
-.df-run-overview .df-run-pill[data-status="failed"] strong,
-.df-run-overview .df-run-pill[data-status="cancelled"] strong {color:#bc4650}
+.df-run-summary {margin:0 0 3px}
+.df-run-summary-title {display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 5px}
+.df-run-summary-title h3 {flex:1 1 auto;min-width:0;margin:0;padding:0;color:#172842;
+  font-size:21px;line-height:1.4;font-weight:650;letter-spacing:-.3px;overflow-wrap:anywhere}
+.df-run-status {display:inline-flex;align-items:center;gap:6px;border-radius:6px;padding:3px 8px;
+  font-size:12px;font-weight:600;line-height:1.5;color:#376ca7;background:#edf5ff}
+.df-run-status::before {content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.df-run-status[data-status="completed"] {color:#18805f;background:#edf8f2}
+.df-run-status[data-status="failed"],.df-run-status[data-status="cancelled"] {color:#b34856;background:#fff2f3}
+.df-run-stage-count {color:#63758b;font-size:12px;line-height:1.5;white-space:nowrap}
+.df-run-stage-count b {color:#47617e;font-weight:650;font-variant-numeric:tabular-nums}
+[data-testid="stMainBlockContainer"] :is([class*="st-key-workflow-run-layout-"],
+  [class*="st-key-workflow-run-canvas-"],[class*="st-key-workflow-run-actions-"],
+  [class*="st-key-workflow-run-input-statistics-"])[data-testid="stVerticalBlock"] {
+  border:0;border-radius:0;padding:0;background:transparent;box-shadow:none;
+}
+[class*="st-key-workflow-run-canvas-toolbar-"] .df-run-section {margin:0}
+[class*="st-key-workflow-run-canvas-toolbar-"] .df-run-section small {margin-top:3px}
+:is([class*="st-key-workflow-run-canvas-toolbar-"],
+    [class*="st-key-workflow-run-canvas-toolbar-"] > [data-testid="stLayoutWrapper"])
+    > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+  flex:1 1 0!important;width:auto!important;min-width:0!important;
+}
+:is([class*="st-key-workflow-run-canvas-toolbar-"],
+    [class*="st-key-workflow-run-canvas-toolbar-"] > [data-testid="stLayoutWrapper"])
+    > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+  flex:0 0 180px!important;width:180px!important;max-width:180px;min-width:0!important;
+}
+[class*="st-key-workflow-run-actions-"] {max-width:210px;margin-left:auto!important;width:100%}
+[class*="st-key-workflow-run-actions-"]:has(> [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]) {max-width:422px}
+.df-run-input-summary {display:flex;align-items:baseline;flex-wrap:wrap;gap:7px 20px;margin:0;padding:0}
+.df-run-input-summary > span {display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap;line-height:1.5}
+.df-run-input-summary b {color:#345778;font-size:15px;font-weight:650;font-variant-numeric:tabular-nums}
+.df-run-input-summary small {color:#63758b;font-size:12px}
 .df-run-section {display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:3px 0 12px}
 .df-run-section strong {display:block;color:#172842;font-size:17px;letter-spacing:.01em}
 .df-run-section small {display:block;color:#5c708a;font-size:13px;line-height:1.6;margin-top:5px}
@@ -101,10 +126,10 @@ def workflow_run_styles() -> str:
   background:#eaf3ff;color:#2376db;font-size:17px}
 .df-run-inspector-head strong {display:block;font-size:15px;color:#172842}
 .df-run-inspector-head small {display:block;margin-top:2px;font-size:12px;color:#74859e}
-.df-run-stat-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
-.df-run-stat {padding:13px;border:0;border-radius:11px;background:#f4f7fc}
-.df-run-stat b {display:block;font-size:18px;color:#184b8e;line-height:1.2}
-.df-run-stat span {display:block;font-size:12px;color:#63758b;margin-top:3px}
+.df-run-stat-grid {display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 22px;margin:12px 0}
+.df-run-stat {display:inline-flex;align-items:baseline;gap:7px;padding:0;border:0;background:transparent}
+.df-run-stat b {font-size:18px;color:#184b8e;line-height:1.2;font-variant-numeric:tabular-nums}
+.df-run-stat span {font-size:12px;color:#63758b}
 .df-run-config {display:grid;gap:0;margin:8px 0 0;border:0;border-radius:11px;overflow:hidden;background:#f4f7fc}
 .df-run-config div {display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:9px 11px;
   background:transparent;border-bottom:1px solid #e3eaf4;font-size:12px;line-height:1.6}
@@ -138,11 +163,56 @@ def workflow_run_styles() -> str:
 .df-run-quality-card small {display:block;color:#697e9c;font-size:12px}
 .df-run-quality-card b {display:block;color:#1d5eab;font-size:23px;line-height:1.35;margin-top:5px}
 .df-run-quality-card span {display:block;color:#7b8ca1;font-size:12px;margin-top:2px}
+/* Native run details remain owned by Streamlit. The canvas positions this
+   container next to its selected node; its host must not reserve a blank row. */
+[class*="st-key-workflow-run-node-panel-"]:not([data-workflow-inspector]) {display:none}
+[data-workflow-inspector-host="floating"]:has([class*="st-key-workflow-run-node-panel-"]) {
+  height:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:visible!important;
+}
+[class*="st-key-workflow-run-node-panel-"][data-workflow-inspector="floating"] {
+  box-sizing:border-box;border:1px solid #cbdcf0;border-top:2px solid #2c7de2;border-radius:16px;
+  padding:0 18px 18px;background:#fff;box-shadow:0 20px 60px #152e501f,0 5px 15px #264e7010;
+  overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b5c9e2 transparent;gap:14px;
+}
+[class*="st-key-workflow-run-node-panel-"][data-workflow-inspector="floating"]
+  > [data-testid="stLayoutWrapper"]:has(> [class*="st-key-workflow-run-node-header-"]) {
+  position:sticky;top:0;z-index:2;background:#fff;
+}
+[class*="st-key-workflow-run-node-header-"] {padding:14px 0 12px;border-bottom:1px solid #e3ebf5;gap:10px}
+[class*="st-key-workflow-run-node-header-"] .df-run-inspector-head {padding:0;border:0}
+[class*="st-key-workflow-run-node-header-"] .df-run-inspector-head > b {flex:0 0 36px}
+[class*="st-key-workflow-run-node-header-"] .df-run-inspector-head > div {min-width:0;overflow-wrap:anywhere}
+[class*="st-key-workflow-run-node-header-"] .df-run-inspector-head strong {font-size:17px;line-height:1.4}
+[class*="st-key-workflow-run-node-header-"] .df-run-inspector-head small {font-size:13px;color:#60748d}
+[class*="st-key-workflow-run-node-header-"] button {min-height:38px;padding:5px 10px;
+  color:#47627f;border-color:#dce6f2;background:#f9fbfe}
+[class*="st-key-workflow-run-node-header-"] button:hover {background:#eef5ff;border-color:#a8c8ee;color:#185fad}
+[class*="st-key-workflow-run-node-panel-"] [data-testid="stMarkdownContainer"] p {font-size:14px;line-height:1.6}
+[class*="st-key-workflow-run-node-panel-"] [data-testid="stCaptionContainer"] p {font-size:12px;line-height:1.6;color:#60748d}
+[class*="st-key-workflow-run-node-panel-"] .df-run-reader-heading {margin:0}
+[class*="st-key-workflow-run-node-panel-"] .df-run-reader-heading strong {font-size:14px;font-weight:650}
+[class*="st-key-workflow-run-node-panel-"] .df-run-recipe-heading {margin:10px 0 0;padding-top:14px;border-top:1px solid #e3ebf5}
+[class*="st-key-workflow-run-node-panel-"] .df-run-recipe-heading strong {font-size:15px}
+[class*="st-key-workflow-run-node-panel-"] .df-run-config div {font-size:13px;gap:12px;padding:9px 11px}
+[class*="st-key-workflow-run-node-panel-"] .df-run-config span {color:#60748d}
+[class*="st-key-workflow-run-node-panel-"] .df-run-stat-grid {margin:0}
 @media(prefers-reduced-motion:reduce) {[class*="st-key-flow_node_"] {transition:none} [class*="st-key-flow_node_"]:hover {transform:none}}
 @media(max-width:900px) {.df-run-event-head {flex-wrap:wrap}
   .df-run-lane {flex-wrap:wrap}
   .df-dag-canvas {margin-left:0}}
 @media(max-width:720px) {
+  [class*="st-key-workflow-run-actions-"],
+  [class*="st-key-workflow-run-actions-"]:has(> [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"]) {max-width:none}
+  :is([class*="st-key-workflow-run-canvas-toolbar-"],
+      [class*="st-key-workflow-run-canvas-toolbar-"] > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] {
+    display:grid!important;grid-template-columns:minmax(0,1fr);gap:8px;
+  }
+  :is([class*="st-key-workflow-run-canvas-toolbar-"],
+      [class*="st-key-workflow-run-canvas-toolbar-"] > [data-testid="stLayoutWrapper"])
+      > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:is(:first-child,:last-child) {
+    flex:none!important;width:100%!important;max-width:none;min-width:0!important;
+  }
+  [class*="st-key-workflow-run-node-header-"] button {min-height:44px}
   /* These rows belong to the persisted-run inspector. Never target generic
      columns or the node configuration popup in the authoring workbench. */
   [class*="st-key-workflow-run-layout"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"],
@@ -164,8 +234,8 @@ def workflow_run_styles() -> str:
   [class*="st-key-workflow-run-actions"] button,
   [class*="st-key-workflow-run-delivery-actions"] button,
   [class*="st-key-workflow-run-output-heading"] button {min-height:44px}
-  .df-run-overview {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px}
-  .df-run-overview .df-run-pill {min-width:0;align-items:flex-start;flex-direction:column;gap:3px;padding:6px 8px;border:0;font-weight:500;line-height:1.5}
+  .df-run-summary-title {gap:7px 10px}
+  .df-run-summary-title h3 {flex-basis:100%;font-size:20px}
   .df-run-section {flex-wrap:wrap;gap:8px}
   .df-run-section > div {min-width:0;flex:1 1 180px}
   .df-run-section .df-run-section-tag {align-self:flex-start}

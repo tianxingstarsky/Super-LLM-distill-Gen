@@ -81,7 +81,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
 
 
 def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=None, expanded=False,
-                  reveal_key=None):
+                  reveal_key=None, reveal_target_key="workbench-canvas-panel"):
     # Keep the real Streamlit form mounted when the window is closed. Widget
     # values and callbacks remain owned by Streamlit; the canvas only positions it.
     spec = dict(spec, expanded=expanded)
@@ -93,7 +93,7 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
     if (isinstance(reveal, dict) and reveal.get("node") == spec["selected"]
             and type(reveal.get("serial")) in (str, int) and reveal["serial"] != ""
             and spec.get("inspector", {}).get("open")):
-        spec["reveal"] = dict(reveal, key="workbench-canvas-panel")
+        spec["reveal"] = dict(reveal, key=reveal_target_key)
     elif reveal_key is not None and reveal is not None:
         # Closing the native form or selecting another node cancels navigation
         # even if its component cancellation event was superseded by a click.
@@ -105,6 +105,7 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
     # cannot consume a newer click on the same unresolved configuration issue.
     if isinstance(event, dict) and event.get("action") == "reveal":
         if (isinstance(reveal, dict) and event.get("node") == reveal.get("node")
+                and type(event.get("request_serial")) is type(reveal.get("serial"))
                 and event.get("request_serial") == reveal.get("serial")
                 and event.get("outcome") in ("completed", "cancelled")):
             st.session_state.pop(reveal_key, None)

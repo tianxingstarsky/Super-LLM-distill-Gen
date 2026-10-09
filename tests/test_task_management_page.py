@@ -7,7 +7,7 @@ from streamlit.testing.v1 import AppTest
 from lib.presentation.streamlit.task_management_page import _quick_switch_runs
 
 
-def test_small_visible_task_list_has_one_selector_but_focus_view_keeps_quick_switch():
+def test_small_task_list_keeps_full_selection_without_duplicate_quick_switch():
     script = '''
 import streamlit as st
 from unittest.mock import patch
@@ -27,7 +27,11 @@ with patch.object(page, "render_run", lambda *args, **kwargs: None):
     assert not any(widget.key == "task-quick-select:fixture" for widget in ui.selectbox)
     ui.toggle(key="task-center-focus:fixture").set_value(True).run()
     assert not ui.exception
-    assert ui.selectbox(key="task-quick-select:fixture")
+    assert not any(widget.key == "task-quick-select:fixture" for widget in ui.selectbox)
+    assert len([button for button in ui.button if button.key.startswith("task-card:fixture:")]) == 3
+    ui.button(key="task-card:fixture:2").click().run()
+    assert not ui.exception
+    assert ui.session_state["task-center-run:fixture"] == "2"
 
 
 def test_quick_switch_shows_recent_distinct_actionable_runs_only():
@@ -172,9 +176,12 @@ class Application:
     def task_runs(self):
         return [{"id": self.workspace + "-run", "name": self.workspace + " private task",
                  "status": "running", "created_at": "2026-10-03T12:00:00",
-                 "updated_at": "2026-10-03T12:00:00", "targets": ["sft"]}]
+                 "updated_at": "2026-10-03T12:00:00", "targets": ["sft"]}] + [
+                    {"id": self.workspace + "-done-" + str(number), "name": "Finished " + str(number),
+                     "status": "completed", "targets": ["sft"]} for number in range(3)]
 
 workspace = st.selectbox("Workspace", ["alpha", "beta"], key="ws")
+st.session_state.setdefault("task-center-focus:" + workspace, True)
 st.button("Stale shortcut", key="stale-shortcut",
           on_click=page._switch_run, args=("alpha", "alpha-other"))
 st.button("Stale group", key="stale-group",
@@ -211,10 +218,13 @@ class Application:
     def task_runs(self):
         return [{"id": "one", "name": "客户任务 Keep 原文", "status": "running",
                  "created_at": "2026-10-03T12:00:00", "updated_at": "2026-10-03T12:00:00",
-                 "targets": ["sft"]}]
+                 "targets": ["sft"]}] + [
+                    {"id": "done-" + str(number), "name": "Finished " + str(number),
+                     "status": "completed", "targets": ["sft"]} for number in range(3)]
 
 st.session_state["ws"] = "fixture"
 st.session_state["ui_language"] = "en"
+st.session_state.setdefault("task-center-focus:fixture", True)
 with patch.object(page, "render_run", lambda application, run_id, begin, embedded=False: st.caption(run_id)):
     page.render_task_management(Application(), "fixture", lambda _: None, lambda: None)
 """
@@ -234,4 +244,88 @@ def test_soft_count_does_not_make_completed_task_look_incomplete():
     heading, detail = _run_card_html(run)
     assert 'data-status="completed"' in heading and "完成" in heading
     assert "产出 / 期望" in detail and "20/1,000" in detail
+    assert f'已完成节点 <b>{len(stages)}/{len(stages)}</b>' in detail
+    assert detail.index('class="df-task-card-output"') < detail.index('class="df-task-card-progress"')
     assert "width:100%" in detail and 'aria-label="已完成节点"' in detail
+
+
+def test_compact_target_types_keep_full_accessible_names_and_user_source_text():
+    from lib.presentation.streamlit.i18n import translate_markup
+    from lib.presentation.streamlit.task_management_page import _run_card_html
+
+    _, detail = _run_card_html({
+        "id": "compact", "status": "queued", "targets": ["cpt", "sft", "dpo", "cot", "agent"],
+        "source_mode": "document", "source_names": ['客户_[SFT] & "来源".md'],
+    }, language="en")
+    for short, full in (("CPT", "CPT pretraining text"),
+                        ("SFT", "SFT instructions and conversations"),
+                        ("DPO", "DPO preference pairs")):
+        assert f'title="{full}"' in detail
+        assert f'<span aria-hidden="true">{short}</span>' in detail
+        assert f'<span class="df-task-sr-only">{full}</span>' in detail
+    assert '<span aria-hidden="true">+2</span>' in detail
+    assert 'title="CoT reasoning text · Agent verified traces"' in detail
+    localized = translate_markup(detail, "en")
+    assert '客户_[SFT] &amp; &quot;来源&quot;.md' in localized
+    assert 'data-user-content' in localized
+
+
+def test_task_filter_has_one_empty_state_and_native_titles_select_exact_run():
+    script = """
+import streamlit as st
+from unittest.mock import patch
+from lib.presentation.streamlit import task_management_page as page
+class Application:
+    def task_runs(self):
+        return [{"id": identifier, "name": "客户任务 Keep 原文 " + identifier,
+                 "status": "failed", "targets": ["cpt", "sft", "dpo"]}
+                for identifier in ("one", "two")]
+st.session_state["ws"] = "fixture"
+st.session_state.setdefault("task-center-focus:fixture", False)
+with patch.object(page, "render_run", lambda application, run_id, begin, embedded=False: st.caption("DETAIL " + run_id)):
+    page.render_task_management(Application(), "fixture", lambda _: None, lambda: None)
+"""
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    title = ui.button(key="task-card:fixture:two")
+    assert "客户任务 Keep 原文 two" in title.label
+    assert title.label.endswith("→")
+    title.click().run()
+    assert not ui.exception
+    assert ui.session_state["task-center-run:fixture"] == "two"
+    assert any(item.value == "DETAIL two" for item in ui.caption)
+    ui.text_input(key="task-center-search:fixture").set_value("nothing matches").run()
+    assert not ui.exception
+    notes = [item.proto.body for item in ui.get("html") if 'class="df-task-no-match"' in item.proto.body]
+    assert len(notes) == 1 and "没有符合当前筛选条件" in notes[0]
+    assert "选择左侧任务" not in notes[0]
+    assert ui.session_state["task-center-run:fixture"] is None
+    assert not [button for button in ui.button if button.key.startswith("task-card:")]
+    assert not [item for item in ui.caption if item.value.startswith("DETAIL ")]
+
+
+def test_single_task_has_no_duplicate_switcher_across_expanded_view_changes():
+    script = """
+import streamlit as st
+from unittest.mock import patch
+from lib.presentation.streamlit import task_management_page as page
+class Application:
+    def task_runs(self):
+        return [{"id": "one", "name": "Saved run", "status": "failed", "targets": ["sft"]}]
+st.session_state["ws"] = "fixture"
+with patch.object(page, "render_run", lambda application, run_id, begin, embedded=False: st.caption(run_id)):
+    page.render_task_management(Application(), "fixture", lambda _: None, lambda: None)
+"""
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    assert not [widget for widget in ui.selectbox if widget.key == "task-quick-select:fixture"]
+    ui.run()
+    assert not ui.exception
+    assert not [widget for widget in ui.selectbox if widget.key == "task-quick-select:fixture"]
+    ui.toggle(key="task-center-focus:fixture").set_value(True).run()
+    assert not ui.exception
+    assert not [widget for widget in ui.selectbox if widget.key == "task-quick-select:fixture"]
+    assert "Saved run" in ui.button(key="task-card:fixture:one").label
+    ui.toggle(key="task-center-focus:fixture").set_value(False).run()
+    assert not ui.exception
+    assert not [widget for widget in ui.selectbox if widget.key == "task-quick-select:fixture"]

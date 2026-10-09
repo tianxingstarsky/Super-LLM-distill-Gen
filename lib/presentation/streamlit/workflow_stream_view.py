@@ -15,7 +15,7 @@ _FIELDS = ("id", "stage", "unit", "role", "status", "text", "reasoning", "update
 
 def stream_spec(rows: list[dict], run_id: str, stage: str, language: str, *,
                 selected_id=None, ack_serial=None, delta=None, follow_latest=True,
-                delta_enabled=False) -> dict:
+                delta_enabled=False, reader_height=None) -> dict:
     """Send only this node's received output, never arbitrary journal metadata."""
     selected = [{key: row[key] for key in _FIELDS if key in row}
                 for row in rows if row.get("stage") == stage][:32]
@@ -25,10 +25,13 @@ def stream_spec(rows: list[dict], run_id: str, stage: str, language: str, *,
             row["text"] = row["reasoning"] = ""
             if row["id"] == selected_id and delta is not None:
                 row["truncated"] = delta.get("truncated", False)
-    return {"context": f"{run_id}:{stage}", "rows": selected,
+    spec = {"context": f"{run_id}:{stage}", "rows": selected,
             "language": "en" if language == "en" else "zh", "labels": {},
             "selected_id": selected_id, "ack_serial": ack_serial, "delta": delta,
             "follow_latest": follow_latest}
+    if type(reader_height) is int and 160 <= reader_height <= 600:
+        spec["reader_height"] = reader_height
+    return spec
 
 
 def accept_selection(event, context, request_ids, previous_serial):
@@ -63,18 +66,28 @@ def accept_receipt(event, context, selected_id, selection_serial, offer):
 
 
 @st.fragment(run_every=0.1)
-def render_stream_output(application, run_id: str, stage: str) -> None:
+def render_stream_output(application, run_id: str, stage: str, *, reader_height=None) -> None:
     # Only this small fragment refreshes rapidly. The component keeps its text
     # nodes and appends the received suffix; it never replays a finished answer.
     if not st.session_state.get(f"canvas-open:live-canvas:{run_id}"):
         return
+    # A fast fragment may still have the previous node's arguments while its
+    # parent commits a new selection. Do not read or acknowledge that old view.
+    selected_stage = st.session_state.get(f"workflow-stage:{run_id}")
+    if selected_stage is not None and selected_stage != stage:
+        return
     reader = getattr(application, "read_streams", None)
     if reader is None:
-        st.caption("该节点的执行记录显示在下方日志中。")
+        st.caption("该节点暂无模型输出，运行信息见节点日志。")
         return
     try:
         requests = reader(run_id, stage=stage)
         requests = [row for row in requests if row.get("stage") == stage]
+        if not requests:
+            # Local-only stages and old runs may have no model journal. Do not
+            # mount an empty reader or discard any preserved reading cursor.
+            st.caption("该节点暂无模型输出，运行信息见节点日志。")
+            return
         context = f"{run_id}:{stage}"
         view_key = f"workflow-token-view:{context}"
         cursor_key = f"workflow-token-cursor:{context}"
@@ -113,7 +126,7 @@ def render_stream_output(application, run_id: str, stage: str) -> None:
     event = _output(spec=stream_spec(requests, run_id, stage, st.session_state.get("ui_language", "zh"),
                                     selected_id=selected["id"] if selected else None,
                                     ack_serial=view["serial"], delta=delta, follow_latest=view["follow"],
-                                    delta_enabled=read_delta is not None),
+                                    delta_enabled=read_delta is not None, reader_height=reader_height),
                     key=f"workflow-token-output:{run_id}:{stage}", default=None)
     consumed = accept_receipt(event, context, selected["id"] if selected else None,
                               view["serial"], st.session_state.get(offer_key))

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import hashlib
 import html
 import json
 import math
@@ -569,6 +570,23 @@ def _open_run_failure(run_id: str, stage: str) -> None:
     st.session_state[f"workflow-stage:{run_id}"] = stage
     st.session_state[f"canvas-open:live-canvas:{run_id}"] = True
     st.session_state[f"canvas-pause:workflow-follow:{run_id}"] = True
+    serial_key = f"workflow-run-reveal-sequence:{run_id}"
+    serial = st.session_state.get(serial_key, 0) + 1
+    st.session_state[serial_key] = serial
+    st.session_state[f"workflow-run-reveal:{run_id}"] = {"node": stage, "serial": serial}
+
+
+def _run_panel_keys(run_id: str) -> dict[str, str]:
+    """Keep native positioning selectors safe and unique for arbitrary run IDs."""
+    suffix = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
+    return {"canvas": f"workflow-run-canvas-{suffix}",
+            "node": f"workflow-run-node-panel-{suffix}",
+            "header": f"workflow-run-node-header-{suffix}"}
+
+
+def _toggle_run_reader(run_id: str) -> None:
+    key = f"canvas-wide:live-canvas:{run_id}"
+    st.session_state[key] = not st.session_state.get(key, False)
 
 
 @st.fragment(run_every=2)
@@ -595,12 +613,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
-    st.subheader(UntranslatedText(state["name"]))
     updated = str(state.get("updated_at") or "")[:19].replace("T", " ") or "—"
-    st.html('<div class="df-run-meta">'
-            f'<span>任务编号 <b>{html.escape(run_id[:8])}</b></span><i>·</i>'
-            f'<span>第 {attempt} 次运行</span><i>·</i>'
-            f'<span>更新于 {html.escape(updated)} UTC</span></div>')
     status = state["status"]
     stage_keys = list(state["stages"])
     active_stages = set(graph_nodes)
@@ -613,27 +626,26 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         st.session_state[selection_key] = selected_stage
     selected_stages = [state["stages"][key] for key in stage_keys if key in active_stages]
     completed_stages = sum(stage.get("status") == "completed" for stage in selected_stages)
-    st.html('<div class="df-run-overview">'
-            f'<span class="df-run-pill" data-status="{html.escape(status, quote=True)}">运行状态 <strong>{html.escape(LABELS.get(status, status))}</strong></span>'
-            f'<span class="df-run-pill">已完成节点 <strong>{completed_stages} / {len(selected_stages)}</strong></span>'
-            f'<span class="df-run-pill">本次目标 <strong>{len(state.get("targets", []))}</strong></span>'
-            f'<span class="df-run-pill">运行尝试 <strong>{attempt}</strong></span>'
-            '</div>')
-    scroll_failure_into_view = False
+    st.html('<div class="df-run-summary"><div class="df-run-summary-title">'
+            f'<h3 data-user-content>{html.escape(state["name"])}</h3>'
+            f'<span class="df-run-status" data-status="{html.escape(status, quote=True)}">{html.escape(LABELS.get(status, status))}</span>'
+            f'<span class="df-run-stage-count">已完成节点 <b>{completed_stages} / {len(selected_stages)}</b></span>'
+            '</div><div class="df-run-meta">'
+            f'<span>任务编号 <b>{html.escape(run_id[:8])}</b></span><i>·</i>'
+            f'<span>第 {attempt} 次运行</span><i>·</i>'
+            f'<span>本次目标 <b>{len(state.get("targets", []))}</b></span><i>·</i>'
+            f'<span>更新于 {html.escape(updated)} UTC</span></div></div>')
     if status == "running" and not active:
         st.warning("执行进程已中断。可从已完成的逐条断点继续。")
     elif status == "failed":
         failure_stage = (next((key for key in stage_keys if state["stages"][key].get("status") == "failed"), None)
                          or next((key for key in stage_keys if state["stages"][key].get("error")), None)
                          or selected_stage)
-        message = f"运行失败：{_workflow_error(state.get('error', 'unknown'))}。已完成的步骤与模型响应已保存。"
+        message = f"运行失败：{_workflow_error(state.get('error', 'unknown'))}"
         with st.container(key=f"workflow-run-issue:{run_id}"):
             st.button(UntranslatedText(translate_label(message, st.session_state.get("ui_language", "zh"))),
                       key=f"workflow-run-failure:{run_id}", icon=":material/error_outline:",
                       width="stretch", on_click=_open_run_failure, args=(run_id, failure_stage))
-        # Consume the existing pause flag below, then emit the one-off scroll
-        # only after the complete fragment layout and node output are rendered.
-        scroll_failure_into_view = bool(st.session_state.get(f"canvas-pause:workflow-follow:{run_id}"))
     elif status == "completed":
         st.success("生产已结束，按实际合格数量交付；训练文件与质量报告已生成。")
     elif status == "needs_attention":
@@ -646,8 +658,6 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             st.warning("本次 AI 打包评审隔离了部分样本；通过检查的样本仍可导出，评审证据保留在 ZIP 中。")
         else:
             st.warning("运行已结束；有目标没有合格样本，或输入超过本次处理上限。查看下方质量报告。")
-    else:
-        st.info(LABELS.get(status, status))
     render_delivery_progress(state)
     console_job = st.session_state.get(f"job:{st.session_state.get('ws', '')}:{run_id}")
     if console_job is not None and status == "queued":
@@ -656,8 +666,6 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             st.error("任务进程未能启动。请检查本机运行环境后从断点重试。")
     _render_research_receipt(application, run_id, recipe, state)
     resumable = not active and status in {"queued", "running", "failed", "cancelled"}
-    if resumable:
-        st.caption("继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。")
     if active or resumable:
         with st.container(key=f"workflow-run-actions:{run_id}"):
             action, copy_action = (st.columns(2, gap="small") if draft_application is not None
@@ -667,10 +675,12 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                 if st.button("停止后续步骤", key=f"stop:{run_id}", width="stretch"):
                     application.cancel(run_id)
                     st.info("已请求停止；当前模型请求返回后，在下一断点停止。")
-            elif st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}", width="stretch"):
+            elif st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}", width="stretch",
+                           help="继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。"):
                 begin(["workflow", "--action", "resume", "--run-id", run_id])
     elif draft_application is not None:
-        copy_action = st.container()
+        with st.container(key=f"workflow-run-actions:{run_id}"):
+            copy_action = st.container()
     if draft_application is not None:
         from lib.presentation.streamlit.workflow_reuse import reuse_run_as_draft
         workspace = st.session_state["ws"]
@@ -681,18 +691,24 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                     st.rerun(scope="app")
         if error := st.session_state.pop(f"workflow-reuse-error:{workspace}", None):
             st.error(error)
+    panel_keys = _run_panel_keys(run_id)
+    reveal_key = f"workflow-run-reveal:{run_id}"
+    # Build the complete runtime surface in one contiguous container scope.
+    # Re-entering an old DeltaGenerator around nested fragment calls can append
+    # later siblings at different paths during a timed fragment refresh.
     with st.container(key=f"workflow-run-layout:{run_id}"):
-        flow, inspector = st.columns([2.25, 1], gap="medium")
-    with flow:
-        with st.container(border=True, key=f"workflow-run-canvas:{run_id}"):
-            st.html('<div class="df-run-section"><div><strong>工作流运行图</strong>'
-                    '<small>点击节点，展开模型的实时输出；配置与日志保留在当前页。</small></div>'
-                    '<span class="df-run-section-tag">实时进度</span></div>')
+        with st.container(key=panel_keys["canvas"]):
             follow_key = f"workflow-follow:{run_id}"
             if st.session_state.pop(f"canvas-pause:{follow_key}", False):
                 st.session_state[follow_key] = False
-            follow = st.toggle("跟随执行节点", value=None if follow_key in st.session_state else True, key=follow_key,
-                               help="自动定位正在执行、失败或完成后的打包节点；点击节点会暂停跟随。")
+            with st.container(key=f"workflow-run-canvas-toolbar:{run_id}"):
+                heading, follow_control = st.columns([3, 1], gap="small", vertical_alignment="center")
+                with heading:
+                    st.html('<div class="df-run-section"><div><strong>工作流运行图</strong>'
+                            '<small>点击节点，展开模型的实时输出；配置与日志保留在当前页。</small></div></div>')
+                with follow_control:
+                    follow = st.toggle("跟随执行节点", value=None if follow_key in st.session_state else True, key=follow_key,
+                                       help="自动定位正在执行、失败或完成后的打包节点；点击节点会暂停跟随。")
             if follow:
                 focus_node = (next((key for key in graph_nodes if state["stages"][key].get("status") == "running"), None)
                               or next((key for key in graph_nodes if state["stages"][key].get("status") == "failed"), None)
@@ -700,8 +716,6 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                 if focus_node:
                     selected_stage = focus_node
                     st.session_state[selection_key] = focus_node
-            else:
-                st.caption("已暂停跟随，可检查所选节点；重新开启后定位当前执行阶段。")
             render_canvas(canvas_spec(recipe["targets"], state["stages"], selected_stage,
                                       GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
                                       language=st.session_state.get("ui_language", "zh"), live=True,
@@ -711,47 +725,61 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       source_mode=("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
                                           else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
                                           else "文档资料" if recipe.get("sources") else "开放需求")),
-                          selection_key, key=f"live-canvas:{run_id}", follow_key=follow_key)
-    selected_metrics = state["stages"][selected_stage]
-    selected_status, done, total, percent = _stage_numbers(selected_metrics)
-    if selected_stage not in active_stages:
-        selected_status, done, total, percent = "skipped", 0, 0, 0
-    selected_label = str(selected_metrics.get("label", selected_stage))
-    if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
-        passed, quarantined = done, max(0, total - done)
-        passed_label, quarantined_label = '已规划任务', '待规划任务'
-    elif selected_stage == "ingest":
-        passed = int(state.get("input_summary", {}).get("ready", selected_metrics.get('eligible', 0)) or 0)
-        quarantined = int(state.get("input_summary", {}).get("quarantined", selected_metrics.get('quarantined', 0)) or 0)
-        passed_label, quarantined_label = "可处理输入", "隔离输入"
-    elif selected_stage == "director":
-        passed, quarantined = done, max(0, total - done)
-        passed_label, quarantined_label = "已规划任务", "待规划任务"
-    elif selected_stage == "package":
-        if selected_status == "running" and selected_metrics.get("phase") in {"ai_review", "writing_artifacts"}:
+                          selection_key, key=f"live-canvas:{run_id}", follow_key=follow_key,
+                          inspector_key=panel_keys["node"], expanded=True,
+                          reveal_key=reveal_key, reveal_target_key=panel_keys["canvas"])
+        selected_metrics = state["stages"][selected_stage]
+        selected_status, done, total, percent = _stage_numbers(selected_metrics)
+        if selected_stage not in active_stages:
+            selected_status, done, total, percent = "skipped", 0, 0, 0
+        selected_label = str(selected_metrics.get("label", selected_stage))
+        if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
+            passed, quarantined = done, max(0, total - done)
+            passed_label, quarantined_label = '已规划任务', '待规划任务'
+        elif selected_stage == "ingest":
+            passed = int(state.get("input_summary", {}).get("ready", selected_metrics.get('eligible', 0)) or 0)
+            quarantined = int(state.get("input_summary", {}).get("quarantined", selected_metrics.get('quarantined', 0)) or 0)
+            passed_label, quarantined_label = "可处理输入", "隔离输入"
+        elif selected_stage == "director":
+            passed, quarantined = done, max(0, total - done)
+            passed_label, quarantined_label = "已规划任务", "待规划任务"
+        elif selected_stage == "package":
+            if selected_status == "running" and selected_metrics.get("phase") in {"ai_review", "writing_artifacts"}:
+                passed = int(selected_metrics.get("eligible", 0) or 0)
+                quarantined = int(selected_metrics.get("quarantined", 0) or 0)
+                passed_label, quarantined_label = "AI 通过", "AI 隔离"
+            else:
+                target_quality = state.get("quality", {}).get("targets", {})
+                passed = sum(int(row.get("eligible", 0) or 0) for row in target_quality.values())
+                quarantined = sum(sum(int(count) for count in row.get("reasons", {}).values())
+                                  for row in target_quality.values())
+                passed_label, quarantined_label = "导出样本", "需关注记录"
+        else:
             passed = int(selected_metrics.get("eligible", 0) or 0)
             quarantined = int(selected_metrics.get("quarantined", 0) or 0)
-            passed_label, quarantined_label = "AI 通过", "AI 隔离"
-        else:
-            target_quality = state.get("quality", {}).get("targets", {})
-            passed = sum(int(row.get("eligible", 0) or 0) for row in target_quality.values())
-            quarantined = sum(sum(int(count) for count in row.get("reasons", {}).values())
-                              for row in target_quality.values())
-            passed_label, quarantined_label = "导出样本", "需关注记录"
-    else:
-        passed = int(selected_metrics.get("eligible", 0) or 0)
-        quarantined = int(selected_metrics.get("quarantined", 0) or 0)
-        passed_label, quarantined_label = "通过质检", "隔离记录"
-    with inspector:
-        with st.container(border=True, key=f"workflow-run-inspector:{run_id}"):
-            st.html('<div class="df-run-section"><div><strong>节点配置</strong>'
-                    '<small>所选节点的运行状态与实际配方</small></div></div>')
-            st.html('<div class="df-run-inspector-head">'
-                    f'<b>{html.escape(STAGE_GLYPHS.get(selected_stage, "◈"))}</b><div>'
-                    f'<strong>{html.escape(selected_label)}</strong>'
-                    f'<small><span>{html.escape(STAGE_STATUS.get(selected_status, selected_status))}</span> · {percent}%</small>'
-                    '</div></div>')
+            passed_label, quarantined_label = "通过质检", "隔离记录"
+        output_open_key = f"canvas-open:live-canvas:{run_id}"
+        wide_reader = bool(st.session_state.get(f"canvas-wide:live-canvas:{run_id}", False))
+        # The canvas positions this native container without moving its widgets
+        # out of Streamlit. Keep it mounted so closing does not discard readers.
+        with st.container(key=panel_keys["node"]):
+            with st.container(key=panel_keys["header"]):
+                st.html('<div class="df-run-inspector-head">'
+                        f'<b>{html.escape(STAGE_GLYPHS.get(selected_stage, "◈"))}</b><div>'
+                        f'<strong>{html.escape(selected_label)}</strong>'
+                        f'<small><span>{html.escape(STAGE_STATUS.get(selected_status, selected_status))}</span> · {percent}%</small>'
+                        '</div></div>')
+                reading, close = st.columns(2, gap="small")
+                reading.button("收窄阅读" if wide_reader else "展开阅读",
+                               key=f"workflow-wide-output:{run_id}", width="stretch",
+                               icon=":material/open_in_full:", on_click=_toggle_run_reader, args=(run_id,))
+                close.button("关闭窗口", key=f"close-node-output:{run_id}", width="stretch",
+                             icon=":material/close:", on_click=st.session_state.pop, args=(output_open_key, None))
             st.progress(percent / 100, text=f"{done} / {total} 单元")
+            if selected_metrics.get("error"):
+                st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
+            st.html('<div class="df-run-section df-run-reader-heading"><div><strong>实时输出</strong></div></div>')
+            render_stream_output(application, run_id, selected_stage, reader_height=380 if wide_reader else 220)
             if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
                 st.caption("开放需求任务规划：按批完成后再进入生成节点。")
             if selected_stage == "package" and selected_status == "running":
@@ -775,10 +803,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                 if selected_status == "running" and eta is not None:
                     st.caption(f"预计剩余 {math.ceil(eta / 60):,} 分钟")
                     st.caption("按本次处理速度估算，不计已复用的单元断点；剩余单元仍可能复用模型响应。")
-            st.html('<div class="df-run-stat-grid">'
-                    f'<div class="df-run-stat"><b>{max(0, passed)}</b><span>{passed_label}</span></div>'
-                    f'<div class="df-run-stat"><b>{max(0, quarantined)}</b><span>{quarantined_label}</span></div>'
-                    '</div>')
+            if passed or quarantined or selected_status in {"completed", "failed", "cancelled"}:
+                st.html('<div class="df-run-stat-grid">'
+                        f'<div class="df-run-stat"><b>{max(0, passed)}</b><span>{passed_label}</span></div>'
+                        f'<div class="df-run-stat"><b>{max(0, quarantined)}</b><span>{quarantined_label}</span></div>'
+                        '</div>')
             if selected_stage == "director" and state.get("qa_director", {}).get("coverage"):
                 language = st.session_state.get("ui_language", "zh")
                 coverage = state["qa_director"]["coverage"]
@@ -790,38 +819,19 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                     for kind, counts in coverage.items()
                 ], hide_index=True, width="stretch")
                 st.caption("规划数按任务统计；调度与生成验收数包含 SFT 和多轮目标。最终导出数量另见打包结果。")
+            st.html('<div class="df-run-section df-run-recipe-heading"><div><strong>本次节点配方</strong>'
+                    '<small>本次运行使用的模型、参数与提示词；修改时请复制为新任务。</small></div></div>')
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
             render_run_node_prompts(selected_stage, recipe, run_id)
-            if selected_metrics.get("error"):
-                st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
-    selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
-    output_open_key = f"canvas-open:live-canvas:{run_id}"
-    if st.session_state.get(output_open_key):
-        with flow, st.container(border=True, key=f"workflow-node-output:{run_id}:{selected_stage}"):
-            with st.container(key=f"workflow-run-output-heading:{run_id}:{selected_stage}"):
-                heading, close = st.columns([4, 1], vertical_alignment="center")
-            with heading:
-                st.html('<div class="df-run-section"><div><strong>'
-                        + html.escape(translate(GRAPH_LABELS.get(selected_stage, selected_stage),
-                                               st.session_state.get("ui_language", "zh")))
-                        + ' · ' + html.escape(translate("实时输出", st.session_state.get("ui_language", "zh")))
-                        + '</strong></div></div>')
-            with close:
-                st.button("收起输出", key=f"close-node-output:{run_id}",
-                          on_click=st.session_state.pop, args=(output_open_key, None), width="stretch")
-            render_stream_output(application, run_id, selected_stage)
-    with flow, st.container(border=True, key=f"workflow-run-log:{run_id}"):
-        st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
-                f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'
-                '</div><span class="df-run-section-tag">所选节点</span></div>')
-        st.html(_events_html(selected_events))
     summary = state.get("input_summary", {})
     if summary:
         with st.container(key=f"workflow-run-input-statistics:{run_id}"):
-            cols = st.columns(4)
-        for col, (label, key) in zip(cols, [("解析单元", "units"), ("可处理", "ready"), ("输入隔离", "quarantined"), ("超出上限", "deferred")]):
-            col.metric(label, summary.get(key, 0))
-    tabs = st.tabs(["产物与质量", "全部事件", "来源与配方"])
+            st.html('<div class="df-run-input-summary">' + ''.join(
+                f'<span><b>{html.escape(str(summary.get(key, 0)))}</b><small>{label}</small></span>'
+                for label, key in [("解析单元", "units"), ("可处理", "ready"),
+                                   ("输入隔离", "quarantined"), ("超出上限", "deferred")]
+            ) + '</div>')
+    tabs = st.tabs(["产物与质量", "节点日志", "全部事件", "来源与配方"])
     with tabs[0]:
         quality = state.get("quality")
         if quality:
@@ -892,13 +902,19 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                         st.caption("最多显示前 100 条；完整记录保留在本次产物中。")
                         st.dataframe(rejected, hide_index=True)
     with tabs[1]:
+        selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
+        st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
+                f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'
+                '</div><span class="df-run-section-tag">所选节点</span></div>')
+        st.html(_events_html(selected_events))
+    with tabs[2]:
         st.html('<div class="df-run-section"><div><strong>全部运行事件</strong>'
                 '<small>按时间倒序展示最近的处理与模型调用事件。</small></div></div>')
         st.html(_events_html(state.get("events", []), limit=60))
         with st.expander("技术详情：原始事件与模型用量"):
             st.dataframe(list(reversed(state.get("events", [])[-100:])), hide_index=True, width="stretch")
             st.json({"模型": state.get("models", {}), "调用与 token": state.get("usage", {})})
-    with tabs[2]:
+    with tabs[3]:
         st.html('<div class="df-run-section"><div><strong>来源与运行配方</strong>'
                 '<small>配方和来源快照已固定，可用于核对与重新运行。</small></div></div>')
         st.html(_config_html({"来源文件": [UntranslatedText(source.get("name", source.get("file", "")))
@@ -910,37 +926,13 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         with st.expander("技术详情：完整配方 JSON"):
             st.json(recipe)
 
-    if scroll_failure_into_view:
-        css_key = "".join(character if character.isascii() and (character.isalnum() or character in "_-")
-                          else "-" for character in f"workflow-run-canvas:{run_id}")
-        # Streamlit commits the fragment's widgets asynchronously; measuring
-        # the previous canvas before its new layout settles overshoots. Compare
-        # content coordinates (independent of scroll position) before scrolling
-        # once. A later timer refresh has no flag and emits no new script.
-        st.html('<script>(()=>{const selector=' + json.dumps(".st-key-" + css_key) + ';'
-                'window.__dfRunFailureScrollCleanup?.();'
-                'const started=performance.now();let previous=null,stableSince=started,frame=0,stopped=false;'
-                'function cleanup(){stopped=true;cancelAnimationFrame(frame);'
-                'window.removeEventListener("wheel",cleanup,true);'
-                'window.removeEventListener("touchstart",cleanup,true);}'
-                'window.__dfRunFailureScrollCleanup=cleanup;'
-                'window.addEventListener("wheel",cleanup,{capture:true,passive:true});'
-                'window.addEventListener("touchstart",cleanup,{capture:true,passive:true});'
-                'function settle(){if(stopped)return;const now=performance.now();'
-                'if(now-started>1800){cleanup();return;}'
-                'const target=document.querySelector(selector),main=document.querySelector(\'[data-testid="stMain"]\');'
-                'if(target&&main&&target.getClientRects().length){'
-                'const rect=target.getBoundingClientRect(),mainRect=main.getBoundingClientRect();'
-                'const current=[main.scrollTop+rect.top-mainRect.top,rect.width,rect.height];'
-                'if(!previous||current.some((value,index)=>Math.abs(value-previous[index])>.5))stableSince=now;'
-                'previous=current;'
-                'if(now-started>=300&&now-stableSince>=200){'
-                'const top=Math.max(0,main.scrollTop+target.getBoundingClientRect().top-main.getBoundingClientRect().top-76);'
-                'const behavior=matchMedia("(prefers-reduced-motion: reduce)").matches?"instant":"smooth";'
-                'cleanup();main.scrollTo({top,behavior});return;}}'
-                'else{previous=null;stableSince=now;}'
-                'frame=requestAnimationFrame(settle);}frame=requestAnimationFrame(settle);})();</script>',
-                unsafe_allow_javascript=True)
+    reveal = st.session_state.get(reveal_key)
+    if isinstance(reveal, dict) and reveal.get("node") == selected_stage:
+        # The existing canvas bridge waits for this fragment's complete native
+        # layout. Its matched receipt survives extra reruns, then completes or
+        # cancels once; ordinary follow updates never request page scrolling.
+        st.html('<span class="df-workflow-setup-reveal" data-serial="'
+                + html.escape(str(reveal["serial"]), quote=True) + '" hidden></span>')
 
 
 def _save_draft_value(workspace, key):

@@ -17,15 +17,17 @@ _STYLE = """<style>
   border-color:#91B8ED!important; background:#F5F9FF!important}
 [class*="st-key-review-overview-"] .df-review-overview {display:grid;grid-template-columns:38px 1fr;
   gap:3px 9px;min-height:75px}
-.df-review-overview b {display:grid;grid-row:1/4;place-items:center;width:36px;height:36px;
+.df-review-overview b {display:grid;grid-row:1;place-items:center;width:36px;height:36px;
   border-radius:9px;background:#e7f1ff;color:#1b6fce;font-size:16px}
 .df-review-overview[data-kind="dpo"] b,.df-review-overview[data-kind="orpo"] b {
   background:#f0eafb;color:#7955c1}
 .df-review-overview[data-kind="cpt"] b {background:#e5f8f0;color:#15916c}
-.df-review-overview strong {color:#223852;font-size:14px;line-height:1.4}
+.df-review-overview strong {color:#223852;font-size:14px;line-height:1.4;min-height:2.8em}
 .df-review-overview span {color:#1768c8;font-size:20px;font-weight:800;line-height:1.3}
 .df-review-overview small {color:#596A80;font-size:12px;line-height:1.5}
-[class*="st-key-review-overview-"] button {font-size:12px;min-height:34px}
+.df-review-overview-count {grid-column:1/-1;display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 7px}
+.df-review-overview > small {grid-column:1/-1}
+[class*="st-key-review-overview-"] button {font-size:12px;min-height:40px}
 [data-testid="stVerticalBlock"][class*="st-key-review-overview-"]:hover {
   border-color:#A4C3EB!important; box-shadow:0 6px 18px rgba(32,81,146,.07)!important; transform:translateY(-2px)}
 [data-testid="stVerticalBlock"][class*="st-key-review-overview-"]:has(button:focus-visible) {
@@ -75,14 +77,15 @@ def render_review_overview(applications: Mapping[str, ReviewQueue], mode_key: st
             try:
                 runs = applications[mode].reviewable_runs()
                 candidates = sum(max(0, int(row.get(count_field, 0))) for row in runs)
-                value = str(candidates)
-                detail = f"{len(runs)} 个可审任务 · 候选样本"
+                value = f"{candidates:,}"
+                detail = f"{len(runs):,} 个可审任务"
             except (OSError, ValueError, KeyError, TypeError):
                 value, detail = "—", "队列暂不可读取"
             selected = st.session_state.get(mode_key) == mode
             st.html(f'<div class="df-review-overview" data-kind="{kind}" data-selected="{str(selected).lower()}"><b>{glyph}</b>'
-                    f'<strong>{mode}</strong><span>{value}</span><small>{detail}</small></div>')
-            st.button("打开审核队列 →", key=f"review-overview-open-{kind}",
+                    f'<strong>{mode}</strong><div class="df-review-overview-count" role="group" aria-label="候选样本">'
+                    f'<span>{value}</span><small>候选</small></div><small>{detail}</small></div>')
+            st.button(f"审核 {kind.upper()} →", key=f"review-overview-open-{kind}",
                       on_click=_select_mode, args=(mode_key, mode), width="stretch",
                       type="primary" if selected else "secondary")
     st.caption("以上是当前可审候选量；通过、退回和待处理状态以具体队列为准。")

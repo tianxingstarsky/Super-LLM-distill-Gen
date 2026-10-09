@@ -178,6 +178,17 @@ reviewButton.click();
 assert.equal(events.at(-1).value.node,'preference','activation preserves the existing configuration event protocol');
 
 const runningSpec={...branchSpec,live:true,nodes:branchNodes.map(node=>node.id==='sft'?{...node,status:'running',percent:17}:node)};
+renderSpec({...runningSpec,expanded:true});d.getElementById('fit').click();
+const liveHeight=view.clientHeight;
+assert.ok(liveHeight<420,'short running graphs must not inherit the editing canvas empty area');
+const liveFrames=frameEvents();
+for(let index=0;index<20;index++)w.resizeCanvas();
+assert.equal(view.clientHeight,liveHeight,'live graph height converges across automatic refreshes');
+assert.equal(frameEvents(),liveFrames);
+d.getElementById('reset').click();
+renderSpec({...runningSpec,expanded:true});
+assert.equal(view.clientHeight,liveHeight,'a progress refresh preserves the manually zoomed viewport');
+assert.ok(d.getElementById('legend').parentElement.contains(d.getElementById('scale')),'run status shares the graph footer');
 renderSpec(runningSpec);
 assert.equal(d.querySelectorAll('.edge-flow').length,1);
 assert.equal(d.querySelector('.edge-flow').dataset.to,'sft','only dependencies feeding an actual running node show flow');
@@ -378,6 +389,32 @@ receipt(freshNonce);await flushBridge(6);
 assert.equal(pageScrolls.length,beforeReplacement+1);
 assert.equal(revealEvents().at(-1).request_serial,freshNonce);
 assert.equal(revealEvents().at(-1).outcome,'completed');
+
+// A persisted run uses its own safe native keys. Its failure navigation must
+// target that full-width runtime canvas, while setup keeps its original keys.
+const runtimeSuffix='a'.repeat(64),runtimeCanvasKey='workflow-run-canvas-'+runtimeSuffix,
+ runtimePanelKey='workflow-run-node-panel-'+runtimeSuffix,runtimeNonce=nextRequest++,beforeRuntime=pageScrolls.length;
+setupTarget.className='st-key-'+runtimeCanvasKey;nativePanel.className='st-key-'+runtimePanelKey;
+removeReceipts();receipt(runtimeNonce);
+const runtimeReveal={node:'sft',serial:runtimeNonce,key:runtimeCanvasKey};
+bridgeRender('sft',{live:true,inspector:{key:runtimePanelKey,open:true},reveal:runtimeReveal});await flushBridge(6);
+assert.equal(pageScrolls.length,beforeRuntime+1,'a runtime failure reveals its own complete canvas and native window');
+assert.equal(nativePanel.dataset.workflowInspectorOpen,'true');
+assert.equal(nativePanel.style.width,'430px');
+assert.equal(nativePanel.parentElement.id,'inspector-host','runtime details preserve their original native host');
+bridgeRender('sft',{live:true,inspector:{key:runtimePanelKey,open:true},reveal:runtimeReveal});await flushBridge(6);
+assert.equal(pageScrolls.length,beforeRuntime+1,'runtime progress rerenders cannot repeat acknowledged navigation');
+const runtimeInput=nativePanel.querySelector('input'),runtimeValue=runtimeInput.value;nativePanel.scrollTop=100;
+bridgeRender('sft',{live:true,inspector:{key:runtimePanelKey,open:true,wide:true}});await flushBridge();
+assert.equal(nativePanel.style.width,'760px','wide reading uses the existing anchored native inspector mechanism');
+assert.ok(parseFloat(nativePanel.style.maxHeight)>560,'wide reading uses the available viewport instead of the compact limit');
+assert.equal(nativePanel.scrollTop,100,'wide reading preserves the current native panel scroll');
+assert.equal(runtimeInput.value,runtimeValue,'presentation width changes never reset native controls');
+bridgeRender('sft',{live:true,inspector:{key:runtimePanelKey,open:false,wide:true}});await flushBridge();
+assert.equal(nativePanel.style.display,'none');
+assert.equal(nativePanel.parentElement.dataset.workflowInspectorHost,'floating');
+assert.equal(pageScrolls.length,beforeRuntime+1,'closing a runtime window does not navigate the page');
+setupTarget.className='st-key-workbench-canvas-panel';nativePanel.className='st-key-workbench-node-panel';
 
 bridgeRender('sft',{inspector:undefined});await flushBridge();
 assert.equal(nativePanel.dataset.workflowInspector,undefined,'removing inspector support restores inline fallback');

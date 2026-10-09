@@ -515,5 +515,96 @@ scenario('empty_terminal_delta_completes_and_invalid_cursors_never_get_receipts'
   assert.equal(text(p), '');
 });
 
+scenario('reader_height_override_restores_default_without_touching_pinned_content', p => {
+  const rows = [row('first', {text: 'Latest answer'}), row('other', {
+    text: 'Pinned complete answer', reasoning: 'Pinned reasoning', status: 'completed'})];
+  const height = () => p.reader.style.getPropertyValue('--stream-reader-height');
+  p.render(rows);
+  assert.equal(height(), '', 'standalone readers leave their CSS height defaults intact');
+  assert.match(css, /max-height:var\(--stream-reader-height,460px\)/);
+  assert.match(css, /max-height:var\(--stream-reader-height,400px\)/);
+  p.get('request-tabs').children[1].click();
+  if (!p.get('reasoning-section').open) p.get('reasoning-label').click();
+  p.get('reasoning-label').click();
+  const answerNode = p.get('answer-output').firstChild;
+  const reasoningNode = p.get('reasoning-output').firstChild;
+  const pinnedTab = p.get('request-tabs').children[1];
+  const choices = selectedEvents(p).length;
+  function assertPinned() {
+    assert.equal(text(p), 'Pinned complete answer');
+    assert.equal(p.get('reasoning-output').textContent, 'Pinned reasoning');
+    assert.equal(p.get('answer-output').firstChild, answerNode);
+    assert.equal(p.get('reasoning-output').firstChild, reasoningNode);
+    assert.equal(p.get('request-tabs').children[1], pinnedTab);
+    assert.equal(pinnedTab.getAttribute('aria-selected'), 'true');
+    assert.equal(p.get('reasoning-section').open, false);
+    assert.equal(p.get('follow-request').hidden, false);
+    assert.equal(selectedEvents(p).length, choices, 'height does not select or reset a request');
+  }
+  for (const reader_height of [160, 220, 380, 600]) {
+    p.render(rows, {reader_height});
+    assert.equal(height(), `${reader_height}px`);
+    assertPinned();
+  }
+  p.render(rows);
+  assert.equal(height(), '', 'omitting the option removes the previous override');
+  assertPinned();
+  for (const reader_height of [null, true, false, 159, 601, 220.5, '220', {}, []]) {
+    p.render(rows, {reader_height: 220});
+    assert.equal(height(), '220px');
+    p.render(rows, {reader_height});
+    assert.equal(height(), '', 'invalid height restores the CSS default instead of retaining a stale override');
+    assertPinned();
+  }
+});
+
+scenario('reader_height_changes_preserve_delta_prefix_request_pin_and_receipts', p => {
+  const rows = [row('first'), row('other')];
+  renderDelta(p, rows, 'first', delta('first', 0, 10, [token('Latest response')]));
+  p.get('request-tabs').children[1].click();
+  const selection = selectedEvents(p).at(-1);
+  const pinnedOptions = {ack_serial: selection.serial, follow_latest: false, reader_height: 220};
+  const prefix = delta('other', 0, 20, [token('Pinned prefix'), token('Useful basis', 'reasoning')]);
+  renderDelta(p, rows, 'other', prefix, pinnedOptions);
+  const answerNode = p.get('answer-output').firstChild;
+  const reasoningNode = p.get('reasoning-output').firstChild;
+  const pinnedTab = p.get('request-tabs').children[1];
+  const choices = selectedEvents(p).length, beforeReceipts = receipts(p).length;
+  if (!p.get('reasoning-section').open) p.get('reasoning-label').click();
+  p.get('reasoning-label').click();
+  p.reader.dispatchEvent(new p.w.Event('scroll')); // Confirm the preceding automatic scroll.
+  p.reader.scrollTop = 35;
+  p.reader.dispatchEvent(new p.w.Event('scroll'));
+  assert.equal(p.get('follow-bottom').hidden, false);
+
+  renderDelta(p, rows, 'other', prefix, {...pinnedOptions, reader_height: 380});
+  assert.equal(p.reader.style.getPropertyValue('--stream-reader-height'), '380px');
+  assert.equal(text(p), 'Pinned prefix', 'changing height cannot replay a previously consumed prefix');
+  assert.equal(receipts(p).length, beforeReceipts, 'a height-only render does not duplicate the cursor receipt');
+  assert.equal(selectedEvents(p).length, choices, 'changing height does not reset the request epoch');
+
+  renderDelta(p, rows, 'other', delta('other', 20, 30, [token(' plus next token'),
+    token(' continues', 'reasoning')]), {...pinnedOptions, reader_height: 380});
+  assert.equal(text(p), 'Pinned prefix plus next token');
+  assert.equal(p.get('reasoning-output').textContent, 'Useful basis continues');
+  assert.equal(p.get('answer-output').firstChild, answerNode);
+  assert.equal(p.get('reasoning-output').firstChild, reasoningNode);
+  assert.equal(p.get('request-tabs').children[1], pinnedTab);
+  assert.equal(pinnedTab.getAttribute('aria-selected'), 'true');
+  assert.equal(p.reader.scrollTop, 35, 'the shorter or wider reader does not resume manual output following');
+  assert.equal(p.get('reasoning-section').open, false);
+  assert.equal(p.get('follow-request').hidden, false);
+  assert.equal(selectedEvents(p).length, choices);
+  assert.equal(receipts(p).at(-1).next_offset, 30);
+  assert.equal(receipts(p).at(-1).request_id, 'other');
+  assert.equal(receipts(p).at(-1).selection_serial, selection.serial);
+
+  renderDelta(p, rows, 'other', delta('other', 30, 30), {
+    ack_serial: selection.serial, follow_latest: false});
+  assert.equal(p.reader.style.getPropertyValue('--stream-reader-height'), '');
+  assert.equal(text(p), 'Pinned prefix plus next token');
+  assert.equal(selectedEvents(p).length, choices);
+});
+
 console.log(JSON.stringify({scenarios: results}));
 if (Object.values(results).some(result => !result.ok)) process.exitCode = 1;

@@ -34,6 +34,10 @@ LOCAL_TIMEZONE = timezone(timedelta(hours=8))
 QUICK_SWITCH_LIMIT = 3
 ACTIVE_STATUSES = frozenset({"queued", "running"})
 ATTENTION_STATUSES = frozenset({"failed", "cancelled", "needs_attention"})
+TARGET_SHORT_LABELS = {
+    "cpt": "CPT", "sft": "SFT", "dpo": "DPO", "cot": "CoT", "orpo": "ORPO",
+    "rlaif": "RLAIF", "agent": "Agent", "multiturn": "Multi-turn", "gsm8k": "GSM8K",
+}
 
 
 def _button_text(value: object) -> str:
@@ -65,7 +69,7 @@ def _stage_progress(run: dict) -> tuple[int, int]:
     return sum(stages.get(key, {}).get("status") == "completed" for key in nodes), len(nodes)
 
 
-def _run_card_html(run: dict) -> tuple[str, str]:
+def _run_card_html(run: dict, *, language: str = "zh") -> tuple[str, str]:
     status = str(run.get("status", "queued"))
     safe_status = html.escape(status, quote=True)
     done, total = _stage_progress(run)
@@ -79,14 +83,27 @@ def _run_card_html(run: dict) -> tuple[str, str]:
         percent = round(100 * done / total) if total else 0
         progress_label = "合格数量"
     count_text = f'{progress_label} <b>{done:,}/{total:,}</b>'
+    output = ""
     if goals and soft:
         actual = sum(goal.get("eligible", 0) for goal in goals.values())
         expected = sum(goal["goal"] for goal in goals.values())
-        count_text = f'产出 / 期望 <b>{actual:,}/{expected:,}</b>'
-    targets = [TARGET_LABELS.get(target, str(target).upper()) for target in run.get("targets", [])]
-    tags = "".join(f'<span>{html.escape(label)}</span>' for label in targets[:3])
+        output = ('<div class="df-task-card-output"><span>产出 / 期望</span>'
+                  f'<b>{actual:,}/{expected:,}</b></div>')
+    targets = list(run.get("targets", []))
+    full_labels = [translate(TARGET_LABELS.get(target, str(target).upper()), language)
+                   for target in targets]
+    # Short types scan on one line. Both the tooltip and the accessible text
+    # retain the complete training-target meaning in the active UI language.
+    tags = "".join(
+        f'<span title="{html.escape(full_label, quote=True)}">'
+        f'<span aria-hidden="true">{html.escape(TARGET_SHORT_LABELS.get(target, str(target).upper()))}</span>'
+        f'<span class="df-task-sr-only">{html.escape(full_label)}</span></span>'
+        for target, full_label in zip(targets[:3], full_labels[:3])
+    )
     if len(targets) > 3:
-        tags += f'<span>另有 {len(targets) - 3} 项</span>'
+        remaining = html.escape(" · ".join(full_labels[3:]), quote=True)
+        tags += (f'<span title="{remaining}"><span aria-hidden="true">+{len(targets) - 3}</span>'
+                 f'<span class="df-task-sr-only">{remaining}</span></span>')
     if not tags:
         tags = '<span>未指定目标</span>'
     moment = _display_time(run.get("updated_at") or run.get("created_at"))
@@ -106,9 +123,10 @@ def _run_card_html(run: dict) -> tuple[str, str]:
     detail = (f'<div class="df-task-card-targets">{tags}</div>'
               f'<div class="df-task-card-source"><b>{source_label}</b>'
               f'<span data-user-content title="{source_title}">{html.escape(source_text)}</span></div>'
+              f'{output}'
               f'<div class="df-task-card-progress"><span>{count_text}</span>'
               f'<span>#{html.escape(str(run.get("id", ""))[:8])}</span></div>'
-              f'<div class="df-task-meter" role="progressbar" aria-label="{progress_label}" '
+              f'<div class="df-task-meter" data-status="{safe_status}" role="progressbar" aria-label="{progress_label}" '
               f'aria-valuemin="0" aria-valuemax="{total}" aria-valuenow="{done}">'
               f'<i style="width:{percent}%"></i></div>')
     return heading, detail
@@ -162,12 +180,12 @@ def _summary_html(runs: list[dict]) -> str:
     processing = sum(run.get("status") in {"running", "queued"} for run in runs)
     completed = sum(run.get("status") == "completed" for run in runs)
     attention = sum(run.get("status") in {"failed", "cancelled", "needs_attention"} for run in runs)
-    cells = (("all", "▤", "全部任务", len(runs)), ("processing", "◉", "待启动 / 执行中", processing),
-             ("completed", "✓", "已完成", completed), ("attention", "!", "待处理", attention))
+    cells = (("all", "全部任务", len(runs)), ("processing", "待启动 / 执行中", processing),
+             ("completed", "已完成", completed), ("attention", "待处理", attention))
     return '<div class="df-task-summary">' + "".join(
-        f'<div class="df-task-summary-item" data-kind="{kind}"><i>{glyph}</i>'
-        f'<strong>{number}</strong><span>{label}</span></div>'
-        for kind, glyph, label, number in cells) + '</div>'
+        f'<div class="df-task-summary-item" data-kind="{kind}">'
+        f'<span>{label}</span><strong>{number:,}</strong></div>'
+        for kind, label, number in cells) + '</div>'
 
 
 def _quick_switch_runs(runs: list[dict], limit: int = QUICK_SWITCH_LIMIT
@@ -258,30 +276,32 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                 unsafe_allow_javascript=True)
     runs = application.task_runs()
     if not runs:
-        left, right = st.columns([1.25, 1], gap="large")
-        with left, st.container(border=True):
-            st.html('<div class="df-task-empty"><span class="df-task-empty-icon">◈</span>'
-                    '<h3>本机暂无自动工作流</h3>'
-                    '<p>添加文档、Agent 上下文或开放需求后，这里会显示实际运行节点、质量结果与日志。</p></div>')
-            st.button("新建数据工作流", type="primary", on_click=on_new_workflow,
-                      key=f"task-center-create:{workspace_id}", use_container_width=True)
-        with right, st.container(border=True):
-            st.html('<div class="df-task-list-head"><strong>任务过程</strong><small>开始后逐步点亮</small></div>'
-                    '<div class="df-task-empty-steps">'
-                    '<div><b>01</b><span><strong>接入来源</strong><small>文档、对话记录或开放需求</small></span></div>'
-                    '<div><b>02</b><span><strong>解析清洗</strong><small>读取、切块与来源追踪</small></span></div>'
-                    '<div><b>03</b><span><strong>生成质检</strong><small>按 CPT、SFT、DPO 等目标运行</small></span></div>'
-                    '<div><b>04</b><span><strong>质检与候选打包</strong><small>导出可校验候选包；人工审核另行发布</small></span></div>'
-                    '</div>')
+        with st.container(key="task-center-empty"):
+            left, right = st.columns([1.25, 1], gap="large")
+            with left:
+                st.html('<div class="df-task-empty"><span class="df-task-empty-icon">◈</span>'
+                        '<h3>本机暂无自动工作流</h3>'
+                        '<p>添加文档、Agent 上下文或开放需求后，这里会显示实际运行节点、质量结果与日志。</p></div>')
+                st.button("新建数据工作流", type="primary", on_click=on_new_workflow,
+                          key=f"task-center-create:{workspace_id}", use_container_width=True)
+            with right:
+                st.html('<div class="df-task-list-head"><strong>任务过程</strong><small>开始后逐步点亮</small></div>'
+                        '<div class="df-task-empty-steps">'
+                        '<div><b>01</b><span><strong>接入来源</strong><small>文档、对话记录或开放需求</small></span></div>'
+                        '<div><b>02</b><span><strong>解析清洗</strong><small>读取、切块与来源追踪</small></span></div>'
+                        '<div><b>03</b><span><strong>生成质检</strong><small>按 CPT、SFT、DPO 等目标运行</small></span></div>'
+                        '<div><b>04</b><span><strong>质检与候选打包</strong><small>导出可校验候选包；人工审核另行发布</small></span></div>'
+                        '</div>')
         return None
-    st.html(_summary_html(runs))
     attention, active = _quick_switch_runs(runs)
     focus_key = f"task-center-focus:{workspace_id}"
-    show_quick_switch = bool((attention[1] or active[1])
-                             and (len(runs) > 3 or st.session_state.get(focus_key, len(runs) <= 3)))
-    toolbar = st.columns([1.4, 1.6, 1] if show_quick_switch else [2.5, 1],
-                         gap="small", vertical_alignment="center")
-    focus_column, create_column = toolbar[0], toolbar[-1]
+    show_quick_switch = bool((attention[1] or active[1]) and len(runs) > 3)
+    with st.container(key="task-center-toolbar"):
+        toolbar = st.columns([4.3, 1.8, 2.1, 1.65] if show_quick_switch else [4.3, 1.8, 1.65],
+                             gap="small", vertical_alignment="center")
+    with toolbar[0]:
+        st.html(_summary_html(runs))
+    focus_column, create_column = toolbar[1], toolbar[-1]
     with focus_column:
         focus = st.toggle("放大工作流视图", value=False, key=focus_key,
                           help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
@@ -308,7 +328,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         quick_key = f"task-quick-select:{workspace_id}"
         if st.session_state.get(quick_key) not in options:
             st.session_state[quick_key] = None
-        with toolbar[1]:
+        with toolbar[2]:
             st.selectbox(translate("切换任务", language), options, key=quick_key, format_func=quick_label,
                          label_visibility="collapsed", on_change=_quick_choice,
                          args=(workspace_id, quick_key),
@@ -316,85 +336,86 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
     with create_column:
         st.button("新建数据工作流", on_click=on_new_workflow,
                   key=f"task-center-new:{workspace_id}", use_container_width=True)
-    if focus:
-        left, right = st.popover("选择任务"), st.container()
-    else:
-        left, right = st.columns([1.15, 2.7], gap="medium")
-    with left, st.container(key=f"task-center-list-{workspace_id}"):
-        st.html('<div class="df-task-list-head"><strong>自动工作流</strong>'
-                f'<small>共 {len(runs)} 条</small></div>')
-        status_filter = st.segmented_control("筛选任务", FILTERS, default="全部",
-                                             key=f"task-center-filter:{workspace_id}") or "全部"
-        search = st.text_input("搜索任务", placeholder="任务名称、来源文件、日期或 ID",
-                               key=f"task-center-search:{workspace_id}")
-        matches = _filtered_runs(runs, status_filter, search)
-        page_key = f"task-center-page:{workspace_id}"
-        filter_key = page_key + ":filter"
-        signature = (status_filter, search)
-        page = st.session_state.get(page_key, 0)
-        if st.session_state.get(filter_key) != signature:
-            page = 0
-        st.session_state[filter_key] = signature
-        locate = st.session_state.pop(f"task-center-locate:{workspace_id}", None)
-        if locate:
-            page = next((index // 50 for index, run in enumerate(matches) if run["id"] == locate), 0)
-        page_count = max(1, (len(matches) + 49) // 50)
-        page = min(max(0, page), page_count - 1)
-        st.session_state[page_key] = page
-        visible = matches[page * 50:(page + 1) * 50]
-        if page_count > 1:
-            jump_key = page_key + ":jump"
-            # Keep the editor aligned after filtering, shortcut selection, and
-            # Previous/Next callbacks. This runs before the widget is created.
-            st.session_state[jump_key] = page + 1
-            st.number_input("跳转页码", min_value=1, max_value=page_count, step=1,
-                            key=jump_key, on_change=_jump_to_page,
-                            args=(page_key, jump_key))
-            previous, following = st.columns(2)
-            previous.button("上一页任务", disabled=page == 0, key=page_key + ":previous",
-                            on_click=_change_page, args=(page_key, page - 1), width="stretch")
-            following.button("下一页任务", disabled=page == page_count - 1, key=page_key + ":next",
-                             on_click=_change_page, args=(page_key, page + 1), width="stretch")
-            st.caption(f"{page + 1} / {page_count}")
-        st.html('<div class="df-task-list-head"><small>按创建时间倒序</small>'
-                f'<small>显示 {len(visible)} / 匹配 {len(matches)}</small></div>')
-        selection_key = f"task-center-run:{workspace_id}"
-        selected_id = st.session_state.get(selection_key)
-        visible_ids = {run["id"] for run in visible}
-        if selected_id not in visible_ids:
-            selected_id = visible[0]["id"] if visible else None
-            st.session_state[selection_key] = selected_id
-        if not visible:
-            st.html('<div class="df-task-no-match">没有符合当前筛选条件的任务。调整状态或搜索词后再查看。</div>')
-        with st.container(height=600 if len(visible) > 3 else "content", border=False):
-            for run in visible:
-                run_id = str(run["id"])
-                status = str(run.get("status", "queued"))
-                style_status = "selected" if run_id == selected_id else status
-                label = _button_text(run.get("name") or "未命名任务")
-                heading, detail = _run_card_html(run)
-                with st.container(key=f"task_card_{style_status}_{run_id}"):
-                    st.html(heading)
-                    st.button(UntranslatedText(f"**{label}**　↗"),
-                              key=f"task-card:{workspace_id}:{run_id}", use_container_width=True,
-                              on_click=_select_run, args=(selection_key, run_id))
-                    st.html(detail)
-    with right:
-        if selected_id:
-            selected_run = next(run for run in visible if run["id"] == selected_id)
-            if ("agent" in selected_run.get("targets", []) and
-                    has_deliverable_results(selected_run)):
-                review_key = f"task-center-agent-review:{workspace_id}:{selected_id}"
-                if st.toggle("审查本任务 Agent 轨迹", key=review_key,
-                             help="直接在当前任务核对工具过程与重放证据，处理正样本并查看失败轨迹。"):
-                    from lib.presentation.streamlit.agent_review_page import render_agent_review
-
-                    render_agent_review(application, selected_id, workspace_id=workspace_id)
-            if selected_run.get("recipe_readable", True):
-                render_run(application, selected_id, begin, embedded=True,
-                           **({"draft_application": draft_application} if draft_application is not None else {}))
-            else:
-                st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
+    with st.container(key="task-center-body"):
+        if focus:
+            left, right = st.popover("选择任务"), st.container()
         else:
-            st.html('<div class="df-task-no-match">选择左侧任务即可查看真实运行节点、配置、日志与产物。</div>')
+            left, right = st.columns([1, 2.75], gap="medium")
+        with left, st.container(key=f"task-center-list-{workspace_id}"):
+            st.html('<div class="df-task-list-head"><strong>自动工作流</strong>'
+                    f'<small>共 {len(runs)} 条</small></div>')
+            status_filter = st.segmented_control("筛选任务", FILTERS, default="全部",
+                                                 key=f"task-center-filter:{workspace_id}",
+                                                 label_visibility="collapsed", width="stretch") or "全部"
+            search = st.text_input("搜索任务", placeholder="任务名称、来源文件、日期或 ID",
+                                   key=f"task-center-search:{workspace_id}", label_visibility="collapsed")
+            matches = _filtered_runs(runs, status_filter, search)
+            page_key = f"task-center-page:{workspace_id}"
+            filter_key = page_key + ":filter"
+            signature = (status_filter, search)
+            page = st.session_state.get(page_key, 0)
+            if st.session_state.get(filter_key) != signature:
+                page = 0
+            st.session_state[filter_key] = signature
+            locate = st.session_state.pop(f"task-center-locate:{workspace_id}", None)
+            if locate:
+                page = next((index // 50 for index, run in enumerate(matches) if run["id"] == locate), 0)
+            page_count = max(1, (len(matches) + 49) // 50)
+            page = min(max(0, page), page_count - 1)
+            st.session_state[page_key] = page
+            visible = matches[page * 50:(page + 1) * 50]
+            if page_count > 1:
+                jump_key = page_key + ":jump"
+                # Keep the editor aligned after filtering, shortcut selection, and
+                # Previous/Next callbacks. This runs before the widget is created.
+                st.session_state[jump_key] = page + 1
+                st.number_input("跳转页码", min_value=1, max_value=page_count, step=1,
+                                key=jump_key, on_change=_jump_to_page,
+                                args=(page_key, jump_key))
+                previous, following = st.columns(2)
+                previous.button("上一页任务", disabled=page == 0, key=page_key + ":previous",
+                                on_click=_change_page, args=(page_key, page - 1), width="stretch")
+                following.button("下一页任务", disabled=page == page_count - 1, key=page_key + ":next",
+                                 on_click=_change_page, args=(page_key, page + 1), width="stretch")
+                st.caption(f"{page + 1} / {page_count}")
+            st.html('<div class="df-task-list-head"><small>按创建时间倒序</small>'
+                    f'<small>显示 {len(visible)} / 匹配 {len(matches)}</small></div>')
+            selection_key = f"task-center-run:{workspace_id}"
+            selected_id = st.session_state.get(selection_key)
+            visible_ids = {run["id"] for run in visible}
+            if selected_id not in visible_ids:
+                selected_id = visible[0]["id"] if visible else None
+                st.session_state[selection_key] = selected_id
+            if not visible:
+                st.html('<div class="df-task-no-match">没有符合当前筛选条件的任务。调整状态或搜索词后再查看。</div>')
+                return None
+            with st.container(height=600 if len(visible) > 3 else "content", border=False):
+                for run in visible:
+                    run_id = str(run["id"])
+                    status = str(run.get("status", "queued"))
+                    style_status = "selected" if run_id == selected_id else status
+                    label = _button_text(run.get("name") or "未命名任务")
+                    heading, detail = _run_card_html(run, language=st.session_state.get("ui_language", "zh"))
+                    with st.container(key=f"task_card_{style_status}_{run_id}"):
+                        st.html(heading)
+                        st.button(UntranslatedText(f"**{label}**　→"),
+                                  key=f"task-card:{workspace_id}:{run_id}", use_container_width=True,
+                                  on_click=_select_run, args=(selection_key, run_id))
+                        st.html(detail)
+        with right:
+            if selected_id:
+                selected_run = next(run for run in visible if run["id"] == selected_id)
+                if ("agent" in selected_run.get("targets", []) and
+                        has_deliverable_results(selected_run)):
+                    review_key = f"task-center-agent-review:{workspace_id}:{selected_id}"
+                    if st.toggle("审查本任务 Agent 轨迹", key=review_key,
+                                 help="直接在当前任务核对工具过程与重放证据，处理正样本并查看失败轨迹。"):
+                        from lib.presentation.streamlit.agent_review_page import render_agent_review
+
+                        render_agent_review(application, selected_id, workspace_id=workspace_id)
+                if selected_run.get("recipe_readable", True):
+                    render_run(application, selected_id, begin, embedded=True,
+                               **({"draft_application": draft_application} if draft_application is not None else {}))
+                else:
+                    st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
     return selected_id

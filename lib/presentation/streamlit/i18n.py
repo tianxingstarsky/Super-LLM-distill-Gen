@@ -992,7 +992,7 @@ ZH_EN: dict[str, str] = {
     "查看任务运行过程": "View task progress",
     "所选目标已完成，训练文件与质量报告已生成。": "The selected goals are complete. Training files and a quality report are ready.",
     "停止后续步骤": "Stop later steps",
-    "继续执行 / 从断点重试": "Continue / retry from checkpoint",
+    "继续执行 / 从断点重试": "Resume from checkpoint",
     "任务": "Tasks",
     "下载所选文件": "Download selected file",
     "下载已校验文件": "Download checked file",
@@ -1193,6 +1193,11 @@ ZH_EN: dict[str, str] = {
     "合格量来自已校验清单；原因来自本次运行记录": "Accepted counts come from the checked manifest. Reasons come from this run.",
     "以上是当前工作区可审候选量；通过、退回和待处理状态以具体队列为准。": "These are reviewable examples in this workspace. Queue counts show approved, returned, and pending items.",
     "打开审核队列 →": "Open review queue →",
+    "审核 SFT →": "Review SFT →",
+    "审核 DPO →": "Review DPO →",
+    "审核 ORPO →": "Review ORPO →",
+    "审核 RLAIF →": "Review RLAIF →",
+    "审核 CPT →": "Review CPT →",
     "队列暂不可读取": "Review queue is unavailable",
     "查看生成、人工审核与发布前的确认要求。": "View generation, review, and release checks.",
     "查看任务运行过程": "View task progress",
@@ -2511,6 +2516,14 @@ ZH_EN.update({
     "切换任务": "Switch run",
     "展开编辑": "Expand editor",
     "收窄编辑": "Narrow editor",
+    "展开阅读": "Expand reader",
+    "工作草稿": "Work drafts",
+    "节点日志": "Node logs",
+    "该节点暂无模型输出，运行信息见节点日志。": "No model output yet. See Node logs for run details.",
+    "收窄阅读": "Compact reader",
+    "关闭窗口": "Close window",
+    "本次节点配方": "Settings for this run",
+    "本次运行使用的模型、参数与提示词；修改时请复制为新任务。": "Models, settings, and prompts from this run. Create a new task to make changes.",
     "完整模板决定处理步骤与输出字段；风格指令只补充表达要求，指导员规则只约束问答任务。开始运行后全部固定。": "The full template defines the step and output fields. Style instructions guide expression. Director rules guide QA tasks. All are fixed when the run starts.",
     "新工作流默认值": "New workflow defaults",
     "本次任务可在对应节点调整。": "Adjust these settings in the relevant node for each run.",
@@ -2743,7 +2756,7 @@ def translate(value: Any, language: str = "en") -> Any:
         return f"{match.group(1)} · {match.group(2)} {unit} · {match.group(4)}"
     match = re.fullmatch(r"共 (\d+) 条", value)
     if match:
-        return f"{match.group(1)} runs"
+        return f"{match.group(1)} {'run' if int(match.group(1)) == 1 else 'runs'}"
     match = re.fullmatch(r"显示 (\d+) / 匹配 (\d+)", value)
     if match:
         return f"Showing {match.group(1)} / {match.group(2)} matches"
@@ -2772,6 +2785,9 @@ def translate(value: Any, language: str = "en") -> Any:
     if match:
         reason = translate(match.group(1), language).rstrip(".")
         return f"Run failed: {reason}. Completed steps and model responses are saved."
+    match = re.fullmatch(r"运行失败：(.+)", value)
+    if match:
+        return f"Run failed: {translate(match.group(1), language)}"
     match = re.fullmatch(r"当前筛选：(.+) · 最近 (\d+) 条事件", value)
     if match:
         return f"Current filter: {translate(match.group(1), language)} · Last {match.group(2)} events"
@@ -2989,6 +3005,9 @@ def translate(value: Any, language: str = "en") -> Any:
     match = re.fullmatch(r"([\d,]+) 个可审任务 · 候选样本", value)
     if match:
         return f"{match.group(1)} reviewable tasks · candidate examples"
+    match = re.fullmatch(r"([\d,]+) 个可审任务", value)
+    if match:
+        return f"{match.group(1)} reviewable tasks"
     match = re.fullmatch(r"有效审核覆盖\s*(\d+(?:\.\d+)?)%", value)
     if match:
         return f"Verified review coverage {match.group(1)}%"

@@ -1,5 +1,8 @@
 """Node-open streaming, safe selections, and bounded incremental transport."""
 import json
+from copy import deepcopy
+
+import pytest
 
 from streamlit.testing.v1 import AppTest
 
@@ -20,6 +23,7 @@ class Application:
         st.session_state['read-scope'] = (run_id, stage)
         return st.session_state.get('rows', [])
     def read_stream_delta(self, run_id, request_id, *, stage=None, offset=0):
+        st.session_state['delta-reads'] = st.session_state.get('delta-reads', 0) + 1
         st.session_state['delta-scope'] = (run_id, request_id, stage, offset)
         return {'id': request_id, 'stage': stage, 'status':'active', 'offset':offset,
                 'next_offset':offset+10, 'events':[{'channel':'text','text':'<script>literal</script>'}],
@@ -31,7 +35,8 @@ def output(**kwargs):
     value = original_output(**kwargs)
     return st.session_state.get('component-event', value)
 with patch.object(workflow_stream_view, '_output', side_effect=output):
-    render_stream_output(Application(), 'fixture', 'sft')
+    render_stream_output(Application(), 'fixture', 'sft',
+                         reader_height=st.session_state.get('reader-height'))
 '''
 
 
@@ -43,6 +48,117 @@ def row(request_id, **values):
 
 def component_spec(ui):
     return json.loads(ui.get('component_instance')[0].proto.json_args)['spec']
+
+
+def _pinned_stream_app():
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['workflow-stage:fixture'] = 'sft'
+    ui.session_state['rows'] = [row('active-1'), dict(row('manual-1'), status='completed')]
+    ui.session_state['workflow-token-view:fixture:sft'] = {
+        'follow': False, 'id': 'manual-1', 'serial': 'manual-selection'}
+    ui.session_state['workflow-token-cursor:fixture:sft'] = {'id': 'manual-1', 'offset': 20}
+    ui.session_state['workflow-token-offer:fixture:sft'] = {
+        'id': 'manual-1', 'stage': 'sft', 'status': 'completed', 'offset': 20,
+        'next_offset': 30, 'events': [{'channel': 'text', 'text': 'Pending suffix'}],
+        'done': True, 'truncated': False, 'legacy': False, 'text': '', 'reasoning': ''}
+    return ui
+
+
+def _saved_stream_state(ui):
+    return {key: deepcopy(ui.session_state[f'workflow-token-{key}:fixture:sft'])
+            for key in ('view', 'cursor', 'offer')}
+
+
+@pytest.mark.parametrize('rows', [[], [dict(row('other-stage'), stage='cpt')]])
+def test_empty_selected_node_keeps_a_short_caption_without_a_reader_or_transport_reset(rows):
+    ui = _pinned_stream_app()
+    ui.session_state['rows'] = rows
+    ui.session_state['component-event'] = {'receipt': True, 'context': 'fixture:sft',
+        'request_id': 'manual-1', 'selection_serial': 'manual-selection',
+        'next_offset': 30, 'serial': 'late-empty-receipt'}
+    before = _saved_stream_state(ui)
+    ui.run()
+    assert not ui.exception
+    assert not ui.get('component_instance')
+    assert any('暂无模型输出' in item.value for item in ui.caption)
+    assert ui.session_state['reads'] == 1
+    assert 'delta-reads' not in ui.session_state
+    assert _saved_stream_state(ui) == before
+
+
+@pytest.mark.parametrize('reader_height', [160, 220, 380, 600])
+def test_reader_height_is_a_bounded_presentation_option(reader_height):
+    rows = [row('request')]
+    before = deepcopy(rows)
+    default = stream_spec(rows, 'run-a', 'sft', 'en')
+    resized = stream_spec(rows, 'run-a', 'sft', 'en', reader_height=reader_height)
+    assert 'reader_height' not in default
+    assert resized == {**default, 'reader_height': reader_height}
+    assert rows == before
+
+
+@pytest.mark.parametrize('reader_height', [None, True, False, 159, 601, 220.0, '220', {}, []])
+def test_invalid_reader_height_keeps_the_default_component_contract(reader_height):
+    default = stream_spec([row('request')], 'run-a', 'sft', 'en')
+    assert stream_spec([row('request')], 'run-a', 'sft', 'en',
+                       reader_height=reader_height) == default
+
+
+def test_resizing_an_open_reader_preserves_pinned_request_cursor_and_pending_offer():
+    ui = _pinned_stream_app()
+    ui.session_state['reader-height'] = 220
+    before = _saved_stream_state(ui)
+    ui.run()
+    assert not ui.exception
+    first = component_spec(ui)
+    assert first['reader_height'] == 220
+    assert first['selected_id'] == 'manual-1' and first['follow_latest'] is False
+    assert first['ack_serial'] == 'manual-selection' and first['delta']['offset'] == 20
+    assert _saved_stream_state(ui) == before
+    assert 'delta-reads' not in ui.session_state  # Keep the unconfirmed bounded page.
+
+    for height in (380, '220', None):
+        ui.session_state['reader-height'] = height
+        ui.run()
+        assert not ui.exception
+        expected = {key: value for key, value in first.items() if key != 'reader_height'}
+        if height == 380:
+            expected['reader_height'] = height
+        assert component_spec(ui) == expected
+        assert _saved_stream_state(ui) == before
+        assert 'delta-reads' not in ui.session_state
+
+
+@pytest.mark.parametrize('block', ['closed', 'old-stage'])
+def test_closed_or_old_node_fragment_preserves_transport_and_never_reads(block):
+    ui = _pinned_stream_app().run()
+    assert not ui.exception and component_spec(ui)['selected_id'] == 'manual-1'
+    before = _saved_stream_state(ui)
+    reads = ui.session_state['reads']
+    scope = ui.session_state['read-scope']
+    # This receipt would consume the pending offer if the stale fragment ran.
+    ui.session_state['component-event'] = {
+        'context': 'fixture:sft', 'request_id': 'manual-1', 'receipt': True,
+        'selection_serial': 'manual-selection', 'next_offset': 30, 'serial': 'late-receipt'}
+    if block == 'closed':
+        ui.session_state['canvas-open:live-canvas:fixture'] = False
+    else:
+        ui.session_state['workflow-stage:fixture'] = 'preference'
+    ui.run()
+    assert not ui.exception and not ui.get('component_instance')
+    assert ui.session_state['reads'] == reads and ui.session_state['read-scope'] == scope
+    assert 'delta-reads' not in ui.session_state
+    assert _saved_stream_state(ui) == before
+
+    ui.session_state['component-event'] = None
+    ui.session_state['canvas-open:live-canvas:fixture'] = True
+    ui.session_state['workflow-stage:fixture'] = 'sft'
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['reads'] == reads + 1
+    assert component_spec(ui)['selected_id'] == 'manual-1'
+    assert component_spec(ui)['delta'] == before['offer']
+    assert _saved_stream_state(ui) == before
 
 
 def test_closed_node_never_reads_or_renders_model_output():

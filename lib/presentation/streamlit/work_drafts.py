@@ -45,23 +45,21 @@ def _page(key, delta):
 
 def render_work_drafts(application: CreationDraftApplication, workspace: str, navigate):
     st.html('''<style>
-.st-key-work-drafts {padding:9px 0 12px;border-bottom:1px solid #dce6f1;margin-bottom:8px}
+.st-key-work-drafts {min-width:min(400px,calc(100vw - 64px));max-width:520px;
+  padding:2px 0;margin:0;gap:14px}
 .df-draft-current {min-width:0;line-height:1.35}
-.df-draft-current small {display:block;color:#7890a7;font-size:10px;margin-bottom:3px}
+.df-draft-current small {display:block;color:#63768d;font-size:12px;margin-bottom:5px}
 .df-draft-current strong {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:#284662;font-size:12px;font-weight:650}
-.st-key-work-drafts .stButton button {min-height:34px;height:auto;padding:6px 8px;font-size:12px}
+  color:#284662;font-size:14px;font-weight:650}
+.st-key-work-drafts .stButton button {min-height:40px;height:auto;padding:7px 10px;font-size:13px}
 .st-key-work-drafts .stButton button [data-testid="stMarkdownContainer"],
 .st-key-work-drafts .stButton button p {white-space:normal;overflow:visible;text-overflow:clip;
-  font-size:12px;line-height:1.35}
-.st-key-work-drafts [data-testid="stHorizontalBlock"]:has([class*="st-key-work-drafts-group-"]) {
-  flex-wrap:wrap;row-gap:8px}
-.st-key-work-drafts [data-testid="stColumn"]:has(.st-key-work-drafts-group-current) {
-  flex:2.4 1 260px;min-width:min(260px,100%)}
-.st-key-work-drafts [data-testid="stColumn"]:has(.st-key-work-drafts-group-saved) {
-  flex:3.9 1 330px;min-width:min(330px,100%)}
-.st-key-work-drafts [data-testid="stColumn"]:has(.st-key-work-drafts-group-return) {
-  flex:1.7 1 160px;min-width:min(160px,100%)}
+  font-size:13px;line-height:1.35}
+.st-key-work-drafts-group-saved {padding-top:12px;border-top:1px solid #e3ebf5;gap:8px}
+@media(max-width:520px) {
+  .st-key-work-drafts {min-width:0;width:100%}
+  .st-key-work-drafts .stButton button {min-height:44px}
+}
 </style>''')
     with st.container(border=False, key="work-drafts"):
         form_key = f"workflow-form-draft:{workspace}"
@@ -98,10 +96,8 @@ def render_work_drafts(application: CreationDraftApplication, workspace: str, na
         language = st.session_state.get("ui_language", "zh")
         name = current.get(f"workflow-name:{workspace}") or translate("尚未命名的工作", language)
         previous = st.session_state.get(f"work-draft-switch-backup:{workspace}")
-        columns = st.columns([2.4, 3.9, 1.7] if previous else [2.4, 3.9],
-                             gap="small", vertical_alignment="center")
-        with columns[0], st.container(key="work-drafts-group-current"):
-            title, action = st.columns([1.15, 1.25], gap="small", vertical_alignment="center")
+        with st.container(key="work-drafts-group-current"):
+            title, action = st.columns([1.4, 1], gap="small", vertical_alignment="center")
             with title:
                 st.html(f'<div class="df-draft-current"><small>{current_label}</small>'
                         f'<strong data-user-content title="{html.escape(str(name), quote=True)}">'
@@ -119,19 +115,21 @@ def render_work_drafts(application: CreationDraftApplication, workspace: str, na
             moment = str(item.get("created_at", "")).replace("T", " ")[:16]
             return UntranslatedText(f"{draft_name} · {moment} UTC")
 
-        with columns[1], st.container(key="work-drafts-group-saved"):
-            choice, action = st.columns([2.65, 1.25], gap="small", vertical_alignment="center")
-            with choice:
-                selected = st.selectbox("已保存的独立草稿", list(by_id), format_func=label,
-                                        key=f"work-draft-selected:{workspace}:{page}",
-                                        label_visibility="collapsed", disabled=not by_id,
-                                        placeholder=translate("已保存的独立草稿", language))
-            with action:
-                st.button("打开所选草稿", key=f"work-draft-open:{workspace}", disabled=not by_id,
-                          on_click=_restore, args=(application, selected, workspace), width="stretch",
-                          help="切换前会自动保留当前草稿，可在这里找回。")
+        if by_id:
+            with st.container(key="work-drafts-group-saved"):
+                st.caption("已保存的独立草稿")
+                choice, action = st.columns([2.1, 1], gap="small", vertical_alignment="center")
+                with choice:
+                    selected = st.selectbox("已保存的独立草稿", list(by_id), format_func=label,
+                                            key=f"work-draft-selected:{workspace}:{page}",
+                                            label_visibility="collapsed",
+                                            placeholder=translate("已保存的独立草稿", language))
+                with action:
+                    st.button("打开所选草稿", key=f"work-draft-open:{workspace}",
+                              on_click=_restore, args=(application, selected, workspace), width="stretch",
+                              help="切换前会自动保留当前草稿，可在这里找回。")
         if previous:
-            with columns[2], st.container(key="work-drafts-group-return"):
+            with st.container(key="work-drafts-group-return"):
                 st.button("返回切换前草稿", key=f"work-draft-return:{workspace}",
                           on_click=_restore, args=(application, previous, workspace), width="stretch")
         if page or len(saved) > 20:

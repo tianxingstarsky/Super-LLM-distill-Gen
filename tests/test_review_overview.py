@@ -21,7 +21,7 @@ def test_queue_statistics_and_switch_use_injected_applications():
     ui = AppTest.from_string(SCRIPT.encode('ascii','backslashreplace').decode('ascii')).run()
     assert not ui.exception
     html = '\n'.join(item.proto.body for item in ui.get('html'))
-    assert '<span>50000</span>' in html
+    assert '<span>50,000</span>' in html
     assert '<span>30</span>' in html
     assert '队列暂不可读取' in html
     ui.button(key='review-overview-open-orpo').click().run()
@@ -39,8 +39,10 @@ install_streamlit_localization()
     ui = AppTest.from_string((setup + SCRIPT).encode('ascii', 'backslashreplace').decode('ascii')).run()
     assert not ui.exception
     html = '\n'.join(item.proto.body for item in ui.get('html'))
-    assert '<span>—</span><small>Review queue is unavailable</small>' in html
+    assert '<span>—</span><small>Candidates</small></div><small>Review queue is unavailable</small>' in html
     assert '队列暂不可读取' not in html
+    assert [button.label for button in ui.button] == [
+        'Review SFT →', 'Review DPO →', 'Review ORPO →', 'Review RLAIF →', 'Review CPT →']
     ui.button(key='review-overview-open-rlaif').click().run()
     assert ui.session_state['mode'] == 'RLAIF 反馈审核'
     assert not ui.exception
