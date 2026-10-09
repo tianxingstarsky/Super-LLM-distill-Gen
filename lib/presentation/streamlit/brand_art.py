@@ -64,6 +64,7 @@ _GENERATED_ART = {
     "brief": "entry-brief-v1.png",
     "review": "quality-review-v1.png",
     "delivery": "delivery-package-v1.png",
+    "library": "library-archive-v1.png",
 }
 
 

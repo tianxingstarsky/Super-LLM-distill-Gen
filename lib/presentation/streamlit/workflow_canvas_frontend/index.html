@@ -25,7 +25,7 @@ body{margin:0;font:14px "Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-se
 .edge-flow{stroke-dasharray:3 11;stroke:#1c68c5!important;animation:edge-flow 1.3s linear infinite}
 .canvas[data-relations-active="true"] .edge-flow[data-relation="context"]{opacity:.65}
 .edge-arrow{stroke-width:1.8}
-.node{position:absolute;width:218px;height:78px;border:1px solid #cfdfef;border-radius:12px;background:#fff;box-shadow:0 2px 4px #25426005,0 5px 12px #25426008;display:flex;align-items:center;gap:11px;padding:11px 12px;cursor:pointer;text-align:left;color:#1e3855;transition:border-color .16s,background .16s,box-shadow .16s}
+.node{position:absolute;width:218px;height:78px;border:1px solid #cfdfef;border-radius:12px;background:#fff;box-shadow:0 2px 4px #25426005,0 5px 12px #25426008;display:grid;grid-template-columns:28px minmax(0,1fr);align-content:center;align-items:center;gap:2px 8px;padding:4px 10px;cursor:pointer;text-align:left;color:#1e3855;transition:border-color .16s,background .16s,box-shadow .16s}
 .node:hover{border-color:#86b3e7;box-shadow:0 3px 8px #246dd316,0 8px 18px #246dd316;background:#fbfdff}
 .node:focus-visible{outline:3px solid #6cb2ff;outline-offset:4px}
 .node::before,.node::after{content:"";position:absolute;top:35px;width:7px;height:7px;border:1px solid #afc5de;border-radius:50%;background:#fff;pointer-events:none}
@@ -36,25 +36,27 @@ body{margin:0;font:14px "Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-se
 .node[data-status=configuration_required] .dot{background:#c79735;box-shadow:0 0 0 3px #f8efd9}
 .node[data-status=completed]{border-color:#91cdbb}.node[data-status=running]{border-color:#5a9aeb;background:#f8fbff}
 .node[data-status=failed],.node[data-status=cancelled]{border-color:#db9ba6;background:#fffafb}
-.node.selected{border:2px solid #2375d8;padding:10px 11px;background:#f7fbff;box-shadow:0 0 0 4px #dcecff88,0 6px 18px #246dd322}
+.node.selected{border:2px solid #2375d8;padding:3px 9px;background:#f7fbff;box-shadow:0 0 0 4px #dcecff88,0 6px 18px #246dd322}
 .node.selected::before,.node.selected::after{top:34px;border-color:#2375d8;background:#e7f1ff}
 .node.selected .copy small{color:#42648b}
 .node[data-relation="focus"]:not(.selected){border-color:#4989d8;box-shadow:0 0 0 3px #e4effe,0 6px 14px #25426012}
 .node[data-relation="focus"]::before,.node[data-relation="focus"]::after{border-color:#2375d8;background:#e7f1ff}
 .node[data-relation="upstream"] .icon{box-shadow:0 0 0 2px #b8d4f34d}
 .node[data-relation="downstream"] .icon{box-shadow:0 0 0 2px #a9dccd66}
-.icon{width:36px;height:36px;flex:0 0 36px;background:linear-gradient(145deg,#eef6ff,#e4efff);border:1px solid #dfeafa;border-radius:10px;display:grid;place-items:center;color:#2d78cc;font-size:20px}
-.icon svg{width:22px;height:22px;overflow:visible;position:static}
+.icon{width:28px;height:28px;grid-column:1;grid-row:1;background:linear-gradient(145deg,#eef6ff,#e4efff);border:1px solid #dfeafa;border-radius:8px;display:grid;place-items:center;color:#2d78cc;font-size:18px}
+.icon svg{width:19px;height:19px;overflow:visible;position:static}
 .node[data-node=director] .icon,.node[data-node=multiturn] .icon,.node[data-node=agent] .icon{background:linear-gradient(145deg,#effbf8,#e0f3ed);border-color:#d4ece4;color:#16826d}
 .node[data-node=preference] .icon,.node[data-node=cot] .icon{background:linear-gradient(145deg,#f6f1ff,#eee5ff);border-color:#e6dcf7;color:#8054bb}
 .node[data-node=package] .icon{background:linear-gradient(145deg,#eefaf3,#e0f2e9);border-color:#d3e8db;color:#228764}
 .node[data-node=gsm8k] .icon,.node[data-node=trim] .icon{background:linear-gradient(145deg,#fff8eb,#fff0d8);border-color:#f2e4c6;color:#a87520}
 .node.intermediate{border-style:dashed}
-.copy{min-width:0;flex:1}.copy strong{display:block;font-size:18px;font-weight:650;letter-spacing:-.25px;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
-.copy small{display:block;font-size:14px;line-height:1.35;color:#60738b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.copy:has(small+small) strong{font-size:16.5px;line-height:1.22;margin-bottom:3px}
-.copy:has(small+small) small{font-size:12px;line-height:1.3}
-.copy small+small{font-size:12px;margin-top:1px}
+.copy{display:contents}
+.copy strong{grid-column:2;grid-row:1;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;max-height:36px;padding-right:8px;font-size:16.5px;font-weight:650;letter-spacing:-.15px;line-height:18px;white-space:normal;overflow-wrap:anywhere;overflow:hidden}
+.node-details{grid-column:1/-1;grid-row:2;min-width:0;max-height:30px;overflow:hidden}
+.copy small{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;max-height:30px;font-size:13.5px;line-height:15px;color:#60738b;white-space:normal;overflow-wrap:anywhere;overflow:hidden;font-variant-numeric:tabular-nums}
+.copy small.node-model{display:flex;align-items:baseline;gap:5px;max-height:15px;white-space:nowrap;overflow:hidden}
+.model-role{flex:0 0 auto;font-size:12px;font-weight:500;color:#61758d}
+.model-name{min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:500;color:#3e5875}
 .dot{position:absolute;right:10px;top:10px;width:6px;height:6px;border-radius:50%;background:#a4b3c7;box-shadow:0 0 0 3px #f3f6fa}
 .node[data-status=completed] .dot{background:#249b77;box-shadow:0 0 0 3px #e4f6ee}
 .node[data-status=running] .dot{background:#247ae4;box-shadow:0 0 0 3px #e0edff}
@@ -132,6 +134,15 @@ function drawNodeIcon(element,node,glyph){
  const ns="http://www.w3.org/2000/svg",icon=document.createElementNS(ns,"svg");
  icon.setAttribute("viewBox","0 0 24 24");icon.setAttribute("fill","none");icon.setAttribute("stroke","currentColor");icon.setAttribute("stroke-width","1.7");icon.setAttribute("stroke-linecap","round");icon.setAttribute("stroke-linejoin","round");icon.setAttribute("aria-hidden","true");
  for(const d of paths){const path=document.createElementNS(ns,"path");path.setAttribute("d",d);icon.append(path)}element.append(icon);
+}
+function drawModelLabel(element,value){
+ element.className="node-model";element.title=value;
+ // The compact row prioritizes the actual model and role. Backend names are
+ // retained in the complete native tooltip and button accessible name.
+ const match=/^(Generate|Review|Read|生成|评审|识别): (.+?) · (.+)$/.exec(value);
+ if(!match){element.textContent=value;return}
+ const role=document.createElement("span"),model=document.createElement("span");
+ role.className="model-role";role.textContent=match[1]+" · ";model.className="model-name";model.textContent=match[3];element.append(role,model);
 }
 function clearInspectorPosition(){
  if(inspectorPanel){inspectorPanel.removeAttribute("data-workflow-inspector");inspectorPanel.removeAttribute("data-workflow-inspector-open");inspectorPanel.removeAttribute("data-workflow-placement");for(const property of ["display","position","left","top","width","max-height","overflow-y","overscroll-behavior","z-index","--workflow-anchor-x","--workflow-anchor-y"])inspectorPanel.style.removeProperty(property)}
@@ -284,7 +295,7 @@ function render(next){const priorFocus=document.activeElement?.dataset?.node;if(
  const byId=Object.fromEntries(spec.nodes.map(n=>[n.id,n]));
  for(const [a,b] of spec.edges){const from=byId[a],to=byId[b],x=from.x+218,y=from.y+39,ex=to.x,ey=to.y+39,path=document.createElementNS(ns,"path");const bypass=b==="package"&&ex-x>300,rail=from.y===Math.min(...spec.nodes.filter(n=>n.x===from.x).map(n=>n.y))?16:spec.height-16;path.setAttribute("d",bypass?`M ${x} ${y} C ${x+24} ${y},${x+24} ${rail},${x+42} ${rail} L ${ex-35} ${rail} C ${ex-18} ${rail},${ex-18} ${ey},${ex-7} ${ey}`:`M ${x} ${y} C ${x+30} ${y},${ex-30} ${ey},${ex-7} ${ey}`);path.dataset.from=a;path.dataset.to=b;path.classList.add("edge");path.setAttribute("fill","none");path.setAttribute("stroke",to.status==="running"?"#3a88e2":from.status==="completed"&&to.status==="completed"?"#56ac94":"#b5c6db");path.setAttribute("stroke-width",a===spec.selected||b===spec.selected?"3":"2");if(a===spec.selected||b===spec.selected)path.setAttribute("stroke","#247ae4");svg.append(path);if(spec.live&&to.status==="running"){const flow=path.cloneNode();flow.classList.add("edge-flow");flow.setAttribute("stroke","#1c68c5");flow.setAttribute("stroke-width","2.4");svg.append(flow)}const arrow=document.createElementNS(ns,"path");arrow.setAttribute("d",`M ${ex-8} ${ey-4} L ${ex-1} ${ey} L ${ex-8} ${ey+4}`);arrow.dataset.from=a;arrow.dataset.to=b;arrow.classList.add("edge","edge-arrow");arrow.setAttribute("fill","none");arrow.setAttribute("stroke-width","1.8");arrow.setAttribute("stroke",path.getAttribute("stroke"));svg.append(arrow)}
  for(const n of spec.nodes){const button=document.createElement("button");button.className="node"+(n.id===spec.selected?" selected":"")+(n.intermediate?" intermediate":"");button.dataset.status=n.status;button.dataset.node=n.id;button.style.left=n.x+"px";button.style.top=n.y+"px";const modelLabels=!spec.live?(n.models||[]):[];const statusLabels=modelLabels.length&&n.status!=="configuration_required"?[]:[n.subtitle];button.setAttribute("aria-label",[n.label,...statusLabels,...modelLabels].join(" · "));button.setAttribute("aria-pressed",n.id===spec.selected);button.setAttribute("aria-describedby","lineage");button.title=[n.label,n.subtitle,...(n.models||[])].join(" · ");
- const icon=document.createElement("span"),copy=document.createElement("span"),title=document.createElement("strong"),sub=document.createElement("small"),dot=document.createElement("i");icon.className="icon";icon.setAttribute("aria-hidden","true");drawNodeIcon(icon,n.id,n.glyph);copy.className="copy";title.textContent=n.label;sub.textContent=n.subtitle;copy.append(title);if(!spec.live&&n.status!=="configuration_required"&&n.models?.length){for(const value of n.models){const model=document.createElement("small");model.textContent=value;copy.append(model)}}else copy.append(sub);dot.className="dot";button.append(icon,copy,dot);
+ const icon=document.createElement("span"),copy=document.createElement("span"),title=document.createElement("strong"),details=document.createElement("span"),sub=document.createElement("small"),dot=document.createElement("i");icon.className="icon";icon.setAttribute("aria-hidden","true");drawNodeIcon(icon,n.id,n.glyph);copy.className="copy";title.textContent=n.label;details.className="node-details";sub.textContent=n.subtitle;sub.title=n.subtitle;copy.append(title,details);if(!spec.live&&n.status!=="configuration_required"&&n.models?.length){for(const value of n.models){const model=document.createElement("small");drawModelLabel(model,value);details.append(model)}}else details.append(sub);dot.className="dot";button.append(icon,copy,dot);
  if(spec.live){const track=document.createElement("span"),fill=document.createElement("i");track.className="track";fill.style.width=n.percent+"%";track.append(fill);button.append(track)}
  button.onclick=()=>chooseNode(n.id);
  button.onpointerenter=event=>{if(event.pointerType==="touch")return;hoveredNode=n.id;previewMode="pointer";updateRelations()};

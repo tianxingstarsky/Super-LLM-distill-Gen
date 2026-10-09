@@ -44,6 +44,18 @@ DATA_MANAGEMENT_STYLE = """<style>
 .df-data-detail strong { overflow-wrap:anywhere; color:#263B54; font-size:14px; font-weight:600; line-height:1.55; }
 .df-data-origin { display:inline-block; width:fit-content; padding:4px 8px; border-radius:6px; background:#E8F7F0; color:#16805C !important; font-size:12px !important; }
 .df-data-origin[data-origin="source"] { background:#EAF2FF; color:#1769D2 !important; }
+.df-data-selected-head { display:flex; align-items:flex-start; gap:12px; min-width:0; padding:2px 0 14px; }
+.df-data-selected-head > b { display:grid; place-items:center; flex:0 0 42px; height:46px; border:1px solid #D5E5FA; border-radius:12px; background:linear-gradient(145deg,#F3F8FF,#E3EEFF); color:#1E6ACA; font-size:11px; }
+.df-data-selected-head > b:is([data-ext="PDF"],[data-ext="DOCX"]) { background:linear-gradient(145deg,#FFF7F5,#FFE8E4); border-color:#F1D7D2; color:#B04D44; }
+.df-data-selected-head > div { display:grid; gap:8px; min-width:0; }
+.df-data-selected-head strong { color:#233A56; font-size:17px; font-weight:650; line-height:1.5; overflow-wrap:anywhere; }
+.df-data-file-facts { display:grid; grid-template-columns:minmax(70px,.65fr) minmax(0,1.35fr); gap:10px; margin:0; padding:12px 13px; border:1px solid #E6EDF7; border-radius:10px; background:#F7FAFE; }
+.df-data-file-facts > div { min-width:0; }
+.df-data-file-facts dt { margin-bottom:5px; color:#60718A; font-size:12px; line-height:1.4; }
+.df-data-file-facts dd { margin:0; color:#263D58; font-size:13px; font-weight:600; line-height:1.5; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.df-data-file-location { display:grid; gap:5px; min-width:0; margin:10px 0 14px; padding:0 2px; }
+.df-data-file-location > span { color:#60718A; font-size:12px; }
+.df-data-file-location strong { color:#536B89; font-size:12px; font-weight:500; line-height:1.65; overflow-wrap:anywhere; }
 .df-data-note { margin:9px 0 0; color:#5C6F86; font-size:12px; line-height:1.65; }
 .df-data-sample-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:9px; margin:1px 0 13px; padding:13px 15px; border:0; border-radius:12px; background:#EFF5FD; }
 .df-data-sample-head strong { flex:1 1 180px; min-width:0; overflow-wrap:anywhere; color:#213650; font-size:15px; line-height:1.5; }

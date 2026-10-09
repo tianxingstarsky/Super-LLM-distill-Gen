@@ -243,5 +243,45 @@ def test_english_file_table_column_settings_match_localized_headings_and_keep_na
     config = json.loads(table.proto.columns)
     for column in table.value.columns:
         assert config[column]['label'] == column
-    assert config['File name']['width'] > config['Source / folder']['width']
     assert config['Size']['alignment'] == 'right'
+
+
+def test_directory_labels_do_not_repeat_names_and_details_preserve_user_paths_in_english():
+    filename = '工作流 & 审核.txt'
+    script = _CATALOG_SCREEN.replace('guide.txt', 'docs/' + filename)
+    ui = AppTest.from_string(script)
+    ui.session_state['ui_language'] = 'en'
+    ui.run()
+    assert not ui.exception
+    assert ui.dataframe[0].value['File name'].tolist() == [filename]
+    assert ui.dataframe[0].value['Source / folder'].tolist() == ['Source / docs']
+    markup = _catalog_html(ui)
+    assert f'<strong data-user-content>工作流 &amp; 审核.txt</strong>' in markup
+    assert '<strong data-user-content>Source / docs/工作流 &amp; 审核.txt</strong>' in markup
+    assert '<span>Location</span>' in markup
+    assert ui.code[0].value == 'saved source'
+    assert ui.code[0].proto.wrap_lines
+
+
+def test_identical_output_names_keep_distinct_nearby_folders_and_full_selected_path():
+    path = 'real_pdf/pipeline/workflows/427cf49862864de59938533e2617057b/artifacts/cpt.jsonl'
+    other_path = path.replace('/artifacts/', '/stage-results/')
+    script = _CATALOG_SCREEN.replace(
+        "Asset('source/guide.txt', 'source', 'guide.txt', '来源文件', 10, 1),",
+        f"Asset('output/{path}', 'output', '{path}', '语料', 10, 1),"
+        f"Asset('output/{other_path}', 'output', '{other_path}', '语料', 10, 1),"
+    ).replace("'excerpt'", "'仅展示第一条记录的摘录，未在这里校验全文件。'")
+    ui = AppTest.from_string(script)
+    ui.session_state['ui_language'] = 'en'
+    ui.run()
+    assert not ui.exception
+    table = ui.dataframe[0].value
+    assert table['File name'].tolist() == ['cpt.jsonl', 'cpt.jsonl']
+    assert set(table['Source / folder']) == {
+        'Result / …/427cf498…/artifacts',
+        'Result / …/427cf498…/stage-results',
+    }
+    markup = _catalog_html(ui)
+    assert path in markup
+    assert 'Showing an excerpt from the first record.' in markup
+    assert '仅展示第一条记录' not in markup

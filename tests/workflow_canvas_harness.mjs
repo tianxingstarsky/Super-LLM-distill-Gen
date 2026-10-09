@@ -58,6 +58,38 @@ assert.equal(d.querySelector('[data-node="sft"] source'),null);
 assert.ok(d.querySelector('[data-node="sft"]').title.includes('Review: critic & judge'));
 assert.ok(d.querySelector('[data-node="sft"]').getAttribute('aria-label').includes('Generate: writer <source>'));
 assert.ok(d.querySelector('[data-node="sft"]').getAttribute('aria-label').includes('Review: critic & judge'));
+// Long production labels remain intact in the heading and their metadata gets
+// its own full-width row; bindings keep complete backend details accessible.
+const readableNodes=[
+ {...nodes[0],label:'CPT cleaning and review',status:'configuration_required',subtitle:'Choose an available model'},
+ {...nodes[1],label:'Review preferences',status:'configuration_required',subtitle:'Choose an available model'},
+ {...nodes[2],label:'Check and package',status:'pending',models:['Review: critic & judge · deepseek-flash']},
+];
+renderSpec({nodes:readableNodes,edges:[['ingest','sft'],['sft','package']],selected:'ingest',width:810,height:126,labels,language:'en'});
+for(const node of readableNodes){
+ const button=d.querySelector(`[data-node="${node.id}"]`);
+ assert.equal(button.querySelector('strong').textContent,node.label);
+ assert.ok(button.title.includes(node.label));
+ assert.ok(button.getAttribute('aria-label').includes(node.label));
+ assert.ok(button.querySelector('.node-details'),'secondary information occupies a separate metadata area');
+ if(node.status==='configuration_required'){
+  assert.equal(button.querySelector('.node-details small').textContent,'Choose an available model');
+  assert.equal(button.querySelector('.node-model'),null,'a missing binding never pretends to be configured');
+ }
+}
+const packageRow=d.querySelector('[data-node="package"] .node-model');
+assert.equal(packageRow.querySelector('.model-role').textContent,'Review · ');
+assert.equal(packageRow.querySelector('.model-name').textContent,'deepseek-flash');
+assert.equal(packageRow.title,'Review: critic & judge · deepseek-flash');
+assert.ok(d.querySelector('[data-node="package"]').getAttribute('aria-label').includes('Review: critic & judge · deepseek-flash'));
+readableNodes[1]={...readableNodes[1],status:'pending',models:['Generate: provider <main> · deepseek-flash','Review: critic & judge · review-model-2026']};
+renderSpec({nodes:readableNodes,edges:[['ingest','sft'],['sft','package']],selected:'sft',width:810,height:126,labels,language:'en'});
+assert.deepEqual([...d.querySelector('[data-node="sft"] .node-details').querySelectorAll('.model-name')].map(element=>element.textContent),['deepseek-flash','review-model-2026']);
+assert.ok(d.querySelector('[data-node="sft"]').title.includes('provider <main>'));
+assert.equal(d.querySelector('[data-node="sft"] main'),null,'provider names remain text, never inserted markup');
+readableNodes[1].models=['Unknown role: custom backend · keep this complete label'];
+renderSpec({nodes:readableNodes,edges:[['ingest','sft'],['sft','package']],selected:'sft',width:810,height:126,labels,language:'en'});
+assert.equal(d.querySelector('[data-node="sft"] .node-model').textContent,readableNodes[1].models[0],'unrecognized metadata formats are preserved verbatim');
 render('ingest');
 const picker=d.getElementById('node-picker');
 assert.equal(picker.getAttribute('aria-label'),'Go to node');

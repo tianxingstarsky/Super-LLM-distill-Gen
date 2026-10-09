@@ -75,6 +75,14 @@ SETTINGS_STYLE = """<style>
 .df-pref-rule-list span {font-size:13px;line-height:1.65}
 .st-key-settings-workflow-defaults {border-color:#e1e8f2!important;border-radius:16px!important;background:#fff;box-shadow:0 4px 20px #1a3e6d05}
 .st-key-settings-workflow-defaults > [data-testid="stVerticalBlock"] {gap:14px}
+.st-key-settings-default-format {max-width:880px}
+.df-settings-format-note {display:flex;align-items:center;flex-wrap:wrap;gap:9px 13px;margin:0;
+  color:#536b86;font-size:13px;line-height:1.6}
+.df-settings-format-note > span {display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;
+  padding:4px 9px;border-radius:6px;background:#edf6f2;color:#26785c;font-size:12px;font-weight:600}
+.df-settings-format-note > span[data-state="changed"] {background:#fff4e3;color:#996414}
+.df-settings-format-note i {font-style:normal;font-size:14px;line-height:1}
+.df-settings-format-note p {margin:0;min-width:0;overflow-wrap:anywhere}
 [data-testid="stVerticalBlockBorderWrapper"]:has(.st-key-ui-language-choice) {border-color:#e1e8f2;border-radius:16px;background:linear-gradient(115deg,#fff 65%,#f5f9ff);box-shadow:0 4px 20px #1a3e6d05}
 @media(max-width:1050px) {
   .df-settings-overview {grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -82,6 +90,11 @@ SETTINGS_STYLE = """<style>
   .df-settings-stat:first-of-type {border-left:0}
 }
 @media(max-width:760px) {
+  .st-key-settings-default-format [data-testid="stHorizontalBlock"] {flex-direction:column;align-items:stretch;gap:12px}
+  .st-key-settings-default-format [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    width:100%!important;min-width:0!important;max-width:100%!important;flex:1 1 auto!important}
+  .st-key-settings-default-format button {min-height:44px}
+  .st-key-settings-default-format [data-baseweb="select"] > div {min-height:44px}
   .df-settings-pref-overview {grid-template-columns:repeat(2,minmax(0,1fr))}
   .df-settings-distribution {align-items:flex-start;flex-direction:column}
   .df-settings-distribution-body {width:100%}

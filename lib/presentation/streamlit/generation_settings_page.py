@@ -14,21 +14,28 @@ from lib.presentation.streamlit.shared import page_header, section_heading
 def render_workflow_defaults(settings: GenerationSettingsApplication) -> None:
     """Only preferences that actually affect new automatic workflows."""
     with st.container(border=True, key="settings-workflow-defaults"):
-        section_heading("新工作流默认值", "本次任务可在对应节点调整。", "◇")
-        st.caption("提示词、风格、模型与 token 上限在工作流节点配置；个人模板也从节点保存与使用。")
+        section_heading("新工作流默认值", "只影响新建任务。", "◇")
         try:
             snapshot = settings.load("生成偏好")
             summary = settings.summary(snapshot)
         except (OSError, ValueError):
             st.error("生成默认值无法读取，请检查高级单项工具中的偏好配置。")
             return
-        style = st.selectbox(
-            "SFT 默认训练文件格式", ("separated", "drop"),
-            index=0 if summary["cot_style"] != "drop" else 1,
-            format_func=lambda value: translate_label(
-                "分字段保留推理" if value == "separated" else "只保留答案",
-                st.session_state.get("ui_language", "zh")), key="workflow-default-sft-style")
-        if st.button("保存工作流默认值", key="workflow-defaults-save", type="primary"):
+        # Match the effective workflow default: command-only styles fall back
+        # to separate fields when creating an automatic workflow.
+        saved_style = "drop" if summary["cot_style"] == "drop" else "separated"
+        with st.container(key="settings-default-format"):
+            format_col, action_col = st.columns([3, 1.15], gap="medium", vertical_alignment="bottom")
+            with format_col:
+                style = st.selectbox(
+                    "SFT 默认训练文件格式", ("separated", "drop"),
+                    index=0 if saved_style == "separated" else 1,
+                    format_func=lambda value: translate_label(
+                        "分字段保留推理" if value == "separated" else "只保留答案",
+                        st.session_state.get("ui_language", "zh")), key="workflow-default-sft-style")
+            with action_col:
+                save = st.button("保存工作流默认值", key="workflow-defaults-save", type="primary", width="stretch")
+        if save:
             try:
                 settings.save_form(
                     snapshot, default_share=summary["default_share"],
@@ -38,9 +45,21 @@ def render_workflow_defaults(settings: GenerationSettingsApplication) -> None:
                     correction_enabled=summary["correction_enabled"],
                     correction_threshold=summary["correction_threshold"],
                     correction_tagger=summary["correction_tagger"], cot_style=style)
+                saved_style = style
                 st.toast("工作流默认值已保存，已创建的任务保持原配置。")
             except (OSError, ValueError):
                 st.error("默认值未能保存，请检查配置文件后重试。")
+        changed = style != saved_style
+        state = "changed" if changed else "saved"
+        status = "未保存修改" if changed else "当前默认值"
+        explanation = ("推理与最终答案分字段保存。" if style == "separated"
+                       else "训练文件只保留最终答案。")
+        st.html(
+            '<div class="df-settings-format-note" role="status" aria-live="polite">'
+            f'<span data-state="{state}"><i aria-hidden="true">{"•" if changed else "✓"}</i>{status}</span>'
+            f'<p>{explanation}</p></div>'
+        )
+        st.caption("已有任务保持原配置，单次任务可在 SFT 节点调整。")
 
 
 def render_generation_settings(settings: GenerationSettingsApplication, show_title: bool = True) -> None:

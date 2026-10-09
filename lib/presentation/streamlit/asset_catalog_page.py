@@ -1,6 +1,7 @@
 """Data-library presentation using the application contract."""
 import html
 import hashlib
+from pathlib import PurePosixPath
 import streamlit as st
 from filelock import Timeout
 from lib.application.asset_catalog_service import AssetCatalogApplication
@@ -19,6 +20,18 @@ def _asset_size(size: int) -> str:
     if size < 1024 * 1024:
         return f"{size / 1024:.1f} KB"
     return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _asset_folder(asset, language):
+    origin = translate("来源" if asset.origin == "source" else "产物", language)
+    parts = PurePosixPath(asset.relative_path).parent.parts
+    if not parts:
+        return origin
+    # Show nearby folders so a shared, long run prefix does not hide the
+    # distinction between artifacts and stage results. Full paths stay in details.
+    nearby = [part if len(part) <= 18 else part[:8] + "…" for part in parts[-2:]]
+    folder = "/".join((["…"] if len(parts) > 2 else []) + nearby)
+    return f"{origin} / {folder}"
 
 
 def _selection_asset(assets, positions, preferred_id=None):
@@ -53,7 +66,7 @@ def _use_source(catalog, workspace_id, asset, on_use_source):
 def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, show_title=True, *,
                          on_use_source=None, on_import_sources=None):
     if show_title:
-        page_header("数据管理", "浏览来源、对话样本、偏好数据和工作流产物。", "DATA LIBRARY")
+        page_header("数据管理", "浏览来源、对话样本、偏好数据和工作流产物。", "DATA LIBRARY", art_kind="library")
     from datetime import datetime
     from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES, TRAINING_CATEGORIES
     from lib.presentation.streamlit.data_management_style import DATA_MANAGEMENT_STYLE
@@ -72,7 +85,7 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
     st.html(
         '<div class="df-data-stats">'
         f'<div class="df-data-stat"><b>▤</b><span>来源文件</span><strong>{source_count:,}{more}</strong></div>'
-        f'<div class="df-data-stat"><b>◈</b><span>生成产物</span><strong>{output_count:,}{more}</strong></div>'
+        f'<div class="df-data-stat"><b>◈</b><span>产物文件</span><strong>{output_count:,}{more}</strong></div>'
         f'<div class="df-data-stat"><b>◉</b><span>训练数据文件</span><strong>{training_count:,}{more}</strong></div>'
         f'<div class="df-data-stat"><b>◇</b><span>偏好文件</span><strong>{preference_count:,}{more}</strong></div>'
         '</div>'
@@ -136,15 +149,15 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
                         for label in ("文件名", "类型", "来源 / 目录", "大小")}
             rows = [{headings["文件名"]: asset.name,
                      headings["类型"]: asset.suffix.upper().lstrip(".") or "FILE",
-                     headings["来源 / 目录"]: translate(asset.label, ui_language),
+                     headings["来源 / 目录"]: _asset_folder(asset, ui_language),
                      headings["大小"]: _asset_size(asset.size)}
                     for asset in selected_rows]
             event = st.dataframe(
                 rows, hide_index=True, width="stretch", height=min(610, 42 + len(rows) * 44), row_height=44,
                 column_config={
-                    headings["文件名"]: st.column_config.TextColumn(headings["文件名"], width=250),
+                    headings["文件名"]: st.column_config.TextColumn(headings["文件名"], width=200),
                     headings["类型"]: st.column_config.TextColumn(headings["类型"], width=64),
-                    headings["来源 / 目录"]: st.column_config.TextColumn(headings["来源 / 目录"], width=170),
+                    headings["来源 / 目录"]: st.column_config.TextColumn(headings["来源 / 目录"], width=210),
                     headings["大小"]: st.column_config.TextColumn(headings["大小"], width=72, alignment="right"),
                 },
                 on_select="rerun", selection_mode="single-row",
@@ -160,14 +173,19 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
             st.caption("选择一个文件后，可在此查看详情并下载。")
         else:
             origin = selected.origin
+            extension = html.escape(selected.suffix.upper().lstrip(".") or "FILE", quote=True)
+            display_path = html.escape(translate(selected.label, ui_language))
             st.html(
-                '<div class="df-data-detail">'
-                f'<div><span>文件</span><strong data-user-content>{html.escape(selected.name)}</strong></div>'
-                f'<div><span>位置</span><strong>{html.escape(selected.label)}</strong></div>'
-                f'<div><span>来源</span><strong class="df-data-origin" data-origin="{origin}">{"已有资料" if origin == "source" else "生成产物"}</strong></div>'
-                f'<div><span>大小</span><strong>{_asset_size(selected.size)}</strong></div>'
-                f'<div><span>修改时间</span><strong>{datetime.fromtimestamp(selected.mtime_ns / 1_000_000_000).strftime("%Y-%m-%d %H:%M")}</strong></div>'
-                '</div>'
+                '<div class="df-data-selected-head">'
+                f'<b data-ext="{extension}" aria-hidden="true">{extension}</b><div>'
+                f'<strong data-user-content>{html.escape(selected.name)}</strong>'
+                f'<span class="df-data-origin" data-origin="{html.escape(origin, quote=True)}">{"已有资料" if origin == "source" else "生成产物"}</span>'
+                '</div></div>'
+                '<dl class="df-data-file-facts">'
+                f'<div><dt>大小</dt><dd>{_asset_size(selected.size)}</dd></div>'
+                f'<div><dt>修改时间</dt><dd>{datetime.fromtimestamp(selected.mtime_ns / 1_000_000_000).strftime("%Y-%m-%d %H:%M")}</dd></div>'
+                '</dl><div class="df-data-file-location"><span>位置</span>'
+                f'<strong data-user-content>{display_path}</strong></div>'
             )
             try:
                 generation_source_mode(selected)
@@ -192,7 +210,7 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
                 excerpt, note = catalog.excerpt(workspace_id, selected)
                 st.caption("内容摘录")
                 if excerpt:
-                    st.code(excerpt, language="json" if selected.suffix in (".json", ".jsonl") else "text")
+                    st.code(excerpt, language="json" if selected.suffix in (".json", ".jsonl") else "text", wrap_lines=True)
                 st.html('<p class="df-data-note">' + html.escape(note) + '</p>')
             except (OSError, ValueError) as error:
                 st.warning(f"文件已变化或无法预览：{error}")

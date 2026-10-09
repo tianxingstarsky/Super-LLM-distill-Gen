@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "createdDate": "2026-10-09",
+  "generator": "built-in image_gen.imagegen",
+  "transparentBackground": true,
+  "asset": {
+    "file": "assets/studio/library-archive-v1.png",
+    "description": "Compact rounded white porcelain directory holder with exactly three blank semi-transparent glass cards and two blue-glass data cubes.",
+    "intendedDisplayWidthCssPixels": 185,
+    "dimensions": {
+      "width": 1254,
+      "height": 1254
+    },
+    "initialGenerationPrompt": "Use case: stylized-concept\nAsset type: transparent PNG page-header illustration for a Data Library in a pale-blue and white data workbench, shown on the right at about 185 CSS pixels.\nPrimary request: Create a completely new premium compact 3D product sculpture expressing orderly archived source material that is easy to find and retrieve: a white porcelain rounded file-directory rack containing exactly three upright blank semi-transparent glass cards, with two small blue glass data cubes tucked next to the lower front.\nScene/backdrop: Actual alpha-transparent square canvas. No environment, backdrop, floor, display plinth, separate platform, cast ground shadow or shadow blob.\nSubject: A practical compact desktop directory holder, a low rounded white porcelain U-shaped tray with three narrow ordered upright slots. Its open front lets the individual filed cards be seen and retrieved. Exactly three blank frosted translucent ice-blue rounded rectangular cards stand in those slots, gently staggered in height and depth, with their top corners visible as three distinct layers. A pair of small rounded blue glass data cubes sits neatly adjacent to the rack's lower front. One unified orderly cluster, resembling a small file archive organizer.\nStyle/medium: Clean refined 3D product illustration with soft thick rounded geometry; the same smooth white porcelain and transparent ice-blue glass visual family as a document-and-review-shield illustration and a clean porcelain data package illustration. Polished gentle reflections, restrained blue edge highlights and a subtle cyan-blue glint in the glass.\nComposition/framing: Square canvas, slightly elevated three-quarter view. Center the complete object; its longest visible dimension occupies approximately 68–70% of the canvas, leaving generous transparent margin on all four sides. A strong clear silhouette with simple large forms and three individually readable cards at a small display size.\nLighting/mood: Soft bright studio illumination on the object only, calm orderly productive mood.\nColor palette: Porcelain white with softly shaded cool whites, translucent very light ice blue, restrained clear cool-blue cubes and faint cyan edge glints.\nMaterials/textures: Smooth porcelain and thick transparent softly tinted glass, no grain or texture pattern.\nText: none; all cards are completely blank surfaces without line markings.\nConstraints: Complete object contained within canvas. All external margin pixels genuinely transparent alpha. No letters, digits, words, labels, metrics, logos or watermark. No bow, ribbon, gift-wrap or closed gift box. No big halo, ring, aura, glow field, floating particles, confetti, orbit line or background texture. No checkerboard background. Do not add additional contents or decoration.",
+    "targetedRefinementPrompt": "Use case: background-extraction\nAsset type: final transparent PNG illustration in a Data Library page header, displayed at about 185 CSS pixels.\nInput image: edit target is the newly generated white porcelain directory holder with exactly three blank semi-transparent ice-blue cards and two blue glass cubes.\nPrimary request: Change only the framing and transparent exterior. Reduce and center the entire subject as one unified compact assembly so its longest visible dimension is approximately 68–70% of this square canvas, with balanced generous transparent padding on all sides. Keep all original subject proportions, the three stepped cards, directory-holder geometry, two blue cubes, white porcelain material, translucent glass color, soft cyan edge glints, camera angle and studio lighting unchanged.\nTransparency correction: Remove all detached dust, stray pixels, pale fringe residue and faint background haze around the subject. All margin outside the tight clean antialiased silhouette must be actual zero-alpha transparent space, including every edge of the square canvas.\nConstraints: Exactly three blank glass cards; exactly two data cubes; one practical open file-directory tray. No new contents or decoration. No text, labels, logos, digits, metrics or watermark. No bow, ribbons, gift wrap, large halo, rings, background texture, floor, display platform, cast shadow or shadow blob. Do not draw a checkerboard background. Preserve the complete original subject, and keep the final image a truly transparent PNG.",
+    "refinementCount": 1,
+    "initialToolOutput": "C:/Users/tianx/.codex/generated_images/01a1207a-7840-7e72-bb6f-f4994792002b/exec-20e29bcb-d276-4081-b539-3b564006f938.png",
+    "selectedToolOutput": "C:/Users/tianx/.codex/generated_images/01a1207a-7840-7e72-bb6f-f4994792002b/exec-aea24425-dec0-4611-afe0-f3a3c31f49c5.png",
+    "sha256": "4225CC59DEE57E1A50B800FE58665863165B7395F2C0A9C61FC73E3978E7CE6F",
+    "sizeBytes": 636569,
+    "originalBytesPreserved": true,
+    "styleReferencesInspectedOnly": [
+      "assets/studio/quality-review-v1.png",
+      "assets/studio/delivery-package-v1.png"
+    ],
+    "postprocessing": "None. Selected built-in tool output copied byte-for-byte. No Python, canvas, crop, resize, alpha filtering or other image processing.",
+    "inspection": {
+      "width": 1254,
+      "height": 1254,
+      "transparentPixels": 1148152,
+      "partialAlphaPixels": 423801,
+      "nontransparentBorderPixels": 0,
+      "maxBorderAlpha": 0,
+      "visiblePixelsAlpha16": 411445,
+      "alpha16Bounds": [
+        268,
+        295,
+        1027,
+        1020
+      ],
+      "requestedLongestDimensionOccupancy": 0.7,
+      "observedSubjectWidthRatio": 0.606,
+      "observedSubjectHeightRatio": 0.579,
+      "visualChecks": [
+        "Exactly three blank glass cards and two data cubes",
+        "White porcelain and ice-blue glass match inspected brand family",
+        "Practical open file-directory rack; no gift-wrap, ribbon or bow",
+        "No text, labels, letters, digits, metrics, watermark or logos",
+        "No background texture, large halo, glow field, floor, separate platform or cast shadow",
+        "Entire subject contained inside square canvas with generous transparent margins"
+      ],
+      "note": "After the single permitted framing refinement, the subject's longest dimension is approximately 61% of the canvas, providing more margin than the requested approximate 70%. Every outer-border pixel has zero alpha."
+    }
+  }
+}

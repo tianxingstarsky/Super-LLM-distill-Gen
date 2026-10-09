@@ -3,6 +3,23 @@ from __future__ import annotations
 
 
 WORKBENCH_STYLE = """<style>
+/* Override the generic segmented-control flex layout only for source cards.
+   Container width accounts for the expanded sidebar and nested workbench. */
+[data-testid="stApp"] [class*="st-key-workflow-source-mode"] {
+  container-type:inline-size;container-name:workbench-sources;width:100%}
+[data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) {
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%;max-width:none;
+  gap:12px;padding:0;border:0;background:transparent}
+[data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) > button {
+  width:100%;min-width:0;height:auto;white-space:normal}
+@container workbench-sources (max-width:959px) {
+  [data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) {
+    grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@container workbench-sources (max-width:559px) {
+  [data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) {
+    grid-template-columns:minmax(0,1fr)}
+}
 .st-key-workbench-layout [data-testid="stColumn"] {min-width:0}
 .st-key-workbench-canvas-panel {position:relative;background:linear-gradient(145deg,#fff,#fbfdff);
   border-color:#d9e5f2;border-radius:16px;box-shadow:0 5px 20px #24436307}
@@ -97,6 +114,16 @@ WORKBENCH_STYLE = """<style>
 @media(max-width:1050px) {
   .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] {flex-wrap:wrap}
   .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {flex:1 1 100%;width:100%;min-width:0}
+}
+@media(max-width:959px) {
+  .df-wizard-steps > .df-wizard-step {flex:1 1 0;min-width:0}
+  .df-wizard-steps .df-wizard-step > span {min-width:0}
+  .df-wizard-steps .df-wizard-step :is(strong,small) {white-space:normal;overflow-wrap:anywhere;line-height:1.45}
+}
+@media(max-width:559px) {
+  .df-wizard-steps {flex-direction:column;align-items:stretch;gap:12px;padding:14px 16px}
+  .df-wizard-steps > .df-wizard-step {flex:none;width:100%;gap:10px}
+  .df-wizard-steps > i {display:none}
 }
 @media(max-width:700px) {.df-wb-plan-edges {grid-template-columns:1fr}}
 </style>"""

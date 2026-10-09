@@ -502,7 +502,7 @@ def page_prefs(show_title=True):
 
 
 def page_data_management():
-    page_header("数据管理", "统一浏览来源与产物，预览各类训练样本并查看质量检查结果。", "DATA LIBRARY")
+    page_header("数据管理", "统一浏览来源与产物，预览各类训练样本并查看质量检查结果。", "DATA LIBRARY", art_kind="library")
     area = st.segmented_control(
         "数据视图", ("资产管理", "数据预览", "人工制作", "质量报告"),
         default="资产管理", key=f"data-view:{st.session_state['ws']}",
