@@ -1,0 +1,17 @@
+{
+  "file": "shujian-cube-promo.mp4",
+  "duration_seconds": 60.0,
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "video_codec": "H.264",
+  "audio_codec": "AAC",
+  "audio_sample_rate": 48000,
+  "audio_channels": 2,
+  "file_bytes": 18726819,
+  "full_decode_passed": true,
+  "audio_master_correlation": 0.99959,
+  "audio_alignment_offset_seconds": 0.0145,
+  "subtitles": "transparent text, baked into the video; captions.srt also provided",
+  "readme_scene": "local preview of the project README"
+}

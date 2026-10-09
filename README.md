@@ -22,6 +22,16 @@
 
 ShuJian Cube helps you turn documents, agent conversations, and open briefs into training data. Choose a goal. Follow the work. Review the results. Return to your saved tasks whenever you need them.
 
+## Watch the product film
+
+One minute from your first source to a visible workflow. See the real workbench, node settings, dialogue guidance, and saved data. The film has Chinese narration, music, and subtitles.
+
+<p align="center">
+  <a href="assets/promo/shujian-cube-promo.mp4"><img src="assets/promo/shujian-cube-promo-poster.png" width="1200" alt="Watch the one-minute ShuJian Cube product film" /></a>
+</p>
+
+[Watch or download the film](assets/promo/shujian-cube-promo.mp4) · [Get the subtitles](assets/promo/captions.srt)
+
 ## Meet the workbench
 
 One place to start, follow, and refine your work. The home screen brings new tasks and recent activity together. The interface is available in English and Chinese.

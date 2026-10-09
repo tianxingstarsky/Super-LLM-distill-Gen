@@ -23,3 +23,19 @@
 
 - LLaMA-Factory / MS-Swift（Apache-2.0）：仅作为最终数据格式规范参照。
 - UltraFeedback / Evol-Instruct / AgentInstruct：仅借用其公开提示词模板思想（在 configs/recipes 中注明出处）。
+
+## Promotional Film Assets
+
+- Three.js 0.180.0 — MIT. The film includes pinned browser modules in
+  assets/promo/vendor/. The original license is retained as THREE-LICENSE.txt.
+  Upstream: https://github.com/mrdoob/three.js
+- Noto Sans SC — SIL Open Font License 1.1. The self-hosted film font is a
+  Google Fonts text subset. Its license and source are in assets/promo/fonts/.
+  Upstream: https://github.com/notofonts/noto-cjk
+- Product images and screenshots use the project's existing logo and public
+  sample files. The README scene is a local preview of the project document.
+- Narration is synthesized with Qwen3-TTS-12Hz-1.7B-CustomVoice, using the
+  provided Serena voice. Model weights are not distributed in this repository.
+  Upstream: https://github.com/QwenLM/Qwen3-TTS (Apache-2.0).
+- The accompanying music was composed procedurally for this film. No
+  third-party music recording is included.

@@ -1,0 +1,8 @@
+# Reproducible production intermediates. Keep the finished MP4 and MP3.
+shujian-cube-promo.webm
+audio/*.wav
+audio/voice_*
+audio/qwen_sample.*
+audio/subtitle_cues.json
+audio/subtitles.srt
+fonts/promo-*.woff2

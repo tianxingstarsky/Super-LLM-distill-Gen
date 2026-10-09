@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="数简立方，一分钟认识可视化训练数据工作流。">
+  <title>数简立方 · 一分钟产品宣传片</title>
+  <link rel="stylesheet" href="player.css">
+</head>
+<body>
+  <main class="cinema">
+    <header class="masthead">
+      <a class="brand" href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen" target="_blank" rel="noopener noreferrer">
+        <img class="brand-icon" src="brand-mark.png" alt=""><span>数简立方 <small>ShuJian Cube</small></span>
+      </a>
+      <span class="edition">PRODUCT FILM <i></i> 60 SECONDS</span>
+    </header>
+    <section class="screen" aria-label="数简立方产品宣传片">
+      <canvas id="film" width="1920" height="1080" aria-label="含中文字幕的三维宣传动画"></canvas>
+      <div id="loading" class="loading"><span class="loading-cube"></span><strong>正在准备影像与声音</strong><span>一份知识，无限可能。</span></div>
+      <button id="start" class="start" disabled><span class="play-icon">▶</span><span>播放宣传片<small>中文旁白 · 中文字幕 · 原创配乐</small></span></button>
+    </section>
+    <div class="transport">
+      <button id="play" class="round" aria-label="播放" disabled>▶</button>
+      <button id="replay" class="round" aria-label="从头播放" disabled>↺</button>
+      <output id="time">00:00 / 01:00</output>
+      <input id="seek" type="range" min="0" max="60" step="0.01" value="0" aria-label="影片进度" disabled>
+      <button id="mute" class="quiet" aria-label="静音" disabled>声音 开</button>
+      <button id="captions" class="quiet" aria-label="关闭字幕" disabled>字幕 开</button>
+      <button id="fullscreen" class="round" aria-label="全屏观看">⛶</button>
+    </div>
+    <nav class="chapters" aria-label="影片章节">
+      <button data-time="0"><span>01</span>知识成为数据</button>
+      <button data-time="7"><span>02</span>资料与目标</button>
+      <button data-time="15"><span>03</span>可见的工作流</button>
+      <button data-time="25"><span>04</span>风格与多轮</button>
+      <button data-time="35"><span>05</span>质量与续跑</button>
+      <button data-time="45"><span>06</span>每一种创造者</button>
+      <button data-time="54"><span>07</span>数简立方</button>
+    </nav>
+    <footer>
+      <p id="status" role="status">正在载入。</p>
+      <div class="exports"><a href="captions.srt" download>下载字幕</a><a id="mp4" href="shujian-cube-promo.mp4" download hidden>下载 MP4</a><button id="record" disabled>录制 WebM</button></div>
+    </footer>
+    <p class="visually-hidden" id="description" aria-live="off"></p>
+  </main>
+  <script type="module" src="film.mjs"></script>
+</body>
+</html>

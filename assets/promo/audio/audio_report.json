@@ -1,0 +1,93 @@
+{
+  "duration_seconds": 60.0,
+  "sample_rate": 48000,
+  "channels": 2,
+  "peak_dbfs": -1.5,
+  "rms_dbfs": -19.33,
+  "integrated_loudness_lufs": -16.1,
+  "true_peak_dbfs": -1.5,
+  "voice_provider": "Local Qwen3-TTS-12Hz-1.7B-CustomVoice",
+  "voice_name": "Serena",
+  "voice_instruct": "像向朋友介绍一个实用的软件，温暖、清晰、自然，带一点轻微的笑意。有信心，轻松亲切，语气随句意自然起伏，句间合理停顿。保持中等稍快的日常交流速度，不拖长句尾，不用新闻播报腔，不夸张表演。",
+  "music": "Original deterministic synth composition; seed 6102026, D major, 96 BPM",
+  "ffmpeg": "ffmpeg-win-x86_64-v7.1.exe",
+  "local_model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+  "voice_runtime": ".dataforge/promo-tts/runtime",
+  "voice_model_license": "Apache-2.0",
+  "voice_sources": [
+    "https://github.com/QwenLM/Qwen3-TTS",
+    "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+  ],
+  "scene_voice_timings": [
+    {
+      "scene": 1,
+      "start": 0,
+      "end": 7,
+      "text": "想训练自己的模型，却卡在准备数据这一步？",
+      "voice_start": 0.6,
+      "voice_end": 4.324,
+      "natural_voice_seconds": 3.724,
+      "tempo_factor": 1.0
+    },
+    {
+      "scene": 2,
+      "start": 7,
+      "end": 15,
+      "text": "把文档、对话，或者一个想法，交给数简立方。选好目标，就能开始。",
+      "voice_start": 7.35,
+      "voice_end": 13.006,
+      "natural_voice_seconds": 5.656,
+      "tempo_factor": 1.0
+    },
+    {
+      "scene": 3,
+      "start": 15,
+      "end": 25,
+      "text": "沿着这张画布，你可以做预训练语料、问答和偏好数据。每个节点，都能按你的需求调整。",
+      "voice_start": 15.35,
+      "voice_end": 22.602,
+      "natural_voice_seconds": 7.252,
+      "tempo_factor": 1.0
+    },
+    {
+      "scene": 4,
+      "start": 25,
+      "end": 35,
+      "text": "你能看着回答一点点出现，也能设计多轮对话，让样本带上自己的风格。",
+      "voice_start": 25.35,
+      "voice_end": 30.845,
+      "natural_voice_seconds": 5.495,
+      "tempo_factor": 1.0
+    },
+    {
+      "scene": 5,
+      "start": 35,
+      "end": 45,
+      "text": "从生成到审核、去重和导出，流程一路衔接。中途停下，下次接着做。",
+      "voice_start": 35.35,
+      "voice_end": 42.377,
+      "natural_voice_seconds": 7.027,
+      "tempo_factor": 1.0
+    },
+    {
+      "scene": 6,
+      "start": 45,
+      "end": 54,
+      "text": "做研究、落地企业项目，或只是想试试自己的模型，都可以从一小批开始。",
+      "voice_start": 45.35,
+      "voice_end": 52.457,
+      "natural_voice_seconds": 7.107,
+      "tempo_factor": 1.0
+    },
+    {
+      "scene": 7,
+      "start": 54,
+      "end": 60,
+      "text": "数简立方，让好想法，变成下一次训练的起点。",
+      "voice_start": 54.35,
+      "voice_end": 58.794,
+      "natural_voice_seconds": 4.444,
+      "tempo_factor": 1.0
+    }
+  ]
+}
