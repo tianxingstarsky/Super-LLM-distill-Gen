@@ -18,13 +18,16 @@ NODE_ROLES = {
     "preference": ("generation", "jev"), "cot": ("generation", "jev"),
     "trim": ("generation", "jev"),
     "package": ("jev",),
+    "jev": ("jev",),
 }
 
 
 def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None,
                package_review: dict | None = None, cpt_processing: dict | None = None) -> tuple[str, ...]:
-    if stage == "package":
-        return ("jev",) if validate_package_review(package_review)["enabled"] else ()
+    if stage in {"package", "jev"}:
+        review = validate_package_review(package_review)
+        review_node = review.get("node", "package")
+        return ("jev",) if review["enabled"] and stage == review_node else ()
     if stage == "ingest":
         return (("vision",) if source_mode == "多模态文档" else
                 ("generation",) if source_mode in {"开放需求", "模型辅助文档"} else ())

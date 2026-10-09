@@ -38,6 +38,25 @@ def test_absent_services_do_not_mark_empty_drafts_initialized():
     assert not missing_bindings(["sft"], "文档", recovered, endpoints)
 
 
+def test_jev_node_keeps_saved_package_model_and_only_requires_enabled_review():
+    from lib.domain.workflow_scale import node_roles, validate_node_models
+    port = Inventory()
+    app = WorkflowNodeModelsApplication(port)
+    original = validate_node_models({'package': {'jev': {'backend': 'writer', 'model': 'write-v1'}}})
+    review = {'enabled': True, 'node': 'jev'}
+    draft, _, endpoints = app.prepare_draft(['jev', 'package'], '文档', original, [], package_review=review)
+    assert draft['jev'] == original['package']
+    assert 'jev' not in original
+    assert node_roles('package', '文档', package_review=review) == ()
+    assert node_roles('jev', '文档', package_review=review) == ('jev',)
+    assert not missing_bindings(['package'], '文档', {}, endpoints,
+                                package_review={'enabled': False, 'node': 'jev'})
+    draft['jev']['jev']['model'] = 'write-v2'
+    restored, _, _ = app.prepare_draft(['jev'], '文档', draft, [], package_review=review)
+    assert restored['jev']['jev']['model'] == 'write-v2'
+    assert app.snapshot(['jev', 'package'], '文档', restored, package_review=review) == {'jev': restored['jev']}
+
+
 def test_discovered_model_capacity_initializes_new_role_without_rewriting_saved_draft():
     port = Inventory()
     writer = port.value["backends"][0]

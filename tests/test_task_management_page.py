@@ -7,6 +7,17 @@ from streamlit.testing.v1 import AppTest
 from lib.presentation.streamlit.task_management_page import _quick_switch_runs
 
 
+def test_task_progress_counts_optional_jev_before_packaging():
+    from lib.presentation.streamlit.task_management_page import _stage_progress
+    stages = {name: {"status": "completed"} for name in ("ingest", "sft")}
+    stages["package"] = {"status": "pending"}
+    assert _stage_progress({"targets": ["sft"], "stages": stages}) == (2, 3)
+    stages["jev"] = {"status": "running"}
+    assert _stage_progress({"targets": ["sft"], "stages": stages}) == (2, 4)
+    stages["jev"]["status"] = "completed"
+    assert _stage_progress({"targets": ["sft"], "stages": stages}) == (3, 4)
+
+
 def test_small_task_list_keeps_full_selection_without_duplicate_quick_switch():
     script = '''
 import streamlit as st

@@ -10,6 +10,10 @@ from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
 def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_generation=None,
                      package_review=None, cpt_processing=None):
     draft = validate_node_models(draft)
+    if (package_review or {}).get("node") == "jev" and "jev" not in draft and draft.get("package", {}).get("jev"):
+        # Preserve the chosen terminal reviewer when opening an older draft in
+        # the new node layout. Explicit JEV selections always take precedence.
+        draft["jev"] = {"jev": deepcopy(draft["package"]["jev"])}
     initialized = set(initialized)
     endpoints = {row["name"]: row for row in inventory.get("backends", [])}
     for node in nodes:

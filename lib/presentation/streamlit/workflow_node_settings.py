@@ -1,6 +1,7 @@
 """Configure each node's models and service connection in the node panel."""
 from copy import deepcopy
 import hashlib
+import json
 
 import streamlit as st
 from filelock import Timeout
@@ -9,7 +10,7 @@ from lib.application.backend_service import BackendApplication
 from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
 from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
                                        DEFAULT_MAX_OUTPUT_TOKENS,
-                                       MAX_CONTEXT_WINDOW_TOKENS, node_roles,
+                                       MAX_CONTEXT_WINDOW_TOKENS, NODE_ROLES, node_roles,
                                        validate_node_models)
 from lib.model_protocols import API_FORMATS
 from lib.presentation.streamlit.i18n import UntranslatedText
@@ -20,6 +21,15 @@ from lib.presentation.streamlit.workflow_model_capabilities import (
 
 _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
                       "anthropic": "Anthropic Messages"}
+_PROCESS_REVIEW_DESCRIPTIONS = {
+    "sft": "另发模型请求，核对回答是否符合来源与任务要求；可沿用生成模型。",
+    "multiturn": "另发模型请求，核对每轮回答与整段对话的一致性；可沿用生成模型。",
+    "cot": "另发模型请求，核对推理是否支持答案；可沿用生成模型。",
+    "trim": "另发模型请求，核对答案是否保留、清理规则是否满足；可沿用生成模型。",
+    "cpt": "另发模型请求，核对事实、数字与公式是否保真；可沿用清洗模型。",
+    "preference": "另发模型请求，比较两个候选回答并构造偏好；可沿用生成模型。",
+}
+_PROCESS_REVIEW_HELP = "这是用于过程核对的普通大模型，并非特殊模型。可选 JEV 评分不替代这些核对。"
 
 
 def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None):
@@ -29,8 +39,12 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
     initialized_key = draft_key + ":initialized"
     # An explicitly emptied role stays empty after restart. Keep references
     # to temporarily hidden nodes so switching targets never discards edits.
-    restored_markers = [node + ":" + role for node in draft for role in node_roles(
-        node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)]
+    # Terminal review can be switched off while its explicit empty choice is
+    # saved. Its remembered role must not depend on the current switch value.
+    restored_markers = [node + ":" + role for node in draft for role in (
+        NODE_ROLES[node] if node in {"jev", "package"} else node_roles(
+            node, source_mode, node_generation=node_generation, package_review=package_review,
+            cpt_processing=cpt_processing))]
     draft, initialized, endpoints = application.prepare_draft(
         nodes, source_mode, draft, st.session_state.get(initialized_key, restored_markers),
         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
@@ -68,8 +82,94 @@ def _persist_draft_value(workspace: str, key: str, value) -> None:
 def _persist_bindings(workspace: str, bindings: dict) -> None:
     draft_key = f"workflow-node-bindings:{workspace}"
     safe = validate_node_models(bindings)
+    confirmation_key = f"workflow-node-model-confirmations:{workspace}"
+    confirmations = _model_confirmations(workspace)
+    previous = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(draft_key, {})
+    try:
+        previous = validate_node_models(previous)
+    except ValueError:
+        previous = {}
+    for node in set(previous) | set(safe):
+        if previous.get(node) != safe.get(node):
+            confirmations.pop(node, None)
+    st.session_state[confirmation_key] = confirmations
+    _persist_draft_value(workspace, confirmation_key, confirmations)
     st.session_state[draft_key] = deepcopy(safe)
     _persist_draft_value(workspace, draft_key, safe)
+
+
+def _model_fingerprint(node: str, bindings: dict) -> str:
+    normalized = validate_node_models({node: bindings})[node]
+    return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _model_confirmations(workspace: str) -> dict:
+    """Migrate existing saved choices once; new autosaved choices stay pending."""
+    key = f"workflow-node-model-confirmations:{workspace}"
+    if key not in st.session_state:
+        form = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+        if key in form:
+            confirmations = deepcopy(form[key])
+        else:
+            confirmations = {}
+            for node, bindings in form.get(f"workflow-node-bindings:{workspace}", {}).items():
+                if bindings:
+                    try:
+                        confirmations[node] = _model_fingerprint(node, bindings)
+                    except ValueError:
+                        pass
+        st.session_state[key] = confirmations
+    return deepcopy(st.session_state[key])
+
+
+def _confirmation_ready(node: str, roles: tuple[str, ...], bindings: dict, endpoints) -> bool:
+    try:
+        normalized = validate_node_models({node: bindings})[node]
+    except ValueError:
+        return False
+    return bool(roles) and all(role in normalized and normalized[role]["backend"] in endpoints for role in roles)
+
+
+def _confirm_node_models(workspace: str, node: str, roles: tuple[str, ...], endpoints,
+                         application: BackendApplication | None) -> None:
+    """Confirm the current durable draft, never a stale render-time binding."""
+    if application is not None:
+        try:
+            endpoints = {item["name"] for item in application.list_backends().get("backends", [])}
+        except (OSError, ValueError, RuntimeError):
+            st.toast("暂时无法核对模型服务，请稍后重试。")
+            return
+    bindings = st.session_state.get(f"workflow-node-bindings:{workspace}", {}).get(node, {})
+    if not _confirmation_ready(node, roles, bindings, endpoints):
+        st.toast("请先为当前节点补全有效的模型配置。")
+        return
+    key = f"workflow-node-model-confirmations:{workspace}"
+    confirmations = _model_confirmations(workspace)
+    confirmations[node] = _model_fingerprint(node, bindings)
+    st.session_state[key] = confirmations
+    _persist_draft_value(workspace, key, confirmations)
+    st.toast("模型配置尚未保存，请重试确认。" if st.session_state.get(f"workflow-draft-error:{workspace}")
+             else "当前节点的模型配置已确认。")
+
+
+def _render_model_confirmation(node: str, roles: tuple[str, ...], workspace: str,
+                               bindings: dict, endpoints: dict, application) -> None:
+    node_bindings = bindings.get(node, {})
+    ready = _confirmation_ready(node, roles, node_bindings, endpoints)
+    confirmed = (ready and _model_confirmations(workspace).get(node) == _model_fingerprint(node, node_bindings)
+                 and not st.session_state.get(f"workflow-draft-error:{workspace}"))
+    status, action = st.columns([1.7, 1], gap="small", vertical_alignment="center")
+    with status:
+        st.caption("已确认 · 配置已保存" if confirmed else
+                   "待确认 · 草稿尚未保存" if st.session_state.get(f"workflow-draft-error:{workspace}") else
+                   "待确认 · 修改已自动保存为草稿" if ready else "待确认 · 请补全模型配置")
+    with action:
+        st.button("确认模型配置", key=f"node-model-confirm:{workspace}:{node}",
+                  disabled=not ready or confirmed, type="secondary" if confirmed else "primary",
+                  on_click=_confirm_node_models,
+                  args=(workspace, node, roles, tuple(endpoints), application), width="stretch",
+                  help="确认当前节点的模型与 token 上限，不会发起模型请求。")
 
 
 def _set_binding_widgets(workspace: str, node: str, role: str, binding: dict) -> None:
@@ -368,7 +468,10 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             "cpt": "清洗、分块并去重已有语料；此步骤不调用生成模型。",
             "agent": "核对已记录的工具轨迹；此节点不调用模型。验证环境在下方选择。",
             "gsm8k": "生成可复现的多步整数算术题，核对计算标注和最终答案；不处理通用数学证明，此节点不调用模型。",
-            "package": "核对产物清单并整理候选数据；可开启 AI 评审，再选择本节点的评审模型。",
+            "package": ("检查输出规则并整理产物，不调用模型。"
+                        if (package_review or {}).get("node") == "jev" else
+                        "核对产物清单并整理候选数据；可开启 AI 评审，再选择本节点的评审模型。"),
+            "jev": "未启用额外 JEV 评分；各生成节点仍按配置进行过程核对。",
         }.get(node, "此节点不需要配置模型。")
         st.info(explanation)
         return
@@ -378,11 +481,23 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.info("当前没有可用的模型连接。请在下方登记服务地址和模型。")
         _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
         return
+    _render_model_confirmation(node, roles, workspace, bindings, endpoints, backend_application)
     for role in roles:
         writer_label = ("清洗模型" if node == "cpt" and source_mode != "开放需求" else
                         "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
+        review_label = ("JEV 评分模型" if node == "jev" else
+                        "质量评审模型" if node == "package" else "过程核对模型")
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'
-                + ("多模态识别模型" if role == "vision" else writer_label if role == "generation" else "质量评审模型") + '</strong></p>')
+                + ("多模态识别模型" if role == "vision" else writer_label if role == "generation" else review_label) + '</strong></p>')
+        if role == "jev":
+            if node == "jev":
+                st.caption("可选的最终质量评分，会另发模型请求；关闭后仍保留各节点的过程核对。",
+                           help="JEV 是评分步骤，不是模型名称；可选择普通大模型。")
+            elif node == "package":
+                st.caption("打包前另发模型请求评估最终样本；可选择普通大模型。")
+            else:
+                st.caption(_PROCESS_REVIEW_DESCRIPTIONS.get(node,
+                    "另发模型请求核对当前步骤的结果；可沿用生成模型。"), help=_PROCESS_REVIEW_HELP)
         binding = bindings.get(node, {}).get(role, {})
         prefix = f"node-model:{workspace}:{node}:{role}"
         _render_model_reuse(node, role, workspace, bindings, endpoints,
@@ -393,10 +508,11 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             st.caption(UntranslatedText(binding["backend"] + " · " + binding.get("model", "")))
         if prefix + ":backend" in st.session_state and st.session_state[prefix + ":backend"] not in names:
             st.session_state[prefix + ":backend"] = None
+        if prefix + ":backend" not in st.session_state:
+            st.session_state[prefix + ":backend"] = binding.get("backend") if binding.get("backend") in names else None
         service_column, discovery_column = st.columns([3, 1], gap="small", vertical_alignment="bottom")
         with service_column:
-            backend = st.selectbox("模型服务", names, index=names.index(binding["backend"])
-                                   if binding.get("backend") in names else None, key=prefix + ":backend",
+            backend = st.selectbox("模型服务", names, index=None, key=prefix + ":backend",
                                    placeholder="选择模型服务",
                                    on_change=_save_model_selection, args=(workspace, node, role, backend_application),
                                    format_func=lambda name: name + " · " + _API_FORMAT_LABELS.get(
@@ -411,9 +527,13 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         models = discovered_choices(endpoints[backend])
         if binding.get("backend") == backend and binding.get("model") not in models and binding.get("model"):
             models.append(binding["model"])
-        model = st.selectbox("模型", models, index=models.index(binding["model"])
-                             if binding.get("backend") == backend and binding.get("model") in models else None,
-                             accept_new_options=True, key=prefix + ":model:" + backend,
+        model_key = prefix + ":model:" + backend
+        if model_key not in st.session_state:
+            st.session_state[model_key] = binding.get("model") if binding.get("backend") == backend else None
+        # A non-empty default index makes Streamlit deserialize a clear action
+        # back to that default. Restore through state so None remains explicit.
+        model = st.selectbox("模型", models, index=None,
+                             accept_new_options=True, key=model_key,
                              on_change=_save_model_selection, args=(workspace, node, role, backend_application),
                              placeholder="选择或输入模型名")
         if model:

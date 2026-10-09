@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from lib.prompts import get, render
-from lib.domain.workflow_package_review import validate_package_review
+from lib.domain.workflow_package_review import validate_package_review, package_review_stage
 
 
 MAX_NODE_PROMPT_CHARS = 32_768
@@ -28,9 +28,10 @@ VERSION_13_NODE_PROMPT_IDS = {
     "cot": (*LEGACY_NODE_PROMPT_IDS["cot"], "workflow.cot_directed_check"),
     "trim": (*LEGACY_NODE_PROMPT_IDS["trim"], "workflow.trim_directed_check"),
 }
-NODE_PROMPT_IDS = {**VERSION_13_NODE_PROMPT_IDS,
+VERSION_15_NODE_PROMPT_IDS = {**VERSION_13_NODE_PROMPT_IDS,
                    "ingest": (*LEGACY_NODE_PROMPT_IDS["ingest"], "workflow.document_parse"),
                    "cpt": (*LEGACY_NODE_PROMPT_IDS["cpt"], "workflow.cpt_clean", "workflow.cpt_review")}
+NODE_PROMPT_IDS = {**VERSION_15_NODE_PROMPT_IDS, "jev": ("workflow.package_review",)}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -46,8 +47,9 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
     # Prompt editing must remain available while users are clearing a rule or
     # adjusting the final type weight. Creation validates the complete recipe.
     directed = isinstance(qa_director, dict) and qa_director.get("enabled") is True
-    if stage == "package":
-        return NODE_PROMPT_IDS[stage] if validate_package_review(package_review)["enabled"] else ()
+    if stage in {"package", "jev"}:
+        return (NODE_PROMPT_IDS[stage] if validate_package_review(package_review)["enabled"]
+                and package_review_stage(package_review) == stage else ())
     if stage == "ingest":
         return (("workflow.plan",) if source_mode == "开放需求" else
                 ("workflow.document_parse",) if source_mode == "模型辅助文档" else
@@ -101,7 +103,8 @@ def validate_node_prompts(value: dict | None) -> dict:
 def _prompt_catalog(recipe_version: int) -> dict:
     return (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
             VERSION_10_NODE_PROMPT_IDS if recipe_version == 10 else
-            VERSION_13_NODE_PROMPT_IDS if recipe_version <= 13 else NODE_PROMPT_IDS)
+            VERSION_13_NODE_PROMPT_IDS if recipe_version <= 13 else
+            VERSION_15_NODE_PROMPT_IDS if recipe_version <= 15 else NODE_PROMPT_IDS)
 
 
 def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11) -> dict:

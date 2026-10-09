@@ -17,8 +17,11 @@ def validate_package_review(value: dict | None) -> dict:
         return {"enabled": False}
     if (not isinstance(value, dict)
             or set(value) - {"enabled", "mode", "sample_percent", "max_samples_per_target",
-                             "escalate_failure_percent"}):
+                             "escalate_failure_percent", "node"}):
         raise ValueError("invalid_package_review")
+    if "node" in value and value["node"] != "jev":
+        raise ValueError("invalid_package_review")
+    routing = {"node": "jev"} if "node" in value else {}
     enabled = value.get("enabled", False)
     mode = value.get("mode", "sample")
     percent = value.get("sample_percent", DEFAULT_PACKAGE_REVIEW_PERCENT)
@@ -32,11 +35,16 @@ def validate_package_review(value: dict | None) -> dict:
             or not 0 <= escalation <= 100):
         raise ValueError("invalid_package_review")
     if not enabled:
-        return {"enabled": False}
+        return {"enabled": False, **routing}
     result = {"enabled": True, "mode": mode, "sample_percent": float(percent),
-              "max_samples_per_target": limit}
+              "max_samples_per_target": limit, **routing}
     # Preserve the serialized shape/hash of older pinned recipes. New
     # production runs interpret absence as escalation on any failed sample.
     if "escalate_failure_percent" in value:
         result["escalate_failure_percent"] = float(escalation)
     return result
+
+
+def package_review_stage(value: dict | None) -> str:
+    """The absent routing marker retains historical package checkpoints."""
+    return "jev" if validate_package_review(value).get("node") == "jev" else "package"

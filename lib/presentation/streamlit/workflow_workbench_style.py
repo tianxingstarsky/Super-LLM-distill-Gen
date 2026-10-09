@@ -47,6 +47,7 @@ WORKBENCH_STYLE = """<style>
 .st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab"],[role="tab"]) {font-size:14px;height:42px;font-weight:550}
 .st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab-panel"],[role="tabpanel"]) {padding-top:16px}
 .st-key-workbench-node-panel [data-testid="stMarkdownContainer"] p {font-size:14px;line-height:1.65;color:#334b67}
+.st-key-workbench-node-panel button [data-testid="stMarkdownContainer"] p {color:inherit}
 .st-key-workbench-node-panel [data-testid="stCaptionContainer"] p {font-size:12px;line-height:1.6;color:#64768d;opacity:1}
 .st-key-workbench-node-panel :is(input,textarea) {font-size:14px!important;line-height:1.55}
 .st-key-workbench-node-panel [data-testid="stWidgetLabel"] p {font-size:13px;font-weight:500;color:#334b67}

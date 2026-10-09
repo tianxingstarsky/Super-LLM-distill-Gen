@@ -42,7 +42,7 @@ from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.domain.workflow_generation import validate_node_generation, style_for_sample
 from lib.domain.workflow_reasoning_route import cot_updates_sft, cot_with_sft_context, finalized_sft_rows
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
-from lib.domain.workflow_package_review import validate_package_review
+from lib.domain.workflow_package_review import validate_package_review, package_review_stage
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.source_quote import quote_spans
 from lib.domain.workflow_qa_director import validate_qa_director
@@ -86,7 +86,8 @@ PRODUCTION_RECIPE_VERSION = 12
 SOFT_PRODUCTION_RECIPE_VERSION = 13
 DOCUMENT_PROCESSING_RECIPE_VERSION = 14
 COT_SFT_RECIPE_VERSION = 15
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+JEV_NODE_RECIPE_VERSION = 16
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -295,7 +296,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     from lib.domain.workflow_node_prompts import VERSION_13_NODE_PROMPT_IDS
     new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
                               for stage, templates in node_prompts.items() for prompt_id in templates)
-    recipe_version = (COT_SFT_RECIPE_VERSION if {"sft", "cot"}.issubset(targets) else
+    recipe_version = (JEV_NODE_RECIPE_VERSION if package_review_stage(package_review) == "jev" else
+                      COT_SFT_RECIPE_VERSION if {"sft", "cot"}.issubset(targets) else
                       DOCUMENT_PROCESSING_RECIPE_VERSION if cpt_processing_supplied
                       or (isinstance(document_parser, dict) and document_parser.get("mode") == "model")
                       or new_prompt_override else
@@ -416,7 +418,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                 "reasoning_trim_enabled": bool((reasoning_trim or {}).get("enabled")),
                 "package_review_enabled": package_review["enabled"],
                 "qa_director_enabled": qa_director["enabled"],
-                "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0} for key, label in STAGES.items()},
+                "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0}
+                           for key, label in STAGES.items()
+                           if key != "jev" or (package_review["enabled"] and package_review_stage(package_review) == "jev")},
                 "events": [], "usage": {}})
     return run_id
 
@@ -1971,9 +1975,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                                         "mode": self.recipe["package_review"]["mode"],
                                         "candidate_sha256": candidate_hash, "verdict": check}}]
 
-        self.state["stages"]["package"]["phase"] = "ai_review"
-        reviewed = self.stage_items("package", SelectedRows(), review, finalize=False)
-        self.state["stages"]["package"]["phase"] = "writing_artifacts"
+        review_stage = package_review_stage(self.recipe.get("package_review"))
+        self.state["stages"].setdefault(review_stage, {"label": STAGES[review_stage], "done": 0, "total": 0})
+        self.state["stages"][review_stage]["phase"] = "ai_review"
+        reviewed = self.stage_items(review_stage, SelectedRows(), review, finalize=False)
+        if review_stage == "package":
+            self.state["stages"]["package"]["phase"] = "writing_artifacts"
         self.save()
         return reviewed
 
@@ -2072,7 +2079,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             report["limitations"].append(
                 "RLAIF 当前仅产出任务正确性准则下的 AI 反馈和奖励模型偏好候选；未训练奖励模型、提供在线奖励或运行强化学习")
         review_config = validate_package_review(self.recipe.get("package_review"))
-        self.state["stages"]["package"]["phase"] = "deterministic_checks"
+        independent_review = (review_config["enabled"] and package_review_stage(review_config) == "jev"
+                              and not getattr(self, "_production_finalizing", False))
+        if independent_review:
+            self.stage = "jev"
+            self.state["stages"].setdefault("jev", {"label": STAGES["jev"], "done": 0, "total": 0})
+            self.state["stages"]["jev"].update(status="running", phase="preparing_candidates", done=0, total=0)
+            self.state["stages"]["package"].update(status="pending", phase="waiting_for_jev", done=0, total=1)
+            self.save()
+        else:
+            self.state["stages"]["package"]["phase"] = "deterministic_checks"
         self.save(force=False)
         candidates, review_plans, selections = self._prepare_package_candidates(
             collections, released_index, released_near_index, corpus_index,
@@ -2103,7 +2119,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                                         "targets": review_plans}
             report["limitations"].append("打包 AI 评审只代表模型判断；抽检未选中的样本未经过该项评审，不能把抽检通过率当作全量正确率")
         else:
-            report["package_review"] = {"enabled": False, "status": "disabled"}
+            report["package_review"] = {**review_config, "status": "disabled"}
+        if independent_review:
+            metrics = self.state["stages"]["jev"]
+            metrics.update(status="completed", phase="completed", finished_at=now())
+            self.event("stage_completed", outputs=metrics.get("outputs", 0))
+            self.stage = "package"
+            self.state["stages"]["package"].update(status="running", phase="writing_artifacts", done=0, total=1)
+            self.save()
         with self.qa_publication_guard() as qa_history:
             for target in self.recipe["targets"]:
                 self.check_cancel()

@@ -16,7 +16,7 @@ import uuid
 from filelock import FileLock
 
 from lib.domain.workflow_quality import canonical
-from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES
+from lib.domain.workflow_targets import STAGES
 from lib.io_utils import atomic_json
 import hashlib
 
@@ -30,7 +30,7 @@ DELTA_LIMIT = 16 * 1024 * 1024
 DELTA_LINE_LIMIT = 8192
 DELTA_CHUNK_CHARS = 512
 _NAME = re.compile(r"(?:(?P<stage>[a-z_]{1,80})\.)?(?P<id>[a-f0-9]{32})\.(?P<status>active|completed|interrupted)\.json")
-_STAGES = frozenset(("ingest", *BASE_STAGES, *DERIVED_STAGES, "package"))
+_STAGES = frozenset(STAGES)
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.RLock()
 _CACHE_SIZE = 0

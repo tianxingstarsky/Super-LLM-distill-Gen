@@ -65,7 +65,8 @@ def _stage_progress(run: dict) -> tuple[int, int]:
     trimming = bool(run.get("reasoning_trim_enabled")) or stages.get("trim", {}).get("status") in {
         "running", "completed", "failed", "cancelled"}
     nodes, _ = execution_graph(run.get("targets", []), reasoning_trim=trimming,
-                                qa_director={"enabled": bool(run.get("qa_director_enabled"))})
+                                qa_director={"enabled": bool(run.get("qa_director_enabled"))},
+                                package_review={"enabled": "jev" in stages, "node": "jev"})
     return sum(stages.get(key, {}).get("status") == "completed" for key in nodes), len(nodes)
 
 

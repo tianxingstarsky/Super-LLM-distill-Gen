@@ -18,6 +18,7 @@ from lib.domain.workflow_production import (production_batch_size, validate_prod
     quality_first_production, soft_expectation_production, production_completion_status)
 from lib.domain.workflow_quality import canonical
 from lib.domain.workflow_reasoning_route import cot_updates_sft
+from lib.domain.workflow_package_review import package_review_stage
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE, generation_variant
 from lib.domain.workflow_targets import PREFERENCE_TARGETS, STAGES, TARGETS, rlaif_feedback_issue
 from lib.infrastructure.json_stream import iter_json_records
@@ -126,7 +127,7 @@ class WorkflowProduction:
                             "request_error": failure["code"], "request_attempts": attempt + 1}
                 if stage == "trim":
                     rejected["trim_target"] = unit["target"]
-                if stage == "package":
+                if stage in {"package", "jev"}:
                     return [{"target": unit["target"], "index": unit["index"], "status": "quarantined",
                              "package_review": {"status": "rejected", "mode": self.recipe["package_review"]["mode"],
                                  "candidate_sha256": _digest(unit["payload"]), "error": failure["code"]}}]
@@ -601,6 +602,9 @@ class WorkflowProduction:
         receipts = self._production_receipts(directory)
         production = self._production_state(config, receipts)
         needed = {"ingest", "package"} | set(self.recipe["targets"])
+        if (self.recipe.get("package_review", {}).get("enabled")
+                and package_review_stage(self.recipe["package_review"]) == "jev"):
+            needed.add("jev")
         if set(self.recipe["targets"]) & (PREFERENCE_TARGETS | {"cot"}):
             needed.add("sft")
         if set(self.recipe["targets"]) & PREFERENCE_TARGETS:

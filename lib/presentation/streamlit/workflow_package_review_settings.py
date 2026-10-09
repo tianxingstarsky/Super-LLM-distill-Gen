@@ -1,4 +1,4 @@
-"""Optional AI review configured on the packaging node."""
+"""Optional JEV scoring configured on its own workflow node."""
 from __future__ import annotations
 
 import streamlit as st
@@ -18,9 +18,10 @@ def _field(workspace, key, default):
 def package_review_snapshot(workspace: str) -> dict:
     enabled = _field(workspace, f"workflow-package-review-enabled:{workspace}", False)
     if not enabled:
-        return {"enabled": False}
+        return {"enabled": False, "node": "jev"}
     return {
         "enabled": enabled,
+        "node": "jev",
         "mode": _field(workspace, f"workflow-package-review-mode:{workspace}", "sample"),
         "sample_percent": _field(workspace, f"workflow-package-review-percent:{workspace}", DEFAULT_PACKAGE_REVIEW_PERCENT),
         "max_samples_per_target": _field(workspace, f"workflow-package-review-limit:{workspace}", DEFAULT_PACKAGE_REVIEW_LIMIT),
@@ -29,13 +30,21 @@ def package_review_snapshot(workspace: str) -> dict:
 
 
 def render_package_review_toggle(workspace: str, *, save_field) -> None:
+    # Existing local drafts stored this prompt on packaging. Move a copy to
+    # the new node once; a user's later JEV edits always take precedence.
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    old_prompt = f"workflow-node-prompt:{workspace}:package:workflow.package_review"
+    new_prompt = f"workflow-node-prompt:{workspace}:jev:workflow.package_review"
+    if new_prompt not in draft and new_prompt not in st.session_state:
+        saved_prompt = draft.get(old_prompt, st.session_state.get(old_prompt))
+        if saved_prompt is not None:
+            st.session_state[new_prompt] = saved_prompt
+            save_field(workspace, new_prompt)
     enabled_key = f"workflow-package-review-enabled:{workspace}"
     st.session_state[enabled_key] = _field(workspace, enabled_key, False)
-    enabled = st.toggle("打包前 AI 评审", key=enabled_key,
+    st.toggle("加入 JEV 评分", key=enabled_key,
                         on_change=save_field, args=(workspace, enabled_key),
-                        help="先做结构、去重等规则检查，再由当前节点的模型评审；不通过的样本隔离保存。")
-    if not enabled:
-        st.caption("已保留上游质检与打包规则；开启后可增加抽检或全量 AI 评审。")
+                        help="在输出前加入可选的模型评分节点，可抽检或全量评审。关闭不影响生成节点的基础自检与打包规则。")
 
 
 def render_package_review_settings(workspace: str, *, save_field) -> None:

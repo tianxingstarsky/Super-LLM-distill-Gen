@@ -164,6 +164,15 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-trim-instruction:{workspace}"] = trim["instruction"]
         values[f"workflow-trim-prompt:{workspace}"] = trim["custom_prompt"]
     package_review = validate_package_review(recipe.get("package_review"))
+    # A copied run creates a new recipe. Move the old package-local reviewer
+    # into the explicit JEV node without mutating the immutable source recipe.
+    package_review = {**package_review, "node": "jev"}
+    old_package_models = copied_bindings.get("package", {})
+    old_reviewer = old_package_models.pop("jev", None)
+    if old_reviewer is not None:
+        copied_bindings.setdefault("jev", {}).setdefault("jev", old_reviewer)
+    if not old_package_models:
+        copied_bindings.pop("package", None)
     if "package_review" in recipe:
         values[f"workflow-package-review-enabled:{workspace}"] = package_review["enabled"]
     if package_review["enabled"]:
@@ -184,8 +193,14 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
             values[f"workflow-director-weight:{workspace}:{name}"] = weight
     prompt_mode = ("多模态文档" if parser["mode"] == "vision" else "模型辅助文档" if parser["mode"] == "model" else mode)
     copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")))
+    old_review_prompt = copied_prompts.get("package", {}).get("workflow.package_review")
+    if old_review_prompt is not None:
+        copied_prompts.setdefault("jev", {}).setdefault("workflow.package_review", old_review_prompt)
+    review_prompt = copied_prompts.get("jev", {}).get("workflow.package_review")
+    if review_prompt is not None:
+        values[f"workflow-node-prompt:{workspace}:jev:workflow.package_review"] = review_prompt
     prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")),
-                                     qa_director=director)
+                                     qa_director=director, package_review=package_review)
     for node in prompt_nodes:
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
                                                 package_review=package_review, qa_director=director, cpt_processing=cpt_processing):

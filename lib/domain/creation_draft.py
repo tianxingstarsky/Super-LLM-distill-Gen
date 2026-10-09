@@ -3,7 +3,7 @@ from copy import deepcopy
 from math import isfinite
 import re
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE
-from lib.domain.workflow_scale import validate_node_models
+from lib.domain.workflow_scale import NODE_ROLES, validate_node_models
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_production import MAX_PRODUCTION_GOAL, validate_production
 from lib.domain.workflow_generation import GENERATION_STYLES, MAX_GENERATION_INSTRUCTION_CHARS
@@ -67,7 +67,7 @@ def validate_creation_draft(values):
         scopes.add(parts[1])
         if len(scopes) > 1:
             raise ValueError('invalid_creation_draft')
-        if field in {'workflow-node-bindings', 'workflow-document-parse-mode', 'workflow-agent-mode',
+        if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode'} and len(parts) != 2:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:
@@ -109,6 +109,10 @@ def validate_creation_draft(values):
                 valid = isinstance(value, dict) and validate_node_models(value) == value
             except ValueError:
                 valid = False
+        elif field == 'workflow-node-model-confirmations':
+            valid = (isinstance(value, dict) and not set(value) - set(NODE_ROLES)
+                     and all(isinstance(signature, str) and re.fullmatch(r'[0-9a-f]{64}', signature)
+                             for signature in value.values()))
         elif field == 'workflow-production-goals':
             valid = (len(parts) == 2 and isinstance(value, dict) and not set(value) - set(TARGETS)
                      and all(type(count) is int and 1 <= count <= MAX_PRODUCTION_GOAL

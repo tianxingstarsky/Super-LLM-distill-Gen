@@ -17,6 +17,7 @@ STAGES = {
     "gsm8k": "GSM8K 算术核验",
     "cot": "CoT 推理核对",
     "trim": "推理链修剪与核验",
+    "jev": "JEV 评分",
     "package": "质量汇总与打包",
 }
 

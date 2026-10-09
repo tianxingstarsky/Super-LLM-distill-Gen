@@ -155,7 +155,7 @@ def _workflow_error(error) -> str:
         "production_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
         "production_review_integrity_error": "评审断点校验失败，请保留任务文件并检查存储。",
         "production_round_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
-        "invalid_package_review": "AI 打包评审配置无效，请检查质检打包节点。",
+        "invalid_package_review": "AI 评审配置无效，请检查评审节点的范围与参数。",
         "invalid_qa_director": "对话指导员配置无效，请检查指导方式与指令。",
         "invalid_qa_director_planning_mode": "指导方式无效，请在指导员节点重新选择。",
         "invalid_dialogue_design": "对话设计缺少有效目标或字段，请检查指导员提示词。",
@@ -294,7 +294,7 @@ def _stage_configuration(key, recipe, state):
                 details["生成上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details["生成单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         return details
-    if key in {"director", "cpt", "sft", "multiturn", "agent", "preference", "cot", "trim", "package"}:
+    if key in {"director", "cpt", "sft", "multiturn", "agent", "preference", "cot", "trim", "jev", "package"}:
         details = {"启用目标": [target.upper() for target in targets]}
         mode = "文档资料" if recipe.get("sources") else "开放需求"
         # Old CoT runs only checked an existing explanation and had no writer.
@@ -303,7 +303,8 @@ def _stage_configuration(key, recipe, state):
         for role in roles:
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
             prefix = "" if role == "generation" else "jev_"
-            label = "生成模型" if role == "generation" else "质量评审模型"
+            label = ("生成模型" if role == "generation" else "JEV 评分模型" if key == "jev"
+                     else "质量评审模型" if key == "package" else "过程核对模型")
             fallback = translate("旧版默认配置", st.session_state.get("ui_language", "zh"))
             details[label] = UntranslatedText((binding.get("backend") or recipe.get(prefix + "backend") or fallback)
                               + " / " + (binding.get("model") or recipe.get(prefix + "model") or fallback))
@@ -357,13 +358,15 @@ def _stage_configuration(key, recipe, state):
             route = reasoning_route_description(key, targets, recipe.get("version", 0))
             if route:
                 details["导出数据流"] = route
-        elif key == "package":
+        elif key in {"jev", "package"}:
             review = recipe.get("package_review") or {}
             details.update({"输出目标": [target.upper() for target in targets],
                             "质检证据": "逐条记录、失败原因、来源指纹与 SHA-256 清单",
                             "发布状态": "自动检查候选，尚未完成人工审核"})
-            details["打包前 AI 评审"] = "已开启" if review.get("enabled") else "未开启"
-            if review.get("enabled"):
+            has_review = review.get("enabled") and (key == "jev" if review.get("node") == "jev" else key == "package")
+            if key == "jev" or review.get("node") != "jev":
+                details["打包前 AI 评审"] = "已开启" if has_review else "未开启"
+            if has_review:
                 details["评审范围"] = "抽检" if review.get("mode") == "sample" else "全量评审"
                 if review.get("mode") == "sample":
                     details["抽检比例（%）"] = review.get("sample_percent")
@@ -383,7 +386,7 @@ def _stage_configuration(key, recipe, state):
 
 
 STAGE_GLYPHS = {"ingest": "▤", "director": "⌘", "cpt": "▥", "sft": "✎", "multiturn": "☷", "agent": "◇",
-                "preference": "⚖", "gsm8k": "∑", "cot": "◈", "trim": "✂", "package": "▣"}
+                "preference": "⚖", "gsm8k": "∑", "cot": "◈", "trim": "✂", "jev": "✓", "package": "▣"}
 EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节点处理完成",
                 "item_retry": "当前记录正在重试", "production_round_completed": "本轮合格结果已保存",
                 "production_plan_committed": "有效场景规划已保存",
@@ -462,7 +465,7 @@ def _quality_html(targets):
 
 GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 清洗评审", "sft": "SFT 生成",
                 "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
-                "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "package": "质检打包"}
+                "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "jev": "JEV 评分", "package": "输出打包"}
 
 
 def _missing_model_role_summary(issues, language, node_generation=None):
@@ -473,7 +476,8 @@ def _missing_model_role_summary(issues, language, node_generation=None):
     descriptions = []
     for node, roles in pending_roles.items():
         node_label = translate_label(node_display_label(node, GRAPH_LABELS, node_generation), language)
-        missing = [translate_label(role_labels[role], language) for role in roles]
+        missing = [translate_label(("JEV 评分模型" if node == "jev" else "质量评审模型" if node == "package"
+                                    else "过程核对模型") if role == "jev" else role_labels[role], language) for role in roles]
         if language == "en":
             descriptions.append(f"{node_label}: missing {', '.join(missing)}")
         else:
@@ -614,7 +618,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         attempt = int(state.get("attempt", 0))
         reasoning_trim_enabled = bool((recipe.get("reasoning_trim") or {}).get("enabled"))
         graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
-                                         qa_director=recipe.get("qa_director"), recipe_version=recipe.get("version", 0))
+                                         qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
+                                         recipe_version=recipe.get("version", 0))
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
@@ -750,8 +755,14 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         elif selected_stage == "director":
             passed, quarantined = done, max(0, total - done)
             passed_label, quarantined_label = "已规划任务", "待规划任务"
+        elif selected_stage == "jev":
+            passed = int(selected_metrics.get("eligible", 0) or 0)
+            quarantined = int(selected_metrics.get("quarantined", 0) or 0)
+            passed_label, quarantined_label = "AI 通过", "AI 隔离"
         elif selected_stage == "package":
-            if selected_status == "running" and selected_metrics.get("phase") in {"ai_review", "writing_artifacts"}:
+            review = recipe.get("package_review") or {}
+            if (review.get("enabled") and review.get("node") != "jev" and selected_status == "running"
+                    and selected_metrics.get("phase") in {"ai_review", "writing_artifacts"}):
                 passed = int(selected_metrics.get("eligible", 0) or 0)
                 quarantined = int(selected_metrics.get("quarantined", 0) or 0)
                 passed_label, quarantined_label = "AI 通过", "AI 隔离"
@@ -792,10 +803,12 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             render_stream_output(application, run_id, selected_stage, reader_height=380 if wide_reader else 220)
             if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
                 st.caption("开放需求任务规划：按批完成后再进入生成节点。")
-            if selected_stage == "package" and selected_status == "running":
+            if selected_stage in {"jev", "package"} and selected_status == "running":
                 phase_label = {"deterministic_checks": "正在核对结构、去重与打包规则。",
+                               "preparing_candidates": "正在整理可评审样本，核对结构与去重结果。",
                                "ai_review": "正在逐条 AI 评审；通过和隔离数量实时更新。",
-                               "writing_artifacts": "AI 评审已结束，正在写入训练文件、报告与清单。"}.get(selected_metrics.get("phase"))
+                               "writing_artifacts": ("正在写入训练文件、报告与清单。" if (recipe.get("package_review") or {}).get("node") == "jev" else
+                                                     "AI 评审已结束，正在写入训练文件、报告与清单。")}.get(selected_metrics.get("phase"))
                 if phase_label:
                     st.caption(phase_label)
             if "cached" in selected_metrics:
@@ -1264,8 +1277,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         ) or []
         reasoning_trim = render_trim_toggle(ws, targets, save_field=_save_draft_value)
         qa_director = render_director_toggle(ws, targets, save_field=_save_draft_value)
+        render_package_review_toggle(ws, save_field=_save_draft_value)
+        package_review = package_review_snapshot(ws)
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
-                                                   qa_director=qa_director)
+                                                   qa_director=qa_director, package_review=package_review)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
@@ -1367,17 +1382,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             route = reasoning_route_description(selected_node, targets)
             if route:
                 st.caption(route)
-            if selected_node == "package":
-                render_package_review_toggle(ws, save_field=_save_draft_value)
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
                                                       node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                                                       qa_director=qa_director))
             settings_tab, prompts_tab = (_setup_node_tabs(ws, selected_node) if has_prompts
                                         else (nullcontext(), nullcontext()))
             with settings_tab:
-                if selected_node == "package":
-                    render_package_review_settings(ws, save_field=_save_draft_value)
-                elif selected_node == "director":
+                if selected_node == "director":
                     render_director_settings(ws, save_field=_save_draft_value)
                 if selected_node == "ingest" and source_mode == "文档资料":
                     document_parser = render_document_parser(ws, bindings, endpoints,
@@ -1392,6 +1403,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 else:
                     render_node_models(selected_node, model_source_mode, ws, bindings, endpoints,
                                        backend_application=backend_application, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
+                if selected_node == "jev":
+                    render_package_review_settings(ws, save_field=_save_draft_value)
                 if selected_node == "sft" and "sft" in targets:
                     sft_output_style = st.selectbox(
                         "SFT 训练文件格式", ("separated", "drop"),
@@ -1408,7 +1421,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 if selected_node == "ingest" and source_mode != "知识库检索":
                     st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
                 elif selected_node == "package":
-                    st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
+                    st.caption("检查结构、去重并导出训练文件、报告与清单。")
             with prompts_tab:
                 if selected_node in {"sft", "cot"}:
                     render_generation_settings(selected_node, ws, save_field=_save_draft_value, prompt_library=prompt_library)
@@ -1656,7 +1669,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if qa_director["enabled"]:
                 run_summary += " · " + translate("对话指导员", language)
             if package_review["enabled"]:
-                run_summary += " · " + translate("AI 抽检" if package_review["mode"] == "sample" else "AI 全量评审", language)
+                run_summary += " · " + translate("JEV 抽检" if package_review["mode"] == "sample" else "JEV 全量评审", language)
             if evaluation_uploads:
                 run_summary += (f" · {len(evaluation_uploads)} evaluation references" if language == "en"
                                 else f" · 评测参照 {len(evaluation_uploads)} 份")

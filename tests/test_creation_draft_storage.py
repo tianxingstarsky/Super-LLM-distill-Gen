@@ -24,6 +24,10 @@ from tests.test_workflow_draft import SCRIPT
     ('workflow-generation-enabled:w:cot', 1), ('workflow-generation-instruction:w:sft', 'x' * 4001),
     ('workflow-trim-enabled:w', 'true'), ('workflow-trim-template:w', 'unknown'),
     ('workflow-trim-instruction:w', 'x' * 4001), ('workflow-trim-prompt:w', 'x' * 16001),
+    ('workflow-node-model-confirmations:w', {'sft': 'invalid'}),
+    ('workflow-node-model-confirmations:w', {'unknown': 'a' * 64}),
+    ('workflow-node-model-confirmations:w', {'sft': 'A' * 64}),
+    ('workflow-node-model-confirmations:w:sft', {'sft': 'a' * 64}),
 ])
 def test_draft_rejects_invalid_or_non_form_values(key, value):
     with pytest.raises(ValueError, match='invalid_creation_draft'):
@@ -35,6 +39,12 @@ def test_validation_returns_independent_values():
     result = validate_creation_draft(original)
     result['workflow-targets:w:p'].append('dpo')
     assert original['workflow-targets:w:p'] == ['sft']
+
+
+def test_node_model_confirmations_survive_draft_restart(tmp_path):
+    values = {'workflow-node-model-confirmations:w': {'sft': 'a' * 64, 'jev': 'b' * 64}}
+    creation_draft_application(tmp_path).replace(values)
+    assert creation_draft_application(tmp_path).load() == values
 
 
 def test_generation_and_trim_drafts_preserve_incomplete_custom_edits_across_restart(tmp_path):
@@ -234,7 +244,7 @@ def test_named_drafts_keep_sft_style_and_exact_session_values_across_restarts(tm
         assert fresh.number_input(key='workflow-count:fixture').value == count
         assert fresh.selectbox(key='workflow-sft-output-style:fixture').value == style
         assert restored['workflow-sft-output-style:fixture'] == style
-        assert not any('node-model' in key or 'consent' in key or 'api-key' in key for key in restored)
+        assert not any(key.startswith('node-model:') or 'consent' in key or 'api-key' in key for key in restored)
     assert not first.exception and not second.exception
 
 

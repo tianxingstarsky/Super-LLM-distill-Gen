@@ -1,5 +1,6 @@
 """A model service can be connected without leaving the selected workflow node."""
 import pytest
+from copy import deepcopy
 
 from streamlit.testing.v1 import AppTest
 
@@ -321,6 +322,135 @@ def test_review_picker_does_not_filter_out_the_generation_model():
     ui.selectbox(key='node-model:demo:sft:jev:model:writer').set_value('alpha').run()
     assert not ui.exception
     assert ui.session_state['workflow-node-bindings:demo']['sft']['jev'] == writer
+
+
+def _confirmation_ui(*, form=None, roles=None):
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['fixture-local'] = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha', 'beta']},
+    }}
+    binding = {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}
+    ui.session_state['workflow-node-bindings:demo'] = {
+        'sft': roles if roles is not None else {'generation': dict(binding), 'jev': dict(binding)},
+    }
+    if form is not None:
+        ui.session_state['workflow-form-draft:demo'] = form
+    return ui.run()
+
+
+def test_model_confirmation_is_one_explicit_node_action_and_invalidates_on_edits():
+    ui = _confirmation_ui()
+    assert not ui.exception
+    assert ui.session_state['workflow-node-model-confirmations:demo'] == {}
+    assert not ui.button(key='node-model-confirm:demo:sft').disabled
+    assert sum(button.label == '确认模型配置' for button in ui.button) == 1
+    ui.button(key='node-model-confirm:demo:sft').click().run()
+    assert not ui.exception
+    confirmed = ui.session_state['workflow-node-model-confirmations:demo']['sft']
+    assert len(confirmed) == 64
+    assert ui.button(key='node-model-confirm:demo:sft').disabled
+    assert any(item.value == '已确认 · 配置已保存' for item in ui.caption)
+    assert ui.session_state['workflow-form-draft:demo']['workflow-node-model-confirmations:demo']['sft'] == confirmed
+    ui.number_input(key='node-model:demo:sft:generation:output:writer:alpha').set_value(40_000).run()
+    assert not ui.exception
+    assert 'sft' not in ui.session_state['workflow-node-model-confirmations:demo']
+    assert not ui.button(key='node-model-confirm:demo:sft').disabled
+    ui.number_input(key='node-model:demo:sft:generation:output:writer:alpha').set_value(32_768).run()
+    assert 'sft' not in ui.session_state['workflow-node-model-confirmations:demo']
+    ui.button(key='node-model-confirm:demo:sft').click().run()
+    ui.selectbox(key='node-model:demo:sft:generation:model:writer').set_value('beta').run()
+    assert not ui.exception
+    assert 'sft' not in ui.session_state['workflow-node-model-confirmations:demo']
+
+
+def test_confirmation_survives_restoring_a_saved_draft_but_pending_draft_stays_pending():
+    ui = _confirmation_ui()
+    pending = ui.session_state['workflow-form-draft:demo']
+    restored_pending = _confirmation_ui(form=pending)
+    assert not restored_pending.exception
+    assert not restored_pending.button(key='node-model-confirm:demo:sft').disabled
+    ui.button(key='node-model-confirm:demo:sft').click().run()
+    saved = ui.session_state['workflow-form-draft:demo']
+    restored = _confirmation_ui(form=saved)
+    assert not restored.exception
+    assert restored.button(key='node-model-confirm:demo:sft').disabled
+    assert restored.session_state['workflow-node-model-confirmations:demo'] == saved['workflow-node-model-confirmations:demo']
+
+
+def test_legacy_saved_model_choices_do_not_require_reconfirmation():
+    binding = {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}
+    saved = {'workflow-node-bindings:demo': {'sft': {'generation': binding, 'jev': dict(binding)}}}
+    ui = _confirmation_ui(form=saved)
+    assert not ui.exception
+    assert ui.button(key='node-model-confirm:demo:sft').disabled
+    assert 'sft' in ui.session_state['workflow-form-draft:demo']['workflow-node-model-confirmations:demo']
+
+
+def test_incomplete_model_selection_cannot_be_confirmed():
+    ui = _confirmation_ui(roles={})
+    assert not ui.exception
+    assert ui.button(key='node-model-confirm:demo:sft').disabled
+    assert any(item.value == '待确认 · 请补全模型配置' for item in ui.caption)
+    assert ui.session_state['workflow-node-model-confirmations:demo'] == {}
+
+
+def test_confirmation_rechecks_service_existence_at_click_time():
+    ui = _confirmation_ui()
+    ui.session_state['fixture-local'] = {'backends': {}}
+    ui.button(key='node-model-confirm:demo:sft').click().run()
+    assert not ui.exception
+    assert ui.session_state['workflow-node-model-confirmations:demo'] == {}
+
+
+@pytest.mark.parametrize('legacy_package_binding', [False, True])
+@pytest.mark.parametrize('clear_field', ['model:writer', 'backend'])
+def test_cleared_jev_model_stays_empty_after_disabled_draft_restart(legacy_package_binding, clear_field):
+    script = SCRIPT[:SCRIPT.index('endpoints =')]
+    script = script.replace("return {'backends': {}, 'default_backend': ''}",
+                            "return {'backends': {}, 'default_backend': 'writer', 'default_model': 'alpha'}")
+    script += '''
+from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
+from lib.presentation.streamlit.workflow_node_settings import node_bindings
+enabled = st.checkbox('启用 JEV', key='fixture-jev-enabled')
+review = {'enabled': enabled, 'node': 'jev'}
+bindings, endpoints = node_bindings(WorkflowNodeModelsApplication(application),
+    ['jev'] if enabled else [], '文档资料', 'demo', package_review=review)
+if enabled:
+    render_node_models('jev', '文档资料', 'demo', bindings, endpoints,
+                       backend_application=application, package_review=review)
+'''
+    local = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha']},
+    }}
+    ui = AppTest.from_string(script)
+    ui.session_state['fixture-local'] = deepcopy(local)
+    ui.session_state['fixture-jev-enabled'] = True
+    if legacy_package_binding:
+        ui.session_state['workflow-form-draft:demo'] = {'workflow-node-bindings:demo': {
+            'package': {'jev': {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}},
+        }}
+    ui.run()
+    assert not ui.exception
+    assert ui.selectbox(key='node-model:demo:jev:jev:model:writer').value == 'alpha'
+    ui.selectbox(key='node-model:demo:jev:jev:' + clear_field).set_value(None).run()
+    assert not ui.exception
+    assert ui.session_state['workflow-node-bindings:demo']['jev'] == {}
+    ui.checkbox(key='fixture-jev-enabled').uncheck().run()
+    saved = deepcopy(ui.session_state['workflow-form-draft:demo'])
+    assert saved['workflow-node-bindings:demo']['jev'] == {}
+    restarted = AppTest.from_string(script)
+    restarted.session_state['fixture-local'] = deepcopy(local)
+    restarted.session_state['workflow-form-draft:demo'] = saved
+    restarted.run()
+    assert not restarted.exception
+    assert 'jev:jev' in restarted.session_state['workflow-node-bindings:demo:initialized']
+    restarted.checkbox(key='fixture-jev-enabled').check().run()
+    assert not restarted.exception
+    assert restarted.session_state['workflow-node-bindings:demo']['jev'] == {}
+    assert restarted.selectbox(key='node-model:demo:jev:jev:backend').value is None
+    assert restarted.button(key='node-model-confirm:demo:jev').disabled
+    if legacy_package_binding:
+        assert restarted.session_state['workflow-node-bindings:demo']['package']['jev']['model'] == 'alpha'
 
 
 def test_node_model_picker_accepts_explicit_custom_names():

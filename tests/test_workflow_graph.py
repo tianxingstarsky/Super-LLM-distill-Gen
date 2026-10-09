@@ -120,3 +120,38 @@ def test_trim_canvas_has_readable_non_overlapping_nodes_and_correct_links():
     assert by_id["trim"]["x"] + 218 < by_id["package"]["x"]
     assert all(0 <= node["x"] <= spec["width"] - 218 for node in spec["nodes"])
     assert spec["edges"] == execution_graph(targets, reasoning_trim=True)[1]
+
+
+def test_optional_jev_is_a_real_terminal_stage_without_bypassing_final_reasoning():
+    review = {"enabled": True, "node": "jev"}
+    targets = ["sft", "cot", "cpt", "dpo"]
+    nodes, edges = execution_graph(targets, reasoning_trim=True, package_review=review)
+    assert nodes[-3:] == ("trim", "jev", "package")
+    assert ("cot", "trim") in edges and ("trim", "jev") in edges
+    assert ("cpt", "jev") in edges and ("preference", "jev") in edges
+    assert ("jev", "package") in edges
+    assert all(origin == "jev" for origin, destination in edges if destination == "package")
+    assert ("sft", "jev") not in edges and ("sft", "trim") not in edges
+    for config in ({"enabled": False, "node": "jev"}, {"enabled": True}, None):
+        legacy_nodes, legacy_edges = execution_graph(targets, package_review=config)
+        assert "jev" not in legacy_nodes
+        assert ("cot", "package") in legacy_edges
+
+
+def test_jev_canvas_allocates_its_own_column_and_reports_actual_stage_progress():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    targets = ["sft", "cot", "cpt"]
+    review = {"enabled": True, "node": "jev"}
+    nodes, edges = execution_graph(targets, reasoning_trim=True, package_review=review)
+    labels = {key: key for key in nodes}
+    spec = canvas_spec(targets, {"jev": {"status": "running", "done": 5, "total": 20},
+                                 "package": {"status": "pending"}}, "jev", labels, labels,
+                       live=True, reasoning_trim=True, package_review=review)
+    by_id = {node["id"]: node for node in spec["nodes"]}
+    assert by_id["trim"]["x"] + 218 < by_id["jev"]["x"]
+    assert by_id["jev"]["x"] + 218 < by_id["package"]["x"]
+    assert by_id["jev"]["percent"] == 25
+    assert by_id["package"]["percent"] == 0
+    assert "API" in by_id["jev"]["description"]
+    assert "本地处理" in by_id["package"]["description"]
+    assert spec["edges"] == edges

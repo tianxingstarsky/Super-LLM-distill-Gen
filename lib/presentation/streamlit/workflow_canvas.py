@@ -20,25 +20,57 @@ def node_display_label(node, labels, node_generation=None):
     return labels[node]
 
 
+def node_description(node, source_mode, *, node_generation=None, package_review=None, cpt_processing=None):
+    """A short purpose and cost hint available on every node without another card."""
+    descriptions = {
+        "ingest": "读取来源并整理为可处理的文档片段或任务。",
+        "director": "规划互动类型与上下文，指导生成节点安排多样化样本。",
+        "cpt": "清洗预训练语料，检查内容质量并保留来源。",
+        "sft": "生成指令对话并完成基础自检；为推理或偏好节点提供候选。",
+        "multiturn": "生成连续多轮对话，检查逐轮质量与全段一致性。",
+        "agent": "验证工具调用轨迹，保留可复查的执行证据。",
+        "gsm8k": "构建算术任务并核对答案。",
+        "preference": "比较候选回答，形成偏好训练数据。",
+        "trim": "按提示词修剪推理中的泄漏或冗余，保留最终答案。",
+        "jev": "额外的模型评分节点；按抽检或全量评审筛选最终样本。",
+        "package": "检查结构、去重并导出训练文件、报告与清单。",
+    }
+    if node == "cot":
+        generation = (node_generation or {}).get("cot")
+        description = ("按风格提示词生成显式推理与答案，并核验结果。" if generation and generation.get("enabled", True)
+                       else "核验上游已有推理与答案；本节点不重新撰写推理。")
+    elif node == "package" and package_review and package_review.get("enabled") and package_review.get("node") != "jev":
+        description = "执行规则检查、模型评审与导出，保留旧任务处理方式。"
+    else:
+        description = descriptions.get(node, "")
+    roles = node_roles(node, source_mode, node_generation=node_generation,
+                       package_review=package_review, cpt_processing=cpt_processing)
+    usage = "调用模型；可能产生 API 费用。" if roles else "本地处理，不发起模型请求。"
+    return description, usage
+
+
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
-                qa_director=None, cpt_processing=None, recipe_version=15):
+                qa_director=None, cpt_processing=None, recipe_version=16):
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
-                                  recipe_version=recipe_version)
+                                  package_review=package_review, recipe_version=recipe_version)
     base = [key for key in BASE_STAGES if key in nodes]
     derived = [key for key in DERIVED_STAGES if key in nodes]
     # Center each column within its actual rows. Leave a clear outer lane for
     # base outputs that bypass the derived column on their way to packaging.
-    bypass = bool(derived or "trim" in nodes) and any(a in base and b == "package" for a, b in edges)
+    bypass = bool(derived or "trim" in nodes) and any(a in base and b in {"jev", "package"} for a, b in edges)
     margin = 44 if bypass else 24
     height = 2 * margin + 78 + 100 * (max(1, len(base), len(derived)) - 1)
     director_width = 270 if "director" in nodes else 0
-    width = (1080 if derived else 810) + (270 if "trim" in nodes else 0) + director_width
+    review_width = 270 if "jev" in nodes else 0
+    width = (1080 if derived else 810) + (270 if "trim" in nodes else 0) + director_width + review_width
     positions = {"ingest": (24, (height - 78) / 2), "package": (width - 242, (height - 78) / 2)}
     if "director" in nodes:
         positions["director"] = (294, (height - 78) / 2)
     if "trim" in nodes:
-        positions["trim"] = (width - 512, (height - 78) / 2)
+        positions["trim"] = (width - 512 - review_width, (height - 78) / 2)
+    if "jev" in nodes:
+        positions["jev"] = (width - 512, (height - 78) / 2)
     for column, x in ((base, 294 + director_width), (derived, 564 + director_width)):
         top = (height - (78 + 100 * (len(column) - 1))) / 2
         for index, key in enumerate(column):
@@ -67,6 +99,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                     models.append(f"{en if language == 'en' else zh}: {binding['backend']} · {binding['model']}")
         data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation), language), "glyph": glyphs[key],
                      "x": positions[key][0], "y": positions[key][1], "status": status,
+                     "description": " ".join(translate_label(text, language) for text in node_description(key, source_mode,
+                         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)),
                      "subtitle": subtitle, "models": models, "percent": min(100, done * 100 / total) if total else
                      100 if status == "completed" else 0,
                      "intermediate": key == "sft" and ("sft" not in targets or
