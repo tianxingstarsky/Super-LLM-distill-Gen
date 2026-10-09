@@ -30,6 +30,7 @@ PROMPT_LABELS = {
     "workflow.trim": "推理修剪执行",
     "workflow.trim_check": "语义保留核验",
     "workflow.trim_rules_check": "修剪规则核验",
+    "workflow.package_review": "打包前 AI 评审",
 }
 _MAX_UPLOAD_BYTES = 128 * 1024
 
@@ -43,11 +44,11 @@ def _field(workspace: str, key: str, default):
     return draft.get(key, st.session_state.get(key, default))
 
 
-def node_prompt_snapshot(workspace: str, nodes, source_mode: str, *, node_generation=None) -> dict:
+def node_prompt_snapshot(workspace: str, nodes, source_mode: str, *, node_generation=None, package_review=None) -> dict:
     """Submit only active overrides; inactive edits stay in the local draft."""
     result = {}
     for node in nodes:
-        for prompt_id in active_node_prompt_ids(node, source_mode, node_generation=node_generation):
+        for prompt_id in active_node_prompt_ids(node, source_mode, node_generation=node_generation, package_review=package_review):
             default = builtin_node_prompt(prompt_id)
             body = _field(workspace, _prompt_key(workspace, node, prompt_id), default)
             if body != default:
@@ -98,9 +99,9 @@ def _import_prompt(workspace: str, node: str, prompt_id: str, save_field) -> Non
 
 
 def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_field,
-                        node_generation=None) -> None:
+                        node_generation=None, package_review=None) -> None:
     """Show the active processing prompt beside this node's model settings."""
-    prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation)
+    prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation, package_review=package_review)
     if not prompts:
         return
     language = st.session_state.get("ui_language", "zh")
@@ -142,7 +143,7 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
         return
     mode = ("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
             else "文档资料" if recipe.get("sources") else "开放需求")
-    active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"))
+    active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"))
     prompts = {key: pinned[key] for key in active if key in pinned}
     if not prompts:
         return

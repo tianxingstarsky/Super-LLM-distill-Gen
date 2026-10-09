@@ -14,6 +14,7 @@ from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.package_style import PACKAGE_STYLE
 from lib.presentation.streamlit.shared import page_header
 from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.workflow_package_review_report import package_review_report_html
 from lib.presentation.streamlit.review_navigation import (
     REVIEW_MODES as _REVIEW_MODES, review_choices as _review_choices,
     open_review as _go_to_review,
@@ -266,7 +267,9 @@ def _render_quality(quality: dict, manifest: dict) -> None:
         summary = reports.get(target, {})
         total = int(summary.get("total", eligible))
         reasons = summary.get("reasons", {})
-        reasons_text = "、".join(f"{key} ×{value}" for key, value in reasons.items()) if isinstance(reasons, dict) else ""
+        reason_labels = {"package_ai_review_rejected": "AI 打包评审未通过"}
+        reasons_text = "、".join(f"{reason_labels.get(key, key)} ×{value}"
+                                for key, value in reasons.items()) if isinstance(reasons, dict) else ""
         rows.append(
             '<div class="df-pack-quality-row"><b>' + _safe(str(target).upper()) + '</b>'
             '<span><strong>' + _safe(eligible) + '</strong> 合格 / ' + _safe(total) + ' 候选</span>'
@@ -444,8 +447,17 @@ def render_package_page(application: WorkflowApplication) -> None:
     with left:
         with st.container(border=True):
             _render_summary(run, state, manifest, quality)
+        review_report = package_review_report_html(quality)
+        if review_report:
+            st.html(review_report)
         if run.get("status") == "needs_attention":
-            st.warning("本次运行有目标缺少合格样本或达到处理上限。质量记录和隔离原因仍会保留在 ZIP 中。")
+            review_targets = (quality.get("package_review") or {}).get("targets") or {}
+            ai_rejected = any(int(row.get("rejected", 0)) for row in review_targets.values()
+                              if isinstance(row, dict))
+            if ai_rejected:
+                st.warning("本次 AI 打包评审隔离了部分样本；通过检查的样本仍可导出，评审证据保留在 ZIP 中。")
+            else:
+                st.warning("本次运行有目标缺少合格样本或达到处理上限。质量记录和隔离原因仍会保留在 ZIP 中。")
         with st.container(border=True):
             st.html(_heading("⇩", "导出格式与交付内容", "根据当前任务已验证的文件展示可用格式"))
             _render_format_cards(inventory)
@@ -501,13 +513,13 @@ def render_package_page(application: WorkflowApplication) -> None:
                                        key=f"download-package:{run_id}", on_click="ignore", width="stretch")
                 else:
                     st.info("数据包较大，请使用上方本地路径读取，避免浏览器占用大量内存。")
-            st.caption("当前为自动检查候选；训练前可按用途进行人工审核。包内 SHA-256 可由 manifest.json 复核。")
+            st.caption("可直接下载自动质检数据包，也可按用途抽检或进行人工审核。包内 SHA-256 可由 manifest.json 复核。")
         if quality.get("trainer_exports"):
             with st.container(border=True):
                 _render_trainer_exports(application, run_id, quality, inventory, manifest, package)
         if review_choices:
             with st.container(border=True):
-                st.html(_heading("✓", "下一步：人工审核", "按训练目标逐条审阅并单独发布人工审核版本"))
+                st.html(_heading("✓", "人工审核（可选）", "按需抽检、修订，或单独发布人工审核版本"))
                 if len(review_choices) == 1:
                     review_target = review_choices[0][0]
                     st.html('<div class="df-pack-review-target"><b>' + _safe(review_target.upper())

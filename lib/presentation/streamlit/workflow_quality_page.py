@@ -9,6 +9,7 @@ import streamlit as st
 from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.dataset_preview_page import TARGET_LABELS
 from lib.presentation.streamlit.shared import section_heading
+from lib.presentation.streamlit.workflow_package_review_report import package_review_report_html
 
 
 QUALITY_STYLE = """<style>
@@ -75,6 +76,7 @@ REASON_LABELS = {
     "cot_reasoning_rejected": "推理解释未通过评审",
     "cot_generation_failed_after_repair": "修订后风格化推理仍未通过",
     "reasoning_trim_failed_after_repair": "修订后推理修剪仍未通过",
+    "package_ai_review_rejected": "AI 打包评审未通过",
 }
 
 
@@ -172,6 +174,9 @@ def render_workflow_quality(application: WorkflowApplication, workspace_id: str)
         '<div><span>' + _safe(label) + '</span><strong>' + _safe(value)
         + '</strong><small>' + _safe(note) + '</small></div>'
         for label, value, note in cards) + '</div>')
+    review_report = package_review_report_html(quality)
+    if review_report:
+        st.html(review_report)
     left, right = st.columns([1.8, 1], gap="large")
     with left, st.container(border=True):
         section_heading("逐目标质量", "合格量来自已校验清单；原因来自本次运行记录", "◉")

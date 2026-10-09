@@ -12,6 +12,7 @@ from filelock import Timeout
 from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_scale import validate_node_models
 from lib.domain.workflow_generation import validate_node_generation
+from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_node_prompts import validate_node_prompts, active_node_prompt_ids
 from lib.domain.workflow_graph import execution_graph
@@ -128,11 +129,18 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-trim-template:{workspace}"] = trim["template"]
         values[f"workflow-trim-instruction:{workspace}"] = trim["instruction"]
         values[f"workflow-trim-prompt:{workspace}"] = trim["custom_prompt"]
+    package_review = validate_package_review(recipe.get("package_review"))
+    if "package_review" in recipe:
+        values[f"workflow-package-review-enabled:{workspace}"] = package_review["enabled"]
+    if package_review["enabled"]:
+        values[f"workflow-package-review-mode:{workspace}"] = package_review["mode"]
+        values[f"workflow-package-review-percent:{workspace}"] = package_review["sample_percent"]
+        values[f"workflow-package-review-limit:{workspace}"] = package_review["max_samples_per_target"]
     prompt_mode = ("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision" else mode)
     copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")))
     prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")))
     for node in prompt_nodes:
-        for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation")):
+        for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"), package_review=package_review):
             if prompt_id in copied_prompts.get(node, {}):
                 values[f"workflow-node-prompt:{workspace}:{node}:{prompt_id}"] = copied_prompts[node][prompt_id]
     research = recipe.get("web_research")

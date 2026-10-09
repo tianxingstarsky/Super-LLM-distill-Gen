@@ -6,6 +6,7 @@ from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_node_prompts import validate_node_prompts
+from lib.domain.workflow_package_review import validate_package_review
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
@@ -13,7 +14,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       batch_size=100, node_models=None, conversation_turns=3, brief="",
                       agent_replay_mode="configured", evaluation_sources=(),
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
-                      node_prompts=None):
+                      node_prompts=None, package_review=None):
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)
@@ -39,6 +40,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     node_models = validate_node_models(node_models)
     validate_node_generation(node_generation)
     validate_node_prompts(node_prompts)
+    validate_package_review(package_review)
     trim = validate_reasoning_trim(reasoning_trim)
     if trim and trim["enabled"] and not set(targets) & {"sft", "cot"}:
         raise ValueError("reasoning_trim_requires_reasoning_target")

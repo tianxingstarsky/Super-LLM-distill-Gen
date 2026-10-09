@@ -11,10 +11,13 @@ from contextlib import ExitStack, closing
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
+import heapq
 import json
+import math
 import os
 from pathlib import Path
 import re
+import sqlite3
 import tempfile
 import uuid
 from itertools import islice
@@ -38,6 +41,7 @@ from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.domain.workflow_generation import validate_node_generation, style_for_sample
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
+from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_node_prompts import (
     validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
 )
@@ -67,8 +71,8 @@ from lib.prompts import get, registry, render
 
 EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
-RECIPE_VERSION = 9
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9})
+RECIPE_VERSION = 10
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -254,17 +258,20 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
-               node_generation=None, reasoning_trim=None, node_prompts=None):
+               node_generation=None, reasoning_trim=None, node_prompts=None,
+               package_review=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
         node_models=node_models, conversation_turns=conversation_turns, brief=brief,
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources, node_generation=node_generation,
-        reasoning_trim=reasoning_trim, node_prompts=node_prompts)
+        reasoning_trim=reasoning_trim, node_prompts=node_prompts,
+        package_review=package_review)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
     reasoning_trim = validate_reasoning_trim(reasoning_trim)
+    package_review = validate_package_review(package_review)
     node_prompts = validate_node_prompts(node_prompts)
     node_prompt_templates = snapshot_node_prompts(node_prompts)
     node_prompt_system = render(get("workflow.system"))
@@ -350,6 +357,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "node_prompt_system": node_prompt_system,
               "node_generation_prompts": generation_prompts,
               "reasoning_trim": reasoning_trim,
+              "package_review": package_review,
               "reasoning_trim_prompt": (trim_prompt(reasoning_trim) if (reasoning_trim or {}).get("enabled") else None),
               "generation_preferences": preferences, "sft_output_style": sft_output_style,
               "prompts": prompt_versions()}
@@ -361,6 +369,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     atomic_json(path / "state.json", {"id": run_id, "name": name[:100], "created_at": now(), "updated_at": now(),
                 "status": "queued", "recipe_hash": digest(recipe), "targets": targets, "attempt": 0,
                 "reasoning_trim_enabled": bool((reasoning_trim or {}).get("enabled")),
+                "package_review_enabled": package_review["enabled"],
                 "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0} for key, label in STAGES.items()},
                 "events": [], "usage": {}})
     return run_id
@@ -548,7 +557,7 @@ class Workflow:
                 pass  # The trusted checkpoint is already durable and reusable.
         return value
 
-    def stage_items(self, stage, items, action, *, stream_sources=False):
+    def stage_items(self, stage, items, action, *, stream_sources=False, finalize=True):
         self.stage = stage
         self._abort.clear()
         metrics = self.state["stages"][stage]
@@ -614,8 +623,12 @@ class Workflow:
                 metrics["batches_done"] += 1
                 self.save()
         pending.replace(destination)
-        metrics.update(status="completed", finished_at=now())
-        self.event("stage_completed", outputs=metrics["outputs"])
+        if finalize:
+            metrics.update(status="completed", finished_at=now())
+            self.event("stage_completed", outputs=metrics["outputs"])
+        else:
+            metrics.pop("finished_at", None)
+            self.save()
         return WorkflowRows(destination, metrics["outputs"])
 
     def rejected(self, unit, reason):
@@ -1420,6 +1433,135 @@ class Workflow:
                 collections, released_index, released_near_index, released_rows,
                 corpus_index, cluster_index, evaluation_index)
 
+    def _prepare_package_candidates(self, collections, released_index, released_near_index,
+                                    corpus_index, evaluation_index, preferences, node_style,
+                                    review_config):
+        """Apply deterministic filters first; keep candidate rows and identities on disk."""
+        directory = self.path / "stage-results"
+        directory.mkdir(exist_ok=True)
+        candidates, plans, selections = {}, {}, {}
+        identity_path = directory / "package-training-identities.sqlite3"
+        with ExitStack() as resources:
+            resources.callback(identity_path.unlink, missing_ok=True)
+            identities = resources.enter_context(closing(sqlite3.connect(identity_path)))
+            identities.execute("DROP TABLE IF EXISTS identities")
+            identities.execute("CREATE TABLE identities (target TEXT, sha256 TEXT, PRIMARY KEY(target, sha256))")
+            for target in self.recipe["targets"]:
+                spool = RowSpool(directory / f"package-{target}-candidates.jsonl")
+                candidate_count = 0
+                smallest = []
+                try:
+                    for index, original in enumerate(collections[target]):
+                        self.check_cancel()
+                        row = deepcopy(original)
+                        if target == "gsm8k" and row["status"] == "eligible" and not validate_math_candidate(row):
+                            row.update(status="quarantined", reason="gsm8k_arithmetic_verification_failed")
+                        if row["status"] == "eligible":
+                            payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
+                            if target == "cpt" and corpus_index is not None:
+                                evaluation_hit = evaluation_index.inspect(row["text"]) if evaluation_index else None
+                                if evaluation_hit:
+                                    row.update(status="quarantined", reason=evaluation_hit["reason"],
+                                               evaluation_reference=evaluation_hit)
+                                    quarantined_text = row.pop("text")
+                                    row["quarantined_text_sha256"] = hashlib.sha256(
+                                        quarantined_text.encode("utf-8")).hexdigest()
+                                    row["quarantined_text_chars"] = len(quarantined_text)
+                                else:
+                                    release = exact_release_match(released_index, row["text"])
+                                    if release:
+                                        release_id = f"{release['run_id']}/cpt-v{release['version']:04d}/{release['line']}"
+                                        row.update(status="duplicate", reason="released_corpus_exact_duplicate",
+                                                   duplicate_of=release_id, duplicate_scope="prior_cpt_release",
+                                                   reference_release=release, similarity=1.0)
+                                    elif released_near_index is not None and (
+                                            duplicate := released_near_index.match(row["text"])):
+                                        row.update(status="duplicate", reason="released_corpus_near_duplicate",
+                                                   duplicate_scope="prior_cpt_release",
+                                                   duplicate_of=duplicate["duplicate_of"],
+                                                   representative_source=duplicate["representative_source"],
+                                                   reference_release=duplicate["reference_release"],
+                                                   similarity=duplicate["similarity"])
+                                    else:
+                                        reference = {key: row[key] for key in ("id", "source_name", "reference_release")
+                                                     if key in row}
+                                        duplicate = corpus_index.check_and_add(row["text"], reference)
+                                        if duplicate:
+                                            row.update(status="duplicate", duplicate_scope="current_run", **duplicate)
+                            else:
+                                changed = identities.execute("INSERT OR IGNORE INTO identities VALUES (?, ?)",
+                                                             (target, digest(payload))).rowcount
+                                if not changed:
+                                    row.update(status="duplicate", reason="duplicate_training_content")
+                            if row["status"] == "eligible":
+                                candidate_count += 1
+                                if review_config["enabled"] and review_config["mode"] == "sample":
+                                    # Select the lowest stable hashes. Memory is bounded by the
+                                    # per-target cap, independent of candidate population size.
+                                    rank = int(digest([self.state["id"], target, index, digest(payload)]), 16)
+                                    entry = (-rank, -index)
+                                    if len(smallest) < review_config["max_samples_per_target"]:
+                                        heapq.heappush(smallest, entry)
+                                    elif entry > smallest[0]:
+                                        heapq.heapreplace(smallest, entry)
+                        spool.append(row)
+                finally:
+                    spool.close()
+                candidates[target] = spool
+                if review_config["enabled"]:
+                    planned = (candidate_count if review_config["mode"] == "all" else
+                               min(candidate_count, review_config["max_samples_per_target"],
+                                   math.ceil(candidate_count * review_config["sample_percent"] / 100)))
+                    selections[target] = (None if review_config["mode"] == "all" else
+                                          {-index for _, index in sorted(smallest, reverse=True)[:planned]})
+                    plans[target] = {"candidates": candidate_count, "planned": planned,
+                                     "reviewed": 0, "accepted": 0, "rejected": 0,
+                                     "unreviewed": candidate_count - planned,
+                                     "coverage_percent": round(100 * planned / candidate_count, 4) if candidate_count else 0.0,
+                                     "status": ("no_candidates" if not candidate_count else
+                                                "all_reviewed" if planned == candidate_count else "sampled")}
+            identities.commit()
+        return candidates, plans, selections
+
+    def _review_package_candidates(self, candidates, plans, selections, preferences, node_style):
+        workflow = self
+        class SelectedRows:
+            def __len__(self):
+                return sum(plan["planned"] for plan in plans.values())
+
+            def __iter__(self):
+                for target in workflow.recipe["targets"]:
+                    for index, row in enumerate(candidates[target]):
+                        workflow.check_cancel()
+                        if row["status"] != "eligible":
+                            continue
+                        if selections[target] is not None and index not in selections[target]:
+                            continue
+                        payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
+                        yield {"target": target, "index": index, "id": row.get("id"), "payload": payload,
+                               "source": row.get("source_context"),
+                               "provenance": {key: row[key] for key in (
+                                   "source_id", "source_name", "source_location", "evidence_level", "synthetic") if key in row}}
+
+        def review(item):
+            candidate_hash = digest(item["payload"])
+            check = self.judge_answer(
+                [item.get("id") or candidate_hash[:16], "package_review", item["target"], item["index"], candidate_hash],
+                {"target": item["target"], "source": item["source"], "provenance": item["provenance"]},
+                item["payload"], prompt_id="workflow.package_review", allow_reasoning_fallback=False)
+            passed = accepted(check)
+            return [{"target": item["target"], "index": item["index"],
+                     "status": "eligible" if passed else "quarantined",
+                     "package_review": {"status": "accepted" if passed else "rejected",
+                                        "mode": self.recipe["package_review"]["mode"],
+                                        "candidate_sha256": candidate_hash, "verdict": check}}]
+
+        self.state["stages"]["package"]["phase"] = "ai_review"
+        reviewed = self.stage_items("package", SelectedRows(), review, finalize=False)
+        self.state["stages"]["package"]["phase"] = "writing_artifacts"
+        self.save()
+        return reviewed
+
     def _package_collections(self, collections, released_index, released_near_index,
                              released_rows, corpus_index, cluster_index, evaluation_index):
         evaluation_references = self.recipe.get("evaluation_references", [])
@@ -1503,66 +1645,56 @@ class Workflow:
         if "rlaif" in self.recipe["targets"]:
             report["limitations"].append(
                 "RLAIF 当前仅产出任务正确性准则下的 AI 反馈和奖励模型偏好候选；未训练奖励模型、提供在线奖励或运行强化学习")
+        review_config = validate_package_review(self.recipe.get("package_review"))
+        self.state["stages"]["package"]["phase"] = "deterministic_checks"
+        self.save(force=False)
+        candidates, review_plans, selections = self._prepare_package_candidates(
+            collections, released_index, released_near_index, corpus_index,
+            evaluation_index, preferences, node_style, review_config)
+        review_iterator, next_review = iter(()), None
+        if review_config["enabled"]:
+            reviewed = self._review_package_candidates(candidates, review_plans, selections, preferences, node_style)
+            review_iterator = iter(reviewed)
+            next_review = next(review_iterator, None)
+            report["package_review"] = {**review_config, "status": "completed",
+                                        "selection": "stable_hash_per_target", "targets": review_plans}
+            report["limitations"].append("打包 AI 评审只代表模型判断；抽检未选中的样本未经过该项评审，不能把抽检通过率当作全量正确率")
+        else:
+            report["package_review"] = {"enabled": False, "status": "disabled"}
         for target in self.recipe["targets"]:
             self.check_cancel()
             records = RowSpool(self.path / "stage-results" / f"package-{target}-records.jsonl")
             training = RowSpool(self.path / "stage-results" / f"package-{target}-training.jsonl")
-            seen = set()
-            target_corpus_index = corpus_index if target == "cpt" else None
-            for original in collections[target]:
-                self.check_cancel()
-                row = deepcopy(original)
-                if target == "gsm8k" and row["status"] == "eligible" and not validate_math_candidate(row):
-                    row.update(status="quarantined", reason="gsm8k_arithmetic_verification_failed")
-                if row["status"] == "eligible":
-                    payload = preferred_training_record(
-                        target, row, preferences, sft_output_style=node_style)
-                    if target_corpus_index is not None:
-                        evaluation_hit = evaluation_index.inspect(row["text"]) if evaluation_index else None
-                        if evaluation_hit:
-                            row.update(status="quarantined", reason=evaluation_hit["reason"],
-                                       evaluation_reference=evaluation_hit)
-                            # Preserve the audit fingerprint without reproducing
-                            # held-out text in the downloadable quality sidecar.
-                            quarantined_text = row.pop("text")
-                            row["quarantined_text_sha256"] = hashlib.sha256(
-                                quarantined_text.encode("utf-8")).hexdigest()
-                            row["quarantined_text_chars"] = len(quarantined_text)
-                        else:
-                            release = exact_release_match(released_index, row["text"])
-                            if release:
-                                release_id = f"{release['run_id']}/cpt-v{release['version']:04d}/{release['line']}"
-                                row.update(status="duplicate", reason="released_corpus_exact_duplicate",
-                                           duplicate_of=release_id, duplicate_scope="prior_cpt_release",
-                                           reference_release=release, similarity=1.0)
-                            elif released_near_index is not None and (
-                                    released_duplicate := released_near_index.match(row["text"])):
-                                row.update(status="duplicate", reason="released_corpus_near_duplicate",
-                                           duplicate_scope="prior_cpt_release",
-                                           duplicate_of=released_duplicate["duplicate_of"],
-                                           representative_source=released_duplicate["representative_source"],
-                                           reference_release=released_duplicate["reference_release"],
-                                           similarity=released_duplicate["similarity"])
-                            else:
-                                # The index keeps references until packaging finishes. Retain
-                                # lineage only; full CPT rows are already spooled to disk.
-                                reference = {key: row[key] for key in ("id", "source_name", "reference_release")
-                                             if key in row}
-                                duplicate = target_corpus_index.check_and_add(row["text"], reference)
-                                if duplicate:
-                                    row.update(status="duplicate", duplicate_scope="current_run", **duplicate)
+            try:
+                for index, row in enumerate(candidates[target]):
+                    self.check_cancel()
+                    if row["status"] == "eligible":
+                        payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
+                        if review_config["enabled"]:
+                            selected = selections[target] is None or index in selections[target]
+                            if selected:
+                                if next_review is None or (next_review["target"], next_review["index"]) != (target, index):
+                                    raise ValueError("package_review_checkpoint_mismatch")
+                                row["package_review"] = next_review["package_review"]
+                                if row["package_review"]["candidate_sha256"] != digest(payload):
+                                    raise ValueError("package_review_checkpoint_mismatch")
+                                plan = review_plans[target]
+                                plan["reviewed"] += 1
+                                if row["package_review"]["status"] == "accepted":
+                                    plan["accepted"] += 1
                                 else:
-                                    training.append(payload)
-                    else:
-                        identity = digest(payload)
-                        if identity in seen:
-                            row["status"], row["reason"] = "duplicate", "duplicate_training_content"
-                        else:
-                            seen.add(identity)
+                                    plan["rejected"] += 1
+                                    row.update(status="quarantined", reason="package_ai_review_rejected")
+                                next_review = next(review_iterator, None)
+                            else:
+                                row["package_review"] = {"status": "not_selected", "mode": review_config["mode"],
+                                                         "candidate_sha256": digest(payload)}
+                        if row["status"] == "eligible":
                             training.append(payload)
-                records.append(row)
-            records.close()
-            training.close()
+                    records.append(row)
+            finally:
+                records.close()
+                training.close()
             if target == "cpt":
                 for row in records:
                     cluster_index.add(row)
@@ -1576,6 +1708,8 @@ class Workflow:
                 if row.get("reason"):
                     reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
             report["targets"][target] = {"eligible": len(training), "total": len(records), "reasons": reasons}
+            if review_config["enabled"]:
+                report["targets"][target]["package_review"] = review_plans[target]
             if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:
                 # A trainer export is complete only if every eligible native row converts.
                 # Keep the native target even when its optional TRL format is incompatible.
@@ -1627,10 +1761,13 @@ class Workflow:
                 sidecar = destination / "agent.negative.jsonl"
                 write_jsonl(sidecar, (row["negative"] for row in records if row.get("negative")))
                 report["targets"][target]["negative"] = negative_count
+        if next_review is not None:
+            raise ValueError("package_review_checkpoint_mismatch")
         _write_quality_report(destination / "quality.json", report,
                               self.path / "input_records.json")
         self.state["quality"] = {"policy": report["policy"], "targets": report["targets"],
                                  "human_review": report["human_review"],
+                                 "package_review": report["package_review"],
                                  "trainer_exports": {target: {key: value for key, value in summary.items()
                                                             if key != "failures"}
                                                      for target, summary in report["trainer_exports"].items()}}
@@ -1643,6 +1780,7 @@ class Workflow:
                     "trainer_counts": {t: v["summary"]["compatible"] for t, v in report["trainer_exports"].items()
                                        if v["status"] == "ready"},
                     "negative_counts": {t: v["negative"] for t, v in report["targets"].items() if v.get("negative")},
+                    "package_review": report["package_review"],
                     "cpt_reference_releases": cpt_references,
                     "evaluation_references": evaluation_references,
                     "sha256": files, "created_at": now(), "release_kind": "automatically_checked_candidate"})
@@ -1667,7 +1805,8 @@ class Workflow:
                     raise ValueError("recipe_changed_create_new_run")
                 if self.recipe["version"] >= 9:
                     validate_node_prompt_snapshot(self.recipe.get("node_prompt_templates"),
-                                                  self.recipe.get("node_prompt_system"))
+                                                  self.recipe.get("node_prompt_system"),
+                                                  recipe_version=self.recipe["version"])
                 else:
                     current_prompts = prompt_versions()
                     if any(current_prompts.get(key) != pinned for key, pinned in self.recipe["prompts"].items()):
@@ -1771,12 +1910,14 @@ class Workflow:
                 self.save()
                 self.check_cancel()
                 self.package(collections)
-                self.state["stages"]["package"].update(status="completed", done=1, finished_at=now())
+                self.state["stages"]["package"].update(
+                    status="completed", phase="completed", done=self.state["stages"]["package"]["total"], finished_at=now())
                 counts = self.state["quality"]["targets"]
                 cpt_quarantined = any(row["status"] == "quarantined" for row in collections["cpt"])
                 multiturn_quarantined = any(row["status"] == "quarantined" for row in collections["multiturn"])
                 agent_quarantined = any(row["status"] == "quarantined" for row in collections["agent"])
                 attention = (any(not v["eligible"] or v.get("negative", 0) for v in counts.values())
+                             or any(v.get("package_review", {}).get("rejected", 0) for v in counts.values())
                              or cpt_quarantined
                              or multiturn_quarantined
                              or agent_quarantined

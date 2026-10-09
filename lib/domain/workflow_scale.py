@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from lib.domain.workflow_package_review import validate_package_review
 
 MAX_CANDIDATES = 100_000
 MAX_CONCURRENCY = 16
@@ -15,10 +16,14 @@ NODE_ROLES = {
     "sft": ("generation", "jev"), "multiturn": ("generation", "jev"),
     "preference": ("generation", "jev"), "cot": ("generation", "jev"),
     "trim": ("generation", "jev"),
+    "package": ("jev",),
 }
 
 
-def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None) -> tuple[str, ...]:
+def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None,
+               package_review: dict | None = None) -> tuple[str, ...]:
+    if stage == "package":
+        return ("jev",) if validate_package_review(package_review)["enabled"] else ()
     if stage == "ingest":
         return ("vision",) if source_mode == "多模态文档" else (("generation",) if source_mode == "开放需求" else ())
     if stage in {"ingest", "cpt"} and source_mode != "开放需求":

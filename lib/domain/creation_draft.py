@@ -1,10 +1,12 @@
 """Bounded form values eligible for local creation-draft storage."""
 from copy import deepcopy
+from math import isfinite
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_generation import GENERATION_STYLES, MAX_GENERATION_INSTRUCTION_CHARS
 from lib.domain.reasoning_trim import TRIM_TEMPLATE_NAMES, MAX_TRIM_INSTRUCTION_CHARS, MAX_TRIM_PROMPT_CHARS
 from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS, MAX_NODE_PROMPT_CHARS
+from lib.domain.workflow_package_review import MAX_PACKAGE_REVIEW_SAMPLES, MIN_PACKAGE_REVIEW_PERCENT
 
 NUMBER_FIELDS = {
     'workflow-count': (1, MAX_CANDIDATES), 'workflow-max-units': (1, MAX_CANDIDATES),
@@ -12,7 +14,9 @@ NUMBER_FIELDS = {
     'workflow-batch-size': (1, MAX_BATCH_SIZE), 'workflow-chunk-chars': (200, 20000),
     'workflow-web-research-count': (1, 5),
     'workflow-knowledge-limit': (1, 50),
+    'workflow-package-review-limit': (1, MAX_PACKAGE_REVIEW_SAMPLES),
 }
+DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT, 100)}
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
                'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
                'workflow-web-research-query': 160, 'workflow-web-research-more': 700,
@@ -24,8 +28,10 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
-               'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES)}
-BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled'}
+               'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
+               'workflow-package-review-mode': frozenset({'sample', 'all'})}
+BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
+                  'workflow-package-review-enabled'}
 NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
                           'workflow-generation-instruction'}
 
@@ -52,6 +58,9 @@ def validate_creation_draft(values):
         elif field in NUMBER_FIELDS:
             low, high = NUMBER_FIELDS[field]
             valid = type(value) is int and low <= value <= high
+        elif field in DECIMAL_FIELDS:
+            low, high = DECIMAL_FIELDS[field]
+            valid = type(value) in {int, float} and low <= value <= high and isfinite(value)
         elif field in TEXT_FIELDS:
             valid = (isinstance(value, str) and len(value) <= TEXT_FIELDS[field]
                      and (field != 'workflow-node-prompt' or '\x00' not in value))

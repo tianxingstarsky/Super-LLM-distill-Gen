@@ -1,0 +1,69 @@
+"""Optional AI review configured on the packaging node."""
+from __future__ import annotations
+
+import streamlit as st
+
+from lib.domain.workflow_package_review import (
+    DEFAULT_PACKAGE_REVIEW_LIMIT, DEFAULT_PACKAGE_REVIEW_PERCENT,
+    MAX_PACKAGE_REVIEW_SAMPLES,
+)
+from lib.presentation.streamlit.i18n import translate_label
+
+
+def _field(workspace, key, default):
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    return draft.get(key, st.session_state.get(key, default))
+
+
+def package_review_snapshot(workspace: str) -> dict:
+    enabled = _field(workspace, f"workflow-package-review-enabled:{workspace}", False)
+    if not enabled:
+        return {"enabled": False}
+    return {
+        "enabled": enabled,
+        "mode": _field(workspace, f"workflow-package-review-mode:{workspace}", "sample"),
+        "sample_percent": _field(workspace, f"workflow-package-review-percent:{workspace}", DEFAULT_PACKAGE_REVIEW_PERCENT),
+        "max_samples_per_target": _field(workspace, f"workflow-package-review-limit:{workspace}", DEFAULT_PACKAGE_REVIEW_LIMIT),
+    }
+
+
+def render_package_review_toggle(workspace: str, *, save_field) -> None:
+    enabled_key = f"workflow-package-review-enabled:{workspace}"
+    st.session_state[enabled_key] = _field(workspace, enabled_key, False)
+    enabled = st.toggle("打包前 AI 评审", key=enabled_key,
+                        on_change=save_field, args=(workspace, enabled_key),
+                        help="先做结构、去重等规则检查，再由当前节点的模型评审；不通过的样本隔离保存。")
+    if not enabled:
+        st.caption("已保留上游质检与打包规则；开启后可增加抽检或全量 AI 评审。")
+
+
+def render_package_review_settings(workspace: str, *, save_field) -> None:
+    if not package_review_snapshot(workspace)["enabled"]:
+        return
+    language = st.session_state.get("ui_language", "zh")
+    for name, default in (("mode", "sample"),
+                          ("percent", DEFAULT_PACKAGE_REVIEW_PERCENT),
+                          ("limit", DEFAULT_PACKAGE_REVIEW_LIMIT)):
+        key = f"workflow-package-review-{name}:{workspace}"
+        st.session_state[key] = _field(workspace, key, default)
+    mode_key = f"workflow-package-review-mode:{workspace}"
+    mode = st.segmented_control("评审范围", ("sample", "all"), key=mode_key,
+                                selection_mode="single", required=True,
+                                format_func=lambda value: translate_label("抽检" if value == "sample" else "全量评审", language),
+                                on_change=save_field, args=(workspace, mode_key))
+    if mode == "sample":
+        percent_key = f"workflow-package-review-percent:{workspace}"
+        limit_key = f"workflow-package-review-limit:{workspace}"
+        percent, limit = st.columns(2, gap="small")
+        with percent:
+            st.number_input("抽检比例（%）", min_value=0.01, max_value=100.0, step=0.5,
+                            format="%.2f", key=percent_key,
+                            on_change=save_field, args=(workspace, percent_key))
+        with limit:
+            st.number_input("每类抽检上限", min_value=1, max_value=MAX_PACKAGE_REVIEW_SAMPLES,
+                            step=100, key=limit_key,
+                            on_change=save_field, args=(workspace, limit_key))
+        st.caption("按比例抽取，且不超过每类上限。未抽中样本沿用上游质检结果；报告单独列出覆盖率。")
+    else:
+        st.caption("逐条评审所有规则检查合格的样本；请求数随数据量增加，请设置预算。")
+    st.caption("评审支持并发、预算限制和断点续跑；点击运行中的节点可查看模型流式输出。")

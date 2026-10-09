@@ -25,6 +25,9 @@ from lib.domain.web_research import MAX_QUERIES, validate_web_research
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
 from lib.domain.workflow_node_prompts import active_node_prompt_ids
+from lib.presentation.streamlit.workflow_package_review_settings import (
+    package_review_snapshot, render_package_review_toggle, render_package_review_settings,
+)
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
 from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 from lib.presentation.streamlit.workflow_generation_settings import (
@@ -75,6 +78,8 @@ def _save_sft_output_style(workspace: str) -> None:
 
 def _workflow_error(error) -> str:
     return {
+        "invalid_package_review": "AI 打包评审配置无效，请检查质检打包节点。",
+        "package_review_checkpoint_mismatch": "打包评审检查点与当前样本不一致，请保留任务记录并重新运行。",
         "web_search_not_configured": "网页检索服务未配置。设置检索密钥后可从断点重试。",
         "web_search_provider_error": "网页检索服务暂不可用。可从断点重试本次任务。",
         "web_search_no_safe_results": "没有找到可用的公开检索结果。可重试，或复制配置后调整检索词。",
@@ -122,12 +127,12 @@ def _workflow_error(error) -> str:
     }.get(str(error), str(error))
 
 
-def _missing_budget_prices(nodes, source_mode, bindings, endpoints, budget, *, node_generation=None):
+def _missing_budget_prices(nodes, source_mode, bindings, endpoints, budget, *, node_generation=None, package_review=None):
     if not (budget.get("max_total_usd") and budget.get("hard_stop", True)):
         return []
     missing = []
     for node in nodes:
-        for role in node_roles(node, source_mode, node_generation=node_generation):
+        for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review):
             binding = bindings.get(node, {}).get(role, {})
             endpoint = endpoints.get(binding.get("backend"))
             if endpoint is None:
@@ -157,12 +162,12 @@ def _stage_configuration(key, recipe, state):
                 details["生成上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details["生成单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         return details
-    if key in {"cpt", "sft", "multiturn", "agent", "preference", "cot", "trim"}:
+    if key in {"cpt", "sft", "multiturn", "agent", "preference", "cot", "trim", "package"}:
         details = {"启用目标": [target.upper() for target in targets]}
         mode = "文档资料" if recipe.get("sources") else "开放需求"
         # Old CoT runs only checked an existing explanation and had no writer.
         roles = (("jev",) if key == "cot" and not (recipe.get("node_generation") or {}).get("cot")
-                 else node_roles(key, mode, node_generation=recipe.get("node_generation")))
+                 else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review")))
         for role in roles:
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
             prefix = "" if role == "generation" else "jev_"
@@ -201,6 +206,18 @@ def _stage_configuration(key, recipe, state):
             if key == "sft" and "sft" in targets:
                 details["SFT 训练文件格式"] = ("只保留答案" if recipe.get("sft_output_style") == "drop"
                                               else "分字段保留推理")
+        elif key == "package":
+            review = recipe.get("package_review") or {}
+            details.update({"输出目标": [target.upper() for target in targets],
+                            "质检证据": "逐条记录、失败原因、来源指纹与 SHA-256 清单",
+                            "发布状态": "自动检查候选，尚未完成人工审核"})
+            details["打包前 AI 评审"] = "已开启" if review.get("enabled") else "未开启"
+            if review.get("enabled"):
+                details["评审范围"] = "抽检" if review.get("mode") == "sample" else "全量评审"
+                if review.get("mode") == "sample":
+                    details["抽检比例（%）"] = review.get("sample_percent")
+                    details["每类抽检上限"] = review.get("max_samples_per_target")
+            details["失败样本"] = "单独保存原因和执行证据，不混入训练样本"
         elif key == "trim":
             trim = recipe.get("reasoning_trim") or {}
             details["修剪模板"] = TRIM_LABELS.get(trim.get("template"), "提示词与包装清理")
@@ -211,10 +228,6 @@ def _stage_configuration(key, recipe, state):
     if key == "gsm8k":
         return {"任务数": recipe.get("tasks"), "生成方式": "本地整数算术模板",
                 "验证方式": "受限 AST 逐步计算，不调用模型"}
-    if key == "package":
-        return {"输出目标": [target.upper() for target in targets],
-                "质检证据": "逐条记录、失败原因、来源指纹与 SHA-256 清单",
-                "发布状态": "自动检查候选，尚未完成人工审核"}
     return {"启用目标": [target.upper() for target in targets]}
 
 
@@ -457,7 +470,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     elif status == "completed":
         st.success("所选目标已完成，训练文件与质量报告已生成。")
     elif status == "needs_attention":
-        st.warning("运行已结束；有目标没有合格样本，或输入超过本次处理上限。查看下方质量报告。")
+        if any(row.get("package_review", {}).get("rejected", 0)
+               for row in state.get("quality", {}).get("targets", {}).values()):
+            st.warning("本次 AI 打包评审隔离了部分样本；通过检查的样本仍可导出，评审证据保留在 ZIP 中。")
+        else:
+            st.warning("运行已结束；有目标没有合格样本，或输入超过本次处理上限。查看下方质量报告。")
     else:
         st.info(LABELS.get(status, status))
     console_job = st.session_state.get(f"job:{st.session_state.get('ws', '')}:{run_id}")
@@ -515,7 +532,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
                                       language=st.session_state.get("ui_language", "zh"), live=True,
                                       reasoning_trim=reasoning_trim_enabled,
-                                      node_generation=recipe.get("node_generation")),
+                                      node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review")),
                           selection_key, key=f"live-canvas:{run_id}", follow_key=follow_key)
     selected_metrics = state["stages"][selected_stage]
     selected_status, done, total, percent = _stage_numbers(selected_metrics)
@@ -530,11 +547,16 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         quarantined = int(state.get("input_summary", {}).get("quarantined", selected_metrics.get('quarantined', 0)) or 0)
         passed_label, quarantined_label = "可处理输入", "隔离输入"
     elif selected_stage == "package":
-        target_quality = state.get("quality", {}).get("targets", {})
-        passed = sum(int(row.get("eligible", 0) or 0) for row in target_quality.values())
-        quarantined = sum(sum(int(count) for count in row.get("reasons", {}).values())
-                          for row in target_quality.values())
-        passed_label, quarantined_label = "导出样本", "需关注记录"
+        if selected_status == "running" and selected_metrics.get("phase") in {"ai_review", "writing_artifacts"}:
+            passed = int(selected_metrics.get("eligible", 0) or 0)
+            quarantined = int(selected_metrics.get("quarantined", 0) or 0)
+            passed_label, quarantined_label = "AI 通过", "AI 隔离"
+        else:
+            target_quality = state.get("quality", {}).get("targets", {})
+            passed = sum(int(row.get("eligible", 0) or 0) for row in target_quality.values())
+            quarantined = sum(sum(int(count) for count in row.get("reasons", {}).values())
+                              for row in target_quality.values())
+            passed_label, quarantined_label = "导出样本", "需关注记录"
     else:
         passed = int(selected_metrics.get("eligible", 0) or 0)
         quarantined = int(selected_metrics.get("quarantined", 0) or 0)
@@ -551,6 +573,12 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             st.progress(percent / 100, text=f"{done} / {total} 单元")
             if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
                 st.caption("开放需求任务规划：按批完成后再进入生成节点。")
+            if selected_stage == "package" and selected_status == "running":
+                phase_label = {"deterministic_checks": "正在核对结构、去重与打包规则。",
+                               "ai_review": "正在逐条 AI 评审；通过和隔离数量实时更新。",
+                               "writing_artifacts": "AI 评审已结束，正在写入训练文件、报告与清单。"}.get(selected_metrics.get("phase"))
+                if phase_label:
+                    st.caption(phase_label)
             if "cached" in selected_metrics:
                 cached = min(done, max(0, int(selected_metrics.get("cached", 0) or 0)))
                 reused, processed = st.columns(2)
@@ -1025,6 +1053,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         saved_binding = st.session_state.get(f"workflow-node-bindings:{ws}", {}).get("ingest", {}).get("vision")
         if saved_binding:
             document_parser["binding"] = saved_binding
+    package_review = package_review_snapshot(ws)
     if targets:
         node_generation = generation_snapshot(ws, graph_nodes)
         selection_key = f"workflow-setup-node:{ws}"
@@ -1034,19 +1063,19 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         st.session_state[selection_key] = selected_node
         model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else source_mode
         bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws,
-                                           node_generation=node_generation)
+                                           node_generation=node_generation, package_review=package_review)
         if document_parser.get("mode") == "vision" and document_parser.get("binding"):
             from lib.domain.document_parser import supports_vision
             vision_binding = document_parser["binding"]
             if not supports_vision(endpoints.get(vision_binding["backend"], {}), vision_binding["model"]):
                 document_parser["unconfirmed"] = True
         model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints,
-                                        node_generation=node_generation)
+                                        node_generation=node_generation, package_review=package_review)
         if backend_application is not None:
             pricing_issues = _missing_budget_prices(
                 graph_nodes, model_source_mode, bindings, endpoints,
                 backend_application.list_backends().get("budget") or {},
-                node_generation=node_generation,
+                node_generation=node_generation, package_review=package_review,
             )
         if model_issues:
             st.warning("部分节点尚未选择可用模型，请点击这些节点完成配置。")
@@ -1064,9 +1093,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             section_heading("工作流节点配置", "点击节点，就近配置模型、提示词与处理方式。", "◇")
             render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
                                       snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints,
-                                                                  node_generation=node_generation),
+                                                                  node_generation=node_generation, package_review=package_review),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
-                                      reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation),
+                                      reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review),
                           selection_key, key=f"setup-canvas:{ws}",
                           inspector_key="workbench-node-panel", expanded=True)
         with workbench, st.container(border=True, key="workbench-node-panel"):
@@ -1078,11 +1107,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.button("✕", key=f"workflow-close-config:{ws}", help="收起节点配置",
                               on_click=st.session_state.update,
                               args=({f"canvas-open:setup-canvas:{ws}": False},), width="stretch")
+            if selected_node == "package":
+                render_package_review_toggle(ws, save_field=_save_draft_value)
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
-                                                      node_generation=node_generation))
+                                                      node_generation=node_generation, package_review=package_review))
             settings_tab, prompts_tab = (st.tabs(["节点设置", "提示词与风格"]) if has_prompts
                                         else (nullcontext(), nullcontext()))
             with settings_tab:
+                if selected_node == "package":
+                    render_package_review_settings(ws, save_field=_save_draft_value)
                 if selected_node == "ingest" and source_mode == "文档资料":
                     document_parser = render_document_parser(ws, bindings, endpoints,
                         backend_application=backend_application)
@@ -1092,7 +1125,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     render_knowledge_settings(knowledge_application, ws)
                 else:
                     render_node_models(selected_node, source_mode, ws, bindings, endpoints,
-                                       backend_application=backend_application, node_generation=node_generation)
+                                       backend_application=backend_application, node_generation=node_generation, package_review=package_review)
                 if selected_node == "sft" and "sft" in targets:
                     sft_output_style = st.selectbox(
                         "SFT 训练文件格式", ("separated", "drop"),
@@ -1116,7 +1149,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 elif selected_node == "trim":
                     render_trim_settings(ws, save_field=_save_draft_value)
                 render_node_prompts(selected_node, model_source_mode, ws,
-                                    save_field=_save_draft_value, node_generation=node_generation)
+                                    save_field=_save_draft_value, node_generation=node_generation, package_review=package_review)
     # Source previews and common run controls stay in normal document flow.
     # Only the node-local form follows the selected graph node.
     with workbench:
@@ -1126,7 +1159,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
     trim_invalid = trim_has_issue(reasoning_trim)
     node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
-                                       node_generation=node_generation) if targets else {}
+                                       node_generation=node_generation, package_review=package_review) if targets else {}
     prompts_invalid = node_prompt_has_issue(node_prompts)
     # Pair source input with either its preview or the common run settings.
     # Node forms have no influence on the height of these normal-flow columns.
@@ -1306,6 +1339,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 run_summary += " · " + generation_summary(node_generation, language)
             if reasoning_trim["enabled"]:
                 run_summary += " · " + translate("推理链修剪", language)
+            if package_review["enabled"]:
+                run_summary += " · " + translate("AI 抽检" if package_review["mode"] == "sample" else "AI 全量评审", language)
             if evaluation_uploads:
                 run_summary += (f" · {len(evaluation_uploads)} evaluation references" if language == "en"
                                 else f" · 评测参照 {len(evaluation_uploads)} 份")
@@ -1359,13 +1394,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         raise ValueError("请描述开放性需求。")
                     run_id = application.create_run(sources=sources, brief=brief, name=name, targets=targets,
                                         node_models=model_application.snapshot(graph_nodes, source_mode, bindings,
-                                                                               node_generation=node_generation),
+                                                                               node_generation=node_generation, package_review=package_review),
                                         sample_count=int(sample_count), concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),
                                         agent_replay_mode=agent_mode,
                                         sft_output_style=sft_output_style,
                                         node_generation=node_generation,
+                                        package_review=package_review,
                                         node_prompts=node_prompts,
                                         reasoning_trim=reasoning_trim,
                                         web_research=web_research,

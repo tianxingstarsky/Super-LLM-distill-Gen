@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from lib.prompts import get, render
+from lib.domain.workflow_package_review import validate_package_review
 
 
 MAX_NODE_PROMPT_CHARS = 32_768
-NODE_PROMPT_IDS = {
+# The exact version 9 catalog remains separate from later additions so that
+# older immutable recipe snapshots can still be validated without migration.
+LEGACY_NODE_PROMPT_IDS = {
     "ingest": ("workflow.plan", "workflow.document_vision"),
     "cpt": ("workflow.corpus", "workflow.jev_score"),
     "sft": ("workflow.sft", "workflow.sft_styled", "workflow.jev_score", "workflow.style_check"),
@@ -15,6 +18,7 @@ NODE_PROMPT_IDS = {
     "cot": ("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check"),
     "trim": ("workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"),
 }
+NODE_PROMPT_IDS = {**LEGACY_NODE_PROMPT_IDS, "package": ("workflow.package_review",)}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -24,8 +28,11 @@ def builtin_node_prompt(prompt_id: str) -> str:
     return render(get(prompt_id))
 
 
-def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None) -> tuple[str, ...]:
+def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None,
+                           package_review=None) -> tuple[str, ...]:
     """Only offer templates that the selected node can actually call."""
+    if stage == "package":
+        return NODE_PROMPT_IDS[stage] if validate_package_review(package_review)["enabled"] else ()
     if stage == "ingest":
         return (("workflow.plan",) if source_mode == "开放需求" else
                 ("workflow.document_vision",) if source_mode == "多模态文档" else ())
@@ -70,11 +77,12 @@ def snapshot_node_prompts(value: dict | None) -> dict:
             for stage, prompt_ids in NODE_PROMPT_IDS.items()}
 
 
-def validate_node_prompt_snapshot(value: dict, system: str) -> dict:
+def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 10) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
     templates = validate_node_prompts(value)
-    if (set(templates) != set(NODE_PROMPT_IDS)
-            or any(set(templates[stage]) != set(ids) for stage, ids in NODE_PROMPT_IDS.items())
+    catalog = LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else NODE_PROMPT_IDS
+    if (set(templates) != set(catalog)
+            or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):
         raise ValueError("invalid_node_prompt_snapshot")
     return templates

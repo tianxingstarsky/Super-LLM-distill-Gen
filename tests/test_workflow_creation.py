@@ -7,7 +7,7 @@ from lib.domain.workflow_creation import validate_creation
 @pytest.mark.parametrize('field,value', [
     ('sample_count', True), ('sample_count', 100001), ('concurrency', 0),
     ('batch_size', 501), ('conversation_turns', 1), ('brief', 42),
-    ('targets', ['unknown']), ('node_models', {'package': {}}),
+    ('targets', ['unknown']), ('node_models', {'package': {'generation': {}}}),
 ])
 def test_invalid_creation_never_reaches_storage(field, value):
     driver = Mock()

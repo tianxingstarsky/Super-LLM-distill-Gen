@@ -67,7 +67,7 @@ def make_run(tmp_path, **kwargs):
 
 @pytest.mark.parametrize("value,error", [
     (False, "invalid_node_prompts"), ([], "invalid_node_prompts"),
-    ({"agent": {}}, "invalid_node_prompts"), ({"package": {}}, "invalid_node_prompts"),
+    ({"agent": {}}, "invalid_node_prompts"), ({"package": []}, "invalid_node_prompts"),
     ({"sft": []}, "invalid_node_prompts"),
     ({"sft": {"workflow.system": "override"}}, "invalid_node_prompt_id"),
     ({"sft": {"workflow.trim": "wrong node"}}, "invalid_node_prompt_id"),
@@ -104,7 +104,7 @@ def test_prompt_config_is_independent_and_literal_braces_are_not_interpolated(tm
     assert TEXT in writer.calls[0][1]["content"]
     assert "LOCAL_PROMPT_SENTINEL" not in writer.calls[0][1]["content"]
     recipe = engine.read_json(path / "recipe.json")
-    assert recipe["version"] == 9 and recipe["node_prompts"]["sft"]["workflow.sft"] == body
+    assert recipe["version"] == 10 and recipe["node_prompts"]["sft"]["workflow.sft"] == body
     assert recipe["node_prompt_templates"]["sft"]["workflow.sft"] == body
     report = engine.read_json(path / "artifacts/quality.json")
     assert report["node_prompts"]["sft"]["workflow.sft"] == {"sha256": engine.digest(body), "custom": True}

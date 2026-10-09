@@ -15,12 +15,12 @@ _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses
                       "anthropic": "Anthropic Messages"}
 
 
-def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None):
+def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None):
     draft_key = f"workflow-node-bindings:{workspace}"
     draft = deepcopy(st.session_state.get(draft_key, {}))
     initialized_key = draft_key + ":initialized"
     draft, initialized, endpoints = application.prepare_draft(
-        nodes, source_mode, draft, st.session_state.get(initialized_key, ()), node_generation=node_generation)
+        nodes, source_mode, draft, st.session_state.get(initialized_key, ()), node_generation=node_generation, package_review=package_review)
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
     return draft, endpoints
@@ -156,21 +156,21 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
 
 
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
-                       backend_application: BackendApplication | None = None, node_generation=None):
+                       backend_application: BackendApplication | None = None, node_generation=None, package_review=None):
     pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
-    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation):
+    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review):
         prefix = f"node-model:{workspace}:{node}:{pending['role']}"
         st.session_state[prefix + ":backend"] = pending["backend"]
         st.session_state[prefix + ":model:" + pending["backend"]] = pending["model"]
     previous = deepcopy(bindings)
-    roles = node_roles(node, source_mode, node_generation=node_generation)
+    roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review)
     if not roles:
         explanation = {
             "ingest": "解析上传来源并保留来源位置；此步骤不调用生成模型。",
             "cpt": "清洗、分块并去重已有语料；此步骤不调用生成模型。",
             "agent": "核对已记录的工具轨迹；此节点不调用模型。验证环境在下方选择。",
             "gsm8k": "生成可复现的多步整数算术题，核对计算标注和最终答案；不处理通用数学证明，此节点不调用模型。",
-            "package": "核对产物清单并整理候选数据；人工审核和正式发布在后续完成，此节点不调用模型。",
+            "package": "核对产物清单并整理候选数据；可开启 AI 评审，再选择本节点的评审模型。",
         }.get(node, "此节点不需要配置模型。")
         st.info(explanation)
         return
@@ -249,8 +249,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.rerun()
 
 
-def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None):
-    return {node: {role: bindings[node][role] for role in node_roles(node, source_mode, node_generation=node_generation)
+def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None):
+    return {node: {role: bindings[node][role] for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
 
 

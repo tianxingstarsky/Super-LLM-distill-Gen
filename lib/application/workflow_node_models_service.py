@@ -12,11 +12,13 @@ class WorkflowNodeModelsApplication:
     def __init__(self, inventory: ModelInventoryPort):
         self._inventory = inventory
 
-    def prepare_draft(self, nodes, source_mode, draft, initialized, *, node_generation=None):
+    def prepare_draft(self, nodes, source_mode, draft, initialized, *, node_generation=None,
+                      package_review=None):
         return initialize_draft(nodes, source_mode, draft, initialized, self._inventory.list_backends(),
-                                node_generation=node_generation)
+                                node_generation=node_generation, package_review=package_review)
 
-    def snapshot(self, nodes, source_mode, bindings, *, node_generation=None):
+    def snapshot(self, nodes, source_mode, bindings, *, node_generation=None, package_review=None):
         # Recheck service existence at submission, rather than trust an earlier UI render.
         endpoints = {row["name"]: row for row in self._inventory.list_backends().get("backends", [])}
-        return binding_snapshot(nodes, source_mode, bindings, endpoints, node_generation=node_generation)
+        return binding_snapshot(nodes, source_mode, bindings, endpoints, node_generation=node_generation,
+                                package_review=package_review)
