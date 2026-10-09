@@ -67,8 +67,9 @@ def test_cot_and_trim_accept_independent_generation_and_judge_models():
     from tests.test_workflow_node_models import Inventory
 
     application = WorkflowNodeModelsApplication(Inventory())
-    draft, _, _ = application.prepare_draft(['cot', 'trim'], '文档', {}, [])
-    result = application.snapshot(['cot', 'trim'], '文档', draft)
+    generation = {'cot': {'enabled': True}}
+    draft, _, _ = application.prepare_draft(['cot', 'trim'], '文档', {}, [], node_generation=generation)
+    result = application.snapshot(['cot', 'trim'], '文档', draft, node_generation=generation)
     assert set(result) == {'cot', 'trim'}
     for node in result.values():
         assert node['generation']['backend'] == 'writer'

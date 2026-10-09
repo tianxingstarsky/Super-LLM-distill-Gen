@@ -38,6 +38,9 @@ from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.domain.workflow_generation import validate_node_generation, style_for_sample
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
+from lib.domain.workflow_node_prompts import (
+    validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
+)
 from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.generation_settings_file import FileGenerationSettingsDriver
@@ -64,8 +67,8 @@ from lib.prompts import get, registry, render
 
 EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
-RECIPE_VERSION = 8
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8})
+RECIPE_VERSION = 9
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -251,17 +254,20 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
-               node_generation=None, reasoning_trim=None):
+               node_generation=None, reasoning_trim=None, node_prompts=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
         node_models=node_models, conversation_turns=conversation_turns, brief=brief,
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources, node_generation=node_generation,
-        reasoning_trim=reasoning_trim)
+        reasoning_trim=reasoning_trim, node_prompts=node_prompts)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
     reasoning_trim = validate_reasoning_trim(reasoning_trim)
+    node_prompts = validate_node_prompts(node_prompts)
+    node_prompt_templates = snapshot_node_prompts(node_prompts)
+    node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
         if config.get("enabled", True):
@@ -339,6 +345,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "node_models": node_models, "web_research": web_research,
               "document_parser": document_parser,
               "node_generation": node_generation,
+              "node_prompts": node_prompts,
+              "node_prompt_templates": node_prompt_templates,
+              "node_prompt_system": node_prompt_system,
               "node_generation_prompts": generation_prompts,
               "reasoning_trim": reasoning_trim,
               "reasoning_trim_prompt": (trim_prompt(reasoning_trim) if (reasoning_trim or {}).get("enabled") else None),
@@ -465,6 +474,18 @@ class Workflow:
             self.save(force=False)
         return client
 
+    def prompt_text(self, prompt_id, *, stage=None):
+        """Resolve by node as well as step, without formatting user-owned text."""
+        if self.recipe.get("version", 0) >= 9:
+            try:
+                text = self.recipe["node_prompt_templates"][stage or self.stage][prompt_id]
+            except (KeyError, TypeError) as exc:
+                raise ValueError("invalid_node_prompt_snapshot") from exc
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("invalid_node_prompt_snapshot")
+            return text
+        return render(get(prompt_id))
+
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
             allow_reasoning_fallback=True):
         journal = None
@@ -489,7 +510,9 @@ class Workflow:
                             self.check_cancel()
                             journal(event)
                         streaming["on_stream"] = received
-                    system = render(get("workflow.system")) + "\n" + render(get(prompt_id))
+                    base_system = (self.recipe["node_prompt_system"] if self.recipe.get("version", 0) >= 9
+                                   else render(get("workflow.system")))
+                    system = base_system + "\n" + self.prompt_text(prompt_id)
                     if instruction is not None:
                         system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
                     visible_only = (not allow_reasoning_fallback or prompt_id in {
@@ -1168,7 +1191,9 @@ class Workflow:
                                   {"prompt": prefix, "source": sample["source_context"]}, alternative)
         node_models = self.recipe.get("node_models", {})
         chosen_check = sample["judge"]
-        if node_models.get("sft", {}).get("jev") != node_models.get("preference", {}).get("jev"):
+        if (node_models.get("sft", {}).get("jev") != node_models.get("preference", {}).get("jev")
+                or self.prompt_text("workflow.jev_score", stage="sft")
+                != self.prompt_text("workflow.jev_score", stage="preference")):
             chosen_check = self.judge_answer([sample["id"], "chosen_judge"],
                 {"prompt": prefix, "source": sample["source_context"]}, chosen)
         choices = sorted([(chosen_check, chosen), (check, alternative)], key=lambda x: x[0]["correctness"])
@@ -1449,6 +1474,12 @@ class Workflow:
                         "reasoning_origin": "prompt_styled_generation" if config.get("enabled", True) else "ordinary_distillation",
                         "maximum_repair_attempts": 1}
                 for stage, config in self.recipe["node_generation"].items()}
+        if self.recipe.get("node_prompt_templates"):
+            report["node_prompts"] = {
+                stage: {prompt_id: {"sha256": digest(text),
+                                     "custom": prompt_id in self.recipe.get("node_prompts", {}).get(stage, {})}
+                        for prompt_id, text in templates.items()}
+                for stage, templates in self.recipe["node_prompt_templates"].items()}
         if (self.recipe.get("reasoning_trim") or {}).get("enabled"):
             report["reasoning_trim"] = {
                 "enabled": True, "template": self.recipe["reasoning_trim"]["template"],
@@ -1634,9 +1665,13 @@ class Workflow:
                 self.recipe = read_json(self.path / "recipe.json")
                 if digest(self.recipe) != self.state["recipe_hash"] or self.recipe["version"] not in SUPPORTED_RECIPE_VERSIONS:
                     raise ValueError("recipe_changed_create_new_run")
-                current_prompts = prompt_versions()
-                if any(current_prompts.get(key) != pinned for key, pinned in self.recipe["prompts"].items()):
-                    raise ValueError("prompts_changed_create_new_run")
+                if self.recipe["version"] >= 9:
+                    validate_node_prompt_snapshot(self.recipe.get("node_prompt_templates"),
+                                                  self.recipe.get("node_prompt_system"))
+                else:
+                    current_prompts = prompt_versions()
+                    if any(current_prompts.get(key) != pinned for key, pinned in self.recipe["prompts"].items()):
+                        raise ValueError("prompts_changed_create_new_run")
                 for source in self.recipe["sources"]:
                     if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
                         raise ValueError("source_snapshot_changed")

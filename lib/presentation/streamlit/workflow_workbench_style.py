@@ -57,6 +57,15 @@ WORKBENCH_STYLE = """<style>
 .df-generation-preview.is-disabled {background:#f7f9fc;border-color:#e2e9f2}
 .df-generation-preview.is-disabled i {background:#e8edf5;color:#7890ab}
 .df-generation-preview.is-disabled strong,.df-generation-preview.is-disabled p {color:#71849b}
+[class*="st-key-workbench-node-prompts"] {padding:12px 0;border-bottom:1px solid #e0eaf5}
+[class*="st-key-workbench-node-prompts"] [data-testid="stTextArea"] textarea {
+  background:#f8fbff;border-color:#cfdff2;font-size:12px;line-height:1.65}
+[class*="st-key-workbench-node-prompts"] [data-testid="stFileUploader"] section {
+  background:#f8fbff;border-color:#cfdff2}
+.df-node-prompt-heading {display:flex;align-items:center;gap:7px;color:#294d78;
+  font-size:13px;font-weight:650;line-height:1.5;margin-bottom:3px}
+.df-node-prompt-heading i {display:grid;place-items:center;width:24px;height:24px;
+  border-radius:7px;background:#e6efff;color:#3575c9;font-style:normal}
 @media(max-width:1050px) {
   .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] {flex-wrap:wrap}
   .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {flex:1 1 100%;width:100%;min-width:0}

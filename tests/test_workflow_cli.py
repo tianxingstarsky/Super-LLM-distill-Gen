@@ -47,14 +47,19 @@ def test_workflow_cli_forwards_generation_and_trim_files(monkeypatch, tmp_path):
     monkeypatch.setattr(workflows, 'workflow_application', lambda *_: Application())
     generation = {'cot': {'enabled': True, 'style': 'structured', 'instruction': '保留必要依据。'}}
     trim = {'enabled': True, 'template': 'leakage'}
+    node_prompts = {'cot': {'workflow.cot_generate': 'Preserve facts. Return {"reasoning":"...","answer":"..."}.'}}
     generation_file = tmp_path / 'generation.json'
     trim_file = tmp_path / 'trim.json'
+    prompts_file = tmp_path / 'prompts.json'
     generation_file.write_text(json.dumps(generation, ensure_ascii=False), encoding='utf-8')
     trim_file.write_text(json.dumps(trim), encoding='utf-8')
+    prompts_file.write_text(json.dumps(node_prompts), encoding='utf-8')
     args = cli.build_parser().parse_args([
         'workflow', '--brief', 'Generate sourced examples', '--targets', 'cot',
         '--node-generation', str(generation_file), '--reasoning-trim', str(trim_file),
+        '--node-prompts', str(prompts_file),
     ])
     assert args.func(args) == 0
     assert captured['node_generation'] == generation
     assert captured['reasoning_trim'] == trim
+    assert captured['node_prompts'] == node_prompts

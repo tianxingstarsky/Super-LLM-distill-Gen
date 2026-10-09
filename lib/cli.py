@@ -1055,6 +1055,8 @@ def cmd_workflow(args) -> int:
                                              if getattr(args, "node_generation", None) else None),
                             reasoning_trim=(json.loads(pathlib.Path(args.reasoning_trim).read_text(encoding="utf-8"))
                                             if getattr(args, "reasoning_trim", None) else None),
+                            node_prompts=(json.loads(pathlib.Path(args.node_prompts).read_text(encoding="utf-8"))
+                                          if getattr(args, "node_prompts", None) else None),
                             conversation_turns=args.conversation_turns)
         print(f"运行 ID: {run_id}", flush=True)
         state = application.execute(run_id)
@@ -1285,6 +1287,7 @@ def build_parser():
     p_workflow.add_argument("--node-models", help="节点模型配置 JSON 文件，仅包含 backend 与 model")
     p_workflow.add_argument("--node-generation", help="SFT/CoT 节点生成风格与附加指令的 JSON 文件")
     p_workflow.add_argument("--reasoning-trim", help="可选推理文本修剪节点的 JSON 配置文件")
+    p_workflow.add_argument("--node-prompts", help="按节点和提示词 ID 配置完整提示词正文的 JSON 文件")
     p_workflow.add_argument("--conversation-turns", type=int, default=3, help="多轮对话目标的轮数，2–8")
     p_workflow.add_argument("--backend")
     p_workflow.add_argument("--model")

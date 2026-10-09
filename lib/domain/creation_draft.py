@@ -4,6 +4,7 @@ from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_generation import GENERATION_STYLES, MAX_GENERATION_INSTRUCTION_CHARS
 from lib.domain.reasoning_trim import TRIM_TEMPLATE_NAMES, MAX_TRIM_INSTRUCTION_CHARS, MAX_TRIM_PROMPT_CHARS
+from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS, MAX_NODE_PROMPT_CHARS
 
 NUMBER_FIELDS = {
     'workflow-count': (1, MAX_CANDIDATES), 'workflow-max-units': (1, MAX_CANDIDATES),
@@ -18,7 +19,8 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
                'workflow-knowledge-query': 2000,
                'workflow-generation-instruction': MAX_GENERATION_INSTRUCTION_CHARS,
                'workflow-trim-instruction': MAX_TRIM_INSTRUCTION_CHARS,
-               'workflow-trim-prompt': MAX_TRIM_PROMPT_CHARS}
+               'workflow-trim-prompt': MAX_TRIM_PROMPT_CHARS,
+               'workflow-node-prompt': MAX_NODE_PROMPT_CHARS}
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
@@ -39,6 +41,11 @@ def validate_creation_draft(values):
             parts = key.split(':')
             if len(parts) != 3 or not parts[1] or parts[2] not in {'sft', 'cot'}:
                 raise ValueError('invalid_creation_draft')
+        if field == 'workflow-node-prompt':
+            parts = key.split(':')
+            if (len(parts) != 4 or not parts[1] or parts[2] not in NODE_PROMPT_IDS
+                    or parts[3] not in NODE_PROMPT_IDS[parts[2]]):
+                raise ValueError('invalid_creation_draft')
         valid = False
         if field in BOOLEAN_FIELDS:
             valid = type(value) is bool
@@ -46,7 +53,8 @@ def validate_creation_draft(values):
             low, high = NUMBER_FIELDS[field]
             valid = type(value) is int and low <= value <= high
         elif field in TEXT_FIELDS:
-            valid = isinstance(value, str) and len(value) <= TEXT_FIELDS[field]
+            valid = (isinstance(value, str) and len(value) <= TEXT_FIELDS[field]
+                     and (field != 'workflow-node-prompt' or '\x00' not in value))
         elif field in ENUM_FIELDS:
             valid = isinstance(value, str) and value in ENUM_FIELDS[field]
         elif field == 'workflow-targets':

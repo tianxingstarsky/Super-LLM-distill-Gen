@@ -223,7 +223,7 @@ def test_recipe_pins_style_and_trim_instructions_before_execution(tmp_path, monk
     assert "CHANGED_STYLE_SENTINEL" not in generator.calls[0][0]["content"]
     assert "CHANGED_TRIM_SENTINEL" not in generator.calls[-1][0]["content"]
     recipe = engine.read_json(path / "recipe.json")
-    assert recipe["version"] == 8 and recipe["reasoning_trim"]["template"] == "leakage"
+    assert recipe["version"] == engine.RECIPE_VERSION and recipe["reasoning_trim"]["template"] == "leakage"
 
 
 def test_trim_keeps_answers_and_upstream_rows_but_does_not_duplicate_original_chain_in_bundle(tmp_path):

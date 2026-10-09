@@ -30,6 +30,9 @@ from lib.presentation.streamlit.workflow_generation_settings import (
     STYLE_LABELS, TRIM_LABELS, generation_snapshot, generation_issues, generation_summary,
     render_generation_settings, render_trim_toggle, render_trim_settings, trim_snapshot, trim_has_issue,
 )
+from lib.presentation.streamlit.workflow_prompt_settings import (
+    node_prompt_snapshot, node_prompt_has_issue, render_node_prompts, render_run_node_prompts,
+)
 
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
@@ -109,6 +112,10 @@ def _workflow_error(error) -> str:
         "reasoning_trim_requires_reasoning_target": "请先选择 SFT 或 CoT 目标，再开启推理链修剪。",
         "invalid_style_judge_schema": "核验模型未返回有效评分。可从断点重试，或新建任务调整节点模型。",
         "model_visible_output_missing": "模型只返回推理通道，未返回所需的答案正文。请检查模型输出设置后重试。",
+        "invalid_node_prompts": "节点提示词配置无效，请检查对应节点的处理步骤。",
+        "invalid_node_prompt_id": "节点提示词与处理步骤不匹配，请重新选择或恢复内置提示词。",
+        "invalid_node_prompt_text": "节点提示词正文无效，请填写有效文本或恢复内置提示词。",
+        "invalid_node_prompt_snapshot": "本次任务的提示词快照无效，请复制配置后新建任务。",
     }.get(str(error), str(error))
 
 
@@ -560,6 +567,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                     f'<div class="df-run-stat"><b>{max(0, quarantined)}</b><span>{quarantined_label}</span></div>'
                     '</div>')
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
+            render_run_node_prompts(selected_stage, recipe, run_id)
             if selected_metrics.get("error"):
                 st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
     selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
@@ -1065,6 +1073,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                           selection_key, key=f"setup-canvas:{ws}")
         with setup_col, st.container(border=True, key="workbench-node-panel"):
             section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
+            if selected_node != "ingest" or source_mode != "文档资料":
+                render_node_prompts(selected_node, model_source_mode, ws,
+                                    save_field=_save_draft_value, node_generation=node_generation)
             if selected_node in {"sft", "cot"}:
                 render_generation_settings(selected_node, ws, save_field=_save_draft_value)
             elif selected_node == "trim":
@@ -1072,12 +1083,16 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if selected_node == "ingest" and source_mode == "文档资料":
                 document_parser = render_document_parser(ws, bindings, endpoints,
                     backend_application=backend_application)
+                model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else source_mode
             elif selected_node == "ingest" and source_mode == "知识库检索" and knowledge_application is not None:
                 from lib.presentation.streamlit.knowledge_page import render_knowledge_settings
                 render_knowledge_settings(knowledge_application, ws)
             else:
                 render_node_models(selected_node, source_mode, ws, bindings, endpoints,
                                    backend_application=backend_application, node_generation=node_generation)
+            if selected_node == "ingest" and source_mode == "文档资料":
+                render_node_prompts(selected_node, model_source_mode, ws,
+                                    save_field=_save_draft_value, node_generation=node_generation)
             if selected_node == "sft" and "sft" in targets:
                 sft_output_style = st.selectbox(
                     "SFT 训练文件格式", ("separated", "drop"),
@@ -1099,6 +1114,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     generation_invalid = generation_issues(node_generation)
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
     trim_invalid = trim_has_issue(reasoning_trim)
+    node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
+                                       node_generation=node_generation) if targets else {}
+    prompts_invalid = node_prompt_has_issue(node_prompts)
     # A short, informational node leaves most of the inspector column unused.
     # Put common controls there, while keeping long model/verification forms
     # separate from the full-width controls below the workbench.
@@ -1263,6 +1281,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.warning("风格配置尚未完成，请在对应节点填写有效的自定义指令。")
             if trim_invalid:
                 st.warning("修剪配置尚未完成，请在修剪节点填写有效的自定义模板。")
+            if prompts_invalid:
+                st.warning("节点提示词尚未完成，请在对应节点填写有效正文或恢复内置提示词。")
             style_summary = (translate("分字段保留推理" if sft_output_style == "separated"
                                        else "只保留答案",
                                        st.session_state.get("ui_language", "zh"))
@@ -1295,7 +1315,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     and any(Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in selected))
                 submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues)
                                       or bool(pricing_issues) or agent_unavailable or web_unavailable
-                                      or bool(generation_invalid) or trim_invalid
+                                      or bool(generation_invalid) or trim_invalid or prompts_invalid
                                       or parser_unavailable or source_mode == "知识库检索" and not selected
                                       or bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")),
                                       key=f"workflow-create:{ws}", width="stretch")
@@ -1339,6 +1359,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         agent_replay_mode=agent_mode,
                                         sft_output_style=sft_output_style,
                                         node_generation=node_generation,
+                                        node_prompts=node_prompts,
                                         reasoning_trim=reasoning_trim,
                                         web_research=web_research,
                                         document_parser=document_parser,

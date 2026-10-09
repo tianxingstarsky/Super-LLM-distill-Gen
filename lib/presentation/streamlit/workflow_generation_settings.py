@@ -77,16 +77,16 @@ def render_generation_settings(node: str, workspace: str, *, save_field) -> None
                              format_func=lambda value: translate_label(STYLE_LABELS[value], language),
                              on_change=save_field, args=(workspace, style_key))
         if enabled:
-            st.file_uploader("导入风格提示词", type=["txt", "md"], max_upload_size=1,
+            st.file_uploader("导入风格要求", type=["txt", "md"], max_upload_size=1,
                              key=f"workflow-generation-upload:{prefix}",
                              on_change=_import_generation_instruction, args=(workspace, node, save_field),
                              help="UTF-8 文本，最多 64 KiB / 4,000 字符；导入后切换为自定义风格，可继续编辑。")
             if error := st.session_state.get(f"workflow-generation-upload-error:{prefix}"):
                 st.error(error)
-        st.text_area("附加风格指令", key=instruction_key, height=95, disabled=not enabled,
+        st.text_area("风格要求", key=instruction_key, height=95, disabled=not enabled,
                      max_chars=MAX_GENERATION_INSTRUCTION_CHARS,
                      placeholder="例如：先核对条件，再给出简短推导；使用自然中文，避免机械编号。",
-                     help="预设上的补充要求；自定义风格开启时必须填写。",
+                     help="只控制表达要求；生成与核验指令在节点提示词中编辑。自定义风格开启时必须填写。",
                      on_change=save_field, args=(workspace, instruction_key))
         description = (STYLE_PRESETS.get(style) or (
             "按样本稳定轮换简洁、教学、核验和反思风格，重试时保持一致。" if style == "mixed"
@@ -197,19 +197,19 @@ def render_trim_settings(workspace: str, *, save_field) -> None:
         _restore_field(workspace, key, default)
     language = st.session_state.get("ui_language", "zh")
     st.caption("仅修剪推理字段，最终答案保持原样；质检不通过的改写会隔离。")
-    selected = st.selectbox("修剪模板", tuple(TRIM_LABELS), key=template_key,
+    selected = st.selectbox("修剪规则模板", tuple(TRIM_LABELS), key=template_key,
                             format_func=lambda value: translate_label(TRIM_LABELS[value], language),
                             on_change=save_field, args=(workspace, template_key))
-    st.text_area("附加修剪指令", key=instruction_key, height=85,
+    st.text_area("附加修剪规则", key=instruction_key, height=85,
                  max_chars=MAX_TRIM_INSTRUCTION_CHARS,
                  placeholder="例如：保留引用与公式，去掉重复的资料包装说明。",
                  on_change=save_field, args=(workspace, instruction_key))
     if selected == "custom":
-        st.file_uploader("导入修剪提示词", type=["txt", "md"], max_upload_size=1,
+        st.file_uploader("导入修剪规则", type=["txt", "md"], max_upload_size=1,
                          key=f"workflow-trim-upload:{workspace}",
                          on_change=_import_trim_template, args=(workspace, save_field),
                          help="UTF-8 文本，最多 64 KiB / 16,000 字符；上传后可直接编辑。")
-        st.text_area("自定义修剪模板", key=prompt_key, height=180, max_chars=_MAX_TEMPLATE_CHARS,
+        st.text_area("自定义修剪规则", key=prompt_key, height=180, max_chars=_MAX_TEMPLATE_CHARS,
                      on_change=save_field, args=(workspace, prompt_key),
                      help="明确哪些内容需要清理，并要求返回完整修剪后的推理；任务会另行提供推理与答案。")
     else:

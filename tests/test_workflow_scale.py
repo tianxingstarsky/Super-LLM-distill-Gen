@@ -242,7 +242,8 @@ def test_node_clients_are_separate_and_usage_is_exact_under_concurrency(tmp_path
 
     monkeypatch.setattr(engine, "load_backend", load)
     for stage in bindings:
-        run.stage_items(stage, list(range(12)), lambda item: [run.ask(item, "generation", "workflow.sft", {"index": item})])
+        prompt_id = "workflow.sft" if stage == "sft" else "workflow.alternative"
+        run.stage_items(stage, list(range(12)), lambda item: [run.ask(item, "generation", prompt_id, {"index": item})])
     assert run.state["usage"]["generation"] == {"calls": 24, "prompt_tokens": 240, "completion_tokens": 120}
     assert {name for name, model in created} == {"sft", "preference"}
     assert run.state["models"]["sft.generation"]["model"] == "sft-model"

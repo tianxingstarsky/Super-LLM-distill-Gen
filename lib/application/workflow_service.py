@@ -9,6 +9,7 @@ from lib.domain.workflow_creation import validate_creation
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.reasoning_trim import validate_reasoning_trim
+from lib.domain.workflow_node_prompts import validate_node_prompts
 
 
 class WorkflowApplication:
@@ -22,13 +23,14 @@ class WorkflowApplication:
             "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
             "batch_size", "node_models", "conversation_turns", "brief",
             "agent_replay_mode", "evaluation_sources", "web_research", "sources",
-            "node_generation", "reasoning_trim") if key in recipe}
+            "node_generation", "reasoning_trim", "node_prompts") if key in recipe}
         targets, node_models = validate_creation(**fields)
         research = validate_web_research(recipe.get("web_research"), brief=recipe.get("brief", ""),
                                          sources=recipe.get("sources", ()), targets=targets)
         return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models,
                                       "web_research": research,
                                       "node_generation": validate_node_generation(recipe.get("node_generation")),
+                                      "node_prompts": validate_node_prompts(recipe.get("node_prompts")),
                                       "reasoning_trim": validate_reasoning_trim(recipe.get("reasoning_trim"))})
 
     def default_sft_output_style(self) -> str:

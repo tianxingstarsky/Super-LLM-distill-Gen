@@ -48,6 +48,19 @@ def test_generation_style_and_cleanup_controls_have_complete_english_copy():
         assert translate(phrase, "zh") == phrase
 
 
+def test_node_prompt_controls_have_complete_english_copy():
+    import ast
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "lib/presentation/streamlit/workflow_prompt_settings.py"
+    phrases = [node.value for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
+               if isinstance(node, ast.Constant) and isinstance(node.value, str)
+               and re.search(r"[\u4e00-\u9fff]", node.value)]
+    for phrase in phrases:
+        assert not re.search(r"[\u4e00-\u9fff]", translate(phrase, "en")), phrase
+        assert translate(phrase, "zh") == phrase
+
+
 def test_preference_review_controls_and_progress_translate_completely():
     assert translate("编辑两个回答", "en") == "Edit both responses"
     assert translate("已审核 12 对 · 待处理 50000 对", "en") == "Reviewed 12 · Pending 50000"
