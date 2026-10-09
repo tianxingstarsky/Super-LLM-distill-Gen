@@ -11,6 +11,8 @@ from filelock import Timeout
 
 from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_scale import validate_node_models
+from lib.domain.workflow_generation import validate_node_generation
+from lib.domain.reasoning_trim import validate_reasoning_trim
 
 
 _DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"})
@@ -114,6 +116,16 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         if style not in {"separated", "drop"}:
             style = "separated"
     values[f"workflow-sft-output-style:{workspace}"] = style
+    for node, generation in validate_node_generation(recipe.get("node_generation")).items():
+        values[f"workflow-generation-enabled:{workspace}:{node}"] = generation["enabled"]
+        values[f"workflow-generation-style:{workspace}:{node}"] = generation["style"]
+        values[f"workflow-generation-instruction:{workspace}:{node}"] = generation["instruction"]
+    trim = validate_reasoning_trim(recipe.get("reasoning_trim"))
+    if trim is not None:
+        values[f"workflow-trim-enabled:{workspace}"] = trim["enabled"]
+        values[f"workflow-trim-template:{workspace}"] = trim["template"]
+        values[f"workflow-trim-instruction:{workspace}"] = trim["instruction"]
+        values[f"workflow-trim-prompt:{workspace}"] = trim["custom_prompt"]
     research = recipe.get("web_research")
     if isinstance(research, dict):
         values[f"workflow-web-research-query:{workspace}"] = research.get("query", "")

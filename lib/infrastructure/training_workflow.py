@@ -36,6 +36,8 @@ from lib.domain.workflow_creation import validate_creation
 from lib.domain.document_parser import validate_document_parser
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
+from lib.domain.workflow_generation import validate_node_generation, style_for_sample
+from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
 from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.generation_settings_file import FileGenerationSettingsDriver
@@ -62,8 +64,8 @@ from lib.prompts import get, registry, render
 
 EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
-RECIPE_VERSION = 7
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7})
+RECIPE_VERSION = 8
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -248,14 +250,25 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                evaluation_sources=(), evaluation_source_names=None,
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
                agent_replay_mode="configured", web_research=None, settings_root=None,
-               sft_output_style=None, document_parser=None, knowledge_retrieval=None):
+               sft_output_style=None, document_parser=None, knowledge_retrieval=None,
+               node_generation=None, reasoning_trim=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
         node_models=node_models, conversation_turns=conversation_turns, brief=brief,
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
-        web_research=web_research, sources=sources)
+        web_research=web_research, sources=sources, node_generation=node_generation,
+        reasoning_trim=reasoning_trim)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
+    node_generation = validate_node_generation(node_generation)
+    reasoning_trim = validate_reasoning_trim(reasoning_trim)
+    generation_prompts = {}
+    for stage, config in node_generation.items():
+        if config.get("enabled", True):
+            presets = (("concise", "structured", "skeptical", "reflective")
+                       if config["style"] == "mixed" else (config["style"],))
+            generation_prompts[stage] = {preset: style_for_sample({**config, "style": preset}, "snapshot")["instruction"]
+                                         for preset in presets}
     if (sft_output_style is not None and
             (type(sft_output_style) is not str or sft_output_style not in {"separated", "drop"}
              or "sft" not in targets)):
@@ -325,6 +338,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
               "node_models": node_models, "web_research": web_research,
               "document_parser": document_parser,
+              "node_generation": node_generation,
+              "node_generation_prompts": generation_prompts,
+              "reasoning_trim": reasoning_trim,
+              "reasoning_trim_prompt": (trim_prompt(reasoning_trim) if (reasoning_trim or {}).get("enabled") else None),
               "generation_preferences": preferences, "sft_output_style": sft_output_style,
               "prompts": prompt_versions()}
     if endpoint_pins is not None:
@@ -334,6 +351,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     atomic_json(path / "recipe.json", recipe)
     atomic_json(path / "state.json", {"id": run_id, "name": name[:100], "created_at": now(), "updated_at": now(),
                 "status": "queued", "recipe_hash": digest(recipe), "targets": targets, "attempt": 0,
+                "reasoning_trim_enabled": bool((reasoning_trim or {}).get("enabled")),
                 "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0} for key, label in STAGES.items()},
                 "events": [], "usage": {}})
     return run_id
@@ -447,7 +465,8 @@ class Workflow:
             self.save(force=False)
         return client
 
-    def ask(self, key, role, prompt_id, data, *, image=None):
+    def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
+            allow_reasoning_fallback=True):
         journal = None
         def invoke():
             nonlocal journal
@@ -470,12 +489,19 @@ class Workflow:
                             self.check_cancel()
                             journal(event)
                         streaming["on_stream"] = received
+                    system = render(get("workflow.system")) + "\n" + render(get(prompt_id))
+                    if instruction is not None:
+                        system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
+                    visible_only = (not allow_reasoning_fallback or prompt_id in {
+                        "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
+                        "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
                     return chat_json(client, [
-                        {"role": "system", "content": render(get("workflow.system")) + "\n" + render(get(prompt_id))},
+                        {"role": "system", "content": system},
                         {"role": "user", "content": canonical(data) if image is None else [
                             {"type": "text", "text": canonical(data)},
                             {"type": "image_url", "image_url": {"url": image}}]}],
-                        max_tokens=binding.get("max_output_tokens"), **streaming)
+                        max_tokens=binding.get("max_output_tokens"), **streaming,
+                        **({"allow_reasoning_fallback": False} if visible_only else {}))
                 finally:
                     after = getattr(client, "usage", {})
                     with self._lock:
@@ -819,15 +845,55 @@ class Workflow:
                        "source_location": {"brief_task": index + 1},
                        "kind": "brief", "text": task, "status": "ready", "synthetic": True}
 
-    def judge_answer(self, key, context, message, prompt_id="workflow.jev_score"):
+    def judge_answer(self, key, context, message, prompt_id="workflow.jev_score", *, instruction=None,
+                     allow_reasoning_fallback=True):
         # A failed schema must not become a permanent successful call checkpoint.
         value = self.ask(key, "jev", prompt_id,
-            {"context": context, "answer": message})
+            {"context": context, "answer": message},
+            **({"instruction": instruction} if instruction is not None else {}),
+            **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}))
         try:
             return verdict(value)
         except ValueError:
             (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
             raise
+
+    def generation_style(self, stage, sample_id):
+        config = self.recipe.get("node_generation", {}).get(stage)
+        if not config or not config.get("enabled", True):
+            return None
+        style = style_for_sample(config, sample_id)
+        pinned = self.recipe.get("node_generation_prompts", {}).get(stage, {}).get(style["preset"])
+        if pinned is not None:
+            style["instruction"] = pinned
+        return style
+
+    @staticmethod
+    def without_source_reasoning(value):
+        """Keep source facts without supplying an assistant's existing chain."""
+        if isinstance(value, list):
+            return [Workflow.without_source_reasoning(item) for item in value]
+        if isinstance(value, dict):
+            return {key: Workflow.without_source_reasoning(item) for key, item in value.items()
+                    if not (value.get("role") == "assistant" and
+                            key in {"reasoning_content", "reasoning", "thinking"})}
+        return value
+
+    def style_check(self, key, style, reasoning, answer):
+        return self.adherence_check(key, "workflow.style_check", {
+            "generation_style": style, "reasoning": reasoning, "answer": answer})
+
+    def adherence_check(self, key, prompt_id, data, *, instruction=None):
+        value = self.ask(key, "jev", prompt_id, data,
+                         **({"instruction": instruction} if instruction is not None else {}))
+        if (not isinstance(value, dict) or set(value) != {"keep", "adherence", "reason"}
+                or type(value.get("keep")) is not bool
+                or type(value.get("adherence")) is not int
+                or not 1 <= value["adherence"] <= 5
+                or not isinstance(value.get("reason"), str) or not value["reason"].strip()):
+            (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
+            raise ValueError("invalid_style_judge_schema")
+        return value
 
     def cpt(self, unit):
         if unit["kind"] == "conversation":
@@ -862,14 +928,22 @@ class Workflow:
                        {**m, "content": "[来源内容隐藏]" if m.get("role") == "assistant" else m.get("content", "")}
                        for m in unit.get("messages", [])]},
                    "requirement": self.recipe["brief"]}
+        style = self.generation_style("sft", unit["id"])
+        if style is not None:
+            history = self.without_source_reasoning(history)
+            context = self.without_source_reasoning(context)
+            context["generation_style"] = style
         feedback = None
+        check, style_check = None, None
         for attempt in range(2):
-            if history and attempt == 0 and history[-1].get("reasoning_content"):
+            if style is None and history and attempt == 0 and history[-1].get("reasoning_content"):
                 messages = history
                 quotes = []
             else:
-                candidate = self.ask([unit["id"], "sft", attempt], "generation", "workflow.sft",
-                    {**context, "feedback": feedback})
+                key = [unit["id"], "sft_styled" if style is not None else "sft", attempt]
+                candidate = self.ask(key, "generation", "workflow.sft_styled" if style is not None else "workflow.sft",
+                    {**context, "feedback": feedback},
+                    **({"instruction": "生成风格要求：\n" + style["instruction"]} if style is not None else {}))
                 if not isinstance(candidate, dict) or any(text_issue(candidate.get(k)) for k in ("question", "answer", "reasoning")):
                     feedback = "回答结构不合格或存在敏感数据"
                     continue
@@ -891,15 +965,28 @@ class Workflow:
             if issue:
                 feedback = issue
                 continue
-            check = self.judge_answer([unit["id"], "sft_judge", attempt], {**context, "rendered_prompt": messages[:-1]}, messages)
-            if accepted(check):
+            check = self.judge_answer([unit["id"], "sft_judge", attempt], {**context, "rendered_prompt": messages[:-1]}, messages,
+                                      **({"allow_reasoning_fallback": False} if style is not None else {}))
+            style_check = (self.style_check([unit["id"], "sft_style", attempt], style,
+                                           messages[-1]["reasoning_content"], messages[-1]["content"])
+                           if style is not None else None)
+            if accepted(check) and (style_check is None or
+                                    (style_check["keep"] and style_check["adherence"] >= 4)):
                 return [{"id": unit["id"], "source_id": unit["source_id"], "status": "eligible", "messages": messages,
                          "tools": unit.get("tools", []), "quotes": quotes, "judge": check, "source_context": unit,
-                         "repair_attempts": attempt, "reasoning_origin": "source" if messages is history else "synthetic_explanation",
+                         **({"generation_style": style, "style_check": style_check} if style is not None else {}),
+                         "repair_attempts": attempt, "reasoning_origin": ("prompt_styled_generation" if style is not None
+                            else "source" if messages is history else "synthetic_explanation"),
                          "evidence_level": ("model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
                                             else "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed")}]
-            feedback = check["reason"]
-        return [{**self.rejected(unit, "sft_quality_failed_after_repair"), "feedback": feedback}]
+            feedback = {"correctness": check["reason"] if not accepted(check) else None,
+                        "style": style_check["reason"] if style_check is not None and
+                        not (style_check["keep"] and style_check["adherence"] >= 4) else None}
+            if style is None:
+                feedback = check["reason"]
+        return [{**self.rejected(unit, "sft_quality_failed_after_repair"), "feedback": feedback,
+                 **({"generation_style": style, "judge": check, "style_check": style_check,
+                     "repair_attempts": 1} if style is not None else {})}]
 
     def multiturn(self, unit):
         """Build or conservatively assess a complete multi-turn conversation.
@@ -1107,6 +1194,9 @@ class Workflow:
                  "evidence_level": "deterministic_synthetic_arithmetic"}]
 
     def cot(self, sample):
+        style = self.generation_style("cot", sample["id"])
+        if style is not None:
+            return self.styled_cot(sample, style)
         messages = sample["messages"]
         if not messages or messages[-1].get("role") != "assistant":
             return [self.rejected(sample, "cot_missing_final_answer")]
@@ -1129,6 +1219,135 @@ class Workflow:
         return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                  "question": messages[:-1], "reasoning": steps or [reasoning], "answer": answer,
                  "judge": check, "evidence_level": sample["evidence_level"]}]
+
+    def styled_cot(self, sample, style):
+        """Author a new explicit rationale; never copy a provider reasoning channel."""
+        messages = sample.get("messages", [])
+        if (not messages or messages[-1].get("role") != "assistant"
+                or text_issue(messages[-1].get("content"))):
+            return [self.rejected(sample, "cot_missing_final_answer")]
+        source = self.without_source_reasoning(sample.get("source_context"))
+        task = {"prompt": self.without_source_reasoning(messages[:-1]), "source": source,
+                "quotes": sample.get("quotes", []), "reference_answer": messages[-1]["content"],
+                "generation_style": style}
+        feedback, check, style_check = None, None, None
+        for attempt in range(2):
+            value = self.ask([sample["id"], "cot_generate_v1", attempt], "generation",
+                             "workflow.cot_generate", {**task, "feedback": feedback},
+                             instruction="生成风格要求：\n" + style["instruction"])
+            if not isinstance(value, dict) or any(text_issue(value.get(key)) for key in ("reasoning", "answer")):
+                feedback = "推理和答案必须是有效的完整文本"
+                continue
+            check = self.judge_answer([sample["id"], "cot_generated_check_v1", attempt],
+                                      {key: item for key, item in task.items() if key != "generation_style"},
+                                      {"reasoning": value["reasoning"], "answer": value["answer"]},
+                                      prompt_id="workflow.rationale_check", allow_reasoning_fallback=False)
+            style_check = self.style_check([sample["id"], "cot_style_v1", attempt], style,
+                                          value["reasoning"], value["answer"])
+            if accepted(check) and style_check["keep"] and style_check["adherence"] >= 4:
+                return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
+                         "question": task["prompt"], "reasoning": [value["reasoning"]], "answer": value["answer"],
+                         "source_context": source, "quotes": sample.get("quotes", []),
+                         "judge": check, "style_check": style_check, "generation_style": style,
+                         "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation",
+                         "evidence_level": sample["evidence_level"]}]
+            feedback = {"correctness": check["reason"] if not accepted(check) else None,
+                        "style": style_check["reason"] if not (style_check["keep"] and
+                                  style_check["adherence"] >= 4) else None}
+        return [{**self.rejected(sample, "cot_generation_failed_after_repair"),
+                 "generation_style": style, "judge": check, "style_check": style_check,
+                 "feedback": feedback, "repair_attempts": 1,
+                 "reasoning_origin": "prompt_styled_generation"}]
+
+    def trim_reasoning(self, item):
+        """Transform only explicit SFT/CoT reasoning, retaining immutable answers."""
+        target, sample = item["target"], item["sample"]
+        row = deepcopy(sample)
+        if row.get("status") != "eligible":
+            return [{**row, "trim_target": target}]
+        config = self.recipe["reasoning_trim"]
+        instruction = self.recipe.get("reasoning_trim_prompt") or trim_prompt(config)
+        fields = []
+        if target == "sft":
+            for index, message in enumerate(row.get("messages", [])):
+                if message.get("role") == "assistant" and message.get("reasoning_content"):
+                    fields.append((f"messages.{index}.reasoning_content", message["reasoning_content"],
+                                   self.without_source_reasoning(row["messages"][:index]), message["content"], index))
+        elif target == "cot":
+            reasoning = row.get("reasoning")
+            if isinstance(reasoning, list):
+                reasoning = "\n".join(reasoning)
+            if reasoning:
+                fields.append(("reasoning", reasoning, self.without_source_reasoning(row.get("question")), row["answer"], None))
+        receipts = []
+        for field, original, prompt, answer, index in fields:
+            feedback, check, rules_check = None, None, None
+            original_hash = digest(original)
+            for attempt in range(2):
+                key = [row["id"], "trim_v1", target, field, original_hash, attempt]
+                context = {"prompt": prompt, "source": self.without_source_reasoning(row.get("source_context")),
+                           "final_answer": answer, "original_reasoning": original}
+                replacement = self.ask(key, "generation", "workflow.trim",
+                                       {**context, "feedback": feedback}, instruction=instruction)
+                if (not isinstance(replacement, dict) or set(replacement) != {"reasoning"}
+                        or text_issue(replacement.get("reasoning"))):
+                    feedback = "仅返回有效的 reasoning 文本，不得包含或改写其他字段"
+                    continue
+                check = self.judge_answer([*key, "meaning"], context,
+                    {"replacement_reasoning": replacement["reasoning"], "final_answer": answer},
+                    prompt_id="workflow.trim_check", instruction=instruction)
+                rules_check = self.adherence_check([*key, "rules"], "workflow.trim_rules_check",
+                    {"prompt": prompt, "original_reasoning": original,
+                     "replacement_reasoning": replacement["reasoning"], "final_answer": answer},
+                    instruction=instruction)
+                if accepted(check) and rules_check["keep"] and rules_check["adherence"] >= 4:
+                    receipts.append({"field": field, "input_sha256": original_hash, "judge": check,
+                                     "rules_check": rules_check, "repair_attempts": attempt})
+                    if target == "sft":
+                        row["messages"][index]["reasoning_content"] = replacement["reasoning"]
+                    else:
+                        row["reasoning"] = [replacement["reasoning"]]
+                    break
+                feedback = {"meaning": check["reason"] if not accepted(check) else None,
+                            "rules": rules_check["reason"] if not (rules_check["keep"] and
+                                      rules_check["adherence"] >= 4) else None}
+            else:
+                return [{**self.rejected(sample, "reasoning_trim_failed_after_repair"), "trim_target": target,
+                         "reasoning_trim": {"version": 1, "template": config["template"], "status": "rejected",
+                            "instruction_sha256": digest(instruction), "field": field,
+                            "input_sha256": original_hash, "judge": check, "rules_check": rules_check,
+                            "feedback": feedback, "repair_attempts": 1}}]
+        if "source_context" in row:
+            row["source_context"] = self.without_source_reasoning(row["source_context"])
+        row["reasoning_trim"] = {"version": 1, "template": config["template"],
+                                  "status": "applied" if fields else "not_applicable",
+                                  "instruction_sha256": digest(instruction), "fields": receipts}
+        return [{**row, "trim_target": target}]
+
+    def apply_reasoning_trim(self, collections):
+        """Use replayable row views so the optional final stage stays bounded."""
+        if not (self.recipe.get("reasoning_trim") or {}).get("enabled"):
+            if "trim" in self.state["stages"]:
+                self.state["stages"]["trim"]["status"] = "skipped"
+            return
+        targets = [target for target in ("sft", "cot") if target in self.recipe["targets"]]
+        if not targets:
+            raise ValueError("reasoning_trim_requires_reasoning_target")
+        self.state["stages"].setdefault("trim", {"label": STAGES["trim"], "status": "pending", "done": 0, "total": 0})
+        class TaggedRows:
+            def __len__(self):
+                return sum(len(collections[target]) for target in targets)
+
+            def __iter__(self):
+                for target in targets:
+                    for sample in collections[target]:
+                        yield {"target": target, "sample": sample}
+        counts = {target: len(collections[target]) for target in targets}
+        rows = self.stage_items("trim", TaggedRows(), self.trim_reasoning)
+        for target in targets:
+            collections[target] = WorkflowRows(rows.path, counts[target],
+                predicate=lambda row, selected=target: row["trim_target"] == selected,
+                transform=lambda row: {key: value for key, value in row.items() if key != "trim_target"})
 
     def preference(self, sample):
         pairs = self.dpo(sample)
@@ -1223,6 +1442,21 @@ class Workflow:
                 "Agent 轨迹及偏好对保持原始证据。")
         else:
             report["generation_preferences"] = {"status": "legacy_run_without_snapshot"}
+        if self.recipe.get("node_generation"):
+            report["node_generation"] = {
+                stage: {"enabled": config.get("enabled", True), "style": config["style"],
+                        "instruction_sha256": digest(config.get("instruction", "")),
+                        "reasoning_origin": "prompt_styled_generation" if config.get("enabled", True) else "ordinary_distillation",
+                        "maximum_repair_attempts": 1}
+                for stage, config in self.recipe["node_generation"].items()}
+        if (self.recipe.get("reasoning_trim") or {}).get("enabled"):
+            report["reasoning_trim"] = {
+                "enabled": True, "template": self.recipe["reasoning_trim"]["template"],
+                "applied_targets": [target for target in ("sft", "cot") if target in self.recipe["targets"]],
+                "instruction_sha256": digest(self.recipe.get("reasoning_trim_prompt") or trim_prompt(self.recipe["reasoning_trim"])),
+                "checks": ["meaning_and_correctness", "editing_rules"], "maximum_repair_attempts": 1,
+                "original_rows": "retained_in_upstream_stage_files"}
+            report["limitations"].append("推理修剪使用提示词和独立模型评审，不保证移除所有泄漏；仅处理 SFT/CoT 的显式推理字段，偏好对与 Agent 轨迹保持原始证据")
         if self._research_document is not None:
             atomic_json(destination / "web_research.json", self._research_document)
             report["web_research"] = {"status": "planning_leads_only", "provider": "brave",
@@ -1495,6 +1729,7 @@ class Workflow:
                 else:
                     collections["cot"] = []
                     self.state["stages"]["cot"]["status"] = "skipped"
+                self.apply_reasoning_trim(collections)
                 # Packaging is deliberately re-run after interruption, never trusted from a stale checkpoint.
                 self.stage = "package"
                 self.state["stages"]["package"].update(status="running", total=1, done=0)

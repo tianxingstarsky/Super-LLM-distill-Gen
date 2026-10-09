@@ -19,6 +19,11 @@ from tests.test_workflow_draft import SCRIPT
     ('workflow-open-brief:w', 'x' * 20001), ('workflow-name', 'No workspace'),
     ('workflow-sft-output-style:w', 'DROP'), ('workflow-sft-output-style:w', True),
     ('workflow-sft-output-style:w', None), ('workflow-sft-output-style:w', ['drop']),
+    ('workflow-generation-style:w:sft', 'unknown'), ('workflow-generation-style:w:trim', 'concise'),
+    ('workflow-generation-style:w', 'concise'), ('workflow-generation-style::sft', 'concise'),
+    ('workflow-generation-enabled:w:cot', 1), ('workflow-generation-instruction:w:sft', 'x' * 4001),
+    ('workflow-trim-enabled:w', 'true'), ('workflow-trim-template:w', 'unknown'),
+    ('workflow-trim-instruction:w', 'x' * 4001), ('workflow-trim-prompt:w', 'x' * 16001),
 ])
 def test_draft_rejects_invalid_or_non_form_values(key, value):
     with pytest.raises(ValueError, match='invalid_creation_draft'):
@@ -30,6 +35,27 @@ def test_validation_returns_independent_values():
     result = validate_creation_draft(original)
     result['workflow-targets:w:p'].append('dpo')
     assert original['workflow-targets:w:p'] == ['sft']
+
+
+def test_generation_and_trim_drafts_preserve_incomplete_custom_edits_across_restart(tmp_path):
+    values = {
+        'workflow-generation-enabled:w:sft': False,
+        'workflow-generation-style:w:sft': 'custom',
+        'workflow-generation-instruction:w:sft': '',
+        'workflow-generation-enabled:w:cot': True,
+        'workflow-generation-style:w:cot': 'structured',
+        'workflow-generation-instruction:w:cot': 'Keep task evidence.',
+        'workflow-trim-enabled:w': True,
+        'workflow-trim-template:w': 'custom',
+        'workflow-trim-instruction:w': '',
+        'workflow-trim-prompt:w': '',
+    }
+    application = creation_draft_application(tmp_path)
+    application.replace(values)
+    identifier = application.save_snapshot()
+    assert creation_draft_application(tmp_path).load() == values
+    application.replace({'workflow-name:w': 'Other form'})
+    assert creation_draft_application(tmp_path).restore_snapshot(identifier) == values
 
 
 def test_fresh_instance_restores_values_without_rewriting_unchanged_draft(tmp_path):

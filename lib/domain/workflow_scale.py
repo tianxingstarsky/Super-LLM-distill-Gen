@@ -13,15 +13,28 @@ MAX_CONTEXT_WINDOW_TOKENS = 4_000_000
 NODE_ROLES = {
     "ingest": ("generation", "vision"), "cpt": ("generation", "jev"),
     "sft": ("generation", "jev"), "multiturn": ("generation", "jev"),
-    "preference": ("generation", "jev"), "cot": ("jev",),
+    "preference": ("generation", "jev"), "cot": ("generation", "jev"),
+    "trim": ("generation", "jev"),
 }
 
 
-def node_roles(stage: str, source_mode: str) -> tuple[str, ...]:
+def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None) -> tuple[str, ...]:
     if stage == "ingest":
         return ("vision",) if source_mode == "多模态文档" else (("generation",) if source_mode == "开放需求" else ())
     if stage in {"ingest", "cpt"} and source_mode != "开放需求":
         return ()
+    if stage == "cot":
+        # Model drafts also exist while a custom instruction is incomplete.
+        # Derive role requirements from the switch; creation validates text.
+        if node_generation is not None and not isinstance(node_generation, dict):
+            raise ValueError("invalid_node_generation")
+        config = (node_generation or {}).get("cot")
+        if config is None:
+            return ("jev",)
+        if not isinstance(config, dict) or type(config.get("enabled", True)) is not bool:
+            raise ValueError("invalid_node_generation")
+        if not config.get("enabled", True):
+            return ("jev",)
     return NODE_ROLES.get(stage, ())
 
 

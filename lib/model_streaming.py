@@ -16,7 +16,8 @@ def _get(value, name, default=None):
     return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
 
 
-def consume_stream(stream, api_format: str, emit: StreamCallback) -> tuple[str, int, int]:
+def consume_stream(stream, api_format: str, emit: StreamCallback, *,
+                   allow_reasoning_fallback: bool = True) -> tuple[str, int, int]:
     """Consume SDK-decoded SSE events, closing the HTTP response on every exit.
 
     A balanced JSON prefix is insufficient evidence of a completed response.
@@ -108,7 +109,7 @@ def consume_stream(stream, api_format: str, emit: StreamCallback) -> tuple[str, 
         emit({"type": "response_completed", "prompt_tokens": prompt_tokens,
               "completion_tokens": completion_tokens})
         content = "".join(text).strip()
-        if not content and api_format == "chat":
+        if not content and api_format == "chat" and allow_reasoning_fallback:
             content = "".join(reasoning).strip()
         return content, prompt_tokens, completion_tokens
     finally:

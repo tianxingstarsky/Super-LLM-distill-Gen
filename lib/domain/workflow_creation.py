@@ -3,13 +3,15 @@ from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_quality import text_issue
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, validate_node_models
 from lib.domain.web_research import validate_web_research
+from lib.domain.workflow_generation import validate_node_generation
+from lib.domain.reasoning_trim import validate_reasoning_trim
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       chunk_chars=2000, tasks=10, sample_count=None, concurrency=1,
                       batch_size=100, node_models=None, conversation_turns=3, brief="",
                       agent_replay_mode="configured", evaluation_sources=(),
-                      web_research=None, sources=()):
+                      web_research=None, sources=(), node_generation=None, reasoning_trim=None):
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)
@@ -33,6 +35,10 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     if type(batch_size) is not int or not 1 <= batch_size <= MAX_BATCH_SIZE:
         raise ValueError("invalid_workflow_batch_size")
     node_models = validate_node_models(node_models)
+    validate_node_generation(node_generation)
+    trim = validate_reasoning_trim(reasoning_trim)
+    if trim and trim["enabled"] and not set(targets) & {"sft", "cot"}:
+        raise ValueError("reasoning_trim_requires_reasoning_target")
     if type(conversation_turns) is not int or not 2 <= conversation_turns <= 8:
         raise ValueError("多轮对话轮次必须为 2 到 8")
     if not isinstance(brief, str) or len(brief) > 20000:

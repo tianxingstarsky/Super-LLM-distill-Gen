@@ -78,6 +78,7 @@ def chat_json(
     thinking: bool = False,
     max_tokens: int | None = None,
     on_stream: StreamCallback | None = None,
+    allow_reasoning_fallback: bool = True,
 ) -> Dict[str, Any]:
     """严格 JSON 调用：response_format 解码层强制 + 容错解析 + 降温度重试。"""
     if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
@@ -87,6 +88,7 @@ def chat_json(
         temp = temperature if attempt == 0 else min(temperature, 0.3)
         out = client.chat(messages, max_tokens=max_tokens, temperature=temp,
                           thinking=thinking, json_mode=True,
+                          **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
                           **({"on_stream": on_stream} if on_stream else {}))
         try:
             return parse_json_robust(out)
@@ -382,7 +384,8 @@ class ChatClient:
 
     def _request(self, messages: List[Dict[str, Any]], *, max_tokens: int | None,
                  temperature: float, thinking: bool, json_mode: bool,
-                 on_stream: StreamCallback | None = None) -> tuple[str, int, int]:
+                 on_stream: StreamCallback | None = None,
+                 allow_reasoning_fallback: bool = True) -> tuple[str, int, int]:
         if self.api_format == "anthropic":
             kwargs = anthropic_request(messages, json_mode=json_mode)
             kwargs.update(model=self.model, temperature=temperature,
@@ -397,7 +400,7 @@ class ChatClient:
                 kwargs.pop("temperature")
                 response = self._create(self.client.messages.create, kwargs)
             if on_stream and kwargs.get("stream"):
-                return consume_stream(response, self.api_format, on_stream)
+                return consume_stream(response, self.api_format, on_stream, allow_reasoning_fallback=allow_reasoning_fallback)
             usage = getattr(response, "usage", None)
             return self._full_result((anthropic_text(response), getattr(usage, "input_tokens", 0) or 0,
                                       getattr(usage, "output_tokens", 0) or 0), on_stream,
@@ -421,7 +424,7 @@ class ChatClient:
             if json_mode and self.json_supported is None:
                 self.json_supported = True
             if on_stream and kwargs.get("stream"):
-                return consume_stream(response, self.api_format, on_stream)
+                return consume_stream(response, self.api_format, on_stream, allow_reasoning_fallback=allow_reasoning_fallback)
             usage = getattr(response, "usage", None)
             return self._full_result((response_text(response), getattr(usage, "input_tokens", 0) or 0,
                                       getattr(usage, "output_tokens", 0) or 0), on_stream,
@@ -455,11 +458,11 @@ class ChatClient:
         if json_mode and self.json_supported is None:
             self.json_supported = True
         if on_stream and kwargs.get("stream"):
-            return consume_stream(response, self.api_format, on_stream)
+            return consume_stream(response, self.api_format, on_stream, allow_reasoning_fallback=allow_reasoning_fallback)
         usage = getattr(response, "usage", None)
         message = response.choices[0].message
         content = (message.content or "").strip()
-        if not content:
+        if not content and allow_reasoning_fallback:
             reasoning = getattr(message, "reasoning_content", None)
             if isinstance(reasoning, str):
                 content = reasoning.strip()
@@ -503,6 +506,7 @@ class ChatClient:
         thinking: bool = True,
         json_mode: bool = False,
         on_stream: StreamCallback | None = None,
+        allow_reasoning_fallback: bool = True,
     ) -> str:
         """Return text through the selected protocol and count its usage."""
         if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
@@ -533,6 +537,7 @@ class ChatClient:
                 content, prompt_tokens, completion_tokens = self._request(
                     messages, max_tokens=request_max_tokens, temperature=temperature,
                     thinking=thinking, json_mode=json_mode,
+                    **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
                     **({"on_stream": notify} if on_stream else {}))
                 self.usage["calls"] += 1
                 self.usage["prompt_tokens"] += prompt_tokens
@@ -548,6 +553,8 @@ class ChatClient:
                         self.budget.add_usd(cost)
                 if content:
                     return content
+                if not allow_reasoning_fallback:
+                    raise ValueError("model_visible_output_missing")
                 last_err = ValueError("empty completion")
             except BudgetExceeded:
                 raise

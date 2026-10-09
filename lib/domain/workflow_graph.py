@@ -12,7 +12,7 @@ BASE_STAGES = ("cpt", "sft", "multiturn", "agent", "gsm8k")
 DERIVED_STAGES = ("preference", "cot")
 
 
-def execution_graph(targets) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+def execution_graph(targets, *, reasoning_trim=False) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
     unknown = selected.difference(TARGETS)
@@ -25,8 +25,11 @@ def execution_graph(targets) -> tuple[tuple[str, ...], tuple[tuple[str, str], ..
         active.add("preference")
     if "preference" in active or "cot" in active:
         active.add("sft")
+    trimmed_outputs = selected.intersection({"sft", "cot"}) if reasoning_trim else set()
+    if trimmed_outputs:
+        active.add("trim")
 
-    nodes = tuple(key for key in ("ingest", *BASE_STAGES, *DERIVED_STAGES, "package") if key in active)
+    nodes = tuple(key for key in ("ingest", *BASE_STAGES, *DERIVED_STAGES, "trim", "package") if key in active)
     edges = []
     edges.extend(("ingest", key) for key in BASE_STAGES if key in active)
     edges.extend(("sft", key) for key in DERIVED_STAGES if key in active)
@@ -35,5 +38,8 @@ def execution_graph(targets) -> tuple[tuple[str, ...], tuple[tuple[str, str], ..
     outputs = {"cpt", "multiturn", "agent", "gsm8k", "preference", "cot"}
     if "sft" in selected:
         outputs.add("sft")
-    edges.extend((key, "package") for key in (*BASE_STAGES, *DERIVED_STAGES) if key in active and key in outputs)
+    edges.extend((key, "trim" if key in trimmed_outputs else "package")
+                 for key in (*BASE_STAGES, *DERIVED_STAGES) if key in active and key in outputs)
+    if trimmed_outputs:
+        edges.append(("trim", "package"))
     return nodes, tuple(edges)

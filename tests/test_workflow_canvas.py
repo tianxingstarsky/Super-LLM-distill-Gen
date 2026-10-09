@@ -8,12 +8,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def _spec(targets):
+def _spec(targets, *, reasoning_trim=False):
     from lib.domain.workflow_graph import execution_graph
     from lib.presentation.streamlit.workflow_canvas import canvas_spec
 
-    labels = {key: key for key in execution_graph(targets)[0]}
-    return canvas_spec(targets, {}, "package", labels, labels, language="en")
+    labels = {key: key for key in execution_graph(targets, reasoning_trim=reasoning_trim)[0]}
+    return canvas_spec(targets, {}, "package", labels, labels, language="en",
+                       reasoning_trim=reasoning_trim)
 
 
 def test_all_target_combinations_fit_without_overlapping_nodes():
@@ -42,8 +43,9 @@ def test_canvas_node_navigation_and_dependency_highlight():
         pytest.skip('Node and jsdom are required')
     from lib.domain.workflow_targets import TARGETS
 
-    specs = [_spec(targets) for targets in ([], ["cpt"], ["dpo", "cot"],
-                                           ["sft", "dpo", "cot"], list(TARGETS))]
+    specs = [_spec(targets, reasoning_trim=trim) for trim in (False, True)
+             for targets in ([], ["cpt"], ["sft"], ["dpo", "cot"],
+                             ["sft", "dpo", "cot"], list(TARGETS))]
     result = subprocess.run([node, str(ROOT / 'tests/workflow_canvas_harness.mjs'), '--check-specs'],
                             input=json.dumps(specs), cwd=ROOT, capture_output=True,
                             text=True, encoding='utf-8', timeout=30)

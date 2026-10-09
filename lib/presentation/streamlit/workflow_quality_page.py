@@ -73,6 +73,8 @@ REASON_LABELS = {
     "preference_evidence_missing": "缺少偏好证据",
     "gsm8k_arithmetic_verification_failed": "算术核验失败",
     "cot_reasoning_rejected": "推理解释未通过评审",
+    "cot_generation_failed_after_repair": "修订后风格化推理仍未通过",
+    "reasoning_trim_failed_after_repair": "修订后推理修剪仍未通过",
 }
 
 

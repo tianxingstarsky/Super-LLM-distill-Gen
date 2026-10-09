@@ -32,9 +32,11 @@ assert.equal(view.clientHeight,wideHeight,'observer notifications must converge 
 assert.equal(frameEvents(),initialFrames,'stable observer callbacks must not keep posting iframe heights');
 Object.defineProperty(d.getElementById('view'),'clientWidth',{value:540,configurable:true});
 w.resizeCanvas();
-assert.equal(d.getElementById('scale').textContent,'65%');
+assert.equal(d.getElementById('scale').textContent,'68%');
+assert.ok(810*.68>540,'initial fit keeps labels readable and allows horizontal navigation');
 assert.ok(view.clientHeight<wideHeight,'fit height should follow the actual available width');
 d.getElementById('fit').click();
+assert.equal(d.getElementById('scale').textContent,'65%','explicit fit can show the complete graph at a smaller scale');
 assert.notEqual(d.getElementById('canvas').style.transform,'scale(1)');
 const manualHeight=view.clientHeight;
 d.getElementById('reset').click();

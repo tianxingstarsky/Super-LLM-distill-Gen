@@ -92,3 +92,49 @@ def test_snapshot_keeps_custom_models_and_only_current_node_roles():
     assert result["sft"]["generation"]["model"] == "custom-model"
     result["sft"]["generation"]["model"] = "changed"
     assert draft["sft"]["generation"]["model"] == "custom-model"
+
+
+@pytest.mark.parametrize('configuration', [{}, {'cot': {'enabled': False, 'style': 'custom'}}])
+def test_ordinary_cot_needs_only_reviewer_and_preserves_optional_writer_choice(configuration):
+    app = WorkflowNodeModelsApplication(Inventory())
+    draft, initialized, endpoints = app.prepare_draft(
+        ['cot'], '文档', {}, [], node_generation=configuration)
+    assert set(draft['cot']) == {'jev'}
+    assert initialized == ['cot:jev']
+    assert missing_bindings(['cot'], '文档', draft, endpoints, node_generation=configuration) == []
+    assert set(app.snapshot(['cot'], '文档', draft, node_generation=configuration)['cot']) == {'jev'}
+
+    styled = {'cot': {'enabled': True, 'style': 'structured'}}
+    expanded, initialized, _ = app.prepare_draft(
+        ['cot'], '文档', draft, initialized, node_generation=styled)
+    assert set(expanded['cot']) == {'generation', 'jev'}
+    ordinary, _, _ = app.prepare_draft(
+        ['cot'], '文档', expanded, initialized, node_generation=configuration)
+    assert ordinary['cot']['generation'] == expanded['cot']['generation']
+    assert set(app.snapshot(['cot'], '文档', ordinary, node_generation=configuration)['cot']) == {'jev'}
+
+
+def test_enabled_cot_style_requires_writer_before_submission():
+    app = WorkflowNodeModelsApplication(Inventory())
+    configuration = {'cot': {'style': 'structured'}}
+    bindings = {'cot': {'jev': {'backend': 'review', 'model': 'judge'}}}
+    with pytest.raises(ValueError, match='选择服务'):
+        app.snapshot(['cot'], '文档', bindings, node_generation=configuration)
+
+
+def test_omitting_style_configuration_keeps_existing_model_draft_contract():
+    from lib.domain.workflow_scale import node_roles
+    assert node_roles('cot', '文档') == ('jev',)
+    assert node_roles('cot', '文档', node_generation={}) == ('jev',)
+    assert node_roles('cot', '文档', node_generation={'cot': {'style': 'concise'}}) == ('generation', 'jev')
+
+
+def test_incomplete_custom_instruction_does_not_crash_model_draft_preparation():
+    app = WorkflowNodeModelsApplication(Inventory())
+    incomplete = {'cot': {'enabled': True, 'style': 'custom', 'instruction': ''}}
+    draft, _, _ = app.prepare_draft(['cot'], '文档', {}, [], node_generation=incomplete)
+    assert set(draft['cot']) == {'generation', 'jev'}
+    assert set(app.snapshot(['cot'], '文档', draft, node_generation=incomplete)['cot']) == {'generation', 'jev'}
+    from lib.domain.workflow_creation import validate_creation
+    with pytest.raises(ValueError, match='invalid_node_generation'):
+        validate_creation(targets=['cot'], node_generation=incomplete)

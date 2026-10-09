@@ -54,3 +54,26 @@ def test_requested_sft_and_independent_branches_feed_package():
     assert nodes == ("ingest", "sft", "multiturn", "agent", "gsm8k", "package")
     assert all(("ingest", key) in edges for key in ("sft", "multiturn", "agent", "gsm8k"))
     assert all((key, "package") in edges for key in ("sft", "multiturn", "agent", "gsm8k"))
+
+
+def test_optional_trim_processes_only_requested_reasoning_exports():
+    nodes, edges = execution_graph(["sft", "cot", "dpo", "cpt"], reasoning_trim=True)
+    assert nodes[-2:] == ("trim", "package")
+    assert ("sft", "trim") in edges and ("cot", "trim") in edges
+    assert ("trim", "package") in edges
+    assert ("sft", "package") not in edges and ("cot", "package") not in edges
+    assert ("sft", "cot") in edges and ("sft", "preference") in edges
+    assert ("preference", "package") in edges and ("cpt", "package") in edges
+    assert "trim" not in execution_graph(["dpo"], reasoning_trim=True)[0]
+
+
+def test_trim_canvas_has_readable_non_overlapping_nodes_and_correct_links():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    targets = ["sft", "cot", "dpo"]
+    labels = {key: key for key in execution_graph(targets, reasoning_trim=True)[0]}
+    spec = canvas_spec(targets, {}, "trim", labels, labels, reasoning_trim=True)
+    by_id = {node["id"]: node for node in spec["nodes"]}
+    assert by_id["cot"]["x"] + 218 < by_id["trim"]["x"]
+    assert by_id["trim"]["x"] + 218 < by_id["package"]["x"]
+    assert all(0 <= node["x"] <= spec["width"] - 218 for node in spec["nodes"])
+    assert spec["edges"] == execution_graph(targets, reasoning_trim=True)[1]

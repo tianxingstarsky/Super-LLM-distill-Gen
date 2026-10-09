@@ -29,6 +29,25 @@ def test_persistent_creation_draft_status_translates_completely():
         "Settings, goals, and brief text are saved in this workspace. Reconfirm uploads and node models when you reopen it.")
 
 
+def test_generation_style_and_cleanup_controls_have_complete_english_copy():
+    import ast
+    from pathlib import Path
+    from lib.domain.workflow_generation import STYLE_PRESETS
+    from lib.presentation.streamlit.workflow_generation_settings import (
+        STYLE_LABELS, TRIM_LABELS, TRIM_DESCRIPTIONS,
+    )
+
+    source = Path(__file__).resolve().parents[1] / "lib/presentation/streamlit/workflow_generation_settings.py"
+    phrases = [node.value for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
+               if isinstance(node, ast.Constant) and isinstance(node.value, str)
+               and re.search(r"[\u4e00-\u9fff]", node.value)]
+    phrases += [*STYLE_PRESETS.values(), *STYLE_LABELS.values(), *TRIM_LABELS.values(),
+                *TRIM_DESCRIPTIONS.values(), "CoT 推理生成", "推理链修剪与核验", "SFT 训练文件格式"]
+    for phrase in phrases:
+        assert not re.search(r"[\u4e00-\u9fff]", translate(phrase, "en")), phrase
+        assert translate(phrase, "zh") == phrase
+
+
 def test_preference_review_controls_and_progress_translate_completely():
     assert translate("编辑两个回答", "en") == "Edit both responses"
     assert translate("已审核 12 对 · 待处理 50000 对", "en") == "Reviewed 12 · Pending 50000"

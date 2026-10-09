@@ -10,6 +10,7 @@
 .node:focus-visible{outline:3px solid #6cb2ff;outline-offset:3px}.node.selected{border:2px solid #247ae4;background:#f1f7ff;box-shadow:0 3px 14px #246dd325}
 .node[data-status=configuration_required]{border-color:#DCA954;background:#FFFCF5}.node[data-status=configuration_required] .dot{background:#DCA954}.node[data-status=completed]{border-color:#7bc9ac}.node[data-status=running]{border-color:#247ae4}.node[data-status=failed],.node[data-status=cancelled]{border-color:#df969d}
 .node.selected{border:2px solid #247ae4}.node:hover{box-shadow:0 4px 16px #246dd330}.node[data-node=preference] .icon,.node[data-node=cot] .icon{background:#f0eaff;color:#8054c7}.node[data-node=multiturn] .icon,.node[data-node=agent] .icon{background:#e1f8f3;color:#138a78}.node[data-node=package] .icon{background:#e1f8ea;color:#13885d}.node[data-node=gsm8k] .icon{background:#fff4dd;color:#b77a17}.node.intermediate{border-style:dashed}.icon{width:32px;height:35px;background:#eaf3ff;border-radius:8px;display:grid;place-items:center;color:#287ad5;font-size:20px;flex-shrink:0}
+.node[data-node=trim] .icon{background:#fff0dd;color:#aa7420}
 .copy{min-width:0;flex:1}.copy strong{display:block;font-size:16px;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.copy small{display:block;font-size:13px;color:#71869f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dot{position:absolute;right:9px;top:8px;width:6px;height:6px;border-radius:50%;background:#acb9ca}.node[data-status=completed] .dot{background:#1db181}.node[data-status=running] .dot{background:#247ae4}.node[data-status=failed] .dot{background:#d5626c}
 .track{position:absolute;bottom:0;left:9px;right:9px;height:3px;background:#ecf2fa;border-radius:3px;overflow:hidden}.track i{display:block;height:100%;background:#2c89e8}.footer{display:flex;justify-content:space-between;gap:12px;padding:10px 12px;background:#fff;color:#71869f;font-size:10px}.legend{white-space:nowrap}.legend i{display:inline-block;width:6px;height:6px;background:#1db181;border-radius:50%;margin:0 4px 0 8px}.legend i:nth-child(2){background:#247ae4}
@@ -17,16 +18,19 @@
 <script>
 const post=(type,data={})=>parent.postMessage({isStreamlitMessage:true,type,...data},"*");
 const view=document.getElementById("view"), canvas=document.getElementById("canvas"), space=document.getElementById("space");
-let spec,scale=1,signature="",serial=0,lastSelected="",lastFrameHeight=0,fitMode=true;
+let spec,scale=1,signature="",serial=0,lastSelected="",lastFrameHeight=0,fitMode=true,readableFit=true;
 const text=(id,value)=>document.getElementById(id).textContent=value;
 function resize(){if(!spec)return;canvas.style.transform=`scale(${scale})`;space.style.width=`${Math.max(view.clientWidth,spec.width*scale)}px`;canvas.style.left=`${Math.max(0,(view.clientWidth-spec.width*scale)/2)}px`;space.style.height=`${Math.max(view.clientHeight,spec.height*scale)}px`;canvas.style.top=`${Math.max(0,(view.clientHeight-spec.height*scale)/2)}px`;text("scale",Math.round(scale*100)+"%");document.getElementById("minus").disabled=scale<=.35;document.getElementById("plus").disabled=scale>=1.8;const height=document.querySelector(".shell").offsetHeight;if(height!==lastFrameHeight){lastFrameHeight=height;post("streamlit:setFrameHeight",{height})}}
-function fit(){
+function fit(readable=readableFit){
  if(!spec)return;
  fitMode=true;
+ readableFit=readable;
  // Width drives the fit; using the current height here would feed each
  // ResizeObserver notification back into another viewport size change.
  const padding=12,maxHeight=560;
- scale=Math.max(.35,Math.min(1,(view.clientWidth-padding)/spec.width,(maxHeight-padding)/spec.height));
+ // Long workflows open with readable labels and horizontal panning. The
+ // explicit Fit control still offers the complete overview at a smaller scale.
+ scale=Math.max(readable ? .68 : .35,Math.min(1,(view.clientWidth-padding)/spec.width,(maxHeight-padding)/spec.height));
  view.style.height=Math.ceil(spec.height*scale+padding)+"px";
  resize();
 }
@@ -45,9 +49,9 @@ function render(next){const focusedNode=document.activeElement?.dataset?.node;sp
  const picker=document.getElementById("node-picker");picker.setAttribute("aria-label",spec.labels.node_picker);picker.title=spec.labels.node_picker;picker.replaceChildren();for(const n of spec.nodes){const option=document.createElement("option");option.value=n.id;option.textContent=n.label;option.selected=n.id===spec.selected;picker.append(option)}
  text("fit",spec.labels.fit);text("focus",spec.labels.focus);text("hint",spec.labels.hint);text("lineage",spec.labels.lineage);text("overview",spec.labels.overview);document.getElementById("reset").setAttribute("aria-label",spec.labels.reset);document.getElementById("plus").setAttribute("aria-label",spec.labels.zoom_in);document.getElementById("minus").setAttribute("aria-label",spec.labels.zoom_out);
  const legend=document.getElementById("legend");legend.hidden=!spec.live;legend.replaceChildren();if(spec.live){for(const [key,color] of [["completed","#1db181"],["running","#247ae4"],["failed","#d5626c"]]){const item=document.createElement("span"),dot=document.createElement("i");dot.style.background=color;item.append(dot,document.createTextNode(spec.labels[key]));legend.append(item)}}
- const nextSignature=spec.nodes.map(n=>n.id).join();if(nextSignature!==signature){signature=nextSignature;fitMode=true;fit();locate()}else if(fitMode)fit();else resize();if(lastSelected!==spec.selected){lastSelected=spec.selected;locate()}}
+ const nextSignature=spec.nodes.map(n=>n.id).join();if(nextSignature!==signature){signature=nextSignature;fitMode=true;fit(true);locate()}else if(fitMode)fit();else resize();if(lastSelected!==spec.selected){lastSelected=spec.selected;locate()}}
 document.getElementById("node-picker").onchange=e=>chooseNode(e.target.value);
-document.getElementById("plus").onclick=()=>zoom(scale+.1);document.getElementById("minus").onclick=()=>zoom(scale-.1);document.getElementById("fit").onclick=()=>{fit();locate()};document.getElementById("reset").onclick=()=>zoom(1);document.getElementById("focus").onclick=locate;
+document.getElementById("plus").onclick=()=>zoom(scale+.1);document.getElementById("minus").onclick=()=>zoom(scale-.1);document.getElementById("fit").onclick=()=>{fit(false);locate()};document.getElementById("reset").onclick=()=>zoom(1);document.getElementById("focus").onclick=locate;
 view.addEventListener("wheel",e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();const rect=view.getBoundingClientRect();zoom(scale*Math.exp(-e.deltaY*.002),e.clientX-rect.left,e.clientY-rect.top)}},{passive:false});
 let drag;view.onpointerdown=e=>{if(e.target.closest("button")||e.button!==0)return;fitMode=false;drag={x:e.clientX,y:e.clientY,left:view.scrollLeft,top:view.scrollTop};view.classList.add("drag");view.setPointerCapture(e.pointerId)};view.onpointermove=e=>{if(drag){view.scrollLeft=drag.left+drag.x-e.clientX;view.scrollTop=drag.top+drag.y-e.clientY}};const endDrag=()=>{drag=null;view.classList.remove("drag")};view.onpointerup=endDrag;view.onpointercancel=endDrag;view.onlostpointercapture=endDrag;
 window.addEventListener("message",event=>{if(event.source===parent&&event.data.type==="streamlit:render")render(event.data.args.spec)});new ResizeObserver(()=>{if(spec){if(fitMode){fit();locate()}else resize()}}).observe(view);post("streamlit:componentReady",{apiVersion:1});

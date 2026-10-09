@@ -12,17 +12,19 @@ _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__
 
 
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
-                source_mode="文档资料"):
-    nodes, edges = execution_graph(targets)
+                source_mode="文档资料", reasoning_trim=False, node_generation=None):
+    nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim)
     base = [key for key in BASE_STAGES if key in nodes]
     derived = [key for key in DERIVED_STAGES if key in nodes]
     # Center each column within its actual rows. Leave a clear outer lane for
     # base outputs that bypass the derived column on their way to packaging.
-    bypass = bool(derived) and any(a in base and b == "package" for a, b in edges)
+    bypass = bool(derived or "trim" in nodes) and any(a in base and b == "package" for a, b in edges)
     margin = 44 if bypass else 24
     height = 2 * margin + 78 + 100 * (max(1, len(base), len(derived)) - 1)
-    width = 1080 if derived else 810
+    width = (1080 if derived else 810) + (270 if "trim" in nodes else 0)
     positions = {"ingest": (24, (height - 78) / 2), "package": (width - 242, (height - 78) / 2)}
+    if "trim" in nodes:
+        positions["trim"] = (width - 512, (height - 78) / 2)
     for column, x in ((base, 294), (derived, 564)):
         top = (height - (78 + 100 * (len(column) - 1))) / 2
         for index, key in enumerate(column):
@@ -32,12 +34,14 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         metrics = stages.get(key, {})
         done, total = int(metrics.get("done", 0) or 0), int(metrics.get("total", 0) or 0)
         status = metrics.get("status", "pending")
-        node_bindings = (bindings or {}).get(key, {})
+        roles = node_roles(key, source_mode, node_generation=node_generation)
+        node_bindings = {role: binding for role, binding in (bindings or {}).get(key, {}).items()
+                         if role in roles}
         role = node_bindings.get("generation") or node_bindings.get("jev") or node_bindings.get("vision")
         status_label = {"completed": "完成", "running": "执行中", "failed": "失败", "cancelled": "已停止",
                         "pending": "等待", "queued": "待启动"}.get(status, "等待")
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
-                    translate_label("无需模型 · 查看步骤", language) if not node_roles(key, source_mode) else
+                    translate_label("无需模型 · 查看步骤", language) if not roles else
                     translate_label("请选择可用模型", language) if status == "configuration_required" else
                     f"{role['backend']} · {role['model']}" if role else
                     translate_label("点击配置节点", language))

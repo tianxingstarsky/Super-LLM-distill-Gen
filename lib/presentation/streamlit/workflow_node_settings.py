@@ -15,12 +15,12 @@ _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses
                       "anthropic": "Anthropic Messages"}
 
 
-def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace):
+def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None):
     draft_key = f"workflow-node-bindings:{workspace}"
     draft = deepcopy(st.session_state.get(draft_key, {}))
     initialized_key = draft_key + ":initialized"
     draft, initialized, endpoints = application.prepare_draft(
-        nodes, source_mode, draft, st.session_state.get(initialized_key, ()))
+        nodes, source_mode, draft, st.session_state.get(initialized_key, ()), node_generation=node_generation)
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
     return draft, endpoints
@@ -156,14 +156,14 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
 
 
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
-                       backend_application: BackendApplication | None = None):
+                       backend_application: BackendApplication | None = None, node_generation=None):
     pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
-    if pending and pending.get("role") in node_roles(node, source_mode):
+    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation):
         prefix = f"node-model:{workspace}:{node}:{pending['role']}"
         st.session_state[prefix + ":backend"] = pending["backend"]
         st.session_state[prefix + ":model:" + pending["backend"]] = pending["model"]
     previous = deepcopy(bindings)
-    roles = node_roles(node, source_mode)
+    roles = node_roles(node, source_mode, node_generation=node_generation)
     if not roles:
         explanation = {
             "ingest": "解析上传来源并保留来源位置；此步骤不调用生成模型。",
@@ -249,8 +249,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.rerun()
 
 
-def snapshot_available_bindings(nodes, source_mode, bindings, endpoints):
-    return {node: {role: bindings[node][role] for role in node_roles(node, source_mode)
+def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None):
+    return {node: {role: bindings[node][role] for role in node_roles(node, source_mode, node_generation=node_generation)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
 
 

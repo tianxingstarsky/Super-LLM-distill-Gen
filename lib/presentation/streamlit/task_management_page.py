@@ -54,8 +54,12 @@ def _display_time(value: object) -> str:
 
 def _stage_progress(run: dict) -> tuple[int, int]:
     """Count completed stages in the run's actual dependency graph."""
-    nodes, _ = execution_graph(run.get("targets", []))
     stages = run.get("stages", {})
+    # Older runs also carry unused stage keys. Only a scheduled trim stage
+    # contributes to progress; its recipe flag is copied into new run state.
+    trimming = bool(run.get("reasoning_trim_enabled")) or stages.get("trim", {}).get("status") in {
+        "running", "completed", "failed", "cancelled"}
+    nodes, _ = execution_graph(run.get("targets", []), reasoning_trim=trimming)
     return sum(stages.get(key, {}).get("status") == "completed" for key in nodes), len(nodes)
 
 
