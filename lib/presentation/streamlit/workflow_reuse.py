@@ -13,6 +13,7 @@ from filelock import Timeout
 from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_scale import validate_node_models
 from lib.domain.document_parser import validate_document_parser
+from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director
@@ -22,7 +23,7 @@ from lib.domain.workflow_graph import execution_graph
 from lib.domain.workflow_production import validate_production
 
 
-_DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"})
+_DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".tex", ".latex", ".png", ".jpg", ".jpeg", ".webp"})
 _AGENT_SUFFIXES = frozenset({".json", ".jsonl"})
 _MAX_SOURCE_BYTES = 50 * 1024 * 1024
 _MAX_MATCH_BYTES = 200 * 1024 * 1024
@@ -137,8 +138,14 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     parser = validate_document_parser(recipe.get("document_parser"))
     if parser["mode"] == "vision":
         copied_bindings.setdefault("ingest", {})["vision"] = parser["binding"]
+    elif parser["mode"] == "model":
+        copied_bindings.setdefault("ingest", {})["generation"] = parser["binding"]
     values[f"workflow-node-bindings:{workspace}"] = copied_bindings
     values[f"workflow-document-parse-mode:{workspace}"] = parser["mode"]
+    cpt_processing = validate_cpt_processing(recipe.get("cpt_processing"))
+    values[f"workflow-cpt-processing-mode:{workspace}"] = cpt_processing["mode"]
+    if cpt_processing["mode"] == "model":
+        values[f"workflow-cpt-review-mode:{workspace}"] = cpt_processing["review_mode"]
     # Copy only the user's verification choice. Image/container pins and
     # credentials remain owned by the immutable run and the local registry.
     agent_mode = recipe.get("agent_replay_mode")
@@ -175,13 +182,13 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-director-answer-rules:{workspace}"] = director["answer_rules"]
         for name, weight in director["type_weights"].items():
             values[f"workflow-director-weight:{workspace}:{name}"] = weight
-    prompt_mode = ("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision" else mode)
+    prompt_mode = ("多模态文档" if parser["mode"] == "vision" else "模型辅助文档" if parser["mode"] == "model" else mode)
     copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")))
     prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")),
                                      qa_director=director)
     for node in prompt_nodes:
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
-                                                package_review=package_review, qa_director=director):
+                                                package_review=package_review, qa_director=director, cpt_processing=cpt_processing):
             if prompt_id in copied_prompts.get(node, {}):
                 values[f"workflow-node-prompt:{workspace}:{node}:{prompt_id}"] = copied_prompts[node][prompt_id]
     research = recipe.get("web_research")

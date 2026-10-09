@@ -42,6 +42,7 @@ from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.domain.workflow_generation import validate_node_generation, style_for_sample
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
 from lib.domain.workflow_package_review import validate_package_review
+from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.domain.workflow_node_prompts import (
     validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
@@ -61,6 +62,7 @@ from lib.infrastructure.production_checkpoints import ProductionCheckpoints
 from lib.infrastructure.production_review_quality import package_review_escalation
 from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DialoguePlanError
+from lib.infrastructure.workflow_cpt_processing import WorkflowCPTProcessing
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -80,7 +82,8 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 RECIPE_VERSION = 11
 PRODUCTION_RECIPE_VERSION = 12
 SOFT_PRODUCTION_RECIPE_VERSION = 13
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13})
+DOCUMENT_PROCESSING_RECIPE_VERSION = 14
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -267,7 +270,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
-               package_review=None, qa_director=None, production=None):
+               package_review=None, qa_director=None, production=None, cpt_processing=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -275,15 +278,26 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources, node_generation=node_generation,
         reasoning_trim=reasoning_trim, node_prompts=node_prompts,
-        package_review=package_review, qa_director=qa_director, production=production)
+        package_review=package_review, qa_director=qa_director, production=production,
+        cpt_processing=cpt_processing)
     production = validate_production(production, targets)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
     reasoning_trim = validate_reasoning_trim(reasoning_trim)
     package_review = validate_package_review(package_review)
     qa_director = validate_qa_director(qa_director)
+    cpt_processing_supplied = cpt_processing is not None
+    cpt_processing = validate_cpt_processing(cpt_processing)
     node_prompts = validate_node_prompts(node_prompts)
-    node_prompt_templates = snapshot_node_prompts(node_prompts)
+    from lib.domain.workflow_node_prompts import VERSION_13_NODE_PROMPT_IDS
+    new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
+                              for stage, templates in node_prompts.items() for prompt_id in templates)
+    recipe_version = (DOCUMENT_PROCESSING_RECIPE_VERSION if cpt_processing_supplied
+                      or (isinstance(document_parser, dict) and document_parser.get("mode") == "model")
+                      or new_prompt_override else
+                      SOFT_PRODUCTION_RECIPE_VERSION if production and production["version"] == 2
+                      else PRODUCTION_RECIPE_VERSION if production is not None else RECIPE_VERSION)
+    node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -298,6 +312,14 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         raise ValueError("invalid_sft_output_style")
     preferences = preference_snapshot(settings_root or Path(__file__).resolve().parents[2])
     files = [Path(p).resolve(strict=True) for p in sources]
+    if cpt_processing["mode"] == "model" and cpt_processing["review_mode"] == "vision":
+        from lib.infrastructure.document_vision import require_vision_model
+        binding = node_models.get("cpt", {}).get("jev")
+        if settings_root is None or not binding:
+            raise ValueError("cpt_visual_review_model_required")
+        require_vision_model(Path(settings_root), binding)
+        if not files:
+            raise ValueError("cpt_visual_review_requires_documents")
     document_parser = validate_document_parser(document_parser)
     if document_parser["mode"] == "vision":
         from lib.infrastructure.document_vision import require_vision_model
@@ -305,6 +327,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             raise ValueError("document_vision_requires_document_sources")
         require_vision_model(Path(settings_root), document_parser["binding"])
         node_models.setdefault("ingest", {})["vision"] = document_parser["binding"]
+    elif document_parser["mode"] == "model":
+        if not files or any(path.suffix.lower() in {".json", ".jsonl", ".png", ".jpg", ".jpeg", ".webp"} for path in files):
+            raise ValueError("document_text_requires_document_sources")
+        node_models.setdefault("ingest", {})["generation"] = document_parser["binding"]
     elif any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in files):
         raise ValueError("document_image_requires_vision_parser")
     if not files and not brief.strip():
@@ -350,8 +376,6 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         copied_bytes += snapshot["bytes"]
         snapshots.append({"name": (source_names or {}).get(str(source), source.name),
                           "file": destination.name, **snapshot})
-    recipe_version = (SOFT_PRODUCTION_RECIPE_VERSION if production and production["version"] == 2
-                      else PRODUCTION_RECIPE_VERSION if production is not None else RECIPE_VERSION)
     recipe = {"version": recipe_version, "policy": POLICY, "sources": snapshots, "brief": brief.strip(),
               "targets": targets, "backend": backend, "model": model, "judge_backend": judge_backend,
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
@@ -376,6 +400,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "prompts": prompt_versions()}
     if production is not None:
         recipe["production"] = production
+    if cpt_processing_supplied:
+        recipe["cpt_processing"] = cpt_processing
     if endpoint_pins is not None:
         recipe["endpoint_pins"] = endpoint_pins
     if knowledge_retrieval is not None:
@@ -395,7 +421,7 @@ class Cancelled(Exception):
     pass
 
 
-class Workflow(WorkflowProduction, WorkflowQADirector):
+class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
     def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)
@@ -405,6 +431,13 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
         if parser["mode"] == "vision":
             from lib.infrastructure.document_vision import require_vision_model
             require_vision_model(self.root, parser["binding"])
+        cpt_config = validate_cpt_processing(self.recipe.get("cpt_processing"))
+        if cpt_config["mode"] == "model" and cpt_config["review_mode"] == "vision":
+            from lib.infrastructure.document_vision import require_vision_model
+            binding = self.recipe.get("node_models", {}).get("cpt", {}).get("jev")
+            if not binding:
+                raise ValueError("cpt_visual_review_model_required")
+            require_vision_model(self.root, binding)
         self.generator, self.judge = generator, judge
         # Keep the earlier judge injection point usable while all new workflow
         # calls and accounting use the dedicated JEV role.
@@ -714,6 +747,50 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
         """Compatibility entry point; execution consumes the streaming iterator."""
         return list(self.iter_source_units(source))
 
+    def cpt_source_image(self, unit):
+        """Load a bounded original-page raster from this run's fixed inputs."""
+        from collections import OrderedDict
+        from lib.infrastructure.document_vision import visual_part
+        location = (unit.get("source_location") or {}).get("record")
+        if not isinstance(location, str):
+            return None
+        candidates = [source for source in self.recipe["sources"]
+                      if source["sha256"] == unit.get("source_id")
+                      and source["name"] == unit.get("source_name")]
+        if not candidates:
+            return None
+        source = candidates[0]
+        path = self.path / "inputs" / source["file"]
+        if Path(source["file"]).name != source["file"] or path.is_symlink():
+            raise ValueError("source_snapshot_changed")
+        with self._lock:
+            info = path.stat()
+            stamp = (info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino)
+            verified = getattr(self, "_visual_source_verified", {})
+            if verified.get(source["file"]) != stamp:
+                if file_hash(path) != source["sha256"]:
+                    raise ValueError("source_snapshot_changed")
+                verified[source["file"]] = stamp
+                self._visual_source_verified = verified
+            cache = getattr(self, "_visual_source_cache", OrderedDict())
+            key = (source["file"], location, stamp)
+            if key in cache:
+                cache.move_to_end(key)
+                part = cache[key]
+            else:
+                part = visual_part(path, location)
+                final_info = path.stat()
+                if (final_info.st_size, final_info.st_mtime_ns, final_info.st_ctime_ns, final_info.st_ino) != stamp:
+                    raise ValueError("source_snapshot_changed")
+                cache[key] = part
+                while len(cache) > 16:
+                    cache.popitem(last=False)
+                self._visual_source_cache = cache
+            expected = (unit.get("document_reading") or {}).get("image_sha256")
+            if part and expected and part["image_sha256"] != expected:
+                raise ValueError("document_source_image_changed")
+            return part["image"] if part else None
+
     def iter_source_units(self, source):
         path = self.path / "inputs" / source["file"]
         if file_hash(path) != source["sha256"]:
@@ -728,12 +805,72 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
             issue = text_issue(text)
             if issue:
                 return [unit(index, status="quarantined", reason=issue)]
+            knowledge_hits = (self.recipe.get("knowledge_retrieval") or {}).get("hits", [])
+            retrieved_fragment = (self.recipe.get("version", 0) >= 14 and any(
+                (hit.get("snapshot") or {}).get("file") == source["file"] for hit in knowledge_hits))
+            if retrieved_fragment:
+                # Retrieval already split and pinned this complete fragment.
+                # Its Markdown storage suffix must not split formulas again.
+                chunks = [text]
+            elif path.suffix.lower() in {".tex", ".latex"}:
+                from lib.infrastructure.latex_document import chunk_latex
+                chunks = chunk_latex(text, self.recipe["chunk_chars"])
+            else:
+                chunks = chunk_text(text, self.recipe["chunk_chars"])
             return [unit(f"{index}:chunk:{i}", source_location={"file": source["name"],
                          "record": index, "chunk": i}, status="quarantined", reason="oversized_source_block")
                     if len(chunk) > max(12000, self.recipe["chunk_chars"] * 4)
                     else unit(f"{index}:chunk:{i}", source_location={"file": source["name"],
                               "record": index, "chunk": i}, kind="document", text=chunk, status="ready")
-                    for i, chunk in enumerate(chunk_text(text, self.recipe["chunk_chars"]))]
+                    for i, chunk in enumerate(chunks)]
+        parser_mode = self.recipe.get("document_parser", {}).get("mode", "native")
+        if parser_mode == "model" or (self.recipe.get("version", 0) >= 14 and path.suffix == ".pdf" and parser_mode == "native"):
+            from lib.infrastructure.document_text import text_parts
+            try:
+                for part in text_parts(path):
+                    self.check_cancel()
+                    location, text = part["location"], part["text"]
+                    if part.get("requires_vision"):
+                        yield unit(location, status="quarantined", reason="document_text_requires_vision",
+                                   source_location={"file": source["name"], "record": location})
+                        continue
+                    if not text.strip():
+                        yield unit(location, status="skipped", reason="empty_document_page",
+                                   source_location={"file": source["name"], "record": location})
+                        continue
+                    for segment in documents(text, location):
+                        if segment["status"] != "ready" or parser_mode == "native":
+                            yield segment
+                            continue
+                        key = [segment["id"], "document_parse", digest(segment["text"])]
+                        result = self.ask(key, "generation", "workflow.document_parse", {
+                            "source": source["name"], "location": segment["location"], "text": segment["text"]},
+                            allow_reasoning_fallback=False)
+                        if (not isinstance(result, dict) or set(result) != {"text", "uncertain"}
+                                or type(result.get("uncertain")) is not bool or not isinstance(result.get("text"), str)
+                                or len(result["text"]) > 80_000):
+                            self.invalidate_checkpoint(["call", key])
+                            yield {**self.rejected(segment, "invalid_document_parse_schema")}
+                            continue
+                        if result["uncertain"]:
+                            yield {**self.rejected(segment, "document_parse_uncertain")}
+                            continue
+                        reading = {"mode": "model", "source_text": segment["text"],
+                                   "source_text_sha256": digest(segment["text"]),
+                                   "parsed_text": result["text"], "parsed_text_sha256": digest(result["text"]),
+                                   "evidence_level": "model_restructured_source_text"}
+                        for index, row in enumerate(documents(result["text"], location)):
+                            row["id"] = digest([segment["id"], "parsed", index])
+                            row["document_reading"] = reading
+                            yield row
+            except UnicodeError:
+                yield unit("document", status="quarantined", reason="invalid_encoding")
+            except ValueError as error:
+                if str(error) in {"checkpoint_integrity_error", "source_snapshot_changed", "workflow_endpoint_pin_invalid",
+                                  "model_configuration_changed_create_new_run", "prompts_changed_create_new_run"}:
+                    raise
+                yield unit("document", status="quarantined", reason=str(error))
+            return
         if (self.recipe.get("document_parser", {}).get("mode") == "vision"
                 and path.suffix in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"}):
             from lib.infrastructure.document_vision import visual_parts
@@ -1009,6 +1146,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
         if unit["kind"] == "conversation":
             return [self.rejected(unit, "conversation_not_knowledge_corpus")]
         if unit["kind"] == "document":
+            if self.cpt_processing()["mode"] == "model":
+                return self.model_clean_corpus(unit)
             quality = inspect_corpus(unit["text"])
             if not quality["keep"]:
                 return [{**unit, "status": "quarantined", "reason": quality["reason"], "quality": quality}]
@@ -2116,13 +2255,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                         lambda: ({"id": digest([brief, "gsm8k", i]), "source_id": source_id,
                                   "kind": "brief", "text": brief, "status": "ready"}
                                  for i in range(self.recipe["tasks"])), self.check_cancel)
-                eligible_count = sum(u["status"] == "ready" for u in units)
+                from collections import Counter
+                input_statuses = Counter(u["status"] for u in units)
+                eligible_count = input_statuses["ready"]
                 eligible = (units.ready(eligible_count, self.recipe["max_units"]) if isinstance(units, WorkflowRows)
                             else [u for u in units if u["status"] == "ready"])
                 requested = self.recipe.get("sample_count") or self.recipe["tasks"]
                 planning_deferred = max(0, requested - self.recipe["max_units"]) if not self.recipe["sources"] else 0
                 self.state["input_summary"] = {"units": len(units), "ready": eligible_count,
-                    "quarantined": len(units) - eligible_count, "deferred": max(max(0, eligible_count - self.recipe["max_units"]), planning_deferred),
+                    "quarantined": input_statuses["quarantined"], "skipped": input_statuses["skipped"],
+                    "deferred": max(max(0, eligible_count - self.recipe["max_units"]), planning_deferred),
                     "targets": list(self.recipe["targets"])}
                 write_json_array(self.path / "input_records.json", units)
                 selected = eligible if isinstance(eligible, WorkflowRows) else eligible[:self.recipe["max_units"]]

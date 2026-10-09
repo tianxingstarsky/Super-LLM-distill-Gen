@@ -1051,6 +1051,10 @@ def cmd_workflow(args) -> int:
                             max_units=args.max_units, chunk_chars=args.chunk_chars, tasks=args.tasks,
                             sample_count=args.sample_count, concurrency=args.concurrency, batch_size=args.batch_size,
                             node_models=json.loads(pathlib.Path(args.node_models).read_text(encoding="utf-8")) if args.node_models else None,
+                            document_parser=(json.loads(pathlib.Path(args.document_parser).read_text(encoding="utf-8-sig"))
+                                             if getattr(args, "document_parser", None) else None),
+                            cpt_processing=(json.loads(pathlib.Path(args.cpt_processing).read_text(encoding="utf-8-sig"))
+                                            if getattr(args, "cpt_processing", None) else None),
                             node_generation=(json.loads(pathlib.Path(args.node_generation).read_text(encoding="utf-8"))
                                              if getattr(args, "node_generation", None) else None),
                             reasoning_trim=(json.loads(pathlib.Path(args.reasoning_trim).read_text(encoding="utf-8"))
@@ -1290,6 +1294,8 @@ def build_parser():
     p_workflow.add_argument("--concurrency", type=int, default=1, help="节点内并发上限，1–16")
     p_workflow.add_argument("--batch-size", type=int, default=100, help="每批候选数，1–500")
     p_workflow.add_argument("--node-models", help="节点模型配置 JSON 文件，仅包含 backend 与 model")
+    p_workflow.add_argument("--document-parser", help="输入节点解析配置 JSON：native / model / vision；模型模式需 binding")
+    p_workflow.add_argument("--cpt-processing", help="CPT 节点清洗配置 JSON：native 或 model；review_mode=text / vision")
     p_workflow.add_argument("--node-generation", help="SFT/CoT 节点生成风格与附加指令的 JSON 文件")
     p_workflow.add_argument("--reasoning-trim", help="可选推理文本修剪节点的 JSON 配置文件")
     p_workflow.add_argument("--node-prompts", help="按节点和提示词 ID 配置完整提示词正文的 JSON 文件")

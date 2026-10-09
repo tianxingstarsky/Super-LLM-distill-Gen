@@ -17,6 +17,9 @@ _ERRORS = {
     "preview_parser_unavailable": "当前环境缺少 PDF 或 DOCX 解析组件；MD / TXT 仍可预览。",
     "preview_source_changed": "来源文件已变化，请重新预览。",
     "preview_parse_failed": "文档解析失败。请检查文件是否损坏、编码或格式是否正确。",
+    "preview_latex_external_dependencies": "LaTeX 引用了外部文件；请先合并正文与参考文献，或上传包含图表的 PDF。不会读取本机引用路径。",
+    "preview_latex_unsupported_syntax": "LaTeX 修改了字符解析规则，无法安全提取。请上传整理后的源文档或 PDF。",
+    "preview_latex_invalid_source": "LaTeX 结构不完整，请检查文档环境、公式、表格和括号。",
 }
 
 

@@ -25,6 +25,10 @@ ERRORS = {
     "knowledge_pdf_limit": "PDF 已加密或超过 200 页，请解密或拆分后再索引。",
     "knowledge_docx_limit": "DOCX 展开内容过大，请先拆分资料。",
     "knowledge_document_parse_failed": "文档无法解析，请检查文件是否损坏或缺少解析组件。",
+    "knowledge_latex_external_dependencies": "LaTeX 引用了外部文件；请先合并正文与参考文献，或上传包含图表的 PDF。不会读取本机引用路径。",
+    "knowledge_latex_unsupported_syntax": "LaTeX 修改了字符解析规则，无法安全提取。请上传整理后的源文档或 PDF。",
+    "knowledge_latex_invalid_source": "LaTeX 结构不完整，请检查文档环境、公式、表格和括号。",
+    "knowledge_latex_atomic_block_limit": "LaTeX 单个公式、表格或代码块超过 20,000 字符。请缩小该结构后重新索引，系统不会切断它。",
     "knowledge_storage_unavailable": "本地知识库暂时无法读取，请检查索引文件与本机存储。",
 }
 
@@ -123,7 +127,7 @@ def render_knowledge_source(application, workspace, files, *, input_cache=None, 
         st.caption(f"本地全文检索 · {status.get('documents', 0):,} 份资料 · {status.get('chunks', 0):,} 个片段")
         with st.expander("添加或更新知识资料", expanded=not status.get("chunks")):
             if input_cache is not None:
-                st.file_uploader("上传知识资料", type=["md", "txt", "pdf", "docx"], accept_multiple_files=True,
+                st.file_uploader("上传知识资料", type=["md", "txt", "tex", "latex", "pdf", "docx"], accept_multiple_files=True,
                     key=f"knowledge-upload:{workspace}", on_change=_upload_sources, args=(input_cache, workspace), max_upload_size=10)
             if st.session_state.get(f"knowledge-upload-error:{workspace}"):
                 st.error("知识资料未能保存，请检查文件格式与本机存储。")

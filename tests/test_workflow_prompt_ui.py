@@ -54,9 +54,16 @@ def test_style_toggle_switches_active_prompt_without_losing_ordinary_prompt():
 def test_node_prompts_are_shown_only_for_actual_model_processing_steps():
     ui = AppTest.from_string(SCRIPT).run()
     ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["cpt", "sft"]).run()
-    for node in ("ingest", "cpt", "package"):
-        ui.button(key="fixture-node:" + node).click().run()
-        assert not any(row.key.startswith("workflow-node-prompt:") for row in ui.text_area)
+    ui.button(key="fixture-node:ingest").click().run()
+    assert ui.selectbox(key="workflow-node-prompt-selection:fixture:ingest").value == "workflow.document_parse"
+    ui.radio(key="workflow-document-parse-mode:fixture").set_value("native").run()
+    assert not any(row.key.startswith("workflow-node-prompt:") for row in ui.text_area)
+    ui.button(key="fixture-node:cpt").click().run()
+    assert ui.selectbox(key="workflow-node-prompt-selection:fixture:cpt").value == "workflow.cpt_clean"
+    ui.radio(key="workflow-cpt-processing-mode:fixture").set_value("native").run()
+    assert not any(row.key.startswith("workflow-node-prompt:") for row in ui.text_area)
+    ui.button(key="fixture-node:package").click().run()
+    assert not any(row.key.startswith("workflow-node-prompt:") for row in ui.text_area)
     ui.segmented_control(key="workflow-source-mode:fixture").set_value("开放需求").run()
     assert ui.selectbox(key="workflow-node-prompt-selection:fixture:ingest").value == "workflow.plan"
     ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["cot"]).run()

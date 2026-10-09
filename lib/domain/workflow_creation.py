@@ -9,6 +9,7 @@ from lib.domain.workflow_node_prompts import validate_node_prompts
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director, qa_director_applicable
 from lib.domain.workflow_production import validate_production, MAX_PRODUCTION_GOAL
+from lib.domain.cpt_processing import validate_cpt_processing
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
@@ -16,7 +17,8 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       batch_size=100, node_models=None, conversation_turns=3, brief="",
                       agent_replay_mode="configured", evaluation_sources=(),
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
-                      node_prompts=None, package_review=None, qa_director=None, production=None):
+                      node_prompts=None, package_review=None, qa_director=None, production=None,
+                      cpt_processing=None):
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)
@@ -45,6 +47,9 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     validate_node_generation(node_generation)
     validate_node_prompts(node_prompts)
     validate_package_review(package_review)
+    cpt = validate_cpt_processing(cpt_processing)
+    if cpt["mode"] == "model" and "cpt" not in targets:
+        raise ValueError("cpt_processing_requires_cpt")
     director = validate_qa_director(qa_director)
     if director["enabled"] and not qa_director_applicable(targets):
         raise ValueError("qa_director_requires_qa_target")

@@ -111,3 +111,45 @@ def visual_parts(path: Path):
                 yield _image(part.blob, f"block:{index}:image:{images}")
     else:
         raise ValueError("unsupported_vision_document")
+
+
+def visual_part(path: Path, location: str) -> dict | None:
+    """Rasterize only a requested pinned page, not all preceding PDF pages."""
+    path = Path(path)
+    if path.suffix.lower() == ".pdf" and location.startswith("page:"):
+        try:
+            index = int(location.split(":", 1)[1]) - 1
+        except (ValueError, TypeError):
+            raise ValueError("document_source_page_invalid") from None
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            raise ValueError("document_pdf_renderer_unavailable") from None
+        document = pdfium.PdfDocument(str(path))
+        try:
+            if len(document) > MAX_PAGES:
+                raise ValueError("document_vision_page_limit")
+            if not 0 <= index < len(document):
+                raise ValueError("document_source_page_invalid")
+            page = document[index]
+            try:
+                width, height = page.get_size()
+                if min(width, height) <= 0 or max(width, height) > 100_000:
+                    raise ValueError("document_pdf_page_invalid")
+                bitmap = page.render(scale=min(2.0, 2048 / max(width, height)))
+                try:
+                    output = io.BytesIO()
+                    bitmap.to_pil().save(output, format="PNG")
+                    return _image(output.getvalue(), location)
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+        finally:
+            document.close()
+    if path.suffix.lower() not in IMAGE_EXTENSIONS | {".docx"}:
+        return None
+    for part in visual_parts(path):
+        if part["location"] == location:
+            return part if "image" in part else None
+    return None

@@ -285,8 +285,12 @@ def _document_ui(script=DOCUMENT_SCRIPT):
     return ui.run()
 
 
-def test_document_node_defaults_to_local_text_without_a_model_form():
+def test_document_node_defaults_to_model_assisted_parsing_and_can_choose_local():
     ui = _document_ui()
+    assert not ui.exception
+    assert ui.session_state['fixture-parser'] == {'mode': 'model'}
+    assert any(field.label == '模型服务' for field in ui.selectbox)
+    ui.radio(key='workflow-document-parse-mode:demo').set_value('native').run()
     assert not ui.exception
     assert ui.session_state['fixture-parser'] == {'mode': 'native'}
     assert not ui.selectbox

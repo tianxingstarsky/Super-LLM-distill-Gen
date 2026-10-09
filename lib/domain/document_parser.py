@@ -29,6 +29,11 @@ def validate_document_parser(value=None) -> dict:
         raise ValueError("invalid_document_parser")
     if value.get("mode") == "native":
         return {"mode": "native"}
+    if value.get("mode") == "model":
+        if not isinstance(value.get("binding"), dict):
+            raise ValueError("document_text_model_required")
+        binding = validate_node_models({"ingest": {"generation": value["binding"]}})["ingest"]["generation"]
+        return {"mode": "model", "binding": binding}
     if value.get("mode") != "vision" or not isinstance(value.get("binding"), dict):
         raise ValueError("document_vision_model_required")
     binding = validate_node_models({"ingest": {"vision": value["binding"]}})["ingest"]["vision"]

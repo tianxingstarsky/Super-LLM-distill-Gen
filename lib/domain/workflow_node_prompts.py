@@ -19,7 +19,7 @@ LEGACY_NODE_PROMPT_IDS = {
     "trim": ("workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"),
 }
 VERSION_10_NODE_PROMPT_IDS = {**LEGACY_NODE_PROMPT_IDS, "package": ("workflow.package_review",)}
-NODE_PROMPT_IDS = {
+VERSION_13_NODE_PROMPT_IDS = {
     **VERSION_10_NODE_PROMPT_IDS,
     "director": ("workflow.qa_director",),
     "sft": (*LEGACY_NODE_PROMPT_IDS["sft"], "workflow.sft_directed", "workflow.sft_directed_check"),
@@ -28,6 +28,9 @@ NODE_PROMPT_IDS = {
     "cot": (*LEGACY_NODE_PROMPT_IDS["cot"], "workflow.cot_directed_check"),
     "trim": (*LEGACY_NODE_PROMPT_IDS["trim"], "workflow.trim_directed_check"),
 }
+NODE_PROMPT_IDS = {**VERSION_13_NODE_PROMPT_IDS,
+                   "ingest": (*LEGACY_NODE_PROMPT_IDS["ingest"], "workflow.document_parse"),
+                   "cpt": (*LEGACY_NODE_PROMPT_IDS["cpt"], "workflow.cpt_clean", "workflow.cpt_review")}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -38,7 +41,7 @@ def builtin_node_prompt(prompt_id: str) -> str:
 
 
 def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None,
-                           package_review=None, qa_director=None) -> tuple[str, ...]:
+                           package_review=None, qa_director=None, cpt_processing=None) -> tuple[str, ...]:
     """Only offer templates that the selected node can actually call."""
     # Prompt editing must remain available while users are clearing a rule or
     # adjusting the final type weight. Creation validates the complete recipe.
@@ -47,9 +50,14 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
         return NODE_PROMPT_IDS[stage] if validate_package_review(package_review)["enabled"] else ()
     if stage == "ingest":
         return (("workflow.plan",) if source_mode == "开放需求" else
+                ("workflow.document_parse",) if source_mode == "模型辅助文档" else
                 ("workflow.document_vision",) if source_mode == "多模态文档" else ())
-    if stage == "cpt" and source_mode != "开放需求":
-        return ()
+    if stage == "cpt":
+        if source_mode == "开放需求":
+            return LEGACY_NODE_PROMPT_IDS["cpt"]
+        from lib.domain.cpt_processing import validate_cpt_processing
+        return (("workflow.cpt_clean", "workflow.cpt_review")
+                if validate_cpt_processing(cpt_processing)["mode"] == "model" else ())
     config = (node_generation or {}).get(stage) or {}
     styled = config.get("enabled", True) if config else False
     if stage == "sft":
@@ -90,19 +98,24 @@ def validate_node_prompts(value: dict | None) -> dict:
     return result
 
 
-def snapshot_node_prompts(value: dict | None) -> dict:
+def _prompt_catalog(recipe_version: int) -> dict:
+    return (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
+            VERSION_10_NODE_PROMPT_IDS if recipe_version == 10 else
+            VERSION_13_NODE_PROMPT_IDS if recipe_version <= 13 else NODE_PROMPT_IDS)
+
+
+def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
     return {stage: {prompt_id: overrides.get(stage, {}).get(prompt_id, builtin_node_prompt(prompt_id))
                     for prompt_id in prompt_ids}
-            for stage, prompt_ids in NODE_PROMPT_IDS.items()}
+            for stage, prompt_ids in _prompt_catalog(recipe_version).items()}
 
 
 def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
     templates = validate_node_prompts(value)
-    catalog = (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
-               VERSION_10_NODE_PROMPT_IDS if recipe_version == 10 else NODE_PROMPT_IDS)
+    catalog = _prompt_catalog(recipe_version)
     if (set(templates) != set(catalog)
             or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):

@@ -610,10 +610,13 @@ class WorkflowProduction:
         self._research_document = self.research()
         if self.recipe["sources"]:
             units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
-            ready_count = sum(unit["status"] == "ready" for unit in units)
+            from collections import Counter
+            input_statuses = Counter(unit["status"] for unit in units)
+            ready_count = input_statuses["ready"]
             sources = units.ready(ready_count, self.recipe["max_units"])
             self.state["input_summary"] = {"units": len(units), "ready": ready_count,
-                "quarantined": len(units) - ready_count, "deferred": max(0, ready_count - len(sources)),
+                "quarantined": input_statuses["quarantined"], "skipped": input_statuses["skipped"],
+                "deferred": max(0, ready_count - len(sources)),
                 "targets": self.recipe["targets"], "generation_candidates": production["attempted"]}
             write_json_array(self.path / "input_records.json", units)
         else:

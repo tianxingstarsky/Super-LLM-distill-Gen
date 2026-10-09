@@ -18,7 +18,7 @@ _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses
                       "anthropic": "Anthropic Messages"}
 
 
-def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None):
+def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None):
     draft_key = f"workflow-node-bindings:{workspace}"
     saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(draft_key, {})
     draft = deepcopy(st.session_state.get(draft_key, saved))
@@ -26,15 +26,16 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
     # An explicitly emptied role stays empty after restart. Keep references
     # to temporarily hidden nodes so switching targets never discards edits.
     restored_markers = [node + ":" + role for node in draft for role in node_roles(
-        node, source_mode, node_generation=node_generation, package_review=package_review)]
+        node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)]
     draft, initialized, endpoints = application.prepare_draft(
         nodes, source_mode, draft, st.session_state.get(initialized_key, restored_markers),
-        node_generation=node_generation, package_review=package_review)
+        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
     st.session_state[f"workflow-node-scope:{workspace}"] = {
         "nodes": list(nodes), "source_mode": source_mode,
         "node_generation": deepcopy(node_generation), "package_review": deepcopy(package_review),
+        "cpt_processing": deepcopy(cpt_processing),
     }
     agent_key = f"workflow-agent-mode:{workspace}"
     if agent_key not in st.session_state:
@@ -115,7 +116,7 @@ def _missing_role_copies(node: str, workspace: str, bindings: dict, endpoints: d
             continue
         for role in node_roles(target, scope["source_mode"],
                                node_generation=scope.get("node_generation"),
-                               package_review=scope.get("package_review")):
+                               package_review=scope.get("package_review"), cpt_processing=scope.get("cpt_processing")):
             source = bindings.get(node, {}).get(role, {})
             if (not bindings.get(target, {}).get(role) and source.get("backend") in endpoints
                     and source.get("model")):
@@ -261,14 +262,14 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
 
 
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
-                       backend_application: BackendApplication | None = None, node_generation=None, package_review=None):
+                       backend_application: BackendApplication | None = None, node_generation=None, package_review=None, cpt_processing=None):
     pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
-    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review):
+    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing):
         prefix = f"node-model:{workspace}:{node}:{pending['role']}"
         st.session_state[prefix + ":backend"] = pending["backend"]
         st.session_state[prefix + ":model:" + pending["backend"]] = pending["model"]
     previous = deepcopy(bindings)
-    roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review)
+    roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
     if not roles:
         explanation = {
             "ingest": "解析上传来源并保留来源位置；此步骤不调用生成模型。",
@@ -286,8 +287,10 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
         return
     for role in roles:
+        writer_label = ("清洗模型" if node == "cpt" and source_mode != "开放需求" else
+                        "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'
-                + ("多模态识别模型" if role == "vision" else "生成模型" if role == "generation" else "独立质量评审模型") + '</strong></p>')
+                + ("多模态识别模型" if role == "vision" else writer_label if role == "generation" else "独立质量评审模型") + '</strong></p>')
         binding = bindings.get(node, {}).get(role, {})
         prefix = f"node-model:{workspace}:{node}:{role}"
         if not binding:
@@ -374,8 +377,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.rerun()
 
 
-def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None):
-    return {node: {role: deepcopy(bindings[node][role]) for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review)
+def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None, cpt_processing=None):
+    return {node: {role: deepcopy(bindings[node][role]) for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
 
 
@@ -383,17 +386,17 @@ def document_parser_mode(workspace):
     """Keep the chosen parser when Streamlit removes an unrendered widget."""
     draft_key = f"workflow-document-parse-mode-draft:{workspace}"
     key = f"workflow-document-parse-mode:{workspace}"
-    saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key, "native")
+    saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key, "model")
     mode = st.session_state.get(draft_key, st.session_state.get(key, saved))
-    if mode not in {"native", "vision"}:
-        mode = "native"
+    if mode not in {"native", "model", "vision"}:
+        mode = "model"
     st.session_state[draft_key] = mode
     return mode
 
 
 def _save_document_parser_mode(workspace):
     mode = st.session_state.get(f"workflow-document-parse-mode:{workspace}", "native")
-    if mode in {"native", "vision"}:
+    if mode in {"native", "model", "vision"}:
         st.session_state[f"workflow-document-parse-mode-draft:{workspace}"] = mode
         _persist_draft_value(workspace, f"workflow-document-parse-mode:{workspace}", mode)
 
@@ -405,12 +408,18 @@ def render_document_parser(workspace, bindings, endpoints, *, backend_applicatio
     saved_mode = document_parser_mode(workspace)
     if key not in st.session_state:
         st.session_state[key] = saved_mode
-    mode = st.radio("文档解析方式", ("native", "vision"), horizontal=True, key=key,
+    mode = st.radio("文档解析方式", ("model", "vision", "native"), horizontal=True, key=key,
                     on_change=_save_document_parser_mode, args=(workspace,),
-                    format_func=lambda value: "本地文本解析" if value == "native" else "多模态识别")
+                    format_func=lambda value: {"native": "本地文本解析", "model": "模型辅助解析", "vision": "多模态识别"}[value])
     if mode == "native":
         st.caption("读取文档文字，不调用模型。扫描 PDF 与图片请使用多模态识别。")
         return {"mode": "native"}
+    if mode == "model":
+        st.caption("PDF 逐页提取文字后交给模型整理；保留数字、公式与表格关系。扫描页和图片请切换多模态识别。")
+        render_node_models("ingest", "模型辅助文档", workspace, bindings, endpoints,
+                           backend_application=backend_application)
+        binding = bindings.get("ingest", {}).get("generation")
+        return {"mode": "model", **({"binding": deepcopy(binding)} if binding else {})}
     st.caption("PDF 按页识别，图片直接识别，DOCX 保留文字并识别内嵌图片。所选资料会发送至节点模型服务。")
     render_node_models("ingest", "多模态文档", workspace, bindings, endpoints,
                        backend_application=backend_application)

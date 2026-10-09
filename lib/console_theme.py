@@ -320,7 +320,7 @@ $theme_vars
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(2)::before { content: "◈"; background: #E8F7F1; color: #16845E; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::before { content: "⌕"; background: #E5F5FA; color: #147C9D; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(4)::before { content: "✦"; background: #F1ECFC; color: #7350C8; }
-[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(1)::after { content: "MD / TXT / PDF / DOCX · 保留原文来源"; }
+[data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(1)::after { content: "MD / TXT / PDF / DOCX / TeX · 保留原文来源"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(2)::after { content: "对话、工具调用与真实观测"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(3)::after { content: "本地知识库 / Qdrant · 检索正文"; }
 [data-testid="stApp"] [role="radiogroup"][aria-label="选择来源类型"] button:nth-child(4)::after { content: "描述任务领域和应用场景"; }

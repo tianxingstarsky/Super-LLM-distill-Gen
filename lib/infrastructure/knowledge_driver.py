@@ -100,14 +100,14 @@ class FilesystemKnowledgeDriver:
         return {"documents": len(rows), "chunks": sum(row["chunks"] for row in rows), "revision": revision}
 
     def describe_source(self, source):
-        return self.source_driver.describe(source, frozenset({".md", ".txt", ".pdf", ".docx"}))
+        return self.source_driver.describe(source, frozenset({".md", ".txt", ".tex", ".latex", ".pdf", ".docx"}))
 
     def index(self, sources, chunk_chars):
         added = unchanged = 0
         # A transaction replaces each source completely. Parsing failure keeps the prior index.
         with self._database() as database:
             for source in sources:
-                info = self.source_driver.describe(source, frozenset({".md", ".txt", ".pdf", ".docx"}))
+                info = self.source_driver.describe(source, frozenset({".md", ".txt", ".tex", ".latex", ".pdf", ".docx"}))
                 path = Path(info["path"])
                 if info["size"] > 10 * 1024 * 1024:
                     raise ValueError("knowledge_index_file_limit")
@@ -142,14 +142,25 @@ class FilesystemKnowledgeDriver:
                 except Exception as error:
                     if isinstance(error, ValueError) and str(error).startswith("knowledge_"):
                         raise
+                    if isinstance(error, ValueError) and str(error) in {"latex_external_dependencies", "latex_unsupported_syntax"}:
+                        raise ValueError("knowledge_" + str(error)) from None
+                    if isinstance(error, ValueError) and str(error).startswith("latex_"):
+                        raise ValueError("knowledge_latex_invalid_source") from None
                     raise ValueError("knowledge_document_parse_failed") from None
                 if self.source_driver.describe(source, frozenset({path.suffix.lower()}))["version"] != info["version"]:
                     raise ValueError("knowledge_source_changed")
                 if len(text) > 2_000_000:
                     raise ValueError("knowledge_index_text_limit")
-                chunks = [part[offset:offset + chunk_chars]
-                          for part in chunk_text(text, chunk_chars)
-                          for offset in range(0, len(part), chunk_chars)]
+                if path.suffix.lower() in {".tex", ".latex"}:
+                    from lib.infrastructure.latex_document import chunk_latex
+
+                    chunks = chunk_latex(text, chunk_chars)
+                    if any(len(part) > 20_000 for part in chunks):
+                        raise ValueError("knowledge_latex_atomic_block_limit")
+                else:
+                    chunks = [part[offset:offset + chunk_chars]
+                              for part in chunk_text(text, chunk_chars)
+                              for offset in range(0, len(part), chunk_chars)]
                 database.execute("DELETE FROM passages WHERE source=?", (info["path"],))
                 database.executemany("INSERT INTO passages(tokens,text,source,name,location,fingerprint) VALUES (?,?,?,?,?,?)",
                     [(" ".join(search_tokens(chunk)), chunk, info["path"], info["label"], f"document:chunk:{i}", fingerprint)

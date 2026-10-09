@@ -22,13 +22,15 @@ NODE_ROLES = {
 
 
 def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None,
-               package_review: dict | None = None) -> tuple[str, ...]:
+               package_review: dict | None = None, cpt_processing: dict | None = None) -> tuple[str, ...]:
     if stage == "package":
         return ("jev",) if validate_package_review(package_review)["enabled"] else ()
     if stage == "ingest":
-        return ("vision",) if source_mode == "多模态文档" else (("generation",) if source_mode == "开放需求" else ())
-    if stage in {"ingest", "cpt"} and source_mode != "开放需求":
-        return ()
+        return (("vision",) if source_mode == "多模态文档" else
+                ("generation",) if source_mode in {"开放需求", "模型辅助文档"} else ())
+    if stage == "cpt" and source_mode != "开放需求":
+        from lib.domain.cpt_processing import validate_cpt_processing
+        return (("generation", "jev") if validate_cpt_processing(cpt_processing)["mode"] == "model" else ())
     if stage == "cot":
         # Model drafts also exist while a custom instruction is incomplete.
         # Derive role requirements from the switch; creation validates text.

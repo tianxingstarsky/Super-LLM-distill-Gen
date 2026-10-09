@@ -91,7 +91,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                 with st.container(key="home-source-entries"):
                     cards = st.columns(3, gap="small")
                     entries = (
-                        ("文档资料", "MD / TXT / PDF / DOCX", "自动推荐", "documents"),
+                        ("文档资料", "MD / TXT / PDF / DOCX / TeX", "自动推荐", "documents"),
                         ("Agent 上下文", "导入对话、工具调用和观测。", "Agent 轨迹", "agent"),
                         ("开放需求", "描述场景，生成多样化候选。", "自动推荐", "brief"),
                     )

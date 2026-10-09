@@ -39,7 +39,9 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'})}
-ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'vision'}),
+ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model', 'vision'}),
+                    'workflow-cpt-processing-mode': frozenset({'native', 'model'}),
+                    'workflow-cpt-review-mode': frozenset({'text', 'vision'}),
                     'workflow-agent-mode': frozenset({'local', 'isolated'}),
                     'workflow-production-policy': frozenset({'quality_first', 'bounded_replenishment'}),
                     'workflow-director-mode': frozenset({'adaptive', 'balanced'})})
@@ -65,7 +67,8 @@ def validate_creation_draft(values):
         scopes.add(parts[1])
         if len(scopes) > 1:
             raise ValueError('invalid_creation_draft')
-        if field in {'workflow-node-bindings', 'workflow-document-parse-mode', 'workflow-agent-mode'} and len(parts) != 2:
+        if field in {'workflow-node-bindings', 'workflow-document-parse-mode', 'workflow-agent-mode',
+                     'workflow-cpt-processing-mode', 'workflow-cpt-review-mode'} and len(parts) != 2:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:
             parts = key.split(':')

@@ -9,7 +9,7 @@ TRAINING_CATEGORIES = frozenset({"语料", "样本", "DPO 偏好对", "其他偏
 OUTPUT_SUFFIXES = frozenset({".jsonl", ".json", ".html", ".txt", ".md", ".csv", ".xlsx", ".zip"})
 DIRECT_DOWNLOAD_LIMIT_BYTES = 50 * 1024 * 1024
 # Reusable input types only; image parsing still requires explicit vision setup.
-DOCUMENT_SOURCE_SUFFIXES = frozenset({".md", ".txt", ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"})
+DOCUMENT_SOURCE_SUFFIXES = frozenset({".md", ".txt", ".tex", ".latex", ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"})
 CONVERSATION_SOURCE_SUFFIXES = frozenset({".json", ".jsonl"})
 
 
@@ -81,7 +81,7 @@ def common_asset(asset: Asset) -> bool:
 
 
 def asset_sort_key(asset: Asset) -> tuple:
-    document = asset.suffix in {".pdf", ".docx", ".md", ".txt"}
+    document = asset.suffix in {".pdf", ".docx", ".md", ".txt", ".tex", ".latex"}
     return (0 if asset.origin == "source" else 1,
             0 if asset.origin == "source" and document else 1,
             asset.name.casefold(), asset.relative_path.casefold())

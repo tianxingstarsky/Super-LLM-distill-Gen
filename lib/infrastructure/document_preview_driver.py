@@ -104,12 +104,21 @@ class FilesystemDocumentPreviewDriver:
             except ValueError as error:
                 if str(error).startswith("preview_"):
                     raise
+                if str(error) in {"latex_external_dependencies", "latex_unsupported_syntax"}:
+                    raise ValueError("preview_" + str(error)) from None
+                if str(error).startswith("latex_"):
+                    raise ValueError("preview_latex_invalid_source") from None
                 raise ValueError("preview_parse_failed") from error
             except Exception as error:
                 raise ValueError("preview_parse_failed") from error
         if len(text) > MAX_PREVIEW_CHARS:
             raise ValueError("preview_text_limit")
-        chunks = chunk_text(text, chunk_chars)
+        if path.suffix.lower() in {".tex", ".latex"}:
+            from lib.infrastructure.latex_document import chunk_latex
+
+            chunks = chunk_latex(text, chunk_chars)
+        else:
+            chunks = chunk_text(text, chunk_chars)
         return {**row, "sha256": hashlib.sha256(data).hexdigest(), "chunk_chars": chunk_chars,
                 "characters": len(text), "chunk_count": len(chunks), "chunks": chunks,
                 "signature": (row["path"], row["version"], chunk_chars)}

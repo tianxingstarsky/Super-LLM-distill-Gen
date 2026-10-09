@@ -24,7 +24,7 @@ class DocumentPreviewApplication:
 
     def signature(self, source: str, chunk_chars: int) -> tuple:
         self._validate_chunk_size(chunk_chars)
-        row = self.describe(source, frozenset({".md", ".txt", ".pdf", ".docx"}))
+        row = self.describe(source, frozenset({".md", ".txt", ".tex", ".latex", ".pdf", ".docx"}))
         return (row["path"], row["version"], chunk_chars)
 
     def preview(self, source: str, chunk_chars: int) -> dict:

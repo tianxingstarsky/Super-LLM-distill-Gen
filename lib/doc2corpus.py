@@ -15,7 +15,7 @@ import pathlib
 import re
 from typing import Any, Dict, Iterator, List
 
-SUPPORTED_EXTS = {".md", ".txt", ".pdf", ".docx"}
+SUPPORTED_EXTS = {".md", ".txt", ".tex", ".latex", ".pdf", ".docx"}
 
 
 # ── 导入层 ──────────────────────────────────────────────────────────────────
@@ -40,6 +40,10 @@ def import_text(path: str | pathlib.Path) -> str:
         raise ValueError(f"不支持的文件类型 {ext}（支持 {sorted(SUPPORTED_EXTS)}）")
     if ext in (".md", ".txt"):
         return _decode_text(path.read_bytes())
+    if ext in (".tex", ".latex"):
+        from lib.infrastructure.latex_document import parse_latex
+
+        return parse_latex(_decode_text(path.read_bytes()))
     if ext == ".pdf":
         from pypdf import PdfReader
 
@@ -126,14 +130,26 @@ def doc_to_corpus(
 ) -> Dict[str, Any]:
     """单文档 → 语料条目列表 + 统计。manifest 为跨文档全局查重集合。"""
     manifest = manifest if manifest is not None else set()
-    raw = clean_text(import_text(path))
+    latex_source = pathlib.Path(path).suffix.lower() in {".tex", ".latex"}
+    raw = import_text(path).strip() if latex_source else clean_text(import_text(path))
     if not raw:
         return {"entries": [], "stats": {"file": str(path), "chunks": 0, "kept": 0, "dups": 0, "chars": 0}}
 
     entries: List[Dict[str, str]] = []
     dups = 0
-    for i, chunk in enumerate(chunk_text(raw, target_chars, overlap)):
-        h = chunk_hash(chunk)
+    if latex_source:
+        from lib.infrastructure.latex_document import chunk_latex
+
+        if overlap:
+            raise ValueError("latex_overlap_not_supported")
+        chunks = chunk_latex(raw, target_chars)
+    else:
+        chunks = chunk_text(raw, target_chars, overlap)
+    for i, chunk in enumerate(chunks):
+        # Whitespace can change verbatim/code semantics in TeX documents.
+        # Preserve the existing normalized identity for all legacy formats.
+        h = (hashlib.sha256(chunk.encode("utf-8")).hexdigest()[:16]
+             if latex_source else chunk_hash(chunk))
         if h in manifest:
             dups += 1
             continue

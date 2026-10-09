@@ -13,6 +13,7 @@ from lib.domain.workflow_node_prompts import validate_node_prompts
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.domain.workflow_production import validate_production
+from lib.domain.cpt_processing import validate_cpt_processing
 
 
 class WorkflowApplication:
@@ -26,7 +27,8 @@ class WorkflowApplication:
             "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
             "batch_size", "node_models", "conversation_turns", "brief",
             "agent_replay_mode", "evaluation_sources", "web_research", "sources",
-            "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director", "production") if key in recipe}
+            "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director", "production",
+            "cpt_processing") if key in recipe}
         targets, node_models = validate_creation(**fields)
         research = validate_web_research(recipe.get("web_research"), brief=recipe.get("brief", ""),
                                          sources=recipe.get("sources", ()), targets=targets)
@@ -37,7 +39,9 @@ class WorkflowApplication:
                                       "package_review": validate_package_review(recipe.get("package_review")),
                                       "qa_director": validate_qa_director(recipe.get("qa_director")),
                                       "production": validate_production(recipe.get("production"), targets),
-                                      "reasoning_trim": validate_reasoning_trim(recipe.get("reasoning_trim"))})
+                                      "reasoning_trim": validate_reasoning_trim(recipe.get("reasoning_trim")),
+                                      **({"cpt_processing": validate_cpt_processing(recipe["cpt_processing"])}
+                                         if "cpt_processing" in recipe else {})})
 
     def default_sft_output_style(self) -> str:
         """Suggest the current preference when configuring a new SFT run."""

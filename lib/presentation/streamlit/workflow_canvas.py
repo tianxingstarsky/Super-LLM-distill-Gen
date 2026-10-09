@@ -13,7 +13,7 @@ _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__
 
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
-                qa_director=None):
+                qa_director=None, cpt_processing=None):
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director)
     base = [key for key in BASE_STAGES if key in nodes]
     derived = [key for key in DERIVED_STAGES if key in nodes]
@@ -38,7 +38,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         metrics = stages.get(key, {})
         done, total = int(metrics.get("done", 0) or 0), int(metrics.get("total", 0) or 0)
         status = metrics.get("status", "pending")
-        roles = node_roles(key, source_mode, node_generation=node_generation, package_review=package_review)
+        roles = node_roles(key, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
         node_bindings = {role: binding for role, binding in (bindings or {}).get(key, {}).items()
                          if role in roles}
         role = node_bindings.get("generation") or node_bindings.get("jev") or node_bindings.get("vision")
