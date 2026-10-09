@@ -43,6 +43,7 @@ from lib.domain.workflow_generation import validate_node_generation, style_for_s
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.cpt_processing import validate_cpt_processing
+from lib.domain.source_quote import quote_spans
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.domain.workflow_node_prompts import (
     validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
@@ -1187,6 +1188,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         feedback = None
         check, style_check = None, None
         for attempt in range(2):
+            evidence_spans = None
             if style is None and history and attempt == 0 and history[-1].get("reasoning_content"):
                 messages = history
                 quotes = []
@@ -1199,10 +1201,15 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                     feedback = "回答结构不合格或存在敏感数据"
                     continue
                 quotes = candidate.get("quotes", [])
-                if unit["kind"] == "document" and (not isinstance(quotes, list) or not quotes or
-                        any(not isinstance(q, str) or not q.strip() or q not in unit["text"] for q in quotes)):
-                    feedback = "需要原文中可逐字匹配的证据"
-                    continue
+                if unit["kind"] == "document":
+                    pdf_source = any(Path(source.get("file", "")).suffix.lower() == ".pdf"
+                        and source.get("sha256") == unit.get("source_id")
+                        and source.get("name") == unit.get("source_name")
+                        for source in self.recipe.get("sources", ()))
+                    evidence_spans = quote_spans(unit["text"], quotes, pdf_whitespace=pdf_source)
+                    if evidence_spans is None:
+                        feedback = "需要原文中可逐字匹配的证据"
+                        continue
                 if unit["kind"] == "document":
                     prompt = f"请根据以下资料回答问题。只使用资料支持的内容。\n\n资料：\n{unit['text']}\n\n问题：\n{candidate['question']}"
                     prefix = [{"role": "user", "content": prompt}]
@@ -1225,6 +1232,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                                     (style_check["keep"] and style_check["adherence"] >= 4)):
                 return [{"id": unit["id"], "source_id": unit["source_id"], "status": "eligible", "messages": messages,
                          "tools": unit.get("tools", []), "quotes": quotes, "judge": check, "source_context": unit,
+                         **({"quote_spans": evidence_spans} if evidence_spans is not None else {}),
                          **({"generation_style": style, "style_check": style_check} if style is not None else {}),
                          "repair_attempts": attempt, "reasoning_origin": ("prompt_styled_generation" if style is not None
                             else "source" if messages is history else "synthetic_explanation"),
