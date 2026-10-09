@@ -130,7 +130,7 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
         kind = _REVIEW_KIND.get(st.session_state.get(f"review-mode:{workspace}"), "sft")
         queue_button = f"review-overview-open-{kind}"
         if step == 0:
-            return ("review-mode:",)
+            return (f"review-overview-{kind}",)
         if step == 1:
             return (queue_button,)
         return (f"df-review-actions-{kind}", queue_button)
@@ -141,7 +141,7 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
                 "package-release-download:", "package-release-file:",
                 "package-releases-panel", "package-empty-workflow")
     if route == "系统设置":
-        return (("ui-language-choice",), ("preference-area",))[step]
+        return (("ui-language-choice",), ("settings-workflow-defaults",))[step]
     return ()
 
 
@@ -286,8 +286,7 @@ def render_context_guide(page: str, navigate: Callable[[str], None]) -> None:
     steps, action = _GUIDES[route]
     language = st.session_state.get("ui_language", "zh")
     tour_key = f"context-guide-step:{route}"
-    _, help_column = st.columns([6, 1], gap="small")
-    with help_column:
+    with st.container(key="context-guide-launcher"):
         st.button("ⓘ 本页指引", key=f"context-guide-start:{route}",
                   on_click=_set_tour_step, args=(tour_key, 0), width="stretch")
 

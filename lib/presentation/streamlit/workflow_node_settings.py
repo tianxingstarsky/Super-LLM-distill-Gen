@@ -395,9 +395,6 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                                if same_model else suggested_context)
             output_default = (binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
                               if same_model else suggested_output)
-            render_model_capabilities(backend_application, backend, model, info, prefix=prefix,
-                                      save_selection=_save_model_selection,
-                                      save_args=(workspace, node, role, backend_application))
             context_column, output_column = st.columns(2, gap="small")
             with context_column:
                 context_tokens = st.number_input(
@@ -422,6 +419,9 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                 "context_window_tokens": int(context_tokens),
                 "max_output_tokens": int(output_tokens),
             }
+            render_model_capabilities(backend_application, backend, model, info, prefix=prefix,
+                                      save_selection=_save_model_selection,
+                                      save_args=(workspace, node, role, backend_application))
         else:
             bindings.setdefault(node, {}).pop(role, None)
     _persist_bindings(workspace, bindings)

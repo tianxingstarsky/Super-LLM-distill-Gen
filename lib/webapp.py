@@ -371,9 +371,10 @@ def page_human_review():
         modes[3]: preference_review_application(output, target="rlaif"),
         modes[4]: corpus_review_application(output),
     }
+    if st.session_state.get(mode_key) not in modes:
+        st.session_state[mode_key] = modes[0]
     render_review_overview(applications, mode_key)
-    mode = st.segmented_control("审核类型", modes, default=None if mode_key in st.session_state else modes[0], key=mode_key,
-                                label_visibility="collapsed")
+    mode = st.session_state[mode_key]
     if mode == modes[0]:
         from lib.presentation.streamlit.sft_review_page import render_sft_review
         render_sft_review(applications[mode], legacy_review=page_review)

@@ -77,11 +77,11 @@ def test_empty_prompt_blocks_submission_until_restored():
     ui = AppTest.from_string(SCRIPT).run()
     prompt = "workflow-node-prompt:fixture:sft:workflow.sft"
     ui.text_area(key=prompt).set_value("  ").run()
-    assert any("节点提示词尚未完成" in warning.value for warning in ui.warning)
+    assert "节点提示词尚未完成" in ui.button(key="workflow-config-fix:fixture:prompt:sft").label
     assert ui.button(key="workflow-create:fixture").disabled
     ui.button(key="workflow-node-prompt-reset:fixture:sft:workflow.sft").click().run()
     assert ui.text_area(key=prompt).value == builtin_node_prompt("workflow.sft")
-    assert not any("节点提示词尚未完成" in warning.value for warning in ui.warning)
+    assert not any(row.key == "workflow-config-fix:fixture:prompt:sft" for row in ui.button)
     assert ui.button(key="workflow-node-prompt-reset:fixture:sft:workflow.sft").disabled
     assert not ui.exception
 

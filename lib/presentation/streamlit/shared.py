@@ -5,8 +5,7 @@ import html
 
 import streamlit as st
 
-
-_HERO_CUBES = '<i><b></b><em></em><span></span></i>' * 3
+from lib.presentation.streamlit.brand_art import STUDIO_ART_URI, studio_art_url
 
 
 def page_header(title: str, description: str, tag: str = "", *, variant: str = "standard") -> None:
@@ -15,14 +14,16 @@ def page_header(title: str, description: str, tag: str = "", *, variant: str = "
     # console_theme hides this framework heading and shows the richer masthead below.
     st.title(title)
     hero_class = "df-page-hero df-page-hero--hub" if variant == "hub" else "df-page-hero"
+    art_url = studio_art_url("hero") if variant == "hub" else STUDIO_ART_URI
     st.html(
         f'<section class="{hero_class}">'
         '<div class="df-page-copy">'
+        '<span class="df-page-eyebrow" aria-hidden="true">SHUJIAN CUBE / DATA STUDIO</span>'
         f'<h1>{html.escape(title)}</h1>'
         f'<p>{html.escape(description)}</p>'
         '</div>'
         + (f'<div class="df-page-tag">{html.escape(tag)}</div>' if tag else '')
-        + '<div class="df-hero-art" aria-hidden="true">' + _HERO_CUBES + '</div>'
+        + '<div class="df-hero-art" aria-hidden="true"><img src="' + html.escape(art_url, quote=True) + '" alt=""></div>'
         '</section>'
     )
 

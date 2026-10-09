@@ -1,4 +1,6 @@
 """Model discovery and evidence stay in the selected workflow node."""
+import re
+
 from streamlit.testing.v1 import AppTest
 
 from lib.presentation.streamlit.workflow_model_capabilities import suggested_tokens
@@ -85,6 +87,23 @@ def test_discovery_offers_remote_models_without_replacing_binding_or_limits():
     assert ui.session_state['workflow-node-bindings:demo']['sft']['generation'] == {
         'backend': 'writer', 'model': 'alpha', 'context_window_tokens': 12_000, 'max_output_tokens': 2_000}
     assert ui.session_state['fixture-discovery-overrides'] is None
+
+
+def test_english_capability_badges_translate_states_and_keep_unknown_source_compact():
+    ui = _ui()
+    ui.session_state['ui_language'] = 'en'
+    ui.run()
+    assert not ui.exception
+    badge_html = [item.proto.body for item in ui.get('html')
+                  if '<span style="display:inline-block' in item.proto.body]
+    assert len(badge_html) == 1
+    badges = badge_html[0]
+    assert 'Images · Unknown' in badges
+    assert 'Native PDF · Unsupported · Public metadata' in badges
+    assert 'Tool calls · Supported · Service information' in badges
+    # Unknown capability evidence does not repeat an unknown provenance label.
+    assert badges.count('Unknown') == 1
+    assert not re.search(r'[\u3400-\u9fff]', badges)
 
 
 def test_new_selection_uses_public_limits_while_saved_limits_stay_unchanged():

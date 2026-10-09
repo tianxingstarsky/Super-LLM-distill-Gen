@@ -76,10 +76,43 @@ def _preset_label(preset, workspace):
     return label
 
 
-def _select_setup_node(key: str, node: str) -> None:
+def _select_setup_node(key: str, node: str, tab: str = "settings", prompt_id: str | None = None) -> None:
+    """Open the actual node form at the field group that can fix an issue."""
     st.session_state[key] = node
     workspace = key.removeprefix("workflow-setup-node:")
     st.session_state[f"canvas-open:setup-canvas:{workspace}"] = True
+    language = st.session_state.get("ui_language", "zh")
+    label = "提示词与风格" if tab == "prompts" else "节点设置"
+    st.session_state[f"workflow-node-tabs:{workspace}:{node}"] = translate_label(label, language)
+    if prompt_id is not None:
+        st.session_state[f"workflow-node-prompt-selection:{workspace}:{node}"] = prompt_id
+
+
+def _render_setup_issue(workspace: str, node: str, message: str, *, kind: str,
+                        tab: str = "settings", prompt_id: str | None = None,
+                        full_label: bool = False) -> None:
+    """Use one keyboard-accessible warning button instead of a passive banner."""
+    language = st.session_state.get("ui_language", "zh")
+    label = translate_label(message, language)
+    if not full_label:
+        label = translate_label(GRAPH_LABELS[node], language) + " · " + label
+    with st.container(key=f"workflow-config-issue:{workspace}:{kind}:{node}"):
+        st.button(UntranslatedText(label), key=f"workflow-config-fix:{workspace}:{kind}:{node}",
+                  icon=":material/error_outline:", width="stretch",
+                  on_click=_select_setup_node,
+                  args=(f"workflow-setup-node:{workspace}", node, tab, prompt_id))
+
+
+def _setup_node_tabs(workspace: str, node: str):
+    """Keep the active native tab controllable and valid after language changes."""
+    language = st.session_state.get("ui_language", "zh")
+    labels = [translate_label(label, language) for label in ("节点设置", "提示词与风格")]
+    key = f"workflow-node-tabs:{workspace}:{node}"
+    previous = st.session_state.get(key)
+    if previous not in labels:
+        prompt_labels = {"提示词与风格", translate_label("提示词与风格", "en")}
+        st.session_state[key] = labels[1] if previous in prompt_labels else labels[0]
+    return st.tabs(labels, key=key, on_change="rerun")
 
 
 def _change_source_mode(workspace, key):
@@ -527,6 +560,13 @@ def _render_research_receipt(application, run_id, recipe, state):
             st.caption("运行开始后会先检索公开资料，并在此展示规划线索。")
 
 
+def _open_run_failure(run_id: str, stage: str) -> None:
+    """Inspect the persisted failure without starting work or changing its recipe."""
+    st.session_state[f"workflow-stage:{run_id}"] = stage
+    st.session_state[f"canvas-open:live-canvas:{run_id}"] = True
+    st.session_state[f"canvas-pause:workflow-follow:{run_id}"] = True
+
+
 @st.fragment(run_every=2)
 def render_run(application, run_id, begin, *, embedded=False, draft_application=None):
     from lib.presentation.streamlit.review_navigation import consume_app_navigation
@@ -575,10 +615,21 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             f'<span class="df-run-pill">本次目标 <strong>{len(state.get("targets", []))}</strong></span>'
             f'<span class="df-run-pill">运行尝试 <strong>{attempt}</strong></span>'
             '</div>')
+    scroll_failure_into_view = False
     if status == "running" and not active:
         st.warning("执行进程已中断。可从已完成的逐条断点继续。")
     elif status == "failed":
-        st.error(f"运行失败：{_workflow_error(state.get('error', 'unknown'))}。已完成的步骤与模型响应已保存。")
+        failure_stage = (next((key for key in stage_keys if state["stages"][key].get("status") == "failed"), None)
+                         or next((key for key in stage_keys if state["stages"][key].get("error")), None)
+                         or selected_stage)
+        message = f"运行失败：{_workflow_error(state.get('error', 'unknown'))}。已完成的步骤与模型响应已保存。"
+        with st.container(key=f"workflow-run-issue:{run_id}"):
+            st.button(UntranslatedText(translate_label(message, st.session_state.get("ui_language", "zh"))),
+                      key=f"workflow-run-failure:{run_id}", icon=":material/error_outline:",
+                      width="stretch", on_click=_open_run_failure, args=(run_id, failure_stage))
+        # Consume the existing pause flag below, then emit the one-off scroll
+        # only after the complete fragment layout and node output are rendered.
+        scroll_failure_into_view = bool(st.session_state.get(f"canvas-pause:workflow-follow:{run_id}"))
     elif status == "completed":
         st.success("生产已结束，按实际合格数量交付；训练文件与质量报告已生成。")
     elif status == "needs_attention":
@@ -848,6 +899,38 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                               "任务数": recipe.get("tasks"), "处理上限": recipe.get("max_units")}))
         with st.expander("技术详情：完整配方 JSON"):
             st.json(recipe)
+
+    if scroll_failure_into_view:
+        css_key = "".join(character if character.isascii() and (character.isalnum() or character in "_-")
+                          else "-" for character in f"workflow-run-canvas:{run_id}")
+        # Streamlit commits the fragment's widgets asynchronously; measuring
+        # the previous canvas before its new layout settles overshoots. Compare
+        # content coordinates (independent of scroll position) before scrolling
+        # once. A later timer refresh has no flag and emits no new script.
+        st.html('<script>(()=>{const selector=' + json.dumps(".st-key-" + css_key) + ';'
+                'window.__dfRunFailureScrollCleanup?.();'
+                'const started=performance.now();let previous=null,stableSince=started,frame=0,stopped=false;'
+                'function cleanup(){stopped=true;cancelAnimationFrame(frame);'
+                'window.removeEventListener("wheel",cleanup,true);'
+                'window.removeEventListener("touchstart",cleanup,true);}'
+                'window.__dfRunFailureScrollCleanup=cleanup;'
+                'window.addEventListener("wheel",cleanup,{capture:true,passive:true});'
+                'window.addEventListener("touchstart",cleanup,{capture:true,passive:true});'
+                'function settle(){if(stopped)return;const now=performance.now();'
+                'if(now-started>1800){cleanup();return;}'
+                'const target=document.querySelector(selector),main=document.querySelector(\'[data-testid="stMain"]\');'
+                'if(target&&main&&target.getClientRects().length){'
+                'const rect=target.getBoundingClientRect(),mainRect=main.getBoundingClientRect();'
+                'const current=[main.scrollTop+rect.top-mainRect.top,rect.width,rect.height];'
+                'if(!previous||current.some((value,index)=>Math.abs(value-previous[index])>.5))stableSince=now;'
+                'previous=current;'
+                'if(now-started>=300&&now-stableSince>=200){'
+                'const top=Math.max(0,main.scrollTop+target.getBoundingClientRect().top-main.getBoundingClientRect().top-76);'
+                'const behavior=matchMedia("(prefers-reduced-motion: reduce)").matches?"instant":"smooth";'
+                'cleanup();main.scrollTo({top,behavior});return;}}'
+                'else{previous=null;stableSince=now;}'
+                'frame=requestAnimationFrame(settle);}frame=requestAnimationFrame(settle);})();</script>',
+                unsafe_allow_javascript=True)
 
 
 def _save_draft_value(workspace, key):
@@ -1125,6 +1208,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         default=None, key=source_key, on_change=_change_source_mode, args=(ws, source_key),
         help="按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。",
     ) or "文档资料"
+    # Reserve the visual workbench near the source switch. Populate it only
+    # after the existing target and model calculations below; widget ownership,
+    # callbacks and draft restoration keep their original execution order.
+    workbench = st.container(key="workbench-layout")
     source_extensions = ({".pdf", ".docx", ".txt", ".md", ".tex", ".latex", ".png", ".jpg", ".jpeg", ".webp"} if source_mode == "文档资料"
                          else {".json", ".jsonl"} if source_mode == "Agent 上下文" else set())
     files = application.source_files(ws, suffixes=frozenset(source_extensions), limit=5000) if source_extensions else []
@@ -1141,8 +1228,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 file_labels[saved_source] = safe_source["label"]
             except (OSError, ValueError):
                 unavailable_sources += 1
-    # Declare the source and goal slots first. Fill them below once node-specific
-    # parsing and validation are known, without putting the upload below a graph.
+    # Source inputs and goals remain open below the canvas. Fill the source
+    # slot once node-specific parsing and validation are known.
     source_col, setup_col = st.columns([1.15, 1], gap="medium")
     with source_col:
         source_slot, target_slot = st.container(), st.container()
@@ -1235,17 +1322,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 budget,
                 node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
             )
-        if model_issues:
-            st.warning("部分节点尚未选择可用模型，请点击这些节点完成配置。")
-            pending_nodes = list(dict.fromkeys(node for node, _ in model_issues))
-            next_node = next((node for node in graph_nodes[graph_nodes.index(selected_node) + 1:]
-                              if node in pending_nodes), pending_nodes[0])
-            st.button("配置下一个待完善节点", on_click=_select_setup_node,
-                      args=(selection_key, next_node), key=f"workflow-next-config:{ws}")
-            st.caption(_missing_model_role_summary(model_issues, st.session_state.get("ui_language", "zh")))
-        if pricing_issues:
-            st.warning("部分节点的模型服务缺少预算单价。请点击节点，在连接表单中更新输入和输出单价。")
-    workbench = st.container(key="workbench-layout")
+    # Source previews follow their visible upload/selection controls instead of
+    # being pulled to the early canvas slot with the anchored node form.
+    source_previews = st.container(key="workbench-source-previews")
     if targets:
         with workbench, st.container(border=True, key="workbench-canvas-panel"):
             section_heading("工作流节点配置", "点击节点，就近配置模型、提示词与处理方式。", "◇")
@@ -1277,7 +1356,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
                                                       node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                                                       qa_director=qa_director))
-            settings_tab, prompts_tab = (st.tabs(["节点设置", "提示词与风格"]) if has_prompts
+            settings_tab, prompts_tab = (_setup_node_tabs(ws, selected_node) if has_prompts
                                         else (nullcontext(), nullcontext()))
             with settings_tab:
                 if selected_node == "package":
@@ -1324,6 +1403,16 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 render_node_prompts(selected_node, model_source_mode, ws,
                                     save_field=_save_draft_value, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                                     qa_director=qa_director, prompt_library=prompt_library)
+        with workbench:
+            if model_issues:
+                for node in dict.fromkeys(node for node, _ in model_issues):
+                    description = _missing_model_role_summary(
+                        [(issue_node, role) for issue_node, role in model_issues if issue_node == node],
+                        st.session_state.get("ui_language", "zh"))
+                    _render_setup_issue(ws, node, description, kind="model", full_label=True)
+            if pricing_issues:
+                for node in dict.fromkeys(node for node, _ in pricing_issues):
+                    _render_setup_issue(ws, node, "模型服务缺少预算单价，点击检查服务连接", kind="prices")
     # Source previews and common run controls stay in normal document flow.
     # Only the node-local form follows the selected graph node.
     node_generation = generation_snapshot(ws, graph_nodes) if targets else {}
@@ -1345,7 +1434,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         with source_slot, st.container(border=True, key="workbench-source-panel"):
             section_heading("添加来源", f"本次来源类型：{source_mode}", "▤")
             if document_parser.get("unconfirmed"):
-                st.warning("请点击输入节点，核实并确认模型的图片输入能力。")
+                _render_setup_issue(ws, "ingest", "图片输入能力尚未确认，点击核实模型能力", kind="vision")
             if source_mode == "开放需求":
                 uploaded, selected = [], []
                 st.caption("描述任务、领域和使用场景，系统会规划并生成候选。")
@@ -1410,7 +1499,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     selected = []
                 if (source_mode == "文档资料" and document_parser.get("mode") == "native"
                         and any(Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in selected)):
-                    st.warning("图片需要多模态识别，请在输入解析节点选择并确认图片输入模型。")
+                    if targets:
+                        _render_setup_issue(ws, "ingest", "图片需要多模态识别，点击配置输入模型", kind="image-parser")
+                    else:
+                        st.warning("图片需要多模态识别，请在输入解析节点选择并确认图片输入模型。")
                 upload_error = st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")
                 if upload_error:
                     st.error(_upload_cache_error(upload_error))
@@ -1420,7 +1512,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
         if preview_in_input:
             from lib.presentation.streamlit.document_preview import render_document_preview
-            with workbench, st.container(border=True, key="workbench-source-preview"):
+            with source_previews, st.container(border=True, key="workbench-source-preview"):
                 chunk_chars = _draft_number(
                     "文档分块目标字符数", 200, 20000, 2000,
                     key=f"workflow-chunk-chars:{ws}")
@@ -1430,7 +1522,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 render_document_preview(document_preview, ws, native_sources, file_labels, int(chunk_chars))
         if targets and source_mode == "知识库检索":
             from lib.presentation.streamlit.knowledge_page import render_knowledge_preview
-            with workbench, st.container(border=True, key="workbench-knowledge-preview"):
+            with source_previews, st.container(border=True, key="workbench-knowledge-preview"):
                 render_knowledge_preview(ws)
         with setup_col, st.container(
                 border=True, key="workbench-parameters-panel"):
@@ -1497,15 +1589,32 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             agent_unavailable = ("agent" in targets and agent_mode == "isolated"
                                  and not agent_capabilities.get("isolated_configured"))
             if agent_unavailable:
-                st.warning("Agent 节点的隔离验证环境未配置，请检查该节点。")
+                _render_setup_issue(ws, "agent", "Agent 隔离验证环境未配置，点击检查节点", kind="agent")
             if generation_invalid:
-                st.warning("风格配置尚未完成，请在对应节点填写有效的自定义指令。")
+                for node in generation_invalid:
+                    _render_setup_issue(ws, node, "风格配置尚未完成，点击填写自定义指令", kind="style", tab="prompts")
             if trim_invalid:
-                st.warning("修剪配置尚未完成，请在修剪节点填写有效的自定义模板。")
+                _render_setup_issue(ws, "trim", "修剪配置尚未完成，点击填写自定义模板", kind="trim", tab="prompts")
             if director_invalid:
-                st.warning("指导员配置尚未完成，请检查指导方式与指令。")
+                from lib.domain.workflow_qa_director import validate_qa_director
+                director_tab = "settings"
+                try:
+                    validate_qa_director(qa_director)
+                except (ValueError, TypeError) as error:
+                    director_tab = "prompts" if str(error) == "invalid_qa_director_rules" else "settings"
+                _render_setup_issue(ws, "director", "指导员配置尚未完成，点击检查指导方式与指令",
+                                    kind="director", tab=director_tab)
             if prompts_invalid:
-                st.warning("节点提示词尚未完成，请在对应节点填写有效正文或恢复内置提示词。")
+                for node, prompts in node_prompts.items():
+                    invalid_prompt = next((prompt_id for prompt_id, body in prompts.items()
+                                           if node_prompt_has_issue({node: {prompt_id: body}})), None)
+                    if invalid_prompt is not None:
+                        _render_setup_issue(ws, node, "节点提示词尚未完成，点击编辑或恢复默认模板",
+                                            kind="prompt", tab="prompts", prompt_id=invalid_prompt)
+            cpt_vision_blocked = cpt_vision_unconfirmed(
+                cpt_processing or {}, bindings if targets else {}, endpoints if targets else {})
+            if cpt_vision_blocked and bindings.get("cpt", {}).get("jev"):
+                _render_setup_issue(ws, "cpt", "CPT 图片评审能力尚未确认，点击核实评审模型", kind="cpt-vision")
             style_summary = (translate("分字段保留推理" if sft_output_style == "separated"
                                        else "只保留答案",
                                        st.session_state.get("ui_language", "zh"))
@@ -1549,7 +1658,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 submitted = st.button("开始自动生成", type="primary", disabled=not targets or bool(model_issues)
                                       or bool(pricing_issues) or agent_unavailable or web_unavailable
                                       or bool(generation_invalid) or trim_invalid or prompts_invalid or director_invalid
-                                      or parser_unavailable or cpt_vision_unconfirmed(cpt_processing or {}, bindings if targets else {}, endpoints if targets else {}) or source_mode == "知识库检索" and not selected
+                                      or parser_unavailable or cpt_vision_blocked or source_mode == "知识库检索" and not selected
                                       or bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")),
                                       key=f"workflow-create:{ws}", width="stretch")
                 if draft_application is not None:

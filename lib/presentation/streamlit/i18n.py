@@ -9,6 +9,15 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "模型服务缺少预算单价，点击检查服务连接": "Budget rates are missing. Open the service connection.",
+    "图片输入能力尚未确认，点击核实模型能力": "Image support is unconfirmed. Check the model capabilities.",
+    "图片需要多模态识别，点击配置输入模型": "Images need image reading. Configure the input model.",
+    "Agent 隔离验证环境未配置，点击检查节点": "The isolated Agent environment is missing. Open the node settings.",
+    "风格配置尚未完成，点击填写自定义指令": "Style settings are incomplete. Enter custom instructions.",
+    "修剪配置尚未完成，点击填写自定义模板": "Trimming settings are incomplete. Enter a custom template.",
+    "指导员配置尚未完成，点击检查指导方式与指令": "Director settings are incomplete. Check the guidance and rules.",
+    "节点提示词尚未完成，点击编辑或恢复默认模板": "A node prompt is incomplete. Edit it or restore the default template.",
+    "CPT 图片评审能力尚未确认，点击核实评审模型": "CPT image review is unconfirmed. Check the review model.",
     "开放需求生成合成语料，由模型生成并独立评审；没有原文时不作原页保真声明。": "Open briefs produce synthetic corpus text with independent model review. Without an original source, page fidelity is not claimed.",
     "清洗模型": "Cleaning model",
     "文档解析模型": "Document parsing model",
@@ -2612,6 +2621,7 @@ ZH_EN.update({
     "未能获取模型列表，请检查地址、协议和凭据。仍可手动输入模型名。": "Could not get models. Check the address, protocol, and credentials. You can enter a model name.",
     "采用建议上限": "Use suggested limits", "仅更新当前节点。已有草稿不会自动覆盖。": "Update this node only. Saved drafts keep their settings.",
     "服务未提供容量信息，可调整下方节点上限。短请求测试不能证明完整上下文容量。": "No capacity information was returned. Set the node limits below. Short tests cannot verify the full context capacity.",
+    "服务未提供容量信息，可调整节点上限。短请求测试不能证明完整上下文容量。": "No capacity information was returned. Set the node limits. Short tests cannot verify the full context capacity.",
     "测试项目": "Test features", "测试模型调用": "Test model calls",
     "正在发送少量测试内容，验证所选模型能力…": "Sending small test inputs to check this model…",
     "模型测试未完成，请检查服务连接后重试。": "Model testing did not finish. Check the connection and try again.",

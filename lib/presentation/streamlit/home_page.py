@@ -6,6 +6,7 @@ import streamlit as st
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.home_style import HOME_STYLE
+from lib.presentation.streamlit.brand_art import studio_art_url
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
 from lib.presentation.streamlit.workflow_page import TARGET_LABELS
@@ -84,7 +85,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
         for label, value, tone in items) + '</div>')
 
     with st.container(key="home-main"):
-        source_column, recent_column = st.columns([1.15, 1], gap="small")
+        source_column, recent_column = st.columns([1.25, 1], gap="medium")
         with source_column:
             with st.container(border=True, key="home-source-panel"):
                 section_heading("开始制作数据", "导入资料，或直接选择要制作的数据类型。", "◈")
@@ -98,7 +99,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                     for column, (mode, detail, preset, kind) in zip(cards, entries):
                         with column, st.container(key=f"home-entry-{kind}"):
                             st.html('<div class="df-home-entry-art" aria-hidden="true">'
-                                    '<img src="' + _SOURCE_ART[kind] + '" alt="">'
+                                    '<img src="' + html.escape(studio_art_url(kind, _SOURCE_ART[kind]), quote=True) + '" alt="">'
                                     '<span>↗</span></div>')
                             st.button(mode, key=f"overview:{mode}", on_click=start_mode,
                                       args=(mode, preset), width="stretch")
@@ -111,45 +112,51 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                     action.button("人工制作图文", key="overview-manual", on_click=start_manual, width="stretch")
                 with st.container(key="home-strategy-options"):
                     st.caption("按数据类型开始 · 工作台内可组合多类目标")
-                    targets = ("cpt", "sft", "dpo", "orpo", "rlaif", "agent", "multiturn", "cot", "gsm8k")
-                    for offset in range(0, len(targets), 3):
-                        for column, target in zip(st.columns(3, gap="small"), targets[offset:offset + 3]):
+                    with st.container(key="home-targets-primary"):
+                        for column, target in zip(st.columns(3, gap="small"), ("cpt", "sft", "dpo")):
                             column.button(TARGET_LABELS[target], key=f"overview-target:{target}",
                                           on_click=start_target, args=(target,), width="stretch")
+                    with st.container(key="home-targets-secondary"):
+                        targets = ("orpo", "rlaif", "agent", "multiturn", "cot", "gsm8k")
+                        for offset in range(0, len(targets), 3):
+                            for column, target in zip(st.columns(3, gap="small"), targets[offset:offset + 3]):
+                                column.button(TARGET_LABELS[target], key=f"overview-target:{target}",
+                                              on_click=start_target, args=(target,), width="stretch")
         with recent_column:
             with st.container(border=True, key="home-recent-panel"):
                 section_heading("最近任务", "选择任务直接查看工作流过程", "◷")
                 if recent:
                     status_labels = {"completed": "已完成", "needs_attention": "需检查", "running": "处理中",
                                      "queued": "排队中", "failed": "失败", "cancelled": "已停止"}
-                    for row in recent:
+                    for index, row in enumerate(recent):
                         status = str(row.get("status", "未知"))
                         targets = "、".join(str(target).upper() for target in row.get("targets", [])) or "—"
                         updated = str(row.get("updated_at") or row.get("created_at") or "")[:16].replace('T', ' ') or "—"
-                        task, action = st.columns([4, 1], gap="small", vertical_alignment="center")
-                        with task:
-                            st.html('<div class="df-home-task"><strong data-user-content>'
-                                    + html.escape(str(row.get("name", "未命名任务")))
-                                    + '</strong><span class="df-home-task-status" data-status="'
-                                    + html.escape(status, quote=True) + '">'
-                                    + html.escape(status_labels.get(status, status)) + '</span><small>'
-                                    + html.escape(targets) + ' · ' + html.escape(updated) + '</small></div>')
-                        with action:
-                            if row.get("id"):
-                                st.button("查看 →", key=f"overview-run:{row['id']}", on_click=open_run,
-                                          args=(row['id'],), width="stretch")
+                        with st.container(key=f"home-task-row-{index}"):
+                            task, action = st.columns([4, 1], gap="small", vertical_alignment="center")
+                            with task:
+                                st.html('<div class="df-home-task"><strong data-user-content>'
+                                        + html.escape(str(row.get("name", "未命名任务")))
+                                        + '</strong><span class="df-home-task-status" data-status="'
+                                        + html.escape(status, quote=True) + '">'
+                                        + html.escape(status_labels.get(status, status)) + '</span><small>'
+                                        + html.escape(targets) + ' · ' + html.escape(updated) + '</small></div>')
+                            with action:
+                                if row.get("id"):
+                                    st.button("查看 →", key=f"overview-run:{row['id']}", on_click=open_run,
+                                              args=(row['id'],), width="stretch")
                 else:
                     st.html('<div class="df-home-empty df-home-empty-work"><span aria-hidden="true">◈</span><strong>暂无最近任务</strong>'
                             '<small>本机还没有工作流任务。上传资料或选择训练策略，即可开始创建。</small></div>')
                 st.button("查看全部任务 →", on_click=navigate, args=("任务管理",),
                           key="overview-all-tasks", width="stretch")
 
-    with source_column:
+    with recent_column:
         with st.container(border=True, key="home-library-panel"):
             section_heading("来源文件", "本机缓存中的部分输入资料", "▤")
             if inventory:
                 rows = []
-                for item in inventory[:5]:
+                for item in inventory[:3]:
                     relative = item['name']
                     ext = item['extension'] or 'FILE'
                     rows.append('<div class="df-home-source"><b>' + html.escape(ext[:4])
@@ -162,17 +169,20 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                         '<small>可以在数据生成页上传文档，也可以用开放需求直接开始。</small></div>')
             st.button("打开数据管理", on_click=navigate, args=("数据管理",),
                       key="overview-assets", width="stretch")
-    with recent_column:
-        with st.container(border=True, key="home-results-panel"):
+    with st.container(border=True, key="home-results-panel"):
+        review_copy, review_actions = st.columns([1.25, 1], gap="medium", vertical_alignment="center")
+        with review_copy:
             section_heading("审核与输出", "逐条查看来源与模型判断，确认后再发布训练版本。", "✓")
-            st.button("进入人工审核", on_click=navigate, args=("人工审核",),
-                      key="overview-review", width="stretch")
             try:
                 release_count = sum(bool(row.get("verified")) for row in application.list_releases())
             except (OSError, ValueError):
                 release_count = 0
             st.html(f'<div class="df-home-summary">本地发布版本 <b>{release_count}</b></div>')
-            st.button("查看输出打包", on_click=navigate, args=("输出打包",), width="stretch")
+        with review_actions:
+            review_action, output_action = st.columns(2, gap="small")
+            review_action.button("进入人工审核", on_click=navigate, args=("人工审核",),
+                                 key="overview-review", width="stretch")
+            output_action.button("查看输出打包", on_click=navigate, args=("输出打包",), width="stretch")
             with st.expander("本机缓存位置"):
                 language = st.session_state.get('ui_language', 'zh')
                 st.caption(UntranslatedText(f"{translate('来源目录', language)}　{source_location}"))

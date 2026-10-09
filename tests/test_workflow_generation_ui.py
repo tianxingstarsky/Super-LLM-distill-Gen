@@ -40,10 +40,10 @@ def test_custom_style_requires_instruction_only_while_enabled():
     enabled = "workflow-generation-enabled:fixture:sft"
     ui.toggle(key=enabled).set_value(True).run()
     ui.selectbox(key="workflow-generation-style:fixture:sft").set_value("custom").run()
-    assert any("风格配置尚未完成" in row.value for row in ui.warning)
+    assert "风格配置尚未完成" in ui.button(key="workflow-config-fix:fixture:style:sft").label
     assert ui.button(key="workflow-create:fixture").disabled
     ui.toggle(key=enabled).set_value(False).run()
-    assert not any("风格配置尚未完成" in row.value for row in ui.warning)
+    assert not any(row.key == "workflow-config-fix:fixture:style:sft" for row in ui.button)
     assert not ui.exception
 
 
@@ -54,11 +54,11 @@ def test_incomplete_cot_custom_style_is_editable_without_crashing_model_controls
     ui.toggle(key="workflow-generation-enabled:fixture:cot").set_value(True).run()
     ui.selectbox(key="workflow-generation-style:fixture:cot").set_value("custom").run()
     assert not ui.exception
-    assert any("风格配置尚未完成" in row.value for row in ui.warning)
+    assert "风格配置尚未完成" in ui.button(key="workflow-config-fix:fixture:style:cot").label
     assert ui.selectbox(key="node-model:fixture:cot:generation:backend").value == "local"
     ui.text_area(key="workflow-generation-instruction:fixture:cot").set_value("Use a brief teaching style.").run()
     assert not ui.exception
-    assert not any("风格配置尚未完成" in row.value for row in ui.warning)
+    assert not any(row.key == "workflow-config-fix:fixture:style:cot" for row in ui.button)
 
 
 def test_cot_and_sft_keep_separate_style_drafts_after_page_and_goal_changes():
@@ -90,11 +90,11 @@ def test_trim_node_is_optional_and_custom_template_survives_switching():
     ui.toggle(key=toggle).set_value(True).run()
     ui.button(key="fixture-node:trim").click().run()
     ui.selectbox(key="workflow-trim-template:fixture").set_value("custom").run()
-    assert any("修剪配置尚未完成" in row.value for row in ui.warning)
+    assert "修剪配置尚未完成" in ui.button(key="workflow-config-fix:fixture:trim:trim").label
     prompt = "Remove only repeated framing. Keep the reasoning facts and final answer."
     ui.text_area(key="workflow-trim-prompt:fixture").set_value(prompt).run()
     ui.text_area(key="workflow-trim-instruction:fixture").set_value("Keep citations.").run()
-    assert not any("修剪配置尚未完成" in row.value for row in ui.warning)
+    assert not any(row.key == "workflow-config-fix:fixture:trim:trim" for row in ui.button)
     ui.button(key="fixture-node:sft").click().run()
     ui.button(key="fixture-node:trim").click().run()
     assert ui.text_area(key="workflow-trim-prompt:fixture").value == prompt

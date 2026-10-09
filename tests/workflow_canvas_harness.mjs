@@ -101,7 +101,7 @@ if(process.argv.includes('--check-specs')){
    assert.ok(node.y>=0&&node.y+78<=spec.height,`${node.id} outside world`);
   }
   // Every actual SVG control point must stay inside the world, including bypass rails.
-  for(const path of d.querySelectorAll('svg path')){
+  for(const path of d.querySelectorAll('#canvas > svg.connections path')){
    const coords=path.getAttribute('d').match(/-?\d+(?:\.\d+)?/g).map(Number);
    for(let index=0;index<coords.length;index+=2){
     assert.ok(coords[index]>=0&&coords[index]<=spec.width,'edge exceeds world width');

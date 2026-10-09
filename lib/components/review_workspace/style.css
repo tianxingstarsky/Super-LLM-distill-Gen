@@ -12,3 +12,44 @@ input,select {padding:7px 9px;min-width:0;} textarea {display:block;width:100%;p
 @media(max-width:1050px) {.layout {grid-template-columns:175px minmax(0,1fr) 205px;}.conversation {padding:14px;}.top-meta .small {max-width:260px;}.decision {padding:10px;}.field-head {flex-wrap:wrap;}}
 @media(max-width:760px) {.review-workspace {height:max(620px,calc(100dvh - 100px));}.topbar {padding:9px;align-items:flex-start;}.topbar .actions {gap:4px;}.topbar button {font-size:12px;padding:5px 7px;}.top-meta .small {max-width:180px;}.mobile-queue {display:inline-block;}.layout {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}.queue {display:none;position:absolute;top:90px;bottom:10px;left:0;width:240px;z-index:10;border:1px solid var(--rw-line);box-shadow:5px 0 30px #24436633;}.queue.open {display:flex;}.decision {border-left:0;border-top:1px solid var(--rw-line);max-height:245px;padding:8px 12px;}.decision h3,.decision .summary,.decision .help {display:none;}.decision textarea {min-height:55px;height:55px;}.decision-buttons {display:flex;margin:8px 0 0;gap:6px;}.decision-buttons button {flex:1;font-size:12px;padding:7px 4px;}.decision label {margin:0;font-size:12px;}.decision select {padding:3px;margin-bottom:5px;}.conversation {padding:12px;}.reader-head {padding:8px 12px;}.reader-head select {max-width:125px;}.statusbar {font-size:12px;padding:5px 9px;}}
 .rw-tool {margin:8px 0;padding:10px 12px;border:1px solid var(--rw-line);border-radius:9px;background:#f3f8ff;}.rw-tool-name {display:block;font-weight:600;color:var(--rw-text);}.rw-tool-meta {display:block;color:var(--rw-muted);font-size:12px;overflow-wrap:anywhere;}.rw-tool-parameters {margin-top:8px;}.rw-tool-parameters > summary {cursor:pointer;color:var(--rw-accent);}.rw-tool-parameters > pre {max-height:320px;overflow:auto;overscroll-behavior:contain;}
+
+/* The reading surface stays quiet while queue and decision states carry color. */
+:host,.review-workspace {--rw-text:#192C46;--rw-muted:#5E7088;--rw-line:#E1E8F2;--rw-accent:#1769E0;--rw-raised:#EFF5FD;font-family:"Segoe UI Variable","Segoe UI","Microsoft YaHei",system-ui,sans-serif;}
+.review-workspace {border-radius:16px;box-shadow:0 6px 28px #1A3E6D08;}
+button {min-height:36px;border-radius:9px;transition:background .14s,border-color .14s;}
+.primary {background:var(--rw-accent);border-color:var(--rw-accent);box-shadow:0 3px 8px #1769E015;}
+.primary:hover {background:#105BC9;}
+.topbar {padding:15px 18px;background:#FFF;}
+.topbar strong {font-size:18px;letter-spacing:-.02em;}
+.queue,.decision {background:#F8FAFD;}
+.queue-controls {padding:14px 12px;}
+.queue-item {padding:12px;border-radius:10px;line-height:1.6;}
+.queue-item.active {background:#EBF3FF;border-color:#C7DCF9;box-shadow:inset 3px 0 var(--rw-accent);}
+.queue-preview {font-size:14px;}
+.reader-head {padding:13px 18px;background:#FFF;}
+.reader-title strong {font-size:15px;}
+.conversation {padding:22px 26px 35px;line-height:1.75;}
+.message {padding-bottom:23px;border-bottom-color:#EBEFF5;}
+.message-head {font-size:12px;margin-bottom:10px;}
+.role {letter-spacing:.025em;}
+.message.user .field-read {padding:14px 17px;border-radius:13px 5px 13px 13px;background:#EFF5FF;}
+.field-head button {min-height:28px;}
+.field-read pre,.extra pre {border-color:#E1E8F2;border-radius:10px;background:#F6F8FC;}
+.ai-panel {padding:15px;border-color:#D5E3F6;border-left:3px solid #598FE0;border-radius:12px;background:#F7FAFF;}
+.decision {padding:18px 15px;}
+.decision h3 {font-size:16px;}
+.decision .summary {padding:12px;border:0;border-radius:10px;background:#EDF3FC;line-height:1.6;}
+.decision-buttons {gap:9px;}
+.decision-buttons button {min-height:41px;}
+.guard-card {background:#FFF;border-color:#E1E8F2;border-radius:16px;padding:26px;box-shadow:0 24px 80px #19334F33;}
+.rw-tool {border:0;border-left:3px solid #C8DDF8;border-radius:10px;background:#F3F7FD;padding:13px 15px;}
+@media(max-width:1050px) {.conversation {padding:17px;}.decision {padding:13px;}.topbar {padding:12px;}}
+@media(max-width:760px) {
+  .review-workspace {border-radius:12px;}
+  .topbar {padding:10px;}.topbar strong {font-size:16px;}
+  .topbar button {min-height:32px;}
+  .conversation {padding:14px;}.reader-head {padding:10px 13px;}
+  .decision {padding:9px 12px;}.decision-buttons {gap:6px;}
+  .decision-buttons button {min-height:35px;}
+}
+@media(prefers-reduced-motion:reduce) {button {transition:none;}}

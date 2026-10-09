@@ -82,8 +82,8 @@ def test_page_walkthroughs_target_real_key_prefixes_and_can_be_exited():
     cases = (
         ("数据管理", "st-key-data-view-", "st-key-asset-category-"),
         ("任务管理", "st-key-task-view-", "st-key-task-center-filter-"),
-        ("人工审核", "st-key-review-mode-", "st-key-review-overview-open-sft"),
-        ("系统设置", "st-key-ui-language-choice", "st-key-preference-area"),
+        ("人工审核", "st-key-review-overview-sft", "st-key-review-overview-open-sft"),
+        ("系统设置", "st-key-ui-language-choice", "st-key-settings-workflow-defaults"),
     )
     for page, first, second in cases:
         ui = AppTest.from_string(SCRIPT)

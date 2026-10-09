@@ -6,6 +6,7 @@ import html
 
 import streamlit as st
 
+from lib.presentation.streamlit.i18n import translate
 from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
                                        DEFAULT_MAX_OUTPUT_TOKENS,
                                        MAX_CONTEXT_WINDOW_TOKENS)
@@ -101,13 +102,18 @@ def render_model_capabilities(application, backend: str, model: str, info: dict,
                               save_selection=None, save_args=()) -> None:
     """Show evidence, an explicit bounded probe, and optional manual overrides."""
     rows = []
+    language = st.session_state.get("ui_language", "zh")
     for field, label in (("vision", "图片"), ("pdf", "原生 PDF"), ("tools", "工具调用")):
         value = info.get(field)
         state = "支持" if value is True else "不支持" if value is False else "未知"
+        source = _source(info, field)
+        summary = translate(label, language) + " · " + translate(state, language)
+        if source != "未知":
+            summary += " · " + translate(source, language)
         color = "#127c63" if value is True else "#b65645" if value is False else "#64748b"
         rows.append('<span style="display:inline-block;padding:5px 9px;margin:0 5px 5px 0;'
                     'border:1px solid #dfE8f3;border-radius:8px;background:#f7faff;font-size:12px;color:'
-                    + color + '">' + html.escape(label + " · " + state + " · " + _source(info, field)) + '</span>')
+                    + color + '">' + html.escape(summary) + '</span>')
     st.html('<div style="margin:5px 0">' + ''.join(rows) + '</div>')
     if info.get("vision") is True and (info.get("sources") or {}).get("vision") in {"models.dev", "models_dev", "catalog"}:
         st.caption("公开元数据仅作参考，图片输入需调用测试或手动确认。")
@@ -124,7 +130,7 @@ def render_model_capabilities(application, backend: str, model: str, info: dict,
                                          help="仅更新当前节点。已有草稿不会自动覆盖。"):
             pass
     else:
-        st.caption("服务未提供容量信息，可调整下方节点上限。短请求测试不能证明完整上下文容量。")
+        st.caption("服务未提供容量信息，可调整节点上限。短请求测试不能证明完整上下文容量。")
     if application is None or not hasattr(application, "test_model"):
         return
     test_columns = st.columns([2, 1], gap="small", vertical_alignment="bottom")
