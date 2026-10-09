@@ -228,6 +228,13 @@ def test_recipe_pins_style_and_trim_instructions_before_execution(tmp_path, monk
 
 def test_trim_keeps_answers_and_upstream_rows_but_does_not_duplicate_original_chain_in_bundle(tmp_path):
     output, rid, path = run(tmp_path, conversation=True, reasoning_trim={"enabled": True, "template": "leakage"})
+    # Historical independent deliveries retain their original two trim jobs.
+    recipe = engine.read_json(path / "recipe.json")
+    recipe["version"] = 14
+    atomic_json(path / "recipe.json", recipe)
+    saved = engine.read_json(path / "state.json")
+    saved["recipe_hash"] = engine.digest(recipe)
+    atomic_json(path / "state.json", saved)
     generator, reviewer = Generator(malformed_trim=True), Reviewer()
     state = engine.Workflow(output, rid, tmp_path, generator=generator, jev=reviewer).execute()
     assert state["status"] == "completed" and state["reasoning_trim_enabled"] is True

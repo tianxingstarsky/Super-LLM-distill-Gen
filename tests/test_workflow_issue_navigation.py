@@ -158,7 +158,7 @@ def test_missing_models_are_separate_clickable_node_errors():
     ui = AppTest.from_string(code).run()
     ui.button(key="fixture-node:ingest").click().run()
     action = ui.button(key="workflow-config-fix:fixture:model:sft")
-    assert "生成模型" in action.label and "独立质量评审模型" in action.label
+    assert "生成模型" in action.label and "质量评审模型" in action.label
     assert not any(button.key == "workflow-next-config:fixture" for button in ui.button)
     action.click().run()
     _assert_open(ui, "sft", "节点设置")

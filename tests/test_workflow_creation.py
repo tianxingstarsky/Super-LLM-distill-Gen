@@ -73,3 +73,15 @@ def test_generator_targets_are_normalized_once_before_driver():
     driver = Mock()
     WorkflowApplication(driver).create_run(targets=(item for item in ['sft', 'orpo', 'sft']))
     assert driver.create.call_args.kwargs['targets'] == ['sft', 'orpo']
+
+
+@pytest.mark.parametrize('targets,version', [(['sft', 'cot'], 15), (['sft'], 11), (['cot'], 11)])
+def test_cot_sft_route_is_frozen_in_new_recipe_version(tmp_path, targets, version):
+    from lib.infrastructure import training_workflow as engine
+    source = tmp_path / 'source.txt'
+    source.write_text('设备维护前先断电，再检查线路，完成后记录结果。', encoding='utf-8')
+    output = tmp_path / 'output'
+    run_id = engine.create_run(output, sources=[source], targets=targets)
+    recipe = engine.read_json(engine.run_path(output, run_id) / 'recipe.json')
+    assert recipe['version'] == version
+    assert recipe['version'] in engine.SUPPORTED_RECIPE_VERSIONS

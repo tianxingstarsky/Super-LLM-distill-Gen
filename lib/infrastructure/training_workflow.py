@@ -40,6 +40,7 @@ from lib.domain.document_parser import validate_document_parser
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.domain.workflow_generation import validate_node_generation, style_for_sample
+from lib.domain.workflow_reasoning_route import cot_updates_sft, cot_with_sft_context, finalized_sft_rows
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.cpt_processing import validate_cpt_processing
@@ -84,7 +85,8 @@ RECIPE_VERSION = 11
 PRODUCTION_RECIPE_VERSION = 12
 SOFT_PRODUCTION_RECIPE_VERSION = 13
 DOCUMENT_PROCESSING_RECIPE_VERSION = 14
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14})
+COT_SFT_RECIPE_VERSION = 15
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -293,7 +295,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     from lib.domain.workflow_node_prompts import VERSION_13_NODE_PROMPT_IDS
     new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
                               for stage, templates in node_prompts.items() for prompt_id in templates)
-    recipe_version = (DOCUMENT_PROCESSING_RECIPE_VERSION if cpt_processing_supplied
+    recipe_version = (COT_SFT_RECIPE_VERSION if {"sft", "cot"}.issubset(targets) else
+                      DOCUMENT_PROCESSING_RECIPE_VERSION if cpt_processing_supplied
                       or (isinstance(document_parser, dict) and document_parser.get("mode") == "model")
                       or new_prompt_override else
                       SOFT_PRODUCTION_RECIPE_VERSION if production and production["version"] == 2
@@ -1559,6 +1562,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                  "evidence_level": "deterministic_synthetic_arithmetic"}]
 
     def cot(self, sample):
+        rows = self._cot_result(sample)
+        if cot_updates_sft(self.recipe):
+            return [cot_with_sft_context(sample, row) for row in rows]
+        return rows
+
+    def _cot_result(self, sample):
         style = self.generation_style("cot", sample["id"])
         if style is not None:
             return self.styled_cot(sample, style)
@@ -1651,7 +1660,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         config = self.recipe["reasoning_trim"]
         instruction = self.recipe.get("reasoning_trim_prompt") or trim_prompt(config)
         fields = []
-        if target == "sft":
+        linked_cot = target == "cot" and cot_updates_sft(self.recipe)
+        if target == "sft" or linked_cot:
             for index, message in enumerate(row.get("messages", [])):
                 if message.get("role") == "assistant" and message.get("reasoning_content"):
                     fields.append((f"messages.{index}.reasoning_content", message["reasoning_content"],
@@ -1685,7 +1695,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                     instruction=instruction)
                 contract_check = None
                 if row.get("qa_contract"):
-                    if target == "sft":
+                    if target == "sft" or linked_cot:
                         contract_messages = deepcopy(row["messages"])
                         contract_messages[index]["reasoning_content"] = replacement["reasoning"]
                     else:
@@ -1699,7 +1709,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                                      "rules_check": rules_check, "repair_attempts": attempt})
                     if contract_check is not None:
                         row["qa_contract_check"] = contract_check
-                    if target == "sft":
+                    if target == "sft" or linked_cot:
                         row["messages"][index]["reasoning_content"] = replacement["reasoning"]
                     else:
                         row["reasoning"] = [replacement["reasoning"]]
@@ -1716,6 +1726,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                             "instruction_sha256": digest(instruction), "field": field,
                             "input_sha256": original_hash, "judge": check, "rules_check": rules_check,
                             "feedback": feedback, "repair_attempts": 1}}]
+        if linked_cot:
+            row["question"] = deepcopy(row["messages"][:-1])
+            row["reasoning"] = [row["messages"][-1]["reasoning_content"]]
         if "source_context" in row:
             row["source_context"] = self.without_source_reasoning(row["source_context"])
         row["reasoning_trim"] = {"version": 1, "template": config["template"],
@@ -1723,13 +1736,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                                   "instruction_sha256": digest(instruction), "fields": receipts}
         return [{**row, "trim_target": target}]
 
-    def apply_reasoning_trim(self, collections):
+    def apply_reasoning_trim(self, collections, *, targets=None):
         """Use replayable row views so the optional final stage stays bounded."""
         if not (self.recipe.get("reasoning_trim") or {}).get("enabled"):
             if "trim" in self.state["stages"]:
                 self.state["stages"]["trim"]["status"] = "skipped"
             return
-        targets = [target for target in ("sft", "cot") if target in self.recipe["targets"]]
+        targets = ([target for target in ("sft", "cot") if target in self.recipe["targets"]]
+                   if targets is None else list(targets))
         if not targets:
             raise ValueError("reasoning_trim_requires_reasoning_target")
         self.state["stages"].setdefault("trim", {"label": STAGES["trim"], "status": "pending", "done": 0, "total": 0})
@@ -1747,6 +1761,28 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             collections[target] = WorkflowRows(rows.path, counts[target],
                 predicate=lambda row, selected=target: row["trim_target"] == selected,
                 transform=lambda row: {key: value for key, value in row.items() if key != "trim_target"})
+
+    def finalize_reasoning_outputs(self, collections, *, delivery_targets=None):
+        """Finalize one reasoning result before exposing its selected formats."""
+        selected = set(self.recipe["targets"] if delivery_targets is None else delivery_targets)
+        if not cot_updates_sft(self.recipe):
+            self.apply_reasoning_trim(collections)
+            return
+        if not selected.intersection({"sft", "cot"}):
+            self.apply_reasoning_trim(collections, targets=("cot",))
+            return
+        self.apply_reasoning_trim(collections, targets=("cot",))
+        if "sft" in selected:
+            originals = collections["sft"]
+            destination = self.path / "stage-results" / "sft-cot-final.jsonl"
+
+            def checked_rows():
+                for row in finalized_sft_rows(originals, collections["cot"]):
+                    self.check_cancel()
+                    yield row
+
+            write_jsonl(destination, checked_rows())
+            collections["sft"] = WorkflowRows(destination, len(originals))
 
     def preference(self, sample):
         pairs = self.dpo(sample)
@@ -2346,7 +2382,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                 else:
                     collections["cot"] = []
                     self.state["stages"]["cot"]["status"] = "skipped"
-                self.apply_reasoning_trim(collections)
+                self.finalize_reasoning_outputs(collections)
                 # Packaging is deliberately re-run after interruption, never trusted from a stale checkpoint.
                 self.stage = "package"
                 self.state["stages"]["package"].update(status="running", total=1, done=0)

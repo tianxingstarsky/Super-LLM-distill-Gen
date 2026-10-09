@@ -10,6 +10,7 @@ from lib.domain.workflow_generation import (
     GENERATION_STYLES, MAX_GENERATION_INSTRUCTION_CHARS, STYLE_PRESETS,
     validate_node_generation,
 )
+from lib.domain.workflow_graph import sft_uses_cot_output
 from lib.domain.reasoning_trim import (validate_reasoning_trim,
                                        MAX_TRIM_INSTRUCTION_CHARS, MAX_TRIM_PROMPT_CHARS)
 from lib.presentation.streamlit.i18n import translate, translate_label
@@ -60,6 +61,16 @@ def generation_issues(configuration: dict) -> list[str]:
     return invalid
 
 
+def reasoning_route_description(node, targets, recipe_version=15) -> str:
+    """Explain the combined output at its nodes without adding another panel."""
+    if not sft_uses_cot_output(targets, recipe_version):
+        return ""
+    return {
+        "sft": "先生成候选，再交给 CoT 处理；SFT 使用最终通过核验的答案，推理按训练文件格式导出。",
+        "cot": "CoT 核验通过后才生成最终 SFT；未通过的样本进入隔离，推理按 SFT 训练文件格式保留。",
+    }.get(node, "")
+
+
 def render_generation_settings(node: str, workspace: str, *, save_field, prompt_library=None) -> None:
     """Keep generation style separate from training-file output formatting."""
     prefix = f"{workspace}:{node}"
@@ -78,7 +89,8 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                               label="我的风格模板", save_label="保存风格")
         enabled = st.toggle("启用风格化生成", key=enabled_key,
                             on_change=save_field, args=(workspace, enabled_key),
-                            help="开启后，教师按风格提示词撰写推理与答案；关闭后使用普通蒸馏。")
+                            help=("开启后，教师按风格提示词重新撰写推理与答案；关闭后核验已有推理。" if node == "cot" else
+                                  "开启后，教师按风格提示词撰写推理与答案；关闭后使用普通蒸馏。"))
         style = st.selectbox("生成风格", GENERATION_STYLES, key=style_key, disabled=not enabled,
                              format_func=lambda value: translate_label(STYLE_LABELS[value], language),
                              on_change=save_field, args=(workspace, style_key))
@@ -97,12 +109,13 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
         description = (STYLE_PRESETS.get(style) or (
             "按样本稳定轮换简洁、教学、核验和反思风格，重试时保持一致。" if style == "mixed"
             else "根据附加指令组织推理与答案。"))
-        status = "提示词驱动" if enabled else "普通蒸馏"
+        status = "提示词驱动" if enabled else "已有推理核验" if node == "cot" else "普通蒸馏"
+        inactive_description = ("核验上游候选的已有推理与答案；缺少推理或未通过核验的样本进入隔离。" if node == "cot" else
+                                "可保留模型输出的推理；SFT 训练文件格式可单独设置。")
         st.html('<div class="df-generation-preview' + ('' if enabled else ' is-disabled') + '">'
                 '<div><i aria-hidden="true">◈</i><strong>' + html.escape(translate(status, language)) +
                 '</strong><span>' + html.escape(translate(STYLE_LABELS[style], language)) + '</span></div>'
-                '<p>' + html.escape(translate(description if enabled else
-                    "可保留模型输出的推理；SFT 训练文件格式可单独设置。", language)) + '</p></div>')
+                '<p>' + html.escape(translate(description if enabled else inactive_description, language)) + '</p></div>')
         if enabled:
             st.caption("教师根据提示词生成显式推理与答案，正确性与风格分别检查。")
 
@@ -246,6 +259,6 @@ def generation_summary(configuration: dict, language: str) -> str:
         if settings.get("enabled"):
             detail = label + (" + " + translate("附加指令", language) if settings.get("instruction", "").strip() else "")
         else:
-            detail = translate("普通蒸馏", language)
+            detail = translate("已有推理核验" if node == "cot" else "普通蒸馏", language)
         parts.append(f"{node.upper()} {detail}")
     return " · ".join(parts)

@@ -17,6 +17,7 @@ from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_i
 from lib.domain.workflow_production import (production_batch_size, validate_production,
     quality_first_production, soft_expectation_production, production_completion_status)
 from lib.domain.workflow_quality import canonical
+from lib.domain.workflow_reasoning_route import cot_updates_sft
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE, generation_variant
 from lib.domain.workflow_targets import PREFERENCE_TARGETS, STAGES, TARGETS, rlaif_feedback_issue
 from lib.infrastructure.json_stream import iter_json_records
@@ -479,15 +480,19 @@ class WorkflowProduction:
                     collections[target] = WorkflowRows(pairs.path, len(pairs), transform=checked)
                 else:
                     collections[target] = pairs
-        if "cot" in selected:
+        if "cot" in selected or ("sft" in selected and cot_updates_sft(self.recipe)):
             rows = collections["sft"].eligible(self.state["stages"]["sft"]["eligible"])
             collections["cot"] = self.stage_items("cot", rows, self.cot)
         if "gsm8k" in selected:
             collections["gsm8k"] = self.stage_items("gsm8k", generated, self.gsm8k)
-        # Intermediate SFT needed by preference/CoT is not a requested delivery.
+        if cot_updates_sft(self.recipe):
+            self.finalize_reasoning_outputs(collections, delivery_targets=selected)
+        # Intermediate candidates are processed before suppressing unrequested
+        # formats, including CoT required after its own delivery goal is met.
         for target in set(collections) - selected:
             collections[target] = []
-        self.apply_reasoning_trim(collections)
+        if not cot_updates_sft(self.recipe):
+            self.apply_reasoning_trim(collections)
         return collections
 
     def _production_partial_export(self, status, reason):

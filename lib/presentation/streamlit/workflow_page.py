@@ -14,7 +14,7 @@ from filelock import Timeout
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.application.creation_draft_service import CreationDraftApplication
-from lib.domain.workflow_graph import execution_graph
+from lib.domain.workflow_graph import execution_graph, sft_uses_cot_output
 from lib.domain.backend_config import validate_token_prices
 from lib.presentation.streamlit.i18n import UntranslatedText, translate, translate_label
 from lib.presentation.streamlit.shared import page_header, section_heading
@@ -36,11 +36,11 @@ from lib.presentation.streamlit.workflow_director_settings import (
     director_snapshot, director_has_issue, render_director_toggle,
     render_director_settings, render_director_rules, TYPE_LABELS,
 )
-from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
+from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas, node_display_label
 from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 from lib.presentation.streamlit.workflow_cpt_settings import cpt_processing_snapshot, render_cpt_settings, cpt_vision_unconfirmed
 from lib.presentation.streamlit.workflow_generation_settings import (
-    STYLE_LABELS, TRIM_LABELS, generation_snapshot, generation_issues, generation_summary,
+    STYLE_LABELS, TRIM_LABELS, generation_snapshot, generation_issues, generation_summary, reasoning_route_description,
     render_generation_settings, render_trim_toggle, render_trim_settings, trim_snapshot, trim_has_issue,
 )
 from lib.presentation.streamlit.workflow_prompt_settings import (
@@ -100,7 +100,7 @@ def _render_setup_issue(workspace: str, node: str, message: str, *, kind: str,
     language = st.session_state.get("ui_language", "zh")
     label = translate_label(message, language)
     if not full_label:
-        label = translate_label(GRAPH_LABELS[node], language) + " · " + label
+        label = translate_label(node_display_label(node, GRAPH_LABELS, generation_snapshot(workspace, (node,))), language) + " · " + label
     with st.container(key=f"workflow-config-issue:{workspace}:{kind}:{node}"):
         st.button(UntranslatedText(label), key=f"workflow-config-fix:{workspace}:{kind}:{node}",
                   icon=":material/error_outline:", width="stretch",
@@ -251,6 +251,7 @@ def _workflow_error(error) -> str:
         "reasoning_trim_requires_reasoning_target": "请先选择 SFT 或 CoT 目标，再开启推理链修剪。",
         "invalid_style_judge_schema": "核验模型未返回有效评分。可从断点重试，或新建任务调整节点模型。",
         "model_visible_output_missing": "模型只返回推理通道，未返回所需的答案正文。请检查模型输出设置后重试。",
+        "cot_sft_lineage_mismatch": "推理结果与上游样本未能对应，请检查 CoT 节点后重试。",
         "invalid_node_prompts": "节点提示词配置无效，请检查对应节点的处理步骤。",
         "invalid_node_prompt_id": "节点提示词与处理步骤不匹配，请重新选择或恢复内置提示词。",
         "invalid_node_prompt_text": "节点提示词正文无效，请填写有效文本或恢复内置提示词。",
@@ -302,7 +303,7 @@ def _stage_configuration(key, recipe, state):
         for role in roles:
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
             prefix = "" if role == "generation" else "jev_"
-            label = "生成模型" if role == "generation" else "独立质量评审模型"
+            label = "生成模型" if role == "generation" else "质量评审模型"
             fallback = translate("旧版默认配置", st.session_state.get("ui_language", "zh"))
             details[label] = UntranslatedText((binding.get("backend") or recipe.get(prefix + "backend") or fallback)
                               + " / " + (binding.get("model") or recipe.get(prefix + "model") or fallback))
@@ -343,7 +344,7 @@ def _stage_configuration(key, recipe, state):
             generation = (recipe.get("node_generation") or {}).get(key)
             if generation:
                 enabled = generation.get("enabled", True)
-                details["生成方式"] = "风格化生成" if enabled else "普通蒸馏"
+                details["生成方式"] = "风格化生成" if enabled else "已有推理核验" if key == "cot" else "普通蒸馏"
                 if enabled:
                     details["生成风格"] = STYLE_LABELS.get(generation.get("style"), "遵循任务")
                     details["附加风格指令"] = (UntranslatedText(generation["instruction"])
@@ -353,6 +354,9 @@ def _stage_configuration(key, recipe, state):
             if key == "sft" and "sft" in targets:
                 details["SFT 训练文件格式"] = ("只保留答案" if recipe.get("sft_output_style") == "drop"
                                               else "分字段保留推理")
+            route = reasoning_route_description(key, targets, recipe.get("version", 0))
+            if route:
+                details["导出数据流"] = route
         elif key == "package":
             review = recipe.get("package_review") or {}
             details.update({"输出目标": [target.upper() for target in targets],
@@ -416,7 +420,7 @@ def _config_html(configuration):
     return '<div class="df-run-config">' + "".join(rows) + "</div>"
 
 
-def _events_html(events, *, limit=12):
+def _events_html(events, *, limit=12, node_generation=None):
     if not events:
         return '<div class="df-run-empty">这个节点还没有运行事件。开始执行后会在这里持续更新。</div>'
     rows = []
@@ -428,7 +432,8 @@ def _events_html(events, *, limit=12):
         if raw_time.endswith(("Z", "+00:00")):
             moment += " UTC"
         stage_key = str(event.get("stage") or "")
-        stage_label = GRAPH_LABELS.get(stage_key, "工作流" if not stage_key else stage_key)
+        stage_label = (node_display_label(stage_key, GRAPH_LABELS, node_generation) if stage_key in GRAPH_LABELS
+                       else "工作流" if not stage_key else stage_key)
         details = " · ".join(f"{key}: {value}" for key, value in event.items()
                              if key not in {"at", "stage", "kind"} and value is not None)
         if len(details) > 180:
@@ -457,17 +462,17 @@ def _quality_html(targets):
 
 GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 清洗评审", "sft": "SFT 生成",
                 "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
-                "preference": "偏好评审", "cot": "CoT 推理生成", "trim": "推理链修剪", "package": "质检打包"}
+                "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "package": "质检打包"}
 
 
-def _missing_model_role_summary(issues, language):
+def _missing_model_role_summary(issues, language, node_generation=None):
     pending_roles = {}
     for node, role in issues:
         pending_roles.setdefault(node, []).append(role)
-    role_labels = {"generation": "生成模型", "jev": "独立质量评审模型", "vision": "多模态识别模型"}
+    role_labels = {"generation": "生成模型", "jev": "质量评审模型", "vision": "多模态识别模型"}
     descriptions = []
     for node, roles in pending_roles.items():
-        node_label = translate_label(GRAPH_LABELS[node], language)
+        node_label = translate_label(node_display_label(node, GRAPH_LABELS, node_generation), language)
         missing = [translate_label(role_labels[role], language) for role in roles]
         if language == "en":
             descriptions.append(f"{node_label}: missing {', '.join(missing)}")
@@ -482,22 +487,22 @@ def _planned_flow_html(targets, nodes: tuple[str, ...], edges: tuple[tuple[str, 
         return ('<div class="df-wb-plan df-wb-plan-empty">'
                 '<span>请从上方列表至少选择一类训练目标。</span></div>')
     intermediate = ('<span class="df-wb-plan-intermediate">SFT 中间候选</span>'
-                    if "sft" in nodes and "sft" not in targets else '')
+                    if "sft" in nodes and ("sft" not in targets or sft_uses_cot_output(targets)) else '')
     return ('<div class="df-wb-plan">'
             '<strong>运行前流程预览</strong>'
             f'<small>{len(nodes)} 个阶段 · {len(edges)} 条数据依赖</small>'
             + intermediate + '</div>')
 
 
-def _planned_dependencies_html(edges: tuple[tuple[str, str], ...]) -> str:
+def _planned_dependencies_html(edges: tuple[tuple[str, str], ...], node_generation=None) -> str:
     """Render only the data-dependency edges supplied by execution_graph."""
     rows = []
     for origin, destination in edges:
         rows.append(
             f'<div class="df-wb-plan-edge" data-from="{origin}" data-to="{destination}">'
-            f'<span>{html.escape(GRAPH_LABELS[origin])}</span>'
+            f'<span>{html.escape(node_display_label(origin, GRAPH_LABELS, node_generation))}</span>'
             '<i aria-hidden="true">→</i>'
-            f'<span>{html.escape(GRAPH_LABELS[destination])}</span></div>')
+            f'<span>{html.escape(node_display_label(destination, GRAPH_LABELS, node_generation))}</span></div>')
     return ('<div class="df-wb-plan-detail">'
             '<p>箭头表示本次目标的真实数据依赖；各阶段仍按顺序执行。</p>'
             '<div class="df-wb-plan-edges">' + ''.join(rows) + '</div></div>')
@@ -609,7 +614,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         attempt = int(state.get("attempt", 0))
         reasoning_trim_enabled = bool((recipe.get("reasoning_trim") or {}).get("enabled"))
         graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
-                                         qa_director=recipe.get("qa_director"))
+                                         qa_director=recipe.get("qa_director"), recipe_version=recipe.get("version", 0))
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
@@ -722,6 +727,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       reasoning_trim=reasoning_trim_enabled,
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
                                       qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"),
+                                      recipe_version=recipe.get("version", 0),
                                       source_mode=("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
                                           else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
                                           else "文档资料" if recipe.get("sources") else "开放需求")),
@@ -732,7 +738,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         selected_status, done, total, percent = _stage_numbers(selected_metrics)
         if selected_stage not in active_stages:
             selected_status, done, total, percent = "skipped", 0, 0, 0
-        selected_label = str(selected_metrics.get("label", selected_stage))
+        selected_label = (node_display_label(selected_stage, GRAPH_LABELS, recipe.get("node_generation"))
+                          if selected_stage == "cot" else str(selected_metrics.get("label", selected_stage)))
         if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
             passed, quarantined = done, max(0, total - done)
             passed_label, quarantined_label = '已规划任务', '待规划任务'
@@ -776,6 +783,9 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                 close.button("关闭窗口", key=f"close-node-output:{run_id}", width="stretch",
                              icon=":material/close:", on_click=st.session_state.pop, args=(output_open_key, None))
             st.progress(percent / 100, text=f"{done} / {total} 单元")
+            route = reasoning_route_description(selected_stage, recipe["targets"], recipe.get("version", 0))
+            if route:
+                st.caption(route)
             if selected_metrics.get("error"):
                 st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
             st.html('<div class="df-run-section df-run-reader-heading"><div><strong>实时输出</strong></div></div>')
@@ -906,11 +916,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
                 f'<small>当前筛选：{html.escape(selected_label)} · 最近 {min(len(selected_events), 12)} 条事件</small>'
                 '</div><span class="df-run-section-tag">所选节点</span></div>')
-        st.html(_events_html(selected_events))
+        st.html(_events_html(selected_events, node_generation=recipe.get("node_generation")))
     with tabs[2]:
         st.html('<div class="df-run-section"><div><strong>全部运行事件</strong>'
                 '<small>按时间倒序展示最近的处理与模型调用事件。</small></div></div>')
-        st.html(_events_html(state.get("events", []), limit=60))
+        st.html(_events_html(state.get("events", []), limit=60, node_generation=recipe.get("node_generation")))
         with st.expander("技术详情：原始事件与模型用量"):
             st.dataframe(list(reversed(state.get("events", [])[-100:])), hide_index=True, width="stretch")
             st.json({"模型": state.get("models", {}), "调用与 token": state.get("usage", {})})
@@ -1259,7 +1269,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
-                st.html(_planned_dependencies_html(graph_edges))
+                st.html(_planned_dependencies_html(graph_edges, generation_snapshot(ws, graph_nodes)))
                 if "sft" in graph_nodes and "sft" not in targets:
                     st.caption("仅用于下游目标的 SFT 中间候选不会单独导出。")
         if "agent" in targets:
@@ -1343,7 +1353,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             with st.container(key="workbench-node-header"):
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
                 with title:
-                    section_heading(GRAPH_LABELS[selected_node], "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
+                    section_heading(node_display_label(selected_node, GRAPH_LABELS, node_generation), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
                 with expand:
                     wide_key = f"canvas-wide:setup-canvas:{ws}"
                     st.button("收窄编辑" if st.session_state.get(wide_key) else "展开编辑",
@@ -1354,6 +1364,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.button("✕", key=f"workflow-close-config:{ws}", help="收起节点配置",
                               on_click=st.session_state.update,
                               args=({f"canvas-open:setup-canvas:{ws}": False},), width="stretch")
+            route = reasoning_route_description(selected_node, targets)
+            if route:
+                st.caption(route)
             if selected_node == "package":
                 render_package_review_toggle(ws, save_field=_save_draft_value)
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
@@ -1389,7 +1402,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                             st.session_state.get("ui_language", "zh")),
                         help="仅影响本次任务的 SFT 训练文件，不改写审核证据或其他目标。",
                     )
-                    st.caption("只控制训练文件是否包含推理字段；生成风格与审核证据独立保留。")
+                    st.caption("分字段保留推理：已有推理写入 assistant.reasoning_content；只保留答案：省略推理字段。")
                 if selected_node == "agent":
                     render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
                 if selected_node == "ingest" and source_mode != "知识库检索":
@@ -1411,7 +1424,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 for node in dict.fromkeys(node for node, _ in model_issues):
                     description = _missing_model_role_summary(
                         [(issue_node, role) for issue_node, role in model_issues if issue_node == node],
-                        st.session_state.get("ui_language", "zh"))
+                        st.session_state.get("ui_language", "zh"), node_generation)
                     _render_setup_issue(ws, node, description, kind="model", full_label=True)
             if pricing_issues:
                 for node in dict.fromkeys(node for node, _ in pricing_issues):

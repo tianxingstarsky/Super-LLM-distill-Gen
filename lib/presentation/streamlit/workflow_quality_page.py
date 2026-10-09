@@ -96,6 +96,8 @@ REASON_LABELS = {
     "preference_evidence_missing": "缺少偏好证据",
     "gsm8k_arithmetic_verification_failed": "算术核验失败",
     "cot_reasoning_rejected": "推理解释未通过评审",
+    "cot_sft_invalid_reasoning_fields": "历史对话的推理字段格式不正确",
+    "cot_sft_conflicting_reasoning_fields": "历史对话存在互相冲突的推理字段",
     "cot_generation_failed_after_repair": "修订后风格化推理仍未通过",
     "reasoning_trim_failed_after_repair": "修订后推理修剪仍未通过",
     "package_ai_review_rejected": "AI 打包评审未通过",

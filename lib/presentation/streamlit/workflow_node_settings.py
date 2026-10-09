@@ -144,7 +144,10 @@ def _fill_missing_models(workspace: str, copies) -> None:
 
 def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) -> list[tuple[str, dict]]:
     """Offer only usable models already chosen for the same role on another node."""
-    seen = set()
+    current = bindings.get(node, {}).get(role, {})
+    seen = {(current.get("backend"), current.get("model"),
+             current.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS),
+             current.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS))}
     choices = []
     for source, roles in bindings.items():
         if source == node:
@@ -153,8 +156,9 @@ def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) ->
         backend = binding.get("backend")
         if backend not in endpoints or not binding.get("model"):
             continue
-        signature = (backend, binding["model"], binding["context_window_tokens"],
-                     binding["max_output_tokens"])
+        signature = (backend, binding["model"],
+                     binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS),
+                     binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS))
         if signature in seen:
             continue
         seen.add(signature)
@@ -166,10 +170,46 @@ def _reuse_binding(workspace: str, node: str, role: str, binding: dict) -> None:
     """Copy an explicit choice into one node without changing the source node."""
     draft_key = f"workflow-node-bindings:{workspace}"
     draft = deepcopy(st.session_state.get(draft_key, {}))
-    copied = deepcopy(binding)
+    copied = validate_node_models({node: {role: binding}})[node][role]
     draft.setdefault(node, {})[role] = copied
     _set_binding_widgets(workspace, node, role, copied)
     _persist_bindings(workspace, draft)
+
+
+def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, endpoints: dict, *,
+                        allow_generation_reuse: bool) -> None:
+    """Keep reuse explicit, including replacement of an existing role choice."""
+    binding = bindings.get(node, {}).get(role, {})
+    prefix = f"node-model:{workspace}:{node}:{role}"
+    writer = bindings.get(node, {}).get("generation", {})
+    if (allow_generation_reuse and role == "jev" and writer.get("backend") in endpoints and writer.get("model")
+            and writer != binding):
+        st.button("沿用本节点生成模型", key=prefix + ":reuse-generation",
+                  on_click=_reuse_binding, args=(workspace, node, role, deepcopy(writer)),
+                  help="复制生成模型及 token 上限到评审配置；只在点击时替换，之后可分别调整。",
+                  width="stretch")
+    choices = _reusable_bindings(node, role, bindings, endpoints)
+    if not choices:
+        return
+    help_text = "只复制到当前角色。模型服务、模型和 token 上限可继续分别调整。"
+    if not binding and len(choices) == 1:
+        source, reusable = choices[0]
+        st.button(f"沿用 {source.upper()} 节点的 {reusable['model']}", key=prefix + ":reuse:" + source,
+                  on_click=_reuse_binding, args=(workspace, node, role, deepcopy(reusable)),
+                  help=help_text, width="stretch")
+        return
+    with st.popover("复用其他节点模型", width="stretch"):
+        candidates = dict(choices)
+        source_key = prefix + ":reuse-source"
+        if source_key in st.session_state and st.session_state[source_key] not in candidates:
+            st.session_state.pop(source_key)
+        source = st.selectbox("已有模型配置", list(candidates), key=source_key,
+                              format_func=lambda source: UntranslatedText(
+                                  source.upper() + " · " + candidates[source]["backend"]
+                                  + " · " + candidates[source]["model"]))
+        st.button("用于当前角色", key=prefix + ":reuse-apply",
+                  on_click=_reuse_binding, args=(workspace, node, role, deepcopy(candidates[source])),
+                  help=help_text, width="stretch")
 
 
 def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings: dict,
@@ -342,17 +382,11 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         writer_label = ("清洗模型" if node == "cpt" and source_mode != "开放需求" else
                         "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'
-                + ("多模态识别模型" if role == "vision" else writer_label if role == "generation" else "独立质量评审模型") + '</strong></p>')
+                + ("多模态识别模型" if role == "vision" else writer_label if role == "generation" else "质量评审模型") + '</strong></p>')
         binding = bindings.get(node, {}).get(role, {})
         prefix = f"node-model:{workspace}:{node}:{role}"
-        if not binding:
-            for source, reusable in _reusable_bindings(node, role, bindings, endpoints):
-                model_name = reusable["model"]
-                label = f"沿用 {source.upper()} 节点的 {model_name}"
-                st.button(label, key=prefix + ":reuse:" + source,
-                          on_click=_reuse_binding, args=(workspace, node, role, reusable),
-                          help="只复制到当前节点。模型服务、模型和 token 上限可继续分别调整。",
-                          use_container_width=True)
+        _render_model_reuse(node, role, workspace, bindings, endpoints,
+                            allow_generation_reuse="generation" in roles)
         names = list(endpoints)
         if binding.get("backend") and binding["backend"] not in endpoints:
             st.warning("已保存的模型连接不可用，请重新选择；原选择保留在草稿中。")
@@ -433,6 +467,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                   help="按相同角色复制当前节点的模型与 token 上限。保留已有选择，之后仍可逐个修改。",
                   width="stretch")
         st.caption(UntranslatedText("、".join(targets)))
+    st.caption("同一模型可用于多个节点，也可同时用于生成和评审；各角色的参数分别保存。")
     st.caption("模型和 token 上限随草稿保存在本机；默认上下文 131,072、单次输出 32,768 tokens。开始运行后，本次配置固定。")
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:

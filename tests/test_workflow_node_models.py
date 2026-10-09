@@ -124,6 +124,20 @@ def test_snapshot_keeps_custom_models_and_only_current_node_roles():
     assert draft["sft"]["generation"]["model"] == "custom-model"
 
 
+def test_same_model_can_fill_all_nodes_and_roles_with_independent_token_limits():
+    app = WorkflowNodeModelsApplication(Inventory())
+    binding = {"backend": "writer", "model": "write-v2", "context_window_tokens": 196_608,
+               "max_output_tokens": 65_536}
+    draft = {node: {"generation": dict(binding), "jev": {**binding, "max_output_tokens": 32_768}}
+             for node in ("sft", "multiturn", "cot")}
+    result = app.snapshot(list(draft), "文档", draft, node_generation={"cot": {"enabled": True}})
+    assert result == draft
+    result["cot"]["generation"]["max_output_tokens"] = 48_000
+    assert result["cot"]["jev"]["max_output_tokens"] == 32_768
+    assert result["sft"]["generation"]["max_output_tokens"] == 65_536
+    assert draft["cot"]["generation"]["max_output_tokens"] == 65_536
+
+
 @pytest.mark.parametrize('configuration', [{}, {'cot': {'enabled': False, 'style': 'custom'}}])
 def test_ordinary_cot_needs_only_reviewer_and_preserves_optional_writer_choice(configuration):
     app = WorkflowNodeModelsApplication(Inventory())

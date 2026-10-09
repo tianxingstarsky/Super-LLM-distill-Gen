@@ -22,6 +22,14 @@ def test_language_choice_accepts_chinese_and_english_values():
     assert language_code("简体中文") == "zh"
 
 
+def test_shared_node_model_controls_translate_without_chinese_leaks():
+    for phrase in ("质量评审模型", "沿用本节点生成模型", "复用其他节点模型", "已有模型配置", "用于当前角色",
+                   "同一模型可用于多个节点，也可同时用于生成和评审；各角色的参数分别保存。",
+                   "复制生成模型及 token 上限到评审配置；只在点击时替换，之后可分别调整。",
+                   "只复制到当前角色。模型服务、模型和 token 上限可继续分别调整。"):
+        assert not re.search(r"[\u4e00-\u9fff]", translate(phrase, "en")), phrase
+
+
 def test_persistent_creation_draft_status_translates_completely():
     assert translate("配置草稿未能保存或恢复。当前修改仍保留在会话中。", "en") == (
         "The draft could not be saved or restored. Your changes remain in this session.")

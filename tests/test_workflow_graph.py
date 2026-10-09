@@ -59,12 +59,55 @@ def test_requested_sft_and_independent_branches_feed_package():
 def test_optional_trim_processes_only_requested_reasoning_exports():
     nodes, edges = execution_graph(["sft", "cot", "dpo", "cpt"], reasoning_trim=True)
     assert nodes[-2:] == ("trim", "package")
-    assert ("sft", "trim") in edges and ("cot", "trim") in edges
+    assert ("sft", "trim") not in edges and ("cot", "trim") in edges
     assert ("trim", "package") in edges
     assert ("sft", "package") not in edges and ("cot", "package") not in edges
     assert ("sft", "cot") in edges and ("sft", "preference") in edges
     assert ("preference", "package") in edges and ("cpt", "package") in edges
     assert "trim" not in execution_graph(["dpo"], reasoning_trim=True)[0]
+
+
+def test_combined_sft_cot_route_waits_for_cot_but_preserves_historical_graphs():
+    for trim in (False, True):
+        destination = "trim" if trim else "package"
+        _, edges = execution_graph(["sft", "cot"], reasoning_trim=trim)
+        assert ("sft", "cot") in edges
+        assert ("cot", destination) in edges
+        assert ("sft", destination) not in edges
+        for version in (0, 14):
+            _, legacy_edges = execution_graph(["sft", "cot"], reasoning_trim=trim,
+                                               recipe_version=version)
+            assert ("sft", destination) in legacy_edges
+            assert ("cot", destination) in legacy_edges
+
+
+def test_canvas_marks_combined_sft_candidates_and_names_the_actual_cot_operation():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    targets = ["sft", "cot"]
+    labels = {key: key for key in execution_graph(targets)[0]}
+    for enabled, label in ((False, "CoT 推理核验"), (True, "CoT 推理生成")):
+        generation = {"cot": {"enabled": enabled}}
+        for live in (False, True):
+            current = canvas_spec(targets, {}, "cot", labels, labels,
+                                  node_generation=generation, live=live)
+            by_id = {node["id"]: node for node in current["nodes"]}
+            assert by_id["sft"]["intermediate"] is True
+            assert by_id["cot"]["label"] == label
+            assert ("sft", "package") not in current["edges"]
+            legacy = canvas_spec(targets, {}, "cot", labels, labels,
+                                 node_generation=generation, live=live, recipe_version=14)
+            assert not next(node for node in legacy["nodes"] if node["id"] == "sft")["intermediate"]
+            assert ("sft", "package") in legacy["edges"]
+
+
+def test_node_route_description_only_promises_cot_finalization_for_new_combined_runs():
+    from lib.presentation.streamlit.workflow_generation_settings import reasoning_route_description
+    for node in ("sft", "cot"):
+        assert reasoning_route_description(node, ["sft", "cot"])
+        assert not reasoning_route_description(node, ["sft", "cot"], recipe_version=14)
+        assert not reasoning_route_description(node, ["sft"])
+        assert not reasoning_route_description(node, ["cot"])
+    assert not reasoning_route_description("package", ["sft", "cot"])
 
 
 def test_trim_canvas_has_readable_non_overlapping_nodes_and_correct_links():

@@ -4,17 +4,27 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES, execution_graph
+from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES, execution_graph, sft_uses_cot_output
 from lib.domain.workflow_scale import node_roles
 from lib.presentation.streamlit.i18n import translate_label
 
 _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__).with_name("workflow_canvas_frontend")))
 
 
+def node_display_label(node, labels, node_generation=None):
+    """Name the actual CoT operation rather than implying a writer always runs."""
+    if node == "cot":
+        settings = (node_generation or {}).get("cot")
+        generates = bool(settings and settings.get("enabled", True))
+        return "CoT 推理生成" if generates else "CoT 推理核验"
+    return labels[node]
+
+
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
-                qa_director=None, cpt_processing=None):
-    nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director)
+                qa_director=None, cpt_processing=None, recipe_version=15):
+    nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
+                                  recipe_version=recipe_version)
     base = [key for key in BASE_STAGES if key in nodes]
     derived = [key for key in DERIVED_STAGES if key in nodes]
     # Center each column within its actual rows. Leave a clear outer lane for
@@ -55,11 +65,12 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 binding = node_bindings.get(role_key)
                 if binding:
                     models.append(f"{en if language == 'en' else zh}: {binding['backend']} · {binding['model']}")
-        data.append({"id": key, "label": translate_label(labels[key], language), "glyph": glyphs[key],
+        data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation), language), "glyph": glyphs[key],
                      "x": positions[key][0], "y": positions[key][1], "status": status,
                      "subtitle": subtitle, "models": models, "percent": min(100, done * 100 / total) if total else
                      100 if status == "completed" else 0,
-                     "intermediate": key == "sft" and "sft" not in targets})
+                     "intermediate": key == "sft" and ("sft" not in targets or
+                         sft_uses_cot_output(targets, recipe_version))})
     english = language == "en"
     return {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
             "live": live, "language": language, "labels": {"node_picker": "Go to node" if english else "定位节点",

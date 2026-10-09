@@ -250,6 +250,79 @@ def test_node_rejects_output_limit_at_or_above_context_window():
     assert 'generation' not in ui.session_state['workflow-node-bindings:demo']['sft']
 
 
+@pytest.mark.parametrize('existing_reviewer', [None, {
+    'backend': 'judge', 'model': 'judge-v1', **TOKEN_LIMITS,
+}])
+def test_reviewer_explicitly_reuses_own_writer_and_keeps_limits_independent(existing_reviewer):
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['fixture-local'] = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha']},
+        'judge': {'base_url': 'https://models.example.test/v1', 'models': ['judge-v1']},
+    }}
+    writer = {'backend': 'writer', 'model': 'alpha',
+              'context_window_tokens': 196_608, 'max_output_tokens': 65_536}
+    roles = {'generation': writer}
+    if existing_reviewer:
+        roles['jev'] = existing_reviewer
+    ui.session_state['workflow-node-bindings:demo'] = {'sft': roles}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['workflow-node-bindings:demo']['sft'].get('jev') == existing_reviewer
+    ui.button(key='node-model:demo:sft:jev:reuse-generation').click().run()
+    assert not ui.exception
+    saved = ui.session_state['workflow-form-draft:demo']['workflow-node-bindings:demo']
+    assert saved['sft']['generation'] == saved['sft']['jev'] == writer
+    assert saved['sft']['generation'] is not saved['sft']['jev']
+    assert ui.selectbox(key='node-model:demo:sft:jev:backend').value == 'writer'
+    assert ui.selectbox(key='node-model:demo:sft:jev:model:writer').value == 'alpha'
+    assert not [button for button in ui.button if button.key == 'node-model:demo:sft:jev:reuse-generation']
+    ui.number_input(key='node-model:demo:sft:jev:output:writer:alpha').set_value(48_000).run()
+    assert not ui.exception
+    saved = ui.session_state['workflow-form-draft:demo']['workflow-node-bindings:demo']
+    assert saved['sft']['generation']['max_output_tokens'] == 65_536
+    assert saved['sft']['jev']['max_output_tokens'] == 48_000
+    ui.run()
+    assert ui.number_input(key='node-model:demo:sft:jev:output:writer:alpha').value == 48_000
+
+
+def test_configured_node_can_choose_existing_model_without_overwriting_until_apply():
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['fixture-local'] = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha', 'beta']},
+    }}
+    original = {'backend': 'writer', 'model': 'beta', **TOKEN_LIMITS}
+    source = {'backend': 'writer', 'model': 'alpha',
+              'context_window_tokens': 196_608, 'max_output_tokens': 65_536}
+    ui.session_state['workflow-node-bindings:demo'] = {
+        'sft': {'generation': original}, 'cpt': {'generation': source},
+        'multiturn': {'generation': {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}},
+    }
+    ui.run()
+    assert not ui.exception
+    ui.selectbox(key='node-model:demo:sft:generation:reuse-source').set_value('cpt').run()
+    assert ui.session_state['workflow-node-bindings:demo']['sft']['generation'] == original
+    ui.button(key='node-model:demo:sft:generation:reuse-apply').click().run()
+    assert not ui.exception
+    saved = ui.session_state['workflow-form-draft:demo']['workflow-node-bindings:demo']
+    assert saved['sft']['generation'] == saved['cpt']['generation'] == source
+    ui.number_input(key='node-model:demo:sft:generation:output:writer:alpha').set_value(40_000).run()
+    assert ui.session_state['workflow-node-bindings:demo']['cpt']['generation']['max_output_tokens'] == 65_536
+
+
+def test_review_picker_does_not_filter_out_the_generation_model():
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['fixture-local'] = {'backends': {
+        'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha']},
+    }}
+    writer = {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}
+    ui.session_state['workflow-node-bindings:demo'] = {'sft': {'generation': writer}}
+    ui.run()
+    ui.selectbox(key='node-model:demo:sft:jev:backend').set_value('writer').run()
+    ui.selectbox(key='node-model:demo:sft:jev:model:writer').set_value('alpha').run()
+    assert not ui.exception
+    assert ui.session_state['workflow-node-bindings:demo']['sft']['jev'] == writer
+
+
 def test_node_model_picker_accepts_explicit_custom_names():
     ui = AppTest.from_string(SCRIPT)
     ui.session_state['fixture-local'] = {'backends': {

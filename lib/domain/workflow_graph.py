@@ -6,13 +6,20 @@ checkpointed; edges must not be interpreted as parallel scheduling.
 from __future__ import annotations
 
 from lib.domain.workflow_targets import PREFERENCE_TARGETS, TARGETS
+from lib.domain.workflow_reasoning_route import cot_updates_sft
 
 
 BASE_STAGES = ("cpt", "sft", "multiturn", "agent", "gsm8k")
 DERIVED_STAGES = ("preference", "cot")
 
 
-def execution_graph(targets, *, reasoning_trim=False, qa_director=False) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+def sft_uses_cot_output(targets, recipe_version=15) -> bool:
+    """New combined runs publish SFT from the final CoT result, never its input."""
+    return cot_updates_sft({"version": recipe_version, "targets": targets})
+
+
+def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
+                    recipe_version=15) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
     unknown = selected.difference(TARGETS)
@@ -42,10 +49,11 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False) -> tupl
     edges.extend(("director" if directed and key in {"sft", "multiturn"} else "ingest", key)
                  for key in BASE_STAGES if key in active)
     edges.extend(("sft", key) for key in DERIVED_STAGES if key in active)
-    # The SFT stage is an intermediate candidate set for preference/CoT-only
-    # runs. Only a requested SFT export feeds its own packaged artifact.
+    # Combined runs publish the final CoT records in both requested formats.
+    # The earlier SFT candidates must not bypass CoT verification or trimming.
+    # Retain independent outputs when displaying a persisted legacy recipe.
     outputs = {"cpt", "multiturn", "agent", "gsm8k", "preference", "cot"}
-    if "sft" in selected:
+    if "sft" in selected and not sft_uses_cot_output(selected, recipe_version):
         outputs.add("sft")
     edges.extend((key, "trim" if key in trimmed_outputs else "package")
                  for key in (*BASE_STAGES, *DERIVED_STAGES) if key in active and key in outputs)
