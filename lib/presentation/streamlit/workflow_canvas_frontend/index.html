@@ -19,26 +19,90 @@
 const post=(type,data={})=>parent.postMessage({isStreamlitMessage:true,type,...data},"*");
 const view=document.getElementById("view"), canvas=document.getElementById("canvas"), space=document.getElementById("space");
 let spec,scale=1,signature="",serial=0,lastSelected="",lastFrameHeight=0,fitMode=true,readableFit=true;
+let inspectorPanel=null,inspectorHost=null,parentDocument=null,parentWindow=null,inspectorObserver=null,inspectorFrame=0,inspectorNode="",restoreNodeFocus=false;
 const text=(id,value)=>document.getElementById(id).textContent=value;
-function resize(){if(!spec)return;canvas.style.transform=`scale(${scale})`;space.style.width=`${Math.max(view.clientWidth,spec.width*scale)}px`;canvas.style.left=`${Math.max(0,(view.clientWidth-spec.width*scale)/2)}px`;space.style.height=`${Math.max(view.clientHeight,spec.height*scale)}px`;canvas.style.top=`${Math.max(0,(view.clientHeight-spec.height*scale)/2)}px`;text("scale",Math.round(scale*100)+"%");document.getElementById("minus").disabled=scale<=.35;document.getElementById("plus").disabled=scale>=1.8;const height=document.querySelector(".shell").offsetHeight;if(height!==lastFrameHeight){lastFrameHeight=height;post("streamlit:setFrameHeight",{height})}}
+function clearInspectorPosition(){
+ if(inspectorPanel){inspectorPanel.removeAttribute("data-workflow-inspector");inspectorPanel.removeAttribute("data-workflow-inspector-open");inspectorPanel.removeAttribute("data-workflow-placement");for(const property of ["display","position","left","top","width","max-height","overflow-y","overscroll-behavior","z-index","--workflow-anchor-x","--workflow-anchor-y"])inspectorPanel.style.removeProperty(property)}
+ if(inspectorHost)inspectorHost.removeAttribute("data-workflow-inspector-host");inspectorPanel=null;inspectorHost=null;
+}
+function cleanupInspector(){
+ if(inspectorFrame){cancelAnimationFrame(inspectorFrame);inspectorFrame=0}inspectorObserver?.disconnect();inspectorObserver=null;
+ if(parentWindow){parentWindow.removeEventListener("scroll",scheduleInspector,true);parentWindow.removeEventListener("resize",scheduleInspector);parentDocument?.removeEventListener("keydown",inspectorKeydown,true)}
+ clearInspectorPosition();parentDocument=null;parentWindow=null;
+}
+function scheduleInspector(){if(spec?.inspector&&!inspectorFrame)inspectorFrame=requestAnimationFrame(()=>{inspectorFrame=0;positionInspector()})}
+function inspectorKeydown(event){
+ if(event.key!=="Escape"||!spec?.inspector?.open)return;
+ // Streamlit menus/popovers are portals outside the native panel. Let their
+ // own Escape handler run first so choosing a model never closes the form.
+ const target=event.target,combobox=target?.closest?.('[role="combobox"]');
+ if(target?.closest?.('[role="listbox"],[role="dialog"],[data-testid="stPopoverBody"]')||combobox?.getAttribute("aria-expanded")==="true")return;
+ if(parentDocument&&[...parentDocument.querySelectorAll('[role="listbox"],[role="dialog"],[data-testid="stPopoverBody"]')].some(element=>element.getClientRects().length))return;
+ event.preventDefault();event.stopPropagation();closeInspector();
+}
+function closeInspector(){if(!spec?.inspector?.open)return;restoreNodeFocus=true;post("streamlit:setComponentValue",{dataType:"json",value:{action:"close",node:spec.selected,serial:Date.now()+"-"+(++serial)}})}
+function connectInspector(){
+ if(!spec?.inspector){cleanupInspector();return}
+ try{
+  if(!window.frameElement||!parent.document?.documentElement){cleanupInspector();return}
+  if(parentDocument!==parent.document){cleanupInspector();parentDocument=parent.document;parentWindow=parent;
+   parentWindow.addEventListener("scroll",scheduleInspector,true);parentWindow.addEventListener("resize",scheduleInspector);parentDocument.addEventListener("keydown",inspectorKeydown,true);
+   // Native controls are rendered after this component, and React may replace
+   // their wrapper on later reruns. Observe membership only, never form values.
+   inspectorObserver=new MutationObserver(scheduleInspector);inspectorObserver.observe(parentDocument.documentElement,{childList:true,subtree:true});
+  }
+  positionInspector();
+ }catch(_error){cleanupInspector()}
+}
+function positionInspector(){
+ if(!parentDocument||!spec?.inspector)return;
+ const key=String(spec.inspector.key||"");if(!/^[a-zA-Z0-9_-]+$/.test(key)){clearInspectorPosition();return}
+ const panel=parentDocument.querySelector(".st-key-"+key),button=[...canvas.querySelectorAll(".node")].find(element=>element.dataset.node===spec.selected);
+ if(!panel||!button)return;
+ if(panel!==inspectorPanel){clearInspectorPosition();inspectorPanel=panel;inspectorHost=panel.closest('[data-testid="stLayoutWrapper"]');if(inspectorHost===panel)inspectorHost=null}
+ panel.setAttribute("data-workflow-inspector","floating");panel.setAttribute("data-workflow-inspector-open",String(Boolean(spec.inspector.open)));inspectorHost?.setAttribute("data-workflow-inspector-host","floating");
+ if(inspectorNode!==spec.selected){inspectorNode=spec.selected;panel.scrollTop=0}
+ if(!spec.inspector.open){panel.style.setProperty("display","none");return}
+ panel.style.removeProperty("display");
+ const frame=window.frameElement?.getBoundingClientRect();if(!frame)return;
+ const node=button.getBoundingClientRect(),viewport=view.getBoundingClientRect(),windowWidth=parentWindow.innerWidth,windowHeight=parentWindow.innerHeight;
+ const leftBound=Math.max(12,frame.left+viewport.left+8),rightBound=Math.min(windowWidth-12,frame.left+viewport.right-8);
+ // An offscreen/very narrow canvas uses the visible page bounds so the
+ // inspector remains reachable even while its node is deliberately panned.
+ const boundedWidth=rightBound-leftBound>=260,right=boundedWidth?rightBound:windowWidth-12,left=boundedWidth?leftBound:12;
+ const width=Math.min(430,Math.max(0,right-left)),nodeLeft=frame.left+node.left,nodeRight=frame.left+node.right,nodeTop=frame.top+node.top,nodeBottom=frame.top+node.bottom;
+ const gap=12,spaceRight=right-nodeRight-gap,spaceLeft=nodeLeft-left-gap;
+ let placement=spaceRight>=width?"right":spaceLeft>=width?"left":spaceRight>=spaceLeft?"right":"left";
+ let x=placement==="right"?nodeRight+gap:nodeLeft-width-gap;
+ x=Math.max(left,Math.min(x,right-width));
+ const topBound=Math.min(76,Math.max(12,windowHeight-120)),availableHeight=Math.max(100,windowHeight-topBound-16),maxHeight=Math.min(560,availableHeight);
+ const naturalHeight=Math.min(panel.scrollHeight||maxHeight,maxHeight);
+ let y=Math.max(topBound,Math.min(nodeTop,windowHeight-naturalHeight-16));
+ if(spaceRight<width&&spaceLeft<width&&nodeBottom+gap+Math.min(naturalHeight,220)<windowHeight-16){placement="below";y=Math.max(topBound,nodeBottom+gap);}
+ panel.setAttribute("data-workflow-placement",placement);
+ const styles={position:"fixed",left:x+"px",top:y+"px",width:width+"px","max-height":Math.min(maxHeight,Math.max(100,windowHeight-y-16))+"px","overflow-y":"auto","overscroll-behavior":"contain","z-index":"80","--workflow-anchor-x":Math.max(12,Math.min(width-12,(nodeLeft+nodeRight)/2-x))+"px","--workflow-anchor-y":Math.max(12,Math.min(maxHeight-12,(nodeTop+nodeBottom)/2-y))+"px"};
+ for(const [property,value] of Object.entries(styles))if(panel.style.getPropertyValue(property)!==value)panel.style.setProperty(property,value);
+}
+function resize(){if(!spec)return;canvas.style.transform=`scale(${scale})`;space.style.width=`${Math.max(view.clientWidth,spec.width*scale)}px`;canvas.style.left=`${Math.max(0,(view.clientWidth-spec.width*scale)/2)}px`;space.style.height=`${Math.max(view.clientHeight,spec.height*scale)}px`;canvas.style.top=`${Math.max(0,(view.clientHeight-spec.height*scale)/2)}px`;text("scale",Math.round(scale*100)+"%");document.getElementById("minus").disabled=scale<=.35;document.getElementById("plus").disabled=scale>=1.8;const height=document.querySelector(".shell").offsetHeight;if(height!==lastFrameHeight){lastFrameHeight=height;post("streamlit:setFrameHeight",{height})}scheduleInspector()}
 function fit(readable=readableFit){
  if(!spec)return;
  fitMode=true;
  readableFit=readable;
  // Width drives the fit; using the current height here would feed each
  // ResizeObserver notification back into another viewport size change.
- const padding=12,maxHeight=560;
+ const padding=12,maxHeight=spec.expanded?600:560;
  // Long workflows open with readable labels and horizontal panning. The
  // explicit Fit control still offers the complete overview at a smaller scale.
  scale=Math.max(readable ? .68 : .35,Math.min(1,(view.clientWidth-padding)/spec.width,(maxHeight-padding)/spec.height));
- view.style.height=Math.ceil(spec.height*scale+padding)+"px";
+ view.style.height=Math.ceil(Math.max(spec.expanded?420:0,spec.height*scale+padding))+"px";
  resize();
 }
 function zoom(value,x=view.clientWidth/2,y=view.clientHeight/2){if(!spec)return;const worldX=(view.scrollLeft+x-canvas.offsetLeft)/scale,worldY=(view.scrollTop+y-canvas.offsetTop)/scale;fitMode=false;scale=Math.max(.35,Math.min(1.8,value));resize();view.scrollLeft=worldX*scale+canvas.offsetLeft-x;view.scrollTop=worldY*scale+canvas.offsetTop-y}
-function locate(){if(!spec)return;const n=spec.nodes.find(n=>n.id===spec.selected);if(n){view.scrollLeft=Math.max(0,n.x*scale+canvas.offsetLeft-(view.clientWidth-218*scale)/2);view.scrollTop=Math.max(0,n.y*scale+canvas.offsetTop-(view.clientHeight-78*scale)/2)}}
+function locate(){if(!spec)return;const n=spec.nodes.find(n=>n.id===spec.selected);if(n){view.scrollLeft=Math.max(0,n.x*scale+canvas.offsetLeft-(view.clientWidth-218*scale)/2);view.scrollTop=Math.max(0,n.y*scale+canvas.offsetTop-(view.clientHeight-78*scale)/2);scheduleInspector()}}
+function selectedIsVisible(){const n=spec?.nodes.find(node=>node.id===spec.selected);if(!n)return false;const x=n.x*scale+canvas.offsetLeft-view.scrollLeft,y=n.y*scale+canvas.offsetTop-view.scrollTop;return x>=0&&x+218*scale<=view.clientWidth&&y>=0&&y+78*scale<=view.clientHeight}
 function moveFocus(n,key){const right=key==="ArrowRight",vertical=key==="ArrowUp"||key==="ArrowDown",sign=right||key==="ArrowDown"?1:-1;const candidates=spec.nodes.filter(other=>other.id!==n.id).map(other=>{const dx=other.x-n.x,dy=other.y-n.y;return{other,forward:(vertical?dy:dx)*sign,cross:Math.abs(vertical?dx:dy)}}).filter(item=>item.forward>1).sort((a,b)=>(a.forward+2*a.cross)-(b.forward+2*b.cross));const target=key==="Home"?spec.nodes[0]:key==="End"?spec.nodes[spec.nodes.length-1]:candidates[0]?.other;if(target){const button=[...canvas.querySelectorAll("button")].find(b=>b.dataset.node===target.id);button?.focus()}}
 function chooseNode(node){post("streamlit:setComponentValue",{dataType:"json",value:{node,serial:Date.now()+"-"+(++serial)}})}
-function render(next){const focusedNode=document.activeElement?.dataset?.node;spec=next;document.documentElement.lang=spec.language==="en"?"en":"zh-CN";canvas.style.width=spec.width+"px";canvas.style.height=spec.height+"px";canvas.replaceChildren();
+function render(next){const focusedNode=document.activeElement?.dataset?.node;if(spec?.inspector?.open&&next.inspector&&!next.inspector.open)restoreNodeFocus=true;spec=next;document.documentElement.lang=spec.language==="en"?"en":"zh-CN";canvas.style.width=spec.width+"px";canvas.style.height=spec.height+"px";canvas.replaceChildren();
  const ns="http://www.w3.org/2000/svg",svg=document.createElementNS(ns,"svg");svg.setAttribute("width",spec.width);svg.setAttribute("height",spec.height);canvas.append(svg);
  const byId=Object.fromEntries(spec.nodes.map(n=>[n.id,n]));
  for(const [a,b] of spec.edges){const from=byId[a],to=byId[b],x=from.x+218,y=from.y+39,ex=to.x,ey=to.y+39,path=document.createElementNS(ns,"path");const bypass=b==="package"&&ex-x>300,rail=from.y===Math.min(...spec.nodes.filter(n=>n.x===from.x).map(n=>n.y))?16:spec.height-16;path.setAttribute("d",bypass?`M ${x} ${y} C ${x+24} ${y},${x+24} ${rail},${x+42} ${rail} L ${ex-35} ${rail} C ${ex-18} ${rail},${ex-18} ${ey},${ex-7} ${ey}`:`M ${x} ${y} C ${x+30} ${y},${ex-30} ${ey},${ex-7} ${ey}`);path.dataset.from=a;path.dataset.to=b;path.setAttribute("fill","none");path.setAttribute("stroke",to.status==="running"?"#3087e7":from.status==="completed"&&to.status==="completed"?"#45b89a":"#a6bdd9");path.setAttribute("stroke-width",a===spec.selected||b===spec.selected?"3":"2");if(a===spec.selected||b===spec.selected)path.setAttribute("stroke","#247ae4");svg.append(path);const arrow=document.createElementNS(ns,"path");arrow.setAttribute("d",`M ${ex-8} ${ey-4} L ${ex-1} ${ey} L ${ex-8} ${ey+4}`);arrow.setAttribute("fill","none");arrow.setAttribute("stroke",path.getAttribute("stroke"));svg.append(arrow)}
@@ -49,10 +113,11 @@ function render(next){const focusedNode=document.activeElement?.dataset?.node;sp
  const picker=document.getElementById("node-picker");picker.setAttribute("aria-label",spec.labels.node_picker);picker.title=spec.labels.node_picker;picker.replaceChildren();for(const n of spec.nodes){const option=document.createElement("option");option.value=n.id;option.textContent=n.label;option.selected=n.id===spec.selected;picker.append(option)}
  text("fit",spec.labels.fit);text("focus",spec.labels.focus);text("hint",spec.labels.hint);text("lineage",spec.labels.lineage);text("overview",spec.labels.overview);document.getElementById("reset").setAttribute("aria-label",spec.labels.reset);document.getElementById("plus").setAttribute("aria-label",spec.labels.zoom_in);document.getElementById("minus").setAttribute("aria-label",spec.labels.zoom_out);
  const legend=document.getElementById("legend");legend.hidden=!spec.live;legend.replaceChildren();if(spec.live){for(const [key,color] of [["completed","#1db181"],["running","#247ae4"],["failed","#d5626c"]]){const item=document.createElement("span"),dot=document.createElement("i");dot.style.background=color;item.append(dot,document.createTextNode(spec.labels[key]));legend.append(item)}}
- const nextSignature=spec.nodes.map(n=>n.id).join();if(nextSignature!==signature){signature=nextSignature;fitMode=true;fit(true);locate()}else if(fitMode)fit();else resize();if(lastSelected!==spec.selected){lastSelected=spec.selected;locate()}}
+ const nextSignature=spec.nodes.map(n=>n.id).join();if(nextSignature!==signature){signature=nextSignature;fitMode=true;fit(true);locate()}else if(fitMode)fit();else resize();if(lastSelected!==spec.selected){lastSelected=spec.selected;if(!spec.inspector||!selectedIsVisible())locate()}connectInspector();if(restoreNodeFocus&&!spec.inspector?.open){restoreNodeFocus=false;[...canvas.querySelectorAll(".node")].find(button=>button.dataset.node===spec.selected)?.focus({preventScroll:true})}}
 document.getElementById("node-picker").onchange=e=>chooseNode(e.target.value);
 document.getElementById("plus").onclick=()=>zoom(scale+.1);document.getElementById("minus").onclick=()=>zoom(scale-.1);document.getElementById("fit").onclick=()=>{fit(false);locate()};document.getElementById("reset").onclick=()=>zoom(1);document.getElementById("focus").onclick=locate;
 view.addEventListener("wheel",e=>{if(e.ctrlKey||e.metaKey){e.preventDefault();const rect=view.getBoundingClientRect();zoom(scale*Math.exp(-e.deltaY*.002),e.clientX-rect.left,e.clientY-rect.top)}},{passive:false});
-let drag;view.onpointerdown=e=>{if(e.target.closest("button")||e.button!==0)return;fitMode=false;drag={x:e.clientX,y:e.clientY,left:view.scrollLeft,top:view.scrollTop};view.classList.add("drag");view.setPointerCapture(e.pointerId)};view.onpointermove=e=>{if(drag){view.scrollLeft=drag.left+drag.x-e.clientX;view.scrollTop=drag.top+drag.y-e.clientY}};const endDrag=()=>{drag=null;view.classList.remove("drag")};view.onpointerup=endDrag;view.onpointercancel=endDrag;view.onlostpointercapture=endDrag;
-window.addEventListener("message",event=>{if(event.source===parent&&event.data.type==="streamlit:render")render(event.data.args.spec)});new ResizeObserver(()=>{if(spec){if(fitMode){fit();locate()}else resize()}}).observe(view);post("streamlit:componentReady",{apiVersion:1});
+let drag;view.onpointerdown=e=>{if(e.target.closest("button")||e.button!==0)return;fitMode=false;drag={x:e.clientX,y:e.clientY,left:view.scrollLeft,top:view.scrollTop,moved:false};view.classList.add("drag");view.setPointerCapture(e.pointerId)};view.onpointermove=e=>{if(drag){if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>4)drag.moved=true;view.scrollLeft=drag.left+drag.x-e.clientX;view.scrollTop=drag.top+drag.y-e.clientY;scheduleInspector()}};const endDrag=(event)=>{const clicked=drag&&!drag.moved&&event?.type==="pointerup";drag=null;view.classList.remove("drag");if(clicked)closeInspector()};view.onpointerup=endDrag;view.onpointercancel=endDrag;view.onlostpointercapture=endDrag;
+view.addEventListener("scroll",scheduleInspector);window.addEventListener("keydown",inspectorKeydown,true);window.addEventListener("pagehide",cleanupInspector);window.addEventListener("unload",cleanupInspector);
+window.addEventListener("message",event=>{if(event.source===parent&&event.data.type==="streamlit:render")render(event.data.args.spec)});new ResizeObserver(()=>{if(spec){if(fitMode){fit();if(!spec.inspector||!selectedIsVisible())locate()}else resize()}}).observe(view);post("streamlit:componentReady",{apiVersion:1});
 </script></body></html>

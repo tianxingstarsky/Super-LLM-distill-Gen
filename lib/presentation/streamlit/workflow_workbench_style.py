@@ -8,6 +8,21 @@ WORKBENCH_STYLE = """<style>
 .st-key-workbench-canvas-panel .df-panel-icon {background:linear-gradient(145deg,#edf5ff,#dbeaff);box-shadow:0 3px 9px #bdd5f44d}
 .st-key-workbench-targets {background:linear-gradient(110deg,#fff,#f7faff);border-color:#d7e5f5}
 .st-key-workbench-node-panel {border-top:3px solid #78acf1;background:linear-gradient(160deg,#f9fcff,#fff 45%)}
+[data-workflow-inspector-host="floating"] {height:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:visible!important}
+.st-key-workbench-node-panel[data-workflow-inspector="floating"] {
+  border:1px solid #c8dbf2;border-top:3px solid #4e95ec;border-radius:14px;
+  padding:0 16px 14px;background:#fff;box-shadow:0 16px 50px #183e7030,0 3px 12px #264e7012;
+  overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#bfd2e9 transparent;gap:10px}
+.st-key-workbench-node-panel[data-workflow-inspector="floating"] .st-key-workbench-node-header {
+  position:sticky;top:0;z-index:2;background:linear-gradient(110deg,#f2f7ff,#fff);
+  padding:13px 0 8px;border-bottom:1px solid #e3edf8}
+.st-key-workbench-node-header .df-section-heading {margin-bottom:0;padding-bottom:0;border-bottom:0}
+.st-key-workbench-node-header button {min-height:30px;padding:2px;color:#6681a2;border-color:#e3ebf6;background:#fff}
+.st-key-workbench-node-panel [data-testid="stTabs"] [data-baseweb="tab-list"] {gap:18px}
+.st-key-workbench-node-panel [data-testid="stTabs"] [data-baseweb="tab"] {font-size:12px;height:36px}
+.st-key-workbench-node-panel [data-testid="stTabs"] [data-baseweb="tab-panel"] {padding-top:10px}
+.st-key-workbench-node-panel [data-testid="stMarkdownContainer"] p {font-size:12px;line-height:1.55}
+.st-key-workbench-node-panel [class*="st-key-workbench-node-prompts"] {padding-top:4px;border-bottom:0}
 .st-key-workbench-source-preview {border-top:3px solid #83c9bf}
 .df-knowledge-route {position:relative;overflow:hidden;padding:18px 12px 14px;border:1px solid #dbe9f6;
   border-radius:12px;background:radial-gradient(circle at 85% 10%,#e0efff,transparent 45%),#f8fbff;text-align:center}

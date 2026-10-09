@@ -114,6 +114,7 @@ def test_generation_controls_survive_node_layout_changes_and_empty_targets(tmp_p
 
 
 def test_next_incomplete_node_locates_panel_and_wraps_without_starting_run(tmp_path, monkeypatch):
+    from copy import deepcopy
     from lib.application.backend_service import BackendApplication
     _, workspace, _ = setup_workspace(tmp_path, monkeypatch)
     monkeypatch.setattr(BackendApplication, "list_backends", lambda self: {"backends": []})
@@ -123,13 +124,33 @@ def test_next_incomplete_node_locates_panel_and_wraps_without_starting_run(tmp_p
     app.session_state["ui_language"] = "en"
     app.run()
     key = f"workflow-next-config:{workspace}"
+    canvas_key = f"setup-canvas:{workspace}"
+    open_key = f"canvas-open:{canvas_key}"
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "sft"
+    assert canvas(app, canvas_key)["inspector"] == {"key": "workbench-node-panel", "open": False}
     assert any("missing Generation model, Independent review model" in str(item.value)
                for item in app.caption)
     next(button for button in app.button if button.key == key).click().run()
     assert not app.exception
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "preference"
-    assert canvas(app, f"setup-canvas:{workspace}")["selected"] == "preference"
+    assert canvas(app, canvas_key)["selected"] == "preference"
+    assert app.session_state[open_key] is True
+    assert canvas(app, canvas_key)["inspector"]["open"] is True
+    bindings = deepcopy(app.session_state[f"workflow-node-bindings:{workspace}"])
+    draft = deepcopy(app.session_state[f"workflow-form-draft:{workspace}"])
+    app.button(key=f"workflow-close-config:{workspace}").click().run()
+    assert not app.exception
+    assert app.session_state[open_key] is False
+    assert canvas(app, canvas_key)["inspector"]["open"] is False
+    assert app.session_state[f"workflow-setup-node:{workspace}"] == "preference"
+    assert app.session_state[f"workflow-node-bindings:{workspace}"] == bindings
+    assert app.session_state[f"workflow-form-draft:{workspace}"] == draft
+    app.session_state[canvas_key] = {"node": "preference", "serial": "reopen-current-node"}
+    app.run()
+    assert not app.exception
+    assert app.session_state[open_key] is True
+    assert canvas(app, canvas_key)["inspector"]["open"] is True
+    assert app.session_state[f"workflow-setup-node:{workspace}"] == "preference"
     next(button for button in app.button if button.key == key).click().run()
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "sft"
     assert next(button for button in app.button if button.label == "Start generation").disabled
@@ -167,15 +188,21 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     app.run()
     assert not app.exception
     assert any("数据生成工作台" == item.value for item in app.title)
-    assert any("尚无运行记录" in item.value for item in app.info)
+    assert not any('class="df-run-overview"' in str(item.value) for item in app.get("html"))
+    app.sidebar.button(key="nav-button:任务管理").click().run()
+    assert not app.exception
+    assert any("本机暂无自动工作流" in str(item.value) for item in app.get("html"))
+    assert not any(item.key.startswith("sidebar-task:") for item in app.sidebar.button)
+    app.sidebar.button(key="nav-button:自动工作流").click().run()
+    assert not app.exception
     rid = create_run(ws.out(name), sources=[source], targets=["cpt"], name="文档自动验收")
     Workflow(ws.out(name), rid, ROOT).execute()
     app.run()
     assert not app.exception
     assert not any('class="df-run-overview"' in str(item.value) for item in app.get("html"))
-    app.session_state[f"task-center-filter:{name}"] = "未完成"
+    app.session_state[f"task-center-filter:{name}"] = "未结束"
     app.session_state[f"task-center-search:{name}"] = "stale search"
-    next(item for item in app.button if item.key == f"workflow-open-history:{name}").click().run()
+    app.sidebar.button(key=f"sidebar-task:{name}:{rid}").click().run()
     assert not app.exception
     assert app.session_state["nav"] == "任务管理"
     assert app.session_state[f"task-center-search:{name}"] == ""
@@ -213,7 +240,7 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     other.session_state["nav"] = "自动工作流"
     other.run()
     assert not other.exception
-    next(item for item in other.button if item.key == f"workflow-open-history:{name}").click().run()
+    other.sidebar.button(key=f"sidebar-task:{name}:{rid}").click().run()
     assert not other.exception
     assert any("文档自动验收" == item.value for item in other.subheader)
 
@@ -317,12 +344,12 @@ def test_quick_presets_keep_every_target_available_and_custom_choices_independen
     assert "SFT 中间候选" in rendered
     assert next(widget for widget in app.pills if widget.label == "训练目标").value == ["orpo"]
 
-    app.segmented_control(key=f"workflow-preset:{name}").set_value("偏好对齐").run()
+    app.selectbox(key=f"workflow-preset:{name}").set_value("偏好对齐").run()
     assert not app.exception
     assert set(next(widget for widget in app.pills if widget.label == "训练目标").value) == {
         "sft", "orpo", "dpo", "rlaif"}
     next(widget for widget in app.pills if widget.label == "训练目标").set_value(["rlaif"]).run()
-    app.segmented_control(key=f"workflow-preset:{name}").set_value("自动推荐").run()
+    app.selectbox(key=f"workflow-preset:{name}").set_value("自动推荐").run()
     assert not app.exception
     assert next(widget for widget in app.pills if widget.label == "训练目标").value == ["orpo"]
 
@@ -571,7 +598,7 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     app.session_state["nav"] = "自动工作流"
     app.run()
     assert not app.exception
-    next(item for item in app.button if item.key == f"workflow-open-history:{name}").click().run()
+    app.sidebar.button(key=f"sidebar-task:{name}:{run_id}").click().run()
     assert not app.exception
     overview = [item.value for item in app.get("html") if isinstance(item.value, str)
                 and 'class="df-run-overview"' in item.value]
@@ -605,7 +632,7 @@ def test_run_inspector_distinguishes_reused_units_in_english(tmp_path, monkeypat
     app.session_state[f"workflow-stage:{run_id}"] = "cpt"
     app.run()
     assert not app.exception
-    next(item for item in app.button if item.key == f"workflow-open-history:{name}").click().run()
+    app.sidebar.button(key=f"sidebar-task:{name}:{run_id}").click().run()
     assert not app.exception
     metrics = {item.label: item.value for item in app.metric}
     assert metrics["Reused checkpoints"] == "35,000"

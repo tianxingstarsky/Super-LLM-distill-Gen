@@ -24,6 +24,7 @@ from lib.domain.workflow_targets import TARGETS
 from lib.domain.web_research import MAX_QUERIES, validate_web_research
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
+from lib.domain.workflow_node_prompts import active_node_prompt_ids
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas
 from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 from lib.presentation.streamlit.workflow_generation_settings import (
@@ -55,6 +56,8 @@ PRESETS = {
 
 def _select_setup_node(key: str, node: str) -> None:
     st.session_state[key] = node
+    workspace = key.removeprefix("workflow-setup-node:")
+    st.session_state[f"canvas-open:setup-canvas:{workspace}"] = True
 
 
 def _change_source_mode(workspace, key):
@@ -1055,61 +1058,69 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.caption(_missing_model_role_summary(model_issues, st.session_state.get("ui_language", "zh")))
         if pricing_issues:
             st.warning("部分节点的模型服务缺少预算单价。请点击节点，在连接表单中更新输入和输出单价。")
-    # Keep each side as a continuous stack. A long model form must not push
-    # the source inputs down to the bottom of an unrelated, shared-height row.
-    with st.container(key="workbench-layout"):
-        if targets:
-            source_col, setup_col = st.columns([1.65, 1], gap="medium")
-        else:
-            source_col, setup_col = st.container(), None
+    workbench = st.container(key="workbench-layout")
     if targets:
-        with source_col, st.container(border=True, key="workbench-canvas-panel"):
-            section_heading("工作流节点配置", "点击节点查看步骤；需要模型的节点可在右侧选择。", "◇")
+        with workbench, st.container(border=True, key="workbench-canvas-panel"):
+            section_heading("工作流节点配置", "点击节点，就近配置模型、提示词与处理方式。", "◇")
             render_canvas(canvas_spec(targets, {node: {"status": "configuration_required"} for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
                                       snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                                                   node_generation=node_generation),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation),
-                          selection_key, key=f"setup-canvas:{ws}")
-        with setup_col, st.container(border=True, key="workbench-node-panel"):
-            section_heading(GRAPH_LABELS[selected_node], "所选节点", STAGE_GLYPHS[selected_node])
-            if selected_node != "ingest" or source_mode != "文档资料":
+                          selection_key, key=f"setup-canvas:{ws}",
+                          inspector_key="workbench-node-panel", expanded=True)
+        with workbench, st.container(border=True, key="workbench-node-panel"):
+            with st.container(key="workbench-node-header"):
+                title, close = st.columns([6, 1], gap="small", vertical_alignment="center")
+                with title:
+                    section_heading(GRAPH_LABELS[selected_node], "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
+                with close:
+                    st.button("✕", key=f"workflow-close-config:{ws}", help="收起节点配置",
+                              on_click=st.session_state.update,
+                              args=({f"canvas-open:setup-canvas:{ws}": False},), width="stretch")
+            has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
+                                                      node_generation=node_generation))
+            settings_tab, prompts_tab = (st.tabs(["节点设置", "提示词与风格"]) if has_prompts
+                                        else (nullcontext(), nullcontext()))
+            with settings_tab:
+                if selected_node == "ingest" and source_mode == "文档资料":
+                    document_parser = render_document_parser(ws, bindings, endpoints,
+                        backend_application=backend_application)
+                    model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else source_mode
+                elif selected_node == "ingest" and source_mode == "知识库检索" and knowledge_application is not None:
+                    from lib.presentation.streamlit.knowledge_page import render_knowledge_settings
+                    render_knowledge_settings(knowledge_application, ws)
+                else:
+                    render_node_models(selected_node, source_mode, ws, bindings, endpoints,
+                                       backend_application=backend_application, node_generation=node_generation)
+                if selected_node == "sft" and "sft" in targets:
+                    sft_output_style = st.selectbox(
+                        "SFT 训练文件格式", ("separated", "drop"),
+                        key=f"workflow-sft-output-style:{ws}",
+                        on_change=_save_sft_output_style, args=(ws,),
+                        format_func=lambda value: translate_label(
+                            "分字段保留推理" if value == "separated" else "只保留答案",
+                            st.session_state.get("ui_language", "zh")),
+                        help="仅影响本次任务的 SFT 训练文件，不改写审核证据或其他目标。",
+                    )
+                    st.caption("只控制训练文件是否包含推理字段；生成风格与审核证据独立保留。")
+                if selected_node == "agent":
+                    render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
+                if selected_node == "ingest" and source_mode != "知识库检索":
+                    st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
+                elif selected_node == "package":
+                    st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
+            with prompts_tab:
+                if selected_node in {"sft", "cot"}:
+                    render_generation_settings(selected_node, ws, save_field=_save_draft_value)
+                elif selected_node == "trim":
+                    render_trim_settings(ws, save_field=_save_draft_value)
                 render_node_prompts(selected_node, model_source_mode, ws,
                                     save_field=_save_draft_value, node_generation=node_generation)
-            if selected_node in {"sft", "cot"}:
-                render_generation_settings(selected_node, ws, save_field=_save_draft_value)
-            elif selected_node == "trim":
-                render_trim_settings(ws, save_field=_save_draft_value)
-            if selected_node == "ingest" and source_mode == "文档资料":
-                document_parser = render_document_parser(ws, bindings, endpoints,
-                    backend_application=backend_application)
-                model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else source_mode
-            elif selected_node == "ingest" and source_mode == "知识库检索" and knowledge_application is not None:
-                from lib.presentation.streamlit.knowledge_page import render_knowledge_settings
-                render_knowledge_settings(knowledge_application, ws)
-            else:
-                render_node_models(selected_node, source_mode, ws, bindings, endpoints,
-                                   backend_application=backend_application, node_generation=node_generation)
-            if selected_node == "ingest" and source_mode == "文档资料":
-                render_node_prompts(selected_node, model_source_mode, ws,
-                                    save_field=_save_draft_value, node_generation=node_generation)
-            if selected_node == "sft" and "sft" in targets:
-                sft_output_style = st.selectbox(
-                    "SFT 训练文件格式", ("separated", "drop"),
-                    key=f"workflow-sft-output-style:{ws}",
-                    on_change=_save_sft_output_style, args=(ws,),
-                    format_func=lambda value: translate_label(
-                        "分字段保留推理" if value == "separated" else "只保留答案",
-                        st.session_state.get("ui_language", "zh")),
-                    help="仅影响本次任务的 SFT 训练文件，不改写审核证据或其他目标。",
-                )
-                st.caption("只控制训练文件是否包含推理字段；生成风格与审核证据独立保留。")
-            if selected_node == "agent":
-                render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
-            if selected_node == "ingest" and source_mode != "知识库检索":
-                st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
-            elif selected_node == "package":
-                st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
+    # Source previews and common run controls stay in normal document flow.
+    # Only the node-local form follows the selected graph node.
+    with workbench:
+        source_col, setup_col = st.columns([1.2, 1], gap="medium") if targets else (st.container(), None)
     node_generation = generation_snapshot(ws, graph_nodes) if targets else {}
     generation_invalid = generation_issues(node_generation)
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
@@ -1117,15 +1128,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
                                        node_generation=node_generation) if targets else {}
     prompts_invalid = node_prompt_has_issue(node_prompts)
-    # A short, informational node leaves most of the inspector column unused.
-    # Put common controls there, while keeping long model/verification forms
-    # separate from the full-width controls below the workbench.
+    # Pair source input with either its preview or the common run settings.
+    # Node forms have no influence on the height of these normal-flow columns.
     preview_in_input = bool(targets and selected_node == "ingest" and source_mode == "文档资料"
                             and document_parser.get("mode") == "native" and document_preview is not None)
-    compact_parameters = bool(targets and selected_node != "agent" and not preview_in_input
-                              and source_mode != "知识库检索" and not node_roles(selected_node,
-                                  "多模态文档" if document_parser.get("mode") == "vision" else source_mode,
-                                  node_generation=node_generation))
+    compact_parameters = bool(targets and not preview_in_input and source_mode != "知识库检索")
     with st.container(key=f"workbench-create:{ws}"):
         web_research, web_unavailable = None, False
         knowledge_source_names = {}

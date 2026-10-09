@@ -79,3 +79,111 @@ with patch.object(canvas, '_canvas', lambda **kw: st.session_state.get('event'))
     ui.session_state['event'] = {'node':'sft', 'serial':2}
     ui.run()
     assert ui.session_state['canvas-open:live-canvas:run'] is True
+
+
+def _inspector_app(*, live=False, expanded=False):
+    from streamlit.testing.v1 import AppTest
+
+    script = f'''
+from copy import deepcopy
+import streamlit as st
+from unittest.mock import patch
+from lib.presentation.streamlit import workflow_canvas as canvas
+st.session_state.setdefault('selected-node', 'ingest')
+st.session_state.setdefault('workflow-node-bindings:fixture', {{'sft': {{}}}})
+st.session_state.setdefault('workflow-form-draft:fixture', {{'prompt': 'Keep my unsaved prompt'}})
+labels = {{key:key for key in ('ingest','sft','package')}}
+spec = canvas.canvas_spec(['sft'], {{'sft': {{'status': 'configuration_required'}}}},
+                         st.session_state['selected-node'], labels, labels,
+                         st.session_state['workflow-node-bindings:fixture'], live={live!r})
+def component(**kwargs):
+    st.session_state['captured-spec'] = deepcopy(kwargs['spec'])
+    return st.session_state.get('event')
+with patch.object(canvas, '_canvas', component):
+    canvas.render_canvas(spec, 'selected-node', key='fixture-canvas',
+                         follow_key={'workflow-follow:fixture' if live else None!r},
+                         inspector_key='fixture-inspector', expanded={expanded!r})
+'''
+    return AppTest.from_string(script).run()
+
+
+def _assert_node_drafts_preserved(ui):
+    assert ui.session_state['workflow-node-bindings:fixture'] == {'sft': {}}
+    assert ui.session_state['workflow-form-draft:fixture'] == {'prompt': 'Keep my unsaved prompt'}
+
+
+@pytest.mark.parametrize('expanded', [False, True])
+def test_setup_canvas_passes_inspector_state_and_opens_incomplete_node(expanded):
+    ui = _inspector_app(expanded=expanded)
+    assert not ui.exception
+    assert ui.session_state['captured-spec']['inspector'] == {'key': 'fixture-inspector', 'open': False}
+    assert ui.session_state['captured-spec'].get('expanded', False) is expanded
+    assert 'canvas-open:fixture-canvas' not in ui.session_state
+
+    ui.session_state['event'] = {'node': 'sft', 'serial': 'click-1'}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['selected-node'] == 'sft'
+    assert ui.session_state['canvas-open:fixture-canvas'] is True
+    assert ui.session_state['captured-spec']['inspector'] == {'key': 'fixture-inspector', 'open': True}
+    assert 'canvas-pause:workflow-follow:fixture' not in ui.session_state
+    _assert_node_drafts_preserved(ui)
+
+
+@pytest.mark.parametrize('paused', [False, True])
+def test_closing_inspector_preserves_selection_following_and_node_drafts(paused):
+    ui = _inspector_app(live=True, expanded=True)
+    ui.session_state['event'] = {'node': 'sft', 'serial': 1}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['canvas-pause:workflow-follow:fixture'] is True
+
+    ui.session_state['canvas-pause:workflow-follow:fixture'] = paused
+    ui.session_state['event'] = {'action': 'close', 'node': 'sft', 'serial': 2}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['canvas-open:fixture-canvas'] is False
+    assert ui.session_state['selected-node'] == 'sft'
+    assert ui.session_state['canvas-pause:workflow-follow:fixture'] is paused
+    assert ui.session_state['captured-spec']['inspector']['open'] is False
+    _assert_node_drafts_preserved(ui)
+
+    # A refresh, including a replayed selection with the close event's serial,
+    # must leave the inspector closed. Only a new click can reopen it.
+    ui.run()
+    ui.session_state['event'] = {'node': 'sft', 'serial': 2}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['canvas-open:fixture-canvas'] is False
+    assert ui.session_state['canvas-pause:workflow-follow:fixture'] is paused
+    ui.session_state['event'] = {'node': 'sft', 'serial': 3}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['canvas-open:fixture-canvas'] is True
+    assert ui.session_state['canvas-pause:workflow-follow:fixture'] is True
+    _assert_node_drafts_preserved(ui)
+
+
+@pytest.mark.parametrize('event', [
+    {'action': 'close', 'node': 'unknown', 'serial': 2},
+    {'action': 'close', 'node': 'ingest', 'serial': 2},
+    {'action': 'close', 'serial': 2},
+    {'action': 'close', 'node': 'sft'},
+    {'action': 'close', 'node': 'sft', 'serial': None},
+    {'action': 'close', 'node': 'sft', 'serial': ''},
+    {'action': 'close', 'node': 'sft', 'serial': []},
+    {'action': 'close', 'node': 'sft', 'serial': {}},
+])
+def test_invalid_close_event_does_not_consume_or_change_node_state(event):
+    ui = _inspector_app(live=True)
+    ui.session_state['event'] = {'node': 'sft', 'serial': 1}
+    ui.run()
+    ui.session_state['canvas-pause:workflow-follow:fixture'] = False
+    ui.session_state['event'] = event
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['canvas-open:fixture-canvas'] is True
+    assert ui.session_state['selected-node'] == 'sft'
+    assert ui.session_state['canvas-pause:workflow-follow:fixture'] is False
+    assert ui.session_state['canvas-event:fixture-canvas'] == 1
+    _assert_node_drafts_preserved(ui)

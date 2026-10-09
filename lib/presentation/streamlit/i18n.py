@@ -10,6 +10,12 @@ from typing import Any
 
 ZH_EN: dict[str, str] = {
     "节点提示词": "Node prompts",
+    "节点设置": "Node settings",
+    "提示词与风格": "Prompts and style",
+    "节点配置 · 自动保存": "Node settings · Saved automatically",
+    "收起节点配置": "Close node settings",
+    "点击节点，就近配置模型、提示词与处理方式。": "Select a node to edit its models, prompts, and processing settings nearby.",
+    "点击工作流中的模型节点，在小窗中为本次任务选择模型。": "Select a model node in the workflow. Choose its model in the floating window.",
     "处理步骤": "Processing step",
     "提示词正文": "Prompt text",
     "任务规划": "Task planning",

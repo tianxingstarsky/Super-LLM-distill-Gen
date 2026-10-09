@@ -76,13 +76,29 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
 
 
-def render_canvas(spec, selection_key, *, key, follow_key=None):
+def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=None, expanded=False):
+    # Keep the real Streamlit form mounted when the window is closed. Widget
+    # values and callbacks remain owned by Streamlit; the canvas only positions it.
+    spec = dict(spec, expanded=expanded)
+    if inspector_key is not None:
+        spec["inspector"] = {"key": inspector_key,
+                             "open": bool(st.session_state.get(f"canvas-open:{key}", False))}
     event = _canvas(spec=spec, key=key, default=None)
-    if isinstance(event, dict) and event.get("node") in {node["id"] for node in spec["nodes"]}:
+    if (isinstance(event, dict) and event.get("node") in {node["id"] for node in spec["nodes"]}
+            and type(event.get("serial")) in (str, int) and event["serial"] != ""
+            and event.get("action") in (None, "close")
+            and (event.get("action") != "close" or event["node"] == spec["selected"])):
         consumed_key = f"canvas-event:{key}"
         if event.get("serial") != st.session_state.get(consumed_key):
             st.session_state[consumed_key] = event.get("serial")
+            if event.get("action") == "close":
+                if inspector_key is not None:
+                    st.session_state[f"canvas-open:{key}"] = False
+                    st.rerun()
+                return
             st.session_state[selection_key] = event["node"]
+            if inspector_key is not None:
+                st.session_state[f"canvas-open:{key}"] = True
             if follow_key is not None:
                 # The toggle already exists in this render. Apply the pause
                 # before creating it on the next rerun instead of mutating a widget.

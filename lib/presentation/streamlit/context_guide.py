@@ -21,7 +21,7 @@ _GUIDES: dict[str, tuple[tuple[tuple[str, str], ...], tuple[str, str] | None]] =
     ),
     "自动工作流": (
         (("确定来源和目标", "选择来源类型与训练目标；文档或对话记录可在下方上传。"),
-         ("配置节点模型", "点击工作流中的模型节点，在右侧为本次任务选择模型。"),
+         ("配置节点模型", "点击工作流中的模型节点，在小窗中为本次任务选择模型。"),
          ("开始运行", "填写需求或来源与规模后，直接点击“开始自动生成”。")),
         None,
     ),
@@ -100,7 +100,7 @@ def _target_candidates(route: str, step: int) -> tuple[str, ...]:
                 ("manual-datasets-editor", "manual-datasets-preview", "manual-datasets-picker"),
                 ("manual-datasets-saved", "manual-datasets-editor", "manual-datasets-picker"))[step]
     if route == "自动工作流":
-        return (("workbench-targets",), ("workbench-node-panel", "workbench-targets"),
+        return (("workbench-targets",), ("workbench-node-panel", "workbench-canvas-panel", "workbench-targets"),
                 ("workbench-submit",))[step]
     if route == "数据管理":
         if step == 0:
