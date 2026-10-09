@@ -224,3 +224,14 @@ with patch.object(page, "render_run", lambda application, run_id, begin, embedde
     assert shortcut.label == "Switch run"
     assert any("客户任务 Keep 原文" in option and "Running" in option for option in shortcut.options)
     assert not [button for button in ui.button if button.key.startswith("task-quick:")]
+def test_soft_count_does_not_make_completed_task_look_incomplete():
+    from lib.domain.workflow_graph import execution_graph
+    from lib.presentation.streamlit.task_management_page import _run_card_html
+    stages, _ = execution_graph(["sft"])
+    run = {"id": "soft-task", "status": "completed", "targets": ["sft"],
+           "stages": {key: {"status": "completed"} for key in stages},
+           "production": {"version": 2, "goals": {"sft": {"goal": 1000, "eligible": 20}}}}
+    heading, detail = _run_card_html(run)
+    assert 'data-status="completed"' in heading and "完成" in heading
+    assert "产出 / 期望" in detail and "20/1,000" in detail
+    assert "width:100%" in detail and 'aria-label="已完成节点"' in detail

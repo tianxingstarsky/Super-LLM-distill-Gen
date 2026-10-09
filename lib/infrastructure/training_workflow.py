@@ -60,7 +60,7 @@ from lib.infrastructure.workflow_production import WorkflowProduction
 from lib.infrastructure.production_checkpoints import ProductionCheckpoints
 from lib.infrastructure.production_review_quality import package_review_escalation
 from lib.infrastructure.planning_identities import PlanningIdentities
-from lib.infrastructure.workflow_qa_director import WorkflowQADirector
+from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DialoguePlanError
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -79,7 +79,8 @@ EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
 RECIPE_VERSION = 11
 PRODUCTION_RECIPE_VERSION = 12
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
+SOFT_PRODUCTION_RECIPE_VERSION = 13
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -349,7 +350,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         copied_bytes += snapshot["bytes"]
         snapshots.append({"name": (source_names or {}).get(str(source), source.name),
                           "file": destination.name, **snapshot})
-    recipe = {"version": PRODUCTION_RECIPE_VERSION if production is not None else RECIPE_VERSION, "policy": POLICY, "sources": snapshots, "brief": brief.strip(),
+    recipe_version = (SOFT_PRODUCTION_RECIPE_VERSION if production and production["version"] == 2
+                      else PRODUCTION_RECIPE_VERSION if production is not None else RECIPE_VERSION)
+    recipe = {"version": recipe_version, "policy": POLICY, "sources": snapshots, "brief": brief.strip(),
               "targets": targets, "backend": backend, "model": model, "judge_backend": judge_backend,
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
@@ -474,7 +477,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
             self._production_checkpoints.delete(stage or self.stage, digest(key))
         (self.path / "checkpoints" / (stage or self.stage) / f"{digest(key)}.json").unlink(missing_ok=True)
 
-    def client(self, role):
+    def client(self, role, *, stage=None):
+        stage = stage or self.stage
         if role == "vision":
             from lib.infrastructure.document_vision import require_vision_model
             parser = validate_document_parser(self.recipe.get("document_parser"))
@@ -485,15 +489,15 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
             cache = getattr(self._local, "clients", None)
             if cache is None:
                 cache = self._local.clients = {}
-            cache_key = (self.stage, role)
+            cache_key = (stage, role)
             client = cache.get(cache_key)
             if client is None:
                 prefix = f"{role}_" if role in {"judge", "jev"} else ""
-                binding = self.recipe.get("node_models", {}).get(self.stage, {}).get(role, {})
+                binding = self.recipe.get("node_models", {}).get(stage, {}).get(role, {})
                 pins = self.recipe.get("endpoint_pins")
                 if pins is not None and not isinstance(pins, dict):
                     raise ValueError("workflow_endpoint_pin_invalid")
-                stage_pins = pins.get(self.stage, {}) if pins is not None else {}
+                stage_pins = pins.get(stage, {}) if pins is not None else {}
                 if not isinstance(stage_pins, dict):
                     raise ValueError("workflow_endpoint_pin_invalid")
                 pin = stage_pins.get(role)
@@ -515,7 +519,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
             endpoint_identity += "|" + api_format
         identity = {"model": getattr(client, "model", type(client).__name__),
                     "endpoint_hash": digest(endpoint_identity)}
-        model_key = f"{self.stage}.{role}" if self.recipe.get("node_models", {}).get(self.stage, {}).get(role) else role
+        model_key = f"{stage}.{role}" if self.recipe.get("node_models", {}).get(stage, {}).get(role) else role
         with self._lock:
             pinned = self.state.setdefault("models", {}).get(model_key)
             if pinned and pinned != identity:
@@ -524,6 +528,29 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
             self._client_locks.setdefault(id(client), threading.Lock())
             self.save(force=False)
         return client
+
+    def historical_prompt(self, prompt_id):
+        """Resolve a pre-node-template recipe by its saved asset version.
+
+        Older catalogs may omit later prompt ids. Their historical fallback
+        is version 1.0.0, never the newest registered default. A saved pin must
+        still match the retained version's exact template hash.
+        """
+        pins = self.recipe.get("prompts", {})
+        if not isinstance(pins, dict):
+            raise ValueError("prompts_changed_create_new_run")
+        pinned = pins.get(prompt_id)
+        if pinned is not None and (not isinstance(pinned, dict) or set(pinned) != {"version", "sha256"}
+                or not isinstance(pinned.get("version"), str)):
+            raise ValueError("prompts_changed_create_new_run")
+        version = pinned["version"] if pinned is not None else "1.0.0"
+        try:
+            spec = get(prompt_id, version=version)
+        except (KeyError, TypeError) as error:
+            raise ValueError("prompts_changed_create_new_run") from error
+        if pinned is not None and digest(spec.template) != pinned["sha256"]:
+            raise ValueError("prompts_changed_create_new_run")
+        return spec
 
     def prompt_text(self, prompt_id, *, stage=None):
         """Resolve by node as well as step, without formatting user-owned text."""
@@ -535,21 +562,21 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("invalid_node_prompt_snapshot")
             return text
-        return render(get(prompt_id))
+        return render(self.historical_prompt(prompt_id))
 
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
-            allow_reasoning_fallback=True):
+            allow_reasoning_fallback=True, model_stage=None, prompt_stage=None):
         journal = None
         def invoke():
             nonlocal journal
             self.check_cancel()
-            client = self.client(role)
+            client = self.client(role, stage=model_stage) if model_stage is not None else self.client(role)
             with self._client_locks[id(client)]:
                 self.check_cancel()
                 before = dict(getattr(client, "usage", {}))
                 self.event("model_started", role=role)
                 try:
-                    binding = self.recipe.get("node_models", {}).get(self.stage, {}).get(role, {})
+                    binding = self.recipe.get("node_models", {}).get(model_stage or self.stage, {}).get(role, {})
                     streaming = {}
                     if isinstance(client, ChatClient):
                         first = key[0] if isinstance(key, (list, tuple)) and key else key
@@ -562,8 +589,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                             journal(event)
                         streaming["on_stream"] = received
                     base_system = (self.recipe["node_prompt_system"] if self.recipe.get("version", 0) >= 9
-                                   else render(get("workflow.system")))
-                    system = base_system + "\n" + self.prompt_text(prompt_id)
+                                   else render(self.historical_prompt("workflow.system")))
+                    system = base_system + "\n" + (self.prompt_text(prompt_id, stage=prompt_stage)
+                        if prompt_stage is not None else self.prompt_text(prompt_id))
                     if instruction is not None:
                         system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
                     visible_only = (not allow_reasoning_fallback or prompt_id in {
@@ -1105,6 +1133,17 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                                else "no_external_source")
         reviews = []
         quotes_by_turn = []
+        adaptive_dialogue = (contract is not None and contract.get("dialogue_design") is not None
+            and self.recipe.get("qa_director", {}).get("planning_mode") == "adaptive")
+        dialogue_steps = []
+        dialogue_state = ({"user_intent": contract["dialogue_design"].get("user_intent", ""),
+            "progress": "", "shared_understanding": [], "open_issues": [],
+            "active_constraints": [], "context_links": []} if adaptive_dialogue else None)
+        dialogue_end_reason = "turn_limit"
+        dialogue_end_guidance = ""
+        dialogue_state_after_turn = 0
+        if adaptive_dialogue:
+            source_context["dialogue_design"] = contract["dialogue_design"]
         if unit["kind"] == "conversation":
             messages = deepcopy(unit["messages"])
             ends, issue = completed_turn_ends(messages)
@@ -1121,11 +1160,34 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
         else:
             messages = []
             raw_user_messages = []
+            finished_dialogue = False
             for turn_index in range(self.recipe.get("conversation_turns", 3)):
                 feedback = None
                 for attempt in range(2):
+                    planned_step = None
+                    current_dialogue_state = dialogue_state
                     if contract is not None and turn_index == 0:
                         user_data = {"message": contract["question"]}
+                    elif adaptive_dialogue:
+                        try:
+                            planned_step = self.next_dialogue_step(unit, messages, dialogue_state,
+                                attempt=attempt, feedback=feedback)
+                        except DialoguePlanError:
+                            feedback = "invalid_dialogue_step"
+                            continue
+                        if not planned_step["continue"]:
+                            dialogue_steps.append({"after_turn": turn_index, **planned_step})
+                            # This is still an untrusted summary. The final
+                            # independent whole-dialogue review checks it
+                            # against actual messages and source evidence.
+                            dialogue_state = planned_step["dialogue_state"]
+                            dialogue_state_after_turn = turn_index
+                            dialogue_end_reason = "natural_completion"
+                            dialogue_end_guidance = planned_step["reason"]
+                            finished_dialogue = True
+                            break
+                        current_dialogue_state = planned_step["dialogue_state"]
+                        user_data = {"message": planned_step["user_message"]}
                     else:
                         user_data = self.ask([unit["id"], "multiturn_user", turn_index, attempt],
                             "generation", "workflow.multiturn_user",
@@ -1137,7 +1199,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                     if text_issue(user_text) or len(user_text) > (12000 if contract is not None and turn_index == 0 else 6000):
                         feedback = "用户消息为空、含敏感信息或过长"
                         continue
-                    if any(same_answer(user_text, previous) for previous in raw_user_messages):
+                    surface_repetition = any(same_answer(user_text, previous) for previous in raw_user_messages)
+                    if surface_repetition and not adaptive_dialogue:
                         feedback = "不能重复之前的用户问题"
                         continue
                     if turn_index == 0 and contract is not None:
@@ -1151,7 +1214,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                     user_message = {"role": "user", "content": user_text}
                     response = self.ask([unit["id"], "multiturn_answer", turn_index, attempt],
                         "generation", "workflow.multiturn_assistant",
-                        {**source_context, "messages": [*messages, user_message], "feedback": feedback},
+                        {**source_context, "messages": [*messages, user_message], "feedback": feedback,
+                         **({"dialogue_state": current_dialogue_state,
+                             "dialogue_step": planned_step} if adaptive_dialogue else {})},
                         **({"instruction": "遵循问答指导契约和回答规则。首轮严格遵循answer_policy；"
                             "后续按用户新提供的信息回答，仍须区分教师证据与用户可见证据，"
                             "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
@@ -1163,6 +1228,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                         feedback = "回答或逐字证据结构不合格"
                         continue
                     if unit["kind"] == "document" and ((not quotes and
+                            not adaptive_dialogue and
                             (contract is None or contract["answer_policy"] in {"answer", "correct_premise"})) or any(
                             not isinstance(quote, str) or not quote.strip() or quote not in unit["text"]
                             for quote in quotes)):
@@ -1179,13 +1245,18 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                         continue
                     check = self.judge_answer([unit["id"], "multiturn_turn", turn_index, attempt],
                         {**source_context, "dialogue_before_answer": [*messages, user_message],
-                         "quotes": quotes, "source_text": unit.get("text")}, assistant_message)
+                         "quotes": quotes, "source_text": unit.get("text"),
+                         **({"dialogue_state": current_dialogue_state,
+                             "dialogue_step": planned_step,
+                             "surface_repetition": surface_repetition} if adaptive_dialogue else {})}, assistant_message)
                     if not accepted(check):
                         feedback = check["reason"]
                         continue
                     contract_check = (self.qa_contract_check(
                         [unit["id"], "multiturn_contract", turn_index, attempt], unit, candidate,
-                        prompt_id="workflow.multiturn_directed_check") if contract is not None else None)
+                        prompt_id="workflow.multiturn_directed_check",
+                        **({"dialogue_state": current_dialogue_state,
+                            "dialogue_steps": dialogue_steps} if adaptive_dialogue else {})) if contract is not None else None)
                     if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
                         feedback = contract_check["reason"]
                         continue
@@ -1193,19 +1264,34 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                     raw_user_messages.append(user_data["message"])
                     reviews.append({"turn": turn_index + 1, "end_message_index": len(messages) - 1,
                                     "judge": check, "repair_attempts": attempt,
+                                    **({"surface_repetition": surface_repetition} if adaptive_dialogue else {}),
                                     **({"qa_contract_check": contract_check} if contract_check is not None else {})})
                     quotes_by_turn.append(quotes)
+                    if adaptive_dialogue:
+                        dialogue_state = current_dialogue_state
+                        dialogue_state_after_turn = turn_index
+                        dialogue_steps.append({"turn": turn_index + 1,
+                            **(planned_step if planned_step is not None else {
+                                "continue": True, "user_message": contract["question"],
+                                "reason": "initial_design", "dialogue_state": dialogue_state})})
                     break
                 else:
                     return [{**self.rejected(unit, "multiturn_turn_failed_after_repair"),
                              "failed_turn": turn_index + 1, "feedback": feedback,
                              "turn_reviews": reviews, "evidence_level": evidence_level}]
+                if finished_dialogue:
+                    break
             ends, issue = completed_turn_ends(messages)
             if issue:
                 return [self.rejected(unit, issue)]
         consistency = self.judge_answer([unit["id"], "multiturn_consistency"],
             {**source_context, "evidence_level": evidence_level, "turn_reviews": reviews,
-             "source_text": unit.get("text"), "whole_dialogue": True},
+             "source_text": unit.get("text"), "whole_dialogue": True,
+             **({"dialogue_state": dialogue_state, "dialogue_steps": dialogue_steps,
+                 "dialogue_end_reason": dialogue_end_reason,
+                 "dialogue_state_after_turn": dialogue_state_after_turn,
+                 "dialogue_state_scope": "final_summary" if dialogue_end_reason == "natural_completion" else "before_last_turn",
+                 "dialogue_end_guidance": dialogue_end_guidance} if adaptive_dialogue else {})},
             messages, prompt_id="workflow.multiturn_consistency")
         if not accepted(consistency):
             return [{**self.rejected(unit, "multiturn_consistency_rejected"),
@@ -1223,6 +1309,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                      else "not_applicable"),
                  "turn_count": len(ends), "turn_reviews": reviews, "consistency": consistency,
                  "quotes_by_turn": quotes_by_turn,
+                 **({"dialogue_design": contract["dialogue_design"], "dialogue_steps": dialogue_steps,
+                     "dialogue_state": dialogue_state, "dialogue_end_reason": dialogue_end_reason,
+                     "dialogue_state_after_turn": dialogue_state_after_turn,
+                     "dialogue_state_scope": "final_summary" if dialogue_end_reason == "natural_completion" else "before_last_turn",
+                     "dialogue_end_guidance": dialogue_end_guidance} if adaptive_dialogue else {}),
                  **({"qa_contract": contract, "family_id": unit["family_id"],
                      "parent_id": unit.get("parent_id")} if contract is not None else {}),
                  "source_text_sha256": digest(unit["text"]) if unit.get("text") else None}]
@@ -1999,9 +2090,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector):
                                                   self.recipe.get("node_prompt_system"),
                                                   recipe_version=self.recipe["version"])
                 else:
-                    current_prompts = prompt_versions()
-                    if any(current_prompts.get(key) != pinned for key, pinned in self.recipe["prompts"].items()):
+                    if not isinstance(self.recipe.get("prompts"), dict):
                         raise ValueError("prompts_changed_create_new_run")
+                    for key in self.recipe["prompts"]:
+                        self.historical_prompt(key)
                 for source in self.recipe["sources"]:
                     if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
                         raise ValueError("source_snapshot_changed")

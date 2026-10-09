@@ -30,7 +30,8 @@ def test_fresh_workbench_defaults_to_one_sft_goal():
     assert not ui.exception
     assert ui.pills(key="workflow-targets:fixture:自动推荐").value == ["sft"]
     assert ui.toggle(key="workflow-production-enabled:fixture").value is True
-    assert ui.number_input(key="workflow-count:fixture").label == "目标合格数量"
+    assert ui.number_input(key="workflow-count:fixture").label == "期望样本量（非必达）"
+    assert ui.selectbox(key="workflow-production-policy:fixture").value == "quality_first"
     assert ui.number_input(key="workflow-max-units:fixture").max == 1000000
 
 
@@ -171,7 +172,35 @@ def test_stop_limits_follow_shared_goal_and_custom_limits_survive_reuse(tmp_path
     assert fresh.session_state["fixture-production"]["min_acceptance_rate"] == .05
     fresh.button(key="production-limits-reset:fixture").click().run()
     assert fresh.session_state["fixture-production"]["max_attempts"] == 3000000
-    assert fresh.session_state["fixture-production"]["min_acceptance_rate"] == .01
+    assert fresh.session_state["fixture-production"]["min_acceptance_rate"] == .2
+
+
+def test_scope_policy_survives_restart_and_copy(tmp_path):
+    ui = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
+    ui.selectbox(key="workflow-production-policy:fixture").set_value("bounded_replenishment").run()
+    config = ui.session_state["fixture-production"]
+    assert config["version"] == 2 and config["quantity_policy"] == "bounded_replenishment"
+    from lib.presentation.streamlit.workflow_reuse import recipe_to_draft
+    copied = recipe_to_draft({"sources": [], "targets": ["sft", "dpo"], "production": config},
+                             "Scenario expansion", "fixture", [])["values"]
+    creation_draft_application(tmp_path).replace(copied)
+    fresh = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
+    assert not fresh.exception
+    assert fresh.selectbox(key="workflow-production-policy:fixture").value == "bounded_replenishment"
+    assert fresh.session_state["fixture-production"] == config
+
+
+def test_completed_below_expectation_is_informational_not_a_warning():
+    def screen():
+        from lib.presentation.streamlit.workflow_production_settings import render_delivery_progress
+        render_delivery_progress({"status": "completed", "production": {
+            "version": 2, "stop_reason": "source_coverage_complete", "goals": {
+                "sft": {"goal": 1000, "eligible": 20, "stop_reason": "source_coverage_complete"}}}})
+    ui = AppTest.from_function(screen).run()
+    assert not ui.exception and not ui.warning
+    assert "20 / 1,000" in ui.get("progress")[0].proto.text
+    assert any("实际产出 / 期望规模" in item.value for item in ui.markdown)
+    assert any("当前素材已覆盖" in item.value for item in ui.caption)
 
 
 def vision_workbench_screen(output, confirmed, with_services=False):

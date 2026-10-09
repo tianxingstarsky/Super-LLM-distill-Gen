@@ -1286,7 +1286,7 @@ def build_parser():
     p_workflow.add_argument("--chunk-chars", type=int, default=2000)
     p_workflow.add_argument("--tasks", type=int, default=10)
     p_workflow.add_argument("--sample-count", type=int, help="候选规模，最多 100000；最终数量取决于质检")
-    p_workflow.add_argument("--production", help="合格产量、有限补齐与任务预算的 JSON 配置文件；每类最多 1000000 条")
+    p_workflow.add_argument("--production", help="期望规模、质量优先或可选扩写与预算的 JSON 配置文件；新策略使用 version=2，每类最多 1000000 条")
     p_workflow.add_argument("--concurrency", type=int, default=1, help="节点内并发上限，1–16")
     p_workflow.add_argument("--batch-size", type=int, default=100, help="每批候选数，1–500")
     p_workflow.add_argument("--node-models", help="节点模型配置 JSON 文件，仅包含 backend 与 model")

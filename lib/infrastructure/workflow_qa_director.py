@@ -17,6 +17,7 @@ from filelock import FileLock, Timeout
 
 from lib.domain.workflow_qa_director import (
     allocate_qa_types, validate_director_task, validate_qa_director,
+    validate_director_skip, validate_dialogue_step,
 )
 from lib.domain.workflow_quality import accepted, canonical, conversation_issue, text_issue
 from lib.domain.workflow_scale import DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS
@@ -37,7 +38,8 @@ def learner_prompt(contract):
     """This is the only contract projection permitted in training messages."""
     question = contract["question"]
     if contract["visible_context"]:
-        return "资料：\n" + contract["visible_context"] + "\n\n问题：\n" + question
+        label = "用户消息：" if contract.get("dialogue_design") else "问题："
+        return "资料：\n" + contract["visible_context"] + "\n\n" + label + "\n" + question
     return question
 
 
@@ -51,7 +53,19 @@ class DirectorPlanError(ValueError):
         super().__init__(self.code)
 
 
+class DialoguePlanError(ValueError):
+    code = "invalid_dialogue_step"
+
+    def __init__(self):
+        super().__init__(self.code)
+
+
 class WorkflowQADirector:
+    def qa_identity_design(self, contract):
+        """Only adaptive contracts opt in; old persistent identities stay valid."""
+        return (contract.get("dialogue_design")
+                if self.recipe.get("qa_director", {}).get("planning_mode") == "adaptive" else None)
+
     def _invalidate_director_call(self, key, *, stage=None):
         stage = stage or self.stage
         invalidate = getattr(self, "invalidate_checkpoint", None)
@@ -94,6 +108,7 @@ class WorkflowQADirector:
         c = row["qa_contract"]
         duplicate = history.duplicate(c["question"], visible_context=c["visible_context"],
             answer_policy=c["answer_policy"], qa_type=c["qa_type"],
+            dialogue_design=self.qa_identity_design(c),
             namespace="multiturn" if target == "multiturn" else "sft")
         return duplicate if duplicate and duplicate.get("run_id") != self.state["id"] else None
 
@@ -113,9 +128,12 @@ class WorkflowQADirector:
                 "source_id": row.get("source_id"), "status": "eligible",
                 "question": contract["question"], "answer": answer,
                 "qa_type": contract["qa_type"], "visible_context": contract["visible_context"],
-                "answer_policy": contract["answer_policy"]}
+                "answer_policy": contract["answer_policy"],
+                **({"dialogue_design": self.qa_identity_design(contract)}
+                   if self.qa_identity_design(contract) is not None else {})}
 
-    def qa_contract_check(self, key, unit, messages, *, prompt_id="workflow.sft_directed_check"):
+    def qa_contract_check(self, key, unit, messages, *, prompt_id="workflow.sft_directed_check",
+                          dialogue_state=None, dialogue_steps=None):
         contract = unit["qa_contract"]
         source = unit.get("source_context", unit)
         if not isinstance(source, dict):
@@ -127,6 +145,8 @@ class WorkflowQADirector:
             "answer_rules": self.recipe["qa_director"]["answer_rules"],
             "question_rules": self.recipe["qa_director"]["question_rules"],
             "source_kind": source.get("kind", "brief"), "history_is_not_evidence": True,
+            **({"dialogue_state": dialogue_state} if dialogue_state is not None else {}),
+            **({"dialogue_steps": dialogue_steps} if dialogue_steps is not None else {}),
         }, allow_reasoning_fallback=False)
         if (not isinstance(value, dict) or set(value) != {"keep", "adherence", "reason"}
                 or type(value.get("keep")) is not bool
@@ -136,6 +156,37 @@ class WorkflowQADirector:
             self._invalidate_director_call(key)
             raise ValueError("invalid_qa_director_judge_schema")
         return value
+
+    def next_dialogue_step(self, unit, messages, previous_state, *, attempt=0, feedback=None):
+        """Replan from actual accepted messages using the director node binding.
+
+        Never change self.stage: different conversations can be generated in
+        parallel. The request and response stay in the current worker's durable
+        checkpoints while model and editable prompt are resolved at director.
+        """
+        key = [unit["id"], "dialogue_director", len(messages) // 2, attempt, _digest(messages)]
+        data = {
+            "request_phase": "next_turn", "planning_mode": "adaptive",
+            "qa_contract": unit["qa_contract"],
+            "dialogue_design": unit["qa_contract"].get("dialogue_design", {}),
+            "dialogue_messages": messages, "previous_dialogue_state": previous_state,
+            "teacher_evidence": unit.get("text", "")[:20_000],
+            "teacher_evidence_not_shared_understanding": True,
+            "completed_turns": len(messages) // 2,
+            "maximum_turns": self.recipe.get("conversation_turns", 3),
+            "question_rules": self.recipe["qa_director"]["question_rules"],
+            "answer_rules": self.recipe["qa_director"]["answer_rules"], "feedback": feedback,
+        }
+        try:
+            value = self.ask(key, "generation", "workflow.qa_director", data,
+                allow_reasoning_fallback=False, model_stage="director", prompt_stage="director")
+        except ModelJSONError as error:
+            raise DialoguePlanError() from error
+        try:
+            return validate_dialogue_step(value, completed_turns=len(messages) // 2)
+        except ValueError as error:
+            self._invalidate_director_call(key)
+            raise DialoguePlanError() from error
 
     @staticmethod
     def qa_metadata(sample, check=None):
@@ -221,7 +272,9 @@ class WorkflowQADirector:
         if not guided:
             return batch
         key = ["director_batch", offset, _digest(guided)]
-        assigned = allocate_qa_types(len(guided), config["type_weights"], offset=offset)
+        adaptive = config.get("planning_mode", "balanced") == "adaptive"
+        assigned = ((None,) * len(guided) if adaptive else
+                    allocate_qa_types(len(guided), config["type_weights"], offset=offset))
         def snapshot():
             limit = config["history_limit"]
             history = []
@@ -254,6 +307,10 @@ class WorkflowQADirector:
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
                     "targets": list(stages)}
+            if adaptive:
+                data.update(request_phase="batch_design", planning_mode="adaptive",
+                    evidence_modes=list(config["type_weights"]),
+                    type_weights_are_not_quotas=True)
             binding = self.recipe.get("node_models", {}).get("director", {}).get("generation", {})
             context_limit = binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
             output_limit = binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
@@ -280,7 +337,7 @@ class WorkflowQADirector:
             return data
         inputs = self.checkpoint([*key, "inputs"], snapshot)
         def plan():
-            production = self.recipe.get("version", 0) >= 12 and self.recipe.get("production") is not None
+            production = adaptive or (self.recipe.get("version", 0) >= 12 and self.recipe.get("production") is not None)
             repair_feedback = None
             for attempt in range(3 if production else 1):
                 call_key = [*key, "plan"] if attempt == 0 else [*key, "plan", attempt]
@@ -305,8 +362,14 @@ class WorkflowQADirector:
                         raise ValueError("qa_director_batch_id_mismatch")
                     contracts = {}
                     for candidate in inputs["candidates"]:
+                        task = by_id[candidate["id"]]
+                        if adaptive and "skip_reason" in task:
+                            contracts[candidate["id"]] = validate_director_skip(task, candidate["id"])
+                            continue
+                        if adaptive and "dialogue_design" not in task:
+                            raise ValueError("qa_director_dialogue_design_required")
                         contracts[candidate["id"]] = validate_director_task(
-                            by_id[candidate["id"]], expected_type=candidate["assigned_type"],
+                            task, expected_type=candidate["assigned_type"],
                             source_text=candidate["teacher_evidence"],
                             expected_id=candidate["id"])
                     return contracts
@@ -318,7 +381,8 @@ class WorkflowQADirector:
                     # rejected model response, provider text or source excerpts.
                     repair_feedback = {
                         "code": "qa_director_contract_validation_failed",
-                        "instruction": "返回与 candidates 数量及 id 完全一致的 tasks；保持分配题型。"
+                        "instruction": "返回与 candidates 数量及 id 完全一致的 tasks；balanced 保持分配题型，"
+                            "adaptive 选择依据合适的类型并附 dialogue_design，或明确 skip_reason。"
                             "字段与类型须符合模板，visible_context 和 evidence_quotes 必须逐字来自对应"
                             " teacher_evidence；无线索题的 visible_context 必须为空。不得新增资料或引用历史为事实。",
                         "attempt": attempt + 1,
@@ -347,6 +411,13 @@ class WorkflowQADirector:
                 result.append(unit)
                 continue
             contract = contracts[unit["id"]]
+            if "skip_reason" in contract:
+                result.append({**unit, "director_skip_reason": contract["skip_reason"],
+                               "director_skip_guidance": contract.get("guidance", "")})
+                feedback = self.state["qa_director"]["feedback"]
+                feedback[contract["skip_reason"]] = feedback.get(contract["skip_reason"], 0) + 1
+                self.state["qa_director"]["skipped"] = self.state["qa_director"].get("skipped", 0) + 1
+                continue
             result.append({**unit, "qa_contract": contract,
                            "family_id": _digest([unit["source_id"], contract["question"]]),
                            "parent_id": unit.get("generation_variant", {}).get("source_unit_id", unit["id"]),
@@ -356,7 +427,9 @@ class WorkflowQADirector:
         metrics = self.state["stages"]["director"]
         metrics["done"] += len(guided)
         metrics["outputs"] += len(guided)
-        metrics["eligible"] += len(guided)
+        skipped = sum(bool(unit.get("director_skip_reason")) for unit in result)
+        metrics["eligible"] += len(guided) - skipped
+        metrics["quarantined"] += skipped
         metrics["batches_done"] += 1
         self.state["qa_director"]["batches_planned"] += 1
         self.save()
@@ -374,7 +447,8 @@ class WorkflowQADirector:
             if not unit.get("qa_contract"):
                 continue
             c = unit["qa_contract"]
-            identity = contract_identity(c["question"], c["visible_context"], c["answer_policy"], c["qa_type"])
+            identity = contract_identity(c["question"], c["visible_context"], c["answer_policy"], c["qa_type"],
+                                         dialogue_design=self.qa_identity_design(c))
             if identity in registered:
                 duplicates[index] = registered[identity]
             else:
@@ -388,6 +462,9 @@ class WorkflowQADirector:
             def generate():
                 if unit.get("director_plan_failure"):
                     return [self.rejected(unit, DirectorPlanError.code)]
+                if unit.get("director_skip_reason"):
+                    return [{**self.rejected(unit, unit["director_skip_reason"]),
+                             "director_skip_guidance": unit.get("director_skip_guidance", "")}]
                 if unit.get("qa_contract"):
                     c = unit["qa_contract"]
                     def dispatch():
@@ -395,11 +472,13 @@ class WorkflowQADirector:
                             return {"reason": "duplicate_qa_contract_in_batch", "duplicate_of": duplicates[index - offset]}
                         duplicate = local_history.duplicate(c["question"], visible_context=c["visible_context"],
                             answer_policy=c["answer_policy"], qa_type=c["qa_type"], namespace=stage,
+                            dialogue_design=self.qa_identity_design(c),
                             exclude_id=self.state["id"] + ":" + unit["id"])
                         if duplicate:
                             return {"reason": "duplicate_qa_contract", "duplicate_of": duplicate["id"]}
                         duplicate = published_history.duplicate(c["question"], visible_context=c["visible_context"],
-                            answer_policy=c["answer_policy"], qa_type=c["qa_type"], namespace=stage)
+                            answer_policy=c["answer_policy"], qa_type=c["qa_type"], namespace=stage,
+                            dialogue_design=self.qa_identity_design(c))
                         if duplicate and duplicate.get("run_id") != self.state["id"]:
                             return {"reason": "duplicate_qa_contract", "duplicate_of": duplicate["id"]}
                         return {"reason": None}
@@ -461,10 +540,12 @@ class WorkflowQADirector:
                     previous_batch = current_batch
         self.state["qa_director"] = {
             "enabled": True, "batches_planned": 0, "batch_size": config["batch_size"],
+            "planning_mode": config.get("planning_mode", "balanced"), "skipped": 0,
             "history_limit": config["history_limit"], "coverage": {
                 qa_type: {"planned": 0, "assigned": 0, "accepted": 0, "rejected": 0} for qa_type in config["type_weights"]},
             "feedback": {}, "recorded_conversations_preserved": len(units) - guided_count,
-            "deduplication": "normalized_exact_question_context_type_policy",
+            "deduplication": ("exact_message_context_type_policy_goal_intent" if config.get("planning_mode") == "adaptive"
+                              else "normalized_exact_question_context_type_policy"),
             "history_recall": "bounded_lexical_examples_not_evidence",
             "teacher_evidence_export": "only_explicit_visible_context",
             "acceptance_basis": "generation_quality_and_contract_checks",
@@ -494,12 +575,14 @@ class WorkflowQADirector:
                     planned = self._director_batch_plan(batch, offset, config, local_history, published_history, stages)
                     for unit in planned:
                         plans.write(canonical({"id": unit["id"], "source_id": unit["source_id"],
-                            "status": "quarantined" if unit.get("director_plan_failure") else "ready",
+                            "status": "quarantined" if unit.get("director_plan_failure") or unit.get("director_skip_reason") else "ready",
                             **({"reason": unit["director_plan_failure"]} if unit.get("director_plan_failure") else {}),
+                            **({"reason": unit["director_skip_reason"],
+                                "guidance": unit.get("director_skip_guidance", "")} if unit.get("director_skip_reason") else {}),
                             "qa_contract": unit.get("qa_contract"),
                             "family_id": unit.get("family_id"), "director_batch": unit.get("director_batch"),
                             "route": "recorded_conversation_preserved" if unit["kind"] == "conversation" else
-                                [] if unit.get("director_plan_failure") else list(stages)}) + "\n")
+                                [] if unit.get("director_plan_failure") or unit.get("director_skip_reason") else list(stages)}) + "\n")
                     plans.flush()
                     for stage in stages:
                         self._directed_worker_batch(stage, planned, offset, handles[stage], local_history, published_history)

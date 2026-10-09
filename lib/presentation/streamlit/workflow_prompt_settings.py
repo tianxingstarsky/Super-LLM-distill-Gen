@@ -34,7 +34,7 @@ PROMPT_LABELS = {
     "workflow.trim_check": "语义保留核验",
     "workflow.trim_rules_check": "修剪规则核验",
     "workflow.package_review": "打包前 AI 评审",
-    "workflow.qa_director": "问答任务调度",
+    "workflow.qa_director": "对话设计与逐轮指导",
     "workflow.sft_directed": "按指导任务生成问答",
     "workflow.sft_directed_check": "问答规则与线索核验",
     "workflow.multiturn_directed_check": "整段问答规则核验",
@@ -126,7 +126,7 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
     with st.container(key=f"workbench-node-prompts:{node}"):
         st.html('<p class="df-node-prompt-heading"><strong>'
                 + html.escape(translate("节点提示词", language)) + '</strong></p>')
-        st.caption("完整模板决定处理步骤与输出字段；风格指令只补充表达要求，指导员规则只约束问答任务。开始运行后全部固定。")
+        st.caption("完整模板决定处理步骤与输出字段；风格指令补充表达要求，指导员指令设计互动与任务推进。开始运行后全部固定。")
         step, reset = st.columns([1.65, 1], gap="small", vertical_alignment="bottom")
         with step:
             prompt_id = st.selectbox("处理步骤", prompts, key=selection_key,

@@ -40,7 +40,9 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'})}
 ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'vision'}),
-                    'workflow-agent-mode': frozenset({'local', 'isolated'})})
+                    'workflow-agent-mode': frozenset({'local', 'isolated'}),
+                    'workflow-production-policy': frozenset({'quality_first', 'bounded_replenishment'}),
+                    'workflow-director-mode': frozenset({'adaptive', 'balanced'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
                   'workflow-production-enabled'}

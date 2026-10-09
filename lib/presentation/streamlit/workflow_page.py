@@ -96,8 +96,8 @@ def _save_sft_output_style(workspace: str) -> None:
 
 def _workflow_error(error) -> str:
     return {
-        "invalid_production": "生产目标配置无效，请检查合格数量与预算。",
-        "invalid_production_goals": "合格目标应为每类 1 到 1,000,000 条。",
+        "invalid_production": "生产计划配置无效，请检查期望数量与预算。",
+        "invalid_production_goals": "期望数量应为每类 1 到 1,000,000 条。",
         "invalid_production_limits": "生产限制无效，请检查数量、轮数与预算。",
         "budget_exhausted": "预算不足，任务已暂停。已完成结果与模型响应保留，可检查预算后继续。",
         "service_authentication_failed": "模型服务鉴权失败，请检查本机凭据后继续。",
@@ -115,13 +115,18 @@ def _workflow_error(error) -> str:
         "production_review_integrity_error": "评审断点校验失败，请保留任务文件并检查存储。",
         "production_round_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
         "invalid_package_review": "AI 打包评审配置无效，请检查质检打包节点。",
-        "invalid_qa_director": "问答指导员配置无效，请检查题型配比与规则。",
+        "invalid_qa_director": "对话指导员配置无效，请检查指导方式与指令。",
+        "invalid_qa_director_planning_mode": "指导方式无效，请在指导员节点重新选择。",
+        "invalid_dialogue_design": "对话设计缺少有效目标或字段，请检查指导员提示词。",
+        "invalid_qa_director_skip": "指导员返回了无效的跳过说明，请检查节点提示词。",
+        "invalid_dialogue_step": "后续互动计划无效，已保留成功轮次；请检查指导员提示词。",
+        "dialogue_step_stopped_before_multiturn": "对话未形成完整多轮，已隔离该候选，不补写无效轮次。",
         "invalid_qa_director_batch_size": "每批指导任务数应为 1 到 50，请调整指导员节点。",
         "invalid_qa_director_history_limit": "相似历史参考数应为 0 到 20，请调整指导员节点。",
         "invalid_qa_director_type_weights": "题型配比应为 0 到 100，且至少一种大于 0，请调整指导员节点。",
         "invalid_qa_director_rules": "指导员规则不能为空或含无效字符，且每项最多 12,000 字符。",
         "invalid_qa_director_schedule": "指导员无法分配本批题型，请检查题型配比或复制配置后新建任务。",
-        "qa_director_requires_qa_target": "请先选择问答或偏好训练目标，再开启问答指导员。",
+        "qa_director_requires_qa_target": "请先选择对话或偏好训练目标，再开启对话指导员。",
         "invalid_qa_director_plan": "指导员返回的任务不符合本次规则，请重试当前批次。",
         "invalid_qa_director_batch": "指导员返回的任务数量或结构无效，请重试当前批次。",
         "invalid_qa_director_task": "指导员任务字段无效，请检查节点提示词后重试。",
@@ -144,6 +149,7 @@ def _workflow_error(error) -> str:
         "qa_history_dimension_too_long": "历史问答的题型或策略字段过长，请检查指导员返回格式。",
         "qa_history_sample_id_required": "历史问答缺少有效样本标识，请保留任务记录并重新运行。",
         "qa_history_sample_id_conflict": "样本标识对应的历史问答已发生变化，请保留任务记录并新建任务。",
+        "qa_history_dialogue_design_invalid": "历史互动的目标或意图无效，请检查指导员输出并保留任务记录。",
         "package_review_checkpoint_mismatch": "打包评审检查点与当前样本不一致，请保留任务记录并重新运行。",
         "web_search_not_configured": "网页检索服务未配置。设置检索密钥后可从断点重试。",
         "web_search_provider_error": "网页检索服务暂不可用。可从断点重试本次任务。",
@@ -248,16 +254,20 @@ def _stage_configuration(key, recipe, state):
             details.update({"并发请求上限": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
         if key == "director":
             config = recipe.get("qa_director") or {}
+            adaptive = config.get("planning_mode") == "adaptive"
             details.update({"每批指导任务数": config.get("batch_size"),
                             "相似历史参考数": config.get("history_limit"),
-                            "问答调度指令": UntranslatedText(config.get("question_rules") or "—"),
-                            "回答规则": UntranslatedText(config.get("answer_rules") or "—")})
-            details.update({TYPE_LABELS.get(name, name): weight for name, weight in
-                            config.get("type_weights", {}).items()})
+                            "对话设计指令": UntranslatedText(config.get("question_rules") or "—"),
+                            "回应与任务推进指令": UntranslatedText(config.get("answer_rules") or "—"),
+                            "指导方式": "语言专家自适应" if adaptive else "按线索比例安排"})
+            if not adaptive:
+                details.update({TYPE_LABELS.get(name, name): weight for name, weight in
+                                config.get("type_weights", {}).items()})
         elif key == "cpt":
             details.update({"分块目标字符数": recipe.get("chunk_chars"), "去重": "精确去重与保守近重复检查"})
         elif key == "multiturn":
-            details.update({"每段对话轮数": recipe.get("conversation_turns", 3),
+            adaptive = (recipe.get("qa_director") or {}).get("planning_mode") == "adaptive"
+            details.update({"每段最多轮数" if adaptive else "每段对话轮数": recipe.get("conversation_turns", 3),
                             "质检方式": "逐轮评审 + 全段一致性评审"})
         elif key == "agent":
             details["验证方式"] = "隔离验证" if recipe.get("agent_sandbox_image") else "本地验证"
@@ -308,6 +318,7 @@ STAGE_GLYPHS = {"ingest": "▤", "director": "⌘", "cpt": "▥", "sft": "✎", 
                 "preference": "⚖", "gsm8k": "∑", "cot": "◈", "trim": "✂", "package": "▣"}
 EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节点处理完成",
                 "item_retry": "当前记录正在重试", "production_round_completed": "本轮合格结果已保存",
+                "production_plan_committed": "有效场景规划已保存",
                 "model_started": "模型请求开始", "model_finished": "模型请求完成",
                 "web_search_started": "开始查找公开资料", "web_search_completed": "公开资料检索完成",
                 "run_finished": "工作流运行结束", "run_failed": "工作流运行失败",
@@ -380,7 +391,7 @@ def _quality_html(targets):
     return '<div class="df-run-quality-grid">' + "".join(cards) + "</div>"
 
 
-GRAPH_LABELS = {"ingest": "输入解析", "director": "问答指导员", "cpt": "CPT 语料", "sft": "SFT 生成",
+GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 语料", "sft": "SFT 生成",
                 "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
                 "preference": "偏好评审", "cot": "CoT 推理生成", "trim": "推理链修剪", "package": "质检打包"}
 
@@ -543,9 +554,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     elif status == "failed":
         st.error(f"运行失败：{_workflow_error(state.get('error', 'unknown'))}。已完成的步骤与模型响应已保存。")
     elif status == "completed":
-        st.success("所选目标已完成，训练文件与质量报告已生成。")
+        st.success("生产已结束，按实际合格数量交付；训练文件与质量报告已生成。")
     elif status == "needs_attention":
-        if state.get("production"):
+        if (state.get("production") or {}).get("version", 1) >= 2:
+            st.warning("本次生产有未完成的处理，请查看停止原因与质量报告；已合格结果仍可导出。")
+        elif state.get("production"):
             st.warning("运行已结束，部分合格目标尚未达到。已合格结果可导出；调整配置后可创建新任务。")
         elif any(row.get("package_review", {}).get("rejected", 0)
                for row in state.get("quality", {}).get("targets", {}).values()):
@@ -1136,7 +1149,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if "multiturn" in targets:
             st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
         if qa_director["enabled"] and source_mode == "Agent 上下文":
-            st.caption("已有完整对话保留原文并绕过指导员；指导员只安排文档与开放需求生成的问答。")
+            st.caption("已有完整对话保留原文并绕过指导员；指导员只设计文档与开放需求生成的新互动。")
     model_issues = []
     pricing_issues = []
     sft_output_style = None
@@ -1384,7 +1397,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 render_knowledge_preview(ws)
         with setup_col, st.container(
                 border=True, key="workbench-parameters-panel"):
-            section_heading("本次生产目标", "合格数量、预算与运行方式", "⚙")
+            section_heading("本次生产计划", "期望规模、预算与运行方式", "⚙")
             scale_col, batch_col = st.container(), st.container()
             with scale_col:
                 default_run_name = ("Automatic data generation"
@@ -1400,8 +1413,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 sample_count, production = render_delivery_goal(
                     ws, targets, source_mode, TARGET_LABELS, _draft_number, _save_draft_value)
                 tasks = sample_count
-                conversation_turns = (_draft_number("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
-                                                      help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
+                adaptive_dialogue = qa_director.get("enabled") and qa_director.get("planning_mode") == "adaptive"
+                conversation_turns = (_draft_number("每段最多轮数" if adaptive_dialogue else "每段对话轮数",
+                                                      2, 8, 3, key=f"workflow-turns:{ws}",
+                                                      help=("根据真实回应推进，达到目的即可结束，不填满轮数；导入的完整对话保持原有轮次。"
+                                                            if adaptive_dialogue else
+                                                            "仅用于新生成的多轮对话；导入的完整对话保持原有轮次。"))
                                       if "multiturn" in targets else 3)
             with batch_col:
                 a, b = st.columns(2, gap="small")
@@ -1449,7 +1466,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if trim_invalid:
                 st.warning("修剪配置尚未完成，请在修剪节点填写有效的自定义模板。")
             if director_invalid:
-                st.warning("请至少保留一种问答类型，并检查指导员规则。")
+                st.warning("指导员配置尚未完成，请检查指导方式与指令。")
             if prompts_invalid:
                 st.warning("节点提示词尚未完成，请在对应节点填写有效正文或恢复内置提示词。")
             style_summary = (translate("分字段保留推理" if sft_output_style == "separated"
@@ -1461,7 +1478,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 goal_text = ", ".join(f"{target.upper()} {count:,}" for target, count in production["goals"].items())
                 goal_text = goal_text or translate("按实际来源处理", language)
                 run_summary = (translate_label(source_mode, language) + " · " +
-                               translate("合格目标", language) + " " + goal_text)
+                               translate("期望规模", language) + " " + goal_text)
                 if production["budget_usd"]:
                     run_summary += f" · USD {production['budget_usd']:,.2f}"
             else:
@@ -1475,7 +1492,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if reasoning_trim["enabled"]:
                 run_summary += " · " + translate("推理链修剪", language)
             if qa_director["enabled"]:
-                run_summary += " · " + translate("问答指导员", language)
+                run_summary += " · " + translate("对话指导员", language)
             if package_review["enabled"]:
                 run_summary += " · " + translate("AI 抽检" if package_review["mode"] == "sample" else "AI 全量评审", language)
             if evaluation_uploads:

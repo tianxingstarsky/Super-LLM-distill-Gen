@@ -25,12 +25,15 @@ def _field(workspace, key, default):
 def director_snapshot(workspace: str, *, eligible=True) -> dict:
     if not eligible or not _field(workspace, f"workflow-director-enabled:{workspace}", False):
         return {"enabled": False}
+    mode = _field(workspace, f"workflow-director-mode:{workspace}", "adaptive")
     return {
         "enabled": True,
+        "planning_mode": mode,
         "batch_size": _field(workspace, f"workflow-director-batch:{workspace}", 20),
         "history_limit": _field(workspace, f"workflow-director-history:{workspace}", 10),
-        "type_weights": {name: _field(workspace, f"workflow-director-weight:{workspace}:{name}", default)
-                         for name, default in DEFAULT_TYPE_WEIGHTS.items()},
+        "type_weights": ({name: _field(workspace, f"workflow-director-weight:{workspace}:{name}", default)
+                          for name, default in DEFAULT_TYPE_WEIGHTS.items()}
+                         if mode == "balanced" else dict(DEFAULT_TYPE_WEIGHTS)),
         "question_rules": _field(workspace, f"workflow-director-question-rules:{workspace}", DEFAULT_QUESTION_RULES),
         "answer_rules": _field(workspace, f"workflow-director-answer-rules:{workspace}", DEFAULT_ANSWER_RULES),
     }
@@ -48,13 +51,20 @@ def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
     eligible = bool(DIRECTED_TARGETS.intersection(targets))
     key = f"workflow-director-enabled:{workspace}"
     st.session_state[key] = _field(workspace, key, False)
-    st.toggle("加入问答指导员", key=key, disabled=not eligible,
+    st.toggle("加入对话指导员", key=key, disabled=not eligible,
               on_change=save_field, args=(workspace, key),
-              help="按批次安排问答类型、线索与回答规则。点击指导员节点配置模型和提示词。")
+              help="结合语言、上下文与资料设计互动，连续多轮按实际回应调整。模型与提示词在节点内配置。")
     return director_snapshot(workspace, eligible=eligible)
 
 
 def render_director_settings(workspace: str, *, save_field) -> None:
+    key = f"workflow-director-mode:{workspace}"
+    st.session_state[key] = _field(workspace, key, "adaptive")
+    language = st.session_state.get("ui_language", "zh")
+    mode_labels = {"adaptive": translate_label("语言专家自适应", language),
+                   "balanced": translate_label("按线索比例安排", language)}
+    mode = st.selectbox("指导方式", tuple(mode_labels), key=key, format_func=mode_labels.__getitem__,
+                        on_change=save_field, args=(workspace, key))
     for name, default in (("batch", 20), ("history", 10)):
         key = f"workflow-director-{name}:{workspace}"
         st.session_state[key] = _field(workspace, key, default)
@@ -67,7 +77,11 @@ def render_director_settings(workspace: str, *, save_field) -> None:
         key = f"workflow-director-history:{workspace}"
         st.number_input("相似历史参考数", min_value=0, max_value=20, key=key,
                         on_change=save_field, args=(workspace, key))
-    st.caption("指导员按批次调度；历史问答只用于避重，不能作为新答案的事实依据。")
+    st.caption("历史样本用于发现重复和设计新的互动，不作为事实依据。")
+    if mode == "adaptive":
+        st.info("指导员结合任务目的、用户表达和上下文自主设计；可以澄清、协商、修改或共同解决问题，不要求问答形式或固定行为配比。")
+        st.caption("多轮根据真实回应推进，达到目的即可结束；资料不足时允许跳过，不为数量或轮数凑内容。")
+        return
     st.markdown("**问答类型配比**")
     language = st.session_state.get("ui_language", "zh")
     columns = st.columns(3, gap="small")
@@ -86,8 +100,8 @@ def render_director_settings(workspace: str, *, save_field) -> None:
 
 def render_director_rules(workspace: str, *, save_field, prompt_library=None) -> None:
     rule_fields = (
-        ("question-rules", "问答调度指令", DEFAULT_QUESTION_RULES, "例如：优先覆盖故障诊断和边界条件，避免反复询问定义。"),
-        ("answer-rules", "回答规则", DEFAULT_ANSWER_RULES, "例如：证据不足时追问缺失条件；有错误前提时先纠正，再给出回答。"),
+        ("question-rules", "对话设计指令", DEFAULT_QUESTION_RULES, "例如：结合用户已有表达，设计共同分析、方案协商和有意义的后续互动。"),
+        ("answer-rules", "回应与任务推进指令", DEFAULT_ANSWER_RULES, "例如：记住前文约束；只在必要时澄清，依据新反馈调整方案。"),
     )
     for name, _, default, _ in rule_fields:
         key = f"workflow-director-{name}:{workspace}"
@@ -101,4 +115,4 @@ def render_director_rules(workspace: str, *, save_field, prompt_library=None) ->
         key = f"workflow-director-{name}:{workspace}"
         st.text_area(label, key=key, height=100, max_chars=12000, placeholder=placeholder,
                      on_change=save_field, args=(workspace, key))
-    st.caption("规则随任务固定保存；生成与评审都会收到本题规则。下方可编辑或导入完整的指导员提示词。")
+    st.caption("指令随任务固定；规划、生成与评审共享对话目标和实际进展。可恢复默认，也可保存个人模板。")

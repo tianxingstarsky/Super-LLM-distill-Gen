@@ -70,16 +70,32 @@ def _dimension(value, fallback: str) -> str:
     return result
 
 
-def _identity(question: str, visible_context, answer_policy, qa_type) -> str:
+def _design_dimensions(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("qa_history_dialogue_design_invalid")
+    goal, intent = value.get("interaction_goal"), value.get("user_intent", "")
+    if (not isinstance(goal, str) or not goal.strip() or len(goal) > 4000 or "\x00" in goal
+            or not isinstance(intent, str) or len(intent) > 2000 or "\x00" in intent):
+        raise ValueError("qa_history_dialogue_design_invalid")
+    return _exact_text(goal, strip=True), _exact_text(intent, strip=True)
+
+
+def _identity(question: str, visible_context, answer_policy, qa_type, dialogue_design=None) -> str:
     contract = [_exact_text(question, strip=True), _exact_text(visible_context),
                 _dimension(answer_policy, "answer"), _dimension(qa_type, "closed_book")]
+    dimensions = _design_dimensions(dialogue_design)
+    if dimensions is not None:
+        contract.append(["dialogue_design_v1", *dimensions])
     return hashlib.sha256(json.dumps(contract, ensure_ascii=False,
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def contract_identity(question, visible_context="", answer_policy="answer", qa_type="closed_book") -> str:
+def contract_identity(question, visible_context="", answer_policy="answer", qa_type="closed_book", *,
+                      dialogue_design=None) -> str:
     """Use the same exact contract key for bounded pre-dispatch registration."""
-    return _identity(_question(question), visible_context, answer_policy, qa_type)
+    return _identity(_question(question), visible_context, answer_policy, qa_type, dialogue_design)
 
 
 def _terms(question: str) -> tuple[str, ...]:
@@ -145,6 +161,8 @@ class QAHistory:
                 source_id TEXT NOT NULL,
                 source_name TEXT NOT NULL,
                 run_id TEXT NOT NULL,
+                dialogue_goal TEXT NOT NULL DEFAULT '',
+                dialogue_intent TEXT NOT NULL DEFAULT '',
                 UNIQUE(namespace, sample_id),
                 UNIQUE(namespace, identity)
             );
@@ -169,6 +187,19 @@ class QAHistory:
                 PRIMARY KEY(namespace, qa_type)
             ) WITHOUT ROWID;
         """)
+        # Old exact identities remain byte-for-byte valid. Only new adaptive
+        # contracts opt in to a goal/intent dimension; no history rewrite is
+        # needed. Serialize schema inspection with cross-process writers.
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(qa_history)")}
+            for name in ("dialogue_goal", "dialogue_intent"):
+                if name not in columns:
+                    self.connection.execute(f"ALTER TABLE qa_history ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
 
     def __enter__(self):
         return self
@@ -191,7 +222,10 @@ class QAHistory:
                 "answer_policy": row["answer_policy"],
                 "family_id": row["family_id"], "parent_id": row["parent_id"],
                 "source_id": row["source_id"], "source_name": row["source_name"],
-                "run_id": row["run_id"], "namespace": row["namespace"]}
+                "run_id": row["run_id"], "namespace": row["namespace"],
+                **({"dialogue_design": {"interaction_goal": row["dialogue_goal"],
+                                        "user_intent": row["dialogue_intent"]}}
+                   if row["dialogue_goal"] else {})}
 
     def add(self, row: dict, *, namespace="default") -> bool:
         status = row.get("status")
@@ -202,7 +236,9 @@ class QAHistory:
         qa_type = _dimension(row.get("qa_type"), "closed_book")
         answer_policy = _dimension(row.get("answer_policy"), "answer")
         visible_context = row.get("visible_context", "")
-        identity = _identity(question, visible_context, answer_policy, qa_type)
+        design = row.get("dialogue_design")
+        dimensions = _design_dimensions(design)
+        identity = _identity(question, visible_context, answer_policy, qa_type, design)
         sample_id = _text(row.get("id"))
         if not sample_id or len(sample_id) > 512:
             raise ValueError("qa_history_sample_id_required")
@@ -210,7 +246,8 @@ class QAHistory:
                   _snippet(row.get("answer", ""), MAX_ANSWER_SNIPPET), qa_type,
                   _snippet(visible_context, MAX_CONTEXT_SNIPPET), answer_policy,
                   *(_snippet(row.get(key, ""), 256) for key in
-                    ("family_id", "parent_id", "source_id", "source_name", "run_id")))
+                    ("family_id", "parent_id", "source_id", "source_name", "run_id")),
+                  *(_snippet(value, limit) for value, limit in zip(dimensions or ("", ""), (1024, 512))))
         terms = _terms(question)
         with self._lock:
             self.connection.execute("BEGIN IMMEDIATE")
@@ -225,8 +262,8 @@ class QAHistory:
                     return True
                 inserted = self.connection.execute(
                     "INSERT OR IGNORE INTO qa_history (namespace,sample_id,identity,question,answer,"
-                    "qa_type,visible_context,answer_policy,family_id,parent_id,source_id,source_name,run_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", fields)
+                    "qa_type,visible_context,answer_policy,family_id,parent_id,source_id,source_name,run_id,dialogue_goal,dialogue_intent) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", fields)
                 if not inserted.rowcount:
                     self.connection.execute("COMMIT")
                     return False
@@ -248,8 +285,8 @@ class QAHistory:
                 raise
 
     def duplicate(self, question, *, visible_context="", answer_policy="answer",
-                  qa_type="closed_book", namespace="default", exclude_id=None) -> dict | None:
-        identity = _identity(_question(question), visible_context, answer_policy, qa_type)
+                  qa_type="closed_book", namespace="default", exclude_id=None, dialogue_design=None) -> dict | None:
+        identity = _identity(_question(question), visible_context, answer_policy, qa_type, dialogue_design)
         with self._lock:
             row = self.connection.execute(
                 "SELECT * FROM qa_history WHERE namespace=? AND identity=?",

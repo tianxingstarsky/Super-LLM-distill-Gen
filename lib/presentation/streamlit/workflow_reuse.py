@@ -117,6 +117,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     production = validate_production(recipe.get("production"), recipe.get("targets", []))
     values[f"workflow-production-enabled:{workspace}"] = production is not None
     if production is not None:
+        values[f"workflow-production-policy:{workspace}"] = production.get("quantity_policy", "bounded_replenishment")
         values[f"workflow-production-goals:{workspace}"] = production["goals"]
         values[f"workflow-production-budget:{workspace}"] = production["budget_usd"]
         values[f"workflow-production-limits:{workspace}"] = {
@@ -166,7 +167,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     director = validate_qa_director(recipe.get("qa_director"))
     if "qa_director" in recipe:
         values[f"workflow-director-enabled:{workspace}"] = director["enabled"]
-    if director["enabled"]:
+    if director.get("enabled"):
+        values[f"workflow-director-mode:{workspace}"] = director.get("planning_mode", "balanced")
         values[f"workflow-director-batch:{workspace}"] = director["batch_size"]
         values[f"workflow-director-history:{workspace}"] = director["history_limit"]
         values[f"workflow-director-question-rules:{workspace}"] = director["question_rules"]

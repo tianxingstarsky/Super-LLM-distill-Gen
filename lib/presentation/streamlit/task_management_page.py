@@ -72,11 +72,17 @@ def _run_card_html(run: dict) -> tuple[str, str]:
     percent = round(100 * done / total) if total else 0
     progress_label = "已完成节点"
     goals = (run.get("production") or {}).get("goals", {})
-    if goals:
+    soft = (run.get("production") or {}).get("version", 1) >= 2
+    if goals and not soft:
         total = sum(goal["goal"] for goal in goals.values())
         done = sum(min(goal["goal"], goal.get("eligible", 0)) for goal in goals.values())
         percent = round(100 * done / total) if total else 0
         progress_label = "合格数量"
+    count_text = f'{progress_label} <b>{done:,}/{total:,}</b>'
+    if goals and soft:
+        actual = sum(goal.get("eligible", 0) for goal in goals.values())
+        expected = sum(goal["goal"] for goal in goals.values())
+        count_text = f'产出 / 期望 <b>{actual:,}/{expected:,}</b>'
     targets = [TARGET_LABELS.get(target, str(target).upper()) for target in run.get("targets", [])]
     tags = "".join(f'<span>{html.escape(label)}</span>' for label in targets[:3])
     if len(targets) > 3:
@@ -100,7 +106,7 @@ def _run_card_html(run: dict) -> tuple[str, str]:
     detail = (f'<div class="df-task-card-targets">{tags}</div>'
               f'<div class="df-task-card-source"><b>{source_label}</b>'
               f'<span data-user-content title="{source_title}">{html.escape(source_text)}</span></div>'
-              f'<div class="df-task-card-progress"><span>{progress_label} <b>{done:,}/{total:,}</b></span>'
+              f'<div class="df-task-card-progress"><span>{count_text}</span>'
               f'<span>#{html.escape(str(run.get("id", ""))[:8])}</span></div>'
               f'<div class="df-task-meter" role="progressbar" aria-label="{progress_label}" '
               f'aria-valuemin="0" aria-valuemax="{total}" aria-valuenow="{done}">'

@@ -8,7 +8,7 @@ PREFERENCE_TARGETS = frozenset({"dpo", "rlaif", "orpo"})
 INPUT_EXTENSIONS = frozenset({".md", ".txt", ".pdf", ".docx", ".json", ".jsonl", ".png", ".jpg", ".jpeg", ".webp"})
 STAGES = {
     "ingest": "解析与来源检查",
-    "director": "问答指导与调度",
+    "director": "对话设计与调度",
     "cpt": "CPT 语料整理",
     "sft": "SFT 生成与验证",
     "multiturn": "多轮对话生成与一致性验证",

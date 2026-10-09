@@ -50,6 +50,10 @@ QUALITY_STYLE = """<style>
 </style>"""
 
 REASON_LABELS = {
+    "source_exhausted": "资料不足以支持新互动",
+    "no_new_grounded_scenario": "未发现新的有依据场景",
+    "invalid_dialogue_step": "后续互动计划未通过检查",
+    "dialogue_step_stopped_before_multiturn": "未形成完整多轮互动",
     "planning_failed_after_repair": "任务规划修复后仍不合格",
     "request_retries_exhausted": "单条请求重试已用尽",
     "invalid_model_result": "模型返回结构无效",

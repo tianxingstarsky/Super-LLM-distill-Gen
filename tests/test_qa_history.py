@@ -1,5 +1,6 @@
 """Persistent QA memory must preserve contracts and bound history context."""
 from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 
 import pytest
 
@@ -224,3 +225,64 @@ def test_invalid_question_does_not_create_partial_rows(tmp_path):
                 history.add(accepted(question=question))
         assert history.coverage() == {}
         assert history.recent() == []
+
+
+def test_adaptive_same_opening_can_have_distinct_activity_goals_and_intents(tmp_path):
+    question = "帮我处理一下这份材料。"
+    first = {"interaction_goal": "根据材料完成操作卡。", "user_intent": "制作操作卡。"}
+    second = {"interaction_goal": "根据材料比较操作方案。", "user_intent": "选择适用方案。"}
+    with QAHistory(tmp_path / "qa.sqlite3") as history:
+        assert history.add(accepted("card", question, dialogue_design=first))
+        assert history.duplicate(question, dialogue_design=second) is None
+        assert history.add(accepted("compare", question, dialogue_design=second))
+        assert not history.add(accepted("same", question, dialogue_design=first))
+        assert history.duplicate(question, dialogue_design=first)["id"] == "card"
+        assert history.duplicate(question) is None
+        summaries = history.similar(question)
+        assert {item["dialogue_design"]["interaction_goal"] for item in summaries} == {
+            first["interaction_goal"], second["interaction_goal"]}
+        assert history.coverage() == {"closed_book": 2}
+
+
+def test_adaptive_identity_uses_full_goal_but_does_not_hash_wording_only_guidance(tmp_path):
+    goal = "保留实际数据的全部必要条件。" * 120
+    first = {"interaction_goal": goal + "版本一", "user_intent": "共同分析。", "turn_guidance": ["先比较。"]}
+    second = {**first, "interaction_goal": goal + "版本二"}
+    with QAHistory(tmp_path / "qa.sqlite3") as history:
+        assert history.add(accepted("one", dialogue_design=first))
+        assert history.add(accepted("two", dialogue_design=second))
+        changed_wording = {**first, "turn_guidance": ["换个说法先比较。"]}
+        assert history.duplicate("如何设置模型上下文长度？", dialogue_design=changed_wording)["id"] == "one"
+        assert all(len(item["dialogue_design"]["interaction_goal"]) <= 1024 for item in history.recent())
+
+
+def test_pre_design_history_schema_upgrades_without_rehashing_old_contracts(tmp_path):
+    path = tmp_path / "old.sqlite3"
+    row = accepted()
+    identity = contract_identity(row["question"])
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE qa_history (row_id INTEGER PRIMARY KEY, namespace TEXT NOT NULL, "
+            "sample_id TEXT NOT NULL, identity TEXT NOT NULL, question TEXT NOT NULL, answer TEXT NOT NULL, "
+            "qa_type TEXT NOT NULL, visible_context TEXT NOT NULL, answer_policy TEXT NOT NULL, "
+            "family_id TEXT NOT NULL, parent_id TEXT NOT NULL, source_id TEXT NOT NULL, source_name TEXT NOT NULL, "
+            "run_id TEXT NOT NULL, UNIQUE(namespace,sample_id), UNIQUE(namespace,identity))")
+        connection.execute("INSERT INTO qa_history (namespace,sample_id,identity,question,answer,qa_type,"
+            "visible_context,answer_policy,family_id,parent_id,source_id,source_name,run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("default", row["id"], identity, row["question"], row["answer"], row["qa_type"], "", "answer",
+             row["family_id"], "", row["source_id"], row["source_name"], row["run_id"]))
+    with QAHistory(path) as history:
+        found = history.duplicate(row["question"])
+        assert found["identity"] == identity and "dialogue_design" not in found
+        assert history.add(row)  # replay retains its original identity
+        assert history.add(accepted("new", dialogue_design={"interaction_goal": "实际新活动。"}))
+    with QAHistory(path) as history:
+        assert history.duplicate(row["question"])["identity"] == identity
+
+
+def test_adaptive_design_identity_is_bounded_before_any_history_write(tmp_path):
+    with QAHistory(tmp_path / "qa.sqlite3") as history:
+        for design in ({}, {"interaction_goal": "g" * 4001}, {"interaction_goal": "a\x00b"},
+                       {"interaction_goal": "可用", "user_intent": False}):
+            with pytest.raises(ValueError, match="qa_history_dialogue_design_invalid"):
+                history.add(accepted(dialogue_design=design))
+        assert not history.recent()
