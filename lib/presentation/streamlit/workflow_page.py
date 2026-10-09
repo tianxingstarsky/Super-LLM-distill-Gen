@@ -981,7 +981,7 @@ def _upload_cache_error(error):
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
                      draft_application: CreationDraftApplication | None = None,
                      backend_application=None, input_cache=None, manual_application=None, document_preview=None,
-                     knowledge_application=None):
+                     knowledge_application=None, prompt_library=None):
     page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
@@ -1210,14 +1210,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.caption("只打包通过质量检查的记录，并附带来源与审核证据。")
             with prompts_tab:
                 if selected_node in {"sft", "cot"}:
-                    render_generation_settings(selected_node, ws, save_field=_save_draft_value)
+                    render_generation_settings(selected_node, ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 elif selected_node == "trim":
-                    render_trim_settings(ws, save_field=_save_draft_value)
+                    render_trim_settings(ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 elif selected_node == "director":
-                    render_director_rules(ws, save_field=_save_draft_value)
+                    render_director_rules(ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 render_node_prompts(selected_node, model_source_mode, ws,
                                     save_field=_save_draft_value, node_generation=node_generation, package_review=package_review,
-                                    qa_director=qa_director)
+                                    qa_director=qa_director, prompt_library=prompt_library)
     # Source previews and common run controls stay in normal document flow.
     # Only the node-local form follows the selected graph node.
     with workbench:

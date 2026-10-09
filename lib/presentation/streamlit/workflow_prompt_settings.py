@@ -10,6 +10,9 @@ from lib.domain.workflow_node_prompts import (
     MAX_NODE_PROMPT_CHARS, active_node_prompt_ids, builtin_node_prompt,
 )
 from lib.presentation.streamlit.i18n import translate, translate_label
+from lib.presentation.streamlit.prompt_library_controls import (
+    render_prompt_library, clear_prompt_template_selection,
+)
 
 
 PROMPT_LABELS = {
@@ -74,6 +77,7 @@ def node_prompt_has_issue(configuration: dict) -> bool:
 def _restore_prompt(workspace: str, node: str, prompt_id: str, save_field) -> None:
     key = _prompt_key(workspace, node, prompt_id)
     st.session_state[key] = builtin_node_prompt(prompt_id)
+    clear_prompt_template_selection(workspace, f"node:{node}:{prompt_id}")
     st.session_state.pop(f"workflow-node-prompt-upload-error:{workspace}:{node}:{prompt_id}", None)
     save_field(workspace, key)
 
@@ -108,7 +112,8 @@ def _import_prompt(workspace: str, node: str, prompt_id: str, save_field) -> Non
 
 
 def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_field,
-                        node_generation=None, package_review=None, qa_director=None) -> None:
+                        node_generation=None, package_review=None, qa_director=None,
+                        prompt_library=None) -> None:
     """Show the active processing prompt beside this node's model settings."""
     prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation,
                                     package_review=package_review, qa_director=qa_director)
@@ -122,25 +127,30 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
         st.html('<p class="df-node-prompt-heading"><strong>'
                 + html.escape(translate("节点提示词", language)) + '</strong></p>')
         st.caption("仅作用于当前节点的所选处理步骤；开始任务后固定保存。")
-        prompt_id = st.selectbox("处理步骤", prompts, key=selection_key,
-                                format_func=lambda value: translate_label(PROMPT_LABELS.get(value, value), language))
+        step, reset = st.columns([1.65, 1], gap="small", vertical_alignment="bottom")
+        with step:
+            prompt_id = st.selectbox("处理步骤", prompts, key=selection_key,
+                                    format_func=lambda value: translate_label(PROMPT_LABELS.get(value, value), language))
         body_key = _prompt_key(workspace, node, prompt_id)
         default = builtin_node_prompt(prompt_id)
         st.session_state[body_key] = _field(workspace, body_key, default)
+        custom = st.session_state[body_key] != default
+        with reset:
+            st.button("恢复默认模板", key=f"workflow-node-prompt-reset:{workspace}:{node}:{prompt_id}",
+                      disabled=not custom, width="stretch", on_click=_restore_prompt,
+                      args=(workspace, node, prompt_id, save_field),
+                      help="恢复当前步骤的内置模板，保留已保存的个人模板。")
+        render_prompt_library(prompt_library, workspace, f"node:{node}:{prompt_id}",
+                              fields={"text": body_key}, save_field=save_field,
+                              label="我的提示词模板", save_label="保存提示词")
         st.text_area("提示词正文", key=body_key, height=164, max_chars=MAX_NODE_PROMPT_CHARS,
                      on_change=save_field, args=(workspace, body_key),
                      help="可直接编辑或导入完整指令；输入资料会自动附加。请保留本步骤要求的输出字段。")
-        custom = st.session_state[body_key] != default
-        actions, reset = st.columns([1.15, 1], gap="small")
-        with actions, st.popover("导入 TXT / Markdown", width="stretch"):
+        with st.popover("导入 TXT / Markdown", width="stretch"):
             st.file_uploader("导入当前步骤提示词", type=["txt", "md"], max_upload_size=1,
                              key=f"workflow-node-prompt-upload:{workspace}:{node}:{prompt_id}",
                              on_change=_import_prompt, args=(workspace, node, prompt_id, save_field),
                              help="UTF-8 文本，最多 128 KiB / 32,768 字符；导入后可继续编辑。")
-        with reset:
-            st.button("恢复内置提示词", key=f"workflow-node-prompt-reset:{workspace}:{node}:{prompt_id}",
-                      disabled=not custom, width="stretch", on_click=_restore_prompt,
-                      args=(workspace, node, prompt_id, save_field))
         if error := st.session_state.get(f"workflow-node-prompt-upload-error:{workspace}:{node}:{prompt_id}"):
             st.error(error)
         st.caption("已自定义 · 仅当前步骤" if custom else "使用内置提示词 · 可直接编辑")

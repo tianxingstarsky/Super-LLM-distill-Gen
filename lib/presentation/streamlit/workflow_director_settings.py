@@ -7,6 +7,7 @@ from lib.domain.workflow_qa_director import (
     DEFAULT_TYPE_WEIGHTS, DEFAULT_QUESTION_RULES, DEFAULT_ANSWER_RULES, validate_qa_director,
 )
 from lib.presentation.streamlit.i18n import translate_label
+from lib.presentation.streamlit.prompt_library_controls import render_prompt_library
 
 
 TYPE_LABELS = {
@@ -83,13 +84,21 @@ def render_director_settings(workspace: str, *, save_field) -> None:
         st.warning("请至少保留一种问答类型，并检查指导员规则。")
 
 
-def render_director_rules(workspace: str, *, save_field) -> None:
-    for name, label, default, placeholder in (
+def render_director_rules(workspace: str, *, save_field, prompt_library=None) -> None:
+    rule_fields = (
         ("question-rules", "问答调度指令", DEFAULT_QUESTION_RULES, "例如：优先覆盖故障诊断和边界条件，避免反复询问定义。"),
         ("answer-rules", "回答规则", DEFAULT_ANSWER_RULES, "例如：证据不足时追问缺失条件；有错误前提时先纠正，再给出回答。"),
-    ):
+    )
+    for name, _, default, _ in rule_fields:
         key = f"workflow-director-{name}:{workspace}"
         st.session_state[key] = _field(workspace, key, default)
+    render_prompt_library(prompt_library, workspace, "director.rules", save_field=save_field,
+                          fields={"question_rules": f"workflow-director-question-rules:{workspace}",
+                                  "answer_rules": f"workflow-director-answer-rules:{workspace}"},
+                          defaults={"question_rules": DEFAULT_QUESTION_RULES, "answer_rules": DEFAULT_ANSWER_RULES},
+                          label="我的规则模板", save_label="保存规则")
+    for name, label, _, placeholder in rule_fields:
+        key = f"workflow-director-{name}:{workspace}"
         st.text_area(label, key=key, height=100, max_chars=12000, placeholder=placeholder,
                      on_change=save_field, args=(workspace, key))
     st.caption("规则随任务固定保存；生成与评审都会收到本题规则。下方可编辑或导入完整的指导员提示词。")

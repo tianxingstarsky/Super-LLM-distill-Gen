@@ -13,6 +13,7 @@ from lib.domain.workflow_generation import (
 from lib.domain.reasoning_trim import (validate_reasoning_trim,
                                        MAX_TRIM_INSTRUCTION_CHARS, MAX_TRIM_PROMPT_CHARS)
 from lib.presentation.streamlit.i18n import translate, translate_label
+from lib.presentation.streamlit.prompt_library_controls import render_prompt_library
 
 
 STYLE_LABELS = {"default": "遵循任务", "concise": "简洁工程", "structured": "分步教学",
@@ -59,7 +60,7 @@ def generation_issues(configuration: dict) -> list[str]:
     return invalid
 
 
-def render_generation_settings(node: str, workspace: str, *, save_field) -> None:
+def render_generation_settings(node: str, workspace: str, *, save_field, prompt_library=None) -> None:
     """Keep generation style separate from training-file output formatting."""
     prefix = f"{workspace}:{node}"
     enabled_key = f"workflow-generation-enabled:{prefix}"
@@ -70,6 +71,11 @@ def render_generation_settings(node: str, workspace: str, *, save_field) -> None
     _restore_field(workspace, instruction_key, "")
     language = st.session_state.get("ui_language", "zh")
     with st.container(key=f"workbench-generation:{node}"):
+        render_prompt_library(prompt_library, workspace, f"generation:{node}", save_field=save_field,
+                              fields={"style": style_key, "instruction": instruction_key},
+                              defaults={"style": "structured" if node == "cot" else "default", "instruction": ""},
+                              apply_extras={enabled_key: True}, restore_extras={enabled_key: False},
+                              label="我的风格模板", save_label="保存风格")
         enabled = st.toggle("启用风格化生成", key=enabled_key,
                             on_change=save_field, args=(workspace, enabled_key),
                             help="开启后，教师按风格提示词撰写推理与答案；关闭后使用普通蒸馏。")
@@ -189,7 +195,7 @@ def _import_trim_template(workspace: str, save_field) -> None:
     save_field(workspace, template_key)
 
 
-def render_trim_settings(workspace: str, *, save_field) -> None:
+def render_trim_settings(workspace: str, *, save_field, prompt_library=None) -> None:
     template_key = f"workflow-trim-template:{workspace}"
     instruction_key = f"workflow-trim-instruction:{workspace}"
     prompt_key = f"workflow-trim-prompt:{workspace}"
@@ -197,6 +203,11 @@ def render_trim_settings(workspace: str, *, save_field) -> None:
         _restore_field(workspace, key, default)
     language = st.session_state.get("ui_language", "zh")
     st.caption("仅修剪推理字段，最终答案保持原样；质检不通过的改写会隔离。")
+    render_prompt_library(prompt_library, workspace, "trim.rules", save_field=save_field,
+                          fields={"template": template_key, "instruction": instruction_key,
+                                  "custom_prompt": prompt_key},
+                          defaults={"template": "leakage", "instruction": "", "custom_prompt": ""},
+                          label="我的修剪模板", save_label="保存修剪模板")
     selected = st.selectbox("修剪规则模板", tuple(TRIM_LABELS), key=template_key,
                             format_func=lambda value: translate_label(TRIM_LABELS[value], language),
                             on_change=save_field, args=(workspace, template_key))

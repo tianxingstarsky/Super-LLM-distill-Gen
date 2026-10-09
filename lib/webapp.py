@@ -173,13 +173,15 @@ def page_workflow():
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.bootstrap.backends import backend_application
     from lib.bootstrap.manual_datasets import manual_dataset_application
+    from lib.bootstrap.prompt_library import prompt_library_application
     render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT),
                      input_cache=local_input_application(),
                      draft_application=creation_draft_application(_ws_out()),
                      backend_application=backend_application(ROOT),
                      manual_application=manual_dataset_application(_ws_out()),
                      document_preview=document_preview_application(st.session_state["ws"]),
-                     knowledge_application=knowledge_application(st.session_state["ws"]))
+                     knowledge_application=knowledge_application(st.session_state["ws"]),
+                     prompt_library=prompt_library_application())
 
 
 def page_run(show_title=True):
