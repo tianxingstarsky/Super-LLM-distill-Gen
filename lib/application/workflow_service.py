@@ -12,6 +12,7 @@ from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_node_prompts import validate_node_prompts
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director
+from lib.domain.workflow_production import validate_production
 
 
 class WorkflowApplication:
@@ -25,7 +26,7 @@ class WorkflowApplication:
             "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
             "batch_size", "node_models", "conversation_turns", "brief",
             "agent_replay_mode", "evaluation_sources", "web_research", "sources",
-            "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director") if key in recipe}
+            "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director", "production") if key in recipe}
         targets, node_models = validate_creation(**fields)
         research = validate_web_research(recipe.get("web_research"), brief=recipe.get("brief", ""),
                                          sources=recipe.get("sources", ()), targets=targets)
@@ -35,6 +36,7 @@ class WorkflowApplication:
                                       "node_prompts": validate_node_prompts(recipe.get("node_prompts")),
                                       "package_review": validate_package_review(recipe.get("package_review")),
                                       "qa_director": validate_qa_director(recipe.get("qa_director")),
+                                      "production": validate_production(recipe.get("production"), targets),
                                       "reasoning_trim": validate_reasoning_trim(recipe.get("reasoning_trim"))})
 
     def default_sft_output_style(self) -> str:

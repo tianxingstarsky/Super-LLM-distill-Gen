@@ -221,6 +221,6 @@ with patch.object(page, "render_run", lambda application, run_id, begin, embedde
     ui = AppTest.from_string(script, default_timeout=30).run()
     assert not ui.exception
     shortcut = ui.selectbox(key="task-quick-select:fixture")
-    assert shortcut.label == "Concurrent tasks"
+    assert shortcut.label == "Switch run"
     assert any("客户任务 Keep 原文" in option and "Running" in option for option in shortcut.options)
     assert not [button for button in ui.button if button.key.startswith("task-quick:")]

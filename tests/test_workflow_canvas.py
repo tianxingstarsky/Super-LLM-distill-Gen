@@ -116,7 +116,7 @@ def _assert_node_drafts_preserved(ui):
 def test_setup_canvas_passes_inspector_state_and_opens_incomplete_node(expanded):
     ui = _inspector_app(expanded=expanded)
     assert not ui.exception
-    assert ui.session_state['captured-spec']['inspector'] == {'key': 'fixture-inspector', 'open': False}
+    assert ui.session_state['captured-spec']['inspector'] == {'key': 'fixture-inspector', 'open': False, 'wide': False}
     assert ui.session_state['captured-spec'].get('expanded', False) is expanded
     assert 'canvas-open:fixture-canvas' not in ui.session_state
 
@@ -125,7 +125,7 @@ def test_setup_canvas_passes_inspector_state_and_opens_incomplete_node(expanded)
     assert not ui.exception
     assert ui.session_state['selected-node'] == 'sft'
     assert ui.session_state['canvas-open:fixture-canvas'] is True
-    assert ui.session_state['captured-spec']['inspector'] == {'key': 'fixture-inspector', 'open': True}
+    assert ui.session_state['captured-spec']['inspector'] == {'key': 'fixture-inspector', 'open': True, 'wide': False}
     assert 'canvas-pause:workflow-follow:fixture' not in ui.session_state
     _assert_node_drafts_preserved(ui)
 

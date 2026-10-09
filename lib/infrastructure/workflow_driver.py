@@ -17,6 +17,7 @@ from lib.infrastructure import review_release_jobs
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.infrastructure.agent_docker_replay import IMAGE_ENV, validate_sandbox_image
 from lib.domain.workflow_targets import training_record
+from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.domain.web_research import validate_web_research
 from lib import workspace as WS
 
@@ -222,7 +223,13 @@ class FilesystemWorkflowDriver:
 
     def start_bundle(self, run_id: str) -> dict:
         state = self.state(run_id)
-        if state.get("status") not in {"completed", "needs_attention"}:
+        path = run_path(self.output, run_id)
+        if not has_deliverable_results(state) or run_is_active(path):
+            raise ValueError("workflow_not_ready_to_package")
+        manifest = verify_artifacts(path)
+        if not delivery_manifest_matches(state, manifest):
+            raise ValueError("artifact_integrity_error")
+        if self.state(run_id) != state or run_is_active(path):
             raise ValueError("workflow_not_ready_to_package")
         return review_release_jobs.start_release_job(self.output, run_id, "workflow", 0)
 
@@ -309,14 +316,16 @@ class FilesystemWorkflowDriver:
         """Expose only completed SFT conversations whose run bundle still verifies."""
         result = []
         for run in list_runs(self.output):
-            if run.get("status") not in {"completed", "needs_attention"} or "sft" not in run.get("targets", []):
+            if not has_deliverable_results(run) or "sft" not in run.get("targets", []):
                 continue
             try:
                 path = run_path(self.output, run.get("id", ""))
                 artifact = path / "artifacts" / "sft.jsonl"
                 if not artifact.is_file():
                     continue
-                verify_artifacts(path)
+                manifest = verify_artifacts(path)
+                if run_is_active(path) or not delivery_manifest_matches(run, manifest):
+                    continue
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             result.append(str(artifact))

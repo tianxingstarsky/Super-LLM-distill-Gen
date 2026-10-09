@@ -1059,6 +1059,8 @@ def cmd_workflow(args) -> int:
                                           if getattr(args, "node_prompts", None) else None),
                             qa_director=(json.loads(pathlib.Path(args.qa_director).read_text(encoding="utf-8-sig"))
                                          if getattr(args, "qa_director", None) else None),
+                            production=(json.loads(pathlib.Path(args.production).read_text(encoding="utf-8-sig"))
+                                        if getattr(args, "production", None) else None),
                             conversation_turns=args.conversation_turns)
         print(f"运行 ID: {run_id}", flush=True)
         state = application.execute(run_id)
@@ -1284,6 +1286,7 @@ def build_parser():
     p_workflow.add_argument("--chunk-chars", type=int, default=2000)
     p_workflow.add_argument("--tasks", type=int, default=10)
     p_workflow.add_argument("--sample-count", type=int, help="候选规模，最多 100000；最终数量取决于质检")
+    p_workflow.add_argument("--production", help="合格产量、有限补齐与任务预算的 JSON 配置文件；每类最多 1000000 条")
     p_workflow.add_argument("--concurrency", type=int, default=1, help="节点内并发上限，1–16")
     p_workflow.add_argument("--batch-size", type=int, default=100, help="每批候选数，1–500")
     p_workflow.add_argument("--node-models", help="节点模型配置 JSON 文件，仅包含 backend 与 model")

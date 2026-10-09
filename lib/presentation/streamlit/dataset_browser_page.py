@@ -4,6 +4,7 @@ import streamlit as st
 from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.domain.workflow_quality import tool_error_flag
+from lib.domain.workflow_delivery import has_deliverable_results
 
 
 def _message_tool_errors(message):
@@ -27,7 +28,7 @@ def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str,
     st.html(DATA_MANAGEMENT_STYLE)
     from lib.presentation.streamlit.dataset_preview_page import render_workflow_samples
     verified_runs = [row for row in workflow_app.task_runs()
-                     if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
+                     if has_deliverable_results(row) and row.get("id")]
     if verified_runs:
         view = st.segmented_control(
             "预览来源", ("工作流产物", "已有对话文件"), default="工作流产物",

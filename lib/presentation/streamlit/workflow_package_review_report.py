@@ -63,6 +63,8 @@ def package_review_report_html(quality: dict) -> str:
     headers = ("训练目标", "评审前样本", "已评审", "AI 通过", "AI 隔离", "未评审", "覆盖率")
     if totals["candidates"] == 0:
         note = "本次没有可供 AI 评审的样本。"
+    elif not totals["unreviewed"]:
+        note = "AI 评审已覆盖本次进入打包的全部样本。"
     elif report.get("mode") == "sample":
         note = "未抽中的样本沿用上游质检结果；抽样评审不代表所有样本均已通过 AI 评审。"
     elif totals["unreviewed"]:
@@ -72,11 +74,15 @@ def package_review_report_html(quality: dict) -> str:
     table = ('<div class="df-ai-review-scroll"><table class="df-ai-review-table"><thead><tr>'
              + ''.join('<th>' + label + '</th>' for label in headers)
              + '</tr></thead><tbody>' + ''.join(table_rows) + '</tbody></table></div>') if rows else ''
+    escalated = any(isinstance(row.get("escalation"), dict) and row["escalation"].get("escalated")
+                    for _, row in rows)
+    escalation_note = ('<p class="df-ai-review-note">抽检发现问题后，部分轮次扩大为全量评审；范围与阈值保存在报告中。</p>'
+                       if escalated else '')
     return (PACKAGE_REVIEW_STYLE + '<div class="df-ai-review"><div class="df-ai-review-head">'
             '<strong>AI 打包评审</strong><span class="df-ai-review-mode">' + mode + '</span></div>'
             '<div class="df-ai-review-coverage"><b>' + f"{coverage:.1f}%" + '</b><span>评审覆盖率</span>'
             '<span>已评审</span><strong>' + f'{totals["reviewed"]:,} / {totals["candidates"]:,}'
             + '</strong></div><div class="df-ai-review-track"><i style="width:'
             + f"{min(100, coverage):.1f}" + '%"></i></div>' + table
-            + '<p class="df-ai-review-note">' + note + '</p>'
-            '<p class="df-ai-review-note">AI 隔离样本不进入训练文件；评审证据随数据包保存。</p></div>')
+            + '<p class="df-ai-review-note">' + note + '</p>' + escalation_note
+            + '<p class="df-ai-review-note">AI 隔离样本不进入训练文件；评审证据随数据包保存。</p></div>')

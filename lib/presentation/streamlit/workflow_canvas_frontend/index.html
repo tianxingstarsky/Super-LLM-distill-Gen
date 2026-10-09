@@ -70,15 +70,16 @@ function positionInspector(){
  // An offscreen/very narrow canvas uses the visible page bounds so the
  // inspector remains reachable even while its node is deliberately panned.
  const boundedWidth=rightBound-leftBound>=260,right=boundedWidth?rightBound:windowWidth-12,left=boundedWidth?leftBound:12;
- const width=Math.min(430,Math.max(0,right-left)),nodeLeft=frame.left+node.left,nodeRight=frame.left+node.right,nodeTop=frame.top+node.top,nodeBottom=frame.top+node.bottom;
+ const width=Math.min(spec.inspector.wide?760:430,Math.max(0,right-left)),nodeLeft=frame.left+node.left,nodeRight=frame.left+node.right,nodeTop=frame.top+node.top,nodeBottom=frame.top+node.bottom;
  const gap=12,spaceRight=right-nodeRight-gap,spaceLeft=nodeLeft-left-gap;
  let placement=spaceRight>=width?"right":spaceLeft>=width?"left":spaceRight>=spaceLeft?"right":"left";
  let x=placement==="right"?nodeRight+gap:nodeLeft-width-gap;
  x=Math.max(left,Math.min(x,right-width));
- const topBound=Math.min(76,Math.max(12,windowHeight-120)),availableHeight=Math.max(100,windowHeight-topBound-16),maxHeight=Math.min(560,availableHeight);
+ const topBound=Math.min(76,Math.max(12,windowHeight-120)),availableHeight=Math.max(100,windowHeight-topBound-16),maxHeight=spec.inspector.wide?availableHeight:Math.min(560,availableHeight);
  const naturalHeight=Math.min(panel.scrollHeight||maxHeight,maxHeight);
- let y=Math.max(topBound,Math.min(nodeTop,windowHeight-naturalHeight-16));
- if(spaceRight<width&&spaceLeft<width&&nodeBottom+gap+Math.min(naturalHeight,220)<windowHeight-16){placement="below";y=Math.max(topBound,nodeBottom+gap);}
+ let y=spec.inspector.wide?topBound:Math.max(topBound,Math.min(nodeTop,windowHeight-naturalHeight-16));
+ if(spec.inspector.wide){placement="editor";}
+ else if(spaceRight<width&&spaceLeft<width&&nodeBottom+gap+Math.min(naturalHeight,220)<windowHeight-16){placement="below";y=Math.max(topBound,nodeBottom+gap);}
  panel.setAttribute("data-workflow-placement",placement);
  const styles={position:"fixed",left:x+"px",top:y+"px",width:width+"px","max-height":Math.min(maxHeight,Math.max(100,windowHeight-y-16))+"px","overflow-y":"auto","overscroll-behavior":"contain","z-index":"80","--workflow-anchor-x":Math.max(12,Math.min(width-12,(nodeLeft+nodeRight)/2-x))+"px","--workflow-anchor-y":Math.max(12,Math.min(maxHeight-12,(nodeTop+nodeBottom)/2-y))+"px"};
  for(const [property,value] of Object.entries(styles))if(panel.style.getPropertyValue(property)!==value)panel.style.setProperty(property,value);

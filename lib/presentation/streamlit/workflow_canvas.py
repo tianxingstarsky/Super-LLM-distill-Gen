@@ -86,7 +86,8 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
     spec = dict(spec, expanded=expanded)
     if inspector_key is not None:
         spec["inspector"] = {"key": inspector_key,
-                             "open": bool(st.session_state.get(f"canvas-open:{key}", False))}
+                             "open": bool(st.session_state.get(f"canvas-open:{key}", False)),
+                             "wide": bool(st.session_state.get(f"canvas-wide:{key}", False))}
     event = _canvas(spec=spec, key=key, default=None)
     if (isinstance(event, dict) and event.get("node") in {node["id"] for node in spec["nodes"]}
             and type(event.get("serial")) in (str, int) and event["serial"] != ""

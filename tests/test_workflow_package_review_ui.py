@@ -109,7 +109,8 @@ def test_submission_pins_package_scope_model_limits_and_custom_prompt():
     assert not ui.exception
     saved = ui.session_state['fixture-submitted']
     assert saved['package_review'] == {'enabled': True, 'mode': 'sample',
-                                       'sample_percent': 2.5, 'max_samples_per_target': 1000}
+                                       'sample_percent': 2.5, 'max_samples_per_target': 1000,
+                                       'escalate_failure_percent': 0.0}
     assert saved['node_models']['package']['jev'] == {'backend': 'local', 'model': 'writer',
         'context_window_tokens': 131072, 'max_output_tokens': 32768}
     assert saved['node_prompts']['package']['workflow.package_review'] == 'Custom review.'

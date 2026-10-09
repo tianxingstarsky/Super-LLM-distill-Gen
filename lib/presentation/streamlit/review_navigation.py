@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import streamlit as st
+from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 
 
 REVIEW_MODES = {
@@ -39,6 +40,8 @@ def review_choices(state: dict, manifest: dict) -> list[tuple[str, str]]:
     Multiturn, CoT and arithmetic remain separate training targets. Their
     records must never be redirected into the unrelated SFT review store.
     """
+    if ("status" in state and not has_deliverable_results(state)) or not delivery_manifest_matches(state, manifest):
+        return []
     targets = set(state.get("targets", []))
     counts = manifest.get("counts") or {}
     choices = [(target, mode[0]) for target, mode in REVIEW_MODES.items()
@@ -77,9 +80,12 @@ def open_verified_review(application, run_id: str, target: str, *, from_fragment
     error_key = f"workflow-review-error:{run_id}"
     try:
         state = application.state(run_id)
-        if state.get("status") not in {"completed", "needs_attention"}:
+        active = getattr(application, "is_active", None)
+        if not has_deliverable_results(state) or (callable(active) and active(run_id)):
             raise ValueError("workflow_not_ready_for_review")
         inventory = application.package_inventory(run_id)
+        if not delivery_manifest_matches(state, inventory["manifest"]):
+            raise ValueError("artifact_integrity_error")
         choices = dict(review_choices(state, inventory["manifest"]))
         filename = "agent.negative.jsonl" if target == "agent_negative" else f"{target}.jsonl"
         if target not in choices or filename not in {row["name"] for row in inventory["files"]}:

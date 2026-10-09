@@ -1,6 +1,7 @@
 """Copy immutable run settings into a separate, editable creation draft."""
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 from pathlib import Path
 import re
@@ -11,12 +12,14 @@ from filelock import Timeout
 
 from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_scale import validate_node_models
+from lib.domain.document_parser import validate_document_parser
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_node_prompts import validate_node_prompts, active_node_prompt_ids
 from lib.domain.workflow_graph import execution_graph
+from lib.domain.workflow_production import validate_production
 
 
 _DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"})
@@ -94,7 +97,7 @@ def _matching_sources(sources: list[dict], inventory: list[dict], suffixes: froz
 
 
 def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[dict]) -> dict:
-    """Return validated form values and separate, session-only model references."""
+    """Copy model references and prompts into one durable editable form."""
     if not isinstance(recipe, dict) or not isinstance(name, str):
         raise ValueError("invalid_reusable_recipe")
     mode = _source_mode(recipe)
@@ -111,6 +114,15 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         f"workflow-chunk-chars:{workspace}": recipe.get("chunk_chars", 2000),
         f"workflow-turns:{workspace}": recipe.get("conversation_turns", 3),
     }
+    production = validate_production(recipe.get("production"), recipe.get("targets", []))
+    values[f"workflow-production-enabled:{workspace}"] = production is not None
+    if production is not None:
+        values[f"workflow-production-goals:{workspace}"] = production["goals"]
+        values[f"workflow-production-budget:{workspace}"] = production["budget_usd"]
+        values[f"workflow-production-limits:{workspace}"] = {
+            key: production[key] for key in ("max_attempts", "max_rounds", "round_size",
+                "min_acceptance_rate", "low_acceptance_rounds", "item_retries") if key in production}
+        values[f"workflow-count:{workspace}"] = max(production["goals"].values(), default=values[f"workflow-count:{workspace}"])
     values[f"workflow-open-brief:{workspace}" if mode == "开放需求" else
            f"workflow-source-brief:{workspace}:{mode}"] = recipe.get("brief", "")
     style = recipe.get("sft_output_style")
@@ -120,6 +132,19 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         if style not in {"separated", "drop"}:
             style = "separated"
     values[f"workflow-sft-output-style:{workspace}"] = style
+    copied_bindings = validate_node_models(recipe.get("node_models"))
+    parser = validate_document_parser(recipe.get("document_parser"))
+    if parser["mode"] == "vision":
+        copied_bindings.setdefault("ingest", {})["vision"] = parser["binding"]
+    values[f"workflow-node-bindings:{workspace}"] = copied_bindings
+    values[f"workflow-document-parse-mode:{workspace}"] = parser["mode"]
+    # Copy only the user's verification choice. Image/container pins and
+    # credentials remain owned by the immutable run and the local registry.
+    agent_mode = recipe.get("agent_replay_mode")
+    if agent_mode not in {"local", "isolated"} and "agent" in recipe.get("targets", []):
+        agent_mode = "isolated" if recipe.get("agent_sandbox_image") else "local"
+    if agent_mode in {"local", "isolated"}:
+        values[f"workflow-agent-mode:{workspace}"] = agent_mode
     for node, generation in validate_node_generation(recipe.get("node_generation")).items():
         values[f"workflow-generation-enabled:{workspace}:{node}"] = generation["enabled"]
         values[f"workflow-generation-style:{workspace}:{node}"] = generation["style"]
@@ -137,6 +162,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-package-review-mode:{workspace}"] = package_review["mode"]
         values[f"workflow-package-review-percent:{workspace}"] = package_review["sample_percent"]
         values[f"workflow-package-review-limit:{workspace}"] = package_review["max_samples_per_target"]
+        values[f"workflow-package-review-escalation:{workspace}"] = package_review.get("escalate_failure_percent", 0.0)
     director = validate_qa_director(recipe.get("qa_director"))
     if "qa_director" in recipe:
         values[f"workflow-director-enabled:{workspace}"] = director["enabled"]
@@ -169,7 +195,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     if mode != "开放需求":
         values[f"workflow-sources:{workspace}:{mode}"] = selected
     return {"values": validate_creation_draft(values), "missing_sources": missing,
-            "node_bindings": validate_node_models(recipe.get("node_models")),
+            "node_bindings": deepcopy(copied_bindings),
             "evaluation_references_omitted": bool(recipe.get("evaluation_references"))}
 
 

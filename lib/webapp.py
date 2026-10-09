@@ -533,6 +533,8 @@ def page_task_manager():
         page_monitor(show_title=False)
     elif area == "命令管线":
         page_run(show_title=False)
+        with st.expander("高级命令偏好与模板"):
+            page_prefs(show_title=False)
     else:
         from lib.bootstrap.workflows import workflow_application
         from lib.bootstrap.creation_drafts import creation_draft_application
@@ -558,7 +560,9 @@ def page_system_settings():
             "界面语言", ["简体中文", "English"], key="ui-language-choice",
             label_visibility="collapsed", on_change=_set_ui_language,
         )
-    page_prefs(show_title=False)
+    from lib.presentation.streamlit.generation_settings_page import render_workflow_defaults
+    from lib.bootstrap.generation_settings import generation_settings_application
+    render_workflow_defaults(generation_settings_application(ROOT))
     with st.expander("服务连接与预算（高级）", expanded=bool(st.session_state.pop("open-model-admin", False))):
         st.caption("每次任务使用的模型在工作流节点选择；这里仅维护共用连接与预算。")
         from lib.bootstrap.backends import backend_application

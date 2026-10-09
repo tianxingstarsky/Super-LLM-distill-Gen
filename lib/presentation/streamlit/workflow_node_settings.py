@@ -2,13 +2,16 @@
 from copy import deepcopy
 
 import streamlit as st
+from filelock import Timeout
 
 from lib.application.backend_service import BackendApplication
 from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
 from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
                                        DEFAULT_MAX_OUTPUT_TOKENS,
-                                       MAX_CONTEXT_WINDOW_TOKENS, node_roles)
+                                       MAX_CONTEXT_WINDOW_TOKENS, node_roles,
+                                       validate_node_models)
 from lib.model_protocols import API_FORMATS
+from lib.presentation.streamlit.i18n import UntranslatedText
 
 
 _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
@@ -17,13 +20,120 @@ _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses
 
 def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None):
     draft_key = f"workflow-node-bindings:{workspace}"
-    draft = deepcopy(st.session_state.get(draft_key, {}))
+    saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(draft_key, {})
+    draft = deepcopy(st.session_state.get(draft_key, saved))
     initialized_key = draft_key + ":initialized"
+    # An explicitly emptied role stays empty after restart. Keep references
+    # to temporarily hidden nodes so switching targets never discards edits.
+    restored_markers = [node + ":" + role for node in draft for role in node_roles(
+        node, source_mode, node_generation=node_generation, package_review=package_review)]
     draft, initialized, endpoints = application.prepare_draft(
-        nodes, source_mode, draft, st.session_state.get(initialized_key, ()), node_generation=node_generation, package_review=package_review)
+        nodes, source_mode, draft, st.session_state.get(initialized_key, restored_markers),
+        node_generation=node_generation, package_review=package_review)
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
+    st.session_state[f"workflow-node-scope:{workspace}"] = {
+        "nodes": list(nodes), "source_mode": source_mode,
+        "node_generation": deepcopy(node_generation), "package_review": deepcopy(package_review),
+    }
+    agent_key = f"workflow-agent-mode:{workspace}"
+    if agent_key not in st.session_state:
+        st.session_state[agent_key] = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(agent_key, "local")
+    _persist_bindings(workspace, draft)
     return draft, endpoints
+
+
+def _persist_draft_value(workspace: str, key: str, value) -> None:
+    """Autosave this session's complete form, including prompt edits."""
+    form_key = f"workflow-form-draft:{workspace}"
+    previous = st.session_state.get(form_key, {})
+    changed = previous.get(key) != value or key not in previous
+    if changed:
+        st.session_state[form_key] = {**previous, key: deepcopy(value)}
+    application = st.session_state.get(f"workflow-draft-application:{workspace}")
+    if application is not None and (changed or st.session_state.get(f"workflow-draft-error:{workspace}")):
+        try:
+            application.replace(st.session_state[form_key])
+        except (OSError, ValueError, Timeout):
+            st.session_state[f"workflow-draft-error:{workspace}"] = True
+        else:
+            st.session_state.pop(f"workflow-draft-error:{workspace}", None)
+
+
+def _persist_bindings(workspace: str, bindings: dict) -> None:
+    draft_key = f"workflow-node-bindings:{workspace}"
+    safe = validate_node_models(bindings)
+    st.session_state[draft_key] = deepcopy(safe)
+    _persist_draft_value(workspace, draft_key, safe)
+
+
+def _set_binding_widgets(workspace: str, node: str, role: str, binding: dict) -> None:
+    prefix = f"node-model:{workspace}:{node}:{role}"
+    backend, model = binding["backend"], binding["model"]
+    st.session_state[prefix + ":backend"] = backend
+    st.session_state[prefix + ":model:" + backend] = model
+    st.session_state[prefix + ":context:" + backend + ":" + model] = binding["context_window_tokens"]
+    st.session_state[prefix + ":output:" + backend + ":" + model] = binding["max_output_tokens"]
+
+
+def _save_model_selection(workspace: str, node: str, role: str) -> None:
+    """Capture widget edits before a simultaneous node switch hides them."""
+    draft = deepcopy(st.session_state.get(f"workflow-node-bindings:{workspace}", {}))
+    previous = draft.get(node, {}).get(role, {})
+    prefix = f"node-model:{workspace}:{node}:{role}"
+    backend = st.session_state.get(prefix + ":backend")
+    model = st.session_state.get(prefix + ":model:" + str(backend))
+    if isinstance(model, str):
+        model = model.strip()
+    if backend and model:
+        same_model = previous.get("backend") == backend and previous.get("model") == model
+        binding = {"backend": backend, "model": model,
+                   "context_window_tokens": st.session_state.get(
+                       prefix + ":context:" + backend + ":" + model,
+                       previous.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
+                       if same_model else DEFAULT_CONTEXT_WINDOW_TOKENS),
+                   "max_output_tokens": st.session_state.get(
+                       prefix + ":output:" + backend + ":" + model,
+                       previous.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
+                       if same_model else DEFAULT_MAX_OUTPUT_TOKENS)}
+        try:
+            binding = validate_node_models({node: {role: binding}})[node][role]
+        except ValueError:
+            draft.setdefault(node, {}).pop(role, None)
+        else:
+            draft.setdefault(node, {})[role] = binding
+    else:
+        draft.setdefault(node, {}).pop(role, None)
+    _persist_bindings(workspace, draft)
+
+
+def _missing_role_copies(node: str, workspace: str, bindings: dict, endpoints: dict):
+    scope = st.session_state.get(f"workflow-node-scope:{workspace}", {})
+    copies = []
+    for target in scope.get("nodes", []):
+        if target == node:
+            continue
+        for role in node_roles(target, scope["source_mode"],
+                               node_generation=scope.get("node_generation"),
+                               package_review=scope.get("package_review")):
+            source = bindings.get(node, {}).get(role, {})
+            if (not bindings.get(target, {}).get(role) and source.get("backend") in endpoints
+                    and source.get("model")):
+                copies.append((target, role, source))
+    return copies
+
+
+def _fill_missing_models(workspace: str, copies) -> None:
+    draft_key = f"workflow-node-bindings:{workspace}"
+    draft = deepcopy(st.session_state.get(draft_key, {}))
+    for node, role, binding in copies:
+        # Recheck on click, including an edit that happened after rendering.
+        if draft.get(node, {}).get(role):
+            continue
+        copied = deepcopy(binding)
+        draft.setdefault(node, {})[role] = copied
+        _set_binding_widgets(workspace, node, role, copied)
+    _persist_bindings(workspace, draft)
 
 
 def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) -> list[tuple[str, dict]]:
@@ -52,13 +162,8 @@ def _reuse_binding(workspace: str, node: str, role: str, binding: dict) -> None:
     draft = deepcopy(st.session_state.get(draft_key, {}))
     copied = deepcopy(binding)
     draft.setdefault(node, {})[role] = copied
-    st.session_state[draft_key] = draft
-    prefix = f"node-model:{workspace}:{node}:{role}"
-    backend, model = copied["backend"], copied["model"]
-    st.session_state[prefix + ":backend"] = backend
-    st.session_state[prefix + ":model:" + backend] = model
-    st.session_state[prefix + ":context:" + backend + ":" + model] = copied["context_window_tokens"]
-    st.session_state[prefix + ":output:" + backend + ":" + model] = copied["max_output_tokens"]
+    _set_binding_widgets(workspace, node, role, copied)
+    _persist_bindings(workspace, draft)
 
 
 def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings: dict,
@@ -145,7 +250,7 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
                 "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
                 "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
             }
-            st.session_state[f"workflow-node-bindings:{workspace}"] = deepcopy(bindings)
+            _persist_bindings(workspace, bindings)
             st.session_state[f"workflow-node-pending-binding:{workspace}:{node}"] = {
                 "role": target_role, "backend": name.strip(), "model": model.strip(),
             }
@@ -175,6 +280,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.info(explanation)
         return
     if not endpoints:
+        if any(bindings.get(node, {}).get(role) for role in roles):
+            st.warning("已保存的模型连接不可用，请重新选择；原选择保留在草稿中。")
         st.info("当前没有可用的模型连接。请在下方登记服务地址和模型。")
         _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
         return
@@ -193,12 +300,14 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                           use_container_width=True)
         names = list(endpoints)
         if binding.get("backend") and binding["backend"] not in endpoints:
-            st.warning("原模型服务已不可用，请为此节点重新选择。")
+            st.warning("已保存的模型连接不可用，请重新选择；原选择保留在草稿中。")
+            st.caption(UntranslatedText(binding["backend"] + " · " + binding.get("model", "")))
         if prefix + ":backend" in st.session_state and st.session_state[prefix + ":backend"] not in names:
             st.session_state[prefix + ":backend"] = None
         backend = st.selectbox("模型服务", names, index=names.index(binding["backend"])
                                if binding.get("backend") in names else None, key=prefix + ":backend",
                                placeholder="选择模型服务",
+                               on_change=_save_model_selection, args=(workspace, node, role),
                                format_func=lambda name: name + " · " + _API_FORMAT_LABELS.get(
                                    endpoints[name].get("api_format", "chat"), "Chat Completions"))
         if backend is None:
@@ -211,8 +320,14 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         model = st.selectbox("模型", models, index=models.index(binding["model"])
                              if binding.get("backend") == backend and binding.get("model") in models else None,
                              accept_new_options=True, key=prefix + ":model:" + backend,
+                             on_change=_save_model_selection, args=(workspace, node, role),
                              placeholder="选择或输入模型名")
         if model:
+            if (len(model) > 200 or not model.strip() or any(ord(character) < 32 for character in model)):
+                st.warning("模型名称无效，请填写不超过 200 个字符的模型名。")
+                bindings.setdefault(node, {}).pop(role, None)
+                continue
+            model = model.strip()
             same_model = binding.get("backend") == backend and binding.get("model") == model
             context_default = (binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
                                if same_model else DEFAULT_CONTEXT_WINDOW_TOKENS)
@@ -224,12 +339,14 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                     "上下文窗口（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS,
                     value=int(context_default), step=1024,
                     key=prefix + ":context:" + backend + ":" + model,
+                    on_change=_save_model_selection, args=(workspace, node, role),
                 )
             with output_column:
                 output_tokens = st.number_input(
                     "单次输出上限（tokens）", min_value=1, max_value=MAX_CONTEXT_WINDOW_TOKENS - 1,
                     value=int(output_default), step=1024,
                     key=prefix + ":output:" + backend + ":" + model,
+                    on_change=_save_model_selection, args=(workspace, node, role),
                 )
             if output_tokens >= context_tokens:
                 st.warning("单次输出上限必须小于上下文窗口。")
@@ -242,23 +359,32 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             }
         else:
             bindings.setdefault(node, {}).pop(role, None)
-    st.session_state[f"workflow-node-bindings:{workspace}"] = deepcopy(bindings)
-    st.caption("每个节点独立保存选择。默认上下文 131,072、单次输出 32,768 tokens；需按模型能力调整。开始运行后，本次配置固定。")
+    _persist_bindings(workspace, bindings)
+    copies = _missing_role_copies(node, workspace, bindings, endpoints)
+    if copies:
+        targets = list(dict.fromkeys(target.upper() for target, _, _ in copies))
+        st.button("填充其他节点未配置的模型", key=f"node-model-fill:{workspace}:{node}",
+                  on_click=_fill_missing_models, args=(workspace, deepcopy(copies)),
+                  help="按相同角色复制当前节点的模型与 token 上限。保留已有选择，之后仍可逐个修改。",
+                  width="stretch")
+        st.caption(UntranslatedText("、".join(targets)))
+    st.caption("模型和 token 上限随草稿保存在本机；默认上下文 131,072、单次输出 32,768 tokens。开始运行后，本次配置固定。")
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()
 
 
 def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None):
-    return {node: {role: bindings[node][role] for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review)
+    return {node: {role: deepcopy(bindings[node][role]) for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
 
 
 def document_parser_mode(workspace):
     """Keep the chosen parser when Streamlit removes an unrendered widget."""
     draft_key = f"workflow-document-parse-mode-draft:{workspace}"
-    mode = st.session_state.get(draft_key, st.session_state.get(
-        f"workflow-document-parse-mode:{workspace}", "native"))
+    key = f"workflow-document-parse-mode:{workspace}"
+    saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key, "native")
+    mode = st.session_state.get(draft_key, st.session_state.get(key, saved))
     if mode not in {"native", "vision"}:
         mode = "native"
     st.session_state[draft_key] = mode
@@ -269,6 +395,7 @@ def _save_document_parser_mode(workspace):
     mode = st.session_state.get(f"workflow-document-parse-mode:{workspace}", "native")
     if mode in {"native", "vision"}:
         st.session_state[f"workflow-document-parse-mode-draft:{workspace}"] = mode
+        _persist_draft_value(workspace, f"workflow-document-parse-mode:{workspace}", mode)
 
 
 def render_document_parser(workspace, bindings, endpoints, *, backend_application=None):
@@ -311,11 +438,13 @@ def render_document_parser(workspace, bindings, endpoints, *, backend_applicatio
 
 def render_agent_verification(workspace, capabilities, check_environment=None):
     draft_key = f"workflow-agent-mode:{workspace}"
-    draft = st.session_state.get(draft_key, "local")
+    draft = st.session_state.get(draft_key, st.session_state.get(
+        f"workflow-form-draft:{workspace}", {}).get(draft_key, "local"))
     mode = st.selectbox("轨迹验证方式", ["local", "isolated"], index=1 if draft == "isolated" else 0,
                         format_func=lambda value: "本地验证" if value == "local" else "隔离验证",
                         key=f"agent-mode-choice:{workspace}")
     st.session_state[draft_key] = mode
+    _persist_draft_value(workspace, draft_key, mode)
     if mode == "isolated":
         if not capabilities.get("isolated_configured"):
             st.warning("尚未配置可用的隔离验证环境。选择本地验证，或完成环境配置后再开始。")

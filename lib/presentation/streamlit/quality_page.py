@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 from lib.application.release_service import ReleaseApplication
 from lib.application.workflow_service import WorkflowApplication
+from lib.domain.workflow_delivery import has_deliverable_results
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_quality_page import render_workflow_quality
 from lib.render import render_message_sequence
@@ -16,7 +17,7 @@ def render_quality_page(workflow_app: WorkflowApplication, release_app: ReleaseA
     if show_title:
         page_header("质量报告", "查看格式、内容与审核覆盖情况，定位需要修复或隔离的样本。", "DATA QUALITY")
     verified_runs = [row for row in workflow_app.list_runs()
-                     if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
+                     if has_deliverable_results(row) and row.get("id")]
     if verified_runs:
         view = st.segmented_control(
             "质量范围", ("工作流质量", "已有对话质量"), default="工作流质量",

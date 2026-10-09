@@ -51,7 +51,8 @@ def test_recipe_maps_bounded_settings_and_keeps_secrets_out_of_draft():
     assert values["workflow-sft-output-style:default"] == "drop"
     assert copied["evaluation_references_omitted"] is True
     assert copied["node_bindings"]["sft"]["generation"]["model"] == "judge"
-    assert not any("node-model" in key or "consent" in key or "enabled" in key for key in values)
+    assert values["workflow-production-enabled:default"] is False
+    assert not any("node-model" in key or "consent" in key or "api-key" in key for key in values)
     assert "DO_NOT_COPY" not in json.dumps(copied)
     copied["node_bindings"]["sft"]["generation"]["model"] = "another"
     values["workflow-targets:default:自动推荐"].append("cpt")

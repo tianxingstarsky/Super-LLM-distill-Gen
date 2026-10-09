@@ -5,6 +5,7 @@ import html
 from typing import Any
 
 import streamlit as st
+from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.dataset_preview_page import TARGET_LABELS
@@ -49,6 +50,10 @@ QUALITY_STYLE = """<style>
 </style>"""
 
 REASON_LABELS = {
+    "planning_failed_after_repair": "任务规划修复后仍不合格",
+    "request_retries_exhausted": "单条请求重试已用尽",
+    "invalid_model_result": "模型返回结构无效",
+    "production_goal_already_met": "本类合格目标已达到",
     "empty_text": "空文本", "invalid_encoding": "文本编码异常",
     "potential_secret": "疑似密钥", "potential_personal_data": "疑似个人信息",
     "invalid_json_record": "JSON 记录无效", "oversized_source_block": "来源片段过长",
@@ -148,21 +153,25 @@ def _source_breakdown_html(sources: list[dict]) -> str:
 def render_workflow_quality(application: WorkflowApplication, workspace_id: str) -> bool:
     """Show a completed run's content checks separately from artifact integrity."""
     runs = [row for row in application.list_runs()
-            if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
+            if has_deliverable_results(row) and row.get("id")]
     if not runs:
         return False
     st.html(QUALITY_STYLE)
     by_id = {row["id"]: row for row in runs}
     run_id = st.selectbox(
-        "已完成任务", list(by_id), key=f"workflow-quality-run:{workspace_id}",
+        "选择工作流产物", list(by_id), key=f"workflow-quality-run:{workspace_id}",
         format_func=lambda key: f"{by_id[key].get('name', '未命名任务')} · {key[:8]}",
     )
     try:
         evidence = application.quality_report(run_id)
+        if not delivery_manifest_matches(by_id[run_id], evidence["manifest"]):
+            raise ValueError("artifact_integrity_error")
     except (KeyError, OSError, ValueError, TypeError) as error:
         st.error(f"质量证据校验失败：{error}")
         return True
     manifest = evidence["manifest"]
+    if by_id[run_id].get("status") in {"failed", "cancelled"}:
+        st.caption("当前为部分交付，只包含已提交轮次的结果。任务仍可恢复，未完成轮次不会计入本次导出。")
     quality = evidence["quality"]
     quarantined = quality.get("input_issues") or []
     counts = manifest.get("counts") or {}
@@ -224,7 +233,8 @@ def render_workflow_quality(application: WorkflowApplication, workspace_id: str)
                 '<div class="df-wq-evidence"><span>训练目标</span><strong>'
                 + str(len(counts)) + ' 类</strong></div>'
                 '<div class="df-wq-evidence"><span>任务状态</span><strong>'
-                + ("需检查" if by_id[run_id].get("status") == "needs_attention" else "已完成")
+                + {"needs_attention": "需检查", "failed": "失败", "cancelled": "已停止"}.get(
+                    by_id[run_id].get("status"), "已完成")
                 + '</strong></div>')
         if quarantined:
             with st.expander(f"查看隔离输入（{len(quarantined)}）"):

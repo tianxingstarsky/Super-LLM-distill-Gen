@@ -106,7 +106,7 @@ else:""",
     assert ui.pills(key='workflow-targets:fixture:自选目标').value == ['cpt']
     assert ui.segmented_control(key='workflow-source-mode:fixture').value == '文档资料'
     assert ui.text_input(key='workflow-name:fixture').value == prior['workflow-name:fixture']
-    assert ui.number_input(key='workflow-count:fixture').value == 50000
+    assert ui.session_state['workflow-form-draft:fixture']['workflow-count:fixture'] == 50000
     assert ui.number_input(key='workflow-batch-size:fixture').value == 250
     assert ui.multiselect(key='workflow-sources:fixture:文档资料').value == ['fixture.txt']
     assert 'workflow-entry-target:fixture' not in ui.session_state
@@ -159,7 +159,7 @@ def test_selected_goals_and_sources_survive_navigation_and_missing_file():
     assert ui.number_input(key='workflow-batch-size:fixture').value==250
     assert ui.number_input(key='workflow-concurrency:fixture').value==8
     assert ui.text_input(key='workflow-name:fixture').value=='Bulk run'
-    assert [m.value for m in ui.metric]==['200','8']
+    assert ui.toggle(key='workflow-production-enabled:fixture').value is True
 
 
 def test_conditional_settings_survive_goal_and_source_changes():
@@ -235,18 +235,19 @@ def test_briefs_survive_source_changes_navigation_and_workspace_switch():
 
 def test_quick_size_persists_and_open_brief_batch_count_respects_limit():
     ui = AppTest.from_string(SCRIPT).run()
+    ui.toggle(key='workflow-production-enabled:fixture').set_value(False).run()
     ui.button(key='workflow-count-preset:fixture:50000').click().run()
     assert ui.number_input(key='workflow-count:fixture').value == 50000
     ui.segmented_control(key='workflow-source-mode:fixture').set_value('开放需求').run()
     ui.number_input(key='workflow-max-units:fixture').set_value(1200).run()
-    assert [m.value for m in ui.metric] == ['12', '4']
+    assert ui.number_input(key='workflow-max-units:fixture').value == 1200
     assert any('处理上限低于候选规模' in item.value for item in ui.warning)
     ui.checkbox(key='fixture-show').uncheck().run()
     ui.checkbox(key='fixture-show').check().run()
     assert ui.number_input(key='workflow-count:fixture').value == 50000
     ui.button(key='workflow-count-preset:fixture:1000').click().run()
     assert ui.number_input(key='workflow-count:fixture').value == 1000
-    assert [m.value for m in ui.metric] == ['10', '4']
+    assert not any('处理上限低于候选规模' in item.value for item in ui.warning)
     assert not ui.exception
 
 

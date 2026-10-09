@@ -12,6 +12,7 @@ import re
 from typing import Callable
 
 import streamlit as st
+from lib.domain.workflow_delivery import has_deliverable_results
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_graph import execution_graph
@@ -59,7 +60,8 @@ def _stage_progress(run: dict) -> tuple[int, int]:
     # contributes to progress; its recipe flag is copied into new run state.
     trimming = bool(run.get("reasoning_trim_enabled")) or stages.get("trim", {}).get("status") in {
         "running", "completed", "failed", "cancelled"}
-    nodes, _ = execution_graph(run.get("targets", []), reasoning_trim=trimming)
+    nodes, _ = execution_graph(run.get("targets", []), reasoning_trim=trimming,
+                                qa_director={"enabled": bool(run.get("qa_director_enabled"))})
     return sum(stages.get(key, {}).get("status") == "completed" for key in nodes), len(nodes)
 
 
@@ -68,6 +70,13 @@ def _run_card_html(run: dict) -> tuple[str, str]:
     safe_status = html.escape(status, quote=True)
     done, total = _stage_progress(run)
     percent = round(100 * done / total) if total else 0
+    progress_label = "已完成节点"
+    goals = (run.get("production") or {}).get("goals", {})
+    if goals:
+        total = sum(goal["goal"] for goal in goals.values())
+        done = sum(min(goal["goal"], goal.get("eligible", 0)) for goal in goals.values())
+        percent = round(100 * done / total) if total else 0
+        progress_label = "合格数量"
     targets = [TARGET_LABELS.get(target, str(target).upper()) for target in run.get("targets", [])]
     tags = "".join(f'<span>{html.escape(label)}</span>' for label in targets[:3])
     if len(targets) > 3:
@@ -91,9 +100,9 @@ def _run_card_html(run: dict) -> tuple[str, str]:
     detail = (f'<div class="df-task-card-targets">{tags}</div>'
               f'<div class="df-task-card-source"><b>{source_label}</b>'
               f'<span data-user-content title="{source_title}">{html.escape(source_text)}</span></div>'
-              f'<div class="df-task-card-progress"><span>已完成节点 <b>{done}/{total}</b></span>'
+              f'<div class="df-task-card-progress"><span>{progress_label} <b>{done:,}/{total:,}</b></span>'
               f'<span>#{html.escape(str(run.get("id", ""))[:8])}</span></div>'
-              f'<div class="df-task-meter" role="progressbar" aria-label="已完成节点" '
+              f'<div class="df-task-meter" role="progressbar" aria-label="{progress_label}" '
               f'aria-valuemin="0" aria-valuemax="{total}" aria-valuenow="{done}">'
               f'<i style="width:{percent}%"></i></div>')
     return heading, detail
@@ -268,7 +277,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                          gap="small", vertical_alignment="center")
     focus_column, create_column = toolbar[0], toolbar[-1]
     with focus_column:
-        focus = st.toggle("放大工作流视图", value=len(runs) <= 3, key=focus_key,
+        focus = st.toggle("放大工作流视图", value=False, key=focus_key,
                           help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
     if show_quick_switch:
         language = st.session_state.get("ui_language", "zh")
@@ -294,7 +303,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         if st.session_state.get(quick_key) not in options:
             st.session_state[quick_key] = None
         with toolbar[1]:
-            st.selectbox(translate("并行任务", language), options, key=quick_key, format_func=quick_label,
+            st.selectbox(translate("切换任务", language), options, key=quick_key, format_func=quick_label,
                          label_visibility="collapsed", on_change=_quick_choice,
                          args=(workspace_id, quick_key),
                          help="直接切换正在运行或待处理的任务")
@@ -368,7 +377,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         if selected_id:
             selected_run = next(run for run in visible if run["id"] == selected_id)
             if ("agent" in selected_run.get("targets", []) and
-                    selected_run.get("status") in {"completed", "needs_attention"}):
+                    has_deliverable_results(selected_run)):
                 review_key = f"task-center-agent-review:{workspace_id}:{selected_id}"
                 if st.toggle("审查本任务 Agent 轨迹", key=review_key,
                              help="直接在当前任务核对工具过程与重放证据，处理正样本并查看失败轨迹。"):

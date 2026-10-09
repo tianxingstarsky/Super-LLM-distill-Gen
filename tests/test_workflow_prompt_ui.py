@@ -23,6 +23,7 @@ def test_ordinary_sft_prompt_is_node_local_and_survives_step_and_node_changes():
     ui.selectbox(key=selection).set_value("workflow.jev_score").run()
     quality = "workflow-node-prompt:fixture:sft:workflow.jev_score"
     assert ui.text_area(key=quality).value == builtin_node_prompt("workflow.jev_score")
+    ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["sft", "dpo"]).run()
     ui.button(key="fixture-node:preference").click().run()
     ui.button(key="fixture-node:sft").click().run()
     ui.selectbox(key=selection).set_value("workflow.sft").run()
@@ -52,6 +53,7 @@ def test_style_toggle_switches_active_prompt_without_losing_ordinary_prompt():
 
 def test_node_prompts_are_shown_only_for_actual_model_processing_steps():
     ui = AppTest.from_string(SCRIPT).run()
+    ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["cpt", "sft"]).run()
     for node in ("ingest", "cpt", "package"):
         ui.button(key="fixture-node:" + node).click().run()
         assert not any(row.key.startswith("workflow-node-prompt:") for row in ui.text_area)

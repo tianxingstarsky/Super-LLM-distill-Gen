@@ -8,6 +8,7 @@ from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_node_prompts import validate_node_prompts
 from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director, qa_director_applicable
+from lib.domain.workflow_production import validate_production, MAX_PRODUCTION_GOAL
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
@@ -15,7 +16,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       batch_size=100, node_models=None, conversation_turns=3, brief="",
                       agent_replay_mode="configured", evaluation_sources=(),
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
-                      node_prompts=None, package_review=None, qa_director=None):
+                      node_prompts=None, package_review=None, qa_director=None, production=None):
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)
@@ -26,13 +27,15 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     if not targets or any(not isinstance(t, str) or t not in TARGETS for t in targets):
         raise ValueError("请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话")
     targets = list(dict.fromkeys(targets))
+    production = validate_production(production, targets)
     if not isinstance(agent_replay_mode, str) or agent_replay_mode not in {"configured", "local", "isolated"}:
         raise ValueError("invalid_agent_replay_mode")
     if evaluation_sources and "cpt" not in targets:
         raise ValueError("评测集参照仅用于 CPT 去污染检查")
-    if any(type(value) is not int for value in (max_units, chunk_chars, tasks)) or not 1 <= max_units <= MAX_CANDIDATES or not 200 <= chunk_chars <= 20000 or not 1 <= tasks <= MAX_CANDIDATES:
+    capacity = MAX_PRODUCTION_GOAL if production is not None else MAX_CANDIDATES
+    if any(type(value) is not int for value in (max_units, chunk_chars, tasks)) or not 1 <= max_units <= capacity or not 200 <= chunk_chars <= 20000 or not 1 <= tasks <= capacity:
         raise ValueError("处理上限/分块大小/任务数超出允许范围")
-    if sample_count is not None and (type(sample_count) is not int or not 1 <= sample_count <= MAX_CANDIDATES):
+    if sample_count is not None and (type(sample_count) is not int or not 1 <= sample_count <= capacity):
         raise ValueError("invalid_sample_count")
     if type(concurrency) is not int or not 1 <= concurrency <= MAX_CONCURRENCY:
         raise ValueError("invalid_workflow_concurrency")

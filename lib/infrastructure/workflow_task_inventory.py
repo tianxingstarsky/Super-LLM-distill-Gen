@@ -65,6 +65,9 @@ def _summary(path, identity, recipe_identity):
     return {**{key: state[key] for key in
                ("id", "name", "status", "created_at", "updated_at", "targets") if key in state},
             **sources,
+            "production": state.get("production"),
+            "qa_director_enabled": state.get("qa_director_enabled", False),
+            "reasoning_trim_enabled": state.get("reasoning_trim_enabled", False),
             "recipe_readable": (sources["source_mode"] != "unknown" and
                                 isinstance(recipe.get("targets"), list) and
                                 all(isinstance(target, str) for target in recipe["targets"])),

@@ -21,6 +21,9 @@ from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_stream_view import render_stream_output
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
+from lib.domain.workflow_delivery import has_deliverable_results
+from lib.domain.workflow_production import MAX_PRODUCTION_GOAL
+from lib.presentation.streamlit.workflow_production_settings import render_delivery_goal, review_coverage_hint, render_delivery_progress
 from lib.domain.web_research import MAX_QUERIES, validate_web_research
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
@@ -44,13 +47,14 @@ from lib.presentation.streamlit.workflow_prompt_settings import (
 
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
-          "cancelled": "已停止", "needs_attention": "已完成，部分目标需处理", "skipped": "未选择"}
+          "cancelled": "已停止", "needs_attention": "待处理", "skipped": "未选择"}
 TARGET_LABELS = {"cpt": "CPT 预训练语料", "sft": "SFT 指令对话", "agent": "Agent 验证轨迹",
                  "multiturn": "多轮对话 SFT",
                  "dpo": "DPO 偏好对", "rlaif": "RLAIF AI 反馈", "gsm8k": "基础算术（GSM8K 格式）",
                  "cot": "CoT 可见推理", "orpo": "ORPO 偏好对"}
 PRESETS = {
-    "自动推荐": ("cpt", "sft", "orpo", "dpo"),
+    "自动推荐": ("sft",),
+    "常用组合": ("cpt", "sft", "dpo"),
     "预训练语料": ("cpt",),
     "多轮对话": ("sft", "multiturn"),
     "Agent 轨迹": ("sft", "agent"),
@@ -59,6 +63,16 @@ PRESETS = {
     "数学推理": ("sft", "gsm8k", "cot"),
     "自选目标": (),
 }
+
+
+def _preset_label(preset, workspace):
+    language = st.session_state.get("ui_language", "zh")
+    label = translate_label("指令对话" if preset == "自动推荐" else preset, language)
+    key = f"workflow-targets:{workspace}:{preset}"
+    selected = st.session_state.get(key, st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key))
+    if preset != "自选目标" and isinstance(selected, list) and set(selected) != set(PRESETS[preset]):
+        label += " (adjusted)" if language == "en" else "（已调整）"
+    return label
 
 
 def _select_setup_node(key: str, node: str) -> None:
@@ -82,6 +96,24 @@ def _save_sft_output_style(workspace: str) -> None:
 
 def _workflow_error(error) -> str:
     return {
+        "invalid_production": "生产目标配置无效，请检查合格数量与预算。",
+        "invalid_production_goals": "合格目标应为每类 1 到 1,000,000 条。",
+        "invalid_production_limits": "生产限制无效，请检查数量、轮数与预算。",
+        "budget_exhausted": "预算不足，任务已暂停。已完成结果与模型响应保留，可检查预算后继续。",
+        "service_authentication_failed": "模型服务鉴权失败，请检查本机凭据后继续。",
+        "service_permission_denied": "模型服务拒绝访问，请检查账号权限后继续。",
+        "service_model_or_endpoint_missing": "模型或接口不存在，请检查节点连接。",
+        "service_quota_exhausted": "模型服务额度已用尽，请补充额度后继续。",
+        "service_request_rejected": "模型服务拒绝了请求，请检查节点模型与参数。",
+        "service_rate_limited": "模型服务持续限流，当前样本已隔离或任务已暂停。",
+        "service_unavailable": "模型服务暂时不可用，已保留断点。",
+        "service_temporarily_unavailable": "模型服务暂时不可用，已保留断点。",
+        "service_timeout": "模型请求超时，已保留断点。",
+        "service_connection_failed": "模型连接失败，已保留断点。",
+        "model_request_failed": "模型调用未能完成，请检查服务后从断点继续。",
+        "production_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
+        "production_review_integrity_error": "评审断点校验失败，请保留任务文件并检查存储。",
+        "production_round_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
         "invalid_package_review": "AI 打包评审配置无效，请检查质检打包节点。",
         "invalid_qa_director": "问答指导员配置无效，请检查题型配比与规则。",
         "invalid_qa_director_batch_size": "每批指导任务数应为 1 到 50，请调整指导员节点。",
@@ -275,6 +307,7 @@ def _stage_configuration(key, recipe, state):
 STAGE_GLYPHS = {"ingest": "▤", "director": "⌘", "cpt": "▥", "sft": "✎", "multiturn": "☷", "agent": "◇",
                 "preference": "⚖", "gsm8k": "∑", "cot": "◈", "trim": "✂", "package": "▣"}
 EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节点处理完成",
+                "item_retry": "当前记录正在重试", "production_round_completed": "本轮合格结果已保存",
                 "model_started": "模型请求开始", "model_finished": "模型请求完成",
                 "web_search_started": "开始查找公开资料", "web_search_completed": "公开资料检索完成",
                 "run_finished": "工作流运行结束", "run_failed": "工作流运行失败",
@@ -512,13 +545,16 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     elif status == "completed":
         st.success("所选目标已完成，训练文件与质量报告已生成。")
     elif status == "needs_attention":
-        if any(row.get("package_review", {}).get("rejected", 0)
+        if state.get("production"):
+            st.warning("运行已结束，部分合格目标尚未达到。已合格结果可导出；调整配置后可创建新任务。")
+        elif any(row.get("package_review", {}).get("rejected", 0)
                for row in state.get("quality", {}).get("targets", {}).values()):
             st.warning("本次 AI 打包评审隔离了部分样本；通过检查的样本仍可导出，评审证据保留在 ZIP 中。")
         else:
             st.warning("运行已结束；有目标没有合格样本，或输入超过本次处理上限。查看下方质量报告。")
     else:
         st.info(LABELS.get(status, status))
+    render_delivery_progress(state)
     console_job = st.session_state.get(f"job:{st.session_state.get('ws', '')}:{run_id}")
     if console_job is not None and status == "queued":
         exit_code, _ = console_job.snapshot()
@@ -695,7 +731,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                 st.dataframe([{"目标": target.upper(), "通过": info["eligible"], "候选总数": info["total"],
                                "未通过原因": json.dumps(info["reasons"], ensure_ascii=False)}
                               for target, info in quality["targets"].items()], hide_index=True, width="stretch")
-            if status in {"completed", "needs_attention"}:
+            if has_deliverable_results(state):
                 from lib.presentation.streamlit.review_navigation import (
                     review_choices, open_verified_review, open_package,
                 )
@@ -710,6 +746,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                     st.button("查看并打包本次训练数据", on_click=open_package, args=(run_id,),
                               kwargs={"from_fragment": True},
                               type="primary", key=f"zip:{run_id}", width="stretch")
+                    if (state.get("production") or {}).get("partial_export"):
+                        st.caption("当前为部分交付，只包含已提交轮次的结果。任务仍可恢复，未完成轮次不会计入本次导出。")
                 if review_targets:
                     with review_action:
                         if len(review_targets) == 1:
@@ -1023,7 +1061,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if st.session_state.get(f"workflow-draft-error:{ws}"):
             st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
         else:
-            st.caption("参数、目标、需求和已选资料保存在本机缓存；节点模型和联网检索需重新确认。")
+            st.caption("资料、节点模型与提示词自动保存在本机；联网检索需单独开启。")
     entry_target = st.session_state.pop(f"workflow-entry-target:{ws}", None)
     if entry_target in TARGETS:
         # A named entry chooses that exact output. Old edits to a quick plan
@@ -1061,14 +1099,18 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 file_labels[saved_source] = safe_source["label"]
             except (OSError, ValueError):
                 unavailable_sources += 1
-    with st.container(border=True, key="workbench-targets"):
-        heading_col, preset_col = st.columns([2, 1], vertical_alignment="center")
-        with heading_col:
-            section_heading("选择训练目标", icon="◈")
-        with preset_col:
-            preset = st.selectbox("快捷方案", tuple(PRESETS), key=preset_key,
-                on_change=_save_draft_value, args=(ws, preset_key),
-                help="选择常用目标组合。下面仍可逐项增删训练目标。")
+    # Declare the source and goal slots first. Fill them below once node-specific
+    # parsing and validation are known, without putting the upload below a graph.
+    source_col, setup_col = st.columns([1.15, 1], gap="medium")
+    with source_col:
+        source_slot, target_slot = st.container(), st.container()
+    with target_slot, st.container(border=True, key="workbench-targets"):
+        section_heading("选择训练目标", icon="◈")
+        preset_labels = {value: _preset_label(value, ws) for value in PRESETS}
+        preset = st.selectbox("快捷方案", tuple(PRESETS), key=preset_key,
+            format_func=preset_labels.__getitem__,
+            on_change=_save_draft_value, args=(ws, preset_key),
+            help="选择常用目标组合。下面仍可逐项增删训练目标。")
         target_key = f"workflow-targets:{ws}:{preset}"
         target_defaults = [target for target in PRESETS[preset] if target in TARGETS]
         _restore_selection(ws, target_key, target_defaults, TARGETS)
@@ -1125,6 +1167,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else source_mode
         bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws,
                                            node_generation=node_generation, package_review=package_review)
+        if document_parser.get("mode") == "vision" and bindings.get("ingest", {}).get("vision"):
+            document_parser["binding"] = bindings["ingest"]["vision"]
         if document_parser.get("mode") == "vision" and document_parser.get("binding"):
             from lib.domain.document_parser import supports_vision
             vision_binding = document_parser["binding"]
@@ -1133,9 +1177,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                         node_generation=node_generation, package_review=package_review)
         if backend_application is not None:
+            budget = dict(backend_application.list_backends().get("budget") or {})
+            if st.session_state.get(f"workflow-production-enabled:{ws}", st.session_state.get(
+                    f"workflow-form-draft:{ws}", {}).get(f"workflow-production-enabled:{ws}", True)) and st.session_state.get(
+                    f"workflow-production-budget:{ws}", st.session_state.get(
+                        f"workflow-form-draft:{ws}", {}).get(f"workflow-production-budget:{ws}", 0)):
+                budget.update(max_total_usd=1, hard_stop=True)
             pricing_issues = _missing_budget_prices(
                 graph_nodes, model_source_mode, bindings, endpoints,
-                backend_application.list_backends().get("budget") or {},
+                budget,
                 node_generation=node_generation, package_review=package_review,
             )
         if model_issues:
@@ -1162,9 +1212,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                           inspector_key="workbench-node-panel", expanded=True)
         with workbench, st.container(border=True, key="workbench-node-panel"):
             with st.container(key="workbench-node-header"):
-                title, close = st.columns([6, 1], gap="small", vertical_alignment="center")
+                title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
                 with title:
                     section_heading(GRAPH_LABELS[selected_node], "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
+                with expand:
+                    wide_key = f"canvas-wide:setup-canvas:{ws}"
+                    st.button("收窄编辑" if st.session_state.get(wide_key) else "展开编辑",
+                              key=f"workflow-wide-config:{ws}", width="stretch",
+                              on_click=st.session_state.update,
+                              args=({wide_key: not st.session_state.get(wide_key, False)},))
                 with close:
                     st.button("✕", key=f"workflow-close-config:{ws}", help="收起节点配置",
                               on_click=st.session_state.update,
@@ -1220,8 +1276,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                     qa_director=qa_director, prompt_library=prompt_library)
     # Source previews and common run controls stay in normal document flow.
     # Only the node-local form follows the selected graph node.
-    with workbench:
-        source_col, setup_col = st.columns([1.2, 1], gap="medium") if targets else (st.container(), None)
     node_generation = generation_snapshot(ws, graph_nodes) if targets else {}
     generation_invalid = generation_issues(node_generation)
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
@@ -1235,12 +1289,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     # Node forms have no influence on the height of these normal-flow columns.
     preview_in_input = bool(targets and selected_node == "ingest" and source_mode == "文档资料"
                             and document_parser.get("mode") == "native" and document_preview is not None)
-    compact_parameters = bool(targets and not preview_in_input and source_mode != "知识库检索")
     with st.container(key=f"workbench-create:{ws}"):
         web_research, web_unavailable = None, False
         knowledge_source_names = {}
-        with source_col, st.container(border=True, key="workbench-source-panel"):
+        with source_slot, st.container(border=True, key="workbench-source-panel"):
             section_heading("添加来源", f"本次来源类型：{source_mode}", "▤")
+            if document_parser.get("unconfirmed"):
+                st.warning("请点击输入节点，核实并确认模型的图片输入能力。")
             if source_mode == "开放需求":
                 uploaded, selected = [], []
                 st.caption("描述任务、领域和使用场景，系统会规划并生成候选。")
@@ -1299,7 +1354,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 if file_labels:
                     selected = st.multiselect("本次使用的资料", list(file_labels),
                                               format_func=lambda path: file_labels[path],
-                                              key=sources_key, on_change=_save_draft_value, args=(ws, sources_key))
+                                              key=sources_key, on_change=_save_draft_value, args=(ws, sources_key),
+                                              placeholder="选择本次资料")
                 else:
                     selected = []
                 if (source_mode == "文档资料" and document_parser.get("mode") == "native"
@@ -1314,7 +1370,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
         if preview_in_input:
             from lib.presentation.streamlit.document_preview import render_document_preview
-            with setup_col, st.container(border=True, key="workbench-source-preview"):
+            with workbench, st.container(border=True, key="workbench-source-preview"):
                 chunk_chars = _draft_number(
                     "文档分块目标字符数", 200, 20000, 2000,
                     key=f"workflow-chunk-chars:{ws}")
@@ -1324,31 +1380,30 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 render_document_preview(document_preview, ws, native_sources, file_labels, int(chunk_chars))
         if targets and source_mode == "知识库检索":
             from lib.presentation.streamlit.knowledge_page import render_knowledge_preview
-            with setup_col, st.container(border=True, key="workbench-knowledge-preview"):
+            with workbench, st.container(border=True, key="workbench-knowledge-preview"):
                 render_knowledge_preview(ws)
-        with (setup_col if compact_parameters else nullcontext()), st.container(
+        with setup_col, st.container(
                 border=True, key="workbench-parameters-panel"):
-            section_heading("生成参数设置", "设置运行名称与本次处理范围", "⚙")
-            scale_col, batch_col = ((st.container(), st.container()) if compact_parameters
-                                    else st.columns(2, gap="medium"))
+            section_heading("本次生产目标", "合格数量、预算与运行方式", "⚙")
+            scale_col, batch_col = st.container(), st.container()
             with scale_col:
                 default_run_name = ("Automatic data generation"
                                     if st.session_state.get("ui_language") == "en" else "自动数据生成")
                 name = _draft_name(default_run_name, ws)
-                st.caption("快捷规模 · 仍可输入自定义数量")
-                for size_column, count in zip(st.columns(3, gap="small"), (1000, 10000, 50000)):
-                    with size_column:
-                        st.button(f"{count:,}", key=f"workflow-count-preset:{ws}:{count}",
-                                  use_container_width=True, on_click=_select_candidate_count,
-                                  args=(ws, count))
-                sample_count = _draft_number("候选样本规模", 1, MAX_CANDIDATES, 1000, step=100, key=f"workflow-count:{ws}",
-                                               help="设置单个生成目标的候选规模。质检后的实际导出数量可能较少；导入轨迹与 CPT 文档不会重复凑数。")
+                if any(target != "agent" and (target != "cpt" or source_mode == "开放需求") for target in targets):
+                    st.caption("快捷规模 · 仍可输入自定义数量")
+                    for size_column, count in zip(st.columns(3, gap="small"), (1000, 10000, 50000)):
+                        with size_column:
+                            st.button(f"{count:,}", key=f"workflow-count-preset:{ws}:{count}",
+                                      use_container_width=True, on_click=_select_candidate_count,
+                                      args=(ws, count))
+                sample_count, production = render_delivery_goal(
+                    ws, targets, source_mode, TARGET_LABELS, _draft_number, _save_draft_value)
                 tasks = sample_count
                 conversation_turns = (_draft_number("每段对话轮数", 2, 8, 3, key=f"workflow-turns:{ws}",
                                                       help="仅用于新生成的多轮对话；导入的完整对话保持原有轮次。")
                                       if "multiturn" in targets else 3)
             with batch_col:
-                st.caption("分批生成 · 失败后可从逐条断点继续")
                 a, b = st.columns(2, gap="small")
                 with a:
                     concurrency = _draft_number("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
@@ -1360,19 +1415,21 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     range_col, chunk_col = (st.columns(2, gap="small") if source_mode == "文档资料" and not preview_in_input
                                             else (nullcontext(), nullcontext()))
                     with range_col:
-                        maximum = _draft_number("本次最多处理单元", 1, MAX_CANDIDATES, MAX_CANDIDATES, key=f"workflow-max-units:{ws}",
+                        input_limit = MAX_PRODUCTION_GOAL if production else MAX_CANDIDATES
+                        input_key = f"workflow-max-units:{ws}"
+                        if st.session_state.get(input_key, st.session_state.get(
+                                f"workflow-form-draft:{ws}", {}).get(input_key, input_limit)) > input_limit:
+                            st.session_state[input_key] = input_limit
+                            _save_draft_value(ws, input_key)
+                        maximum = _draft_number("本次最多处理单元", 1, input_limit, input_limit, key=input_key,
                                               help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
                     if not preview_in_input:
                         with chunk_col:
                             chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
                                            if source_mode == "文档资料" else 2000)
-                planning_count = min(int(sample_count), int(maximum)) if source_mode == "开放需求" else int(sample_count)
-                if source_mode == "开放需求" and maximum < sample_count:
+                if not production and source_mode == "开放需求" and maximum < sample_count:
                     st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
-                batch_summary, request_summary = st.columns(2, gap="small")
-                batch_summary.metric("每个生成目标的候选批次", f"{(planning_count + int(batch_size) - 1) // int(batch_size):,}")
-                request_summary.metric("同时处理的样本上限", f"{min(int(concurrency), int(batch_size)):,}")
-                st.caption("批次数按候选规模估算；不代表模型调用次数或合格数量。CPT 与导入轨迹按实际来源处理。")
+                review_coverage_hint(production, package_review)
                 evaluation_uploads = []
                 if "cpt" in targets:
                     with st.expander("预训练评测集去污染（可选）"):
@@ -1400,11 +1457,17 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                        st.session_state.get("ui_language", "zh"))
                              if "sft" in targets else "")
             language = st.session_state.get("ui_language", "zh")
-            run_summary = translate(
-                f"{source_mode} · 已选 {len(targets)} 类目标 · 候选规模 {int(sample_count):,}"
-                f" · 并发 {int(concurrency)} · 每批 {int(batch_size)}",
-                language,
-            )
+            if production:
+                goal_text = ", ".join(f"{target.upper()} {count:,}" for target, count in production["goals"].items())
+                goal_text = goal_text or translate("按实际来源处理", language)
+                run_summary = (translate_label(source_mode, language) + " · " +
+                               translate("合格目标", language) + " " + goal_text)
+                if production["budget_usd"]:
+                    run_summary += f" · USD {production['budget_usd']:,.2f}"
+            else:
+                run_summary = translate(
+                    f"{source_mode} · 已选 {len(targets)} 类目标 · 候选规模 {int(sample_count):,}"
+                    f" · 并发 {int(concurrency)} · 每批 {int(batch_size)}", language)
             if "sft" in targets:
                 run_summary += f" · SFT {style_summary}"
             if node_generation:
@@ -1469,7 +1532,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     run_id = application.create_run(sources=sources, brief=brief, name=name, targets=targets,
                                         node_models=model_application.snapshot(graph_nodes, source_mode, bindings,
                                                                                node_generation=node_generation, package_review=package_review),
-                                        sample_count=int(sample_count), concurrency=int(concurrency), batch_size=int(batch_size),
+                                        sample_count=int(sample_count), production=production,
+                                        concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),
                                         agent_replay_mode=agent_mode,

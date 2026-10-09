@@ -8,6 +8,7 @@ import streamlit as st
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_targets import TARGETS
+from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.shared import section_heading
 from lib.presentation.streamlit.i18n import UntranslatedText
@@ -40,9 +41,9 @@ def _preview_targets(manifest: dict, files: list[dict]) -> list[str]:
 
 
 def render_workflow_samples(application: WorkflowApplication, workspace_id: str) -> bool:
-    """Return whether the workspace has a completed candidate to browse."""
+    """Browse completed results or explicitly committed partial deliveries."""
     runs = [row for row in application.task_runs()
-            if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
+            if has_deliverable_results(row) and row.get("id")]
     if not runs:
         return False
     by_id = {row["id"]: row for row in runs}
@@ -53,11 +54,13 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         if st.session_state.get(run_key) not in by_id:
             st.session_state.pop(run_key, None)
         run_id = st.selectbox(
-            "已完成任务", list(by_id), key=run_key,
+            "选择工作流产物", list(by_id), key=run_key,
             format_func=lambda key: UntranslatedText(f"{by_id[key].get('name', '未命名任务')} · {key[:8]}"),
         )
         try:
             inventory = application.package_inventory(run_id)
+            if not delivery_manifest_matches(by_id[run_id], inventory["manifest"]):
+                raise ValueError("artifact_integrity_error")
             targets = _preview_targets(inventory["manifest"], inventory["files"])
         except (KeyError, OSError, ValueError, TypeError) as error:
             st.error(f"产物校验失败：{error}")
@@ -93,11 +96,14 @@ def render_workflow_samples(application: WorkflowApplication, workspace_id: str)
         st.html('<div class="df-data-sample-facts">'
                 '<div><span>训练目标</span><b>' + _safe(target.upper()) + '</b></div>'
                 '<div><span>任务状态</span><b>'
-                + ("需检查" if by_id[run_id].get("status") == "needs_attention" else "已完成")
+                + {"needs_attention": "需检查", "failed": "失败", "cancelled": "已停止"}.get(
+                    by_id[run_id].get("status"), "已完成")
                 + '</b></div>'
                 '<div><span>文件完整性</span><b>SHA-256 通过</b></div>'
                 '<div><span>来源任务</span><b>' + _safe(run_id[:8]) + '</b></div>'
                 '</div><p class="df-data-note">预览来自校验后的自动候选；正式训练前仍可进入人工审核。</p>')
+        if by_id[run_id].get("status") in {"failed", "cancelled"}:
+            st.caption("当前为部分交付，只包含已提交轮次的结果。任务仍可恢复，未完成轮次不会计入本次导出。")
         if st.button("查看任务运行过程", key=f"data-preview-workflow:{workspace_id}:{run_id}", width="stretch"):
             st.session_state["workflow-open-run"] = {"workspace": workspace_id, "run_id": run_id}
             st.rerun()

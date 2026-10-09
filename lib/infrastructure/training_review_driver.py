@@ -9,10 +9,11 @@ from lib.domain.corpus_review import corpus_identity, validate_corpus_row
 from lib.domain.preference_review import pair_identity, validate_pair, validate_rlaif_pair
 from lib.domain.review_audit import validate_review_event
 from lib.domain.sft_review import sft_identity, validate_sft_record
+from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.infrastructure.review_index import review_index
 from lib.infrastructure.review_release import prepare_review_release, review_archive
 from lib.infrastructure.review_store import review_store
-from lib.infrastructure.training_workflow import list_runs, read_json, run_path, verify_artifacts
+from lib.infrastructure.training_workflow import list_runs, read_json, run_path, verify_artifacts, is_active
 
 
 class FilesystemTrainingReviewDriver:
@@ -34,9 +35,11 @@ class FilesystemTrainingReviewDriver:
             raise ValueError("invalid_run_id")
         path = run_path(self.output, run_id)
         state = read_json(path / "state.json")
-        if state.get("status") not in {"completed", "needs_attention"} or self.target not in state.get("targets", []):
+        if not has_deliverable_results(state) or is_active(path) or self.target not in state.get("targets", []):
             raise ValueError(f"{self.family}_run_not_ready")
-        verify_artifacts(path)
+        manifest = verify_artifacts(path)
+        if not delivery_manifest_matches(state, manifest):
+            raise ValueError("artifact_integrity_error")
         if not (path / "artifacts" / f"{self.target}.jsonl").is_file():
             raise ValueError(f"{self.family}_artifact_missing")
         if self.target == "rlaif":
@@ -59,7 +62,7 @@ class FilesystemTrainingReviewDriver:
     def reviewable_runs(self):
         result = []
         for state in list_runs(self.output):
-            if state.get("status") not in {"completed", "needs_attention"} or self.target not in state.get("targets", []):
+            if not has_deliverable_results(state) or self.target not in state.get("targets", []):
                 continue
             try:
                 path = self._run(state["id"])

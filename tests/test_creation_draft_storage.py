@@ -10,7 +10,7 @@ from tests.test_workflow_draft import SCRIPT
 
 
 @pytest.mark.parametrize('key,value', [
-    ('workflow-count:w', True), ('workflow-count:w', 100001),
+    ('workflow-count:w', True), ('workflow-count:w', 1000001),
     ('workflow-concurrency:w', 17), ('workflow-turns:w', 1),
     ('workflow-targets:w:p', ['unknown']), ('workflow-sources:w:p', [123]),
     ('api-key:w', 'credential'), ('workflow-node-model:w', {'model': 'writer'}),
@@ -179,7 +179,9 @@ def test_direct_target_entry_survives_restart_without_replaying_the_shortcut(tmp
     assert not fresh.exception
     assert fresh.pills(key='workflow-targets:fixture:自选目标').value == ['cpt']
     assert fresh.text_input(key='workflow-name:fixture').value == 'Existing 50K source task'
-    assert fresh.number_input(key='workflow-count:fixture').value == 50000
+    # Source-preserving CPT has no misleading quantity control; retain the
+    # value for returning to a generated QA target.
+    assert application.load()['workflow-count:fixture'] == 50000
     assert fresh.multiselect(key='workflow-sources:fixture:文档资料').value == ['fixture.txt']
     fresh.pills(key='workflow-targets:fixture:自选目标').set_value(['dpo']).run()
     again = AppTest.from_string(script).run()

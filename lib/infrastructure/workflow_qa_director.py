@@ -22,6 +22,7 @@ from lib.domain.workflow_quality import accepted, canonical, conversation_issue,
 from lib.domain.workflow_scale import DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS
 from lib.infrastructure.qa_history import QAHistory, contract_identity
 from lib.infrastructure.workflow_rows import WorkflowRows
+from lib.model_request_reliability import ModelJSONError
 
 
 def _digest(value):
@@ -40,7 +41,25 @@ def learner_prompt(contract):
     return question
 
 
+class DirectorPlanError(ValueError):
+    """Invalid planner output after bounded repair; safe for task feedback."""
+
+    code = "qa_director_plan_invalid_after_repair"
+    kind = "invalid"
+
+    def __init__(self):
+        super().__init__(self.code)
+
+
 class WorkflowQADirector:
+    def _invalidate_director_call(self, key, *, stage=None):
+        stage = stage or self.stage
+        invalidate = getattr(self, "invalidate_checkpoint", None)
+        if callable(invalidate):
+            invalidate(["call", key], stage=stage)
+        else:
+            (self.path / "checkpoints" / stage / f"{_digest(['call', key])}.json").unlink(missing_ok=True)
+
     def activate_directed_stage(self, stage):
         self.stage = stage
         for key in ("director", "sft", "multiturn"):
@@ -114,7 +133,7 @@ class WorkflowQADirector:
                 or type(value.get("adherence")) is not int
                 or not 1 <= value["adherence"] <= 5
                 or not isinstance(value.get("reason"), str) or not value["reason"].strip()):
-            (self.path / "checkpoints" / self.stage / f"{_digest(['call', key])}.json").unlink(missing_ok=True)
+            self._invalidate_director_call(key)
             raise ValueError("invalid_qa_director_judge_schema")
         return value
 
@@ -261,27 +280,67 @@ class WorkflowQADirector:
             return data
         inputs = self.checkpoint([*key, "inputs"], snapshot)
         def plan():
-            response = self.ask([*key, "plan"], "generation", "workflow.qa_director", inputs,
-                                allow_reasoning_fallback=False)
-            try:
-                tasks = response.get("tasks") if isinstance(response, dict) else None
-                if (not isinstance(tasks, list) or len(tasks) != len(guided)
-                        or any(not isinstance(task, dict) for task in tasks)):
-                    raise ValueError("invalid_qa_director_batch")
-                by_id = {task.get("id"): task for task in tasks}
-                if len(by_id) != len(guided) or set(by_id) != {unit["id"] for unit in guided}:
-                    raise ValueError("qa_director_batch_id_mismatch")
-                contracts = {}
-                for candidate in inputs["candidates"]:
-                    contracts[candidate["id"]] = validate_director_task(
-                        by_id[candidate["id"]], expected_type=candidate["assigned_type"],
-                        source_text=candidate["teacher_evidence"],
-                        expected_id=candidate["id"])
-                return contracts
-            except ValueError:
-                (self.path / "checkpoints" / "director" / f"{_digest(['call', [*key, 'plan']])}.json").unlink(missing_ok=True)
-                raise
-        contracts = self.checkpoint([*key, "contracts"], plan)
+            production = self.recipe.get("version", 0) >= 12 and self.recipe.get("production") is not None
+            repair_feedback = None
+            for attempt in range(3 if production else 1):
+                call_key = [*key, "plan"] if attempt == 0 else [*key, "plan", attempt]
+                data = inputs if repair_feedback is None else {**inputs, "plan_repair": repair_feedback}
+                try:
+                    response = self.ask(call_key, "generation", "workflow.qa_director", data,
+                                        allow_reasoning_fallback=False)
+                except ModelJSONError:
+                    if not production:
+                        raise
+                    response = None
+                try:
+                    tasks = response.get("tasks") if isinstance(response, dict) else None
+                    if (not isinstance(tasks, list) or len(tasks) != len(guided)
+                            or any(not isinstance(task, dict) for task in tasks)):
+                        raise ValueError("invalid_qa_director_batch")
+                    # A malformed (unhashable) id is output invalidity too.
+                    if any(not isinstance(task.get("id"), str) for task in tasks):
+                        raise ValueError("qa_director_batch_id_mismatch")
+                    by_id = {task["id"]: task for task in tasks}
+                    if len(by_id) != len(guided) or set(by_id) != {unit["id"] for unit in guided}:
+                        raise ValueError("qa_director_batch_id_mismatch")
+                    contracts = {}
+                    for candidate in inputs["candidates"]:
+                        contracts[candidate["id"]] = validate_director_task(
+                            by_id[candidate["id"]], expected_type=candidate["assigned_type"],
+                            source_text=candidate["teacher_evidence"],
+                            expected_id=candidate["id"])
+                    return contracts
+                except ValueError:
+                    self._invalidate_director_call(call_key)
+                    if not production:
+                        raise
+                    # Fixed feedback explains the contract without echoing the
+                    # rejected model response, provider text or source excerpts.
+                    repair_feedback = {
+                        "code": "qa_director_contract_validation_failed",
+                        "instruction": "返回与 candidates 数量及 id 完全一致的 tasks；保持分配题型。"
+                            "字段与类型须符合模板，visible_context 和 evidence_quotes 必须逐字来自对应"
+                            " teacher_evidence；无线索题的 visible_context 必须为空。不得新增资料或引用历史为事实。",
+                        "attempt": attempt + 1,
+                    }
+                    self.event("director_plan_repair", attempt=attempt + 1,
+                               reason="qa_director_contract_validation_failed")
+            raise DirectorPlanError()
+        try:
+            contracts = self.checkpoint([*key, "contracts"], plan)
+        except DirectorPlanError:
+            # Preserve unrelated batches and recorded conversations. No worker
+            # may silently fall back to unguided generation for this batch.
+            metrics = self.state["stages"]["director"]
+            metrics["done"] += len(guided)
+            metrics["outputs"] += len(guided)
+            metrics["quarantined"] += len(guided)
+            metrics["batches_done"] += 1
+            feedback = self.state["qa_director"]["feedback"]
+            feedback[DirectorPlanError.code] = feedback.get(DirectorPlanError.code, 0) + len(guided)
+            self.event("director_batch_quarantined", reason=DirectorPlanError.code, count=len(guided))
+            return [unit if unit["kind"] == "conversation" else
+                    {**unit, "director_plan_failure": DirectorPlanError.code} for unit in batch]
         result = []
         for unit in batch:
             if unit["kind"] == "conversation":
@@ -323,8 +382,12 @@ class WorkflowQADirector:
         def process(index, unit):
             self.check_cancel()
             item_key = ["item", index, _digest(unit)]
-            cached = (self.path / "checkpoints" / stage / f"{_digest(item_key)}.json").exists()
+            has_checkpoint = getattr(self, "checkpoint_has", None)
+            cached = (has_checkpoint(item_key, stage=stage) if callable(has_checkpoint) else
+                      (self.path / "checkpoints" / stage / f"{_digest(item_key)}.json").exists())
             def generate():
+                if unit.get("director_plan_failure"):
+                    return [self.rejected(unit, DirectorPlanError.code)]
                 if unit.get("qa_contract"):
                     c = unit["qa_contract"]
                     def dispatch():
@@ -344,7 +407,8 @@ class WorkflowQADirector:
                     if decision["reason"]:
                         return [{**self.rejected(unit, decision["reason"]), "qa_contract": c,
                                  "family_id": unit["family_id"], "duplicate_of": decision["duplicate_of"]}]
-                return action(unit)
+                run_safely = getattr(self, "run_item_safely", None)
+                return run_safely(stage, unit, action) if callable(run_safely) else action(unit)
             return self.checkpoint(item_key, generate), cached
         ordered = {}
         workers = self.recipe.get("concurrency", 1)
@@ -430,9 +494,12 @@ class WorkflowQADirector:
                     planned = self._director_batch_plan(batch, offset, config, local_history, published_history, stages)
                     for unit in planned:
                         plans.write(canonical({"id": unit["id"], "source_id": unit["source_id"],
-                            "status": "ready", "qa_contract": unit.get("qa_contract"),
+                            "status": "quarantined" if unit.get("director_plan_failure") else "ready",
+                            **({"reason": unit["director_plan_failure"]} if unit.get("director_plan_failure") else {}),
+                            "qa_contract": unit.get("qa_contract"),
                             "family_id": unit.get("family_id"), "director_batch": unit.get("director_batch"),
-                            "route": "recorded_conversation_preserved" if unit["kind"] == "conversation" else list(stages)}) + "\n")
+                            "route": "recorded_conversation_preserved" if unit["kind"] == "conversation" else
+                                [] if unit.get("director_plan_failure") else list(stages)}) + "\n")
                     plans.flush()
                     for stage in stages:
                         self._directed_worker_batch(stage, planned, offset, handles[stage], local_history, published_history)

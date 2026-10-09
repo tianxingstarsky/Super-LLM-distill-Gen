@@ -126,7 +126,7 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
     with st.container(key=f"workbench-node-prompts:{node}"):
         st.html('<p class="df-node-prompt-heading"><strong>'
                 + html.escape(translate("节点提示词", language)) + '</strong></p>')
-        st.caption("仅作用于当前节点的所选处理步骤；开始任务后固定保存。")
+        st.caption("完整模板决定处理步骤与输出字段；风格指令只补充表达要求，指导员规则只约束问答任务。开始运行后全部固定。")
         step, reset = st.columns([1.65, 1], gap="small", vertical_alignment="bottom")
         with step:
             prompt_id = st.selectbox("处理步骤", prompts, key=selection_key,
@@ -143,7 +143,8 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
         render_prompt_library(prompt_library, workspace, f"node:{node}:{prompt_id}",
                               fields={"text": body_key}, save_field=save_field,
                               label="我的提示词模板", save_label="保存提示词")
-        st.text_area("提示词正文", key=body_key, height=164, max_chars=MAX_NODE_PROMPT_CHARS,
+        wide = st.session_state.get(f"canvas-wide:setup-canvas:{workspace}", False)
+        st.text_area("提示词正文", key=body_key, height=320 if wide else 164, max_chars=MAX_NODE_PROMPT_CHARS,
                      on_change=save_field, args=(workspace, body_key),
                      help="可直接编辑或导入完整指令；输入资料会自动附加。请保留本步骤要求的输出字段。")
         with st.popover("导入 TXT / Markdown", width="stretch"):

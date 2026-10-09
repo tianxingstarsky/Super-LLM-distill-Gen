@@ -19,6 +19,10 @@ from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request
                                  anthropic_text, response_text, responses_input,
                                  validate_api_format)
 from lib.model_streaming import StreamCallback, consume_stream
+from lib.model_request_reliability import (
+    ModelJSONError, ModelRequestError, SERVICE_COOLDOWNS, classify_request_error,
+    rejected_before_generation, retry_delay,
+)
 
 DEFAULT_NO_PROXY = "127.0.0.1,localhost"
 # A priced hard-stop request without an explicit model context is constrained
@@ -94,7 +98,7 @@ def chat_json(
             return parse_json_robust(out)
         except Exception as e:  # noqa: BLE001
             last_err = e
-    raise RuntimeError(f"JSON 调用失败（{retries} 次重试后）: {type(last_err).__name__}") from None
+    raise ModelJSONError(retries) from None
 
 
 class BudgetExceeded(RuntimeError):
@@ -311,6 +315,7 @@ class ChatClient:
         budget: BudgetGuard | None = None,
         api_format: str = "chat",
         context_window_tokens: int | None = None,
+        additional_budget: BudgetGuard | None = None,
     ):
         # 本地端点绕代理（spike 报告 F2）：httpx 在 OpenAI 客户端构造时快照代理
         # 环境变量，必须在构造前设置；构造后再 setdefault 对本客户端无效。
@@ -323,11 +328,11 @@ class ChatClient:
         if self.api_format == "anthropic":
             from anthropic import Anthropic
 
-            self.client = Anthropic(base_url=base_url, api_key=api_key)
+            self.client = Anthropic(base_url=base_url, api_key=api_key, max_retries=0)
         else:
             from openai import OpenAI  # delayed import keeps offline domain tests lightweight
 
-            self.client = OpenAI(base_url=base_url, api_key=api_key)
+            self.client = OpenAI(base_url=base_url, api_key=api_key, max_retries=0)
         self.model = model
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
         self.price_input = price_input_per_1m
@@ -335,6 +340,8 @@ class ChatClient:
         if any(not math.isfinite(price) or price < 0 for price in (self.price_input, self.price_output)):
             raise ValueError("invalid_model_token_price")
         self.budget = budget
+        self.additional_budget = additional_budget
+        self._service_identity = SERVICE_COOLDOWNS.identity(base_url, api_key)
         # response_format 能力探测结果：None=未知 / True=支持 / False=不支持。
         # 首次 json_mode 调用被 API 拒绝后置 False，同会话后续自动降级为
         # "提示词要求 JSON + 容错解析"路径，不再硬重试（分层降级 L1→L3）。
@@ -370,7 +377,7 @@ class ChatClient:
         Unknown multimodal tokenization requires an explicit context setting.
         A provider reporting usage beyond either bound closes future admission.
         """
-        if not self.budget or not self.budget.hard_stop or not (self.price_input or self.price_output):
+        if not any(guard.hard_stop for guard in self._budgets()) or not (self.price_input or self.price_output):
             self._check_context(messages, max_tokens)
             return max_tokens, 0.0
         context = self.context_window_tokens or DEFAULT_BUDGET_CONTEXT_TOKENS
@@ -381,6 +388,33 @@ class ChatClient:
             raise ValueError("budget_multimodal_context_required")
         self._check_context(messages, output, context_limit=context)
         return output, (context * self.price_input + output * self.price_output) / 1e6
+
+    def _budgets(self) -> list[BudgetGuard]:
+        """Apply both global and task limits, charging shared paths only once."""
+        unique = {}
+        for guard in (self.budget, getattr(self, "additional_budget", None)):
+            if guard is None:
+                continue
+            identity = os.path.normcase(str(guard.path.absolute()))
+            current = unique.get(identity)
+            if current is None or (guard.hard_stop and
+                    (not current.hard_stop or guard.limit < current.limit)):
+                unique[identity] = guard
+        return [unique[key] for key in sorted(unique)]
+
+    @staticmethod
+    def _settle_all(reservations: list[tuple[BudgetGuard, str]], amount: float) -> None:
+        """Settle every ledger even when one detects an overrun."""
+        first_error = None
+        pending, reservations[:] = list(reservations), []
+        for guard, token in pending:
+            try:
+                guard.settle(token, amount)
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def _request(self, messages: List[Dict[str, Any]], *, max_tokens: int | None,
                  temperature: float, thinking: bool, json_mode: bool,
@@ -511,6 +545,8 @@ class ChatClient:
         """Return text through the selected protocol and count its usage."""
         if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
             raise ValueError("max_tokens must be a positive integer")
+        if type(retries) is not int or not 1 <= retries <= 10:
+            raise ValueError("invalid_model_request_attempts")
         request_max_tokens, reservation_usd = self._budget_request_bound(messages, max_tokens)
         last_err: Exception | None = None
         callback_error = None
@@ -523,14 +559,17 @@ class ChatClient:
                 raise
         attempts = 0
         while attempts < retries:
-            reservation = None
+            reservations = []
             request_started = False
+            definite_rejection = False
+            failure = None
             try:
-                if self.budget:
+                SERVICE_COOLDOWNS.wait(self._service_identity)
+                for guard in self._budgets():
                     if reservation_usd:
-                        reservation = self.budget.reserve(reservation_usd)
+                        reservations.append((guard, guard.reserve(reservation_usd)))
                     else:
-                        self.budget.check()
+                        guard.check()
                 if on_stream:
                     notify({"type": "start", "api_format": self.api_format})
                 request_started = True
@@ -542,15 +581,23 @@ class ChatClient:
                 self.usage["calls"] += 1
                 self.usage["prompt_tokens"] += prompt_tokens
                 self.usage["completion_tokens"] += completion_tokens
-                if self.budget and (self.price_input or self.price_output):
+                if self._budgets() and (self.price_input or self.price_output):
                     cost = (prompt_tokens * self.price_input + completion_tokens * self.price_output) / 1e6
-                    if reservation is not None:
-                        token, reservation = reservation, None
+                    if reservations:
                         # Some compatible endpoints omit usage. Charge the bound
                         # rather than silently treating a priced call as free.
-                        self.budget.settle(token, cost if prompt_tokens or completion_tokens else reservation_usd)
+                        self._settle_all(reservations,
+                                         cost if prompt_tokens or completion_tokens else reservation_usd)
                     else:
-                        self.budget.add_usd(cost)
+                        first_error = None
+                        for guard in self._budgets():
+                            try:
+                                guard.add_usd(cost)
+                            except Exception as error:
+                                if first_error is None:
+                                    first_error = error
+                        if first_error is not None:
+                            raise first_error
                 if content:
                     return content
                 if not allow_reasoning_fallback:
@@ -563,6 +610,7 @@ class ChatClient:
             except Exception as e:  # noqa: BLE001
                 if e is callback_error:
                     raise
+                definite_rejection = rejected_before_generation(e)
                 # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
                 # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
                 if (self.api_format != "anthropic" and json_mode
@@ -570,21 +618,37 @@ class ChatClient:
                     self.json_supported = False
                     continue
                 last_err = e
+                failure = classify_request_error(e)
             finally:
-                if reservation is not None:
+                if reservations:
                     # A timeout/error may still have incurred provider charges.
                     # Pessimistically book the reserved maximum before retrying.
-                    self.budget.settle(reservation, reservation_usd if request_started else 0.0)
+                    self._settle_all(reservations, reservation_usd
+                                     if request_started and not definite_rejection else 0.0)
             attempts += 1
-            time.sleep(1.0)
+            if failure is None:
+                failure = {"kind": "invalid", "code": "model_visible_output_missing"}
+            if failure["kind"] != "transient":
+                break
+            delay = retry_delay(last_err, attempts - 1)
+            if failure["code"] in {"service_rate_limited", "service_unavailable"}:
+                SERVICE_COOLDOWNS.defer(self._service_identity, delay)
+            if attempts >= retries:
+                break
+            if failure["code"] not in {"service_rate_limited", "service_unavailable"}:
+                time.sleep(delay)
         # Provider error messages may echo credentials or source material.
-        raise RuntimeError(f"chat failed after {retries} retries: {type(last_err).__name__}") from None
+        raise ModelRequestError(failure["code"], failure["kind"], attempts) from None
 
 
 def _is_format_unsupported(err: Exception) -> bool:
     """判断异常是否为 'response_format 不支持' 类（400/BadRequest + 关键字）。"""
+    if getattr(err, "status_code", None) not in {None, 400, 422}:
+        return False
     text = str(err).lower()
-    if "response_format" in text or "text.format" in text or "json_object" in text:
+    rejection = any(value in text for value in ("unsupported", "not supported", "unavailable",
+                                                "invalid", "unknown parameter"))
+    if rejection and any(value in text for value in ("response_format", "text.format", "json_object")):
         return True
     if "badrequest" in text and ("unsupported" in text or "unavailable" in text or "not supported" in text):
         return True
@@ -596,6 +660,8 @@ def _is_temperature_unsupported(err: Exception) -> bool:
 
 
 def _is_parameter_unsupported(err: Exception, parameter: str) -> bool:
+    if getattr(err, "status_code", None) not in {None, 400, 422}:
+        return False
     text = str(err).lower()
     return parameter in text and any(value in text for value in
                                      ("unsupported", "not supported", "unavailable", "unknown parameter",
@@ -688,6 +754,7 @@ def load_backend(
     allow_global_endpoint_override: bool = True,
     context_window_tokens: int | None = None,
     expected_endpoint_pin: dict | None = None,
+    additional_budget: BudgetGuard | None = None,
 ) -> tuple[ChatClient, str]:
     """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
 
@@ -725,7 +792,10 @@ def load_backend(
     global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
     model = model or role_model or global_model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
     budget_cfg = cfg.get("budget") or {}
-    prices = _configured_token_prices(b, budget_cfg)
+    effective_budget = budget_cfg
+    if additional_budget is not None and additional_budget.hard_stop:
+        effective_budget = {**budget_cfg, "max_total_usd": additional_budget.limit, "hard_stop": True}
+    prices = _configured_token_prices(b, effective_budget)
     if expected_endpoint_pin is not None:
         if type(expected_endpoint_pin) is not dict:
             raise ValueError("workflow_endpoint_pin_invalid")
@@ -755,5 +825,6 @@ def load_backend(
         price_input_per_1m=float(prices.get("input_per_1m_usd", 0.0)),
         price_output_per_1m=float(prices.get("output_per_1m_usd", 0.0)),
         budget=guard,
+        additional_budget=additional_budget,
     )
     return client, model

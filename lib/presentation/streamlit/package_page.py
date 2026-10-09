@@ -8,6 +8,7 @@ from typing import Any
 import streamlit as st
 
 from lib.application.workflow_service import WorkflowApplication
+from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.presentation.streamlit.sample_preview import render_sample_preview
@@ -235,11 +236,13 @@ def _render_summary(run: dict, state: dict, manifest: dict, quality: dict) -> No
     status = str(run.get("status", "completed"))
     targets = [str(target).upper() for target in state.get("targets", [])]
     target_chips = "".join('<b>' + _safe(target) + '</b>' for target in targets) or '<span>—</span>'
-    has_attention = status == "needs_attention"
+    partial = status in {"failed", "cancelled"}
+    has_attention = status == "needs_attention" or partial
     st.html(
         '<div class="df-pack-run-title"><span class="df-pack-success" data-attention="'
         + str(has_attention).lower() + '">' + ("!" if has_attention else "✓") + '</span><span>'
-        '<span class="df-pack-eyebrow">' + ("已校验 · 质量需检查" if has_attention else "已完成 · 产物校验通过") + '</span><strong>'
+        '<span class="df-pack-eyebrow">' + ("已校验 · 部分交付" if partial else
+            "已校验 · 质量需检查" if has_attention else "已完成 · 产物校验通过") + '</span><strong>'
         + '<span data-user-content>' + _safe(run.get("name", "未命名任务")) + '</span></strong><small>任务 ID：' + _safe(run.get("id", ""))
         + '　·　更新于 ' + _safe(_stamp(state.get("updated_at"))) + '</small></span>'
         + _badge(status) + '</div>'
@@ -402,7 +405,7 @@ def render_package_page(application: WorkflowApplication) -> None:
     page_header("输出打包", "核对真实训练文件、质量证据和来源信息，导出可校验的完整数据包。", "DATASET RELEASE　·　完整性校验")
     runs = application.task_runs()
     releases = application.list_releases()
-    ready = [row for row in runs if row.get("status") in {"completed", "needs_attention"} and row.get("id")]
+    ready = [row for row in runs if has_deliverable_results(row) and row.get("id")]
     if not ready:
         _render_releases(application, releases)
         _render_empty(runs, has_releases=bool(releases))
@@ -417,7 +420,7 @@ def render_package_page(application: WorkflowApplication) -> None:
         if st.session_state.get(selection_key) not in labels:
             st.session_state.pop(selection_key, None)
         run_id = st.selectbox(
-            "选择已完成任务", list(labels), key=selection_key,
+            "选择工作流产物", list(labels), key=selection_key,
             format_func=lambda key: UntranslatedText(f"{labels[key].get('name', '未命名任务')} · {key[:8]}"),
         )
     run = labels[run_id]
@@ -441,6 +444,9 @@ def render_package_page(application: WorkflowApplication) -> None:
         _render_releases(application, releases)
         return
     manifest = contents["manifest"]
+    if not delivery_manifest_matches(state, manifest):
+        st.error("无法读取或校验任务产物：artifact_integrity_error")
+        return
     inventory = {"manifest": manifest, "files": contents["files"]}
     quality = contents["quality"]
     review_choices = _review_choices(state, manifest)
@@ -453,6 +459,8 @@ def render_package_page(application: WorkflowApplication) -> None:
     with left:
         with st.container(border=True):
             _render_summary(run, state, manifest, quality)
+        if run.get("status") in {"failed", "cancelled"}:
+            st.warning("当前为部分交付，只包含已提交轮次的结果。任务仍可恢复，未完成轮次不会计入本次导出。")
         review_report = package_review_report_html(quality)
         if review_report:
             st.html(review_report)
@@ -483,7 +491,7 @@ def render_package_page(application: WorkflowApplication) -> None:
             st.progress(1.0 if package is not None else 0.5,
                         text="交付准备 2 / 2 · ZIP 已校验" if package is not None
                         else "交付准备 1 / 2 · 文件已校验")
-            attention = run.get("status") == "needs_attention"
+            attention = run.get("status") in {"needs_attention", "failed", "cancelled"}
             st.html('<div class="df-pack-export-state" data-attention="' + str(attention).lower()
                     + '"><span>' + ("!" if attention else "✓") + '</span><div><strong>'
                     + ("文件完整，质量需检查" if attention else "文件完整，可生成 ZIP")

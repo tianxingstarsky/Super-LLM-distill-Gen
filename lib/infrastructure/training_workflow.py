@@ -55,6 +55,10 @@ from lib.infrastructure.brave_web_research import (
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
 from lib.infrastructure.workflow_candidates import prepare_generation_rows
+from lib.domain.workflow_production import validate_production
+from lib.infrastructure.workflow_production import WorkflowProduction
+from lib.infrastructure.production_checkpoints import ProductionCheckpoints
+from lib.infrastructure.production_review_quality import package_review_escalation
 from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector
 from lib.domain.multiturn import completed_turn_ends
@@ -66,7 +70,7 @@ from lib.infrastructure.agent_docker_replay import (DockerLedgerReplay, IMAGE_EN
                                                     validate_sandbox_image)
 from lib.doc2corpus import SUPPORTED_EXTS, chunk_text, import_text
 from lib.io_utils import _replace_state, atomic_json
-from lib.llm_client import ChatClient, chat_json, load_backend, snapshot_backend_endpoint
+from lib.llm_client import BudgetGuard, ChatClient, chat_json, load_backend, snapshot_backend_endpoint
 from lib.infrastructure.workflow_stream_journal import StreamJournal
 from lib.prompts import get, registry, render
 
@@ -74,7 +78,8 @@ from lib.prompts import get, registry, render
 EXTENSIONS = INPUT_EXTENSIONS
 MAX_FILE_BYTES = 50 * 1024 * 1024
 RECIPE_VERSION = 11
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
+PRODUCTION_RECIPE_VERSION = 12
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -261,7 +266,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
-               package_review=None, qa_director=None):
+               package_review=None, qa_director=None, production=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -269,7 +274,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources, node_generation=node_generation,
         reasoning_trim=reasoning_trim, node_prompts=node_prompts,
-        package_review=package_review, qa_director=qa_director)
+        package_review=package_review, qa_director=qa_director, production=production)
+    production = validate_production(production, targets)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
     reasoning_trim = validate_reasoning_trim(reasoning_trim)
@@ -343,7 +349,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         copied_bytes += snapshot["bytes"]
         snapshots.append({"name": (source_names or {}).get(str(source), source.name),
                           "file": destination.name, **snapshot})
-    recipe = {"version": RECIPE_VERSION, "policy": POLICY, "sources": snapshots, "brief": brief.strip(),
+    recipe = {"version": PRODUCTION_RECIPE_VERSION if production is not None else RECIPE_VERSION, "policy": POLICY, "sources": snapshots, "brief": brief.strip(),
               "targets": targets, "backend": backend, "model": model, "judge_backend": judge_backend,
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
@@ -365,6 +371,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "reasoning_trim_prompt": (trim_prompt(reasoning_trim) if (reasoning_trim or {}).get("enabled") else None),
               "generation_preferences": preferences, "sft_output_style": sft_output_style,
               "prompts": prompt_versions()}
+    if production is not None:
+        recipe["production"] = production
     if endpoint_pins is not None:
         recipe["endpoint_pins"] = endpoint_pins
     if knowledge_retrieval is not None:
@@ -384,7 +392,7 @@ class Cancelled(Exception):
     pass
 
 
-class Workflow(WorkflowQADirector):
+class Workflow(WorkflowProduction, WorkflowQADirector):
     def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)
@@ -405,6 +413,13 @@ class Workflow(WorkflowQADirector):
         self._abort = threading.Event()
         self._last_save = 0.0
         self._research_document = None
+        self._production_checkpoints = None
+        self._task_budget = None
+        if self.production_enabled():
+            self._production_checkpoints = ProductionCheckpoints(self.path / "production-checkpoints.sqlite3")
+            limit = self.recipe["production"]["budget_usd"]
+            if limit:
+                self._task_budget = BudgetGuard(self.path, limit)
 
     def save(self, *, force=True):
         with self._lock:
@@ -425,11 +440,20 @@ class Workflow(WorkflowQADirector):
             self.save(force=not kind.startswith("model_"))
 
     def check_cancel(self):
+        if getattr(self, "_production_exporting_partial", False):
+            return
         if self._abort.is_set() or (self.path / "cancel.json").exists():
             raise Cancelled()
 
     def checkpoint(self, key, action):
         self.check_cancel()
+        if self._production_checkpoints is not None:
+            cached, data = self._production_checkpoints.get(self.stage, digest(key))
+            if cached:
+                return data
+            value = action()
+            self._production_checkpoints.put(self.stage, digest(key), value)
+            return value
         destination = self.path / "checkpoints" / self.stage / f"{digest(key)}.json"
         if destination.exists():
             saved = read_json(destination)
@@ -439,6 +463,16 @@ class Workflow(WorkflowQADirector):
         value = action()
         atomic_json(destination, {"data": value, "sha256": digest(value)})
         return value
+
+    def checkpoint_has(self, key, *, stage=None):
+        if self._production_checkpoints is not None:
+            return self._production_checkpoints.get(stage or self.stage, digest(key))[0]
+        return (self.path / "checkpoints" / (stage or self.stage) / f"{digest(key)}.json").exists()
+
+    def invalidate_checkpoint(self, key, *, stage=None):
+        if self._production_checkpoints is not None:
+            self._production_checkpoints.delete(stage or self.stage, digest(key))
+        (self.path / "checkpoints" / (stage or self.stage) / f"{digest(key)}.json").unlink(missing_ok=True)
 
     def client(self, role):
         if role == "vision":
@@ -470,8 +504,11 @@ class Workflow(WorkflowQADirector):
                                          model=binding.get("model") or self.recipe.get(prefix + "model"), role=role,
                                          allow_global_endpoint_override=not bool(binding),
                                          context_window_tokens=binding.get("context_window_tokens"),
+                                         **({"additional_budget": self._task_budget} if self._task_budget is not None else {}),
                                          **({"expected_endpoint_pin": pin} if pin is not None else {}))
                 cache[cache_key] = client
+        if self._task_budget is not None and isinstance(client, ChatClient):
+            client.additional_budget = self._task_budget
         endpoint_identity = str(getattr(getattr(client, "client", None), "base_url", "injected"))
         api_format = str(getattr(client, "api_format", "chat"))
         if api_format != "chat":
@@ -586,14 +623,14 @@ class Workflow(WorkflowQADirector):
             if stage == "agent":
                 checkpoint_key.extend((REPLAY_POLICY_VERSION, RUNNER_SHA256,
                                        self.recipe.get("agent_sandbox_image")))
-            cached = (self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json").exists()
+            cached = self.checkpoint_has(checkpoint_key)
             if not cached:
                 with self._lock:
                     if processing_started is None:
                         processing_started = time.monotonic()
             value = (row_checkpoint(self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json",
                                     lambda: self.iter_source_units(item), self.check_cancel)
-                     if stream_sources else self.checkpoint(checkpoint_key, lambda: action(item)))
+                     if stream_sources else self.checkpoint(checkpoint_key, lambda: self.run_item_safely(stage, item, action)))
             with self._lock:
                 metrics["done"] += 1
                 metrics["outputs"] += len(value)
@@ -876,7 +913,7 @@ class Workflow(WorkflowQADirector):
                 not isinstance(planned, list) or len(planned) != size or any(text_issue(t) for t in planned)
                 or len({task.strip() for task in planned}) != size or any(task.strip() in seen for task in planned))
             if issue or legacy_invalid:
-                (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
+                self.invalidate_checkpoint(["call", key])
                 raise ValueError("invalid_task_plan" + (f"_{issue}" if issue else ""))
             recent_tasks.extend(planned)
             seen.update(task_identity(task) if modern else task.strip() for task in planned)
@@ -900,7 +937,7 @@ class Workflow(WorkflowQADirector):
         try:
             return verdict(value)
         except ValueError:
-            (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
+            self.invalidate_checkpoint(["call", key])
             raise
 
     def generation_style(self, stage, sample_id):
@@ -936,7 +973,7 @@ class Workflow(WorkflowQADirector):
                 or type(value.get("adherence")) is not int
                 or not 1 <= value["adherence"] <= 5
                 or not isinstance(value.get("reason"), str) or not value["reason"].strip()):
-            (self.path / "checkpoints" / self.stage / f"{digest(['call', key])}.json").unlink(missing_ok=True)
+            self.invalidate_checkpoint(["call", key])
             raise ValueError("invalid_style_judge_schema")
         return value
 
@@ -1300,8 +1337,7 @@ class Workflow(WorkflowQADirector):
         try:
             check = verdict(check)
         except ValueError:
-            call_key = digest(["call", [sample["id"], "cot_check"]])
-            (self.path / "checkpoints" / self.stage / f"{call_key}.json").unlink(missing_ok=True)
+            self.invalidate_checkpoint(["call", [sample["id"], "cot_check"]])
             raise
         if not accepted(check):
             return [{**self.rejected(sample, "cot_reasoning_rejected"), "judge": check}]
@@ -1599,8 +1635,13 @@ class Workflow(WorkflowQADirector):
                     planned = (candidate_count if review_config["mode"] == "all" else
                                min(candidate_count, review_config["max_samples_per_target"],
                                    math.ceil(candidate_count * review_config["sample_percent"] / 100)))
+                    if getattr(self, "_production_finalizing", False):
+                        planned = sum(row.get("status") == "eligible" and row.get("package_review", {}).get("status") == "accepted"
+                                      for row in candidates[target])
                     selections[target] = (None if review_config["mode"] == "all" else
                                           {-index for _, index in sorted(smallest, reverse=True)[:planned]})
+                    if getattr(self, "_production_finalizing", False):
+                        selections[target] = None
                     plans[target] = {"candidates": candidate_count, "planned": planned,
                                      "reviewed": 0, "accepted": 0, "rejected": 0,
                                      "unreviewed": candidate_count - planned,
@@ -1611,6 +1652,19 @@ class Workflow(WorkflowQADirector):
         return candidates, plans, selections
 
     def _review_package_candidates(self, candidates, plans, selections, preferences, node_style):
+        if getattr(self, "_production_finalizing", False):
+            spool = RowSpool(self.path / "stage-results" / "production-final-reviews.jsonl")
+            try:
+                for target in self.recipe["targets"]:
+                    for index, row in enumerate(candidates[target]):
+                        if row["status"] == "eligible" and row.get("package_review", {}).get("status") == "accepted":
+                            payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
+                            if row["package_review"].get("candidate_sha256") != digest(payload):
+                                raise ValueError("production_review_integrity_error")
+                            spool.append({"target": target, "index": index, "status": "eligible", "package_review": row["package_review"]})
+            finally:
+                spool.close()
+            return spool
         workflow = self
         class SelectedRows:
             def __len__(self):
@@ -1652,7 +1706,7 @@ class Workflow(WorkflowQADirector):
     def _package_collections(self, collections, released_index, released_near_index,
                              released_rows, corpus_index, cluster_index, evaluation_index):
         evaluation_references = self.recipe.get("evaluation_references", [])
-        destination = self.path / "artifacts"
+        destination = getattr(self, "_production_destination", None) or self.path / "artifacts"
         destination.mkdir(exist_ok=True)
         cpt_references = self.recipe.get("cpt_reference_releases", [])
         if self.recipe.get("knowledge_retrieval") is not None:
@@ -1752,10 +1806,27 @@ class Workflow(WorkflowQADirector):
         review_iterator, next_review = iter(()), None
         if review_config["enabled"]:
             reviewed = self._review_package_candidates(candidates, review_plans, selections, preferences, node_style)
+            if self.production_enabled() and not getattr(self, "_production_finalizing", False):
+                failures = {target: 0 for target in review_plans}
+                for row in reviewed:
+                    failures[row["target"]] += int(row["status"] != "eligible")
+                expanded = False
+                for target, plan in review_plans.items():
+                    escalation = package_review_escalation(review_config, sampled=plan["planned"],
+                        failed=failures[target], candidates=plan["candidates"], production=True)
+                    if escalation:
+                        plan.update(escalation=escalation, planned=plan["candidates"], unreviewed=0,
+                                    coverage_percent=100.0, status="all_reviewed")
+                        selections[target] = None
+                        expanded = True
+                if expanded:
+                    self.event("package_review_expanded", targets=[target for target, plan in review_plans.items() if plan.get("escalation")])
+                    reviewed = self._review_package_candidates(candidates, review_plans, selections, preferences, node_style)
             review_iterator = iter(reviewed)
             next_review = next(review_iterator, None)
             report["package_review"] = {**review_config, "status": "completed",
-                                        "selection": "stable_hash_per_target", "targets": review_plans}
+                                        "selection": ("stable_hash_per_target_per_round" if self.production_enabled() else "stable_hash_per_target"),
+                                        "targets": review_plans}
             report["limitations"].append("打包 AI 评审只代表模型判断；抽检未选中的样本未经过该项评审，不能把抽检通过率当作全量正确率")
         else:
             report["package_review"] = {"enabled": False, "status": "disabled"}
@@ -1771,6 +1842,8 @@ class Workflow(WorkflowQADirector):
                             payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
                             if review_config["enabled"]:
                                 selected = selections[target] is None or index in selections[target]
+                                if getattr(self, "_production_finalizing", False):
+                                    selected = row.get("package_review", {}).get("status") == "accepted"
                                 if selected:
                                     if next_review is None or (next_review["target"], next_review["index"]) != (target, index):
                                         raise ValueError("package_review_checkpoint_mismatch")
@@ -1793,6 +1866,8 @@ class Workflow(WorkflowQADirector):
                                 if duplicate:
                                     row.update(status="quarantined", reason="released_qa_contract_duplicate",
                                                duplicate_of=duplicate["id"], duplicate_scope="published_qa_history")
+                            if row["status"] == "eligible":
+                                self._production_accept_row(target, row, payload)
                             if row["status"] == "eligible":
                                 training.append(payload)
                         records.append(row)
@@ -1867,6 +1942,8 @@ class Workflow(WorkflowQADirector):
                     report["targets"][target]["negative"] = negative_count
             if next_review is not None:
                 raise ValueError("package_review_checkpoint_mismatch")
+            if getattr(self, "_production_finalizing", False):
+                self._production_report(report)
             _write_quality_report(destination / "quality.json", report,
                                   self.path / "input_records.json")
             self.state["quality"] = {"policy": report["policy"], "targets": report["targets"],
@@ -1875,6 +1952,8 @@ class Workflow(WorkflowQADirector):
                                      "trainer_exports": {target: {key: value for key, value in summary.items()
                                                                 if key != "failures"}
                                                          for target, summary in report["trainer_exports"].items()}}
+            if "production" in report:
+                self.state["quality"]["production"] = report["production"]
             if "qa_director" in report:
                 self.state["quality"]["qa_director"] = report["qa_director"]
             for pending in destination.glob(".*.pending"):
@@ -1887,13 +1966,15 @@ class Workflow(WorkflowQADirector):
                                            if v["status"] == "ready"},
                         "negative_counts": {t: v["negative"] for t, v in report["targets"].items() if v.get("negative")},
                         "package_review": report["package_review"],
+                        **({"production": report["production"]} if "production" in report else {}),
                         **({"qa_director": {"coverage": report["qa_director"]["coverage"],
                                             "batches_planned": report["qa_director"]["batches_planned"]}}
                            if "qa_director" in report else {}),
                         "cpt_reference_releases": cpt_references,
                         "evaluation_references": evaluation_references,
                         "sha256": files, "created_at": now(), "release_kind": "automatically_checked_candidate"})
-            self.publish_qa_history(destination)
+            if not getattr(self, "_production_collecting", False):
+                self.publish_qa_history(destination)
             return []
 
     def execute(self, resume_run=False):
@@ -1924,6 +2005,8 @@ class Workflow(WorkflowQADirector):
                 for source in self.recipe["sources"]:
                     if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
                         raise ValueError("source_snapshot_changed")
+                if self.production_enabled():
+                    return self._execute_production()
                 selected_targets = set(self.recipe["targets"])
                 planned_targets = selected_targets & ({"cpt", "sft", "cot", "multiturn"} | PREFERENCE_TARGETS)
                 if self.recipe["brief"] and not self.recipe["sources"] and planned_targets:
@@ -2045,11 +2128,24 @@ class Workflow(WorkflowQADirector):
                 self.event("run_finished")
             except Cancelled:
                 self.state["status"] = "cancelled"
+                if self.production_enabled() and "production" in self.state:
+                    self.state["production"].update(status="cancelled", stop_reason="cancelled")
+                    self._production_partial_export("cancelled", "cancelled")
                 self.state["stages"][self.stage]["status"] = "cancelled"
                 self.event("run_cancelled")
             except Exception as error:
                 # Never persist raw provider exceptions: they can contain credentials or source text.
                 code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else type(error).__name__
+                if self.production_enabled():
+                    from lib.model_request_reliability import classify_request_error
+                    failure = classify_request_error(error)
+                    code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else failure["code"]
+                    if "production" in self.state:
+                        self.state["production"].update(status="paused", stop_reason=code)
+                        if failure["code"] not in {"checkpoint_integrity_error", "source_snapshot_changed",
+                                                   "recipe_changed_create_new_run", "production_round_integrity_error",
+                                                   "production_review_integrity_error"}:
+                            self._production_partial_export("paused", code)
                 self.state.update(status="failed", error=code)
                 self.state["stages"][self.stage].update(status="failed", error=code)
                 self.event("run_failed", error=code)

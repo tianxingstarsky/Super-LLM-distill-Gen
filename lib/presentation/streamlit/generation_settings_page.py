@@ -11,6 +11,38 @@ from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 from lib.presentation.streamlit.shared import page_header, section_heading
 
 
+def render_workflow_defaults(settings: GenerationSettingsApplication) -> None:
+    """Only preferences that actually affect new automatic workflows."""
+    with st.container(border=True, key="settings-workflow-defaults"):
+        section_heading("新工作流默认值", "本次任务可在对应节点调整。", "◇")
+        st.caption("提示词、风格、模型与 token 上限在工作流节点配置；个人模板也从节点保存与使用。")
+        try:
+            snapshot = settings.load("生成偏好")
+            summary = settings.summary(snapshot)
+        except (OSError, ValueError):
+            st.error("生成默认值无法读取，请检查高级单项工具中的偏好配置。")
+            return
+        style = st.selectbox(
+            "SFT 默认训练文件格式", ("separated", "drop"),
+            index=0 if summary["cot_style"] != "drop" else 1,
+            format_func=lambda value: translate_label(
+                "分字段保留推理" if value == "separated" else "只保留答案",
+                st.session_state.get("ui_language", "zh")), key="workflow-default-sft-style")
+        if st.button("保存工作流默认值", key="workflow-defaults-save", type="primary"):
+            try:
+                settings.save_form(
+                    snapshot, default_share=summary["default_share"],
+                    relative_tendencies=summary["relative_tendencies"],
+                    templates_per_dim=summary["templates_per_dim"],
+                    shuffle_per_batch=summary["shuffle_per_batch"],
+                    correction_enabled=summary["correction_enabled"],
+                    correction_threshold=summary["correction_threshold"],
+                    correction_tagger=summary["correction_tagger"], cot_style=style)
+                st.toast("工作流默认值已保存，已创建的任务保持原配置。")
+            except (OSError, ValueError):
+                st.error("默认值未能保存，请检查配置文件后重试。")
+
+
 def render_generation_settings(settings: GenerationSettingsApplication, show_title: bool = True) -> None:
     if show_title:
         page_header("生成偏好", "设置训练数据的生成倾向、推理风格与语言规则。", "GENERATION PREFERENCES")

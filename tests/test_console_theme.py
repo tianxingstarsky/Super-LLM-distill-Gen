@@ -29,7 +29,23 @@ def _strip_comments(css: str) -> str:
 
 def _selectors(css: str):
     for selector, _declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", _strip_comments(css), flags=re.S):
-        for part in selector.split(","):
+        # Commas inside :is()/:has() or attribute values do not begin a new rule.
+        parts, start, depth, quote = [], 0, 0, None
+        for index, char in enumerate(selector):
+            if quote:
+                if char == quote and (not index or selector[index - 1] != "\\"):
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char in "([":
+                depth += 1
+            elif char in ")]":
+                depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(selector[start:index])
+                start = index + 1
+        parts.append(selector[start:])
+        for part in parts:
             if part.strip():
                 yield part.strip()
 

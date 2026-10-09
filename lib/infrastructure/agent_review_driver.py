@@ -22,8 +22,9 @@ from lib.domain.sft_review import validate_sft_record
 from lib.domain.workflow_quality import text_issue
 from lib.domain.workflow_targets import training_record
 from lib.infrastructure.json_stream import iter_json_records
+from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.infrastructure.training_workflow import (
-    digest, file_hash, list_runs, read_json, run_path, verify_artifacts,
+    digest, file_hash, list_runs, read_json, run_path, verify_artifacts, is_active,
 )
 from lib.workspace import is_linked
 
@@ -79,10 +80,12 @@ def _source(output: Path, run_id: str):
     if path.resolve(strict=True).parent != workflows.resolve(strict=True):
         raise ValueError("linked_agent_review_source")
     state = read_json(path / "state.json")
-    if (state.get("id") != run_id or state.get("status") not in {"completed", "needs_attention"}
+    if (state.get("id") != run_id or not has_deliverable_results(state) or is_active(path)
             or "agent" not in state.get("targets", [])):
         raise ValueError("agent_run_not_ready")
     manifest = verify_artifacts(path)
+    if not delivery_manifest_matches(state, manifest):
+        raise ValueError("artifact_integrity_error")
     hashes = manifest.get("sha256", {})
     if (manifest.get("run_id") != run_id or
             any(not isinstance(hashes.get(name), str) or not _HEX64.fullmatch(hashes[name])
@@ -349,7 +352,7 @@ class FilesystemAgentReviewDriver:
     def reviewable_runs(self) -> list[dict]:
         result = []
         for state in list_runs(self.output):
-            if state.get("status") not in {"completed", "needs_attention"} or "agent" not in state.get("targets", []):
+            if not has_deliverable_results(state) or "agent" not in state.get("targets", []):
                 continue
             try:
                 _, manifest, _, _, _ = _source(self.output, state["id"])
