@@ -23,7 +23,7 @@ from lib.domain.workflow_quality import accepted, canonical, conversation_issue,
 from lib.domain.workflow_scale import DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS
 from lib.domain.human_augmentation import (
     human_design, human_messages_identity, validate_human_check,
-    HUMAN_DIRECTOR_INSTRUCTION, HUMAN_GENERATION_INSTRUCTION, HUMAN_QA_TARGETS,
+    HUMAN_DIRECTOR_INSTRUCTION, HUMAN_REVISION_INSTRUCTION, human_generation_instruction, HUMAN_QA_TARGETS,
 )
 from lib.infrastructure.qa_history import QAHistory, contract_identity
 from lib.infrastructure.workflow_rows import WorkflowRows
@@ -158,7 +158,25 @@ class WorkflowQADirector:
             answer_policy=c["answer_policy"], qa_type=c["qa_type"],
             dialogue_design=self.qa_identity_design(c),
             namespace="multiturn" if target == "multiturn" else "sft")
-        return duplicate if duplicate and duplicate.get("run_id") != self.state["id"] else None
+        return (duplicate if duplicate and duplicate.get("run_id") != self.state["id"]
+                and not self.human_revision_duplicate_allowed(c, duplicate) else None)
+
+    def human_revision_duplicate_allowed(self, contract, duplicate):
+        """Only the exact selected ancestor may have a separately saved version.
+
+        Unrelated duplicate questions and duplicates inside this child still fail.
+        Old artifacts remain unchanged; session consumers explicitly choose a
+        version rather than combining each iteration as independent examples.
+        """
+        revision = contract.get("human_design", {}).get("seed", {}).get("revision_context")
+        if not revision or not duplicate:
+            return False
+        if not any(duplicate.get("run_id") == ancestor["run_id"] and duplicate.get("id") ==
+                   ancestor["run_id"] + ":" + ancestor["candidate_id"] for ancestor in revision["ancestors"]):
+            return False
+        from lib.infrastructure.human_revision import verified_revision_parent
+        verified_revision_parent(self.path.parent.parent, self.state["id"], revision)
+        return True
 
     def qa_history_row(self, row):
         contract = row.get("qa_contract")
@@ -181,7 +199,7 @@ class WorkflowQADirector:
                    if self.qa_identity_design(contract) is not None else {})}
 
     def qa_contract_check(self, key, unit, messages, *, prompt_id="workflow.sft_directed_check",
-                          dialogue_state=None, dialogue_steps=None):
+                          dialogue_state=None, dialogue_steps=None, review_scope="complete"):
         contract = unit["qa_contract"]
         source = unit.get("source_context", unit)
         if not isinstance(source, dict):
@@ -212,7 +230,9 @@ class WorkflowQADirector:
                 "question_rules": self.recipe["qa_director"]["question_rules"],
                 "answer_rules": self.recipe["qa_director"]["answer_rules"],
                 "fact_verification": "not_independently_verified",
-            }, allow_reasoning_fallback=False)
+                "review_scope": review_scope,
+            }, allow_reasoning_fallback=False,
+                **({"instruction": HUMAN_REVISION_INSTRUCTION} if design.get("seed", {}).get("revision_context") else {}))
             try:
                 check = validate_human_check(check)
             except ValueError:
@@ -247,7 +267,8 @@ class WorkflowQADirector:
         try:
             value = self.ask(key, "generation", "workflow.qa_director", data,
                 allow_reasoning_fallback=False, model_stage="director", prompt_stage="director",
-                **({"instruction": HUMAN_DIRECTOR_INSTRUCTION} if unit["qa_contract"].get("human_design") else {}))
+                **({"instruction": HUMAN_DIRECTOR_INSTRUCTION + human_generation_instruction(unit["qa_contract"])}
+                   if unit["qa_contract"].get("human_design") else {}))
         except ModelJSONError as error:
             raise DialoguePlanError() from error
         try:
@@ -281,7 +302,7 @@ class WorkflowQADirector:
             context["generation_style"] = style
         feedback = None
         check = contract_check = style_check = None
-        instructions = ([HUMAN_GENERATION_INSTRUCTION] if contract.get("human_design") else [])
+        instructions = ([human_generation_instruction(contract)] if contract.get("human_design") else [])
         if style is not None:
             instructions.append("生成风格要求：\n" + style["instruction"])
         for attempt in range(2):
@@ -325,10 +346,10 @@ class WorkflowQADirector:
                          "qa_contract_check": contract_check, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "repair_attempts": attempt,
                          "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
-                         "evidence_level": ("human_provided_and_model_assessed" if unit.get("human_provided") else
+                         "evidence_level": (unit.get("revision_source_level") or ("human_provided_and_model_assessed" if unit.get("human_provided") else
                                             "model_assessed_synthetic" if unit["kind"] == "brief"
                                             else "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
-                                            else "source_and_model_assessed"),
+                                            else "source_and_model_assessed")),
                          **({"generation_style": style, "style_check": style_check} if style else {})}]
             feedback = {"quality": check["reason"], "contract": contract_check["reason"],
                         "style": style_check["reason"] if style_check else None}
@@ -425,7 +446,9 @@ class WorkflowQADirector:
                 try:
                     response = self.ask(call_key, "generation", "workflow.qa_director", data,
                                         allow_reasoning_fallback=False,
-                                        **({"instruction": HUMAN_DIRECTOR_INSTRUCTION} if human.get("enabled") else {}))
+                                        **({"instruction": HUMAN_DIRECTOR_INSTRUCTION +
+                                            (HUMAN_REVISION_INSTRUCTION if any("revision_context" in seed for seed in human["seeds"]) else "")}
+                                           if human.get("enabled") else {}))
                 except ModelJSONError:
                     if not production:
                         raise
@@ -562,7 +585,8 @@ class WorkflowQADirector:
                         duplicate = published_history.duplicate(c["question"], visible_context=c["visible_context"],
                             answer_policy=c["answer_policy"], qa_type=c["qa_type"], namespace=stage,
                             dialogue_design=self.qa_identity_design(c))
-                        if duplicate and duplicate.get("run_id") != self.state["id"]:
+                        if (duplicate and duplicate.get("run_id") != self.state["id"]
+                                and not self.human_revision_duplicate_allowed(c, duplicate)):
                             return {"reason": "duplicate_qa_contract", "duplicate_of": duplicate["id"]}
                         return {"reason": None}
                     decision = self.checkpoint(["qa_dispatch", index, _digest(unit)], dispatch)

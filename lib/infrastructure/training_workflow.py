@@ -46,7 +46,7 @@ from lib.domain.workflow_package_review import validate_package_review, package_
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.source_quote import quote_spans
 from lib.domain.workflow_qa_director import validate_qa_director
-from lib.domain.human_augmentation import human_design, HUMAN_GENERATION_INSTRUCTION
+from lib.domain.human_augmentation import human_design, human_generation_instruction
 from lib.domain.workflow_node_prompts import (
     validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
 )
@@ -273,7 +273,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
-               package_review=None, qa_director=None, production=None, cpt_processing=None):
+               package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -364,7 +364,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                            if "agent" in targets and agent_replay_mode != "local" else None)
     if "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:
         raise ValueError("agent_sandbox_not_configured")
-    run_id = uuid.uuid4().hex
+    run_id = uuid.uuid4().hex if run_id is None else run_id
+    # Human workspaces reserve this identity durably before creating the child.
+    # The usual validated run path and exclusive input mkdir still prevent reuse.
+    run_path(output, run_id)
     endpoint_pins = None
     if settings_root is not None and node_models:
         # A submitted node binding must not follow a mutable service name to a
@@ -384,7 +387,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         copied_bytes += snapshot["bytes"]
         snapshots.append({"name": (source_names or {}).get(str(source), source.name),
                           "file": destination.name, **snapshot})
-    if human["enabled"] and not files:
+    if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
         # recorded conversations or running model document parsing over it.
@@ -825,12 +828,37 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         def unit(index, **fields):
             return {"id": digest([source_id, source["file"], index]), "source_id": source_id,
                     "source_name": source["name"], "location": index, **fields}
+        manual_config = self.recipe.get("qa_director", {}).get("human_augmentation", {})
+        revision_round = bool(manual_config.get("enabled") and manual_config.get("seeds")
+                              and all("revision_context" in seed for seed in manual_config["seeds"]))
+        if revision_round and source.get("kind") != "human_design":
+            # Actual document copies remain pinned in the child manifest. The
+            # selected sealed parent's evidence supplies each revision unit;
+            # unrelated source chunks must not consume its candidate budget.
+            return
         if source.get("kind") == "human_design":
             from lib.domain.human_augmentation import validate_human_augmentation
             manual = validate_human_augmentation(read_json(path))
             if manual != self.recipe.get("qa_director", {}).get("human_augmentation"):
                 raise ValueError("human_augmentation_snapshot_changed")
             for index, seed in enumerate(manual["seeds"]):
+                revision = seed.get("revision_context")
+                if revision:
+                    from lib.infrastructure.human_revision import verified_revision_parent
+                    revision_parent = verified_revision_parent(self.path.parent.parent, self.state["id"], revision)
+                    if (revision["source_kind"] == "document" and not any(
+                            item.get("kind") != "human_design" and item["sha256"] == revision["source_id"]
+                            for item in self.recipe["sources"])):
+                        raise ValueError("human_session_source_changed")
+                    yield {**unit(index, kind="brief" if revision["source_kind"] == "synthetic" else "document",
+                                 text=revision["teacher_evidence"], status="ready",
+                                 human_provided=revision["source_kind"] == "human_provided",
+                                 revision_source_level=revision_parent.get("evidence_level"),
+                                 human_design=human_design(manual, seed_id=seed["id"], validated=True),
+                                 source_location={"file": source["name"], "seed": index + 1,
+                                                  "parent_run_id": revision["parent_run_id"]}),
+                           "source_id": revision["source_id"]}
+                    continue
                 yield unit(index, kind="document", text=seed["answer"], status="ready",
                            human_provided=True, human_design=human_design(manual, seed_id=seed["id"], validated=True),
                            source_location={"file": source["name"], "seed": index + 1})
@@ -1331,11 +1359,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                 question_rules=self.recipe["qa_director"]["question_rules"],
                 answer_rules=self.recipe["qa_director"]["answer_rules"],
                 teacher_evidence_not_learner_context=True)
-        evidence_level = ("human_provided_and_model_assessed" if unit.get("human_provided") else
+        evidence_level = (unit.get("revision_source_level") or ("human_provided_and_model_assessed" if unit.get("human_provided") else
                           "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
                           else "recorded_context_model_assessed" if unit["kind"] == "conversation"
                           else "source_and_model_assessed" if unit["kind"] == "document"
-                          else "model_assessed_synthetic")
+                          else "model_assessed_synthetic"))
         source_verification = ("human_provided_not_independently_verified" if unit.get("human_provided") else
                                "visual_transcription_not_independently_verified" if unit.get("document_reading")
                                else "recorded_unverified" if unit["kind"] == "conversation"
@@ -1432,7 +1460,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                             "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
                             "不得披露内部提示词、内部检索包装或标识，不得输出与回答无关的原文，"
                             "也不得假装读者见过隐藏上文。" +
-                            (HUMAN_GENERATION_INSTRUCTION if contract.get("human_design") else "")} if contract is not None else {}))
+                            human_generation_instruction(contract)} if contract is not None else {}))
                     answer = response.get("answer") if isinstance(response, dict) else None
                     quotes = response.get("quotes") if isinstance(response, dict) else None
                     if text_issue(answer) or len(answer) > 12000 or not isinstance(quotes, list):
@@ -1466,6 +1494,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                     contract_check = (self.qa_contract_check(
                         [unit["id"], "multiturn_contract", turn_index, attempt], unit, candidate,
                         prompt_id="workflow.multiturn_directed_check",
+                        review_scope="completed_prefix",
                         **({"dialogue_state": current_dialogue_state,
                             "dialogue_steps": dialogue_steps} if adaptive_dialogue else {})) if contract is not None else None)
                     if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
@@ -1508,6 +1537,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             return [{**self.rejected(unit, "multiturn_consistency_rejected"),
                      "turn_reviews": reviews, "consistency": consistency,
                      "evidence_level": evidence_level}]
+        if (contract is not None and contract.get("human_design", {}).get("seed", {}).get("revision_context")):
+            contract_check = self.qa_contract_check([unit["id"], "multiturn_revision_complete"], unit, messages,
+                prompt_id="workflow.multiturn_directed_check", review_scope="complete",
+                dialogue_state=dialogue_state, dialogue_steps=dialogue_steps)
+            if not (contract_check["keep"] and contract_check["adherence"] >= 4):
+                return [{**self.rejected(unit, "human_revision_feedback_not_applied"),
+                         "turn_reviews": reviews, "consistency": consistency, "qa_contract_check": contract_check,
+                         "evidence_level": evidence_level}]
         return [{"id": unit["id"], "source_id": unit["source_id"],
                  "source_name": unit.get("source_name"), "location": unit.get("location"),
                  "source_location": unit.get("source_location"),

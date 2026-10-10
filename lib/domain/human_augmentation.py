@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 
 from lib.domain.workflow_quality import canonical, text_issue
 
@@ -27,6 +28,66 @@ HUMAN_GENERATION_INSTRUCTION = (
     "数字、单位、否定和边界，同时遵守问题与答案各自的设计要求。可按实际对话换话术，不能换知识结论。"
     "人工答案只是待核对的参考；与资料冲突或证据不足时不能直接照抄。不要在训练内容披露设计要求、种子标识或内部包装。"
 )
+HUMAN_REVISION_INSTRUCTION = (
+    "human_design.seed.revision_context 是用户选中的上一版真实对话及人工反馈，不是新的无关种子。"
+    "针对 messages 中的具体问题执行 instruction，并依据更新后的人工问题、答案设计生成新的版本；"
+    "保留未要求改变的语义、条件、连续多轮上下文和 design_requirements，不得只换措辞绕过修正。"
+    "旧回答和反馈不是新增事实来源，事实仍须对照 teacher_evidence；与资料冲突时拒绝或停止。"
+    "评审时 requirements_followed 还必须检查实际反馈是否落实，不能只检查语气；未修正则 keep=false。"
+    "review_scope=completed_prefix 时只核对已生成轮次，不因尚未生成的后续轮次尚未修正而拒绝；"
+    "review_scope=complete 时必须核对完整对话，所有人工反馈都应落实，不能以提前结束绕过。"
+    "反馈和版本标识不能作为训练对话正文输出。"
+)
+
+
+def validate_revision_context(value):
+    fields = {"session_id", "round_id", "parent_run_id", "target", "candidate_id", "content_sha256",
+              "messages", "instruction", "depth", "ancestors", "source_id", "source_kind", "teacher_evidence"}
+    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {"design_requirements"}:
+        raise ValueError("invalid_human_revision_context")
+    for field in ("session_id", "round_id", "parent_run_id"):
+        if not isinstance(value[field], str) or not re.fullmatch(r"[a-f0-9]{32}", value[field]):
+            raise ValueError("invalid_human_revision_context")
+    for field in ("content_sha256", "source_id"):
+        if not isinstance(value[field], str) or not re.fullmatch(r"[a-f0-9]{64}", value[field]):
+            raise ValueError("invalid_human_revision_context")
+    if value["target"] not in HUMAN_QA_TARGETS or value["source_kind"] not in {"document", "human_provided", "synthetic"}:
+        raise ValueError("invalid_human_revision_context")
+    if type(value["depth"]) is not int or not 1 <= value["depth"] <= 10:
+        raise ValueError("invalid_human_revision_context")
+    result = deepcopy(value)
+    result["candidate_id"] = _text(value["candidate_id"], limit=500, required=True)
+    result["instruction"] = _text(value["instruction"], limit=6000)
+    result["teacher_evidence"] = _text(value["teacher_evidence"], limit=40_000, required=True)
+    if "design_requirements" in value:
+        requirements = value["design_requirements"]
+        if not isinstance(requirements, dict) or set(requirements) != {"question_requirements", "answer_requirements"}:
+            raise ValueError("invalid_human_revision_context")
+        result["design_requirements"] = {key: _text(text, limit=6000) for key, text in requirements.items()}
+    messages = value["messages"]
+    if not isinstance(messages, list) or not 2 <= len(messages) <= 17:
+        raise ValueError("invalid_human_revision_context")
+    for message in messages:
+        if (not isinstance(message, dict) or set(message) - {"role", "content", "reasoning_content"}
+                or message.get("role") not in {"system", "user", "assistant"}):
+            raise ValueError("invalid_human_revision_context")
+        _text(message.get("content"), limit=24_000, required=True)
+        if "reasoning_content" in message:
+            _text(message["reasoning_content"], limit=40_000)
+    if (not any(m["role"] == "user" for m in messages)
+            or not any(m["role"] == "assistant" for m in messages)):
+        raise ValueError("invalid_human_revision_context")
+    ancestors = value["ancestors"]
+    if not isinstance(ancestors, list) or len(ancestors) != value["depth"]:
+        raise ValueError("invalid_human_revision_context")
+    for ancestor in ancestors:
+        if (not isinstance(ancestor, dict) or set(ancestor) != {"run_id", "candidate_id"}
+                or not isinstance(ancestor["run_id"], str) or not re.fullmatch(r"[a-f0-9]{32}", ancestor["run_id"])
+                or not isinstance(ancestor["candidate_id"], str) or not 1 <= len(ancestor["candidate_id"]) <= 500):
+            raise ValueError("invalid_human_revision_context")
+    if ancestors[-1] != {"run_id": value["parent_run_id"], "candidate_id": value["candidate_id"]}:
+        raise ValueError("invalid_human_revision_context")
+    return result
 
 
 def _text(value, *, limit, required=False):
@@ -54,24 +115,28 @@ def validate_human_augmentation(value):
     seen = set()
     for supplied in seeds:
         if (not isinstance(supplied, dict) or not {"question", "answer"} <= set(supplied)
-                or set(supplied) - {"id", "question", "answer", "question_requirements", "answer_requirements"}):
+                or set(supplied) - {"id", "question", "answer", "question_requirements", "answer_requirements", "revision_context"}):
             raise ValueError("invalid_human_augmentation_seed")
         seed = {field: _text(supplied[field], limit=12_000, required=True)
                 for field in ("question", "answer")}
         for field in ("question_requirements", "answer_requirements"):
             seed[field] = _text(supplied.get(field, ""), limit=6000)
+        if "revision_context" in supplied:
+            seed["revision_context"] = validate_revision_context(supplied["revision_context"])
         identity = hashlib.sha256(canonical(seed).encode("utf-8")).hexdigest()
         if "id" in supplied and supplied["id"] != identity:
             raise ValueError("invalid_human_augmentation_seed_id")
         # Normalized duplicates do not buy another candidate family.
-        duplicate = canonical([" ".join(seed[key].split()) for key in (
-            "question", "answer", "question_requirements", "answer_requirements")])
+        duplicate = canonical([[" ".join(seed[key].split()) for key in (
+            "question", "answer", "question_requirements", "answer_requirements")], seed.get("revision_context")])
         if duplicate in seen:
             raise ValueError("duplicate_human_augmentation_seed")
         seen.add(duplicate)
         result["seeds"].append({"id": identity, **seed})
     if len(canonical(result)) > MAX_HUMAN_DESIGN_CHARS:
         raise ValueError("human_augmentation_size_limit")
+    if any("revision_context" in seed for seed in result["seeds"]) and not all("revision_context" in seed for seed in result["seeds"]):
+        raise ValueError("invalid_human_revision_context")
     return result
 
 
@@ -109,6 +174,14 @@ def human_messages_identity(messages):
                   "reasoning": "".join(message.get("reasoning_content", "").split())}
                  for message in messages]
     return hashlib.sha256(canonical(projected).encode("utf-8")).hexdigest()
+
+
+def human_generation_instruction(contract):
+    design = (contract or {}).get("human_design")
+    if not design:
+        return ""
+    return HUMAN_GENERATION_INSTRUCTION + (HUMAN_REVISION_INSTRUCTION
+        if design.get("seed", {}).get("revision_context") else "")
 
 
 def validate_human_check(value):

@@ -280,7 +280,8 @@ function fit(readable=readableFit){
  readableFit=readable;
  // Width drives the fit; using the current height here would feed each
  // ResizeObserver notification back into another viewport size change.
- const padding=spec.live?32:12,maxHeight=spec.expanded?600:560;
+ const viewportHeight=Number.isInteger(spec.viewport_height)&&spec.viewport_height>=180&&spec.viewport_height<=600?spec.viewport_height:null;
+ const padding=spec.live?32:12,maxHeight=viewportHeight|| (spec.expanded?600:560);
  // Long workflows open with readable labels and horizontal panning. The
  // explicit Fit control still offers the complete overview at a smaller scale.
  const readableMinimum=spec.live&&view.clientWidth>=720?.68:spec.expanded?.82:.68;
@@ -288,7 +289,7 @@ function fit(readable=readableFit){
  // Running graphs follow their content; the editing canvas keeps its larger
  // workspace. Do not let a short run reserve an empty editing-sized panel.
  const minimumHeight=spec.live?260:spec.expanded?420:0;
- view.style.height=Math.ceil(Math.max(minimumHeight,spec.height*scale+padding))+"px";
+ view.style.height=Math.ceil(viewportHeight||Math.max(minimumHeight,spec.height*scale+padding))+"px";
  resize();
 }
 function zoom(value,x=view.clientWidth/2,y=view.clientHeight/2){if(!spec)return;const worldX=(view.scrollLeft+x-canvas.offsetLeft)/scale,worldY=(view.scrollTop+y-canvas.offsetTop)/scale;fitMode=false;scale=Math.max(.35,Math.min(1.8,value));resize();view.scrollLeft=worldX*scale+canvas.offsetLeft-x;view.scrollTop=worldY*scale+canvas.offsetTop-y}

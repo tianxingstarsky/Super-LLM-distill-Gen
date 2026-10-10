@@ -163,10 +163,10 @@ def _workflow_error(error) -> str:
         "model_request_failed": "模型调用未能完成，请检查服务后从断点继续。",
         "model_request_queue_timeout": "等待模型共享额度超时，已保留断点。请在节点检查并发上限、排队时长和其他运行任务后继续。",
         "invalid_model_scheduler_state": "共享调度记录无法读取，已停止后续请求。请检查本机存储后从断点继续。",
-        "human_augmentation_requires_director": "人工增强需要对话指导员，请在指导员节点开启人工问答增强。",
+        "human_augmentation_requires_director": "人工增强的生成流程需要指导模型，请检查工作流中的对话指导员配置。",
         "human_augmentation_requires_qa_sources": "仅用人工问答设计时，请选择对话或偏好目标；CPT 等目标需要真实来源。",
-        "invalid_human_augmentation_seeds": "人工设计尚未完成，请在指导员节点填写问题与参考答案。",
-        "invalid_human_augmentation_text": "人工设计含空文本、无效内容或超过大小限制，请在指导员节点修正。",
+        "invalid_human_augmentation_seeds": "人工设计尚未完成，请在工作室填写问题与参考答案。",
+        "invalid_human_augmentation_text": "人工设计含空文本、无效内容或超过大小限制，请在工作室修正。",
         "duplicate_human_augmentation_seed": "人工设计重复，请合并重复项后继续。",
         "human_augmentation_size_limit": "人工设计总量过大，请减少到 200 项以内，并精简设计文本。",
         "human_augmentation_context_too_small": "人工设计超出指导员上下文，请增加节点上下文上限或精简设计。",
@@ -174,6 +174,15 @@ def _workflow_error(error) -> str:
         "human_augmentation_design_rejected": "候选未保留人工问题、答案或设计要求，已隔离。",
         "human_augmentation_review_missing": "人工设计评审证据缺失，已阻止导出，请检查评审节点。",
         "human_augmentation_review_mismatch": "人工评审证据与当前内容不匹配，已阻止导出。",
+        "human_session_source_changed": "来源文件已变化，已停止回流。请保留原结果，并检查本机工作文件。",
+        "human_session_source_evidence_unavailable": "原结果缺少可核对的来源证据，暂不能回流。请检查原任务记录。",
+        "human_session_feedback_changed": "修正意见记录已变化，请刷新工作状态后重新提交。",
+        "human_session_revision_not_authorized": "回流版本与当前工作不匹配，已停止处理。请从结果列表重新选择。",
+        "human_session_round_cancelled": "本轮已停止。已有结果保留，可以提交新的设计。",
+        "human_session_feedback_not_available": "修正意见已使用或暂不可读取，请重新选择结果后提交意见。",
+        "human_session_request_conflict": "这次提交与已有轮次不一致，请刷新工作状态后继续。",
+        "invalid_human_revision_context": "回流上下文无效，请从原结果重新提交修正意见。",
+        "human_revision_feedback_not_applied": "修正意见未落实，已隔离此版本。请检查结果后补充更具体的意见。",
         "production_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
         "production_review_integrity_error": "评审断点校验失败，请保留任务文件并检查存储。",
         "production_round_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
@@ -627,7 +636,7 @@ def _toggle_run_reader(run_id: str) -> None:
 
 
 @st.fragment(run_every=2)
-def render_run(application, run_id, begin, *, embedded=False, draft_application=None, backend_application=None):
+def render_run(application, run_id, begin, *, embedded=False, draft_application=None, backend_application=None, human_application=None):
     from lib.presentation.streamlit.review_navigation import consume_app_navigation
     consume_app_navigation(run_id)
     st.html(workflow_run_styles())
@@ -896,6 +905,15 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                "未通过原因": json.dumps(info["reasons"], ensure_ascii=False)}
                               for target, info in quality["targets"].items()], hide_index=True, width="stretch")
             if has_deliverable_results(state):
+                if human_application is not None and set(state.get("targets", [])).intersection(HUMAN_QA_TARGETS):
+                    if st.button("用人工意见回流修正", key=f"workflow-human-reflow:{run_id}", width="stretch",
+                        help="打开独立人工增强窗口，选择结果并提交修正意见。新一轮重新生成和评审，原任务结果保留。"):
+                        try:
+                            session_id = human_application.create_session(from_run_id=run_id)
+                            st.session_state["human-open-session"] = {"workspace": st.session_state["ws"], "session_id": session_id}
+                            st.rerun(scope="app")
+                        except (ValueError, OSError, Timeout) as error:
+                            st.error(_workflow_error(error))
                 from lib.presentation.streamlit.review_navigation import (
                     review_choices, open_verified_review, open_package,
                 )
@@ -1027,7 +1045,7 @@ def _change_creation_mode(workspace):
         for field_key, value in values.items():
             st.session_state[field_key] = value
             _save_draft_value(workspace, field_key)
-        _select_setup_node(f"workflow-setup-node:{workspace}", "director")
+        st.session_state[f"canvas-open:setup-canvas:{workspace}"] = False
 
 
 def _select_candidate_count(workspace, count):
@@ -1221,7 +1239,7 @@ def _upload_cache_error(error):
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
                      draft_application: CreationDraftApplication | None = None,
                      backend_application=None, input_cache=None, manual_application=None, document_preview=None,
-                     knowledge_application=None, prompt_library=None):
+                     knowledge_application=None, prompt_library=None, human_application=None):
     page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL", art_kind="hero")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
@@ -1341,6 +1359,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             reasoning_trim = render_trim_toggle(ws, targets, save_field=_save_draft_value)
         with director_option:
             qa_director = render_director_toggle(ws, targets, save_field=_save_draft_value)
+            if creation_mode == "人工问答增强":
+                # Designs belong to the persistent working window. The entry
+                # screen validates only the model and workflow configuration.
+                qa_director = {**qa_director, "human_augmentation": {"enabled": False}}
         with review_option:
             render_package_review_toggle(ws, save_field=_save_draft_value)
         package_review = package_review_snapshot(ws)
@@ -1390,7 +1412,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             selected_node = graph_nodes[0]
         st.session_state[selection_key] = selected_node
         model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
-        if source_mode == "开放需求" and qa_director.get("human_augmentation", {}).get("enabled"):
+        if source_mode == "开放需求" and creation_mode == "人工问答增强":
             # The run snapshots these designs as input units. It never calls
             # the open-brief planning model to parse an existing human QA.
             model_source_mode = "人工设计"
@@ -1520,9 +1542,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
     trim_invalid = trim_has_issue(reasoning_trim)
     director_invalid = director_has_issue(qa_director)
-    human_enabled = bool(qa_director.get("human_augmentation", {}).get("enabled"))
-    human_mode_unavailable = creation_mode == "人工问答增强" and not human_enabled
-    human_ready = human_enabled and not director_invalid
+    human_enabled = creation_mode == "人工问答增强"
+    human_mode_unavailable = human_enabled and (not qa_director.get("enabled") or not set(targets) <= HUMAN_QA_TARGETS)
+    human_ready = human_enabled and not director_invalid and not human_mode_unavailable
     human_source_compatible = human_ready and set(targets) <= HUMAN_QA_TARGETS
     node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
@@ -1542,11 +1564,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 _render_setup_issue(ws, "ingest", "图片输入能力尚未确认，点击核实模型能力", kind="vision")
             if source_mode == "开放需求":
                 uploaded, selected = [], []
-                st.caption("问题与参考答案在指导员节点编辑；可以直接使用人工设计，也可补充要求或加入资料核对。" if human_enabled else
+                st.caption("启动后进入人工增强窗口，在同一页面反复设计问答、检查结果并提交修正意见。" if human_enabled else
                            "描述任务、领域和使用场景，系统会规划并生成候选。")
                 if human_enabled:
-                    st.button("编辑人工问答设计", key=f"workflow-human-open:{ws}",
-                        on_click=_select_setup_node, args=(f"workflow-setup-node:{ws}", "director"))
+                    with st.popover("回流限制"):
+                        st.number_input("同一结果的回流次数上限", min_value=1, max_value=10, value=3,
+                                        key=f"human-revision-limit:{ws}")
+                        st.caption("每次回流都需人工提交。达到上限后停止修订，避免反复消耗模型额度。")
                 brief = _draft_brief("补充生成要求（可选）" if human_enabled else "开放性需求", key=f"workflow-open-brief:{ws}", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
                 with (st.expander("联网资料（可选）") if human_enabled else
                       st.container(border=True, key=f"workbench-web-research:{ws}")):
@@ -1801,7 +1825,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.html('<div class="df-wb-submit-summary"><b>运行配置摘要</b><strong>' +
                         html.escape(translate(name.strip() or "未命名任务", language)) +
                         '</strong><span>' + html.escape(run_summary) + '</span></div>')
-                st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
+                st.caption("启动只打开工作窗口；在窗口中提交设计后才调用模型，可反复生成、查看与回流修正。" if human_enabled else
+                           "先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
                 source_missing = (not brief.strip() if source_mode == "开放需求"
                                   else not (selected or uploaded)) and not human_source_compatible
@@ -1822,7 +1847,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.caption("人工增强需要对话或偏好目标，并开启对话指导员；也可切回自动生成。")
                 elif not targets:
                     st.caption("先选择至少一类训练目标。")
-                submitted = st.button("开始自动生成", type="primary", disabled=source_missing or bool(brief_issue)
+                submitted = st.button("启动人工增强窗口" if human_enabled else "开始自动生成", type="primary", disabled=source_missing or bool(brief_issue)
                                       or human_mode_unavailable
                                       or agent_source_missing or source_limit_exceeded or source_size_exceeded
                                       or source_unavailable or not targets or bool(model_issues)
@@ -1862,7 +1887,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         raise ValueError(f"请先上传或选择{source_mode}来源。")
                     if source_mode == "开放需求" and not brief.strip() and not human_source_compatible:
                         raise ValueError("请描述开放性需求。")
-                    run_id = application.create_run(sources=sources, brief=brief, name=name, targets=targets,
+                    create = human_application.create_session if human_enabled and human_application is not None else application.create_run
+                    if human_enabled and human_application is None:
+                        raise ValueError("human_workspace_unavailable")
+                    from lib.presentation.streamlit.human_augmentation_controls import human_snapshot
+                    human_options = {"initial_draft": human_snapshot(ws),
+                                     "max_revision_depth": int(st.session_state.get(f"human-revision-limit:{ws}", 3))} if human_enabled else {}
+                    run_id = create(**human_options, sources=sources, brief=brief, name=name, targets=targets,
                                         node_models=model_application.snapshot(graph_nodes, model_source_mode, bindings,
                                                                                node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing),
                                         sample_count=int(sample_count), production=production,
@@ -1883,6 +1914,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         source_names=source_names,
                                         evaluation_sources=evaluation_sources,
                                         evaluation_source_names=evaluation_source_names)
+                if human_enabled:
+                    st.session_state["human-open-session"] = {"workspace": ws, "session_id": run_id}
+                    st.rerun()
                 st.session_state[f"workflow-selected:{ws}"] = run_id
                 begin(["workflow", "--action", "resume", "--run-id", run_id])
                 # Show the actual running graph immediately instead of leaving the

@@ -187,68 +187,18 @@ def set_design(ui, index, question, answer):
     assert not ui.exception
 
 
-def test_human_entry_enables_director_opens_its_node_and_blocks_incomplete_design(tmp_path):
-    ui = workbench(tmp_path)
-    enter_human(ui)
-    assert ui.toggle(key=f"workflow-director-enabled:{WORKSPACE}").value is True
-    assert ui.toggle(key=f"workflow-human-enabled:{WORKSPACE}").value is True
-    assert ui.session_state[f"canvas-open:setup-canvas:{WORKSPACE}"] is True
-    assert ui.session_state[f"workflow-setup-reveal:{WORKSPACE}"]["node"] == "director"
-    assert ui.selectbox(key=f"workflow-director-mode:{WORKSPACE}").value == "adaptive"
-    assert ui.selectbox(key=f"workflow-director-mode:{WORKSPACE}").disabled
-    assert ui.button(key=CREATE_KEY).disabled
-    assert ui.session_state["fixture-create-calls"] == []
-    assert ui.session_state["fixture-begin-calls"] == []
 
 
-def test_human_mode_cannot_silently_run_as_plain_generation_with_director_disabled(tmp_path):
-    ui = workbench(tmp_path)
-    enter_human(ui)
-    set_design(ui, 0, "What does a red light mean?", "Stop and check the alarm.")
-    ui.text_area(key=f"workflow-open-brief:{WORKSPACE}").set_value("Keep the same safety conditions.").run()
-    ui.toggle(key=f"workflow-director-enabled:{WORKSPACE}").set_value(False).run()
-    assert not ui.exception
-    assert ui.button(key=CREATE_KEY).disabled
-    assert ui.session_state["fixture-create-calls"] == []
 
 
-def test_human_design_edits_survive_seed_switch_mode_switch_and_fresh_session(tmp_path):
-    from lib.bootstrap.creation_drafts import creation_draft_application
-
-    ui = workbench(tmp_path)
-    enter_human(ui)
-    set_design(ui, 0, "When should the pump stop?", "Stop if its seal leaks.")
-    ui.text_area(key=seed_key(0, "answer_requirements")).set_value("Keep the stop condition.").run()
-    ui.button(key=f"human-seed-add:{WORKSPACE}").click().run()
-    set_design(ui, 1, "When can it restart?", "After the repair and inspection.")
-    ui.selectbox(key=f"human-seed-selection:{WORKSPACE}").set_value(0).run()
-    assert ui.text_area(key=seed_key(0, "question")).value == "When should the pump stop?"
-    assert ui.text_area(key=seed_key(0, "answer_requirements")).value == "Keep the stop condition."
-    ui.text_area(key=f"workflow-human-question-requirements:{WORKSPACE}").set_value("Use everyday language.").run()
-    ui.segmented_control(key=MODE_KEY).set_value("自动生成").run()
-    assert not any(item.key and item.key.startswith("human-seed:") for item in ui.text_area)
-    enter_human(ui)
-    assert ui.text_area(key=seed_key(0, "question")).value == "When should the pump stop?"
-    ui.selectbox(key=f"human-seed-selection:{WORKSPACE}").set_value(1).run()
-    assert ui.text_area(key=seed_key(1, "answer")).value == "After the repair and inspection."
-    stored = creation_draft_application(tmp_path / "output").load()
-    assert len(stored[f"workflow-human-seeds:{WORKSPACE}"]) == 2
-    assert stored[f"workflow-human-question-requirements:{WORKSPACE}"] == "Use everyday language."
-    fresh = AppTest.from_function(workbench_screen, args=(str(tmp_path),), default_timeout=15)
-    fresh.session_state[f"workflow-setup-node:{WORKSPACE}"] = "director"
-    fresh.run()
-    assert not fresh.exception
-    assert fresh.segmented_control(key=MODE_KEY).value == "人工问答增强"
-    assert fresh.text_area(key=seed_key(0, "question")).value == "When should the pump stop?"
-    assert fresh.text_area(key=f"workflow-human-question-requirements:{WORKSPACE}").value == "Use everyday language."
 
 
 @pytest.mark.parametrize("kind", ["json", "jsonl"])
 def test_human_json_import_replaces_and_persists_designs_through_button_callback(tmp_path, kind):
     from lib.bootstrap.creation_drafts import creation_draft_application
 
-    ui = workbench(tmp_path)
-    enter_human(ui)
+    ui = AppTest.from_function(human_controls_screen, args=("zh",)).run()
+    assert not ui.exception
     seeds = [{"question": "What does the alarm mean?", "answer": "The guard is open.",
               "question_requirements": "Ask as a new operator.", "answer_requirements": "Keep the cause."},
              {"question": "What should I do next?", "answer": "Stop and inspect the guard."}]
@@ -258,7 +208,7 @@ def test_human_json_import_replaces_and_persists_designs_through_button_callback
     assert not ui.exception
     assert ui.text_area(key=seed_key(0, "question")).value == seeds[0]["question"]
     assert ui.text_area(key=seed_key(0, "answer_requirements")).value == "Keep the cause."
-    stored = creation_draft_application(tmp_path / "output").load()[f"workflow-human-seeds:{WORKSPACE}"]
+    stored = ui.session_state[f"workflow-form-draft:{WORKSPACE}"][f"workflow-human-seeds:{WORKSPACE}"]
     assert len(stored) == 2
     assert not any("id" in row for row in stored)
     ui.selectbox(key=f"human-seed-selection:{WORKSPACE}").set_value(1).run()
@@ -269,8 +219,8 @@ def test_human_json_import_replaces_and_persists_designs_through_button_callback
 @pytest.mark.parametrize("raw", ["broken JSON", '[{"question":"Missing answer"}]',
                                  '[{"question":"Q","answer":"A"},{"question":"Q","answer":"A"}]'])
 def test_failed_human_import_keeps_current_question_and_answer(tmp_path, raw):
-    ui = workbench(tmp_path)
-    enter_human(ui)
+    ui = AppTest.from_function(human_controls_screen, args=("zh",)).run()
+    assert not ui.exception
     set_design(ui, 0, "When should the pump stop?", "Stop if its seal leaks.")
     prior = deepcopy(ui.session_state[f"workflow-form-draft:{WORKSPACE}"][f"workflow-human-seeds:{WORKSPACE}"])
     ui.text_area(key=f"human-seed-json:{WORKSPACE}").set_value(raw).run()
@@ -280,57 +230,10 @@ def test_failed_human_import_keeps_current_question_and_answer(tmp_path, raw):
     assert any("当前设计已保留" in item.value for item in ui.error)
 
 
-def test_valid_human_question_and_answer_can_start_without_files_or_an_open_brief(tmp_path):
-    ui = workbench(tmp_path)
-    enter_human(ui)
-    assert ui.text_area(key=f"workflow-open-brief:{WORKSPACE}").value == ""
-    assert ui.button(key=CREATE_KEY).disabled
-    ui.text_area(key=seed_key(0, "question")).set_value("When should the pump stop?").run()
-    assert ui.button(key=CREATE_KEY).disabled
-    ui.text_area(key=seed_key(0, "answer")).set_value("Stop if its seal leaks.").run()
-    assert not ui.button(key=CREATE_KEY).disabled
-    assert ui.session_state["fixture-create-calls"] == []
-    ui.button(key=CREATE_KEY).click().run()
-    assert not ui.exception
-    recipes = ui.session_state["fixture-create-calls"]
-    assert len(recipes) == 1
-    assert recipes[0]["sources"] == []
-    assert recipes[0]["brief"] == ""
-    assert recipes[0]["qa_director"]["enabled"] is True
-    assert recipes[0]["qa_director"]["human_augmentation"]["seeds"][0]["answer"] == "Stop if its seal leaks."
-    assert "max_concurrency" not in json.dumps(recipes[0]["node_models"])
-    assert ui.session_state["fixture-begin-calls"] == [["workflow", "--action", "resume", "--run-id", "offline-created-run"]]
 
 
-def test_human_only_mode_does_not_require_an_unused_input_planning_model(tmp_path):
-    ui = workbench(tmp_path)
-    enter_human(ui)
-    set_design(ui, 0, "When should the pump stop?", "Stop if its seal leaks.")
-    bindings = deepcopy(ui.session_state[f"workflow-node-bindings:{WORKSPACE}"])
-    bindings.pop("ingest", None)
-    ui.session_state[f"workflow-node-bindings:{WORKSPACE}"] = bindings
-    draft_key = f"workflow-form-draft:{WORKSPACE}"
-    ui.session_state[draft_key] = {**ui.session_state[draft_key], f"workflow-node-bindings:{WORKSPACE}": bindings}
-    ui.run()
-    assert not ui.exception
-    assert not ui.button(key=CREATE_KEY).disabled
-    ui.button(key=CREATE_KEY).click().run()
-    assert not ui.exception
-    assert ui.session_state["fixture-create-calls"][0]["node_models"].get("ingest", {}) == {}
 
 
-def test_english_human_entry_and_incomplete_design_hint_are_translated(tmp_path):
-    ui = workbench(tmp_path, language="en")
-    enter_human(ui)
-    labels = [item.label for kind in ("button", "text_area", "number_input", "expander")
-              for item in ui.get(kind)]
-    captions = [item.value for item in ui.caption]
-    assert "Edit human QA designs" in labels
-    assert "Additional generation notes (optional)" in labels
-    assert "Web sources (optional)" in labels
-    assert "Complete the human question and reference answer on the director node first." in captions
-    assert not any(CHINESE.search(text) for text in labels + captions)
-    assert ui.button(key=CREATE_KEY).disabled
 
 
 def human_controls_screen(language):
@@ -362,7 +265,7 @@ def test_new_human_controls_render_english_labels_and_help_without_translation_l
     labels += [item.proto.popover.label for item in ui.get("popover")]
     captions = [item.value for item in ui.caption]
     help_texts = [item.proto.help for kind in ("toggle", "selectbox", "button", "text_area") for item in ui.get(kind)]
-    assert "Human QA augmentation" in labels
+    assert "Human QA augmentation" not in labels
     assert "Your question" in labels
     assert "Your reference answer" in labels
     assert "Apply import" in labels

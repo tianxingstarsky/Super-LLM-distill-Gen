@@ -1,4 +1,4 @@
-"""Human question and answer designs, edited inside the director node."""
+"""Persistent question and answer designs for the human working window."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -77,14 +77,14 @@ def _import_seeds(workspace, save_field):
         st.session_state[error_key] = True
 
 
-def render_human_designs(workspace, *, save_field):
+def render_human_designs(workspace, *, save_field, show_toggle=False):
     key = f"workflow-human-enabled:{workspace}"
     st.session_state[key] = field(workspace, "enabled", False)
-    enabled = st.toggle("人工问答增强", key=key, on_change=_change_enabled, args=(workspace, save_field),
+    enabled = (st.toggle("人工问答增强", key=key, on_change=_change_enabled, args=(workspace, save_field),
         help="人同时设计问题和参考答案。模型生成不同表达，再核对原意、事实和两者的设计要求。")
+        if show_toggle else True)
     if not enabled:
         return
-    st.caption("保留问题意图和答案事实，生成不同话术；达到质量或多样性边界即可停止，不强行凑数。")
     seeds = deepcopy(field(workspace, "seeds", []))
     if not seeds:
         _add_seed(workspace, save_field)
@@ -96,7 +96,8 @@ def render_human_designs(workspace, *, save_field):
     language = st.session_state.get("ui_language", "zh")
     with selector:
         index = st.selectbox("人工设计", range(len(seeds)), key=selection_key,
-            format_func=lambda value: f"Design {value + 1} / {len(seeds)}" if language == "en" else f"设计 {value + 1} / {len(seeds)}")
+            format_func=lambda value: f"Design {value + 1} / {len(seeds)}" if language == "en" else f"设计 {value + 1} / {len(seeds)}",
+            help="保留问题意图和答案事实，生成不同话术；达到质量或多样性边界即可停止，不强行凑数。")
     with add:
         st.button("添加", key=f"human-seed-add:{workspace}", on_click=_add_seed,
                   args=(workspace, save_field), disabled=len(seeds) >= MAX_HUMAN_SEEDS, width="stretch")
@@ -113,9 +114,10 @@ def render_human_designs(workspace, *, save_field):
             widget_key = f"human-seed:{workspace}:{index}:{name}"
             st.session_state[widget_key] = seeds[index].get(name, "")
             with column:
+                help_text = ("人工参考答案仍需核对；只用人工设计时会标记为用户提供，不宣称已经得到独立事实验证。" if name == "answer" else
+                    "设计要求可约束语气、难度、表达方式和允许变化的范围；不会作为训练答案直接导出。" if name.endswith("requirements") else None)
                 st.text_area(label, key=widget_key, height=height, max_chars=maximum,
-                             on_change=_edit_seed, args=(workspace, index, save_field))
-    st.caption("设计要求可约束语气、难度、表达方式和允许变化的范围；不会作为训练答案直接导出。")
+                             on_change=_edit_seed, args=(workspace, index, save_field), help=help_text)
     if len(seeds) > 1 or field(workspace, "question-requirements", "") or field(workspace, "answer-requirements", ""):
         with st.expander("共用设计要求"):
             for name, label in (("question-requirements", "共用问题要求"), ("answer-requirements", "共用答案要求")):
@@ -130,4 +132,3 @@ def render_human_designs(workspace, *, save_field):
                   on_click=_import_seeds, args=(workspace, save_field))
         if st.session_state.get(f"human-seed-import-error:{workspace}"):
             st.error("导入失败，请检查问答字段、重复项和大小限制；当前设计已保留。")
-    st.caption("人工参考答案仍需核对；只用人工设计时会标记为用户提供，不宣称已经得到独立事实验证。")

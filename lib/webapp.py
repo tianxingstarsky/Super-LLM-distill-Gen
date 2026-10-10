@@ -175,6 +175,7 @@ def page_workflow():
     from lib.bootstrap.backends import backend_application
     from lib.bootstrap.manual_datasets import manual_dataset_application
     from lib.bootstrap.prompt_library import prompt_library_application
+    from lib.bootstrap.workflows import human_augmentation_application
     render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT),
                      input_cache=local_input_application(),
                      draft_application=creation_draft_application(_ws_out()),
@@ -182,7 +183,19 @@ def page_workflow():
                      manual_application=manual_dataset_application(_ws_out()),
                      document_preview=document_preview_application(st.session_state["ws"]),
                      knowledge_application=knowledge_application(st.session_state["ws"]),
-                     prompt_library=prompt_library_application())
+                     prompt_library=prompt_library_application(),
+                     human_application=human_augmentation_application(ROOT, _ws_out()))
+
+
+def page_human_workspace():
+    from lib.bootstrap.workflows import human_augmentation_application
+    from lib.bootstrap.workflows import workflow_application
+    from lib.bootstrap.backends import backend_application
+    from lib.presentation.streamlit.human_workspace_page import render_human_workspace
+    render_human_workspace(human_augmentation_application(ROOT, _ws_out()),
+        workflow_application(ROOT, _ws_out()), _begin, st.session_state["ws"],
+        session_id=st.query_params.get("human") or st.session_state.get(f"human-selected:{st.session_state['ws']}"),
+        backend_application=backend_application(ROOT), navigate=_select_page)
 
 
 def page_run(show_title=True):
@@ -535,7 +548,7 @@ def page_task_manager():
         modes, drafts = st.columns([4, 1], gap="small", vertical_alignment="center")
         with modes:
             area = st.segmented_control(
-                "任务视图", ("数据工作流", "命令管线", "运行日志"),
+                "任务视图", ("数据工作流", "人工增强工作", "命令管线", "运行日志"),
                 default="数据工作流", key=f"task-view:{st.session_state['ws']}",
                 format_func=lambda value: translate_label(
                     {"命令管线": "高级单项工具", "运行日志": "命令日志"}.get(value, value),
@@ -544,7 +557,11 @@ def page_task_manager():
             )
         with drafts, st.popover("工作草稿", use_container_width=True):
             render_work_drafts(draft_application, st.session_state["ws"], _select_page)
-    if area == "运行日志":
+    if area == "人工增强工作":
+        from lib.bootstrap.workflows import human_augmentation_application
+        from lib.presentation.streamlit.human_workspace_page import render_human_history
+        render_human_history(human_augmentation_application(ROOT, _ws_out()), st.session_state["ws"])
+    elif area == "运行日志":
         page_monitor(show_title=False)
     elif area == "命令管线":
         page_run(show_title=False)
@@ -552,6 +569,7 @@ def page_task_manager():
             page_prefs(show_title=False)
     else:
         from lib.bootstrap.workflows import workflow_application
+        from lib.bootstrap.workflows import human_augmentation_application
         from lib.presentation.streamlit.task_management_page import render_task_management
         application = workflow_application(ROOT, _ws_out())
         render_task_management(
@@ -559,6 +577,7 @@ def page_task_manager():
             lambda: _select_page("自动工作流"),
             draft_application=draft_application,
             backend_application=backend_application(ROOT),
+            human_application=human_augmentation_application(ROOT, _ws_out()),
         )
 
 
@@ -586,6 +605,7 @@ def page_system_settings():
 PAGES = {
     "首页": page_overview, "总览": page_overview,
     "数据生成": page_workflow, "自动工作流": page_workflow,
+    "人工问答增强": page_human_workspace,
     "数据管理": page_data_management, "资产管理": page_assets, "数据预览": page_preview,
     "人工审核": page_human_review, "任务管理": page_task_manager, "工作管理": page_task_manager, "管线运行": page_run,
     "命令管线": page_task_manager,
@@ -598,6 +618,13 @@ try:
 except (ValueError, OSError) as error:
     st.error(str(error))
     st.stop()
+# A human working window remains separate from automatic task navigation.
+_human_handoff = st.session_state.pop("human-open-session", None)
+if isinstance(_human_handoff, dict) and _human_handoff.get("workspace") == st.session_state["ws"]:
+    st.session_state["nav"] = "人工问答增强"
+    st.session_state[f"human-selected:{st.session_state['ws']}"] = _human_handoff["session_id"]
+    st.query_params["human"] = _human_handoff["session_id"]
+    st.session_state["workflow-scroll-top"] = True
 # A newly started workflow should open at its live task graph.  Consume the
 # handoff before the nav radio exists; Streamlit forbids changing a widget's
 # session value after it has been instantiated in the current render.
@@ -646,7 +673,7 @@ if _qp_page in PAGES and "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page
 visible_nav = [
     ("首页", "总览", {"首页", "总览"}),
-    ("数据生成", "自动工作流", {"数据生成", "自动工作流"}),
+    ("数据生成", "自动工作流", {"数据生成", "自动工作流", "人工问答增强"}),
     ("数据管理", "数据管理", {"数据管理", "资产管理", "数据预览", "质量报告"}),
     ("人工审核", "人工审核", {"人工审核"}),
     ("工作管理", "任务管理", {"工作管理", "任务管理", "管线运行", "运行监控", "监控"}),
