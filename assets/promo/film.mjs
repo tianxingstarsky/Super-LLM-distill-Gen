@@ -213,8 +213,7 @@ async function initialize(){
     const brandTexture=new THREE.Texture(images.get('brand'));brandTexture.needsUpdate=true;brandTexture.colorSpace=THREE.SRGBColorSpace;
     mesh(finalBrand,new THREE.PlaneGeometry(8.7,8.7),new THREE.MeshBasicMaterial({map:brandTexture,transparent:true,depthWrite:false,side:THREE.DoubleSide,toneMapped:false}));
     ready=true;draw(0);setLocked(false);$('loading').hidden=true;$('start').disabled=false;setStatus('60 秒 · 1080p · 中文旁白与原创配乐。含真实界面与 README 文档预览。');
-    const video=await fetch('shujian-cube-promo.mp4',{method:'HEAD'});if(video.ok)$('mp4').hidden=false;
     requestAnimationFrame(tickFrame);
-  }catch(e){$('loading').querySelector('strong').textContent='影片暂未准备好';$('loading').querySelector('span:last-child').textContent=e.message;setStatus(e.message);console.error(e);}
+  }catch(e){$('loading').querySelector('strong').textContent='影片暂未准备好';$('loading').querySelector('span:last-child').textContent=e.message;setStatus(e.message);throw e;}
 }
-void initialize();
+export const filmReady=initialize();

@@ -17,6 +17,10 @@
     </header>
     <section class="screen" aria-label="数简立方产品宣传片">
       <canvas id="film" width="1920" height="1080" aria-label="含中文字幕的三维宣传动画"></canvas>
+      <video id="finished-film" controls playsinline preload="none" poster="shujian-cube-promo-poster.png" aria-label="数简立方 MP4 成片，含中文旁白和字幕" hidden>
+        <source data-src="shujian-cube-promo.mp4" type="video/mp4">
+        当前浏览器无法播放视频。<a href="shujian-cube-promo.mp4" download>下载 MP4 成片</a>。
+      </video>
       <div id="loading" class="loading"><span class="loading-cube"></span><strong>正在准备影像与声音</strong><span>一份知识，无限可能。</span></div>
       <button id="start" class="start" disabled><span class="play-icon">▶</span><span>播放宣传片<small>中文旁白 · 中文字幕 · 原创配乐</small></span></button>
     </section>
@@ -40,10 +44,11 @@
     </nav>
     <footer>
       <p id="status" role="status">正在载入。</p>
-      <div class="exports"><a href="captions.srt" download>下载字幕</a><a id="mp4" href="shujian-cube-promo.mp4" download hidden>下载 MP4</a><button id="record" disabled>录制 WebM</button></div>
+      <div class="exports"><a class="film-link" href="watch.html">播放 MP4 成片</a><a href="captions.srt" download>下载字幕</a><a id="mp4" href="shujian-cube-promo.mp4" download>下载 MP4</a><button id="record" disabled>录制 WebM</button></div>
     </footer>
+    <noscript><p class="native-hint">请打开<a href="watch.html">MP4 成片播放器</a>观看完整影片。</p></noscript>
     <p class="visually-hidden" id="description" aria-live="off"></p>
   </main>
-  <script type="module" src="film.mjs"></script>
+  <script type="module" src="bootstrap.mjs"></script>
 </body>
 </html>

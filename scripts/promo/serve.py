@@ -54,6 +54,7 @@ class PromoServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", port), PromoHandler)
         self.expected_host = f"127.0.0.1:{self.server_port}"
         self.expected_origin = f"http://{self.expected_host}"
+        self.preview_hosts = {self.expected_host, f"localhost:{self.server_port}"}
 
 
 class PromoHandler(BaseHTTPRequestHandler):
@@ -69,8 +70,8 @@ class PromoHandler(BaseHTTPRequestHandler):
         return values[0] if len(values) == 1 else None
 
     def _trusted_host(self) -> bool:
-        if self._one_header("Host") != self.server.expected_host:
-            self._json(403, {"error": "Use the printed 127.0.0.1 preview URL"})
+        if self._one_header("Host") not in self.server.preview_hosts:
+            self._json(403, {"error": "Use localhost or 127.0.0.1 with the preview port"})
             return False
         return True
 
@@ -202,7 +203,9 @@ class PromoHandler(BaseHTTPRequestHandler):
         if not self.server.allow_record:
             self._json(403, {"error": "Recording save is disabled; start with --record or download it"})
             return
-        if self._one_header("Origin") != self.server.expected_origin:
+        # Both loopback names can preview the film; writes must still come from
+        # the exact origin of the page being served, including its host and port.
+        if self._one_header("Origin") != f"http://{self._one_header('Host')}":
             self._json(403, {"error": "Recording must come from this preview page"})
             return
         content_type = self._one_header("Content-Type")

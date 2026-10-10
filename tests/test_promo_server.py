@@ -24,6 +24,8 @@ def start_server(tmp_path):
         (root / "index.html").write_text("<h1>Local film</h1>", encoding="utf-8")
         (root / "film.mjs").write_text("export const duration = 60;", encoding="utf-8")
         (root / "master.mp3").write_bytes(b"0123456789")
+        (root / "shujian-cube-promo.mp4").write_bytes(b"mp4-video-fixture")
+        (root / "watch.html").write_text('<video controls src="shujian-cube-promo.mp4"></video>', encoding="utf-8")
         (root / "fonts").mkdir()
         (root / "fonts" / "promo.woff2").write_bytes(b"wOF2")
         (root / "captions.srt").write_text("1\n00:00:00,000 --> 00:00:02,000\nFilm\n", encoding="utf-8")
@@ -105,10 +107,25 @@ def test_unavailable_ranges_are_rejected(start_server, value):
     assert headers["Content-Range"] == "bytes */10"
 
 
-@pytest.mark.parametrize("host", ["localhost:8766", "evil.example", "127.0.0.1", "127.0.0.1:1"])
+@pytest.mark.parametrize("host", ["evil.example", "localhost", "127.0.0.1", "127.0.0.1:1", "localhost:1"])
 def test_host_must_match_the_loopback_port(start_server, host):
     server, _ = start_server()
     assert request(server, headers={"Host": host})[0] == 403
+
+
+@pytest.mark.parametrize("hostname", ["127.0.0.1", "localhost"])
+def test_loopback_aliases_serve_player_and_native_film(start_server, hostname):
+    server, _ = start_server()
+    headers = {"Host": f"{hostname}:{server.server_port}"}
+    assert request(server, headers=headers)[0] == 200
+    assert request(server, path="/watch.html", headers=headers)[0] == 200
+    assert request(server, path="/film.mjs", headers=headers)[1]["Content-Type"] == "text/javascript; charset=utf-8"
+    status, response_headers, body = request(server, path="/shujian-cube-promo.mp4",
+                                            headers={**headers, "Range": "bytes=4-8"})
+    assert (status, body) == (206, b"video")
+    assert response_headers["Content-Type"] == "video/mp4"
+    assert response_headers["Content-Range"] == "bytes 4-8/17"
+    assert request(server, "HEAD", "/shujian-cube-promo.mp4", headers=headers)[2] == b""
 
 
 def test_recording_save_is_opt_in(start_server):
@@ -124,6 +141,27 @@ def test_recording_requires_exact_preview_origin(start_server, origin):
     if origin is not None:
         headers["Origin"] = origin
     assert request(server, "POST", "/__recording", WEBM, headers)[0] == 403
+    assert not (root / serve.RECORDING_NAME).exists()
+
+
+@pytest.mark.parametrize("hostname", ["127.0.0.1", "localhost"])
+def test_recording_accepts_each_loopback_origin_when_it_matches_the_page_host(start_server, hostname):
+    server, root = start_server(record=True)
+    host = f"{hostname}:{server.server_port}"
+    status, _, body = request(server, "POST", "/__recording", WEBM,
+                              {"Host": host, "Origin": f"http://{host}", "Content-Type": "video/webm"})
+    assert status == 200
+    assert json.loads(body)["saved"] is True
+    assert (root / serve.RECORDING_NAME).read_bytes() == WEBM
+
+
+def test_recording_rejects_cross_alias_origin_on_the_same_port(start_server):
+    server, root = start_server(record=True)
+    for host, origin_host in (("localhost", "127.0.0.1"), ("127.0.0.1", "localhost")):
+        assert request(server, "POST", "/__recording", WEBM,
+                       {"Host": f"{host}:{server.server_port}",
+                        "Origin": f"http://{origin_host}:{server.server_port}",
+                        "Content-Type": "video/webm"})[0] == 403
     assert not (root / serve.RECORDING_NAME).exists()
 
 
