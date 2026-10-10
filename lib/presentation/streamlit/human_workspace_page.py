@@ -15,6 +15,7 @@ from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canva
 from lib.presentation.streamlit.workflow_stream_view import render_stream_output
 from lib.presentation.streamlit.workflow_page import GRAPH_LABELS, STAGE_GLYPHS, LABELS, _workflow_error, _stage_configuration, _config_html
 from lib.presentation.streamlit.model_scheduling_controls import render_run_scheduling
+from lib.domain.human_round_projection import project_feedback_branch
 
 
 WORKSPACE_STYLE = """<style>
@@ -23,7 +24,7 @@ body:has(.st-key-human-working-window) .df-page-copy h1{font-size:27px!important
 body:has(.st-key-human-working-window) .df-page-copy p{margin-bottom:0}
 .st-key-human-working-window [data-testid="stVerticalBlock"]{gap:.75rem}
 .st-key-human-working-window [data-testid="stVerticalBlockBorderWrapper"]{border-color:#d6e4f1!important;border-radius:18px!important;background:linear-gradient(145deg,#fff,#f8fbff);box-shadow:inset 0 1px 0 #fff,0 4px 12px -5px #365f8e22}
-.df-human-loop{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;background:#eff6ff;color:#355b86;font-size:13px;border:1px solid #dce9f7}.df-human-loop b{font-size:19px;color:#347ad5}
+.df-human-assessment{padding:12px 15px;margin-bottom:10px;border:1px solid #d4e5f6;border-radius:12px;background:linear-gradient(130deg,#eff6ff,#fff);color:#345b83;font-size:13px;line-height:1.65}.df-human-assessment strong{display:block;color:#234769;font-size:15px;margin-bottom:4px}.df-human-assessment[data-route="rejected"]{border-color:#eedbc8;background:linear-gradient(130deg,#fff5e9,#fff)}
 .df-human-result{padding:14px 16px;border:1px solid #dce6f2;border-radius:13px;background:#fff;box-shadow:0 2px 5px #315f9110;margin-bottom:9px}.df-human-result b{font-size:12px;color:#3772ae}.df-human-result div{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75;font-size:14px;margin-top:6px;color:#253b55}.df-human-result[data-role="user"]{background:linear-gradient(135deg,#f2f7ff,#fff)}
 .df-human-empty{padding:27px 22px;border:1px dashed #cbdcf0;border-radius:14px;background:radial-gradient(ellipse at 92% 15%,#dcecff77,transparent 60%),#f8fbff;color:#58718e;font-size:14px;line-height:1.8}.df-human-empty strong{display:block;color:#244466;font-size:17px;margin-bottom:5px}
 </style>"""
@@ -109,7 +110,7 @@ def _render_record(row):
     record = row.get("record", {})
     status = record.get("status")
     if status == "eligible":
-        st.caption("已通过本轮模型与规则评审，仍可提出修正意见。")
+        st.caption("已通过本轮导出检查；可保留或提出修正意见。")
     elif status:
         st.warning("此候选未通过评审，不会混入合格训练数据；可填写意见回流修正。")
         if record.get("reason"):
@@ -155,21 +156,41 @@ def _live_workflow(workflows, backends, session, round_row, context):
             st.rerun(scope="app")
     selection_key = f"workflow-stage:{run_id}" if run_id else f"human-stage:{context}"
     selected = st.session_state.get(selection_key, "sft")
+    result = st.session_state.get(f"human-branch-result:{context}")
+    if result and result.get("round_id") != (round_row or {}).get("id"):
+        result = None
+    target = (result or {}).get("target") or next(iter(recipe["targets"]), "sft")
+    pending_round = next((row["id"] for row in session.get("rounds", []) if row.get("active") or row.get("status") in {
+        "queued", "prepared", "running", "interrupted", "creating", "cancel_requested"}), None)
+    projection = project_feedback_branch(recipe, state,
+        {**(round_row or {}), "limits": session.get("limits", {}), "active": active, "pending_round_id": pending_round},
+        selected_result=result, target=target)
     spec = canvas_spec(recipe["targets"], state.get("stages", {}), selected, GRAPH_LABELS, STAGE_GLYPHS,
         recipe.get("node_models", {}), language=st.session_state.get("ui_language", "zh"),
         live=bool(run_id), source_mode="人工设计", reasoning_trim=(recipe.get("reasoning_trim") or {}).get("enabled", False),
         node_generation=recipe.get("node_generation"), qa_director=recipe.get("qa_director"),
-        package_review=recipe.get("package_review"), recipe_version=recipe.get("version", 17))
+        package_review=recipe.get("package_review"), recipe_version=recipe.get("version", 17), feedback_branch=projection)
     if selected not in {node["id"] for node in spec["nodes"]}:
         selected = spec["nodes"][0]["id"]
         st.session_state[selection_key] = selected
         spec["selected"] = selected
-    spec["viewport_height"] = 180
-    spec["labels"]["lineage"] = translate_label("回流使用新版本，已完成结果和评审记录保留。", st.session_state.get("ui_language", "zh"))
-    render_canvas(spec, selection_key, key=f"human-flow:{context}:{run_id or 'setup'}")
-    loop, configuration = st.columns([4, 1], gap="small", vertical_alignment="center")
-    with loop:
-        st.html('<div class="df-human-loop"><b>↺</b><span>选择结果 → 人工修正意见 → 重新生成与评审 → 查看新版本</span></div>')
+    spec["viewport_height"] = 320
+    spec["feedback_target"] = "human-results-editor"
+    canvas_key = f"human-flow:{context}:{run_id or 'setup'}"
+    render_canvas(spec, selection_key, key=canvas_key)
+    feedback_event = st.session_state.pop(f"canvas-feedback:{canvas_key}", None)
+    serial = st.session_state.get(f"canvas-event:{canvas_key}")
+    observed_key = f"human-canvas-observed:{canvas_key}"
+    stream_key = f"human-canvas-stream:{canvas_key}"
+    if serial is not None and serial != st.session_state.get(observed_key):
+        st.session_state[observed_key] = serial
+        st.session_state[stream_key] = feedback_event is None
+    explanation, configuration = st.columns([4, 1], gap="small", vertical_alignment="center")
+    with explanation:
+        st.caption("修正后先做生成内质量核对，再进入已启用的额外评分；未通过的结果等待人工决定是否重造。" if (recipe.get("package_review") or {}).get("enabled") else
+                   "修正后重新生成并核对质量。额外评分未启用；未通过的结果等待人工决定是否重造。")
+        if feedback_event is not None:
+            st.caption("已打开下方修正分支。请选择具体结果，确认意见后提交。")
     with configuration, st.popover("查看所选节点配置", width="stretch"):
         st.html(_config_html(_stage_configuration(st.session_state.get(selection_key, selected), recipe, state)))
         render_run_scheduling(backends, recipe.get("node_models", {}).get(st.session_state.get(selection_key, selected), {}))
@@ -180,7 +201,7 @@ def _live_workflow(workflows, backends, session, round_row, context):
     # Selecting a node opens its real stream. Do not reuse a stale stage while
     # the fragment's canvas is committing a new selection.
     selected = st.session_state.get(selection_key, selected)
-    if run_id and st.session_state.get(f"canvas-event:human-flow:{context}:{run_id}"):
+    if run_id and st.session_state.get(stream_key):
         st.session_state[f"canvas-open:live-canvas:{run_id}"] = True
         render_stream_output(workflows, run_id, selected, reader_height=240)
 
@@ -214,7 +235,7 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
     context = _context(workspace, session_id)
     _load_editor(context, session, application)
     with st.container(key="human-working-window"):
-        history, actions = st.columns([3, 2], gap="medium", vertical_alignment="bottom")
+        history, actions, exit_action = st.columns([3.4, 1.1, 1.2], gap="small", vertical_alignment="bottom")
         with history:
             choices = [row["id"] for row in rows]
             if session_id not in choices:
@@ -233,12 +254,25 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
                 st.session_state[f"human-version:{context}"] = session["version"]
                 st.session_state.pop(f"human-save-error:{context}", None)
                 st.rerun()
+        with exit_action:
+            if navigate:
+                st.button("退出人工增强", key=f"human-exit:{context}", width="stretch",
+                    icon=":material/logout:", on_click=navigate, args=("自动工作流",),
+                    help="返回数据生成。设计、结果和运行任务保留在工作管理中。")
         st.caption(UntranslatedText(
             f"Up to {session['limits']['max_revision_depth']} revisions per result. Each revision needs your submission." if st.session_state.get("ui_language", "zh") == "en" else
             f"每条结果最多回流 {session['limits']['max_revision_depth']} 次；每次都由人工提交，不会自动反复调用模型。"))
         rounds = session.get("rounds", [])
         current = next((row for row in reversed(rounds) if row["id"] == session.get("current_round_id")), None)
-        _live_workflow(workflows, backend_application, session, current, context)
+        round_ids = [row["id"] for row in rounds]
+        selected_round_key = f"human-round:{context}"
+        pending_round = st.session_state.pop(f"human-round-pending:{context}", None)
+        if pending_round in round_ids:
+            st.session_state[selected_round_key] = pending_round
+        if round_ids and st.session_state.get(selected_round_key) not in round_ids:
+            st.session_state[selected_round_key] = current["id"] if current else round_ids[-1]
+        shown_round = next((row for row in rounds if row["id"] == st.session_state.get(selected_round_key)), current)
+        _live_workflow(workflows, backend_application, session, shown_round, context)
         left, right = st.columns([1, 1.25], gap="medium")
         with left, st.container(border=True, key="human-design-editor"):
             section_heading("问答设计", "修改设计后生成下一轮；历史结果始终保留。", "✎")
@@ -280,13 +314,6 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
             if not rounds:
                 st.html('<div class="df-human-empty"><strong>从一组问答开始</strong>在左侧写下问题和参考答案，点击生成本轮话术。结果与修正记录会留在这个窗口。</div>')
                 return
-            round_ids = [row["id"] for row in rounds]
-            selected_round_key = f"human-round:{context}"
-            pending_round = st.session_state.pop(f"human-round-pending:{context}", None)
-            if pending_round in round_ids:
-                st.session_state[selected_round_key] = pending_round
-            if st.session_state.get(selected_round_key) not in round_ids:
-                st.session_state[selected_round_key] = current["id"] if current else round_ids[-1]
             language = st.session_state.get("ui_language", "zh")
             round_labels = {row["id"]: (f"Round {index + 1} · " if language == "en" else f"第 {index + 1} 轮 · ") +
                 translate_label("人工回流" if row.get("kind") == "revision" else "问答增强", language) for index, row in enumerate(rounds)}
@@ -316,16 +343,46 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
             selected_id = st.selectbox("选择结果", list(by_id), key=f"human-result:{context}:{selected_round}:{target}:{offset}",
                 format_func=lambda value: UntranslatedText(str(by_id[value].get("question", value))[:90]))
             row = by_id[selected_id]
+            st.session_state[f"human-branch-result:{context}"] = row
+            try:
+                projection = application.branch_projection(session_id, round_id=selected_round, target=target, result=row)
+            except (ValueError, OSError, Timeout) as error:
+                st.error(_error(error))
+                return
+            selected_result = projection.get("selected_result") or {}
+            can_revise = bool(selected_result.get("can_revise"))
+            route = selected_result.get("route", "unknown")
+            outcome = ("已通过 · 可保留或继续改善" if route == "accepted" else
+                       "未通过 · 进入修正分支" if route == "rejected" else "评审尚未完成")
+            st.html(f'<div class="df-human-assessment" data-route="{html.escape(route, quote=True)}"><strong>{outcome}</strong>'
+                    '<span>修正 → 重新生成 → 再次评审 → 通过保留 / 未通过再决定是否重造</span></div>')
+            if selected_result.get("checks"):
+                with st.expander("查看本结果的评审依据", expanded=route == "rejected"):
+                    for check in selected_result["checks"]:
+                        verdict = check.get("verdict", {})
+                        check_label = (("JEV 评分" if (session["blueprint"].get("package_review") or {}).get("node") == "jev" else "AI 评审")
+                            if check["source"] == "package_review" else "生成内质量核对")
+                        st.caption(check_label + (" · 通过" if check["status"] == "accepted" else " · 未通过"))
+                        if verdict.get("scores"):
+                            st.json(verdict["scores"])
+                        if check.get("reason"):
+                            st.text(UntranslatedText(str(check["reason"])))
+            if (session["blueprint"].get("package_review") or {}).get("enabled") and selected_result.get("optional_score_status") == "not_selected":
+                st.caption("此结果未抽中 JEV 额外评分；通过状态来自基础质量核对。")
+            if selected_result.get("depth_limited"):
+                st.warning("这条结果已达到修订上限。请检查设计要求，或重新设计问答。")
             _render_record(row)
             if row.get("lineage"):
                 st.caption("此结果来自人工回流；上一个版本仍保留在结果版本列表中。")
             with st.form(f"human-feedback:{context}:{selected_round}:{target}:{selected_id}"):
                 instruction = st.text_area("修正意见", max_chars=6000, height=105,
+                    value=projection.get("reviewer_feedback", "")[:6000],
                     help="说明哪里不合适、应如何调整。意见会进入新一轮生成与评审，不会被当作训练答案直接导出。")
                 with st.expander("直接修改问题或参考答案（可选）"):
                     question = st.text_area("修订问题", max_chars=12000)
                     answer = st.text_area("修订参考答案", max_chars=12000)
-                revise = st.form_submit_button("提交意见并回流修正", type="primary", disabled=active, width="stretch")
+                revise = st.form_submit_button("确认修正并重新生成" if route == "rejected" else "提交意见并回流修正",
+                    type="primary", disabled=active or not can_revise, width="stretch")
             if revise:
                 try:
                     feedback = application.save_feedback(session_id, round_id=selected_round, target=target, candidate_id=selected_id, instruction=instruction,

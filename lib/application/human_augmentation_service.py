@@ -26,6 +26,11 @@ class HumanAugmentationApplication:
     def results(self, session_id, *, round_id=None, target="sft", offset=0, limit=20):
         return self._driver.results(session_id, round_id=round_id, target=target, offset=offset, limit=limit)
 
+    def branch_projection(self, session_id, *, round_id=None, target=None, candidate_id=None, result=None):
+        """Read the current version's real feedback/review routes without launching it."""
+        return self._driver.branch_projection(session_id, round_id=round_id, target=target,
+            candidate_id=candidate_id, result=result)
+
     def save_feedback(self, session_id, round_id, target, candidate_id, *, instruction="",
                       question=None, answer=None, decision="revise", expected_version):
         return self._driver.save_feedback(session_id, round_id, target, candidate_id,

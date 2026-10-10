@@ -19,6 +19,7 @@ from lib.domain.document_parser import validate_document_parser
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS, validate_human_augmentation
 from lib.domain.human_session import (MAX_REVISION_DEPTH, MAX_SESSION_ROUNDS,
     identifier, request_identifier, validate_draft, validate_feedback)
+from lib.domain.human_round_projection import project_feedback_branch
 from lib.domain.workflow_creation import validate_creation
 from lib.domain.workflow_node_prompts import snapshot_node_prompts
 from lib.domain.workflow_qa_director import validate_qa_director
@@ -389,9 +390,64 @@ class FilesystemHumanSessionDriver:
         feedback = [deepcopy(item) for item in state["feedback"] if item["round_id"] == row["id"]
                     and item["target"] == target and item["candidate_id"] == record["id"]]
         revision = record.get("qa_contract", {}).get("human_design", {}).get("seed", {}).get("revision_context")
-        return {"candidate_id": record["id"], "target": target, "record": record, "messages": messages,
+        return {"candidate_id": record["id"], "target": target, "round_id": row["id"],
+                "run_id": row["run_id"], "record": record, "messages": messages,
                 "question": question, "answer": answer, "content_sha256": digest(record),
                 "lineage": deepcopy(revision), "feedback": feedback}
+
+    def branch_projection(self, session_id, *, round_id=None, target=None, candidate_id=None, result=None):
+        state = self.session(session_id)
+        row = self._round(state, round_id or state.get("current_round_id")) if state["rounds"] else None
+        target = target or (result or {}).get("target") or state["blueprint"]["targets"][0]
+        if target not in HUMAN_QA_TARGETS or target not in state["blueprint"]["targets"]:
+            raise ValueError("human_session_requires_qa_targets")
+        if row is None:
+            return project_feedback_branch(state["blueprint"], {},
+                {"status": "draft", "limits": state["limits"]}, target=target)
+        recipe = self.workflow.recipe(row["run_id"])
+        if result is not None and (result.get("run_id") != row["run_id"]
+                or result.get("round_id") != row["id"] or result.get("target") != target):
+            raise ValueError("human_session_result_changed")
+        if candidate_id is not None:
+            result = self._result(state, row, self._lookup(row, target, candidate_id), target)
+        summary = {"pending": 0, "ready": 0, "blocked": 0, "applied": 0}
+        for item in state["feedback"]:
+            if item["round_id"] != row["id"] or item["target"] != target or item.get("superseded_by"):
+                continue
+            if item.get("applied_round_id"):
+                summary["applied"] += 1
+                continue
+            if item["decision"] != "revise":
+                continue
+            summary["pending"] += 1
+            depth = item.get("revision_depth")
+            if depth is None:
+                # Historical feedback did not store this small display field.
+                # Its immutable snapshot suffices; do not scan training records.
+                snapshot = read_json(self._path(session_id) / "feedback" / f"{item['id']}.json")
+                depth = snapshot["record"].get("qa_contract", {}).get("human_design", {}).get("seed", {}) \
+                    .get("revision_context", {}).get("depth", 0)
+            summary["blocked" if depth >= state["limits"]["max_revision_depth"] else "ready"] += 1
+        # Refreshes use persisted stage progress and the small sealed state
+        # summary. They must not re-hash or enumerate a million result records.
+        manifest_path = run_path(self.output, row["run_id"]) / "artifacts" / "manifest.json"
+        quality, source = {}, "not_sealed"
+        if manifest_path.is_file():
+            manifest = read_json(manifest_path)
+            if (manifest.get("status") == "complete" and manifest.get("run_id") == row["run_id"]
+                    and manifest.get("recipe_hash") == row["state"].get("recipe_hash")):
+                quality = row["state"].get("quality", {})
+                if any(manifest.get("counts", {}).get(key) != value.get("eligible")
+                       for key, value in quality.get("targets", {}).items()):
+                    raise ValueError("artifact_integrity_error")
+                source = "sealed_state_summary"
+        pending = next((other["id"] for other in state["rounds"] if other["active"] or other["status"] in
+            {"prepared", "running", "interrupted", "creating", "cancel_requested"}), None)
+        projection = project_feedback_branch(recipe, row["state"],
+            {**row, "limits": state["limits"], "feedback_summary": summary, "pending_round_id": pending},
+            result, quality, target=target)
+        projection["summary_source"] = source
+        return projection
 
     def results(self, session_id, *, round_id=None, target="sft", offset=0, limit=20):
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
@@ -449,6 +505,8 @@ class FilesystemHumanSessionDriver:
             feedback_id = uuid.uuid4().hex
             feedback = {"id": feedback_id, "round_id": round_id, "run_id": row["run_id"],
                 "target": target, "candidate_id": candidate_id, "content_sha256": digest(record),
+                "revision_depth": record.get("qa_contract", {}).get("human_design", {}).get("seed", {})
+                    .get("revision_context", {}).get("depth", 0),
                 "created_at": _now(), "applied_round_id": None, **correction}
             atomic_json(path / "feedback" / f"{feedback_id}.json", {"feedback": feedback, "record": record})
             # Latest feedback on a candidate supersedes its previous unapplied

@@ -1,4 +1,5 @@
 """Clickable, keyboard-accessible DAG shared by setup and live execution."""
+from copy import deepcopy
 from pathlib import Path
 
 import streamlit as st
@@ -49,9 +50,96 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
     return description, usage
 
 
+def extend_feedback_branch(spec, projection):
+    """Overlay a human revision loop without adding execution dependencies.
+
+    The correction control selects a real generation node. Dashed routes describe
+    explicit work between versions; they never create or run an engine stage.
+    """
+    result = deepcopy(spec)
+    if not isinstance(projection, dict):
+        return result
+    nodes = {node["id"]: node for node in result["nodes"]}
+    generation = projection.get("generation_node")
+    review = projection.get("review_node") or generation
+    if generation not in nodes or review not in nodes or "package" not in nodes:
+        return result
+    english = result.get("language") == "en"
+    phase = projection.get("phase", "waiting")
+    phase = phase if phase in {"waiting", "editing", "generating", "reviewing", "packaging", "approved",
+                              "needs_revision", "revision_limit", "interrupted"} else "waiting"
+    revision = projection.get("kind") == "revision" or bool(projection.get("parent_run_ids"))
+    status = {"editing": "needs_revision", "needs_revision": "needs_revision", "revision_limit": "needs_revision",
+              "interrupted": "needs_revision", "generating": "completed", "reviewing": "completed", "packaging": "completed",
+              "approved": "completed"}.get(phase, "pending")
+    if not revision and phase in {"generating", "reviewing", "packaging", "approved"}:
+        status = "pending"
+    actionable = projection.get("actionable") is True and phase in {"editing", "approved", "needs_revision"}
+    old_height = result["height"]
+    for node in result["nodes"]:
+        node["y"] += 36
+    x = (nodes[generation]["x"] + nodes[review]["x"]) / 2
+    y = old_height + 96
+    subtitles = {
+        "waiting": ("Add feedback after results are available", "有结果后可提交意见回流修正"),
+        "editing": ("Your changes are ready to submit", "人工修正已就绪，等待提交"),
+        "generating": ("Generating a new version from your changes", "正在按照人工意见生成新版本"),
+        "reviewing": ("The new version is being checked", "新版本正在重新核对质量"),
+        "packaging": ("The new version is being checked and packaged", "新版本正在质检打包"),
+        "approved": ("The new version passed its required checks", "新版本已通过必要质量检查"),
+        "needs_revision": ("Review the result and describe the changes", "查看具体结果，填写需要修正的内容"),
+        "revision_limit": ("The revision limit has been reached", "已达到此结果的修正次数上限"),
+        "interrupted": ("Resume the existing version before a new revision", "先恢复已有版本，再进行下一次修正"),
+    }
+    subtitle = subtitles[phase][0 if english else 1]
+    if not revision and phase in {"generating", "reviewing", "packaging"}:
+        subtitle = subtitles["waiting"][0 if english else 1]
+    elif not revision and phase == "approved":
+        subtitle = ("The result passed its checks; feedback is optional" if english else
+                    "结果已通过必要检查，可继续提交人工意见改善")
+    correction = {"id": "human-feedback", "select_node": generation, "action": "feedback",
+                  "actionable": actionable, "label": "Human correction" if english else "人工修正",
+                  "subtitle": subtitle, "status": status, "x": x, "y": y,
+                  "description": ("Open the selected result and human feedback. A new version is created only after submission."
+                                  if english else "打开选中结果与人工意见，提交后才创建新版本。")}
+    scoring = projection.get("stages", {}).get("scoring", {})
+    skipped_score = (scoring.get("status") == "not_selected" or
+                     (projection.get("selected_result") or {}).get("optional_score_status") == "not_selected")
+    pass_label = (("Base checks passed · not selected for scoring" if english else "基础核对通过 · 未抽中额外评分")
+                  if skipped_score else "Passed · keep this version" if english else "通过 · 保留此版本")
+    if phase != "approved":
+        pass_label = "If passed · keep the result" if english else "通过后 · 保留结果"
+    review_label = ("Optional scoring" if english else "可选评分") if scoring.get("enabled") else (
+        "Quality check during generation" if english else "生成内质量核对")
+    routes = [
+        {"id": "needs-correction", "from": review, "to": "human-feedback", "kind": "correction",
+         "label": "Needs changes · human feedback" if english else "需修正 · 等待人工意见",
+         "status": "needs_revision" if phase in {"editing", "needs_revision", "revision_limit", "interrupted"} else "pending"},
+        {"id": "submit-revision", "from": "human-feedback", "to": generation, "kind": "return",
+         "label": "Submit · generate a new version" if english else "提交修正 · 生成新版本",
+         "status": ("running" if phase == "generating" else "completed" if phase in {"reviewing", "packaging", "approved"}
+                    else "pending") if revision else "pending"},
+        {"id": "passed-result", "from": review, "to": "package", "kind": "pass", "label": pass_label,
+         "status": "completed" if phase == "approved" else "running" if phase == "packaging" else "pending"},
+    ]
+    result.update(control_nodes=[correction], control_edges=routes, height=y + 102,
+                  data_top=36, data_height=old_height + 36,
+                  feedback_branch={"phase": phase, "actionable": actionable, "generation_node": generation,
+                                   "review_node": review, "title": "Human revision loop" if english else "人工回流修正",
+                                   "review_label": review_label, "heading_x": x, "heading_y": y - 8,
+                                   "revision": revision})
+    if "viewport_height" in result:
+        result["viewport_height"] = min(600, max(result["viewport_height"], result["height"] + 32))
+    result["labels"].update(waiting="Waiting" if english else "等待",
+                            needs_revision="Needs correction" if english else "需修正")
+    result["labels"]["lineage"] = ("Solid: this version's data flow. Dashed: result routes and human revision. Submit feedback to rebuild."
+                                    if english else "实线：本版本数据流；虚线：条件结果路由与人工回流，重造需手动提交。")
+    return result
+
+
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
-                qa_director=None, cpt_processing=None, recipe_version=16):
+                qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None):
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version)
     base = [key for key in BASE_STAGES if key in nodes]
@@ -112,7 +200,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                      "intermediate": key == "sft" and ("sft" not in targets or
                          sft_uses_cot_output(targets, recipe_version))})
     english = language == "en"
-    return {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
+    result = {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
             "live": live, "language": language, "labels": {"node_picker": "Go to node" if english else "定位节点",
                                        "fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
                                        "zoom_out": "Zoom out" if english else "缩小",
@@ -129,6 +217,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                          "点击节点查看配置 · 拖动平移 · Ctrl + 滚轮缩放"),
                                        "lineage": "Arrows show data dependencies. Stages run in order." if english else
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
+    return extend_feedback_branch(result, feedback_branch) if feedback_branch is not None else result
 
 
 def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=None, expanded=False,
@@ -161,9 +250,12 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
                 and event.get("outcome") in ("completed", "cancelled")):
             st.session_state.pop(reveal_key, None)
         return
+    feedback_nodes = {node["select_node"] for node in spec.get("control_nodes", ())
+                      if node.get("action") == "feedback" and node.get("actionable") is True}
     if (isinstance(event, dict) and event.get("node") in {node["id"] for node in spec["nodes"]}
             and type(event.get("serial")) in (str, int) and event["serial"] != ""
-            and event.get("action") in (None, "close")
+            and (event.get("action") in (None, "close") or
+                 event.get("action") == "feedback" and event.get("node") in feedback_nodes)
             and (event.get("action") != "close" or event["node"] == spec["selected"])):
         consumed_key = f"canvas-event:{key}"
         if event.get("serial") != st.session_state.get(consumed_key):
@@ -176,11 +268,13 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
                     st.rerun()
                 return
             st.session_state[selection_key] = event["node"]
+            if event.get("action") == "feedback":
+                st.session_state[f"canvas-feedback:{key}"] = event["serial"]
             if inspector_key is not None:
-                st.session_state[f"canvas-open:{key}"] = True
+                st.session_state[f"canvas-open:{key}"] = event.get("action") != "feedback"
             if follow_key is not None:
                 # The toggle already exists in this render. Apply the pause
                 # before creating it on the next rerun instead of mutating a widget.
                 st.session_state[f"canvas-pause:{follow_key}"] = True
-                st.session_state[f"canvas-open:{key}"] = True
+                st.session_state[f"canvas-open:{key}"] = event.get("action") != "feedback"
             st.rerun()

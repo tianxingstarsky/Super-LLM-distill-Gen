@@ -103,13 +103,13 @@ class Reviewer:
             "reason": "来源和回答通过模型核对。"})
 
 
-def application(tmp_path, *, sources=(), targets=("sft",), max_revision_depth=3, production=None):
+def application(tmp_path, *, sources=(), targets=("sft",), max_revision_depth=3, production=None, package_review=None):
     shutil.copytree(Path(__file__).resolve().parents[1] / "configs", tmp_path / "configs", dirs_exist_ok=True)
     app = human_augmentation_application(tmp_path, tmp_path / "out")
     session_id = app.create_session(name="安全设备人工增强", targets=list(targets), sources=list(sources),
         qa_director={"enabled": True, "planning_mode": "adaptive", "batch_size": 1},
         initial_draft=design(), node_models={}, sample_count=1, conversation_turns=3,
-        max_revision_depth=max_revision_depth, production=production)
+        max_revision_depth=max_revision_depth, production=production, package_review=package_review)
     return app, session_id, tmp_path / "out"
 
 
@@ -269,3 +269,71 @@ def test_forged_revision_context_without_session_round_authorization_never_calls
     assert state["status"] == "failed"
     assert "human_session_revision_not_authorized" in state["error"]
     assert writer.calls == reviewer.calls == []
+
+
+def test_real_feedback_revision_returns_to_jev_and_keeps_rejected_and_passed_versions(tmp_path, monkeypatch):
+    class FinalReviewer(Reviewer):
+        def __init__(self, reject):
+            super().__init__()
+            self.reject = reject
+
+        def chat(self, messages, **kwargs):
+            data = json.loads(messages[1]["content"])
+            response = super().chat(messages, **kwargs)
+            if self.reject and data.get("context", {}).get("target") == "sft":
+                value = json.loads(response)
+                value.update(keep=False, correctness=2, reason="请在回答中明确检查开始前断电。")
+                return json.dumps(value, ensure_ascii=False)
+            return response
+
+    app, sid, output = application(tmp_path, package_review={"enabled": True, "node": "jev", "mode": "all"})
+    first, _, _ = generate(app, sid, output, tmp_path)
+    original = engine.run_path(output, first["run_id"]) / "artifacts/sft.records.json"
+    original_bytes = original.read_bytes()
+    parent = app.results(sid)["rows"][0]
+    saved = app.save_feedback(sid, first["id"], "sft", parent["candidate_id"],
+        instruction="使用自然的安全提醒口吻。", expected_version=app.session(sid)["version"])
+    waiting = app.branch_projection(sid, result=app.results(sid)["rows"][0])
+    assert waiting["phase"] == "editing" and waiting["next_action"] == "submit_revision"
+    second = app.revise_round(sid, request_id="reject-then-correct", expected_version=saved["version"])
+    state = engine.Workflow(output, second["run_id"], tmp_path, generator=Writer(), judge=FinalReviewer(True)).execute()
+    assert state["status"] == "needs_attention", state.get("error")
+    selected = app.results(sid)["rows"][0]
+    projection = app.branch_projection(sid, result=selected)
+    assert projection["phase"] == "needs_revision" and projection["counts"]["rejected"] == 1
+    assert projection["generation_node"] == "sft" and projection["review_node"] == "jev"
+    assert projection["stages"]["self_check"]["status"] == "completed"
+    assert projection["stages"]["scoring"]["rejected"] == 1
+    assert projection["reviewer_feedback"] == "请在回答中明确检查开始前断电。"
+    assert len(app.session(sid)["rounds"]) == 2 and original.read_bytes() == original_bytes
+    rejected_bytes = (engine.run_path(output, second["run_id"]) / "artifacts/sft.records.json").read_bytes()
+    saved = app.save_feedback(sid, second["id"], "sft", selected["candidate_id"],
+        instruction=projection["reviewer_feedback"], expected_version=app.session(sid)["version"])
+    third = app.revise_round(sid, request_id="correct-after-score", expected_version=saved["version"])
+    state = engine.Workflow(output, third["run_id"], tmp_path, generator=Writer(), judge=FinalReviewer(False)).execute()
+    assert state["status"] == "completed", state.get("error")
+    selected = app.results(sid)["rows"][0]
+    # A live display refresh reuses this record and never scans/hashes artifacts.
+    monkeypatch.setattr(app._driver, "_records", lambda *args, **kwargs: pytest.fail("unexpected record scan"))
+    monkeypatch.setattr("lib.infrastructure.human_sessions.verify_artifacts", lambda *args: pytest.fail("unexpected full hash"))
+    projection = app.branch_projection(sid, result=selected)
+    assert projection["phase"] == "approved" and projection["counts"]["accepted"] == 1
+    assert projection["selected_result"]["optional_score_status"] == "accepted"
+    assert projection["next_action"] == "feedback_optional" and projection["actionable"]
+    assert projection["auto_rebuild"] is False and projection["merge_versions"] is False
+    assert len(app.session(sid)["rounds"]) == 3
+    assert original.read_bytes() == original_bytes
+    assert (engine.run_path(output, second["run_id"]) / "artifacts/sft.records.json").read_bytes() == rejected_bytes
+
+
+def test_projection_exposes_blocked_feedback_without_creating_a_loop(tmp_path):
+    app, sid, output = application(tmp_path, max_revision_depth=1)
+    first, _, _ = generate(app, sid, output, tmp_path)
+    second, _, _, _ = revise(app, sid, first, app.results(sid)["rows"][0], output, tmp_path)
+    selected = app.results(sid)["rows"][0]
+    saved = app.save_feedback(sid, second["id"], "sft", selected["candidate_id"], instruction="继续改善语言。",
+        expected_version=app.session(sid)["version"])
+    projection = app.branch_projection(sid, result=app.results(sid)["rows"][0])
+    assert projection["phase"] == "revision_limit" and projection["feedback"]["blocked"] == 1
+    assert projection["routes"]["rebuild_waiting"]["count"] == 0 and not projection["actionable"]
+    assert app.session(sid)["version"] == saved["version"] and len(app.session(sid)["rounds"]) == 2

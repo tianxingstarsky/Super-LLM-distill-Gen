@@ -22,6 +22,7 @@ from lib.console_jobs import Job
 from lib.bootstrap.workspaces import workspace_application
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.page_motion import PAGE_MOTION_CSS, page_surface_key
+from lib.presentation.streamlit.app_navigation import select_console_page
 
 st.set_page_config(page_title="数简立方 · ShuJian Cube", layout="wide", initial_sidebar_state="expanded")
 initialize_language(st)
@@ -41,7 +42,15 @@ def _OUT(name):
 
 
 def _select_page(page: str):
-    st.session_state["nav"] = page
+    changes = select_console_page(st.session_state, st.query_params, page)
+    if changes:
+        from lib.bootstrap.creation_drafts import creation_draft_application
+        try:
+            # Update only the entry mode. Human session data, saved designs,
+            # node choices and active workers belong to their existing stores.
+            creation_draft_application(_ws_out()).update(changes)
+        except (ValueError, OSError, Timeout):
+            st.session_state[f"workflow-draft-error:{st.session_state['ws']}"] = True
 
 
 def _set_ui_language():
@@ -696,6 +705,7 @@ if _route_label == "模型与密钥":
     st.session_state["open-model-admin"] = True
 if st.session_state.get("nav") != _route_label:
     st.session_state["nav"] = _route_label
+_select_page(_route_label)
 page = _route_label
 for label, target, active_pages in visible_nav:
     st.sidebar.button(

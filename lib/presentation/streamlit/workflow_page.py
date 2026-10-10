@@ -25,6 +25,7 @@ from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_delivery import has_deliverable_results
 from lib.domain.workflow_quality import text_issue
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS
+from lib.domain.human_round_projection import project_feedback_branch
 from lib.presentation.streamlit.model_scheduling_controls import render_run_scheduling
 from lib.domain.workflow_production import MAX_PRODUCTION_GOAL
 from lib.presentation.streamlit.workflow_production_settings import render_delivery_goal, review_coverage_hint, render_delivery_progress
@@ -635,6 +636,16 @@ def _toggle_run_reader(run_id: str) -> None:
     st.session_state[key] = not st.session_state.get(key, False)
 
 
+def _open_human_correction(application, run_id):
+    """Open a preserved result version; model work starts only on submission."""
+    try:
+        session_id = application.create_session(from_run_id=run_id)
+        st.session_state["human-open-session"] = {"workspace": st.session_state["ws"], "session_id": session_id}
+        st.rerun(scope="app")
+    except (ValueError, OSError, Timeout) as error:
+        st.error(_workflow_error(error))
+
+
 @st.fragment(run_every=2)
 def render_run(application, run_id, begin, *, embedded=False, draft_application=None, backend_application=None, human_application=None):
     from lib.presentation.streamlit.review_navigation import consume_app_navigation
@@ -770,12 +781,17 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
                                       qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"),
                                       recipe_version=recipe.get("version", 0),
+                                      feedback_branch=(project_feedback_branch(recipe, state, {"active": active},
+                                          target=next(target for target in recipe["targets"] if target in HUMAN_QA_TARGETS))
+                                          if human_application is not None and set(recipe["targets"]).intersection(HUMAN_QA_TARGETS) else None),
                                       source_mode=("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
                                           else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
                                           else "文档资料" if recipe.get("sources") else "开放需求")),
                           selection_key, key=f"live-canvas:{run_id}", follow_key=follow_key,
                           inspector_key=panel_keys["node"], expanded=True,
                           reveal_key=reveal_key, reveal_target_key=panel_keys["canvas"])
+            if st.session_state.pop(f"canvas-feedback:live-canvas:{run_id}", None) is not None and human_application is not None:
+                _open_human_correction(human_application, run_id)
         selected_metrics = state["stages"][selected_stage]
         selected_status, done, total, percent = _stage_numbers(selected_metrics)
         if selected_stage not in active_stages:
@@ -904,16 +920,12 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                 st.dataframe([{"目标": target.upper(), "通过": info["eligible"], "候选总数": info["total"],
                                "未通过原因": json.dumps(info["reasons"], ensure_ascii=False)}
                               for target, info in quality["targets"].items()], hide_index=True, width="stretch")
+            if (human_application is not None and not active and status in {"completed", "needs_attention"}
+                    and any(item.get("total", 0) > 0 for target, item in quality["targets"].items() if target in HUMAN_QA_TARGETS)):
+                if st.button("用人工意见回流修正", key=f"workflow-human-reflow:{run_id}", width="stretch",
+                    help="打开独立人工增强窗口，选择结果并提交修正意见。新一轮重新生成和评审，原任务结果保留。"):
+                    _open_human_correction(human_application, run_id)
             if has_deliverable_results(state):
-                if human_application is not None and set(state.get("targets", [])).intersection(HUMAN_QA_TARGETS):
-                    if st.button("用人工意见回流修正", key=f"workflow-human-reflow:{run_id}", width="stretch",
-                        help="打开独立人工增强窗口，选择结果并提交修正意见。新一轮重新生成和评审，原任务结果保留。"):
-                        try:
-                            session_id = human_application.create_session(from_run_id=run_id)
-                            st.session_state["human-open-session"] = {"workspace": st.session_state["ws"], "session_id": session_id}
-                            st.rerun(scope="app")
-                        except (ValueError, OSError, Timeout) as error:
-                            st.error(_workflow_error(error))
                 from lib.presentation.streamlit.review_navigation import (
                     review_choices, open_verified_review, open_package,
                 )
@@ -1451,7 +1463,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                                   node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
-                                      qa_director=qa_director),
+                                      qa_director=qa_director,
+                                      feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "version": 17}, {},
+                                          target=next(target for target in targets if target in HUMAN_QA_TARGETS))
+                                          if set(targets).intersection(HUMAN_QA_TARGETS) else None)),
                           selection_key, key=f"setup-canvas:{ws}",
                           inspector_key="workbench-node-panel", expanded=True,
                           reveal_key=f"workflow-setup-reveal:{ws}")
