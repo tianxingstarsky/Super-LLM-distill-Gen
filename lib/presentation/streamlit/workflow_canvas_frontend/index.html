@@ -51,7 +51,7 @@ body{margin:0;font:14px "Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-se
 .icon svg{width:19px;height:19px;overflow:visible;position:static}
 .node[data-node=director] .icon,.node[data-node=multiturn] .icon,.node[data-node=agent] .icon{background:linear-gradient(145deg,#effbf8,#e0f3ed);border-color:#d4ece4;color:#16826d}
 .node[data-node=preference] .icon,.node[data-node=cot] .icon{background:linear-gradient(145deg,#f6f1ff,#eee5ff);border-color:#e6dcf7;color:#8054bb}
-.node[data-node=package] .icon,.node[data-node=jev] .icon{background:linear-gradient(145deg,#f1fcf6,#d4efe2);border-color:#c1e1d1;color:#218162}
+.node[data-node=package] .icon,.node[data-node=jev] .icon,.node[data-node=review] .icon{background:linear-gradient(145deg,#f1fcf6,#d4efe2);border-color:#c1e1d1;color:#218162}
 .node[data-node=gsm8k] .icon,.node[data-node=trim] .icon{background:linear-gradient(145deg,#fff8eb,#fff0d8);border-color:#f2e4c6;color:#a87520}
 .node.intermediate{border-style:dashed}
 .copy{display:contents}
@@ -84,6 +84,7 @@ body{margin:0;font:14px "Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-se
 .feedback-edge-label{font:600 12px "Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-serif;fill:#65798f;stroke:#f7fbff;stroke-width:6px;stroke-linejoin:round;paint-order:stroke;letter-spacing:.1px}
 .feedback-edge-label[data-status=needs_revision]{fill:#99641f}.feedback-edge-label[data-status=running]{fill:#2366b2}.feedback-edge-label[data-status=completed]{fill:#238064}
 .feedback-heading{font:550 12px "Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-serif;fill:#70859d;letter-spacing:.2px}
+.review-stage-group{fill:#eaf4ff50;stroke:#abcbe9;stroke-width:1;stroke-dasharray:4 4}
 .footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px 16px;min-height:42px;padding:10px 14px;background:linear-gradient(180deg,#f8fbff,#eef5fc);box-shadow:inset 0 1px 0 #fff;color:#526b87;font-size:12px;border-top:1px solid #d5e4f1;line-height:1.5}
 #lineage{flex:1 1 270px}#overview{white-space:nowrap}#scale{min-width:44px;padding:2px 7px;border:1px solid #e1eaf4;background:#f5f8fc;border-radius:6px;text-align:center;color:#42648b;font-variant-numeric:tabular-nums;font-weight:600}
 #lineage[data-preview="true"]{color:#345d8c;font-weight:500}
@@ -153,6 +154,7 @@ const iconPaths={
  gsm8k:["M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z","M8 6h8v4H8V6ZM8 14h1M15 14h1M8 17h1M15 17h1"],
  trim:["M8 7a3 3 0 1 0-6 0 3 3 0 1 0 6 0ZM8 17a3 3 0 1 0-6 0 3 3 0 1 0 6 0Z","m7 9 14 12M7 15 21 3"],
  jev:["m12 3 8 3v6c0 5-5 8-8 10-3-2-8-5-8-10V6l8-3Z","m8 12 3 3 5-6"],
+ review:["m12 3 8 3v6c0 5-5 8-8 10-3-2-8-5-8-10V6l8-3Z","m8 12 3 3 5-6"],
  package:["m12 3 9 5v9l-9 5-9-5V8l9-5Z","m3 8 9 5 9-5M12 13v9M8 5l9 5"]
 };
 function drawNodeIcon(element,node,glyph){
@@ -334,7 +336,9 @@ function navigateFeedback(){
 function drawFeedback(svg,byId){
  const branch=spec.feedback_branch,controls=spec.control_nodes||[];if(!branch||!controls.length)return;
  const ns="http://www.w3.org/2000/svg",all={...byId,...Object.fromEntries(controls.map(node=>[node.id,node]))};
- const heading=document.createElementNS(ns,"text");heading.classList.add("feedback-heading");heading.setAttribute("x",Math.min(branch.heading_x,spec.width-480));heading.setAttribute("y",branch.heading_y);heading.textContent=branch.title+" · "+branch.review_label;svg.append(heading);
+ if(branch.group){const group=document.createElementNS(ns,"rect");group.classList.add("review-stage-group");for(const key of ["x","y","width","height"])group.setAttribute(key,branch.group[key]);group.setAttribute("rx",18);svg.insertBefore(group,svg.firstChild)}
+ const heading=document.createElementNS(ns,"text");heading.classList.add("feedback-heading");heading.setAttribute("x",branch.heading_x);heading.setAttribute("y",branch.heading_y);heading.textContent=branch.title;svg.append(heading);
+ const roleHint=document.createElementNS(ns,"text");roleHint.classList.add("feedback-heading");roleHint.setAttribute("x",controls[0].x+4);roleHint.setAttribute("y",controls[0].y-9);roleHint.textContent=branch.review_label;svg.append(roleHint);
  for(const edge of spec.control_edges||[]){
   const from=all[edge.from],to=all[edge.to];if(!from||!to)continue;
   let x,y,ex,ey,pathData,labelX,labelY,down=true;
@@ -357,7 +361,7 @@ function drawFeedback(svg,byId){
   if(!byId[node.select_node])continue;
   const button=document.createElement("button");button.className="feedback-node";button.dataset.control=node.id;button.dataset.status=node.status;button.dataset.selectNode=node.select_node;button.style.left=node.x+"px";button.style.top=node.y+"px";button.disabled=node.actionable!==true;button.setAttribute("aria-label",[node.label,node.subtitle,node.description].filter(Boolean).join(" · "));button.title=node.description||node.subtitle;
   const icon=document.createElement("span"),title=document.createElement("strong"),subtitle=document.createElement("small");icon.className="icon";icon.setAttribute("aria-hidden","true");drawNodeIcon(icon,"trim","↺");title.textContent=node.label;subtitle.textContent=node.subtitle;button.append(icon,title,subtitle);
-  button.onclick=()=>{if(node.actionable===true){navigateFeedback();chooseNode(node.select_node,node.action)}};
+  button.onclick=()=>{if(node.actionable===true){if(node.action==="feedback")navigateFeedback();chooseNode(node.select_node,node.action)}};
   button.onkeydown=event=>{if(event.key==="ArrowUp"){event.preventDefault();[...canvas.querySelectorAll(".node")].find(item=>item.dataset.node===node.select_node)?.focus({preventScroll:true});locate({smooth:true,node:node.select_node})}};canvas.append(button);
  }
 }

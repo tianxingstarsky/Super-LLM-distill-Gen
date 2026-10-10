@@ -123,3 +123,98 @@ def test_empty_workspace_does_not_claim_feedback_is_ready(status):
     assert projection["phase"] == "waiting" and projection["next_action"] == "none"
     assert projection["routes"]["rebuild_waiting"]["count"] == 0
     assert not projection["actionable"] and projection["selected_result"] is None
+
+
+def reviewed_recipe(*, mode="auto", jev=False, repair_inputs=None):
+    return {"version": 18, "targets": ["sft"],
+            "review_repair": {"mode": mode, "max_rounds": 2, "score_threshold": .8},
+            "package_review": {"enabled": jev},
+            **({"repair_inputs": repair_inputs} if repair_inputs is not None else {})}
+
+
+def reviewed_state(*, accepted=1, rejected=0, waiting=0, attempts=0):
+    return {"status": "completed" if not rejected and not waiting else "needs_attention",
+            "stages": {"sft": {"status": "completed"}, "review": {"status": "completed"},
+                       "package": {"status": "completed"}},
+            "quality": {"targets": {"sft": {"total": accepted + rejected + waiting,
+                                             "eligible": accepted}},
+                        "review_repair": {"targets": {"sft": {
+                            "statuses": {"accepted": accepted, "rejected": rejected,
+                                         "waiting_manual_review": waiting}, "repair_attempts": attempts}}}}}
+
+
+def test_v18_generation_waits_for_review_without_calling_it_repair():
+    projection = project_feedback_branch(reviewed_recipe(),
+        {"status": "running", "stages": {"sft": {"status": "running", "done": 5, "total": 10},
+                                           "review": {"status": "pending"}}})
+    assert projection["phase"] == "waiting"
+    assert projection["review_node"] == "review"
+    assert projection["stages"]["scoring"]["node"] == "review"
+    assert not projection["stages"]["self_check"]["coupled_with_generation"]
+    assert projection["counts"] == {"total": None, "accepted": None, "rejected": None, "unreviewed": None}
+
+
+@pytest.mark.parametrize("jev", [False, True])
+def test_v18_real_review_phase_and_counts_exist_without_separate_jev(jev):
+    recipe = reviewed_recipe(jev=jev)
+    running = project_feedback_branch(recipe,
+        {"status": "running", "stages": {"sft": {"status": "completed"},
+            "review": {"status": "running", "phase": "scoring", "done": 1, "total": 3}}})
+    assert running["phase"] == "reviewing" and running["review_node"] == "review"
+    final = project_feedback_branch(recipe, reviewed_state(accepted=2, rejected=1, attempts=2))
+    assert final["stages"]["scoring"]["reviewed"] == 3
+    assert final["stages"]["scoring"]["accepted"] == 2
+    assert final["stages"]["scoring"]["rejected"] == 1
+    assert final["counts"]["unreviewed"] == 0
+    assert final["repair_rounds"] == 2
+    assert final["routes"]["rejected"]["to"] == "review"
+
+
+def test_v18_manual_waiting_score_opens_review_without_reusing_generation_judge():
+    selected = result(status="quarantined", judge=verdict(keep=False, reason="Obsolete generator verdict."))
+    selected["record"]["review_repair"] = {"mode": "human", "status": "waiting_manual_review",
+        "score": None, "attempts": 0, "reason": "manual_review_required"}
+    projection = project_feedback_branch(reviewed_recipe(mode="human"),
+        reviewed_state(accepted=0, waiting=1), selected_result=selected)
+    assert projection["mode"] == "human" and projection["review_node"] == "review"
+    assert projection["actionable"] and projection["next_action"] == "feedback_required"
+    assert projection["selected_result"]["route"] == "waiting_manual_review"
+    assert projection["selected_result"]["checks"] == []
+    assert projection["counts"]["unreviewed"] == 1
+    assert "Obsolete generator verdict" not in projection["reviewer_feedback"]
+
+
+@pytest.mark.parametrize("mode", ["auto", "human"])
+def test_v18_current_review_receipt_replaces_stale_generation_checks(mode):
+    selected = result(status="quarantined", judge=verdict())
+    selected["record"]["review_repair"] = {"mode": mode, "status": "rejected", "score": .4,
+        "attempts": 1, "reason": "The edited answer still reverses the condition."}
+    if mode == "auto":
+        selected["record"]["review_repair"]["verdict"] = verdict(keep=False, correctness=2,
+            reason="The edited answer still reverses the condition.")
+    projection = project_feedback_branch(reviewed_recipe(mode=mode), reviewed_state(accepted=0, rejected=1),
+                                          selected_result=selected)
+    checks = projection["selected_result"]["checks"]
+    assert len(checks) == 1 and checks[0]["status"] == "rejected"
+    assert checks[0]["source"] == ("review" if mode == "auto" else "human_review")
+    assert projection["reviewer_feedback"] == "The edited answer still reverses the condition."
+    assert projection["phase"] == "needs_revision" and projection["repair_rounds"] == 1
+
+
+def test_v18_manual_review_child_has_only_review_routes_and_no_generation_nodes():
+    selected = result()
+    selected["record"]["revision_context"] = {"depth": 1, "parent_run_id": "original"}
+    selected["record"]["review_repair"] = {"mode": "human", "status": "accepted",
+        "score": .95, "attempts": 0, "reason": "Edited and scored by the user."}
+    info = {"id": "manual-child", "kind": "manual_review", "status": "completed",
+            "parent_results": [{"run_id": "original"}], "limits": {"max_revision_depth": 3},
+            "feedback_summary": {"pending": 1, "ready": 1, "blocked": 0, "applied": 0}}
+    projection = project_feedback_branch(reviewed_recipe(mode="human", repair_inputs=[{"target": "sft"}]),
+        reviewed_state(), info, selected)
+    assert projection["kind"] == "manual_review" and projection["review_node"] == "review"
+    assert projection["generation_nodes"] == []
+    assert projection["routes"]["rebuild_waiting"] == {"count": 1, "to": "review"}
+    assert projection["routes"]["rejected"]["to"] == "review"
+    assert projection["parent_run_ids"] == ["original"]
+    assert projection["selected_result"]["parent_run_id"] == "original"
+    assert projection["selected_result"]["depth"] == 1

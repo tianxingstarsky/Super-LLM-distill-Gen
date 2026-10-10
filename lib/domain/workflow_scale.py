@@ -19,12 +19,21 @@ NODE_ROLES = {
     "trim": ("generation", "jev"),
     "package": ("jev",),
     "jev": ("jev",),
+    "review": ("generation", "jev"),
 }
 
 
 def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None,
-               package_review: dict | None = None, cpt_processing: dict | None = None) -> tuple[str, ...]:
+               package_review: dict | None = None, cpt_processing: dict | None = None,
+               review_repair: dict | None = None, recipe_version: int | None = None) -> tuple[str, ...]:
+    if stage == "review":
+        if (review_repair or {}).get("mode", "auto") == "human":
+            return ()
+        return (("generation", "jev") if validate_package_review(package_review)["enabled"]
+                else ("generation",))
     if stage in {"package", "jev"}:
+        if review_repair is not None or recipe_version is not None and recipe_version >= 18:
+            return ()
         review = validate_package_review(package_review)
         review_node = review.get("node", "package")
         return ("jev",) if review["enabled"] and stage == review_node else ()
@@ -34,6 +43,11 @@ def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = N
     if stage == "cpt" and source_mode != "开放需求":
         from lib.domain.cpt_processing import validate_cpt_processing
         return (("generation", "jev") if validate_cpt_processing(cpt_processing)["mode"] == "model" else ())
+    if (stage in {"sft", "multiturn", "preference", "cot", "trim"}
+            and (review_repair is not None or recipe_version is not None and recipe_version >= 18)):
+        # These stages construct the candidate; their final grade belongs to
+        # the review stage. Any local consistency checks use the same model.
+        return ("generation",)
     if stage == "cot":
         # Model drafts also exist while a custom instruction is incomplete.
         # Derive role requirements from the switch; creation validates text.

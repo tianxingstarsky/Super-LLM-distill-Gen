@@ -18,6 +18,7 @@ STAGES = {
     "cot": "CoT 推理核对",
     "trim": "推理链修剪与核验",
     "jev": "JEV 评分",
+    "review": "评分与修正",
     "package": "质量汇总与打包",
 }
 
@@ -36,6 +37,26 @@ TRAINING_FIELDS = {
 
 def preference_score_issue(pair: dict) -> str | None:
     """DPO/ORPO labels must agree with the scores used to choose a response."""
+    manual = pair.get("review_repair", {})
+    if manual.get("mode") == "human" and manual.get("status") == "accepted" and manual.get("approved") is True:
+        from hashlib import sha256
+        from lib.domain.workflow_quality import canonical, conversation_issue
+        from math import isfinite
+        try:
+            payload = {key: pair[key] for key in ("prompt", "chosen", "rejected")}
+            if pair.get("tools"):
+                payload["tools"] = pair["tools"]
+            score, threshold = manual["score"], manual["score_threshold"]
+            if (type(score) not in {int, float} or type(threshold) not in {int, float}
+                    or not isfinite(score) or not isfinite(threshold) or not 0 <= threshold <= score <= 1
+                    or manual.get("candidate_sha256") != sha256(canonical(payload).encode()).hexdigest()
+                    or conversation_issue([*pair["prompt"], *pair["chosen"]])
+                    or conversation_issue([*pair["prompt"], *pair["rejected"]])
+                    or same_answer(pair["chosen"][-1]["content"], pair["rejected"][-1]["content"])):
+                return "manual_preference_evidence_invalid"
+            return None
+        except (KeyError, TypeError, IndexError):
+            return "manual_preference_evidence_invalid"
     evidence = pair.get("preference")
     if not isinstance(evidence, dict) or evidence.get("dimension") != "correctness":
         return "preference_score_evidence_missing"

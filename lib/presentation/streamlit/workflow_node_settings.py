@@ -33,7 +33,7 @@ _PROCESS_REVIEW_DESCRIPTIONS = {
 _PROCESS_REVIEW_HELP = "这是用于过程核对的普通大模型，并非特殊模型。可选 JEV 评分不替代这些核对。"
 
 
-def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None):
+def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None):
     draft_key = f"workflow-node-bindings:{workspace}"
     saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(draft_key, {})
     draft = deepcopy(st.session_state.get(draft_key, saved))
@@ -45,16 +45,16 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
     restored_markers = [node + ":" + role for node in draft for role in (
         NODE_ROLES[node] if node in {"jev", "package"} else node_roles(
             node, source_mode, node_generation=node_generation, package_review=package_review,
-            cpt_processing=cpt_processing))]
+            cpt_processing=cpt_processing, review_repair=review_repair))]
     draft, initialized, endpoints = application.prepare_draft(
         nodes, source_mode, draft, st.session_state.get(initialized_key, restored_markers),
-        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
+        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
     st.session_state[f"workflow-node-scope:{workspace}"] = {
         "nodes": list(nodes), "source_mode": source_mode,
         "node_generation": deepcopy(node_generation), "package_review": deepcopy(package_review),
-        "cpt_processing": deepcopy(cpt_processing),
+        "cpt_processing": deepcopy(cpt_processing), "review_repair": deepcopy(review_repair),
     }
     agent_key = f"workflow-agent-mode:{workspace}"
     if agent_key not in st.session_state:
@@ -222,7 +222,7 @@ def _missing_role_copies(node: str, workspace: str, bindings: dict, endpoints: d
             continue
         for role in node_roles(target, scope["source_mode"],
                                node_generation=scope.get("node_generation"),
-                               package_review=scope.get("package_review"), cpt_processing=scope.get("cpt_processing")):
+                               package_review=scope.get("package_review"), cpt_processing=scope.get("cpt_processing"), review_repair=scope.get("review_repair")):
             source = bindings.get(node, {}).get(role, {})
             if (not bindings.get(target, {}).get(role) and source.get("backend") in endpoints
                     and source.get("model")):
@@ -285,7 +285,7 @@ def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, en
     writer = bindings.get(node, {}).get("generation", {})
     if (allow_generation_reuse and role == "jev" and writer.get("backend") in endpoints and writer.get("model")
             and writer != binding):
-        st.button("沿用本节点生成模型", key=prefix + ":reuse-generation",
+        st.button("沿用本节点修正模型" if node == "review" else "沿用本节点生成模型", key=prefix + ":reuse-generation",
                   on_click=_reuse_binding, args=(workspace, node, role, deepcopy(writer)),
                   help="复制生成模型及 token 上限到评审配置；只在点击时替换，之后可分别调整。",
                   width="stretch")
@@ -455,14 +455,14 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
 
 
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
-                       backend_application: BackendApplication | None = None, node_generation=None, package_review=None, cpt_processing=None):
+                       backend_application: BackendApplication | None = None, node_generation=None, package_review=None, cpt_processing=None, review_repair=None):
     pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
-    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing):
+    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair):
         prefix = f"node-model:{workspace}:{node}:{pending['role']}"
         st.session_state[prefix + ":backend"] = pending["backend"]
         st.session_state[prefix + ":model:" + pending["backend"]] = pending["model"]
     previous = deepcopy(bindings)
-    roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
+    roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
     if not roles:
         explanation = {
             "ingest": ("固定人工问答设计，保留任务来源快照；此步骤不调用模型。" if source_mode == "人工设计" else
@@ -473,6 +473,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             "package": ("检查输出规则并整理产物，不调用模型。"
                         if (package_review or {}).get("node") == "jev" else
                         "核对产物清单并整理候选数据；可开启 AI 评审，再选择本节点的评审模型。"),
+            "review": "人工在本节点评分并修正内容，不需要配置模型。",
             "jev": "未启用额外 JEV 评分；各生成节点仍按配置进行过程核对。",
         }.get(node, "此节点不需要配置模型。")
         st.info(explanation)
@@ -485,14 +486,16 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         return
     _render_model_confirmation(node, roles, workspace, bindings, endpoints, backend_application)
     for role in roles:
-        writer_label = ("清洗模型" if node == "cpt" and source_mode != "开放需求" else
+        writer_label = (("修正模型" if (package_review or {}).get("enabled") else "评分与修正模型") if node == "review" else "清洗模型" if node == "cpt" and source_mode != "开放需求" else
                         "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
-        review_label = ("JEV 评分模型" if node == "jev" else
+        review_label = ("JEV 评分模型" if node in {"review", "jev"} else
                         "质量评审模型" if node == "package" else "过程核对模型")
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'
                 + ("多模态识别模型" if role == "vision" else writer_label if role == "generation" else review_label) + '</strong></p>')
         if role == "jev":
-            if node == "jev":
+            if node == "review":
+                st.caption("JEV 模型只负责评分；低分候选由本节点的修正模型修改，再回到评分。")
+            elif node == "jev":
                 st.caption("可选的最终质量评分，会另发模型请求；关闭后仍保留各节点的过程核对。",
                            help="JEV 是评分步骤，不是模型名称；可选择普通大模型。")
             elif node == "package":
@@ -596,8 +599,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.rerun()
 
 
-def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None, cpt_processing=None):
-    return {node: {role: deepcopy(bindings[node][role]) for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
+def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None):
+    return {node: {role: deepcopy(bindings[node][role]) for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
 
 

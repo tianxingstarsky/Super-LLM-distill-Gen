@@ -67,6 +67,16 @@ class DialoguePlanError(ValueError):
 class WorkflowQADirector:
     def human_package_issue(self, row, target):
         """No derived/cached sample may bypass its human-design assessment."""
+        if self.recipe.get("review_repair") is not None:
+            receipt = row.get("review_repair", {})
+            try:
+                expected = _digest(self._review_payload(target, row))
+                if (receipt.get("status") == "accepted" and receipt.get("candidate_sha256") == expected
+                        and receipt.get("config_sha256") == _digest(self.recipe["review_repair"])):
+                    return None
+            except (KeyError, TypeError, ValueError):
+                pass
+            return "review_repair_assessment_missing"
         if target not in HUMAN_QA_TARGETS:
             return None
         contract = row.get("qa_contract") or {}
@@ -133,7 +143,7 @@ class WorkflowQADirector:
     @contextmanager
     def qa_publication_guard(self):
         """Serialize final QA dedup/write/publication without holding LLM calls."""
-        if not self.recipe.get("qa_director", {}).get("enabled"):
+        if not self.recipe.get("qa_director", {}).get("enabled") and not self.recipe.get("repair_inputs"):
             yield None
             return
         lock = FileLock(str(self.path.parent.parent / ".qa-publication.lock"))
@@ -168,7 +178,7 @@ class WorkflowQADirector:
         Old artifacts remain unchanged; session consumers explicitly choose a
         version rather than combining each iteration as independent examples.
         """
-        revision = contract.get("human_design", {}).get("seed", {}).get("revision_context")
+        revision = contract.get("revision_context") or contract.get("human_design", {}).get("seed", {}).get("revision_context")
         if not revision or not duplicate:
             return False
         if not any(duplicate.get("run_id") == ancestor["run_id"] and duplicate.get("id") ==
@@ -330,6 +340,16 @@ class WorkflowQADirector:
             if issue:
                 feedback = issue
                 continue
+            if self.recipe.get("review_repair") is not None:
+                return [{"id": unit["id"], "source_id": unit["source_id"], "source_name": unit.get("source_name"),
+                         "location": unit.get("location"), "source_location": unit.get("source_location"),
+                         "status": "eligible", "messages": messages, "tools": [], "quotes": quotes,
+                         "source_context": unit, "qa_contract": contract, "family_id": unit["family_id"],
+                         "parent_id": unit.get("parent_id"), "generation_check": "structure_and_source_quotes",
+                         "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
+                         "evidence_level": "human_provided_and_model_assessed" if unit.get("human_provided") else
+                             "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed",
+                         **({"generation_style": style} if style else {})}]
             check = self.judge_answer([unit["id"], "sft_directed_judge", attempt],
                 {**context, "rendered_prompt": messages[:-1]}, messages,
                 **({"allow_reasoning_fallback": False} if style is not None else {}))
@@ -354,6 +374,8 @@ class WorkflowQADirector:
             feedback = {"quality": check["reason"], "contract": contract_check["reason"],
                         "style": style_check["reason"] if style_check else None}
         return [{**self.rejected(unit, "directed_sft_quality_failed_after_repair"),
+                 **({"messages": messages, "quotes": quotes} if self.recipe.get("review_repair") is not None
+                     and "messages" in locals() else {}),
                  "qa_contract": contract, "family_id": unit["family_id"],
                  "parent_id": unit.get("parent_id"), "feedback": feedback,
                  "judge": check, "qa_contract_check": contract_check,
@@ -733,7 +755,7 @@ class WorkflowQADirector:
 
     def publish_qa_history(self, destination):
         """Publish only rows that survived all configured downstream filters."""
-        if not self.recipe.get("qa_director", {}).get("enabled"):
+        if not self.recipe.get("qa_director", {}).get("enabled") and not self.recipe.get("repair_inputs"):
             return
         with QAHistory(self.path.parent.parent / "qa-history.sqlite3") as history:
             for target in ("sft", "multiturn", "dpo", "orpo", "rlaif", "cot"):

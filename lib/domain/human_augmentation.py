@@ -40,7 +40,7 @@ HUMAN_REVISION_INSTRUCTION = (
 )
 
 
-def validate_revision_context(value):
+def validate_revision_context(value, *, review=False):
     fields = {"session_id", "round_id", "parent_run_id", "target", "candidate_id", "content_sha256",
               "messages", "instruction", "depth", "ancestors", "source_id", "source_kind", "teacher_evidence"}
     if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {"design_requirements"}:
@@ -51,7 +51,8 @@ def validate_revision_context(value):
     for field in ("content_sha256", "source_id"):
         if not isinstance(value[field], str) or not re.fullmatch(r"[a-f0-9]{64}", value[field]):
             raise ValueError("invalid_human_revision_context")
-    if value["target"] not in HUMAN_QA_TARGETS or value["source_kind"] not in {"document", "human_provided", "synthetic"}:
+    from lib.domain.workflow_targets import TARGETS
+    if value["target"] not in (TARGETS if review else HUMAN_QA_TARGETS) or value["source_kind"] not in {"document", "human_provided", "synthetic"}:
         raise ValueError("invalid_human_revision_context")
     if type(value["depth"]) is not int or not 1 <= value["depth"] <= 10:
         raise ValueError("invalid_human_revision_context")
@@ -65,13 +66,23 @@ def validate_revision_context(value):
             raise ValueError("invalid_human_revision_context")
         result["design_requirements"] = {key: _text(text, limit=6000) for key, text in requirements.items()}
     messages = value["messages"]
-    if not isinstance(messages, list) or not 2 <= len(messages) <= 17:
+    if not isinstance(messages, list) or not 2 <= len(messages) <= (1000 if review else 17):
+        raise ValueError("invalid_human_revision_context")
+    if review and len(canonical(messages)) > 200_000:
         raise ValueError("invalid_human_revision_context")
     for message in messages:
-        if (not isinstance(message, dict) or set(message) - {"role", "content", "reasoning_content"}
-                or message.get("role") not in {"system", "user", "assistant"}):
+        allowed_fields = {"role", "content", "reasoning_content"}
+        if review:
+            allowed_fields |= {"tool_calls", "tool_call_id", "name", "function_call"}
+        if (not isinstance(message, dict) or set(message) - allowed_fields
+                or message.get("role") not in ({"system", "user", "assistant", "tool", "function"} if review else {"system", "user", "assistant"})):
             raise ValueError("invalid_human_revision_context")
-        _text(message.get("content"), limit=24_000, required=True)
+        if review and isinstance(message.get("content"), list):
+            _text(canonical(message["content"]), limit=100_000, required=True)
+        elif review and not message.get("content") and message.get("role") == "assistant" and message.get("tool_calls"):
+            _text(canonical(message["tool_calls"]), limit=100_000, required=True)
+        else:
+            _text(message.get("content"), limit=100_000 if review else 24_000, required=True)
         if "reasoning_content" in message:
             _text(message["reasoning_content"], limit=40_000)
     if (not any(m["role"] == "user" for m in messages)

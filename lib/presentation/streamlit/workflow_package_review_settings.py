@@ -1,4 +1,4 @@
-"""Optional JEV scoring configured on its own workflow node."""
+"""Optional JEV scoring role configured inside the review and correction node."""
 from __future__ import annotations
 
 import streamlit as st
@@ -22,7 +22,7 @@ def package_review_snapshot(workspace: str) -> dict:
     return {
         "enabled": enabled,
         "node": "jev",
-        "mode": _field(workspace, f"workflow-package-review-mode:{workspace}", "sample"),
+        "mode": "all",
         "sample_percent": _field(workspace, f"workflow-package-review-percent:{workspace}", DEFAULT_PACKAGE_REVIEW_PERCENT),
         "max_samples_per_target": _field(workspace, f"workflow-package-review-limit:{workspace}", DEFAULT_PACKAGE_REVIEW_LIMIT),
         "escalate_failure_percent": _field(workspace, f"workflow-package-review-escalation:{workspace}", 0.0),
@@ -30,21 +30,13 @@ def package_review_snapshot(workspace: str) -> dict:
 
 
 def render_package_review_toggle(workspace: str, *, save_field) -> None:
-    # Existing local drafts stored this prompt on packaging. Move a copy to
-    # the new node once; a user's later JEV edits always take precedence.
-    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
-    old_prompt = f"workflow-node-prompt:{workspace}:package:workflow.package_review"
-    new_prompt = f"workflow-node-prompt:{workspace}:jev:workflow.package_review"
-    if new_prompt not in draft and new_prompt not in st.session_state:
-        saved_prompt = draft.get(old_prompt, st.session_state.get(old_prompt))
-        if saved_prompt is not None:
-            st.session_state[new_prompt] = saved_prompt
-            save_field(workspace, new_prompt)
+    # Historical package prompts remain pinned to their original runs. The
+    # dedicated review node starts with its own compatible score template.
     enabled_key = f"workflow-package-review-enabled:{workspace}"
     st.session_state[enabled_key] = _field(workspace, enabled_key, False)
     st.toggle("加入 JEV 评分", key=enabled_key,
                         on_change=save_field, args=(workspace, enabled_key),
-                        help="在输出前加入可选的模型评分节点，可抽检或全量评审。关闭不影响生成节点的基础自检与打包规则。")
+                        help="在评分与修正节点中，用独立的 JEV 模型评分，另一个模型修正。关闭后由一个模型兼顾评分与修正。")
 
 
 def render_package_review_settings(workspace: str, *, save_field) -> None:
@@ -83,4 +75,4 @@ def render_package_review_settings(workspace: str, *, save_field) -> None:
         st.caption("抽检发现问题后可扩大本轮检查，保留已完成评审，不重复调用。")
     else:
         st.caption("逐条评审所有规则检查合格的样本；请求数随数据量增加，请设置预算。")
-    st.caption("评审支持并发、预算限制和断点续跑；点击运行中的节点可查看模型流式输出。")
+    st.caption("评分与修正共用本节点的并发和预算限制；点击运行中的节点可查看模型流式输出。")

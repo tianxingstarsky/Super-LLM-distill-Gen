@@ -10,11 +10,18 @@ from lib.infrastructure.json_stream import iter_json_records
 
 
 def record_messages(record):
-    messages = record.get("messages") or record.get("chosen")
+    messages = record.get("messages")
+    if not messages and record.get("chosen"):
+        messages = [*record.get("prompt", []), *record["chosen"]]
     if not messages and record.get("question") and record.get("answer"):
-        messages = [{"role": "user", "content": record["question"]},
+        question = record["question"]
+        messages = [*(question if isinstance(question, list) else [{"role": "user", "content": question}]),
                     {"role": "assistant", "content": record["answer"],
-                     **({"reasoning_content": record["reasoning"]} if record.get("reasoning") else {})}]
+                     **({"reasoning_content": "\n".join(record["reasoning"]) if isinstance(record["reasoning"], list)
+                         else record["reasoning"]} if record.get("reasoning") else {})}]
+    if not messages and record.get("text"):
+        messages = [{"role": "user", "content": "Review this source-preserving corpus."},
+                    {"role": "assistant", "content": record["text"]}]
     if not messages:
         seed = record.get("qa_contract", {}).get("human_design", {}).get("seed", {})
         if seed.get("question") and seed.get("answer"):
@@ -44,28 +51,40 @@ def revision_evidence(record, recipe):
 
 
 def verified_revision_parent(output, run_id, supplied):
-    from lib.infrastructure.training_workflow import digest, read_json, run_path, verify_artifacts
+    from lib.infrastructure.training_workflow import digest, file_hash, read_json, run_path, verify_artifacts
 
-    context = validate_revision_context(supplied)
+    context = validate_revision_context(supplied, review=True)
     path = Path(output) / "human-sessions" / context["session_id"]
     try:
         session = read_json(path / "session.json")
-        child = next(row for row in session["rounds"] if row["run_id"] == run_id and row["kind"] == "revision")
+        child = next(row for row in session["rounds"] if row["run_id"] == run_id and row["kind"] in {"revision", "manual_review"})
         expected = {"run_id": context["parent_run_id"], "round_id": context["round_id"],
                     "target": context["target"], "candidate_id": context["candidate_id"],
                     "content_sha256": context["content_sha256"]}
         if expected not in child["parent_results"] or child["status"] in {"cancelled", "preparation_failed"}:
             raise ValueError("human_session_revision_not_authorized")
+        child_recipe = read_json(run_path(output, run_id) / "recipe.json")
+        if child.get("repair_inputs_sha256") is not None and child["repair_inputs_sha256"] != digest(child_recipe.get("repair_inputs")):
+            raise ValueError("human_session_result_changed")
         parent_path = run_path(output, context["parent_run_id"])
-        verify_artifacts(parent_path)
+        manifest = verify_artifacts(parent_path)
+        parent_recipe = read_json(parent_path / "recipe.json")
+        parent_state = read_json(parent_path / "state.json")
+        if (manifest.get("run_id") != context["parent_run_id"] or manifest.get("recipe_hash") != digest(parent_recipe)
+                or parent_state.get("recipe_hash") != manifest.get("recipe_hash")):
+            raise ValueError("human_session_result_changed")
+        for source in parent_recipe["sources"]:
+            source_path = parent_path / "inputs" / source["file"]
+            if source_path.is_symlink() or file_hash(source_path) != source["sha256"]:
+                raise ValueError("human_session_source_changed")
         records = iter_json_records(parent_path / "artifacts" / f"{context['target']}.records.json", max_record_chars=2_000_000)
         try:
             record = next(row for row in records if row.get("id") == context["candidate_id"])
         finally:
             records.close()
-        prior = record.get("qa_contract", {}).get("human_design", {}).get("seed", {}).get("revision_context", {})
+        prior = record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {}).get("seed", {}).get("revision_context", {})
         ancestry = [*prior.get("ancestors", []), {"run_id": context["parent_run_id"], "candidate_id": context["candidate_id"]}]
-        evidence = revision_evidence(record, read_json(parent_path / "recipe.json"))
+        evidence = revision_evidence(record, parent_recipe)
         if (digest(record) != context["content_sha256"] or canonical(record_messages(record)) != canonical(context["messages"])
                 or ancestry != context["ancestors"] or context["depth"] != prior.get("depth", 0) + 1
                 or any(context[key] != value for key, value in evidence.items())):

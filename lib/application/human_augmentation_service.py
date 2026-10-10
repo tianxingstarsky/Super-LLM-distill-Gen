@@ -6,9 +6,9 @@ class HumanAugmentationApplication:
     def __init__(self, driver):
         self._driver = driver
 
-    def create_session(self, *, from_run_id=None, max_revision_depth=3, initial_draft=None, **recipe):
+    def create_session(self, *, from_run_id=None, max_revision_depth=3, initial_draft=None, review_only=False, **recipe):
         return self._driver.create_session(from_run_id=from_run_id,
-            max_revision_depth=max_revision_depth, initial_draft=initial_draft, **recipe)
+            max_revision_depth=max_revision_depth, initial_draft=initial_draft, review_only=review_only, **recipe)
 
     def session(self, session_id):
         return self._driver.session(session_id)
@@ -42,6 +42,14 @@ class HumanAugmentationApplication:
         return self._driver.revise_round(session_id, request_id=request_id,
             expected_version=expected_version, selected_feedback_ids=selected_feedback_ids,
             sample_count=sample_count)
+
+    def submit_manual_review(self, session_id, round_id, target, candidate_id, *, request_id,
+                             score, decision="approve", instruction="", messages=None,
+                             question=None, answer=None, corrected_record=None, expected_version):
+        return self._driver.submit_manual_review(session_id, round_id, target, candidate_id,
+            request_id=request_id, score=score, decision=decision, instruction=instruction,
+            messages=messages, question=question, answer=answer, corrected_record=corrected_record,
+            expected_version=expected_version)
 
     def resume_round(self, session_id, round_id):
         return self._driver.resume_round(session_id, round_id)

@@ -135,8 +135,8 @@ def test_configuration_issue_buttons_locate_panels_without_starting_run(tmp_path
     open_key = f"canvas-open:{canvas_key}"
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "sft"
     assert canvas(app, canvas_key)["inspector"] == {"key": "workbench-node-panel", "open": False, "wide": False}
-    assert any("missing Generation model, Process check model" in item.label
-               for item in app.button)
+    assert "missing Generation model" in app.button(key=key).label
+    assert app.button(key=f"workflow-config-fix:{workspace}:model:review")
     next(button for button in app.button if button.key == key).click().run()
     assert not app.exception
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "preference"
@@ -317,15 +317,16 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     app.session_state[f"setup-canvas:{name}"] = {"node": "cpt", "serial": "choose-native-cpt"}
     app.run()
     app.radio(key=f"workflow-cpt-processing-mode:{name}").set_value("native").run()
-    app.session_state[f"setup-canvas:{name}"] = {"node": "multiturn", "serial": "choose-review-model"}
+    app.session_state[f"setup-canvas:{name}"] = {"node": "review", "serial": "choose-review-model"}
     app.run()
+    app.toggle(key=f"workflow-package-review-enabled:{name}").set_value(True).run()
     assert next(b for b in app.button if b.label == "开始自动生成").disabled
-    app.selectbox(key=f"node-model:{name}:multiturn:jev:backend").set_value("writer").run()
-    app.selectbox(key=f"node-model:{name}:multiturn:jev:model:writer").set_value("judge-v1").run()
-    confirm = app.button(key=f"node-model-confirm:{name}:multiturn")
+    app.selectbox(key=f"node-model:{name}:review:jev:backend").set_value("writer").run()
+    app.selectbox(key=f"node-model:{name}:review:jev:model:writer").set_value("judge-v1").run()
+    confirm = app.button(key=f"node-model-confirm:{name}:review")
     assert not confirm.disabled
     confirm.click().run()
-    assert app.button(key=f"node-model-confirm:{name}:multiturn").disabled
+    assert app.button(key=f"node-model-confirm:{name}:review").disabled
     assert not next(b for b in app.button if b.label == "开始自动生成").disabled
     app.session_state[f"setup-canvas:{name}"] = {"node": "package", "serial": "scale-settings-check"}
     app.run()
@@ -345,8 +346,9 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     assert not any(item.label == "开始自动生成" for item in app.button)
     from lib.workflow import read_json, run_path
     recipe = read_json(run_path(ws.out(name), run_id) / "recipe.json")
-    assert set(recipe["node_models"]) == {"multiturn"}
-    assert set(recipe["node_models"]["multiturn"]) == {"generation", "jev"}
+    assert set(recipe["node_models"]) == {"multiturn", "review"}
+    assert set(recipe["node_models"]["multiturn"]) == {"generation"}
+    assert set(recipe["node_models"]["review"]) == {"generation", "jev"}
     assert recipe["sample_count"] == 50000 and recipe["concurrency"] == 8 and recipe["batch_size"] == 200
     assert recipe["conversation_turns"] == 5
 
@@ -387,7 +389,7 @@ def test_quick_presets_keep_every_target_available_and_custom_choices_independen
     assert next(widget for widget in app.pills if widget.label == "训练目标").value == ["agent", "gsm8k"]
     assert "SFT 中间候选" not in rendered
     assert [node["id"] for node in canvas(app, f"setup-canvas:{name}")["nodes"]] == list(
-        execution_graph(["agent", "gsm8k"])[0])
+        execution_graph(["agent", "gsm8k"], recipe_version=18)[0])
 
 
 def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_nodes(tmp_path, monkeypatch):
@@ -408,14 +410,15 @@ def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_node
     next(widget for widget in app.selectbox if widget.key == generation_key).set_value("write-v2").run()
     assert not app.exception
     assert app.session_state[draft_key]["sft"]["generation"]["model"] == "write-v2"
-    app.session_state[f"setup-canvas:{workspace}"] = {"node": "preference", "serial": "switch-1"}
+    app.session_state[f"setup-canvas:{workspace}"] = {"node": "review", "serial": "switch-1"}
     app.run()
     assert not app.exception
-    review_key = f"node-model:{workspace}:preference:jev:backend"
+    app.toggle(key=f"workflow-package-review-enabled:{workspace}").set_value(True).run()
+    review_key = f"node-model:{workspace}:review:jev:backend"
     next(widget for widget in app.selectbox if widget.key == review_key).set_value("writer").run()
     assert not app.exception
-    assert "jev" not in app.session_state[draft_key]["preference"]
-    review_model_key = f"node-model:{workspace}:preference:jev:model:writer"
+    assert "jev" not in app.session_state[draft_key]["review"]
+    review_model_key = f"node-model:{workspace}:review:jev:model:writer"
     next(widget for widget in app.selectbox if widget.key == review_model_key).set_value("write-v2").run()
     assert not app.exception
     app.session_state[f"setup-canvas:{workspace}"] = {"node": "sft", "serial": "switch-2"}
@@ -423,9 +426,9 @@ def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_node
     assert not app.exception
     assert next(widget for widget in app.selectbox if widget.key == generation_key).value == "write-v2"
     assert app.session_state[draft_key]["preference"]["generation"]["model"] == "write-v1"
-    assert app.session_state[draft_key]["preference"]["jev"]["backend"] == "writer"
-    assert app.session_state[draft_key]["preference"]["jev"]["model"] == "write-v2"
-    assert app.session_state[draft_key]["sft"]["jev"]["backend"] == "review"
+    assert app.session_state[draft_key]["review"]["jev"]["backend"] == "writer"
+    assert app.session_state[draft_key]["review"]["jev"]["model"] == "write-v2"
+    assert "jev" not in app.session_state[draft_key]["sft"]
 
 
 def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatch):
@@ -445,7 +448,8 @@ def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatc
     spec = canvas(app, f"setup-canvas:{workspace}")
     assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
     markup = "".join(str(node.value) for node in app.get("html"))
-    assert "Generation model" in markup and "Process check model" in markup
+    assert "Generation model" in markup
+    assert "Process check model" not in markup
     visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
     visible = re.sub(r"<[^>]*>", "", visible)
     assert not re.search(r"[\u4e00-\u9fff]", visible), visible
@@ -477,23 +481,26 @@ def test_removed_node_service_requires_explicit_replacement(tmp_path, monkeypatc
     app.session_state["nav"] = "自动工作流"
     app.session_state["ui_language"] = "en"
     app.run()
+    app.session_state[f"setup-canvas:{workspace}"] = {"node": "review", "serial": "choose-review-service"}
+    app.run()
+    app.toggle(key=f"workflow-package-review-enabled:{workspace}").set_value(True).run()
     inventory["backends"] = [inventory["backends"][0]]
     app.run()
     assert not app.exception
-    key = f"node-model:{workspace}:sft:jev:backend"
+    key = f"node-model:{workspace}:review:jev:backend"
     assert next(widget for widget in app.selectbox if widget.key == key).value is None
-    assert app.session_state[f"workflow-node-bindings:{workspace}"]["sft"]["jev"]["backend"] == "review"
+    assert app.session_state[f"workflow-node-bindings:{workspace}"]["review"]["jev"]["backend"] == "review"
     assert next(button for button in app.button if button.label == "Start generation").disabled
     assert any("saved model connection is unavailable" in item.value for item in app.warning)
-    node = next(node for node in canvas(app, f"setup-canvas:{workspace}")["nodes"] if node["id"] == "sft")
-    assert node["status"] == "configuration_required" and node["subtitle"] == "Missing: Review model"
+    node = next(node for node in canvas(app, f"setup-canvas:{workspace}")["nodes"] if node["id"] == "review")
+    assert node["status"] == "configuration_required" and "Missing" in node["subtitle"]
     next(widget for widget in app.selectbox if widget.key == key).set_value("writer").run()
     assert not app.exception
-    assert "jev" not in app.session_state[f"workflow-node-bindings:{workspace}"]["sft"]
-    model_key = f"node-model:{workspace}:sft:jev:model:writer"
+    assert "jev" not in app.session_state[f"workflow-node-bindings:{workspace}"]["review"]
+    model_key = f"node-model:{workspace}:review:jev:model:writer"
     next(widget for widget in app.selectbox if widget.key == model_key).set_value("write").run()
     assert not app.exception
-    assert app.session_state[f"workflow-node-bindings:{workspace}"]["sft"]["jev"]["backend"] == "writer"
+    assert app.session_state[f"workflow-node-bindings:{workspace}"]["review"]["jev"]["backend"] == "writer"
 
 
 def test_all_target_canvas_localizes_inspection_and_configuration_controls():
@@ -511,7 +518,8 @@ def test_all_target_canvas_localizes_inspection_and_configuration_controls():
 
 def test_expanded_english_task_view_uses_full_canvas_and_localized_quality(tmp_path, monkeypatch):
     ws, workspace, source = setup_workspace(tmp_path, monkeypatch)
-    rid = create_run(ws.out(workspace), sources=[source], targets=["cpt"], name="Offline document run")
+    rid = create_run(ws.out(workspace), sources=[source], targets=["cpt"], name="Offline document run",
+                     review_repair={"mode": "human", "max_rounds": 0, "score_threshold": .8})
     Workflow(ws.out(workspace), rid, ROOT).execute()
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = workspace
@@ -539,7 +547,7 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
     assert not app.exception
 
     def assert_preview(targets):
-        nodes, edges = execution_graph(targets)
+        nodes, edges = execution_graph(targets, recipe_version=18)
         markup = [str(item.value) for item in app.get("html")]
         summary = next(value for value in markup if 'class="df-wb-plan"' in value)
         detail = next(value for value in markup if 'class="df-wb-plan-detail"' in value)

@@ -33,6 +33,9 @@ from lib.domain.web_research import MAX_QUERIES, validate_web_research
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, node_roles
 from lib.domain.workflow_node_models import missing_bindings
 from lib.domain.workflow_node_prompts import active_node_prompt_ids
+from lib.presentation.streamlit.workflow_review_repair_settings import (
+    review_repair_snapshot, render_review_repair_settings,
+)
 from lib.presentation.streamlit.workflow_package_review_settings import (
     package_review_snapshot, render_package_review_toggle, render_package_review_settings,
 )
@@ -147,6 +150,23 @@ def _workflow_error(error) -> str:
     if str(error).startswith("latex_") and str(error) not in {"latex_external_dependencies", "latex_unsupported_syntax"}:
         return "LaTeX 结构不完整，请检查文档环境、公式、表格和括号。"
     return {
+        "manual_rlaif_change_requires_ai_review": "修改后的 RLAIF 候选需要 AI 重新评分，不能沿用原来的 AI 标签。请切换自动评分与修正。",
+        "manual_review_required": "等待人工评分与修正。",
+        "manual_review_score_required": "请填写人工评分，再提交内容修正。",
+        "manual_review_rejected": "人工评分或结论未达到通过要求，此版本保留在待处理结果中。",
+        "manual_review_patch_target_mismatch": "修正内容与当前训练类型不一致，请保留该类型要求的字段。",
+        "manual_review_messages_target_mismatch": "当前训练类型不使用对话消息，请编辑对应的语料、问题或答案字段。",
+        "review_repair_exhausted": "修正次数已达到上限，候选仍未通过。请检查结果并补充具体意见。",
+        "review_repair_content_unavailable": "候选缺少可评分的内容，请检查结果字段后再修正。",
+        "review_repair_invalid_schema": "修正模型返回的内容格式无效，未替换原候选。请检查修正提示词的输出要求。",
+        "review_repair_invalid_preference": "偏好对缺少有效的问题、优选答案或对照答案，请补全后重新评分。",
+        "review_repair_invalid_question": "问题内容无效，请修正问题后重新评分。",
+        "review_repair_tool_facts_changed": "修正改变了已验证的工具事实，已阻止导出。请保留原工具调用与结果。",
+        "review_repair_source_quotes_missing": "修正没有提供有效的原文依据，已阻止导出。请检查来源与修正提示词。",
+        "review_repair_source_evidence_unavailable": "候选的原始来源依据暂不可读取，已停止修正。请检查来源记录。",
+        "review_repair_inputs_too_large": "本次修正内容过大，请减少候选数量或精简内容。",
+        "invalid_review_repair": "评分与修正配置无效，请检查方式、通过分数和修正次数。",
+        "invalid_repair_inputs": "修正候选无效，请从原结果重新打开评分与修正。",
         "invalid_production": "生产计划配置无效，请检查期望数量与预算。",
         "invalid_production_goals": "期望数量应为每类 1 到 1,000,000 条。",
         "invalid_production_limits": "生产限制无效，请检查数量、轮数与预算。",
@@ -292,12 +312,12 @@ def _workflow_error(error) -> str:
     }.get(str(error), str(error))
 
 
-def _missing_budget_prices(nodes, source_mode, bindings, endpoints, budget, *, node_generation=None, package_review=None, cpt_processing=None):
+def _missing_budget_prices(nodes, source_mode, bindings, endpoints, budget, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None):
     if not (budget.get("max_total_usd") and budget.get("hard_stop", True)):
         return []
     missing = []
     for node in nodes:
-        for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing):
+        for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair):
             binding = bindings.get(node, {}).get(role, {})
             endpoint = endpoints.get(binding.get("backend"))
             if endpoint is None:
@@ -327,16 +347,17 @@ def _stage_configuration(key, recipe, state):
                 details["生成上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details["生成单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         return details
-    if key in {"director", "cpt", "sft", "multiturn", "agent", "preference", "cot", "trim", "jev", "package"}:
+    if key in {"director", "cpt", "sft", "multiturn", "agent", "preference", "cot", "trim", "review", "jev", "package"}:
         details = {"启用目标": [target.upper() for target in targets]}
         mode = "文档资料" if recipe.get("sources") else "开放需求"
         # Old CoT runs only checked an existing explanation and had no writer.
         roles = (("jev",) if key == "cot" and not (recipe.get("node_generation") or {}).get("cot")
-                 else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"), cpt_processing=recipe.get("cpt_processing")))
+                 else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair")))
         for role in roles:
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
             prefix = "" if role == "generation" else "jev_"
-            label = ("生成模型" if role == "generation" else "JEV 评分模型" if key == "jev"
+            label = (("修正模型" if (recipe.get("package_review") or {}).get("enabled") else "评分与修正模型") if key == "review" and role == "generation"
+                     else "生成模型" if role == "generation" else "JEV 评分模型" if key in {"review", "jev"}
                      else "质量评审模型" if key == "package" else "过程核对模型")
             fallback = translate("旧版默认配置", st.session_state.get("ui_language", "zh"))
             details[label] = UntranslatedText((binding.get("backend") or recipe.get(prefix + "backend") or fallback)
@@ -395,6 +416,12 @@ def _stage_configuration(key, recipe, state):
             route = reasoning_route_description(key, targets, recipe.get("version", 0))
             if route:
                 details["导出数据流"] = route
+        elif key == "review":
+            review = recipe.get("review_repair") or {}
+            details.update({"评分与修正方式": "人工评分与修正" if review.get("mode") == "human" else "自动评分与修正",
+                            "通过分数": round(float(review.get("score_threshold", .8)) * 100),
+                            "自动修正次数上限": review.get("max_rounds", 2),
+                            "修正路径": "当前候选修正 → 再次评分；不返回生成节点"})
         elif key in {"jev", "package"}:
             review = recipe.get("package_review") or {}
             details.update({"输出目标": [target.upper() for target in targets],
@@ -422,7 +449,7 @@ def _stage_configuration(key, recipe, state):
     return {"启用目标": [target.upper() for target in targets]}
 
 
-STAGE_GLYPHS = {"ingest": "▤", "director": "⌘", "cpt": "▥", "sft": "✎", "multiturn": "☷", "agent": "◇",
+STAGE_GLYPHS = {"review": "✦", "ingest": "▤", "director": "⌘", "cpt": "▥", "sft": "✎", "multiturn": "☷", "agent": "◇",
                 "preference": "⚖", "gsm8k": "∑", "cot": "◈", "trim": "✂", "jev": "✓", "package": "▣"}
 EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节点处理完成",
                 "model_queued": "等待模型共享额度",
@@ -503,7 +530,7 @@ def _quality_html(targets):
 
 GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 清洗评审", "sft": "SFT 生成",
                 "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
-                "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "jev": "JEV 评分", "package": "输出打包"}
+                "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "review": "评分与修正", "jev": "JEV 评分", "package": "输出打包"}
 
 
 def _missing_model_role_summary(issues, language, node_generation=None):
@@ -514,8 +541,8 @@ def _missing_model_role_summary(issues, language, node_generation=None):
     descriptions = []
     for node, roles in pending_roles.items():
         node_label = translate_label(node_display_label(node, GRAPH_LABELS, node_generation), language)
-        missing = [translate_label(("JEV 评分模型" if node == "jev" else "质量评审模型" if node == "package"
-                                    else "过程核对模型") if role == "jev" else role_labels[role], language) for role in roles]
+        missing = [translate_label(("JEV 评分模型" if node in {"review", "jev"} else "质量评审模型" if node == "package"
+                                    else "过程核对模型") if role == "jev" else ("评分与修正模型" if node == "review" else role_labels[role]), language) for role in roles]
         if language == "en":
             descriptions.append(f"{node_label}: missing {', '.join(missing)}")
         else:
@@ -639,7 +666,7 @@ def _toggle_run_reader(run_id: str) -> None:
 def _open_human_correction(application, run_id):
     """Open a preserved result version; model work starts only on submission."""
     try:
-        session_id = application.create_session(from_run_id=run_id)
+        session_id = application.create_session(from_run_id=run_id, review_only=True)
         st.session_state["human-open-session"] = {"workspace": st.session_state["ws"], "session_id": session_id}
         st.rerun(scope="app")
     except (ValueError, OSError, Timeout) as error:
@@ -667,7 +694,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         reasoning_trim_enabled = bool((recipe.get("reasoning_trim") or {}).get("enabled"))
         graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
                                          qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
-                                         recipe_version=recipe.get("version", 0))
+                                         recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")))
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
@@ -779,11 +806,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       language=st.session_state.get("ui_language", "zh"), live=True,
                                       reasoning_trim=reasoning_trim_enabled,
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
-                                      qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"),
-                                      recipe_version=recipe.get("version", 0),
+                                      qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"),
+                                      recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
                                       feedback_branch=(project_feedback_branch(recipe, state, {"active": active},
-                                          target=next(target for target in recipe["targets"] if target in HUMAN_QA_TARGETS))
-                                          if human_application is not None and set(recipe["targets"]).intersection(HUMAN_QA_TARGETS) else None),
+                                          target=next(iter(recipe["targets"]), None))
+                                          if human_application is not None and set(recipe["targets"]).intersection(TARGETS) else None),
                                       source_mode=("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
                                           else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
                                           else "文档资料" if recipe.get("sources") else "开放需求")),
@@ -808,7 +835,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         elif selected_stage == "director":
             passed, quarantined = done, max(0, total - done)
             passed_label, quarantined_label = "已规划任务", "待规划任务"
-        elif selected_stage == "jev":
+        elif selected_stage in {"review", "jev"}:
             passed = int(selected_metrics.get("eligible", 0) or 0)
             quarantined = int(selected_metrics.get("quarantined", 0) or 0)
             passed_label, quarantined_label = "AI 通过", "AI 隔离"
@@ -900,6 +927,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             render_run_scheduling(backend_application, recipe.get("node_models", {}).get(selected_stage, {}))
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
             render_run_node_prompts(selected_stage, recipe, run_id)
+            if selected_stage == "review" and (recipe.get("review_repair") or {}).get("mode") == "human":
+                st.caption("人工评分和内容修正在本节点完成。未评分候选不会导出。")
+                if human_application is not None and not active and st.button("打开人工评分与修正",
+                        key=f"workflow-human-review:{run_id}", type="primary", width="stretch"):
+                    _open_human_correction(human_application, run_id)
     summary = state.get("input_summary", {})
     if summary:
         with st.container(key=f"workflow-run-input-statistics:{run_id}"):
@@ -915,15 +947,20 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             st.html('<div class="df-run-section"><div><strong>训练产物与质量</strong>'
                     '<small>每个目标只会导出通过对应检查的样本。</small></div></div>')
             st.html(_quality_html(quality["targets"]))
-            st.caption("自动质检候选版本 · 未进行人工审核。开放需求生成的数据依赖模型评审，不能视为已核实的事实。")
+            if quality.get("human_review") == "performed":
+                st.caption("本版本包含人工评分和内容修正；未通过要求的候选单独保留。")
+            elif (recipe.get("review_repair") or {}).get("mode") == "human":
+                st.caption("候选等待人工评分与修正；未评分或未通过的内容不会导出。")
+            else:
+                st.caption("自动质检候选版本 · 未进行人工审核。开放需求生成的数据依赖模型评审，不能视为已核实的事实。")
             with st.expander("查看未通过原因明细"):
                 st.dataframe([{"目标": target.upper(), "通过": info["eligible"], "候选总数": info["total"],
                                "未通过原因": json.dumps(info["reasons"], ensure_ascii=False)}
                               for target, info in quality["targets"].items()], hide_index=True, width="stretch")
             if (human_application is not None and not active and status in {"completed", "needs_attention"}
-                    and any(item.get("total", 0) > 0 for target, item in quality["targets"].items() if target in HUMAN_QA_TARGETS)):
-                if st.button("用人工意见回流修正", key=f"workflow-human-reflow:{run_id}", width="stretch",
-                    help="打开独立人工增强窗口，选择结果并提交修正意见。新一轮重新生成和评审，原任务结果保留。"):
+                    and any(item.get("total", 0) > 0 for target, item in quality["targets"].items() if target in TARGETS)):
+                if st.button("打开评分与修正", key=f"workflow-human-reflow:{run_id}", width="stretch",
+                    help="打开评分与修正节点。人工评分和编辑内容在同一窗口完成；自动修正只处理选中候选，再次评分，不返回 SFT。"):
                     _open_human_correction(human_application, run_id)
             if has_deliverable_results(state):
                 from lib.presentation.streamlit.review_navigation import (
@@ -1366,7 +1403,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             on_change=_save_draft_value, args=(ws, target_key),
             help="点击即可选中或取消，可以同时选择多类训练数据。",
         ) or []
-        trim_option, director_option, review_option = st.columns(3, gap="medium")
+        trim_option, director_option = st.columns(2, gap="medium")
         with trim_option:
             reasoning_trim = render_trim_toggle(ws, targets, save_field=_save_draft_value)
         with director_option:
@@ -1375,11 +1412,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 # Designs belong to the persistent working window. The entry
                 # screen validates only the model and workflow configuration.
                 qa_director = {**qa_director, "human_augmentation": {"enabled": False}}
-        with review_option:
-            render_package_review_toggle(ws, save_field=_save_draft_value)
         package_review = package_review_snapshot(ws)
+        review_repair = review_repair_snapshot(ws)
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
-                                                   qa_director=qa_director, package_review=package_review)
+                                                   qa_director=qa_director, package_review=package_review, recipe_version=18)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
@@ -1414,6 +1450,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if saved_binding:
             document_parser["binding"] = saved_binding
     package_review = package_review_snapshot(ws)
+    review_repair = review_repair_snapshot(ws)
     cpt_processing = (cpt_processing_snapshot(ws) if "cpt" in targets and source_mode != "开放需求"
                       else {"mode": "native"} if "cpt" in targets else None)
     if targets:
@@ -1429,7 +1466,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             # the open-brief planning model to parse an existing human QA.
             model_source_mode = "人工设计"
         bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws,
-                                           node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
+                                           node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
         parser_role = "vision" if document_parser.get("mode") == "vision" else "generation"
         if document_parser.get("mode") in {"model", "vision"} and bindings.get("ingest", {}).get(parser_role):
             document_parser["binding"] = bindings["ingest"][parser_role]
@@ -1439,7 +1476,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if not supports_vision(endpoints.get(vision_binding["backend"], {}), vision_binding["model"]):
                 document_parser["unconfirmed"] = True
         model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints,
-                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
+                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
         if backend_application is not None:
             budget = dict(backend_application.list_backends().get("budget") or {})
             if st.session_state.get(f"workflow-production-enabled:{ws}", st.session_state.get(
@@ -1450,7 +1487,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             pricing_issues = _missing_budget_prices(
                 graph_nodes, model_source_mode, bindings, endpoints,
                 budget,
-                node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
+                node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
             )
     workbench = st.container(key="workbench-layout")
     if targets:
@@ -1460,13 +1497,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                        "missing_roles": [role for issue_node, role in model_issues if issue_node == node]}
                                        for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
                                       snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints,
-                                                                  node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing),
+                                                                  node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
-                                      reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
-                                      qa_director=qa_director,
-                                      feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "version": 17}, {},
-                                          target=next(target for target in targets if target in HUMAN_QA_TARGETS))
-                                          if set(targets).intersection(HUMAN_QA_TARGETS) else None)),
+                                      reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                      qa_director=qa_director, recipe_version=18,
+                                      feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": 18}, {},
+                                          target=next(iter(targets), None))
+                                          if targets else None)),
                           selection_key, key=f"setup-canvas:{ws}",
                           inspector_key="workbench-node-panel", expanded=True,
                           reveal_key=f"workflow-setup-reveal:{ws}")
@@ -1489,11 +1526,16 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if route:
                 st.caption(route)
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
-                                                      node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
+                                                      node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                                       qa_director=qa_director))
             settings_tab, prompts_tab = (_setup_node_tabs(ws, selected_node) if has_prompts
                                         else (nullcontext(), nullcontext()))
             with settings_tab:
+                if selected_node == "review":
+                    review_repair = render_review_repair_settings(ws, package_review, save_field=_save_draft_value)
+                    if review_repair["mode"] == "auto":
+                        render_package_review_toggle(ws, save_field=_save_draft_value)
+                        package_review = package_review_snapshot(ws)
                 if selected_node == "director":
                     render_director_settings(ws, save_field=_save_draft_value)
                 if selected_node == "ingest" and source_mode == "文档资料":
@@ -1508,7 +1550,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         save_field=_save_draft_value, backend_application=backend_application)
                 else:
                     render_node_models(selected_node, model_source_mode, ws, bindings, endpoints,
-                                       backend_application=backend_application, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
+                                       backend_application=backend_application, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
                 if selected_node == "jev":
                     render_package_review_settings(ws, save_field=_save_draft_value)
                 if selected_node == "sft" and "sft" in targets:
@@ -1536,7 +1578,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 elif selected_node == "director":
                     render_director_rules(ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 render_node_prompts(selected_node, model_source_mode, ws,
-                                    save_field=_save_draft_value, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
+                                    save_field=_save_draft_value, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                     qa_director=qa_director, prompt_library=prompt_library)
         with workbench:
             if model_issues:
@@ -1562,7 +1604,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     human_ready = human_enabled and not director_invalid and not human_mode_unavailable
     human_source_compatible = human_ready and set(targets) <= HUMAN_QA_TARGETS
     node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
-                                       node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
+                                       node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                        qa_director=qa_director) if targets else {}
     prompts_invalid = node_prompt_has_issue(node_prompts)
     # Pair source input with either its preview or the common run settings.
@@ -1830,8 +1872,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 run_summary += " · " + translate("推理链修剪", language)
             if qa_director["enabled"]:
                 run_summary += " · " + translate("人工问答增强" if human_enabled else "对话指导员", language)
-            if package_review["enabled"]:
-                run_summary += " · " + translate("JEV 抽检" if package_review["mode"] == "sample" else "JEV 全量评审", language)
+            review_summary = ("人工评分与修正" if review_repair["mode"] == "human" else
+                              "JEV 评分 + 模型修正" if package_review["enabled"] else
+                              "单模型评分与修正")
+            run_summary += " · " + translate(review_summary, language)
             if evaluation_uploads:
                 run_summary += (f" · {len(evaluation_uploads)} evaluation references" if language == "en"
                                 else f" · 评测参照 {len(evaluation_uploads)} 份")
@@ -1910,7 +1954,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                      "max_revision_depth": int(st.session_state.get(f"human-revision-limit:{ws}", 3))} if human_enabled else {}
                     run_id = create(**human_options, sources=sources, brief=brief, name=name, targets=targets,
                                         node_models=model_application.snapshot(graph_nodes, model_source_mode, bindings,
-                                                                               node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing),
+                                                                               node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
                                         sample_count=int(sample_count), production=production,
                                         concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
@@ -1919,7 +1963,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         sft_output_style=sft_output_style,
                                         node_generation=node_generation,
                                         qa_director=qa_director,
-                                        package_review=package_review, cpt_processing=cpt_processing,
+                                        package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                         node_prompts=node_prompts,
                                         reasoning_trim=reasoning_trim,
                                         web_research=web_research,

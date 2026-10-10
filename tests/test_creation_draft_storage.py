@@ -28,6 +28,12 @@ from tests.test_workflow_draft import SCRIPT
     ('workflow-node-model-confirmations:w', {'unknown': 'a' * 64}),
     ('workflow-node-model-confirmations:w', {'sft': 'A' * 64}),
     ('workflow-node-model-confirmations:w:sft', {'sft': 'a' * 64}),
+    ('workflow-review-repair-mode:w', 'manual'),
+    ('workflow-review-repair-mode:w:review', 'human'),
+    ('workflow-review-repair-rounds:w', -1), ('workflow-review-repair-rounds:w', 6),
+    ('workflow-review-repair-rounds:w', True),
+    ('workflow-review-repair-threshold:w', -1), ('workflow-review-repair-threshold:w', 101),
+    ('workflow-review-repair-threshold:w:review', 80),
 ])
 def test_draft_rejects_invalid_or_non_form_values(key, value):
     with pytest.raises(ValueError, match='invalid_creation_draft'):
@@ -45,6 +51,18 @@ def test_node_model_confirmations_survive_draft_restart(tmp_path):
     values = {'workflow-node-model-confirmations:w': {'sft': 'a' * 64, 'jev': 'b' * 64}}
     creation_draft_application(tmp_path).replace(values)
     assert creation_draft_application(tmp_path).load() == values
+
+
+def test_review_node_mode_and_bounds_survive_restart_and_named_restore(tmp_path):
+    values = {'workflow-review-repair-mode:w': 'human',
+              'workflow-review-repair-rounds:w': 5,
+              'workflow-review-repair-threshold:w': 90}
+    application = creation_draft_application(tmp_path)
+    application.replace(values)
+    identifier = application.save_snapshot()
+    assert creation_draft_application(tmp_path).load() == values
+    application.update({'workflow-review-repair-mode:w': 'auto'})
+    assert creation_draft_application(tmp_path).restore_snapshot(identifier) == values
 
 
 def test_generation_and_trim_drafts_preserve_incomplete_custom_edits_across_restart(tmp_path):

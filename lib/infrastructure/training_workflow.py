@@ -46,6 +46,7 @@ from lib.domain.workflow_package_review import validate_package_review, package_
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.source_quote import quote_spans
 from lib.domain.workflow_qa_director import validate_qa_director
+from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
 from lib.domain.human_augmentation import human_design, human_generation_instruction
 from lib.domain.workflow_node_prompts import (
     validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
@@ -66,6 +67,7 @@ from lib.infrastructure.production_review_quality import package_review_escalati
 from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DialoguePlanError
 from lib.infrastructure.workflow_cpt_processing import WorkflowCPTProcessing
+from lib.infrastructure.workflow_review_repair import WorkflowReviewRepair
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -89,7 +91,8 @@ DOCUMENT_PROCESSING_RECIPE_VERSION = 14
 COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
 HUMAN_AUGMENTATION_RECIPE_VERSION = 17
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17})
+REVIEW_REPAIR_RECIPE_VERSION = 18
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -273,7 +276,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
-               package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None):
+               package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
+               review_repair=None, repair_inputs=None):
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -282,7 +286,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         web_research=web_research, sources=sources, node_generation=node_generation,
         reasoning_trim=reasoning_trim, node_prompts=node_prompts,
         package_review=package_review, qa_director=qa_director, production=production,
-        cpt_processing=cpt_processing)
+        cpt_processing=cpt_processing, review_repair=review_repair, repair_inputs=repair_inputs)
+    review_repair = validate_review_repair(review_repair)
+    repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
     production = validate_production(production, targets)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
@@ -297,7 +303,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
                               for stage, templates in node_prompts.items() for prompt_id in templates)
     human_prompt_override = any("workflow.human_augmentation_check" in templates for templates in node_prompts.values())
-    recipe_version = (HUMAN_AUGMENTATION_RECIPE_VERSION if human["enabled"] or human_prompt_override else
+    recipe_version = (REVIEW_REPAIR_RECIPE_VERSION if review_repair is not None else
+                      HUMAN_AUGMENTATION_RECIPE_VERSION if human["enabled"] or human_prompt_override else
                       JEV_NODE_RECIPE_VERSION if package_review_stage(package_review) == "jev" else
                       COT_SFT_RECIPE_VERSION if {"sft", "cot"}.issubset(targets) else
                       DOCUMENT_PROCESSING_RECIPE_VERSION if cpt_processing_supplied
@@ -320,7 +327,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         raise ValueError("invalid_sft_output_style")
     preferences = preference_snapshot(settings_root or Path(__file__).resolve().parents[2])
     files = [Path(p).resolve(strict=True) for p in sources]
-    if cpt_processing["mode"] == "model" and cpt_processing["review_mode"] == "vision":
+    if not repair_inputs and cpt_processing["mode"] == "model" and cpt_processing["review_mode"] == "vision":
         from lib.infrastructure.document_vision import require_vision_model
         binding = node_models.get("cpt", {}).get("jev")
         if settings_root is None or not binding:
@@ -329,21 +336,21 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         if not files:
             raise ValueError("cpt_visual_review_requires_documents")
     document_parser = validate_document_parser(document_parser)
-    if document_parser["mode"] == "vision":
+    if not repair_inputs and document_parser["mode"] == "vision":
         from lib.infrastructure.document_vision import require_vision_model
         if settings_root is None or not files or any(path.suffix.lower() in {".json", ".jsonl"} for path in files):
             raise ValueError("document_vision_requires_document_sources")
         require_vision_model(Path(settings_root), document_parser["binding"])
         node_models.setdefault("ingest", {})["vision"] = document_parser["binding"]
-    elif document_parser["mode"] == "model":
+    elif not repair_inputs and document_parser["mode"] == "model":
         if not files or any(path.suffix.lower() in {".json", ".jsonl", ".png", ".jpg", ".jpeg", ".webp"} for path in files):
             raise ValueError("document_text_requires_document_sources")
         node_models.setdefault("ingest", {})["generation"] = document_parser["binding"]
-    elif any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in files):
+    elif not repair_inputs and any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in files):
         raise ValueError("document_image_requires_vision_parser")
-    if not files and not brief.strip() and not human["enabled"]:
+    if not files and not brief.strip() and not human["enabled"] and not repair_inputs:
         raise ValueError("请上传来源文件或填写开放性需求")
-    if "agent" in targets and not files and not (set(targets) - {"agent"}):
+    if "agent" in targets and not files and not (set(targets) - {"agent"}) and not repair_inputs:
         raise ValueError("Agent 轨迹重放需要上传 JSON/JSONL 工具执行记录")
     if len(files) > 200:
         raise ValueError("单次运行最多 200 个文件")
@@ -361,14 +368,21 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             for index, source in enumerate(files)])
     references = snapshot_released_corpus(Path(output)) if "cpt" in targets else []
     agent_sandbox_image = (validate_sandbox_image(os.environ.get(IMAGE_ENV))
-                           if "agent" in targets and agent_replay_mode != "local" else None)
-    if "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:
+                           if not repair_inputs and "agent" in targets and agent_replay_mode != "local" else None)
+    if not repair_inputs and "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:
         raise ValueError("agent_sandbox_not_configured")
     run_id = uuid.uuid4().hex if run_id is None else run_id
     # Human workspaces reserve this identity durably before creating the child.
     # The usual validated run path and exclusive input mkdir still prevent reuse.
     run_path(output, run_id)
     endpoint_pins = None
+    if repair_inputs:
+        # A correction authenticates the parent snapshots without executing its
+        # parsing, generation, cleaning or replay nodes. Inherited bindings for
+        # those nodes must not load clients or require still-active services.
+        active_roles = ({"generation", "jev"} if package_review["enabled"] else {"generation"}) if review_repair["mode"] == "auto" else set()
+        bindings = {role: binding for role, binding in node_models.get("review", {}).items() if role in active_roles}
+        node_models = {"review": bindings} if bindings else {}
     if settings_root is not None and node_models:
         # A submitted node binding must not follow a mutable service name to a
         # different URL, protocol or model inventory while waiting to run.
@@ -420,6 +434,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "prompts": prompt_versions()}
     if production is not None:
         recipe["production"] = production
+    if review_repair is not None:
+        recipe["review_repair"] = review_repair
+    if repair_inputs is not None:
+        recipe["repair_inputs"] = repair_inputs
     if cpt_processing_supplied:
         recipe["cpt_processing"] = cpt_processing
     if endpoint_pins is not None:
@@ -435,7 +453,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                 "human_augmentation_enabled": human["enabled"],
                 "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0}
                            for key, label in STAGES.items()
-                           if key != "jev" or (package_review["enabled"] and package_review_stage(package_review) == "jev")},
+                           if (key != "review" or review_repair is not None)
+                           and (key != "jev" or (review_repair is None and package_review["enabled"]
+                                                 and package_review_stage(package_review) == "jev"))},
                 "events": [], "usage": {}})
     return run_id
 
@@ -444,18 +464,18 @@ class Cancelled(Exception):
     pass
 
 
-class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
+class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, WorkflowReviewRepair):
     def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)
         self.state = read_json(self.path / "state.json")
         self.recipe = read_json(self.path / "recipe.json")
         parser = validate_document_parser(self.recipe.get("document_parser"))
-        if parser["mode"] == "vision":
+        if not self.recipe.get("repair_inputs") and parser["mode"] == "vision":
             from lib.infrastructure.document_vision import require_vision_model
             require_vision_model(self.root, parser["binding"])
         cpt_config = validate_cpt_processing(self.recipe.get("cpt_processing"))
-        if cpt_config["mode"] == "model" and cpt_config["review_mode"] == "vision":
+        if not self.recipe.get("repair_inputs") and cpt_config["mode"] == "model" and cpt_config["review_mode"] == "vision":
             from lib.infrastructure.document_vision import require_vision_model
             binding = self.recipe.get("node_models", {}).get("cpt", {}).get("jev")
             if not binding:
@@ -624,6 +644,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
 
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
             allow_reasoning_fallback=True, model_stage=None, prompt_stage=None):
+        if (self.recipe.get("review_repair") is not None and role == "jev"
+                and (model_stage or self.stage) in {"sft", "multiturn", "preference", "cot", "trim"}):
+            # Generation-side contract/turn checks use that node's own model.
+            # Only the review node owns the optional separate scoring model.
+            role = "generation"
         journal = None
         def invoke():
             nonlocal journal
@@ -1236,6 +1261,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             if not quality["keep"]:
                 return [{**unit, "status": "quarantined", "reason": quality["reason"], "quality": quality}]
             return [{**unit, "status": "eligible", "text": unit["text"], "quality": quality,
+                     **({"source_context": deepcopy(unit)} if self.recipe.get("review_repair") is not None else {}),
                      "retention_reason": "source_text_passed_deterministic_checks", "evidence_level": (
                          "model_transcribed_visual_source" if unit.get("document_reading") else "source_text")}]
         data = self.ask([unit["id"], "corpus"], "generation", "workflow.corpus", unit)
@@ -1243,6 +1269,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         quality = inspect_corpus(text)
         if not quality["keep"]:
             return [{**self.rejected(unit, "invalid_generated_corpus"), "quality": quality}]
+        if self.recipe.get("review_repair") is not None:
+            return [{**unit, "text": text, "status": "eligible", "quality": quality,
+                     "source_context": deepcopy(unit), "evidence_level": "model_assessed_synthetic"}]
         check = self.judge_answer([unit["id"], "corpus_judge"], unit, {"content": text})
         if not accepted(check):
             return [{**self.rejected(unit, "corpus_judge_rejected"), "judge": check, "quality": quality}]
@@ -1309,6 +1338,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             if issue:
                 feedback = issue
                 continue
+            if self.recipe.get("review_repair") is not None:
+                # Content scoring/correction belongs to the review node in v18.
+                # Generation keeps deterministic shape and source-quote checks.
+                return [{"id": unit["id"], "source_id": unit["source_id"], "status": "eligible",
+                         "messages": messages, "tools": unit.get("tools", []), "quotes": quotes,
+                         "source_context": unit, "generation_check": "structure_and_source_quotes",
+                         **({"quote_spans": evidence_spans} if evidence_spans is not None else {}),
+                         **({"generation_style": style} if style is not None else {}),
+                         "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
+                         "evidence_level": "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed"}]
             check = self.judge_answer([unit["id"], "sft_judge", attempt], {**context, "rendered_prompt": messages[:-1]}, messages,
                                       **({"allow_reasoning_fallback": False} if style is not None else {}))
             style_check = (self.style_check([unit["id"], "sft_style", attempt], style,
@@ -1333,6 +1372,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             if style is None:
                 feedback = check["reason"]
         return [{**self.rejected(unit, "sft_quality_failed_after_repair"), "feedback": feedback,
+                 **({"messages": messages, "quotes": quotes} if self.recipe.get("review_repair") is not None
+                     and "messages" in locals() else {}),
                  **({"generation_style": style, "judge": check, "style_check": style_check,
                      "repair_attempts": 1} if style is not None else {})}]
 
@@ -1535,6 +1576,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             messages, prompt_id="workflow.multiturn_consistency")
         if not accepted(consistency):
             return [{**self.rejected(unit, "multiturn_consistency_rejected"),
+                     **({"messages": messages, "source_context": deepcopy(unit)}
+                        if self.recipe.get("review_repair") is not None else {}),
                      "turn_reviews": reviews, "consistency": consistency,
                      "evidence_level": evidence_level}]
         if (contract is not None and contract.get("human_design", {}).get("seed", {}).get("revision_context")):
@@ -1549,6 +1592,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                  "source_name": unit.get("source_name"), "location": unit.get("location"),
                  "source_location": unit.get("source_location"),
                  "status": "eligible", "messages": messages, "tools": unit.get("tools", []),
+                 **({"source_context": deepcopy(unit)} if self.recipe.get("review_repair") is not None else {}),
                  "synthetic": unit["kind"] != "conversation", "evidence_level": evidence_level,
                  "source_verification": source_verification,
                  "fact_verification": "not_independently_verified",
@@ -1595,6 +1639,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                "original_messages_sha256": digest(unit["messages"])}
         if result["status"] == "eligible":
             return [{**row, "messages": result["messages"], "tools": unit.get("tools", []),
+                     **({"source_context": {"kind": "conversation", "task": canonical(unit["messages"]),
+                                            "messages": deepcopy(unit["messages"])}}
+                        if self.recipe.get("review_repair") is not None else {}),
                      "verification": result["verification"]}]
         row["reason"] = result["reason"]
         if result.get("unverified_tool"):
@@ -1621,6 +1668,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         alternative = {"role": "assistant", "content": value["answer"], "reasoning_content": value["reasoning"]}
         if same_answer(chosen["content"], alternative["content"]):
             return [self.rejected(sample, "identical_dpo_answers")]
+        if self.recipe.get("review_repair") is not None:
+            return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
+                     "prompt": prefix, "chosen": [chosen], "rejected": [alternative], "tools": sample.get("tools", []),
+                     "source_context": deepcopy(sample.get("source_context")), "quotes": sample.get("quotes", []),
+                     "evidence_level": sample["evidence_level"], **self.qa_metadata(sample)}]
         check = self.judge_answer([sample["id"], "alternative_judge"],
                                   {"prompt": prefix, "source": sample["source_context"]}, alternative)
         node_models = self.recipe.get("node_models", {})
@@ -1657,6 +1709,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                  "arithmetic_expression": sample["_expression"], "verified_result": sample["_result"],
                  "calculation_steps": sample.get("_steps", []),
                  "generator_version": self.recipe.get("math_generator_version", 1),
+                 **({"source_context": {"kind": "brief", "task": canonical({"arithmetic_expression": sample["_expression"],
+                     "verified_result": sample["_result"], "calculation_steps": sample.get("_steps", [])})}}
+                    if self.recipe.get("review_repair") is not None else {}),
                  "evidence_level": "deterministic_synthetic_arithmetic"}]
 
     def cot(self, sample):
@@ -1676,6 +1731,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         answer = messages[-1].get("content", "").strip()
         if not reasoning or not answer:
             return [self.rejected(sample, "cot_missing_reasoning_or_answer")]
+        if self.recipe.get("review_repair") is not None:
+            return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
+                     "question": messages[:-1], "reasoning": [reasoning], "answer": answer,
+                     "source_context": deepcopy(sample.get("source_context")), "quotes": sample.get("quotes", []),
+                     "evidence_level": sample["evidence_level"], **self.qa_metadata(sample)}]
         task = {"prompt": messages[:-1], "reasoning": reasoning, "answer": answer,
                 "source": sample.get("source_context"), "quotes": sample.get("quotes", [])}
         check = self.ask([sample["id"], "cot_check"], "jev", "workflow.rationale_check", task)
@@ -1719,6 +1779,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             if not isinstance(value, dict) or any(text_issue(value.get(key)) for key in ("reasoning", "answer")):
                 feedback = "推理和答案必须是有效的完整文本"
                 continue
+            if self.recipe.get("review_repair") is not None:
+                return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
+                         "question": task["prompt"], "reasoning": [value["reasoning"]], "answer": value["answer"],
+                         "source_context": source, "quotes": sample.get("quotes", []), "generation_style": style,
+                         "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation",
+                         "evidence_level": sample["evidence_level"], **self.qa_metadata(sample)}]
             check = self.judge_answer([sample["id"], "cot_generated_check_v1", attempt],
                                       {key: item for key, item in task.items() if key != "generation_style"},
                                       {"reasoning": value["reasoning"], "answer": value["answer"]},
@@ -1884,6 +1950,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
 
     def preference(self, sample):
         pairs = self.dpo(sample)
+        if self.recipe.get("review_repair") is not None:
+            return pairs
         if not pairs or pairs[0]["status"] != "eligible":
             return pairs
         pair = pairs[0]
@@ -1895,6 +1963,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         return [pair]
 
     def package(self, collections):
+        if self.recipe.get("review_repair") is not None:
+            collections = self.review_repair_collections(collections)
+            self.stage = "package"
+            self.state["stages"]["package"].update(status="running", phase="deterministic_checks")
         evaluation_references = self.recipe.get("evaluation_references", [])
         evaluation_index = (load_evaluation_index(self.path, evaluation_references)
                             if "cpt" in self.recipe["targets"] else None)
@@ -2187,7 +2259,22 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         if "rlaif" in self.recipe["targets"]:
             report["limitations"].append(
                 "RLAIF 当前仅产出任务正确性准则下的 AI 反馈和奖励模型偏好候选；未训练奖励模型、提供在线奖励或运行强化学习")
-        review_config = validate_package_review(self.recipe.get("package_review"))
+        review_config = (validate_package_review(None) if self.recipe.get("review_repair") is not None
+                         else validate_package_review(self.recipe.get("package_review")))
+        if self.recipe.get("review_repair") is not None:
+            report["review_repair"] = {**self.recipe["review_repair"], "node": "review", "targets": {}}
+            for target in self.recipe["targets"]:
+                statuses, attempts = {}, 0
+                for row in collections[target]:
+                    receipt = row.get("review_repair", {})
+                    status = receipt.get("status", "not_reviewed")
+                    statuses[status] = statuses.get(status, 0) + 1
+                    attempts += receipt.get("attempts", 0)
+                report["review_repair"]["targets"][target] = {"statuses": statuses, "repair_attempts": attempts}
+            if self.recipe["review_repair"]["mode"] == "human":
+                report["human_review"] = "performed" if any(
+                    row.get("review_repair", {}).get("score") is not None
+                    for target in self.recipe["targets"] for row in collections[target]) else "pending"
         independent_review = (review_config["enabled"] and package_review_stage(review_config) == "jev"
                               and not getattr(self, "_production_finalizing", False))
         if independent_review:
@@ -2362,6 +2449,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                 self.state["quality"]["production"] = report["production"]
             if "qa_director" in report:
                 self.state["quality"]["qa_director"] = report["qa_director"]
+            if "review_repair" in report:
+                self.state["quality"]["review_repair"] = report["review_repair"]
             for pending in destination.glob(".*.pending"):
                 pending.unlink(missing_ok=True)
             files = {p.name: file_hash(p) for p in destination.iterdir() if p.is_file() and p.name != "manifest.json"}
@@ -2412,6 +2501,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                 for source in self.recipe["sources"]:
                     if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
                         raise ValueError("source_snapshot_changed")
+                if self.recipe.get("repair_inputs"):
+                    return self.execute_repair_branch()
                 if self.production_enabled():
                     return self._execute_production()
                 selected_targets = set(self.recipe["targets"])

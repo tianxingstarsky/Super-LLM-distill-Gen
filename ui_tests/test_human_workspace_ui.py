@@ -159,7 +159,7 @@ def test_director_node_does_not_contain_the_human_question_and_answer_editor(tmp
     assert not ui.get("toggle") or not any(item.key == f"workflow-human-enabled:{WORKSPACE}" for item in ui.toggle)
 
 
-def create_workspace(root, *, name="Human QA designs", draft=None):
+def create_workspace(root, *, name="Human QA designs", draft=None, review_mode="auto"):
     from lib.bootstrap.workflows import human_augmentation_application
 
     write_service(root)
@@ -168,12 +168,97 @@ def create_workspace(root, *, name="Human QA designs", draft=None):
     application = human_augmentation_application(root, root / "output")
     session_id = application.create_session(
         name=name, targets=["sft"], sources=[], brief="", sft_output_style="separated",
+        review_repair={"mode": review_mode, "max_rounds": 2, "score_threshold": .8},
         node_models={"director": {"generation": dict(binding)},
+                     "review": {"generation": dict(binding)},
                      "sft": {"generation": dict(binding), "jev": dict(binding)}},
     )
     if draft is not None:
         application.save_draft(session_id, draft, expected_version=application.session(session_id)["version"])
     return session_id
+
+
+def test_review_node_keeps_human_controls_and_both_jev_model_roles_together(tmp_path):
+    ui = entry(tmp_path)
+    assert not any(item.key == f"workflow-package-review-enabled:{WORKSPACE}" for item in ui.toggle)
+    ui.session_state[f"workflow-setup-node:{WORKSPACE}"] = "review"
+    ui.session_state[f"canvas-open:setup-canvas:{WORKSPACE}"] = True
+    ui.run()
+    assert not ui.exception
+    mode = ui.segmented_control(key=f"workflow-review-repair-mode:{WORKSPACE}")
+    assert mode.value == "auto"
+    assert any(item.key and item.key.startswith(f"node-model:{WORKSPACE}:review:generation:") for item in ui.selectbox)
+    assert not any(item.key and item.key.startswith(f"node-model:{WORKSPACE}:review:jev:") for item in ui.selectbox)
+    ui.toggle(key=f"workflow-package-review-enabled:{WORKSPACE}").set_value(True).run()
+    assert not ui.exception
+    assert any(item.key and item.key.startswith(f"node-model:{WORKSPACE}:review:jev:") for item in ui.selectbox)
+    ui.segmented_control(key=f"workflow-review-repair-mode:{WORKSPACE}").set_value("human").run()
+    assert not ui.exception
+    assert not any(item.key and item.key.startswith(f"node-model:{WORKSPACE}:review:") for item in ui.selectbox)
+    assert ui.number_input(key=f"workflow-review-repair-rounds:{WORKSPACE}").disabled
+    saved = ui.session_state[f"workflow-form-draft:{WORKSPACE}"]
+    assert saved[f"workflow-review-repair-mode:{WORKSPACE}"] == "human"
+    assert set(saved[f"workflow-node-bindings:{WORKSPACE}"]["review"]) == {"generation", "jev"}
+    assert not ui.session_state.filtered_state.get(f"workflow-draft-error:{WORKSPACE}", False)
+    from lib.bootstrap.creation_drafts import creation_draft_application
+    assert creation_draft_application(tmp_path / "output").load()[f"workflow-review-repair-mode:{WORKSPACE}"] == "human"
+    fresh = AppTest.from_function(entry_screen, args=(str(tmp_path),), default_timeout=15)
+    fresh.session_state[f"workflow-setup-node:{WORKSPACE}"] = "review"
+    fresh.session_state[f"canvas-open:setup-canvas:{WORKSPACE}"] = True
+    fresh.run()
+    assert not fresh.exception
+    assert fresh.segmented_control(key=f"workflow-review-repair-mode:{WORKSPACE}").value == "human"
+    assert not fresh.session_state.filtered_state.get(f"workflow-draft-error:{WORKSPACE}", False)
+
+
+@pytest.mark.parametrize("mode,jev_enabled,expected", [
+    ("human", True, "人工评分与修正"),
+    ("auto", True, "JEV 评分 + 模型修正"),
+    ("auto", False, "单模型评分与修正"),
+])
+def test_run_summary_describes_actual_review_mode_instead_of_dormant_jev_setting(tmp_path, mode, jev_enabled, expected):
+    ui = entry(tmp_path)
+    ui.session_state[f"workflow-setup-node:{WORKSPACE}"] = "review"
+    ui.run()
+    ui.toggle(key=f"workflow-package-review-enabled:{WORKSPACE}").set_value(jev_enabled).run()
+    ui.segmented_control(key=f"workflow-review-repair-mode:{WORKSPACE}").set_value(mode).run()
+    assert not ui.exception
+    summary = next(item.proto.body for item in ui.get("html") if 'class="df-wb-submit-summary"' in item.proto.body)
+    assert expected in summary
+    assert "JEV 全量评审" not in summary and "JEV 抽检" not in summary
+
+
+def test_human_scoring_and_direct_edit_submit_one_review_only_version(tmp_path):
+    from lib.infrastructure.training_workflow import read_json, run_path
+    session_id = create_workspace(tmp_path, review_mode="human", draft={"enabled": True, "seeds": [
+        {"question": "When should the pump stop?", "answer": "Stop if its seal leaks."}]})
+    ui = studio(tmp_path, session_id)
+    ui.button(key=f"human-generate:{context(session_id)}").click().run()
+    first, originals = complete_round(tmp_path, session_id)
+    ui.run()
+    assert not ui.exception
+    assert not any(item.label == "修正答案并重新评分" for item in ui.button)
+    text_area(ui, "修订答案").set_value("Stop the pump and inspect its seal.")
+    text_area(ui, "修订推理（可选）").set_value("A leaking seal makes continued operation unsafe.")
+    button(ui, "提交人工评分与修正").click().run()
+    assert not ui.exception and not ui.error
+    session = saved_workspace(tmp_path, session_id)
+    assert len(session["rounds"]) == 2
+    child = session["rounds"][-1]
+    assert child["kind"] == "manual_review"
+    recipe = read_json(run_path(tmp_path / "output", child["run_id"]) / "recipe.json")
+    assert recipe["review_repair"]["mode"] == "human"
+    assert recipe["repair_inputs"][0]["score"] == .8
+    corrected = recipe["repair_inputs"][0]["corrected_record"]["messages"]
+    assert corrected[0] == originals[0]["messages"][0]
+    assert corrected[1]["content"] == "Stop the pump and inspect its seal."
+    assert corrected[1]["reasoning_content"] == "A leaking seal makes continued operation unsafe."
+    assert recipe["qa_director"]["enabled"] is False
+    from lib.domain.workflow_graph import execution_graph
+    nodes, _ = execution_graph(recipe["targets"], recipe_version=18, repair_only=True)
+    assert nodes == ("ingest", "review", "package")
+    assert not set(nodes).intersection({"sft", "director", "cot", "preference"})
+    assert len(ui.session_state["fixture-begin-calls"]) == 2
 
 
 def studio_screen(root, session_id):
@@ -203,7 +288,8 @@ def studio_screen(root, session_id):
         file = run_path(output, command[-1]) / "state.json"
         state = read_json(file)
         state["status"] = "running"
-        state["stages"]["director"]["status"] = "running"
+        stage = "review" if read_json(run_path(output, command[-1]) / "recipe.json").get("repair_inputs") else "director"
+        state["stages"][stage]["status"] = "running"
         atomic_json(file, state)
 
     with patch.object(FilesystemWorkflowDriver, "is_active", active), \
@@ -251,16 +337,20 @@ def complete_round(root, session_id, *, question="When should the pump stop?", a
     run = run_path(root / "output", round_row["run_id"])
     recipe = read_json(run / "recipe.json")
     state = read_json(run / "state.json")
-    design = deepcopy(recipe["qa_director"]["human_augmentation"])
+    design = deepcopy((recipe.get("qa_director") or {}).get("human_augmentation") or {})
+    if not design.get("seeds"):
+        design = deepcopy(session["draft"])
     records = []
     for index in range(count):
-        records.append({"id": f"candidate-{index}", "source_id": recipe["sources"][0]["sha256"], "status": "eligible",
+        records.append({"id": f"candidate-{index}", "source_id": (recipe["sources"][0]["sha256"] if recipe["sources"] else recipe["repair_inputs"][0]["record"]["source_id"]), "status": "eligible",
             "evidence_level": "human_provided_and_model_assessed",
             "messages": [{"role": "user", "content": question + (f" {index}" if count > 1 else "")},
                          {"role": "assistant", "content": answer, "reasoning_content": "The stop condition protects the equipment."}],
             "qa_contract": {"human_design": {"seed": deepcopy(design["seeds"][0]),
                 "question_requirements": design["question_requirements"],
                 "answer_requirements": design["answer_requirements"]}},
+            **({"revision_context": deepcopy(recipe["repair_inputs"][0]["revision_context"])}
+               if recipe.get("repair_inputs") else {}),
             **(record_extra or {}),
         })
     artifacts = run / "artifacts"
@@ -295,13 +385,13 @@ def test_failed_review_prefills_real_feedback_and_new_version_is_reviewed_before
     assert not ui.exception and not ui.error
     assert text_area(ui, "修正意见").value == "Keep the stop condition and explain the next action."
     assert any("未通过 · 进入修正分支" in item.proto.body for item in ui.get("html"))
-    button(ui, "确认修正并重新生成").click().run()
-    assert not ui.exception and not ui.error
+    button(ui, "修正答案并重新评分").click().run()
+    assert not ui.exception and not ui.error, [item.value for item in ui.error]
     session = saved_workspace(tmp_path, session_id)
     assert len(session["rounds"]) == 2
     revision = session["rounds"][-1]
     child = read_json(run_path(tmp_path / "output", revision["run_id"]) / "recipe.json")
-    assert child["qa_director"]["human_augmentation"]["seeds"][0]["revision_context"]["instruction"] == \
+    assert child["repair_inputs"][0]["instruction"] == \
         "Keep the stop condition and explain the next action."
     complete_round(tmp_path, session_id)
     ui.run()
@@ -324,7 +414,7 @@ def test_revision_limit_is_visible_and_blocks_submission_for_that_result(tmp_pat
         "qa_contract": {"human_design": {"seed": {"revision_context": {"depth": 3}}}}})
     ui.run()
     assert not ui.exception and not ui.error
-    assert button(ui, "确认修正并重新生成").disabled
+    assert button(ui, "修正答案并重新评分").disabled
     assert any("修订上限" in item.value for item in ui.warning)
     assert len(application.session(session_id)["rounds"]) == 1
 
@@ -363,6 +453,66 @@ def test_normal_workflow_with_only_rejected_candidates_still_opens_correction_br
     saved = application.session(opened["session_id"])
     assert len(saved["rounds"]) == 1 and saved["rounds"][0]["run_id"] == first["run_id"]
     assert len(application.session(session_id)["rounds"]) == 1
+
+
+@pytest.mark.parametrize("target,payload,expected", [
+    ("cpt", {"text": "Stop the pump if its seal leaks."}, {"text": "Stop the pump if its seal leaks."}),
+    ("cot", {"question": "What should I do?", "answer": "Stop the pump.", "reasoning": ["The seal leaks."]},
+     {"question": "What should I do?", "answer": "Stop the pump.", "reasoning": ["The seal leaks."]}),
+    ("gsm8k", {"question": "How many pumps remain?", "answer": "#### 2"},
+     {"question": "How many pumps remain?", "answer": "#### 2"}),
+    ("agent", {"messages": [{"role": "user", "content": "Inspect the pump."},
+                            {"role": "assistant", "content": "The seal leaks."}]},
+     {"messages": [{"role": "user", "content": "Inspect the pump."},
+                   {"role": "assistant", "content": "The seal leaks."}]}),
+    ("rlaif", {"prompt": [{"role": "user", "content": "What should I do?"}], "chosen": [{"role": "assistant", "content": "Stop the pump."}],
+               "rejected": [{"role": "assistant", "content": "Keep it running."}]},
+     {"prompt": [{"role": "user", "content": "What should I do?"}], "responses": [
+         {"response": [{"role": "assistant", "content": "Stop the pump."}], "preference_rank": 1},
+         {"response": [{"role": "assistant", "content": "Keep it running."}], "preference_rank": 2}],
+      "criterion": ""}),
+])
+def test_imported_review_window_preserves_target_fields_without_qa_design_controls(tmp_path, target, payload, expected):
+    from lib.bootstrap.workflows import human_augmentation_application, workflow_application
+    from lib.infrastructure.training_workflow import read_json, run_path, file_hash
+    from lib.io_utils import atomic_json
+    write_service(tmp_path)
+    source = tmp_path / "maintenance.md"
+    source.write_text("Stop the pump if its seal leaks.", encoding="utf-8")
+    workflow = workflow_application(tmp_path, tmp_path / "output")
+    run_id = workflow.create_run(sources=[str(source)], targets=[target],
+        review_repair={"mode": "human", "max_rounds": 2, "score_threshold": .8},
+        **({"cpt_processing": {"mode": "native"}} if target == "cpt" else {}))
+    path = run_path(tmp_path / "output", run_id)
+    recipe, state = read_json(path / "recipe.json"), read_json(path / "state.json")
+    artifacts = path / "artifacts"
+    artifacts.mkdir(exist_ok=True)
+    atomic_json(artifacts / f"{target}.records.json", [{"id": "candidate-a", "source_id": recipe["sources"][0]["sha256"],
+        "status": "quarantined", "reason": "human_review_required", **payload}])
+    quality = {"targets": {target: {"total": 1, "eligible": 0, "reasons": {"human_review_required": 1}}}}
+    atomic_json(artifacts / "quality.json", quality)
+    atomic_json(artifacts / "manifest.json", {"status": "complete", "run_id": run_id,
+        "recipe_hash": state["recipe_hash"], "counts": {target: 0},
+        "sha256": {file.name: file_hash(file) for file in artifacts.iterdir() if file.name != "manifest.json"}})
+    state.update(status="needs_attention", quality=quality)
+    for stage in state["stages"].values():
+        stage["status"] = "completed"
+    atomic_json(path / "state.json", state)
+    app = human_augmentation_application(tmp_path, tmp_path / "output")
+    session_id = app.create_session(from_run_id=run_id, review_only=True)
+    assert app.session(session_id)["review_only"]
+    ui = studio(tmp_path, session_id)
+    assert not ui.exception
+    assert not any(item.key and item.key.startswith("human-generate:") for item in ui.button)
+    assert not any(item.key and item.key.startswith("human-seed:") for item in ui.text_area)
+    assert json.loads(text_area(ui, "完整候选内容（JSON）").value) == expected
+    assert button(ui, "提交人工评分与修正")
+    mode_key = f"human-review-mode:{context(session_id)}:{app.session(session_id)['rounds'][0]['id']}:{target}:candidate-a"
+    ui.segmented_control(key=mode_key).set_value("auto").run()
+    assert not ui.exception
+    assert button(ui, "修正答案并重新评分").disabled
+    assert any("尚未配置修正模型" in item.value for item in ui.info)
+    assert ui.session_state["fixture-begin-calls"] == []
 
 
 def test_workspace_edits_switch_designs_and_restore_after_reload(tmp_path):
@@ -481,9 +631,9 @@ def test_selected_result_feedback_creates_a_new_review_round_and_keeps_previous_
     text_area(ui, "修正意见").set_value("Explain the action first and keep the stop condition.")
     text_area(ui, "修订问题").set_value("The pump seal is leaking. What should I do?")
     text_area(ui, "修订参考答案").set_value("Stop the pump, then inspect and repair the seal.")
-    button(ui, "提交意见并回流修正").click().run()
+    button(ui, "修正答案并重新评分").click().run()
     assert not ui.exception
-    assert not ui.error
+    assert not ui.error, [item.value for item in ui.error]
     stored = saved_workspace(tmp_path, session_id)
     assert len(stored["rounds"]) == 2
     revision = stored["rounds"][-1]
@@ -492,17 +642,20 @@ def test_selected_result_feedback_creates_a_new_review_round_and_keeps_previous_
     assert stored["feedback"][0]["applied_round_id"] == revision["id"]
     assert revision["feedback_ids"] == [stored["feedback"][0]["id"]]
     child = read_json(run_path(tmp_path / "output", revision["run_id"]) / "recipe.json")
-    seed = child["qa_director"]["human_augmentation"]["seeds"][0]
+    seed = child["repair_inputs"][0]
     assert seed["question"] == "The pump seal is leaking. What should I do?"
     assert seed["answer"] == "Stop the pump, then inspect and repair the seal."
     assert seed["revision_context"]["instruction"] == "Explain the action first and keep the stop condition."
-    assert seed["revision_context"]["messages"] == originals[0]["messages"]
+    assert seed["record"]["messages"] == originals[0]["messages"]
+    assert child["qa_director"]["enabled"] is False
+    assert set(child["repair_inputs"][0]["record"]) >= {"id", "messages"}
+    assert set(read_json(run_path(tmp_path / "output", revision["run_id"]) / "state.json")["stages"]) >= {"review", "package"}
     assert len(ui.session_state["fixture-begin-calls"]) == 2
     assert "workflow-open-run" not in ui.session_state
     assert parent_manifest.read_bytes() == before
     ui.selectbox(key=f"human-round:{context(session_id)}").set_value(first_round["id"]).run()
     assert not ui.exception
-    assert button(ui, "提交意见并回流修正").disabled
+    assert button(ui, "修正答案并重新评分").disabled
     ui.selectbox(key=f"human-round:{context(session_id)}").set_value(revision["id"]).run()
     complete_round(tmp_path, session_id, question=seed["question"], answer=seed["answer"])
     ui.run()
@@ -532,7 +685,7 @@ def test_correction_canvas_receipt_opens_feedback_without_opening_the_model_stre
     assert not ui.exception
     assert not ui.session_state[f"human-canvas-stream:{key}"]
     assert any("已打开下方修正分支" in item.value for item in ui.caption)
-    assert button(ui, "提交意见并回流修正")
+    assert button(ui, "修正答案并重新评分")
     ui.run()
     assert not ui.exception
     assert not ui.session_state[f"human-canvas-stream:{key}"]
@@ -580,9 +733,9 @@ def test_conflicting_draft_save_preserves_input_and_refresh_allows_retry(tmp_pat
         "question": "Local question", "answer": "Local answer", "question_requirements": "", "answer_requirements": ""}
 
 
-@pytest.mark.parametrize("with_results", [False, True, "rejected"])
+@pytest.mark.parametrize("with_results", [False, True, "rejected", "human"])
 def test_english_workspace_static_controls_and_help_have_no_translation_leaks(tmp_path, with_results):
-    session_id = create_workspace(tmp_path, name="泵站问答设计", draft={"enabled": True, "seeds": [
+    session_id = create_workspace(tmp_path, name="泵站问答设计", review_mode="human" if with_results == "human" else "auto", draft={"enabled": True, "seeds": [
         {"question": "When should the pump stop?", "answer": "Stop if its seal leaks."}]})
     ui = studio(tmp_path, session_id, language="en")
     if with_results:
@@ -600,7 +753,7 @@ def test_english_workspace_static_controls_and_help_have_no_translation_leaks(tm
     assert "Generate this round" in labels
     if with_results:
         assert "Result version" in labels
-        assert ("Confirm feedback and regenerate" if with_results == "rejected" else "Submit feedback and generate a revision") in labels
+        assert ("Submit human score and correction" if with_results == "human" else "Correct the answer and score again") in labels
     markup = [item.proto.body for item in ui.get("html")
               if any(css in item.proto.body for css in ("df-human-masthead", "df-human-assessment", "df-human-empty", "df-human-result"))]
     assert ui.selectbox(key=f"human-history:{session_id}").options == ["泵站问答设计"]
@@ -608,5 +761,5 @@ def test_english_workspace_static_controls_and_help_have_no_translation_leaks(tm
     for value in markup:
         static_markup.feed(value)
     if with_results:
-        assert "Correct → Generate again → Review again → Keep if passed / Decide on another revision if failed" in static_markup.text
+        assert "Score candidate → Correct when needed → Score again → Keep if passed / Review if failed" in static_markup.text
     assert not any(CHINESE.search(value) for value in labels + captions + help_texts + static_markup.text)

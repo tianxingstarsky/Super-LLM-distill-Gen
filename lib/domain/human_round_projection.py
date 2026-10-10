@@ -1,8 +1,8 @@
 """Read-only feedback branches projected from a single real workflow version.
 
-Generation already includes model checks. Optional JEV is an additional final
-review, not a replacement for those checks. This projection never schedules a
-retry, combines versions, or turns an unselected sample into a scored pass.
+Legacy versions retain their actual generation checks. New versions score and
+repair in one review stage. This projection never schedules a retry, combines
+versions, or turns an unreviewed sample into a scored pass.
 """
 from __future__ import annotations
 
@@ -63,12 +63,26 @@ def _record_projection(result, *, optional_enabled, max_depth):
     check = _verdict(review.get("verdict"), "package_review")
     if check:
         checks.append(check)
-    context = (result.get("lineage") or record.get("qa_contract", {}).get("human_design", {})
+    receipt = record.get("review_repair") or {}
+    if receipt:
+        # These are the verdicts for the current reviewed content. Historical
+        # generation verdicts must not imply that an edited answer passed.
+        checks = []
+        check = _verdict(receipt.get("verdict"), "review")
+        if check:
+            checks.append(check)
+        elif receipt.get("status") in {"accepted", "rejected"}:
+            checks.append({"source": "human_review" if receipt.get("mode") == "human" else "review",
+                           "status": receipt["status"], "reason": receipt.get("reason"),
+                           "score": receipt.get("score")})
+    context = (result.get("lineage") or record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {})
                .get("seed", {}).get("revision_context") or {})
     depth = _count(context.get("depth", 0))
     limited = max_depth is not None and depth is not None and depth >= max_depth
     status = record.get("status", "unknown")
     route = "accepted" if status == "eligible" else "rejected" if status in {"quarantined", "skipped"} else "unknown"
+    if receipt.get("status") == "waiting_manual_review":
+        route = "waiting_manual_review"
     reasons = list(dict.fromkeys(check["reason"] for check in checks
                                 if check["status"] == "rejected" and check.get("reason")))
     if route == "rejected" and not reasons and record.get("reason"):
@@ -76,11 +90,12 @@ def _record_projection(result, *, optional_enabled, max_depth):
     return {"candidate_id": result.get("candidate_id", record.get("id")),
             "target": result.get("target"), "status": status, "route": route,
             "content_sha256": result.get("content_sha256"), "depth": depth,
-            "can_revise": not limited and route in {"accepted", "rejected"},
+            "can_revise": not limited and route in {"accepted", "rejected", "waiting_manual_review"},
             "depth_limited": limited, "reason": record.get("reason"),
             "reviewer_feedback": "\n".join(reasons), "checks": checks,
-            "optional_score_status": (review.get("status", "not_performed")
+            "optional_score_status": ((receipt or review).get("status", "not_performed")
                                       if optional_enabled else "disabled"),
+            "review_repair": deepcopy(receipt),
             "parent_run_id": context.get("parent_run_id"),
             "feedback": deepcopy(result.get("feedback", []))}
 
@@ -101,12 +116,15 @@ def project_feedback_branch(recipe, state, round_info=None, selected_result=None
         generation = "cot"
     review_config = recipe.get("package_review") or {}
     enabled = review_config.get("enabled") is True
-    review_node = package_review_stage(review_config) if enabled else generation
-    correction, package = _stage(state, generation), _stage(state, "package")
-    self_check = {**deepcopy(correction), "coupled_with_generation": True}
-    scoring = _stage(state, review_node) if enabled else {
+    combined = recipe.get("review_repair") is not None
+    mode = (recipe.get("review_repair") or {}).get("mode", "auto")
+    review_node = "review" if combined else package_review_stage(review_config) if enabled else generation
+    correction, package = _stage(state, review_node if combined else generation), _stage(state, "package")
+    self_check = {**deepcopy(correction), "coupled_with_generation": not combined}
+    scoring = _stage(state, review_node) if enabled or combined else {
         "status": "disabled", "nodes": [], "done": None, "total": None, "phase": None, "error": None}
-    scoring.update(enabled=enabled, node=review_node, mode=review_config.get("mode") if enabled else None)
+    scoring.update(enabled=enabled and mode != "human", node=review_node,
+                   mode=mode if combined else review_config.get("mode") if enabled else None)
     summary = quality
     if summary is None and package["status"] == "completed":
         summary = state.get("quality")
@@ -118,6 +136,13 @@ def project_feedback_branch(recipe, state, round_info=None, selected_result=None
     scoring.update(reviewed=_count(plan.get("reviewed")), accepted=_count(plan.get("accepted")),
                    rejected=_count(plan.get("rejected")), unreviewed=unreviewed,
                    coverage_percent=plan.get("coverage_percent"), coverage_status=plan.get("status"))
+    repair_summary = (summary or {}).get("review_repair", {}).get("targets", {}).get(target, {})
+    if combined and repair_summary:
+        statuses = repair_summary.get("statuses", {})
+        scored = sum(statuses.get(key, 0) for key in ("accepted", "rejected"))
+        unreviewed = _count(statuses.get("waiting_manual_review", 0))
+        scoring.update(reviewed=scored, accepted=_count(statuses.get("accepted", 0)),
+                       rejected=_count(statuses.get("rejected", 0)), unreviewed=unreviewed)
     feedback = deepcopy(info.get("feedback_summary") or {"pending": 0, "ready": 0, "blocked": 0, "applied": 0})
     max_depth = _count((info.get("limits") or {}).get("max_revision_depth"))
     selected = _record_projection(selected_result, optional_enabled=enabled, max_depth=max_depth)
@@ -130,13 +155,13 @@ def project_feedback_branch(recipe, state, round_info=None, selected_result=None
     elif status in {"queued", "prepared", "creating"}:
         phase = "waiting"
     elif active or status == "running":
-        phase = "reviewing" if review_node in running_nodes and enabled else "generating"
+        phase = ("repairing" if correction.get("phase") == "repairing" else "reviewing") if review_node in running_nodes and (enabled or combined) else "waiting" if combined else "generating"
         if "package" in running_nodes and package.get("phase") != "ai_review":
             phase = "packaging"
     elif status in {"draft", "cancelled"} and not selected:
         phase = "waiting"
     elif selected:
-        if selected["route"] == "rejected":
+        if selected["route"] in {"rejected", "waiting_manual_review"}:
             phase = "revision_limit" if selected["depth_limited"] else "needs_revision"
             next_action = "revision_limit" if selected["depth_limited"] else "feedback_required"
         elif selected["route"] == "accepted":
@@ -159,9 +184,11 @@ def project_feedback_branch(recipe, state, round_info=None, selected_result=None
     if info.get("pending_round_id") and info["pending_round_id"] != info.get("id", info.get("round_id")):
         actionable = False
         next_action = "wait_for_round"
+    repair_attempts = (selected or {}).get("review_repair", {}).get("attempts", repair_summary.get("repair_attempts", 0))
     return {"phase": phase, "next_action": next_action, "actionable": actionable,
+            "mode": mode, "repair_rounds": repair_attempts,
             "target": target, "generation_node": generation, "review_node": review_node,
-            "generation_nodes": [generation], "round_id": info.get("round_id", info.get("id")),
+            "generation_nodes": [] if recipe.get("repair_inputs") else [generation], "round_id": info.get("round_id", info.get("id")),
             "run_id": info.get("run_id", state.get("id")), "kind": info.get("kind"), "status": status,
             "parent_run_ids": list(dict.fromkeys(parent["run_id"] for parent in info.get("parent_results", [])
                                                   if parent.get("run_id"))),
@@ -169,8 +196,8 @@ def project_feedback_branch(recipe, state, round_info=None, selected_result=None
             "counts": {"total": total, "accepted": approved, "rejected": rejected, "unreviewed": unreviewed},
             "reason_counts": deepcopy(values.get("reasons", {})), "feedback": feedback,
             "routes": {"accepted": {"count": approved, "to": "package"},
-                       "rejected": {"count": rejected, "to": "human_feedback"},
-                       "rebuild_waiting": {"count": feedback.get("ready", 0), "to": generation},
+                       "rejected": {"count": rejected, "to": "review" if combined else "human_feedback"},
+                       "rebuild_waiting": {"count": feedback.get("ready", 0), "to": "review" if combined else generation},
                        "depth_limit": {"count": feedback.get("blocked", 0), "to": None}},
             "selected_result": selected, "selected_reason": selected.get("reason") if selected else None,
             "reviewer_feedback": selected.get("reviewer_feedback", "") if selected else "",

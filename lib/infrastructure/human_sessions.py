@@ -23,6 +23,7 @@ from lib.domain.human_round_projection import project_feedback_branch
 from lib.domain.workflow_creation import validate_creation
 from lib.domain.workflow_node_prompts import snapshot_node_prompts
 from lib.domain.workflow_qa_director import validate_qa_director
+from lib.domain.workflow_targets import TARGETS, TRAINING_FIELDS
 from lib.infrastructure.json_stream import iter_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.verified_preview import verified_snapshot, inventory_identity
@@ -39,6 +40,11 @@ def _now():
 
 def _messages(record):
     return record_messages(record)
+
+
+def _record_revision(record):
+    return (record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {})
+            .get("seed", {}).get("revision_context") or {})
 
 
 class FilesystemHumanSessionDriver:
@@ -152,8 +158,10 @@ class FilesystemHumanSessionDriver:
             parent = self.workflow.recipe(from_run_id)
             inherited = {key: deepcopy(parent[key]) for key in allowed if key in parent
                          and key not in {"sources", "source_names", "evaluation_sources", "evaluation_source_names"}}
-            inherited["targets"] = [target for target in parent["targets"] if target in HUMAN_QA_TARGETS]
-            inherited.pop("cpt_processing", None)
+            inherited["targets"] = list(parent["targets"])
+            if "cpt" not in inherited["targets"]:
+                inherited.pop("cpt_processing", None)
+            inherited.pop("repair_inputs", None)
             if inherited.get("production"):
                 inherited["production"]["goals"] = {target: count for target, count in inherited["production"]["goals"].items()
                     if target in inherited["targets"]}
@@ -170,17 +178,18 @@ class FilesystemHumanSessionDriver:
             recipe = {**inherited, **recipe}
         blueprint = deepcopy(recipe)
         blueprint.setdefault("targets", ["sft"])
-        if not set(blueprint["targets"]) <= HUMAN_QA_TARGETS:
+        if not set(blueprint["targets"]) <= (set(TARGETS) if parent else HUMAN_QA_TARGETS):
             raise ValueError("human_session_requires_qa_targets")
         human = (blueprint.get("qa_director") or {}).get("human_augmentation")
-        director = {**(blueprint.get("qa_director") or {}), "enabled": True,
+        director = {**(blueprint.get("qa_director") or {}), "enabled": set(blueprint["targets"]) <= HUMAN_QA_TARGETS,
                     "planning_mode": "adaptive", "human_augmentation": {"enabled": False}}
         blueprint["qa_director"] = validate_qa_director(director)
         fields = set(inspect.signature(validate_creation).parameters)
         targets, node_models = validate_creation(**{key: value for key, value in blueprint.items() if key in fields})
         blueprint["targets"], blueprint["node_models"] = targets, node_models
         blueprint["document_parser"] = validate_document_parser(blueprint.get("document_parser"))
-        blueprint["node_prompts"] = snapshot_node_prompts(blueprint.get("node_prompts"), recipe_version=17)
+        blueprint["node_prompts"] = snapshot_node_prompts(blueprint.get("node_prompts"),
+            recipe_version=18 if blueprint.get("review_repair") else 17)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):
@@ -190,9 +199,11 @@ class FilesystemHumanSessionDriver:
                                        for seed in human.get("seeds", [])]}
         return blueprint, validate_draft(human or {"enabled": True, "seeds": []}), parent
 
-    def create_session(self, *, from_run_id=None, max_revision_depth=3, initial_draft=None, **recipe):
+    def create_session(self, *, from_run_id=None, max_revision_depth=3, initial_draft=None, review_only=False, **recipe):
         if type(max_revision_depth) is not int or not 1 <= max_revision_depth <= MAX_REVISION_DEPTH:
             raise ValueError("invalid_human_session_revision_limit")
+        if type(review_only) is not bool or review_only and from_run_id is None:
+            raise ValueError("invalid_human_session_review_mode")
         blueprint, draft, parent = self._blueprint(recipe, from_run_id=from_run_id)
         if initial_draft is not None:
             draft = validate_draft(initial_draft)
@@ -224,6 +235,7 @@ class FilesystemHumanSessionDriver:
         state = {"id": session_id, "name": blueprint["name"], "version": 1,
                  "created_at": _now(), "updated_at": _now(), "blueprint_sha256": digest(blueprint),
                  "draft": draft, "rounds": [], "feedback": [],
+                 "review_only": review_only or bool(parent and (parent.get("repair_inputs") or set(blueprint["targets"]) - HUMAN_QA_TARGETS)),
                  "limits": {"max_rounds": MAX_SESSION_ROUNDS, "max_revision_depth": max_revision_depth}}
         if from_run_id is not None:
             state["rounds"].append({"id": uuid.uuid4().hex, "run_id": from_run_id,
@@ -280,7 +292,7 @@ class FilesystemHumanSessionDriver:
             view = self._view_round(row)
         return view
 
-    def _checked_blueprint(self, path, state):
+    def _checked_blueprint(self, path, state, *, check_models=True):
         blueprint = deepcopy(state["blueprint"])
         sources = blueprint.pop("session_source_snapshots")
         for source in sources:
@@ -288,6 +300,11 @@ class FilesystemHumanSessionDriver:
             if not file.is_file() or file.is_symlink() or file_hash(file) != source["sha256"]:
                 raise ValueError("human_session_source_changed")
         pins = blueprint.pop("session_endpoint_pins")
+        if not check_models:
+            # Human review still authenticates source snapshots and parent
+            # results, but it never depends on unused model service settings.
+            blueprint["node_models"] = {}
+            return blueprint, {}
         current = {stage: {role: snapshot_backend_endpoint(self.root, binding["backend"], binding["model"])
             for role, binding in roles.items()} for stage, roles in blueprint["node_models"].items()}
         if pins != current:
@@ -295,15 +312,56 @@ class FilesystemHumanSessionDriver:
         return blueprint, pins
 
     def _prepare(self, path, state, human, *, request_id, kind, sample_count=None,
-                 parents=None, feedback_ids=None):
+                 parents=None, feedback_ids=None, repair_inputs=None, review_mode=None):
         self._can_prepare(state)
-        blueprint, pins = self._checked_blueprint(path, state)
+        human_review = repair_inputs is not None and (review_mode or
+            (state["blueprint"].get("review_repair") or {}).get("mode")) == "human"
+        blueprint, pins = self._checked_blueprint(path, state, check_models=not human_review)
         blueprint["qa_director"] = {**blueprint["qa_director"], "human_augmentation": human}
+        if repair_inputs is not None:
+            # Existing answers are immutable repair evidence, never new SFT
+            # seeds. This branch executes only the review node and packaging.
+            blueprint["qa_director"] = {**blueprint["qa_director"], "enabled": False,
+                                        "human_augmentation": {"enabled": False}}
+            blueprint["repair_inputs"] = deepcopy(repair_inputs)
+            blueprint["targets"] = list(dict.fromkeys(item["target"] for item in repair_inputs))
+            if "sft" not in blueprint["targets"]:
+                blueprint.pop("sft_output_style", None)
+            if "cpt" not in blueprint["targets"]:
+                blueprint.pop("cpt_processing", None)
+            if not set(blueprint["targets"]) & {"sft", "cot"}:
+                blueprint.pop("reasoning_trim", None)
+            blueprint["review_repair"] = {**(blueprint.get("review_repair") or {
+                "mode": "auto", "max_rounds": 2, "score_threshold": 0.8}),
+                **({"mode": review_mode} if review_mode else {})}
+            blueprint["production"] = None
+            blueprint["web_research"] = None
+            blueprint["brief"] = ""
+            blueprint["evaluation_sources"] = []
+            sample_count = len(repair_inputs)
+            if blueprint["review_repair"]["mode"] == "auto":
+                models = blueprint["node_models"]
+                bindings = models.setdefault("review", {})
+                target_node = "preference" if blueprint["targets"][0] in {"dpo", "rlaif", "orpo"} else blueprint["targets"][0]
+                if not bindings.get("generation"):
+                    binding = models.get(target_node, {}).get("generation") or models.get("sft", {}).get("generation")
+                    if binding:
+                        bindings["generation"] = deepcopy(binding)
+                if (blueprint.get("package_review") or {}).get("enabled") and not bindings.get("jev"):
+                    binding = (models.get("jev", {}).get("jev") or models.get("package", {}).get("jev")
+                               or models.get(target_node, {}).get("jev") or bindings.get("generation"))
+                    if binding:
+                        bindings["jev"] = deepcopy(binding)
+                active_roles = {"generation", "jev"} if (blueprint.get("package_review") or {}).get("enabled") else {"generation"}
+                selected = {role: binding for role, binding in bindings.items() if role in active_roles}
+                blueprint["node_models"] = {"review": selected} if selected else {}
+            pins = {stage: {role: snapshot_backend_endpoint(self.root, binding["backend"], binding["model"])
+                for role, binding in roles.items()} for stage, roles in blueprint["node_models"].items()}
         if sample_count is not None:
             blueprint["sample_count"] = sample_count
         if blueprint.get("sample_count") is None:
-            blueprint["sample_count"] = len(human["seeds"])
-        blueprint["max_units"] = max(blueprint.get("max_units", 100), len(human["seeds"]))
+            blueprint["sample_count"] = len(human.get("seeds", []))
+        blueprint["max_units"] = max(blueprint.get("max_units", 100), len(human.get("seeds", [])))
         # Human rounds use their explicit candidate budget, never a stale
         # automatic million-row goal inherited from another working mode.
         # Preserve an existing task cost cap and finite transport retry policy.
@@ -320,6 +378,8 @@ class FilesystemHumanSessionDriver:
                "request_id": request_id, "status": "creating", "created_at": _now(),
                "design_version": state["version"], "human_augmentation_sha256": digest(human),
                "parent_results": deepcopy(parents or []), "feedback_ids": list(feedback_ids or [])}
+        if repair_inputs is not None:
+            row["repair_inputs_sha256"] = digest(repair_inputs)
         state["rounds"].append(row)
         # Consume selections in the same durable write as the reserved child.
         # A crash after child creation cannot leave these feedback IDs reusable.
@@ -360,13 +420,15 @@ class FilesystemHumanSessionDriver:
             if existing := self._existing_request(state, request_id, "generation"):
                 return self._reserve_resume(path, state, self._round(state, existing["id"]))
             self._cas(state, expected_version)
+            if state.get("review_only"):
+                raise ValueError("human_session_requires_qa_targets")
             human = validate_human_augmentation(state["draft"])
             if not human["enabled"]:
                 raise ValueError("human_session_design_required")
             return self._prepare(path, state, human, request_id=request_id, kind="generation", sample_count=sample_count)
 
     def _records(self, run_id, target, *, strict=False):
-        if target not in HUMAN_QA_TARGETS:
+        if target not in TARGETS:
             raise ValueError("human_session_requires_qa_targets")
         path = run_path(self.output, run_id)
         if strict:
@@ -389,7 +451,7 @@ class FilesystemHumanSessionDriver:
         answer = next((message.get("content", "") for message in reversed(messages) if message.get("role") == "assistant"), "")
         feedback = [deepcopy(item) for item in state["feedback"] if item["round_id"] == row["id"]
                     and item["target"] == target and item["candidate_id"] == record["id"]]
-        revision = record.get("qa_contract", {}).get("human_design", {}).get("seed", {}).get("revision_context")
+        revision = _record_revision(record)
         return {"candidate_id": record["id"], "target": target, "round_id": row["id"],
                 "run_id": row["run_id"], "record": record, "messages": messages,
                 "question": question, "answer": answer, "content_sha256": digest(record),
@@ -399,7 +461,7 @@ class FilesystemHumanSessionDriver:
         state = self.session(session_id)
         row = self._round(state, round_id or state.get("current_round_id")) if state["rounds"] else None
         target = target or (result or {}).get("target") or state["blueprint"]["targets"][0]
-        if target not in HUMAN_QA_TARGETS or target not in state["blueprint"]["targets"]:
+        if target not in TARGETS or target not in state["blueprint"]["targets"]:
             raise ValueError("human_session_requires_qa_targets")
         if row is None:
             return project_feedback_branch(state["blueprint"], {},
@@ -425,8 +487,7 @@ class FilesystemHumanSessionDriver:
                 # Historical feedback did not store this small display field.
                 # Its immutable snapshot suffices; do not scan training records.
                 snapshot = read_json(self._path(session_id) / "feedback" / f"{item['id']}.json")
-                depth = snapshot["record"].get("qa_contract", {}).get("human_design", {}).get("seed", {}) \
-                    .get("revision_context", {}).get("depth", 0)
+                depth = _record_revision(snapshot["record"]).get("depth", 0)
             summary["blocked" if depth >= state["limits"]["max_revision_depth"] else "ready"] += 1
         # Refreshes use persisted stage progress and the small sealed state
         # summary. They must not re-hash or enumerate a million result records.
@@ -505,8 +566,7 @@ class FilesystemHumanSessionDriver:
             feedback_id = uuid.uuid4().hex
             feedback = {"id": feedback_id, "round_id": round_id, "run_id": row["run_id"],
                 "target": target, "candidate_id": candidate_id, "content_sha256": digest(record),
-                "revision_depth": record.get("qa_contract", {}).get("human_design", {}).get("seed", {})
-                    .get("revision_context", {}).get("depth", 0),
+                "revision_depth": _record_revision(record).get("depth", 0),
                 "created_at": _now(), "applied_round_id": None, **correction}
             atomic_json(path / "feedback" / f"{feedback_id}.json", {"feedback": feedback, "record": record})
             # Latest feedback on a candidate supersedes its previous unapplied
@@ -530,7 +590,7 @@ class FilesystemHumanSessionDriver:
             raise ValueError("human_session_result_changed")
         previous_design = record.get("qa_contract", {}).get("human_design", {})
         seed = previous_design.get("seed", {})
-        previous_context = seed.get("revision_context", {})
+        previous_context = _record_revision(record)
         depth = previous_context.get("depth", 0) + 1
         if depth > state["limits"]["max_revision_depth"]:
             raise ValueError("human_session_revision_limit")
@@ -554,6 +614,13 @@ class FilesystemHumanSessionDriver:
                 "question_requirements": seed.get("question_requirements", ""),
                 "answer_requirements": seed.get("answer_requirements", "")}
 
+    def _repair_input(self, path, state, feedback):
+        context = self._revision_design(path, state, feedback)["revision_context"]
+        record = read_json(path / "feedback" / f"{feedback['id']}.json")["record"]
+        return {"target": feedback["target"], "record": record, "revision_context": context,
+                "instruction": feedback["instruction"],
+                **{key: feedback[key] for key in ("question", "answer") if feedback.get(key) is not None}}
+
     def revise_round(self, session_id, *, request_id, expected_version,
                      selected_feedback_ids=None, sample_count=None):
         path, request_id = self._path(session_id), request_identifier(request_id)
@@ -575,12 +642,68 @@ class FilesystemHumanSessionDriver:
                     raise ValueError("human_session_feedback_not_available")
             if not 1 <= len(selected) <= 200:
                 raise ValueError("human_session_feedback_required")
-            seeds = [self._revision_design(path, state, item) for item in selected]
-            human = validate_human_augmentation({"enabled": True, "seeds": seeds})
+            inputs = [self._repair_input(path, state, item) for item in selected]
             parents = [{key: item[key] for key in ("run_id", "round_id", "target", "candidate_id", "content_sha256")}
                        for item in selected]
-            return self._prepare(path, state, human, request_id=request_id, kind="revision",
-                sample_count=sample_count, parents=parents, feedback_ids=[item["id"] for item in selected])
+            return self._prepare(path, state, {"enabled": False}, request_id=request_id, kind="revision",
+                sample_count=sample_count, parents=parents, feedback_ids=[item["id"] for item in selected],
+                repair_inputs=inputs, review_mode="auto")
+
+    def submit_manual_review(self, session_id, round_id, target, candidate_id, *, request_id,
+                             score, decision="approve", instruction="", messages=None,
+                             question=None, answer=None, corrected_record=None, expected_version):
+        """Reserve a manually scored/corrected version; no model work here."""
+        from math import isfinite
+        from lib.domain.workflow_quality import conversation_issue
+        if (type(score) not in {int, float} or not isfinite(score) or not 0 <= score <= 100
+                or decision not in {"approve", "reject"}):
+            raise ValueError("invalid_manual_review_score")
+        correction = validate_feedback(instruction=instruction, question=question, answer=answer, decision=decision)
+        if messages is not None and (conversation_issue(messages) or len(json.dumps(messages, ensure_ascii=False)) > 100_000):
+            raise ValueError("invalid_manual_review_messages")
+        if corrected_record is not None:
+            from lib.domain.workflow_quality import text_issue, canonical
+            if (not isinstance(corrected_record, dict) or not corrected_record
+                    or set(corrected_record) - {key for fields in TRAINING_FIELDS.values() for key in fields}
+                    or len(canonical(corrected_record)) > 100_000 or text_issue(canonical(corrected_record))):
+                raise ValueError("invalid_manual_review_record")
+            if messages is not None or question is not None or answer is not None:
+                raise ValueError("invalid_manual_review_record")
+        path, request_id = self._path(session_id), request_identifier(request_id)
+        with FileLock(str(path / ".session.lock")):
+            state = self._read(path)
+            if existing := self._existing_request(state, request_id, "manual_review"):
+                return self._reserve_resume(path, state, self._round(state, existing["id"]))
+            self._cas(state, expected_version)
+            self._can_prepare(state)
+            parent = self._round(state, round_id)
+            if self._view_round(parent)["active"]:
+                raise ValueError("human_session_round_pending")
+            record = self._lookup(parent, target, candidate_id)
+            feedback_id = uuid.uuid4().hex
+            feedback = {"id": feedback_id, "round_id": round_id, "run_id": parent["run_id"],
+                "target": target, "candidate_id": candidate_id, "content_sha256": digest(record),
+                "revision_depth": _record_revision(record).get("depth", 0),
+                "created_at": _now(), "applied_round_id": None, "manual_score": float(score) / 100,
+                **correction}
+            if messages is not None:
+                feedback["manual_messages"] = deepcopy(messages)
+            if corrected_record is not None:
+                feedback["corrected_record"] = deepcopy(corrected_record)
+            atomic_json(path / "feedback" / f"{feedback_id}.json", {"feedback": feedback, "record": record})
+            for previous in state["feedback"]:
+                if (previous["round_id"], previous["target"], previous["candidate_id"]) == (round_id, target, candidate_id):
+                    previous["superseded_by"] = feedback_id
+            state["feedback"].append(feedback)
+            item = self._repair_input(path, state, feedback)
+            item.update(score=float(score) / 100, approved=decision == "approve")
+            if messages is not None:
+                item["messages"] = deepcopy(messages)
+            if corrected_record is not None:
+                item["corrected_record"] = deepcopy(corrected_record)
+            parents = [{key: feedback[key] for key in ("run_id", "round_id", "target", "candidate_id", "content_sha256")}]
+            return self._prepare(path, state, {"enabled": False}, request_id=request_id, kind="manual_review",
+                parents=parents, feedback_ids=[feedback_id], repair_inputs=[item], review_mode="human")
 
     def resume_round(self, session_id, round_id):
         path = self._path(session_id)

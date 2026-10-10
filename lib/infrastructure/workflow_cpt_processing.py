@@ -81,6 +81,7 @@ class WorkflowCPTProcessing:
             return [{**self.rejected(unit, "cpt_source_review_rejected"), "quality": quality,
                      "judge": check, "cpt_processing": trace}]
         return [{**unit, "text": data["text"], "status": "eligible", "quality": quality,
+                 **({"source_context": unit} if self.recipe.get("review_repair") is not None else {}),
                  "judge": check, "cpt_processing": trace,
                  "retention_reason": "source_text_cleaned_and_independently_reviewed",
                  "evidence_level": ("model_reviewed_visual_source" if image else "model_reviewed_source_text")}]

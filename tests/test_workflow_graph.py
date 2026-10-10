@@ -155,3 +155,58 @@ def test_jev_canvas_allocates_its_own_column_and_reports_actual_stage_progress()
     assert "API" in by_id["jev"]["description"]
     assert "本地处理" in by_id["package"]["description"]
     assert spec["edges"] == edges
+
+
+def test_v18_uses_one_terminal_score_repair_stage_with_or_without_jev():
+    targets = ["sft", "cot", "cpt", "dpo"]
+    for review in (None, {"enabled": True, "node": "jev"}):
+        nodes, edges = execution_graph(targets, reasoning_trim=True, package_review=review,
+                                       recipe_version=18)
+        assert nodes[-3:] == ("trim", "review", "package")
+        assert "jev" not in nodes
+        assert ("trim", "review") in edges and ("preference", "review") in edges
+        assert ("cpt", "review") in edges and ("review", "package") in edges
+        assert all(origin == "review" for origin, destination in edges if destination == "package")
+        assert ("review", "sft") not in edges
+
+
+def test_repair_only_graph_does_not_claim_to_rerun_generators():
+    nodes, edges = execution_graph(["sft", "cot", "dpo"], recipe_version=18,
+                                   reasoning_trim=True, qa_director=True, repair_only=True)
+    assert nodes == ("ingest", "review", "package")
+    assert edges == (("ingest", "review"), ("review", "package"))
+    assert "sft" in execution_graph(["sft"], recipe_version=17, repair_only=True)[0]
+
+
+def test_review_role_contract_uses_one_model_two_models_or_manual_work():
+    from lib.domain.workflow_scale import node_roles, validate_node_models
+    assert node_roles("review", "文档资料", review_repair={"mode": "auto"}) == ("generation",)
+    assert node_roles("review", "文档资料", review_repair={"mode": "auto"},
+                      package_review={"enabled": True}) == ("generation", "jev")
+    assert node_roles("review", "文档资料", review_repair={"mode": "human"},
+                      package_review={"enabled": True}) == ()
+    assert node_roles("package", "文档资料", recipe_version=18,
+                      package_review={"enabled": True}) == ()
+    for node in ("sft", "multiturn", "preference", "cot", "trim"):
+        assert node_roles(node, "文档资料", recipe_version=18) == ("generation",)
+    model = {"backend": "shared", "model": "same-model"}
+    # A single endpoint may supply both distinct operations when JEV is on.
+    assert set(validate_node_models({"review": {"generation": model, "jev": model}})["review"]) == {"generation", "jev"}
+
+
+def test_review_canvas_labels_roles_compactly_and_hides_models_in_human_mode():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    labels = {key: key for key in execution_graph(["sft"], recipe_version=18)[0]}
+    model = {"backend": "shared", "model": "same-model"}
+    bindings = {"review": {"generation": model, "jev": model}}
+    for jev, expected in ((False, ["Score + repair: shared · same-model"]),
+                          (True, ["Repair: shared · same-model", "Score: shared · same-model"])):
+        spec = canvas_spec(["sft"], {}, "review", labels, labels, bindings, language="en",
+                           recipe_version=18, review_repair={"mode": "auto"},
+                           package_review={"enabled": jev})
+        assert next(node for node in spec["nodes"] if node["id"] == "review")["models"] == expected
+    manual = canvas_spec(["sft"], {}, "review", labels, labels, bindings, language="en",
+                         recipe_version=18, review_repair={"mode": "human"})
+    review = next(node for node in manual["nodes"] if node["id"] == "review")
+    assert review["models"] == []
+    assert review["subtitle"] == "Human scoring · Edit answer"

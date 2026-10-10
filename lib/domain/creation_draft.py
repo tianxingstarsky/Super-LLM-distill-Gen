@@ -23,6 +23,8 @@ NUMBER_FIELDS = {
     'workflow-package-review-limit': (1, MAX_PACKAGE_REVIEW_SAMPLES),
     'workflow-director-batch': (1, 50), 'workflow-director-history': (0, 20),
     'workflow-director-weight': (0, 100),
+    'workflow-review-repair-rounds': (0, 5),
+    'workflow-review-repair-threshold': (0, 100),
 }
 DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT, 100),
                   'workflow-package-review-escalation': (0, 100),
@@ -43,7 +45,8 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
-               'workflow-package-review-mode': frozenset({'sample', 'all'})}
+               'workflow-package-review-mode': frozenset({'sample', 'all'}),
+               'workflow-review-repair-mode': frozenset({'auto', 'human'})}
 ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model', 'vision'}),
                     'workflow-cpt-processing-mode': frozenset({'native', 'model'}),
                     'workflow-cpt-review-mode': frozenset({'text', 'vision'}),
@@ -105,6 +108,7 @@ def validate_creation_draft(values):
             raise ValueError('invalid_creation_draft')
         if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
+                     'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
                      *HUMAN_FIELDS} and len(parts) != 2:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:

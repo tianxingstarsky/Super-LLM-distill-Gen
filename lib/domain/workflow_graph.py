@@ -19,12 +19,15 @@ def sft_uses_cot_output(targets, recipe_version=15) -> bool:
 
 
 def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
-                    package_review=None, recipe_version=16) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+                    package_review=None, recipe_version=16,
+                    repair_only=False) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
     unknown = selected.difference(TARGETS)
     if unknown:
         raise ValueError(f"unknown training targets: {', '.join(sorted(unknown))}")
+    if repair_only and recipe_version >= 18:
+        return ("ingest", "review", "package"), (("ingest", "review"), ("review", "package"))
 
     active = {"ingest", "package"}
     active.update(selected.intersection({"cpt", "sft", "multiturn", "agent", "gsm8k", "cot"}))
@@ -41,11 +44,19 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     trimmed_outputs = selected.intersection({"sft", "cot"}) if reasoning_trim else set()
     if trimmed_outputs:
         active.add("trim")
-    reviewed = bool(package_review and package_review.get("enabled") and package_review.get("node") == "jev")
-    if reviewed:
+    # New recipes run scoring and repair together after the requested outputs
+    # are complete. Their repair loop stays within this stage: rejected answers
+    # must never be fed back to the SFT candidate generator as training inputs.
+    unified_review = recipe_version >= 18
+    reviewed = (not unified_review and bool(package_review and package_review.get("enabled")
+                                           and package_review.get("node") == "jev"))
+    if unified_review:
+        active.add("review")
+    elif reviewed:
         active.add("jev")
 
-    nodes = tuple(key for key in ("ingest", "director", *BASE_STAGES, *DERIVED_STAGES, "trim", "jev", "package") if key in active)
+    nodes = tuple(key for key in ("ingest", "director", *BASE_STAGES, *DERIVED_STAGES,
+                                 "trim", "review", "jev", "package") if key in active)
     edges = []
     if directed:
         edges.append(("ingest", "director"))
@@ -58,11 +69,11 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     outputs = {"cpt", "multiturn", "agent", "gsm8k", "preference", "cot"}
     if "sft" in selected and not sft_uses_cot_output(selected, recipe_version):
         outputs.add("sft")
-    terminal = "jev" if reviewed else "package"
+    terminal = "review" if unified_review else "jev" if reviewed else "package"
     edges.extend((key, "trim" if key in trimmed_outputs else terminal)
                  for key in (*BASE_STAGES, *DERIVED_STAGES) if key in active and key in outputs)
     if trimmed_outputs:
         edges.append(("trim", terminal))
-    if reviewed:
-        edges.append(("jev", "package"))
+    if unified_review or reviewed:
+        edges.append((terminal, "package"))
     return nodes, tuple(edges)

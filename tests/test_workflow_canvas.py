@@ -55,6 +55,30 @@ def test_canvas_node_navigation_and_dependency_highlight():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_v18_score_repair_branch_fits_every_target_combination():
+    from lib.domain.workflow_graph import execution_graph
+    from lib.domain.workflow_targets import TARGETS
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec, extend_feedback_branch
+    for count in range(len(TARGETS) + 1):
+        for selected in combinations(TARGETS, count):
+            for trim in (False, True):
+                keys, _ = execution_graph(selected, recipe_version=18, reasoning_trim=trim)
+                labels = {key: key for key in keys}
+                spec = canvas_spec(selected, {}, "review", labels, labels, recipe_version=18,
+                                   review_repair={"mode": "auto"}, reasoning_trim=trim)
+                review = next(node for node in spec["nodes"] if node["id"] == "review")
+                group = spec["feedback_branch"]["group"]
+                assert group["x"] <= review["x"] and group["y"] <= review["y"]
+                assert group["x"] + group["width"] <= spec["width"]
+                assert group["y"] + group["height"] <= spec["height"]
+                assert all(0 <= node["x"] <= spec["width"] - 218 for node in spec["nodes"])
+                assert not any(edge["to"] == "sft" for edge in spec["control_edges"])
+                refreshed = extend_feedback_branch(spec, {"phase": "reviewing", "mode": "auto"})
+                assert refreshed["height"] == spec["height"], "refresh must not grow the repair lane"
+                assert [(node["x"], node["y"]) for node in refreshed["nodes"]] == [
+                    (node["x"], node["y"]) for node in spec["nodes"]]
+
+
 def test_clicking_a_live_node_opens_its_output_and_pauses_automatic_following():
     from streamlit.testing.v1 import AppTest
 

@@ -128,6 +128,22 @@ class WorkflowProduction:
                     continue
                 if failure["kind"] not in {"transient", "invalid"}:
                     raise
+                if stage == "review":
+                    # Preserve the candidate and target identity when a review
+                    # response is malformed; it is not an input source record.
+                    from lib.domain.review_repair import validate_review_repair
+                    try:
+                        candidate_hash = _digest(self._review_payload(unit["target"], unit["record"]))
+                    except (KeyError, TypeError, ValueError):
+                        candidate_hash = None
+                    return [{**deepcopy(unit["record"]), "_review_target": unit["target"],
+                             "status": "quarantined", "reason": "invalid_model_result",
+                             "request_error": failure["code"], "request_attempts": attempt + 1,
+                             "review_repair": {"mode": self.recipe["review_repair"]["mode"],
+                                               "status": "rejected", "score": None,
+                                               "attempts": 0, "history": [], "error": failure["code"],
+                                               "candidate_sha256": candidate_hash,
+                                               "config_sha256": _digest(validate_review_repair(self.recipe["review_repair"]))}}]
                 row = unit.get("sample", unit)
                 rejected = {**self.rejected(row, "request_retries_exhausted" if failure["kind"] == "transient"
                                            else "invalid_model_result"),

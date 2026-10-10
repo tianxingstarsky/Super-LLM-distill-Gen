@@ -114,7 +114,7 @@ def test_all_allowed_steps_are_scoped_to_their_own_node(tmp_path):
     overrides = {stage: {prompt_id: f"NODE_{stage}_{prompt_id} {{literal}}"
                          for prompt_id in ids} for stage, ids in NODE_PROMPT_IDS.items()}
     output, rid, _ = make_run(tmp_path, node_prompts=overrides,
-                              package_review={"enabled": False, "node": "jev"})
+                              package_review={"enabled": False, "node": "jev"}, review_repair={"mode": "auto"})
     writer = Writer()
     workflow = engine.Workflow(output, rid, tmp_path, generator=writer)
     for stage, templates in overrides.items():

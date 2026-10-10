@@ -11,6 +11,7 @@ from lib.domain.workflow_qa_director import validate_qa_director, qa_director_ap
 from lib.domain.workflow_production import validate_production, MAX_PRODUCTION_GOAL
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS
+from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
@@ -19,7 +20,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       agent_replay_mode="configured", evaluation_sources=(),
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
                       node_prompts=None, package_review=None, qa_director=None, production=None,
-                      cpt_processing=None):
+                      cpt_processing=None, review_repair=None, repair_inputs=None):
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)
@@ -45,11 +46,15 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     if type(batch_size) is not int or not 1 <= batch_size <= MAX_BATCH_SIZE:
         raise ValueError("invalid_workflow_batch_size")
     node_models = validate_node_models(node_models)
+    review_config = validate_review_repair(review_repair)
+    repair_rows = validate_repair_inputs(repair_inputs, review_config)
+    if repair_rows and set(row["target"] for row in repair_rows) - set(targets):
+        raise ValueError("review_repair_target_mismatch")
     validate_node_generation(node_generation)
     validate_node_prompts(node_prompts)
     validate_package_review(package_review)
     cpt = validate_cpt_processing(cpt_processing)
-    if cpt["mode"] == "model" and "cpt" not in targets:
+    if not repair_rows and cpt["mode"] == "model" and "cpt" not in targets:
         raise ValueError("cpt_processing_requires_cpt")
     director = validate_qa_director(qa_director)
     if director["enabled"] and not qa_director_applicable(targets):

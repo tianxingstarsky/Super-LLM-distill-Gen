@@ -34,11 +34,13 @@ for(const spec of specs){
  assert.equal(d.querySelectorAll('.feedback-node').length,1);
  assert.equal(d.querySelectorAll('.node').length,spec.nodes.length,'controls never masquerade as execution stages');
  assert.equal(d.getElementById('node-picker').options.length,spec.nodes.length);
- assert.equal(correction.dataset.selectNode,spec.feedback_branch.generation_node);
+ assert.equal(correction.dataset.selectNode,'review');
  assert.equal(correction.dataset.status,spec.control_nodes[0].status);
  assert.equal(correction.disabled,!spec.control_nodes[0].actionable);
- assert.equal(d.querySelectorAll('.feedback-edge[data-kind="return"]').length,1,'a return arrow leads to the real generation node');
- assert.equal(d.querySelector('.feedback-edge[data-kind="return"]').dataset.to,spec.feedback_branch.generation_node);
+ assert.equal(d.querySelectorAll('.feedback-edge[data-kind="return"]').length,1,'the repaired result returns to scoring in the same stage');
+ assert.equal(d.querySelector('.feedback-edge[data-kind="return"]').dataset.to,'review');
+ assert.ok(d.querySelector('.review-stage-group'),'one enclosing group keeps scoring and repair together');
+ assert.equal(d.querySelectorAll('.feedback-edge[data-to="sft"]').length,0,'rejected answers never return to SFT');
  assert.equal(d.querySelector('.feedback-edge[data-kind="correction"]').dataset.from,spec.feedback_branch.review_node);
  assert.equal(d.querySelector('.feedback-edge[data-kind="pass"]').dataset.to,'package');
  for(const edge of spec.control_edges){
@@ -47,7 +49,7 @@ for(const spec of specs){
  const returning=d.querySelector('.feedback-edge[data-kind="return"]');
  if(!spec.feedback_branch.revision)assert.equal(returning.dataset.status,'pending','first-version work never implies human revision');
  if(spec.feedback_branch.phase==='reviewing')assert.equal(d.querySelector('.feedback-edge[data-kind="pass"]').dataset.status,'pending','the pass route waits for a real check result');
- assert.ok(d.getElementById('lineage').textContent.includes(spec.language==='en'?'Dashed':'虚线'));
+ assert.ok(d.getElementById('lineage').textContent.includes(spec.language==='en'?'one stage':'同一节点'));
  assert.equal(d.getElementById('legend').hidden,false);
  assert.equal(d.getElementById('legend').children.length,4,'waiting and needs-correction states remain explicit');
  for(const path of d.querySelectorAll('svg.connections path')){
@@ -63,18 +65,20 @@ for(const spec of specs){
  if(spec.control_nodes[0].actionable){
   assert.equal(selectionEvents().length,before+1);
   const action=selectionEvents().at(-1).event.value;
-  assert.equal(action.action,'feedback');assert.equal(action.node,spec.feedback_branch.generation_node);
+  assert.equal(action.action??null,spec.control_nodes[0].action);assert.equal(action.node,'review');
   assert.ok(action.serial);
-  assert.equal(sequence[mark].type,'scroll','the existing editor is reached before publishing its action');
-  assert.equal(sequence[mark].options.top,1032);
-  assert.equal(sequence[mark].options.behavior,'smooth');
+  if(spec.feedback_branch.mode==='human'){
+   assert.equal(sequence[mark].type,'scroll','the human scoring editor is reached before publishing its action');
+   assert.equal(sequence[mark].options.top,1032);
+   assert.equal(sequence[mark].options.behavior,'smooth');
+  }else assert.equal(sequence[mark].type,'event','the automatic branch opens its real stage without navigating to human work');
  }else assert.equal(selectionEvents().length,before,'waiting/limited controls never submit work');
  const beforeRender=selectionEvents().length;
  render({...spec,feedback_target:'human-results-editor'});
  assert.equal(selectionEvents().length,beforeRender,'refreshes never replay the human action');
  if(spec.language==='en')assert.equal(/[\u4e00-\u9fff]/.test(d.querySelector('.feedback-node').textContent+d.querySelector('.feedback-heading').textContent),false);
 }
-const actionable=specs.find(spec=>spec.control_nodes[0].actionable);
+const actionable=specs.find(spec=>spec.control_nodes[0].actionable&&spec.feedback_branch.mode==='human');
 reduced=true;render({...actionable,feedback_target:'human-results-editor'});d.querySelector('.feedback-node').click();
 assert.equal(sequence.at(-2).type,'scroll');assert.equal(sequence.at(-2).options.behavior,'instant');
 const scrolls=()=>sequence.filter(item=>item.type==='scroll').length;

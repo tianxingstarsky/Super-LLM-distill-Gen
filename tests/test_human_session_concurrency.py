@@ -343,7 +343,8 @@ def test_same_revision_click_prepares_one_child_with_exact_selected_result(tmp_p
     assert rows[0]["run_id"] != parent["run_id"]
     revision_run = engine.run_path(output, rows[0]["run_id"])
     recipe = engine.read_json(revision_run / "recipe.json")
-    context = recipe["qa_director"]["human_augmentation"]["seeds"][0]["revision_context"]
+    context = recipe["repair_inputs"][0]["revision_context"]
+    assert recipe["qa_director"].get("human_augmentation", {"enabled": False}) == {"enabled": False}
     assert context["parent_run_id"] == parent["run_id"]
     assert context["content_sha256"] == engine.digest(record) and context["messages"] == record["messages"]
     assert context["instruction"] == "保持安全前提，用更亲切的语气回答。"
