@@ -242,6 +242,31 @@ def test_rlaif_quarantines_conflicting_ai_score_evidence(tmp_path):
     assert read_json(artifacts / "rlaif.records.json")[0]["status"] == "quarantined"
 
 
+@pytest.mark.parametrize("target", ["dpo", "orpo"])
+@pytest.mark.parametrize("conflicting_response", ["chosen", "rejected"])
+def test_preference_exports_quarantine_contradictory_correctness_dimensions(
+    tmp_path, target, conflicting_response,
+):
+    class InconsistentJudge(Judge):
+        def chat(self, messages, **kwargs):
+            result = json.loads(super().chat(messages, **kwargs))
+            bad = "BAD" in messages[1]["content"]
+            if bad is (conflicting_response == "rejected"):
+                result["scores"]["correctness"] = 2 if bad else 4
+            return json.dumps(result)
+
+    out, rid, _ = make_run(tmp_path, targets=[target])
+    state = execute(out, rid, judge=InconsistentJudge())
+    artifacts = run_path(out, rid) / "artifacts"
+    assert state["status"] == "needs_attention", state.get("error")
+    assert state["quality"]["targets"][target]["reasons"] == {"preference_correctness_score_mismatch": 1}
+    assert (artifacts / f"{target}.jsonl").read_text(encoding="utf-8") == ""
+    assert not (artifacts / f"trl_{target}.jsonl").exists()
+    evidence = read_json(artifacts / f"{target}.records.json")[0]
+    assert evidence["status"] == "quarantined"
+    assert evidence["preference"][conflicting_response]["correctness"] != evidence["preference"][conflicting_response]["scores"]["correctness"]
+
+
 def test_limit_exposes_unprocessed_units(tmp_path):
     src = tmp_path / "source.jsonl"
     src.write_text('\n'.join(json.dumps({"text": str(i)}) for i in range(3)), encoding="utf-8")

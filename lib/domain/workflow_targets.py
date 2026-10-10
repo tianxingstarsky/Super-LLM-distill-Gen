@@ -34,6 +34,28 @@ TRAINING_FIELDS = {
 }
 
 
+def preference_score_issue(pair: dict) -> str | None:
+    """DPO/ORPO labels must agree with the scores used to choose a response."""
+    evidence = pair.get("preference")
+    if not isinstance(evidence, dict) or evidence.get("dimension") != "correctness":
+        return "preference_score_evidence_missing"
+    checks = (evidence.get("chosen"), evidence.get("rejected"))
+    for check in checks:
+        try:
+            verdict(check)
+        except ValueError:
+            return "preference_score_evidence_missing"
+        if check["correctness"] != check["scores"]["correctness"]:
+            return "preference_correctness_score_mismatch"
+    if not accepted(checks[0]):
+        return "preference_chosen_not_accepted"
+    gap = evidence.get("minimum_gap")
+    if (type(gap) is not int or gap < 2
+            or checks[0]["correctness"] - checks[1]["correctness"] < gap):
+        return "preference_gap_mismatch"
+    return None
+
+
 def rlaif_feedback_issue(pair: dict) -> str | None:
     """Check that the AI label and its saved evidence describe one preference."""
     if not isinstance(pair, dict):

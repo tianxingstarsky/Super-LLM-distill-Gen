@@ -5,11 +5,12 @@ from lib.doc2corpus import import_text
 from lib.infrastructure.document_vision import MAX_PAGES
 
 
-def text_parts(path: Path):
+def text_parts(path: Path, *, source_processing_version: int = 2):
     """Keep PDF pages separate. Empty/image-only pages must not become facts."""
     path = Path(path)
     if path.suffix.lower() == ".pdf":
         from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
         try:
             reader = PdfReader(path)
             if reader.is_encrypted:
@@ -27,6 +28,9 @@ def text_parts(path: Path):
         except ValueError:
             raise
         except Exception as error:
+            if source_processing_version >= 2 and not isinstance(error, PyPdfError):
+                raise
             raise ValueError("document_pdf_parse_failed") from error
     else:
-        yield {"location": "document", "text": import_text(path), "requires_vision": False}
+        yield {"location": "document", "text": import_text(path, source_processing_version=source_processing_version),
+               "requires_vision": False}

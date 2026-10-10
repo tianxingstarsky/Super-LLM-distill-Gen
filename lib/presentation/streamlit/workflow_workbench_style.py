@@ -21,6 +21,17 @@ WORKBENCH_STYLE = """<style>
     grid-template-columns:minmax(0,1fr)}
 }
 .st-key-workbench-layout [data-testid="stColumn"] {min-width:0}
+.st-key-workbench-source-entry [data-baseweb="select"] > div {max-height:144px;overflow-y:auto;scrollbar-width:thin}
+.st-key-workbench-source-entry [data-testid="stTextArea"] textarea {resize:vertical}
+.st-key-workbench-targets .df-section-heading {margin:0;padding:0;border:0}
+.st-key-workbench-targets [data-testid="stToggle"] {margin-top:2px}
+.st-key-workbench-targets .df-wb-plan {font-size:12px}
+.df-source-issue {display:block;padding:11px 14px;border:1px solid #e8cdaa;border-radius:10px;
+  background:linear-gradient(145deg,#fffcf5,#fff7e8);color:#805e2c;text-decoration:none;font-size:13px;line-height:1.6;
+  box-shadow:inset 0 1px 0 #fff;transition:background .18s,border-color .18s}
+.df-source-issue:hover {background:#fff2da;border-color:#dcb576;color:#6d4c1f}
+.df-source-issue:focus-visible {outline:3px solid #83b7f066;outline-offset:2px}
+#workflow-source-entry {scroll-margin-top:90px}
 .st-key-workbench-entry-bar {container-type:inline-size;container-name:workbench-entry}
 .st-key-workbench-entry-bar .df-wizard-step {flex:1 1 0;min-width:0}
 .st-key-workbench-entry-bar .df-wizard-step > span {min-width:0}

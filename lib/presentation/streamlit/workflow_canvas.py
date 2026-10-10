@@ -86,8 +86,14 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         role = node_bindings.get("generation") or node_bindings.get("jev") or node_bindings.get("vision")
         status_label = {"completed": "完成", "running": "执行中", "failed": "失败", "cancelled": "已停止",
                         "pending": "等待", "queued": "待启动"}.get(status, "等待")
+        missing_roles = metrics.get("missing_roles", [role for role in roles if role not in node_bindings])
+        role_names = ({"generation": "Generation model", "jev": "Review model", "vision": "Image-reading model"}
+                      if language == "en" else {"generation": "生成模型", "jev": "核对模型", "vision": "图片识别模型"})
+        missing_hint = (("Missing: " if language == "en" else "缺少：") +
+                        (", " if language == "en" else "、").join(role_names[role] for role in missing_roles if role in role_names))
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
                     translate_label("无需模型 · 查看步骤", language) if not roles else
+                    missing_hint if status == "configuration_required" and missing_roles else
                     translate_label("请选择可用模型", language) if status == "configuration_required" else
                     f"{role['backend']} · {role['model']}" if role else
                     translate_label("点击配置节点", language))

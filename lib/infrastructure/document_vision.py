@@ -40,22 +40,7 @@ def _image(data: bytes, location: str) -> dict:
             "image": "data:image/png;base64," + base64.b64encode(payload).decode("ascii")}
 
 
-def _docx_block_text(block, parent) -> str:
-    from docx.oxml.ns import qn
-    from docx.table import Table
-    from docx.text.paragraph import Paragraph
-
-    if block.tag == qn("w:p"):
-        return Paragraph(block, parent).text
-    if block.tag == qn("w:tbl"):
-        return "\n".join("\t".join(
-            "\n".join(_docx_block_text(child, cell) for child in cell._tc
-                      if child.tag in {qn("w:p"), qn("w:tbl")})
-            for cell in row.cells) for row in Table(block, parent).rows)
-    return ""
-
-
-def visual_parts(path: Path):
+def visual_parts(path: Path, *, source_processing_version: int = 2):
     """Yield a PDF page, standalone image, or ordered DOCX text/image block."""
     path = Path(path)
     if path.suffix in IMAGE_EXTENSIONS:
@@ -65,7 +50,12 @@ def visual_parts(path: Path):
             import pypdfium2 as pdfium
         except ImportError:
             raise ValueError("document_pdf_renderer_unavailable") from None
-        document = pdfium.PdfDocument(str(path))
+        try:
+            document = pdfium.PdfDocument(str(path))
+        except pdfium.PdfiumError as error:
+            if source_processing_version < 2:
+                raise
+            raise ValueError("document_pdf_parse_failed") from error
         try:
             if len(document) > MAX_PAGES:
                 raise ValueError("document_vision_page_limit")
@@ -85,19 +75,27 @@ def visual_parts(path: Path):
                         bitmap.close()
                 finally:
                     page.close()
+        except pdfium.PdfiumError as error:
+            if source_processing_version < 2:
+                raise
+            raise ValueError("document_pdf_parse_failed") from error
         finally:
             document.close()
     elif path.suffix == ".docx":
-        # Inspect expansion limits before python-docx opens the package.
-        with ZipFile(path) as archive:
-            entries = archive.infolist()
-            if len(entries) > 5000 or sum(item.file_size for item in entries) > MAX_EXPANDED_DOCX_BYTES:
-                raise ValueError("document_docx_expansion_limit")
-        import docx
-        document = docx.Document(path)
+        from lib.infrastructure.docx_document import block_text, open_document
+        if source_processing_version >= 2:
+            document = open_document(path, max_expanded_bytes=MAX_EXPANDED_DOCX_BYTES)
+        else:
+            # Preserve older run behavior and all valid source block identities.
+            with ZipFile(path) as archive:
+                entries = archive.infolist()
+                if len(entries) > 5000 or sum(item.file_size for item in entries) > MAX_EXPANDED_DOCX_BYTES:
+                    raise ValueError("document_docx_expansion_limit")
+            import docx
+            document = docx.Document(path)
         images = 0
         for index, block in enumerate(document.element.body, 1):
-            text = _docx_block_text(block, document)
+            text = block_text(block, document)
             if text.strip():
                 yield {"location": f"block:{index}", "text": text}
             for blip in block.xpath(".//a:blip"):

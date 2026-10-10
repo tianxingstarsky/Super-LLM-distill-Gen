@@ -50,6 +50,14 @@ QUALITY_STYLE = """<style>
 </style>"""
 
 REASON_LABELS = {
+    "document_docx_parse_failed": "DOCX 文件结构损坏，已隔离",
+    "document_docx_expansion_limit": "DOCX 展开体积超限，已隔离",
+    "sft_invalid_reasoning_fields": "推理字段格式不正确",
+    "sft_conflicting_reasoning_fields": "推理字段互相冲突",
+    "preference_score_evidence_missing": "偏好评分证据不完整",
+    "preference_correctness_score_mismatch": "偏好正确性评分互相矛盾",
+    "preference_chosen_not_accepted": "优选回答未通过质量核对",
+    "preference_gap_mismatch": "偏好分差不满足保存要求",
     "source_exhausted": "资料不足以支持新互动",
     "no_new_grounded_scenario": "未发现新的有依据场景",
     "invalid_dialogue_step": "后续互动计划未通过检查",

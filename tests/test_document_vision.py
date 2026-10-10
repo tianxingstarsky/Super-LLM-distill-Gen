@@ -32,6 +32,30 @@ def parser():
             "context_window_tokens": 131072, "max_output_tokens": 32768}}
 
 
+@pytest.mark.parametrize("name, content, reason", [
+    ("broken.docx", b"not a document package", "document_docx_parse_failed"),
+    ("broken.pdf", b"%PDF-1.7\nnot a PDF body", "document_pdf_parse_failed"),
+    ("broken.png", b"not a picture", "invalid_document_image"),
+])
+def test_corrupt_visual_source_does_not_abort_other_documents(tmp_path, name, content, reason):
+    config(tmp_path)
+    invalid = tmp_path / name
+    invalid.write_bytes(content)
+    valid = tmp_path / "valid.txt"
+    valid.write_text(TEXT, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[invalid, valid], targets=["cpt"],
+                               settings_root=tmp_path, document_parser=parser())
+    reader = Vision()
+    run = engine.Workflow(output, run_id, tmp_path, generator=reader)
+    state = run.execute()
+    assert state["status"] == "needs_attention"
+    assert reader.calls == []
+    assert engine.verify_artifacts(run.path)["counts"]["cpt"] == 1
+    inputs = engine.read_json(run.path / "input_records.json")
+    assert any(row.get("reason") == reason and row["source_name"] == name for row in inputs)
+
+
 def image(root, name="scan.png"):
     path = root / name
     Image.new("RGB", (120, 80), "blue").save(path)
@@ -128,6 +152,60 @@ def test_pdf_is_rendered_page_by_page_with_real_rasters_and_locations(tmp_path):
     assert [part["location"] for part in pages] == ["page:1", "page:2"]
     assert all(part["image"].startswith("data:image/png;base64,") for part in pages)
     assert pages[0]["image_sha256"] != pages[1]["image_sha256"]
+
+
+@pytest.mark.parametrize("phase", ["load", "render", "bitmap"])
+@pytest.mark.parametrize("known_pdf_error", [True, False])
+@pytest.mark.parametrize("source_processing_version", [1, 2])
+def test_pdf_page_failures_release_resources_and_only_normalize_known_errors(
+        tmp_path, monkeypatch, phase, known_pdf_error, source_processing_version):
+    import pypdfium2 as pdfium
+
+    error_type = pdfium.PdfiumError if known_pdf_error else RuntimeError
+    closed = []
+
+    class Bitmap:
+        def to_pil(self):
+            raise error_type("offline page bitmap failure")
+
+        def close(self):
+            closed.append("bitmap")
+
+    class Page:
+        def get_size(self):
+            return 100, 100
+
+        def render(self, **options):
+            if phase == "render":
+                raise error_type("offline page rendering failure")
+            return Bitmap()
+
+        def close(self):
+            closed.append("page")
+
+    class Document:
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            if phase == "load":
+                raise error_type("offline page loading failure")
+            return Page()
+
+        def close(self):
+            closed.append("document")
+
+    monkeypatch.setattr(pdfium, "PdfDocument", lambda *_: Document())
+    normalized = known_pdf_error and source_processing_version == 2
+    with pytest.raises(ValueError if normalized else error_type) as failure:
+        list(visual_parts(tmp_path / "mock.pdf", source_processing_version=source_processing_version))
+    if normalized:
+        assert str(failure.value) == "document_pdf_parse_failed"
+        assert type(failure.value.__cause__) is pdfium.PdfiumError
+    else:
+        assert "offline page" in str(failure.value)
+    assert closed == {"load": ["document"], "render": ["page", "document"],
+                      "bitmap": ["bitmap", "page", "document"]}[phase]
 
 
 def test_docx_preserves_text_and_embedded_image_in_body_order(tmp_path):

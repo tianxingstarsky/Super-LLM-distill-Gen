@@ -6,6 +6,7 @@ from pathlib import Path
 from PIL import Image
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, DecodedStreamObject, NameObject
+from pypdf.errors import PdfReadError
 import pytest
 import yaml
 
@@ -195,6 +196,68 @@ def test_corrupt_pdf_never_becomes_an_exported_corpus(tmp_path):
     assert any(row.get("reason") == "document_pdf_parse_failed" for row in inputs)
     if (run.path / "artifacts" / "manifest.json").exists():
         assert engine.verify_artifacts(run.path)["counts"]["cpt"] == 0
+
+
+def test_default_native_recipe_isolates_corrupt_pdf_and_keeps_other_documents(tmp_path):
+    invalid = tmp_path / "broken.pdf"
+    invalid.write_bytes(b"%PDF-1.7\nnot a real PDF body\n")
+    valid = tmp_path / "valid.txt"
+    valid.write_text(PAGE_ONE + " " + PAGE_TWO, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[invalid, valid], targets=["cpt"])
+    run = engine.Workflow(output, run_id, tmp_path)
+    assert run.recipe["version"] == 11
+    assert run.recipe["source_processing_version"] == 2
+    assert run.execute()["status"] == "needs_attention"
+    assert engine.verify_artifacts(run.path)["counts"]["cpt"] == 1
+    inputs = engine.read_json(run.path / "input_records.json")
+    assert any(row.get("reason") == "document_pdf_parse_failed" and row["source_name"] == invalid.name
+               for row in inputs)
+    assert any(row.get("text") == PAGE_ONE + " " + PAGE_TWO for row in inputs)
+
+
+def test_native_source_policy_preserves_historical_pdf_locations(tmp_path):
+    source = text_pdf(tmp_path)
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["cpt"])
+    run = engine.Workflow(output, run_id, tmp_path)
+    assert run.recipe["version"] == 11
+    rows = run.parse_source(run.recipe["sources"][0])
+    assert [row["source_location"]["record"] for row in rows] == ["page:1", "page:2"]
+    assert [row["text"] for row in rows] == [PAGE_ONE, PAGE_TWO]
+
+    run.recipe.pop("source_processing_version")
+    legacy = run.parse_source(run.recipe["sources"][0])
+    assert len(legacy) == 1
+    assert legacy[0]["source_location"]["record"] == "document"
+    assert PAGE_ONE in legacy[0]["text"] and PAGE_TWO in legacy[0]["text"]
+    assert legacy[0]["id"] == engine.digest([run.recipe["sources"][0]["sha256"],
+                                            run.recipe["sources"][0]["file"], "document:chunk:0"])
+
+
+@pytest.mark.parametrize("error_type", [PdfReadError, RuntimeError, MemoryError])
+@pytest.mark.parametrize("source_processing_version", [1, 2])
+def test_pdf_source_errors_preserve_unknown_failures_and_legacy_policy(
+        tmp_path, monkeypatch, error_type, source_processing_version):
+    import pypdf
+    from lib.infrastructure.document_text import text_parts
+
+    class BrokenPage:
+        def extract_text(self):
+            raise error_type("offline page extraction failure")
+
+    class ReaderFailure:
+        is_encrypted = False
+        pages = [BrokenPage()]
+
+    monkeypatch.setattr(pypdf, "PdfReader", lambda *_: ReaderFailure())
+    if source_processing_version == 1 or error_type is PdfReadError:
+        with pytest.raises(ValueError, match="^document_pdf_parse_failed$") as failure:
+            list(text_parts(tmp_path / "mock.pdf", source_processing_version=source_processing_version))
+        assert type(failure.value.__cause__) is error_type
+    else:
+        with pytest.raises(error_type, match="offline page extraction failure"):
+            list(text_parts(tmp_path / "mock.pdf", source_processing_version=source_processing_version))
 
 
 @pytest.mark.parametrize("response", [

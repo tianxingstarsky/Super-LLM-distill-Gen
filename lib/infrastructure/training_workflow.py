@@ -106,17 +106,14 @@ def preference_snapshot(root):
 
 def preferred_training_record(target, row, preferences=None, *, reward_model=False,
                               sft_output_style=None):
-    """Drop SFT explanation fields without changing the scored answer text."""
+    """Canonicalize SFT explanation fields without changing scored answers."""
     record = rlaif_reward_model_record(row) if reward_model else training_record(target, row)
     style = (sft_output_style if sft_output_style is not None else
              preferences["values"]["cot_style"] if preferences else None)
-    if target != "sft" or style != "drop":
+    if target != "sft":
         return record
-    record = deepcopy(record)
-    for message in record["messages"]:
-        if message.get("role") == "assistant":
-            message.pop("reasoning_content", None)
-    return record
+    from lib.domain.reasoning_fields import sft_training_messages
+    return {**record, "messages": sft_training_messages(record["messages"], drop=style == "drop")}
 
 
 def now():
@@ -387,7 +384,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
               "conversation_turns": conversation_turns, "math_generator_version": 2,
-              "planning_policy_version": 2, "cpt_reference_releases": references,
+              "planning_policy_version": 2, "source_processing_version": 2,
+              "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
@@ -824,7 +822,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                 from lib.infrastructure.latex_document import chunk_latex
                 chunks = chunk_latex(text, self.recipe["chunk_chars"])
             else:
-                chunks = chunk_text(text, self.recipe["chunk_chars"])
+                chunks = chunk_text(text, self.recipe["chunk_chars"],
+                                    source_processing_version=self.recipe.get("source_processing_version", 1))
             return [unit(f"{index}:chunk:{i}", source_location={"file": source["name"],
                          "record": index, "chunk": i}, status="quarantined", reason="oversized_source_block")
                     if len(chunk) > max(12000, self.recipe["chunk_chars"] * 4)
@@ -832,10 +831,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                               "record": index, "chunk": i}, kind="document", text=chunk, status="ready")
                     for i, chunk in enumerate(chunks)]
         parser_mode = self.recipe.get("document_parser", {}).get("mode", "native")
-        if parser_mode == "model" or (self.recipe.get("version", 0) >= 14 and path.suffix == ".pdf" and parser_mode == "native"):
+        if parser_mode == "model" or (path.suffix == ".pdf" and parser_mode == "native" and (
+                self.recipe.get("version", 0) >= 14 or self.recipe.get("source_processing_version", 1) >= 2)):
             from lib.infrastructure.document_text import text_parts
             try:
-                for part in text_parts(path):
+                for part in text_parts(path, source_processing_version=self.recipe.get("source_processing_version", 1)):
                     self.check_cancel()
                     location, text = part["location"], part["text"]
                     if part.get("requires_vision"):
@@ -882,32 +882,50 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         if (self.recipe.get("document_parser", {}).get("mode") == "vision"
                 and path.suffix in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"}):
             from lib.infrastructure.document_vision import visual_parts
-            for part in visual_parts(path):
-                self.check_cancel()
-                location = part["location"]
-                if "image" in part:
-                    result = self.ask([source_id, location, part["image_sha256"], "document_vision"],
-                                      "vision", "workflow.document_vision",
-                                      {"source": source["name"], "location": location}, image=part["image"])
-                    if (not isinstance(result, dict) or result.get("uncertain") is not False
-                            or not isinstance(result.get("text"), str) or len(result["text"]) > 120_000):
-                        yield unit(location, status="quarantined", reason="document_vision_uncertain",
-                                   source_location={"file": source["name"], "record": location})
-                        continue
-                    text = result["text"]
-                else:
-                    text = part["text"]
-                for row in documents(text, location):
+            try:
+                for part in visual_parts(path, source_processing_version=self.recipe.get("source_processing_version", 1)):
+                    self.check_cancel()
+                    location = part["location"]
                     if "image" in part:
-                        row["document_reading"] = {"mode": "vision", "image_sha256": part["image_sha256"],
-                                                   "evidence_level": "model_transcribed_visual_source"}
-                    yield row
+                        result = self.ask([source_id, location, part["image_sha256"], "document_vision"],
+                                          "vision", "workflow.document_vision",
+                                          {"source": source["name"], "location": location}, image=part["image"])
+                        if (not isinstance(result, dict) or result.get("uncertain") is not False
+                                or not isinstance(result.get("text"), str) or len(result["text"]) > 120_000):
+                            yield unit(location, status="quarantined", reason="document_vision_uncertain",
+                                       source_location={"file": source["name"], "record": location})
+                            continue
+                        text = result["text"]
+                    else:
+                        text = part["text"]
+                    for row in documents(text, location):
+                        if "image" in part:
+                            row["document_reading"] = {"mode": "vision", "image_sha256": part["image_sha256"],
+                                                       "evidence_level": "model_transcribed_visual_source"}
+                        yield row
+            except ValueError as error:
+                source_errors = {"document_docx_parse_failed", "document_docx_expansion_limit",
+                                 "document_pdf_parse_failed", "document_pdf_page_invalid",
+                                 "document_vision_page_limit", "invalid_document_image",
+                                 "document_image_too_large", "document_external_image_unsupported"}
+                if self.recipe.get("source_processing_version", 1) < 2 or str(error) not in source_errors:
+                    raise
+                yield unit("document", status="quarantined", reason=str(error),
+                           source_location={"file": source["name"], "record": "document"})
             return
         if path.suffix in SUPPORTED_EXTS:
             try:
-                content = import_text(path)
+                content = import_text(path, source_processing_version=self.recipe.get("source_processing_version", 1))
             except UnicodeError:
                 yield unit("document", status="quarantined", reason="invalid_encoding")
+                return
+            except ValueError as error:
+                if (self.recipe.get("source_processing_version", 1) < 2 or not (
+                        str(error) in {"document_docx_parse_failed", "document_docx_expansion_limit"}
+                        or str(error).startswith("latex_"))):
+                    raise
+                yield unit("document", status="quarantined", reason=str(error),
+                           source_location={"file": source["name"], "record": "document"})
                 return
             yield from documents(content, "document")
             return
@@ -1182,7 +1200,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         if any(tool_error_flag(message)[0] or tool_error_flag(message)[1]
                for message in unit.get("messages", [])):
             return [self.rejected(unit, "observed_tool_error_not_sft")]
-        history = deepcopy(unit.get("messages", []))
+        from lib.domain.reasoning_fields import sft_reasoning_issue, sft_training_messages
+        if issue := sft_reasoning_issue(unit.get("messages", [])):
+            return [self.rejected(unit, issue)]
+        history = sft_training_messages(unit.get("messages", []))
         context = {"source": {**unit, "messages": [
                        {**m, "content": "[来源内容隐藏]" if m.get("role") == "assistant" else m.get("content", "")}
                        for m in unit.get("messages", [])]},
@@ -1855,6 +1876,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                     for index, original in enumerate(collections[target]):
                         self.check_cancel()
                         row = deepcopy(original)
+                        if row["status"] == "eligible" and target == "sft":
+                            from lib.domain.reasoning_fields import sft_reasoning_issue
+                            if issue := sft_reasoning_issue(row["messages"]):
+                                row.update(status="quarantined", reason=issue)
+                        if row["status"] == "eligible" and target in {"dpo", "orpo"}:
+                            from lib.domain.workflow_targets import preference_score_issue
+                            if issue := preference_score_issue(row):
+                                row.update(status="quarantined", reason=issue)
                         if target == "gsm8k" and row["status"] == "eligible" and not validate_math_candidate(row):
                             row.update(status="quarantined", reason="gsm8k_arithmetic_verification_failed")
                         if row["status"] == "eligible":

@@ -99,3 +99,163 @@ def test_cpt_corpus_keeps_standalone_numbers_and_code_indentation(tmp_path):
     text = "\n\n".join(entry["text"] for entry in output["entries"])
     assert "\n\n1234\n\n" in text
     assert "    value = 1234\n    return value" in text
+
+
+def test_docx_original_body_and_nested_table_order_is_kept_for_text_and_model_reading(tmp_path):
+    import docx
+    from lib.infrastructure.document_text import text_parts
+    from lib.infrastructure.document_vision import visual_parts
+
+    document = docx.Document()
+    document.add_paragraph("Definition before table")
+    cell = document.add_table(rows=1, cols=1).cell(0, 0)
+    cell.text = "Cell introduction"
+    cell.add_table(rows=1, cols=1).cell(0, 0).text = "Nested measurement: 12.7"
+    cell.add_paragraph("Cell conclusion")
+    document.add_paragraph("Interpretation after table")
+    source = tmp_path / "measurements.docx"
+    document.save(source)
+
+    text = import_text(source)
+    labels = ["Definition before table", "Cell introduction", "Nested measurement: 12.7",
+              "Cell conclusion", "Interpretation after table"]
+    assert [text.index(label) for label in labels] == sorted(text.index(label) for label in labels)
+    assert next(text_parts(source))["text"] == text
+    assert "\n".join(part["text"] for part in visual_parts(source)) == text
+
+    # Old immutable runs retain their original text ordering and identities.
+    legacy = import_text(source, source_processing_version=1)
+    assert legacy.index("Interpretation after table") < legacy.index("Cell introduction")
+    assert "Nested measurement" not in legacy
+
+
+def test_long_prose_prefers_whole_sentences_and_preserves_every_character():
+    source = "".join(f"Measurement {index}: the concentration is {index}.7 mg. " for index in range(30))
+    chunks = chunk_text(source, target_chars=120)
+    assert "".join(chunks) == source
+    assert all(len(chunk) <= 120 for chunk in chunks)
+    assert all(chunk.rstrip().endswith(".") for chunk in chunks[:-1])
+    assert all(".7 mg." in chunk for chunk in chunks)
+
+
+def test_markdown_headings_without_blank_lines_are_real_boundaries():
+    source = "Introduction.\n# First chapter\nFirst evidence.\n## Second chapter\nSecond evidence.\n"
+    chunks = chunk_text(source, target_chars=200)
+    assert chunks == ["Introduction.\n", "# First chapter\nFirst evidence.\n",
+                      "## Second chapter\nSecond evidence.\n"]
+    assert "".join(chunks) == source
+
+
+def test_markdown_code_fences_and_table_relationships_remain_intact():
+    code = "```python\n# This is code, not a document heading\nvalue = 12.7\n\nprint(value)\n```\n"
+    table = "| Measure | Value |\n| --- | ---: |\n| Concentration | 12.7 |\n| Limit | 21.4 |\n"
+    source = "# Measurements\nBefore the example.\n\n" + code + "\n" + table + "\nAfter the table.\n"
+    chunks = chunk_text(source, target_chars=45)
+    assert "".join(chunks) == source
+    assert all(chunk.strip() for chunk in chunks)
+    assert any(code in chunk for chunk in chunks)
+    assert any(table in chunk for chunk in chunks)
+    assert sum("Concentration" in chunk for chunk in chunks) == 1
+
+
+def test_chunk_separators_never_become_empty_evidence_or_lose_source_characters():
+    source = ("\n\n" + "Sentence with a complete result. " * 12 + "\n\n"
+              + "```text\n" + "A code example that stays whole.\n" * 8 + "```\n\n\n"
+              + "| Measure | Value |\n| --- | --- |\n" + "| Sample | 12.7 |\n" * 8
+              + "\n\nConcluding evidence.\n\n")
+    chunks = chunk_text(source, target_chars=45)
+    assert "".join(chunks) == source
+    assert all(chunk.strip() for chunk in chunks)
+
+
+def test_legacy_split_policy_stays_exact_for_saved_workflow_inputs():
+    source = "Paragraph A.\n# Header without blank lines\nParagraph B.\n\nTail."
+    assert chunk_text(source, target_chars=200, source_processing_version=1) == [source]
+    assert chunk_text(source, target_chars=200) != [source]
+
+
+def test_new_workflow_pins_source_processing_and_old_recipe_replays_legacy(tmp_path):
+    from lib.infrastructure.training_workflow import Workflow, create_run
+
+    source = tmp_path / "manual.md"
+    source.write_text("A.\n# Heading\nB.", encoding="utf-8")
+    run_id = create_run(tmp_path / "output", sources=[source], targets=["cpt"], chunk_chars=200)
+    workflow = Workflow(tmp_path / "output", run_id, tmp_path)
+    assert workflow.recipe["source_processing_version"] == 2
+    records = workflow.parse_source(workflow.recipe["sources"][0])
+    assert [record["text"] for record in records] == ["A.\n", "# Heading\nB."]
+
+    # Simulate a historical recipe lacking the new explicit parser policy.
+    workflow.recipe.pop("source_processing_version")
+    legacy = workflow.parse_source(workflow.recipe["sources"][0])
+    assert [record["text"] for record in legacy] == ["A.\n# Heading\nB."]
+    assert legacy[0]["source_location"]["chunk"] == 0
+
+
+def test_docx_expansion_is_bounded_before_document_library_reads_parts(tmp_path, monkeypatch):
+    import docx
+    from lib.infrastructure import docx_document
+
+    source = tmp_path / "large-expansion.docx"
+    docx.Document().save(source)
+    monkeypatch.setattr(docx_document, "MAX_EXPANDED_DOCX_BYTES", 100)
+    monkeypatch.setattr(docx, "Document", lambda *_: pytest.fail("unbounded package must not be opened"))
+    with pytest.raises(ValueError, match="^document_docx_expansion_limit$"):
+        import_text(source)
+
+
+@pytest.mark.parametrize("suffix, contents, reason", [
+    (".docx", b"not a document archive", "document_docx_parse_failed"),
+    (".tex", br"\section{broken", "latex_unbalanced_group"),
+])
+def test_single_corrupt_source_is_isolated_while_valid_document_exports(tmp_path, suffix, contents, reason):
+    from lib.infrastructure.training_workflow import Workflow, create_run, read_json, verify_artifacts
+
+    broken = tmp_path / ("broken" + suffix)
+    broken.write_bytes(contents)
+    valid = tmp_path / "valid.txt"
+    valid.write_text("Before starting the equipment, check the power cable. Keep the machine dry. "
+                     "Disconnect the power before maintenance. Record the result after every inspection.",
+                     encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = create_run(output, sources=[broken, valid], targets=["cpt"])
+    run = Workflow(output, run_id, tmp_path)
+    state = run.execute()
+    assert state["status"] == "needs_attention"
+    assert verify_artifacts(run.path)["counts"]["cpt"] == 1
+    rows = read_json(run.path / "input_records.json")
+    invalid = next(row for row in rows if row["status"] == "quarantined")
+    assert invalid["reason"] == reason
+    assert invalid["source_location"] == {"file": broken.name, "record": "document"}
+    assert any(row.get("text") == valid.read_text(encoding="utf-8") for row in rows)
+
+
+def test_invalid_docx_xml_is_reported_as_a_document_error(tmp_path):
+    import docx
+    from zipfile import ZipFile
+
+    source = tmp_path / "valid.docx"
+    docx.Document().save(source)
+    broken = tmp_path / "bad-xml.docx"
+    with ZipFile(source) as original, ZipFile(broken, "w") as changed:
+        for name in original.namelist():
+            changed.writestr(name, b"<w:document>" if name == "word/document.xml" else original.read(name))
+    with pytest.raises(ValueError, match="^document_docx_parse_failed$"):
+        import_text(broken)
+
+
+def test_unexpected_parser_failure_is_not_disguised_as_a_bad_document(tmp_path, monkeypatch):
+    from lib.infrastructure import training_workflow as engine
+
+    source = tmp_path / "valid.txt"
+    source.write_text("Reliable source text.", encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["cpt"])
+    run = engine.Workflow(output, run_id, tmp_path)
+
+    def broken_parser(*args, **kwargs):
+        raise RuntimeError("unexpected implementation failure")
+
+    monkeypatch.setattr(engine, "import_text", broken_parser)
+    with pytest.raises(RuntimeError, match="unexpected implementation failure"):
+        run.parse_source(run.recipe["sources"][0])
