@@ -14,6 +14,7 @@ from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
                                        validate_node_models)
 from lib.model_protocols import API_FORMATS
 from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.model_scheduling_controls import render_model_scheduling
 from lib.presentation.streamlit.workflow_model_capabilities import (
     discovered_choices, model_info, render_model_capabilities,
     suggested_tokens)
@@ -464,7 +465,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
     roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
     if not roles:
         explanation = {
-            "ingest": "解析上传来源并保留来源位置；此步骤不调用生成模型。",
+            "ingest": ("固定人工问答设计，保留任务来源快照；此步骤不调用模型。" if source_mode == "人工设计" else
+                       "解析上传来源并保留来源位置；此步骤不调用生成模型。"),
             "cpt": "清洗、分块并去重已有语料；此步骤不调用生成模型。",
             "agent": "核对已记录的工具轨迹；此节点不调用模型。验证环境在下方选择。",
             "gsm8k": "生成可复现的多步整数算术题，核对计算标注和最终答案；不处理通用数学证明，此节点不调用模型。",
@@ -570,6 +572,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                 "context_window_tokens": int(context_tokens),
                 "max_output_tokens": int(output_tokens),
             }
+            render_model_scheduling(backend_application, backend, model, prefix=prefix)
             render_model_capabilities(backend_application, backend, model, info, prefix=prefix,
                                       endpoint=endpoints[backend],
                                       save_selection=_save_model_selection,
@@ -587,7 +590,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                   help="按相同角色复制当前节点的模型与 token 上限。保留已有选择，之后仍可逐个修改。",
                   width="stretch")
         st.caption(UntranslatedText("、".join(targets)))
-    st.caption("同一模型可用于多个节点，也可同时用于生成和评审；各角色的参数分别保存。")
+    st.caption("同一模型可用于生成和评审。上下文与输出上限按角色保存，并发额度在全部节点与任务间共享。")
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()

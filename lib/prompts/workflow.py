@@ -257,6 +257,22 @@ RATIONALE_CHECK = spec("rationale_check", "核验独立、可检查的解题过�
     '逐步核对题意、每个运算和最终结果。不能以结果正确替代过程检查，资料中未提供的信息不可自行假定。'
     '返回 {"keep":bool,"grounded":bool,"reasoning_valid":bool,"correctness":1到5整数,"scores":{"correctness":1到5,"reasoning":1到5,"grounding":1到5,"instruction":1到5,"safety":1到5},"reason":"指出需要修复的步骤"}。')
 
+HUMAN_AUGMENTATION_CHECK = spec("human_augmentation_check", "独立核对人工问题与答案设计",
+    '这是人工增强核对，不是普通质量打分。human_design.seed 是人工同时设计的问题与参考答案，'
+    'human_design 与种子各自的 question_requirements、answer_requirements 是必须分别核对的设计要求。'
+    '对照完整 learner_messages 检查首条问题意图、条件以及回答意图是否保留。话术、语气、篇章组织可以变化，'
+    '不得改成另一问题，不得改变事实、数字、单位、否定、因果关系和适用边界。'
+    '连续多轮可以自然延伸当前任务，检查是否承接真实回应以及人工设计目标，不要求每一轮照抄种子答案。'
+    'teacher_evidence 为文件来源时，检查人工种子与实际证据、输出事实的一致性；种子与资料冲突或证据不足应 source_consistent=false。'
+    'source_kind=human_provided 只表示用户提供，人工答案不能被预先当作真实、正确或经过独立验证；'
+    '仍核对其内部逻辑、问题和答案的匹配、明显事实冲突，不得宣称完成外部事实核验。'
+    '只检查偏好样本的 chosen，不因有意的 rejected 负例偏离人工答案而否定整个样本。'
+    '设计说明、种子 id 和内部包装不得泄漏到训练内容。疑义、不支持的变化或任何设计项失败时 keep=false。'
+    '所有判断项为布尔值，任一 false 时 keep 必须 false；reason 只简述可检查的冲突类型，不复制敏感正文。'
+    '返回 {"keep":bool,"question_intent_preserved":bool,"answer_intent_preserved":bool,'
+    '"facts_preserved":bool,"requirements_followed":bool,"source_consistent":bool,"reason":"核对依据或冲突"}。',
+    source="本项目人工设计与模型评审边界；Self-Instruct 的种子示例和过滤：https://arxiv.org/abs/2212.10560")
+
 # Expose the previous versions to the registry without replacing their text.
 from lib.prompts.workflow_dialogue_legacy import (
     PLAN_V1, QA_DIRECTOR_V1, SFT_DIRECTED_V1, SFT_DIRECTED_CHECK_V1, MULTITURN_USER_V1,

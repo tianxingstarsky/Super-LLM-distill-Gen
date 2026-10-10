@@ -1,5 +1,6 @@
 """Bounded form values eligible for local creation-draft storage."""
 from copy import deepcopy
+import hashlib
 from math import isfinite
 import re
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE
@@ -10,6 +11,8 @@ from lib.domain.workflow_generation import GENERATION_STYLES, MAX_GENERATION_INS
 from lib.domain.reasoning_trim import TRIM_TEMPLATE_NAMES, MAX_TRIM_INSTRUCTION_CHARS, MAX_TRIM_PROMPT_CHARS
 from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS, MAX_NODE_PROMPT_CHARS
 from lib.domain.workflow_package_review import MAX_PACKAGE_REVIEW_SAMPLES, MIN_PACKAGE_REVIEW_PERCENT
+from lib.domain.human_augmentation import MAX_HUMAN_SEEDS, MAX_HUMAN_DESIGN_CHARS
+from lib.domain.workflow_quality import SECRET, canonical
 
 NUMBER_FIELDS = {
     'workflow-count': (1, MAX_PRODUCTION_GOAL), 'workflow-max-units': (1, MAX_PRODUCTION_GOAL),
@@ -33,6 +36,8 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
                'workflow-trim-prompt': MAX_TRIM_PROMPT_CHARS,
                'workflow-director-question-rules': 12000,
                'workflow-director-answer-rules': 12000,
+               'workflow-human-question-requirements': 6000,
+               'workflow-human-answer-requirements': 6000,
                'workflow-node-prompt': MAX_NODE_PROMPT_CHARS}
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
@@ -44,12 +49,43 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-cpt-review-mode': frozenset({'text', 'vision'}),
                     'workflow-agent-mode': frozenset({'local', 'isolated'}),
                     'workflow-production-policy': frozenset({'quality_first', 'bounded_replenishment'}),
+                    'workflow-creation-mode': frozenset({'自动生成', '人工问答增强', '人工制作图文'}),
                     'workflow-director-mode': frozenset({'adaptive', 'balanced'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
+                  'workflow-human-enabled',
                   'workflow-production-enabled'}
 NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
                           'workflow-generation-instruction'}
+HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
+                'workflow-human-question-requirements', 'workflow-human-answer-requirements'}
+_HUMAN_SEED_LIMITS = {'question': 12_000, 'answer': 12_000,
+                      'question_requirements': 6000, 'answer_requirements': 6000}
+
+
+def _human_text(value, limit):
+    # Drafts retain incomplete edits, including blank questions and answers.
+    # Credentials and broken text cannot enter automatic or named snapshots.
+    return (isinstance(value, str) and len(value) <= limit and '\x00' not in value
+            and '\ufffd' not in value and not SECRET.search(value))
+
+
+def _human_seeds(value):
+    if not isinstance(value, list) or len(value) > MAX_HUMAN_SEEDS:
+        return False
+    for supplied in value:
+        if (not isinstance(supplied, dict) or not {'question', 'answer'} <= set(supplied)
+                or set(supplied) - {*_HUMAN_SEED_LIMITS, 'id'}):
+            return False
+        if any(not _human_text(supplied.get(field, ''), limit)
+               for field, limit in _HUMAN_SEED_LIMITS.items()):
+            return False
+        if 'id' in supplied:
+            normalized = {field: supplied.get(field, '').strip() for field in _HUMAN_SEED_LIMITS}
+            identity = hashlib.sha256(canonical(normalized).encode('utf-8')).hexdigest()
+            if supplied['id'] != identity:
+                return False
+    return True
 
 
 def validate_creation_draft(values):
@@ -68,7 +104,8 @@ def validate_creation_draft(values):
         if len(scopes) > 1:
             raise ValueError('invalid_creation_draft')
         if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
-                     'workflow-cpt-processing-mode', 'workflow-cpt-review-mode'} and len(parts) != 2:
+                     'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
+                     *HUMAN_FIELDS} and len(parts) != 2:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:
             parts = key.split(':')
@@ -96,12 +133,16 @@ def validate_creation_draft(values):
         elif field in TEXT_FIELDS:
             valid = (isinstance(value, str) and len(value) <= TEXT_FIELDS[field]
                      and (field != 'workflow-node-prompt' or '\x00' not in value))
+            if field in HUMAN_FIELDS:
+                valid = _human_text(value, TEXT_FIELDS[field])
         elif field in ENUM_FIELDS:
             valid = isinstance(value, str) and value in ENUM_FIELDS[field]
         elif field == 'workflow-targets':
             valid = isinstance(value, list) and len(value) <= len(TARGETS) and all(isinstance(v, str) and v in TARGETS for v in value)
         elif field == 'workflow-sources':
             valid = isinstance(value, list) and len(value) <= 500 and all(isinstance(v, str) and len(v) <= 4096 for v in value)
+        elif field == 'workflow-human-seeds':
+            valid = _human_seeds(value)
         elif field == 'workflow-node-bindings':
             # Persist references and limits only. The model validator rejects
             # endpoint URLs, credentials and arbitrary node/role keys.
@@ -126,5 +167,11 @@ def validate_creation_draft(values):
             except ValueError:
                 valid = False
         if not valid:
+            raise ValueError('invalid_creation_draft')
+    if scopes:
+        human = {field.removeprefix('workflow-human-').replace('-', '_'): value
+                 for key, value in values.items()
+                 if (field := key.split(':', 1)[0]) in HUMAN_FIELDS}
+        if len(canonical(human)) > MAX_HUMAN_DESIGN_CHARS:
             raise ValueError('invalid_creation_draft')
     return deepcopy(values)

@@ -71,3 +71,13 @@ def set_role(role: str, backend: str, model: str) -> None:
 
 def _write_local(config: dict[str, Any]) -> None:
     _application().write_local(config)
+
+
+def get_model_scheduling(backend: str, model: str) -> dict[str, Any]:
+    return _application().get_model_scheduling(backend, model)
+
+
+def save_model_scheduling(backend: str, model: str, *, max_concurrency: int,
+                          request_queue_timeout_seconds: int = 300) -> dict[str, Any]:
+    return _application().save_model_scheduling(backend, model, max_concurrency=max_concurrency,
+                      request_queue_timeout_seconds=request_queue_timeout_seconds)

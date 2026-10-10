@@ -30,10 +30,17 @@ _MAX_MATCH_BYTES = 200 * 1024 * 1024
 _ERROR = "配置未能复制，当前草稿仍保留。请检查本机存储后重试。"
 
 
-def _source_mode(recipe: dict) -> str:
+def _file_sources(recipe: dict) -> list[dict]:
     sources = recipe.get("sources", [])
     if not isinstance(sources, list) or len(sources) > 200 or any(not isinstance(row, dict) for row in sources):
         raise ValueError("invalid_reusable_recipe")
+    # Human-only recipes include a durable design snapshot, not a file the
+    # user must find and re-upload from the source library.
+    return [source for source in sources if source.get("kind") != "human_design"]
+
+
+def _source_mode(recipe: dict) -> str:
+    sources = _file_sources(recipe)
     if not sources:
         return "开放需求"
     return ("Agent 上下文" if all(Path(str(row.get("file", ""))).suffix.casefold() in _AGENT_SUFFIXES
@@ -105,6 +112,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     values = {
         f"workflow-name:{workspace}": name,
         f"workflow-source-mode:{workspace}": mode,
+        f"workflow-creation-mode:{workspace}": "自动生成",
         f"workflow-preset:{workspace}": "自动推荐",
         f"workflow-targets:{workspace}:自动推荐": recipe.get("targets", []),
         f"workflow-count:{workspace}": (recipe["sample_count"] if recipe.get("sample_count") is not None
@@ -181,6 +189,15 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-package-review-limit:{workspace}"] = package_review["max_samples_per_target"]
         values[f"workflow-package-review-escalation:{workspace}"] = package_review.get("escalate_failure_percent", 0.0)
     director = validate_qa_director(recipe.get("qa_director"))
+    human = director.get("human_augmentation", {"enabled": False})
+    values[f"workflow-human-enabled:{workspace}"] = human["enabled"]
+    if human["enabled"]:
+        values[f"workflow-creation-mode:{workspace}"] = "人工问答增强"
+        values[f"workflow-human-seeds:{workspace}"] = [
+            {field: seed[field] for field in ("question", "answer", "question_requirements", "answer_requirements")}
+            for seed in human["seeds"]]
+        for field in ("question_requirements", "answer_requirements"):
+            values[f"workflow-human-{field.replace('_', '-')}:{workspace}"] = human[field]
     if "qa_director" in recipe:
         values[f"workflow-director-enabled:{workspace}"] = director["enabled"]
     if director.get("enabled"):
@@ -215,7 +232,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
             raise ValueError("invalid_reusable_recipe")
         values[f"workflow-web-research-more:{workspace}"] = "\n".join(extra)
     suffixes = _AGENT_SUFFIXES if mode == "Agent 上下文" else _DOCUMENT_SUFFIXES
-    selected, missing = _matching_sources(recipe.get("sources", []), source_files, suffixes)
+    selected, missing = _matching_sources(_file_sources(recipe), source_files, suffixes)
     if mode != "开放需求":
         values[f"workflow-sources:{workspace}:{mode}"] = selected
     return {"values": validate_creation_draft(values), "missing_sources": missing,
@@ -238,7 +255,7 @@ def reuse_run_as_draft(application, draft_application, workspace: str, run_id: s
         # Search the full bounded library rather than the former 501-row
         # picker window. Content matching still verifies each candidate.
         inventory = (application.source_files(workspace, suffixes, limit=5000)
-                     if recipe.get("sources") else [])
+                     if _file_sources(recipe) else [])
         copied = recipe_to_draft(recipe, state.get("name", ""), workspace, inventory)
         current = st.session_state.get(f"workflow-form-draft:{workspace}")
         if current is None:

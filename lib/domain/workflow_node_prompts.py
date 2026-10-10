@@ -31,7 +31,10 @@ VERSION_13_NODE_PROMPT_IDS = {
 VERSION_15_NODE_PROMPT_IDS = {**VERSION_13_NODE_PROMPT_IDS,
                    "ingest": (*LEGACY_NODE_PROMPT_IDS["ingest"], "workflow.document_parse"),
                    "cpt": (*LEGACY_NODE_PROMPT_IDS["cpt"], "workflow.cpt_clean", "workflow.cpt_review")}
-NODE_PROMPT_IDS = {**VERSION_15_NODE_PROMPT_IDS, "jev": ("workflow.package_review",)}
+VERSION_16_NODE_PROMPT_IDS = {**VERSION_15_NODE_PROMPT_IDS, "jev": ("workflow.package_review",)}
+NODE_PROMPT_IDS = {**VERSION_16_NODE_PROMPT_IDS,
+                  **{stage: (*VERSION_16_NODE_PROMPT_IDS[stage], "workflow.human_augmentation_check")
+                     for stage in ("sft", "multiturn", "preference", "cot", "trim")}}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -47,6 +50,8 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
     # Prompt editing must remain available while users are clearing a rule or
     # adjusting the final type weight. Creation validates the complete recipe.
     directed = isinstance(qa_director, dict) and qa_director.get("enabled") is True
+    human = directed and isinstance(qa_director.get("human_augmentation"), dict) and qa_director["human_augmentation"].get("enabled") is True
+    human_prompt = ("workflow.human_augmentation_check",) if human else ()
     if stage in {"package", "jev"}:
         return (NODE_PROMPT_IDS[stage] if validate_package_review(package_review)["enabled"]
                 and package_review_stage(package_review) == stage else ())
@@ -64,19 +69,19 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
     styled = config.get("enabled", True) if config else False
     if stage == "sft":
         if directed:
-            return (("workflow.sft_directed", "workflow.sft_directed_check", "workflow.jev_score", "workflow.style_check")
-                    if styled else ("workflow.sft_directed", "workflow.sft_directed_check", "workflow.jev_score"))
+            return (*(("workflow.sft_directed", "workflow.sft_directed_check", "workflow.jev_score", "workflow.style_check")
+                      if styled else ("workflow.sft_directed", "workflow.sft_directed_check", "workflow.jev_score")), *human_prompt)
         return (("workflow.sft_styled", "workflow.jev_score", "workflow.style_check")
                 if styled else ("workflow.sft", "workflow.jev_score"))
     if stage == "multiturn":
-        return (NODE_PROMPT_IDS[stage] if directed
+        return ((*VERSION_16_NODE_PROMPT_IDS[stage], *human_prompt) if directed
                 else LEGACY_NODE_PROMPT_IDS[stage])
     if stage == "cot":
         prompts = (("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check")
                    if styled else ("workflow.rationale_check",))
-        return (*prompts, "workflow.cot_directed_check") if directed else prompts
+        return (*prompts, "workflow.cot_directed_check", *human_prompt) if directed else prompts
     if stage in {"preference", "trim"}:
-        return NODE_PROMPT_IDS[stage] if directed else LEGACY_NODE_PROMPT_IDS[stage]
+        return (*VERSION_16_NODE_PROMPT_IDS[stage], *human_prompt) if directed else LEGACY_NODE_PROMPT_IDS[stage]
     return NODE_PROMPT_IDS.get(stage, ())
 
 
@@ -104,7 +109,8 @@ def _prompt_catalog(recipe_version: int) -> dict:
     return (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
             VERSION_10_NODE_PROMPT_IDS if recipe_version == 10 else
             VERSION_13_NODE_PROMPT_IDS if recipe_version <= 13 else
-            VERSION_15_NODE_PROMPT_IDS if recipe_version <= 15 else NODE_PROMPT_IDS)
+            VERSION_15_NODE_PROMPT_IDS if recipe_version <= 15 else
+            VERSION_16_NODE_PROMPT_IDS if recipe_version <= 16 else NODE_PROMPT_IDS)
 
 
 def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11) -> dict:

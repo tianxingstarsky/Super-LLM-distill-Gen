@@ -85,8 +85,9 @@ def test_english_pending_inspector_translates_status_without_changing_task_name(
     head = next(item.value for item in app.get("html")
                 if isinstance(item.value, str) and 'class="df-run-inspector-head"' in item.value)
     assert "Pending</span> · 0%" in head and "待处理" not in head
-    assert [item.value for item in app.subheader] == ["用户任务名称"]
-    assert any(item.label == "**用户任务名称**　↗" for item in app.button)
+    summary = next(item.value for item in app.get("html") if 'class="df-run-summary"' in str(item.value))
+    assert "<h3 data-user-content>用户任务名称</h3>" in summary
+    assert any(item.label == "**用户任务名称**　→" for item in app.button)
 
 
 def test_task_pages_reach_older_runs_and_explicit_location(tmp_path):
@@ -320,5 +321,6 @@ def test_task_detail_handles_file_changes_after_history_scan(tmp_path, monkeypat
     changed_path.write_bytes(original_bytes)
     app.run()
     assert not app.exception and app.session_state["task-center-run:race"] == run_id
-    assert any(item.value == "Recoverable task" for item in app.subheader)
+    assert any('<h3 data-user-content>Recoverable task</h3>' in str(item.value)
+               for item in app.get("html"))
     assert app.button(key=f"resume:{run_id}")

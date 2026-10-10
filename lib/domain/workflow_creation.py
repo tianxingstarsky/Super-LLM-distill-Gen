@@ -10,6 +10,7 @@ from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director, qa_director_applicable
 from lib.domain.workflow_production import validate_production, MAX_PRODUCTION_GOAL
 from lib.domain.cpt_processing import validate_cpt_processing
+from lib.domain.human_augmentation import HUMAN_QA_TARGETS
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
@@ -53,6 +54,9 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     director = validate_qa_director(qa_director)
     if director["enabled"] and not qa_director_applicable(targets):
         raise ValueError("qa_director_requires_qa_target")
+    if (director.get("human_augmentation", {}).get("enabled") and not sources
+            and set(targets) - HUMAN_QA_TARGETS):
+        raise ValueError("human_augmentation_requires_qa_sources")
     trim = validate_reasoning_trim(reasoning_trim)
     if trim and trim["enabled"] and not set(targets) & {"sft", "cot"}:
         raise ValueError("reasoning_trim_requires_reasoning_target")

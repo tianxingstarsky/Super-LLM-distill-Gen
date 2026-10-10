@@ -12,6 +12,7 @@ from lib.domain.backend_config import validate_backend_url
 from lib.domain.model_capabilities import (INFO_FIELDS, connection_signature, empty_model_info,
                                           merge_model_info, normalize_model_info,
                                           validate_manual_capabilities)
+from lib.domain.model_scheduling import validate_model_scheduling
 
 _UNSET = object()
 
@@ -117,6 +118,7 @@ class BackendApplication:
         result = merge_model_info(model, negative, normalize_model_info(model, manual, "manual"), tested, observed)
         result["manual"] = {field: manual.get(field) for field in INFO_FIELDS}
         result["probes"] = deepcopy(probe)
+        result.update(validate_model_scheduling(declaration))
         return result
 
     def key_display(self, backend: dict[str, Any]) -> dict[str, str]:
@@ -178,7 +180,8 @@ class BackendApplication:
             raise ValueError("invalid_model_capability")
 
     def save_model_capabilities(self, backend: str, model: str, *, context_window_tokens=_UNSET,
-                                max_output_tokens=_UNSET, vision=_UNSET, pdf=_UNSET, tools=_UNSET) -> dict:
+                                max_output_tokens=_UNSET, vision=_UNSET, pdf=_UNSET, tools=_UNSET,
+                                max_concurrency=_UNSET, request_queue_timeout_seconds=_UNSET) -> dict:
         """Save operator declarations separately from observed test evidence."""
         self._validate_model_name(model)
         endpoint = self._endpoint(backend)
@@ -186,6 +189,10 @@ class BackendApplication:
                  "vision": vision, "pdf": pdf, "tools": tools}
         patch = {field: value for field, value in patch.items() if value is not _UNSET}
         previous = (endpoint.get("model_capabilities") or {}).get(model) or {}
+        scheduling_patch = {field: value for field, value in {
+            "max_concurrency": max_concurrency,
+            "request_queue_timeout_seconds": request_queue_timeout_seconds}.items() if value is not _UNSET}
+        scheduling = validate_model_scheduling({**previous, **scheduling_patch})
         prior_manual = previous.get("manual")
         if not isinstance(prior_manual, dict):
             prior_manual = {field: previous[field] for field in INFO_FIELDS if field in previous
@@ -196,6 +203,8 @@ class BackendApplication:
         declarations = deepcopy(endpoint.get("model_capabilities") or {})
         declaration = declarations.setdefault(model, {})
         declaration["manual"] = manual
+        if scheduling_patch:
+            declaration.update(scheduling)
         from lib.domain.document_parser import vision_connection_signature
         if vision is None:
             if declaration.get("vision_source") != "probe":
@@ -206,7 +215,26 @@ class BackendApplication:
                                connection_sha256=vision_connection_signature(endpoint))
         entry["model_capabilities"] = declarations
         self._port.write_local(local)
+        if scheduling_patch:
+            self.get_model_scheduling(backend, model)
         return self.get_model_info(backend, model)
+
+    def get_model_scheduling(self, backend: str, model: str) -> dict:
+        """Safe shared admission state, without provider URLs or credentials."""
+        self._validate_model_name(model)
+        endpoint = self._endpoint(backend)
+        method = getattr(self._port, "model_scheduling", None)
+        if callable(method):
+            return method(endpoint, model)
+        declaration = (endpoint.get("model_capabilities") or {}).get(model) or {}
+        return {**validate_model_scheduling(declaration), "active": 0, "queued": 0,
+                "cooldown_seconds": 0.}
+
+    def save_model_scheduling(self, backend: str, model: str, *, max_concurrency: int,
+                              request_queue_timeout_seconds: int = 300) -> dict:
+        self.save_model_capabilities(backend, model, max_concurrency=max_concurrency,
+                                     request_queue_timeout_seconds=request_queue_timeout_seconds)
+        return self.get_model_scheduling(backend, model)
 
     def test_model(self, name: str, model: str, features=None) -> dict[str, Any]:
         """Test one selected model and persist route-bound per-feature evidence."""

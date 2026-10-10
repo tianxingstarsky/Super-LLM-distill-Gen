@@ -7,7 +7,8 @@ import pytest
 from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_graph import execution_graph
 from lib.domain.workflow_node_prompts import (
-    LEGACY_NODE_PROMPT_IDS, VERSION_10_NODE_PROMPT_IDS, VERSION_13_NODE_PROMPT_IDS, NODE_PROMPT_IDS,
+    LEGACY_NODE_PROMPT_IDS, VERSION_10_NODE_PROMPT_IDS, VERSION_13_NODE_PROMPT_IDS,
+    VERSION_15_NODE_PROMPT_IDS, VERSION_16_NODE_PROMPT_IDS,
     active_node_prompt_ids, builtin_node_prompt, snapshot_node_prompts,
     validate_node_prompt_snapshot,
 )
@@ -157,11 +158,12 @@ def test_valid_quote_cannot_hide_fabricated_visible_conditions(qa_type):
 
 
 def test_editable_node_prompts_and_frozen_catalogs_are_scoped_to_recipe_version():
-    prompts = snapshot_node_prompts({"director": {"workflow.qa_director": "CUSTOM {literal}"}}, recipe_version=14)
+    prompts = snapshot_node_prompts({"director": {"workflow.qa_director": "CUSTOM {literal}"}}, recipe_version=16)
     assert prompts["director"]["workflow.qa_director"] == "CUSTOM {literal}"
     for version, catalog in ((9, LEGACY_NODE_PROMPT_IDS), (10, VERSION_10_NODE_PROMPT_IDS),
                              (11, VERSION_13_NODE_PROMPT_IDS), (12, VERSION_13_NODE_PROMPT_IDS),
-                             (13, VERSION_13_NODE_PROMPT_IDS), (14, NODE_PROMPT_IDS)):
+                             (13, VERSION_13_NODE_PROMPT_IDS), (14, VERSION_15_NODE_PROMPT_IDS),
+                             (15, VERSION_15_NODE_PROMPT_IDS), (16, VERSION_16_NODE_PROMPT_IDS)):
         frozen = {stage: {pid: prompts[stage][pid] for pid in ids} for stage, ids in catalog.items()}
         assert validate_node_prompt_snapshot(frozen, "SYSTEM", recipe_version=version) == frozen
     assert "workflow.sft_directed" in active_node_prompt_ids("sft", "文档资料", qa_director={"enabled": True})

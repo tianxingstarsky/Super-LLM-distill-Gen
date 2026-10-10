@@ -1,7 +1,7 @@
 """Safe request failure categories and bounded, service-local retry pacing.
 
-Provider text and response bodies never leave this module. Cooldowns are an
-in-process courtesy between workers; they are not durable task state.
+Provider text and response bodies never leave this module. Direct clients have
+an in-process cooldown; configured clients use durable shared model admission.
 """
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ FATAL_VALIDATION_CODES = frozenset({
     "invalid_budget_settlement", "budget_multimodal_context_required",
     "max_output_tokens_exceeds_context_window", "model_context_window_exceeded",
     "document_model_vision_not_confirmed", "invalid_api_format", "invalid_model_request_attempts",
+    "invalid_model_scheduling", "invalid_model_max_concurrency", "invalid_model_queue_timeout",
+    "invalid_model_scheduler_identity", "invalid_model_scheduler_state",
 })
 
 
@@ -62,6 +64,8 @@ def classify_request_error(error: Exception) -> dict[str, str]:
     """Classify from types/status/known codes, never interpolate provider text."""
     if isinstance(error, (ModelRequestError, ModelJSONError)):
         return {"kind": error.kind, "code": error.code}
+    if type(error).__name__ == "ModelQueueTimeout":
+        return {"kind": "transient", "code": "model_request_queue_timeout"}
     if type(error).__name__ == "BudgetExceeded":
         return {"kind": "fatal", "code": "budget_exhausted"}
     status = _status(error)
@@ -138,6 +142,17 @@ def retry_delay(error: Exception, attempt: int) -> float:
     return random.uniform(ceiling / 2, ceiling)
 
 
+def cancelable_wait(seconds: float, cancel_check) -> None:
+    """Check cancellation during quiet queue/cooldown/backoff intervals."""
+    deadline = time.monotonic() + max(0., seconds)
+    while True:
+        cancel_check()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(.15, remaining))
+
+
 class ServiceCooldowns:
     """A bounded shared cooldown table; unrelated services never wait on it."""
 
@@ -158,14 +173,17 @@ class ServiceCooldowns:
             self._until[identity] = max(self._until.get(identity, now),
                                        now + min(MAX_RETRY_DELAY_SECONDS, max(0., seconds)))
 
-    def wait(self, identity: str) -> None:
+    def wait(self, identity: str, *, cancel_check=None) -> None:
         with self._lock:
             remaining = min(MAX_RETRY_DELAY_SECONDS,
                             max(0., self._until.get(identity, 0.) - time.monotonic()))
         if remaining:
             # One bounded wait, outside locks. Repeated 429s cannot keep one
             # caller waiting forever by extending its deadline in a loop.
-            time.sleep(remaining)
+            if cancel_check:
+                cancelable_wait(remaining, cancel_check)
+            else:
+                time.sleep(remaining)
 
 
 SERVICE_COOLDOWNS = ServiceCooldowns()

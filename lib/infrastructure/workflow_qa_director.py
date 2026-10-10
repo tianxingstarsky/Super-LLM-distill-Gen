@@ -21,6 +21,10 @@ from lib.domain.workflow_qa_director import (
 )
 from lib.domain.workflow_quality import accepted, canonical, conversation_issue, text_issue
 from lib.domain.workflow_scale import DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS
+from lib.domain.human_augmentation import (
+    human_design, human_messages_identity, validate_human_check,
+    HUMAN_DIRECTOR_INSTRUCTION, HUMAN_GENERATION_INSTRUCTION, HUMAN_QA_TARGETS,
+)
 from lib.infrastructure.qa_history import QAHistory, contract_identity
 from lib.infrastructure.workflow_rows import WorkflowRows
 from lib.model_request_reliability import ModelJSONError
@@ -61,6 +65,50 @@ class DialoguePlanError(ValueError):
 
 
 class WorkflowQADirector:
+    def human_package_issue(self, row, target):
+        """No derived/cached sample may bypass its human-design assessment."""
+        if target not in HUMAN_QA_TARGETS:
+            return None
+        contract = row.get("qa_contract") or {}
+        design = contract.get("human_design")
+        if design is None:
+            if (self.recipe.get("qa_director", {}).get("human_augmentation", {}).get("enabled")
+                    and row.get("evidence_level") != "recorded_context_model_assessed"
+                    and row.get("human_augmentation_status") != "recorded_conversation_preserved"):
+                return "human_augmentation_design_missing"
+            return None
+        try:
+            expected = human_design(self.recipe.get("qa_director", {}).get("human_augmentation"),
+                                    seed_id=design["seed"]["id"], validated=True)
+        except (KeyError, TypeError, ValueError):
+            return "human_augmentation_design_mismatch"
+        if design != expected:
+            return "human_augmentation_design_mismatch"
+        if target in {"dpo", "orpo", "rlaif"}:
+            messages = [*row.get("prompt", []), *row.get("chosen", [])]
+        elif target == "cot":
+            reasoning = row.get("reasoning", [])
+            messages = [*row.get("question", []), {"role": "assistant", "content": row.get("answer", ""),
+                        "reasoning_content": "\n".join(reasoning) if isinstance(reasoning, list) else reasoning}]
+        else:
+            messages = row.get("messages", [])
+        receipt = row.get("qa_contract_check", {})
+        if target == "multiturn" and row.get("turn_reviews"):
+            receipt = row["turn_reviews"][-1].get("qa_contract_check", {})
+        try:
+            if (receipt.get("keep") is not True or type(receipt.get("adherence")) is not int
+                    or receipt["adherence"] < 4):
+                return "human_augmentation_review_missing"
+            check = receipt.get("human_augmentation", {})
+            assessed = validate_human_check({key: value for key, value in check.items()
+                                             if key not in {"design_sha256", "messages_sha256"}})
+            if (not assessed["keep"] or check.get("design_sha256") != _digest(design)
+                    or check.get("messages_sha256") != human_messages_identity(messages)):
+                return "human_augmentation_review_mismatch"
+        except (TypeError, ValueError, AttributeError):
+            return "human_augmentation_review_missing"
+        return None
+
     def qa_identity_design(self, contract):
         """Only adaptive contracts opt in; old persistent identities stay valid."""
         return (contract.get("dialogue_design")
@@ -155,6 +203,25 @@ class WorkflowQADirector:
                 or not isinstance(value.get("reason"), str) or not value["reason"].strip()):
             self._invalidate_director_call(key)
             raise ValueError("invalid_qa_director_judge_schema")
+        if design := contract.get("human_design"):
+            human_key = [*key, "human_augmentation"]
+            check = self.ask(human_key, "jev", "workflow.human_augmentation_check", {
+                "human_design": design, "qa_contract": contract, "learner_messages": messages,
+                "teacher_evidence": source.get("text", source.get("task", "")),
+                "source_kind": "human_provided" if source.get("human_provided") else source.get("kind", "document"),
+                "question_rules": self.recipe["qa_director"]["question_rules"],
+                "answer_rules": self.recipe["qa_director"]["answer_rules"],
+                "fact_verification": "not_independently_verified",
+            }, allow_reasoning_fallback=False)
+            try:
+                check = validate_human_check(check)
+            except ValueError:
+                self._invalidate_director_call(human_key)
+                raise
+            value["human_augmentation"] = {**check, "design_sha256": _digest(design),
+                                            "messages_sha256": human_messages_identity(messages)}
+            if not check["keep"]:
+                value.update(keep=False, adherence=1, reason="human_augmentation_design_rejected")
         return value
 
     def next_dialogue_step(self, unit, messages, previous_state, *, attempt=0, feedback=None):
@@ -179,7 +246,8 @@ class WorkflowQADirector:
         }
         try:
             value = self.ask(key, "generation", "workflow.qa_director", data,
-                allow_reasoning_fallback=False, model_stage="director", prompt_stage="director")
+                allow_reasoning_fallback=False, model_stage="director", prompt_stage="director",
+                **({"instruction": HUMAN_DIRECTOR_INSTRUCTION} if unit["qa_contract"].get("human_design") else {}))
         except ModelJSONError as error:
             raise DialoguePlanError() from error
         try:
@@ -191,7 +259,8 @@ class WorkflowQADirector:
     @staticmethod
     def qa_metadata(sample, check=None):
         if not sample.get("qa_contract"):
-            return {}
+            return ({"human_augmentation_status": "recorded_conversation_preserved"}
+                    if sample.get("human_augmentation_status") == "recorded_conversation_preserved" else {})
         return {key: sample.get(key) for key in ("qa_contract", "family_id", "parent_id")} | (
             {"qa_contract_check": check} if check is not None else {})
 
@@ -212,11 +281,14 @@ class WorkflowQADirector:
             context["generation_style"] = style
         feedback = None
         check = contract_check = style_check = None
+        instructions = ([HUMAN_GENERATION_INSTRUCTION] if contract.get("human_design") else [])
+        if style is not None:
+            instructions.append("生成风格要求：\n" + style["instruction"])
         for attempt in range(2):
             candidate = self.ask([unit["id"], "sft_directed", attempt], "generation",
                 "workflow.sft_directed", {**context, "feedback": feedback},
-                **({"instruction": "生成风格要求：\n" + style["instruction"],
-                    "allow_reasoning_fallback": False} if style is not None else {}))
+                **({"instruction": "\n".join(instructions)} if instructions else {}),
+                **({"allow_reasoning_fallback": False} if style is not None else {}))
             if (not isinstance(candidate, dict)
                     or any(text_issue(candidate.get(key)) for key in ("question", "answer", "reasoning"))
                     or candidate["question"].strip() != contract["question"]):
@@ -253,7 +325,8 @@ class WorkflowQADirector:
                          "qa_contract_check": contract_check, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "repair_attempts": attempt,
                          "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
-                         "evidence_level": ("model_assessed_synthetic" if unit["kind"] == "brief"
+                         "evidence_level": ("human_provided_and_model_assessed" if unit.get("human_provided") else
+                                            "model_assessed_synthetic" if unit["kind"] == "brief"
                                             else "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
                                             else "source_and_model_assessed"),
                          **({"generation_style": style, "style_check": style_check} if style else {})}]
@@ -273,6 +346,9 @@ class WorkflowQADirector:
             return batch
         key = ["director_batch", offset, _digest(guided)]
         adaptive = config.get("planning_mode", "balanced") == "adaptive"
+        human = config.get("human_augmentation", {})
+        design_offset = offset + (self.state.get("production", {}).get("attempted", 0)
+                                  if human.get("enabled") and self.production_enabled() else 0)
         assigned = ((None,) * len(guided) if adaptive else
                     allocate_qa_types(len(guided), config["type_weights"], offset=offset))
         def snapshot():
@@ -298,9 +374,13 @@ class WorkflowQADirector:
                          "teacher_evidence": unit.get("text", "")[:text_limit],
                          "generation_variant": unit.get("generation_variant"),
                          "assigned_type": qa_type,
-                         "source_is_synthetic": unit["kind"] == "brief"}
-                        for unit, qa_type in zip(guided, assigned)],
-                    "assigned_types": list(assigned), "offset": offset,
+                         "source_is_synthetic": unit["kind"] == "brief",
+                         **({"human_design": human_design(human, design_offset + index,
+                                  seed_id=(unit.get("human_design") or {}).get("seed", {}).get("id"), validated=True),
+                             "source_kind": "human_provided" if unit.get("human_provided") else unit["kind"]}
+                            if human.get("enabled") else {})}
+                        for index, (unit, qa_type) in enumerate(zip(guided, assigned))],
+                    "assigned_types": list(assigned), "offset": design_offset,
                     "coverage": deepcopy(self.state["qa_director"]["coverage"]),
                     "feedback": deepcopy(self.state["qa_director"]["feedback"]),
                     "history": history, "history_is_not_evidence": True,
@@ -344,7 +424,8 @@ class WorkflowQADirector:
                 data = inputs if repair_feedback is None else {**inputs, "plan_repair": repair_feedback}
                 try:
                     response = self.ask(call_key, "generation", "workflow.qa_director", data,
-                                        allow_reasoning_fallback=False)
+                                        allow_reasoning_fallback=False,
+                                        **({"instruction": HUMAN_DIRECTOR_INSTRUCTION} if human.get("enabled") else {}))
                 except ModelJSONError:
                     if not production:
                         raise
@@ -372,6 +453,8 @@ class WorkflowQADirector:
                             task, expected_type=candidate["assigned_type"],
                             source_text=candidate["teacher_evidence"],
                             expected_id=candidate["id"])
+                        if candidate.get("human_design"):
+                            contracts[candidate["id"]]["human_design"] = deepcopy(candidate["human_design"])
                     return contracts
                 except ValueError:
                     self._invalidate_director_call(call_key)
@@ -527,6 +610,17 @@ class WorkflowQADirector:
 
     def directed_generation(self, units, *, needs_sft, needs_multiturn):
         config = validate_qa_director(self.recipe.get("qa_director"))
+        if human := config.get("human_augmentation"):
+            binding = self.recipe.get("node_models", {}).get("director", {}).get("generation", {})
+            system = self.recipe["node_prompt_system"] + "\n" + self.prompt_text("workflow.qa_director", stage="director")
+            available = (binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
+                         - binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
+                         - len(system.encode("utf-8")) - len(HUMAN_DIRECTOR_INSTRUCTION.encode("utf-8")) - 4096)
+            largest = max(len(canonical(human_design(human, index, validated=True)).encode("utf-8"))
+                          for index in range(len(human["seeds"]))) + 2048
+            if available < largest:
+                raise ValueError("human_augmentation_context_too_small")
+            config["batch_size"] = min(config["batch_size"], max(1, available // largest))
         stages = [stage for stage, active in (("sft", needs_sft), ("multiturn", needs_multiturn)) if active]
         directory = self.path / "stage-results"
         directory.mkdir(exist_ok=True)
@@ -551,6 +645,12 @@ class WorkflowQADirector:
             "acceptance_basis": "generation_quality_and_contract_checks",
             "publication_basis": "final_package_eligible",
         }
+        if config.get("human_augmentation"):
+            self.state["qa_director"]["human_augmentation"] = {
+                "enabled": True, "seeds": len(config["human_augmentation"]["seeds"]),
+                "evidence_kind": "human_provided", "fact_verification": "not_independently_verified",
+                "checks": ["question_and_answer_design", "source_consistency", "quality", "deduplication"],
+                "identity_sha256": _digest(config["human_augmentation"])}
         for stage, total in [("director", guided_count), *[(stage, len(units)) for stage in stages]]:
             self.state["stages"].setdefault(stage, {"label": "问答指导与调度"})
             self.state["stages"][stage].update(status="running" if stage == "director" else "pending", done=0, total=total, outputs=0,

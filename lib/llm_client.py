@@ -8,6 +8,7 @@ import os
 import pathlib
 import time
 import uuid
+from contextlib import ExitStack
 from typing import Any, Dict, List
 from urllib.parse import urlsplit
 
@@ -29,6 +30,12 @@ DEFAULT_NO_PROXY = "127.0.0.1,localhost"
 # to the same conservative default used by workflow node bindings.
 DEFAULT_BUDGET_CONTEXT_TOKENS = 131_072
 DEFAULT_BUDGET_OUTPUT_TOKENS = 32_768
+# The read limit is inactivity, not an overall generation deadline: a long
+# token stream keeps its slot while it continues to make progress.
+MODEL_CONNECT_TIMEOUT_SECONDS = 15.0
+MODEL_READ_IDLE_TIMEOUT_SECONDS = 600.0
+MODEL_WRITE_TIMEOUT_SECONDS = 60.0
+MODEL_POOL_TIMEOUT_SECONDS = 15.0
 
 
 def parse_json_robust(output: str) -> Dict[str, Any]:
@@ -316,6 +323,8 @@ class ChatClient:
         api_format: str = "chat",
         context_window_tokens: int | None = None,
         additional_budget: BudgetGuard | None = None,
+        scheduler=None,
+        cancel_check=None,
     ):
         # 本地端点绕代理（spike 报告 F2）：httpx 在 OpenAI 客户端构造时快照代理
         # 环境变量，必须在构造前设置；构造后再 setdefault 对本客户端无效。
@@ -326,13 +335,19 @@ class ChatClient:
             raise ValueError("context_window_tokens must be a positive integer")
         self.context_window_tokens = context_window_tokens
         if self.api_format == "anthropic":
-            from anthropic import Anthropic
+            from anthropic import Anthropic, Timeout
 
-            self.client = Anthropic(base_url=base_url, api_key=api_key, max_retries=0)
+            self.client = Anthropic(base_url=base_url, api_key=api_key, max_retries=0,
+                                    timeout=Timeout(MODEL_READ_IDLE_TIMEOUT_SECONDS,
+                                        connect=MODEL_CONNECT_TIMEOUT_SECONDS,
+                                        write=MODEL_WRITE_TIMEOUT_SECONDS, pool=MODEL_POOL_TIMEOUT_SECONDS))
         else:
-            from openai import OpenAI  # delayed import keeps offline domain tests lightweight
+            from openai import OpenAI, Timeout  # delayed import keeps offline domain tests lightweight
 
-            self.client = OpenAI(base_url=base_url, api_key=api_key, max_retries=0)
+            self.client = OpenAI(base_url=base_url, api_key=api_key, max_retries=0,
+                                 timeout=Timeout(MODEL_READ_IDLE_TIMEOUT_SECONDS,
+                                     connect=MODEL_CONNECT_TIMEOUT_SECONDS,
+                                     write=MODEL_WRITE_TIMEOUT_SECONDS, pool=MODEL_POOL_TIMEOUT_SECONDS))
         self.model = model
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
         self.price_input = price_input_per_1m
@@ -341,6 +356,8 @@ class ChatClient:
             raise ValueError("invalid_model_token_price")
         self.budget = budget
         self.additional_budget = additional_budget
+        self.scheduler = scheduler
+        self.cancel_check = cancel_check
         self._service_identity = SERVICE_COOLDOWNS.identity(base_url, api_key)
         # response_format 能力探测结果：None=未知 / True=支持 / False=不支持。
         # 首次 json_mode 调用被 API 拒绝后置 False，同会话后续自动降级为
@@ -550,6 +567,15 @@ class ChatClient:
         request_max_tokens, reservation_usd = self._budget_request_bound(messages, max_tokens)
         last_err: Exception | None = None
         callback_error = None
+        cancel_error = None
+        def check_cancel():
+            nonlocal cancel_error
+            if self.cancel_check:
+                try:
+                    self.cancel_check()
+                except BaseException as error:
+                    cancel_error = error
+                    raise
         def notify(event):
             nonlocal callback_error
             try:
@@ -560,11 +586,20 @@ class ChatClient:
         attempts = 0
         while attempts < retries:
             reservations = []
+            admission = ExitStack()
             request_started = False
             definite_rejection = False
             failure = None
+            delay = None
             try:
-                SERVICE_COOLDOWNS.wait(self._service_identity)
+                check_cancel()
+                if self.scheduler is not None:
+                    admission.enter_context(self.scheduler.acquire(cancel_check=check_cancel,
+                        on_wait=(lambda info: notify({"type": "queued", **info})) if on_stream else None))
+                else:
+                    SERVICE_COOLDOWNS.wait(self._service_identity,
+                                           **({"cancel_check": check_cancel} if self.cancel_check else {}))
+                check_cancel()
                 for guard in self._budgets():
                     if reservation_usd:
                         reservations.append((guard, guard.reserve(reservation_usd)))
@@ -608,8 +643,11 @@ class ChatClient:
             except ValueError:
                 raise
             except Exception as e:  # noqa: BLE001
-                if e is callback_error:
+                if e is callback_error or e is cancel_error:
                     raise
+                from lib.model_request_scheduler import ModelQueueTimeout
+                if isinstance(e, ModelQueueTimeout):
+                    raise ModelRequestError(e.code, e.kind, attempts) from None
                 definite_rejection = rejected_before_generation(e)
                 # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
                 # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
@@ -619,24 +657,37 @@ class ChatClient:
                     continue
                 last_err = e
                 failure = classify_request_error(e)
+                if failure["kind"] == "transient":
+                    delay = retry_delay(e, attempts)
+                    if failure["code"] in {"service_rate_limited", "service_unavailable"}:
+                        if self.scheduler is not None:
+                            # Publish before releasing the rejected call's slot.
+                            self.scheduler.defer(delay)
+                        else:
+                            SERVICE_COOLDOWNS.defer(self._service_identity, delay)
             finally:
-                if reservations:
-                    # A timeout/error may still have incurred provider charges.
-                    # Pessimistically book the reserved maximum before retrying.
-                    self._settle_all(reservations, reservation_usd
-                                     if request_started and not definite_rejection else 0.0)
+                try:
+                    if reservations:
+                        # A timeout/error may still have incurred provider charges.
+                        # Pessimistically book the reserved maximum before retrying.
+                        self._settle_all(reservations, reservation_usd
+                                         if request_started and not definite_rejection else 0.0)
+                finally:
+                    admission.close()
             attempts += 1
             if failure is None:
                 failure = {"kind": "invalid", "code": "model_visible_output_missing"}
             if failure["kind"] != "transient":
                 break
-            delay = retry_delay(last_err, attempts - 1)
-            if failure["code"] in {"service_rate_limited", "service_unavailable"}:
-                SERVICE_COOLDOWNS.defer(self._service_identity, delay)
+            delay = retry_delay(last_err, attempts - 1) if delay is None else delay
             if attempts >= retries:
                 break
             if failure["code"] not in {"service_rate_limited", "service_unavailable"}:
-                time.sleep(delay)
+                if self.cancel_check:
+                    from lib.model_request_reliability import cancelable_wait
+                    cancelable_wait(delay, check_cancel)
+                else:
+                    time.sleep(delay)
         # Provider error messages may echo credentials or source material.
         raise ModelRequestError(failure["code"], failure["kind"], attempts) from None
 
@@ -827,4 +878,8 @@ def load_backend(
         budget=guard,
         additional_budget=additional_budget,
     )
+    from lib.model_request_scheduler import SharedModelScheduler, model_pool_identity
+    scheduler = SharedModelScheduler(root, model_pool_identity(b.get("base_url", ""), api_key, model))
+    scheduler.synchronize(model)
+    client.scheduler = scheduler
     return client, model

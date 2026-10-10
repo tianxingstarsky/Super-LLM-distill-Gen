@@ -113,6 +113,13 @@ class WorkflowProduction:
                 # Cancellation is control flow, never an isolated candidate failure.
                 if type(error).__name__ == "Cancelled":
                     raise
+                # ChatClient already exhausted its bounded transport retries.
+                # A provider failure is not a quality verdict on this source;
+                # stop this run with checkpoints intact rather than retrying
+                # again or quarantining every remaining candidate.
+                from lib.model_request_reliability import ModelRequestError
+                if isinstance(error, ModelRequestError):
+                    raise
                 failure = classify_request_error(error)
                 if failure["kind"] == "fatal":
                     raise
@@ -712,7 +719,11 @@ class WorkflowProduction:
                 self._production_collecting = True
                 if self.recipe["sources"]:
                     generated = RowSpool(round_dir / "generated.jsonl")
-                    for unit in source_index.rows(production["attempted"], size, expand=not quality_first):
+                    # Human enhancement explicitly requests multiple phrasings
+                    # of the same design. Quality-first still caps the initial
+                    # candidate window and never replaces rejected variants.
+                    human = self.recipe.get("qa_director", {}).get("human_augmentation", {}).get("enabled", False)
+                    for unit in source_index.rows(production["attempted"], size, expand=not quality_first or human):
                         generated.append(unit)
                     generated.close()
                 elif set(active) == {"gsm8k"}:

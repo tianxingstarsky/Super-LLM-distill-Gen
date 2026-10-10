@@ -88,6 +88,15 @@ class FilesystemBackendConfigDriver:
         from lib.infrastructure.model_discovery import resolved_credential
         return connection_signature(backend, resolved_credential(backend), model)
 
+    def model_scheduling(self, backend: dict[str, Any], model: str) -> dict[str, Any]:
+        from lib.model_request_scheduler import SharedModelScheduler, model_pool_identity
+        protocol = validate_api_format(backend.get("api_format", "chat"))
+        default_env = "ANTHROPIC_API_KEY" if protocol == "anthropic" else "OPENAI_API_KEY"
+        reference = backend.get("api_key_env") if "api_key_env" in backend else default_env
+        credential = backend.get("api_key") or os.environ.get(reference or "", "")
+        identity = model_pool_identity(backend.get("base_url", ""), credential, model)
+        return SharedModelScheduler(self.root, identity).synchronize(model)
+
     def _model_cache_path(self, name: str) -> Path:
         return self.model_cache_dir / (hashlib.sha256(name.encode()).hexdigest() + ".json")
 
@@ -122,6 +131,20 @@ class FilesystemBackendConfigDriver:
 
     def probe_model(self, backend: dict[str, Any], model: str, features=None,
                     budget: dict[str, Any] | None = None) -> dict[str, Any]:
+        from lib.model_request_scheduler import SharedModelScheduler, model_pool_identity
+        protocol = validate_api_format(backend.get("api_format", "chat"))
+        default_env = "ANTHROPIC_API_KEY" if protocol == "anthropic" else "OPENAI_API_KEY"
+        reference = backend.get("api_key_env") if "api_key_env" in backend else default_env
+        credential = backend.get("api_key") or os.environ.get(reference or "", "")
+        scheduler = SharedModelScheduler(self.root, model_pool_identity(backend.get("base_url", ""),
+                                                                       credential, model))
+        scheduler.synchronize(model)
+        # Feature probes send sequential requests and share production capacity.
+        with scheduler.acquire():
+            return self._probe_model(backend, model, features, budget)
+
+    def _probe_model(self, backend: dict[str, Any], model: str, features=None,
+                     budget: dict[str, Any] | None = None) -> dict[str, Any]:
         from lib.infrastructure.model_capability_probe import probe_model
         from lib.domain.backend_config import validate_token_prices
         from lib.llm_client import BudgetGuard

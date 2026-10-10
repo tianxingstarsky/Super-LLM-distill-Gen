@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from lib.domain.human_augmentation import validate_human_augmentation
+
 
 QA_TYPES = ("closed_book", "grounded", "partial", "multi_source", "distractor")
 QA_TYPE_LABELS = {
@@ -42,16 +44,21 @@ def validate_qa_director(value: dict | None) -> dict:
     """Normalize a bounded, serializable director recipe without hidden fields."""
     if value is None:
         return {"enabled": False}
-    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode"}
+    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation"}
     if not isinstance(value, dict) or set(value) - allowed or type(value.get("enabled", False)) is not bool:
         raise ValueError("invalid_qa_director")
+    human = validate_human_augmentation(value.get("human_augmentation"))
     if not value.get("enabled", False):
+        if human["enabled"]:
+            raise ValueError("human_augmentation_requires_director")
         return {"enabled": False}
     batch_size = value.get("batch_size", 20)
     history_limit = value.get("history_limit", 10)
     planning_mode = value.get("planning_mode", "balanced")
     if planning_mode not in DIRECTOR_PLANNING_MODES:
         raise ValueError("invalid_qa_director_planning_mode")
+    if human["enabled"]:
+        planning_mode = "adaptive"
     if type(batch_size) is not int or not 1 <= batch_size <= 50:
         raise ValueError("invalid_qa_director_batch_size")
     if type(history_limit) is not int or not 0 <= history_limit <= 20:
@@ -73,6 +80,10 @@ def validate_qa_director(value: dict | None) -> dict:
     # into those snapshots or change their weighted scheduling on resume.
     if "planning_mode" in value:
         result["planning_mode"] = planning_mode
+    if human["enabled"]:
+        result["human_augmentation"] = human
+        # Human intent is the design brief, never a rigid evidence-type quota.
+        result["planning_mode"] = "adaptive"
     return result
 
 

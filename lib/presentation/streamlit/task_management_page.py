@@ -259,7 +259,7 @@ def _jump_to_page(page_key: str, jump_key: str) -> None:
 
 def render_task_management(application: WorkflowApplication, workspace_id: str,
                            begin: Callable[[list[str]], None],
-                           on_new_workflow: Callable[[], None], *, draft_application=None) -> str | None:
+                           on_new_workflow: Callable[[], None], *, draft_application=None, backend_application=None) -> str | None:
     """Render the data-workflow task view and return the selected run ID.
 
     ``begin`` starts or resumes a persisted workflow, while
@@ -416,6 +416,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                         render_agent_review(application, selected_id, workspace_id=workspace_id)
                 if selected_run.get("recipe_readable", True):
                     render_run(application, selected_id, begin, embedded=True,
+                               **({"backend_application": backend_application} if backend_application is not None else {}),
                                **({"draft_application": draft_application} if draft_application is not None else {}))
                 else:
                     st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")

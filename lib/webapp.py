@@ -522,6 +522,7 @@ def page_data_management():
 
 
 def page_task_manager():
+    from lib.bootstrap.backends import backend_application
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.presentation.streamlit.work_drafts import render_work_drafts
     from lib.presentation.streamlit.task_management_styles import task_management_styles
@@ -557,6 +558,7 @@ def page_task_manager():
             application, st.session_state["ws"], _begin,
             lambda: _select_page("自动工作流"),
             draft_application=draft_application,
+            backend_application=backend_application(ROOT),
         )
 
 

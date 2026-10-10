@@ -8,6 +8,7 @@ from lib.domain.workflow_qa_director import (
 )
 from lib.presentation.streamlit.i18n import translate_label
 from lib.presentation.streamlit.prompt_library_controls import render_prompt_library
+from lib.presentation.streamlit.human_augmentation_controls import human_snapshot, render_human_designs
 
 
 TYPE_LABELS = {
@@ -36,6 +37,7 @@ def director_snapshot(workspace: str, *, eligible=True) -> dict:
                          if mode == "balanced" else dict(DEFAULT_TYPE_WEIGHTS)),
         "question_rules": _field(workspace, f"workflow-director-question-rules:{workspace}", DEFAULT_QUESTION_RULES),
         "answer_rules": _field(workspace, f"workflow-director-answer-rules:{workspace}", DEFAULT_ANSWER_RULES),
+        "human_augmentation": human_snapshot(workspace),
     }
 
 
@@ -58,13 +60,17 @@ def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
 
 
 def render_director_settings(workspace: str, *, save_field) -> None:
+    render_human_designs(workspace, save_field=save_field)
     key = f"workflow-director-mode:{workspace}"
     st.session_state[key] = _field(workspace, key, "adaptive")
     language = st.session_state.get("ui_language", "zh")
     mode_labels = {"adaptive": translate_label("语言专家自适应", language),
                    "balanced": translate_label("按线索比例安排", language)}
+    human = human_snapshot(workspace).get("enabled", False)
+    if human:
+        st.session_state[key] = "adaptive"
     mode = st.selectbox("指导方式", tuple(mode_labels), key=key, format_func=mode_labels.__getitem__,
-                        on_change=save_field, args=(workspace, key))
+                        on_change=save_field, args=(workspace, key), disabled=human)
     for name, default in (("batch", 20), ("history", 10)):
         key = f"workflow-director-{name}:{workspace}"
         st.session_state[key] = _field(workspace, key, default)

@@ -304,7 +304,7 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     for widget in app.number_input:
         if widget.key == f"workflow-count:{name}":
             widget.set_value(50000)
-        elif widget.label == "并发请求上限":
+        elif widget.label == "流水线并发":
             widget.set_value(8)
         elif widget.label == "每批候选数":
             widget.set_value(200)
@@ -332,7 +332,7 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     assert not app.exception
     values = {widget.label: widget.value for widget in app.number_input}
     assert values["期望样本量（非必达）"] == 50000
-    assert values["并发请求上限"] == 8 and values["每批候选数"] == 200
+    assert values["流水线并发"] == 8 and values["每批候选数"] == 200
     next(b for b in app.button if b.label == "开始自动生成").click().run()
     assert not app.exception
     assert commands and commands[0][:3] == ("workflow", "--action", "resume")

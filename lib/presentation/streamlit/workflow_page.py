@@ -24,6 +24,8 @@ from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_delivery import has_deliverable_results
 from lib.domain.workflow_quality import text_issue
+from lib.domain.human_augmentation import HUMAN_QA_TARGETS
+from lib.presentation.streamlit.model_scheduling_controls import render_run_scheduling
 from lib.domain.workflow_production import MAX_PRODUCTION_GOAL
 from lib.presentation.streamlit.workflow_production_settings import render_delivery_goal, review_coverage_hint, render_delivery_progress
 from lib.domain.web_research import MAX_QUERIES, validate_web_research
@@ -159,6 +161,19 @@ def _workflow_error(error) -> str:
         "service_timeout": "模型请求超时，已保留断点。",
         "service_connection_failed": "模型连接失败，已保留断点。",
         "model_request_failed": "模型调用未能完成，请检查服务后从断点继续。",
+        "model_request_queue_timeout": "等待模型共享额度超时，已保留断点。请在节点检查并发上限、排队时长和其他运行任务后继续。",
+        "invalid_model_scheduler_state": "共享调度记录无法读取，已停止后续请求。请检查本机存储后从断点继续。",
+        "human_augmentation_requires_director": "人工增强需要对话指导员，请在指导员节点开启人工问答增强。",
+        "human_augmentation_requires_qa_sources": "仅用人工问答设计时，请选择对话或偏好目标；CPT 等目标需要真实来源。",
+        "invalid_human_augmentation_seeds": "人工设计尚未完成，请在指导员节点填写问题与参考答案。",
+        "invalid_human_augmentation_text": "人工设计含空文本、无效内容或超过大小限制，请在指导员节点修正。",
+        "duplicate_human_augmentation_seed": "人工设计重复，请合并重复项后继续。",
+        "human_augmentation_size_limit": "人工设计总量过大，请减少到 200 项以内，并精简设计文本。",
+        "human_augmentation_context_too_small": "人工设计超出指导员上下文，请增加节点上下文上限或精简设计。",
+        "human_augmentation_snapshot_changed": "人工设计快照已改变，请保留任务文件并复制配置后新建任务。",
+        "human_augmentation_design_rejected": "候选未保留人工问题、答案或设计要求，已隔离。",
+        "human_augmentation_review_missing": "人工设计评审证据缺失，已阻止导出，请检查评审节点。",
+        "human_augmentation_review_mismatch": "人工评审证据与当前内容不匹配，已阻止导出。",
         "production_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
         "production_review_integrity_error": "评审断点校验失败，请保留任务文件并检查存储。",
         "production_round_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
@@ -321,7 +336,7 @@ def _stage_configuration(key, recipe, state):
                 details[limit_label + "上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details[limit_label + "单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         if roles:
-            details.update({"并发请求上限": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
+            details.update({"流水线并发": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
         if key == "director":
             config = recipe.get("qa_director") or {}
             adaptive = config.get("planning_mode") == "adaptive"
@@ -330,6 +345,10 @@ def _stage_configuration(key, recipe, state):
                             "对话设计指令": UntranslatedText(config.get("question_rules") or "—"),
                             "回应与任务推进指令": UntranslatedText(config.get("answer_rules") or "—"),
                             "指导方式": "语言专家自适应" if adaptive else "按线索比例安排"})
+            human = config.get("human_augmentation") or {}
+            if human.get("enabled"):
+                details["人工设计数"] = len(human.get("seeds", []))
+                details["增强依据"] = "人工问题、参考答案与两者的设计要求"
             if not adaptive:
                 details.update({TYPE_LABELS.get(name, name): weight for name, weight in
                                 config.get("type_weights", {}).items()})
@@ -396,6 +415,7 @@ def _stage_configuration(key, recipe, state):
 STAGE_GLYPHS = {"ingest": "▤", "director": "⌘", "cpt": "▥", "sft": "✎", "multiturn": "☷", "agent": "◇",
                 "preference": "⚖", "gsm8k": "∑", "cot": "◈", "trim": "✂", "jev": "✓", "package": "▣"}
 EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节点处理完成",
+                "model_queued": "等待模型共享额度",
                 "item_retry": "当前记录正在重试", "production_round_completed": "本轮合格结果已保存",
                 "production_plan_committed": "有效场景规划已保存",
                 "model_started": "模型请求开始", "model_finished": "模型请求完成",
@@ -607,7 +627,7 @@ def _toggle_run_reader(run_id: str) -> None:
 
 
 @st.fragment(run_every=2)
-def render_run(application, run_id, begin, *, embedded=False, draft_application=None):
+def render_run(application, run_id, begin, *, embedded=False, draft_application=None, backend_application=None):
     from lib.presentation.streamlit.review_navigation import consume_app_navigation
     consume_app_navigation(run_id)
     st.html(workflow_run_styles())
@@ -692,7 +712,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             if active:
                 if st.button("停止后续步骤", key=f"stop:{run_id}", width="stretch"):
                     application.cancel(run_id)
-                    st.info("已请求停止；当前模型请求返回后，在下一断点停止。")
+                    st.info("已请求停止；排队与退避会及时结束，正在输出的请求在下一段输出或请求返回后停止。已保存断点保留。")
             elif st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}", width="stretch",
                            help="继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。"):
                 begin(["workflow", "--action", "resume", "--run-id", run_id])
@@ -852,6 +872,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                 st.caption("规划数按任务统计；调度与生成验收数包含 SFT 和多轮目标。最终导出数量另见打包结果。")
             st.html('<div class="df-run-section df-run-recipe-heading"><div><strong>本次节点配方</strong>'
                     '<small>本次运行使用的模型、参数与提示词；修改时请复制为新任务。</small></div></div>')
+            render_run_scheduling(backend_application, recipe.get("node_models", {}).get(selected_stage, {}))
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
             render_run_node_prompts(selected_stage, recipe, run_id)
     summary = state.get("input_summary", {})
@@ -984,6 +1005,29 @@ def _save_draft_value(workspace, key):
             st.session_state.pop(f"workflow-draft-error:{workspace}", None)
         except (OSError, ValueError, Timeout):
             st.session_state[f"workflow-draft-error:{workspace}"] = True
+
+
+def _change_creation_mode(workspace):
+    key = f"workflow-creation-mode:{workspace}"
+    if st.session_state[key] is None:
+        st.session_state[key] = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key, "自动生成")
+    _save_draft_value(workspace, key)
+    mode = st.session_state[key]
+    enabled_key = f"workflow-human-enabled:{workspace}"
+    st.session_state[enabled_key] = mode == "人工问答增强"
+    _save_draft_value(workspace, enabled_key)
+    if mode == "人工问答增强":
+        preset = st.session_state.get(f"workflow-preset:{workspace}", "自动推荐")
+        selected = st.session_state.get(f"workflow-targets:{workspace}:{preset}", PRESETS.get(preset, []))
+        values = {f"workflow-director-enabled:{workspace}": True,
+                  f"workflow-director-mode:{workspace}": "adaptive",
+                  f"workflow-preset:{workspace}": "自选目标",
+                  f"workflow-targets:{workspace}:自选目标": [target for target in selected if target in HUMAN_QA_TARGETS] or ["sft"],
+                  f"workflow-source-mode:{workspace}": "开放需求"}
+        for field_key, value in values.items():
+            st.session_state[field_key] = value
+            _save_draft_value(workspace, field_key)
+        _select_setup_node(f"workflow-setup-node:{workspace}", "director")
 
 
 def _select_candidate_count(workspace, count):
@@ -1181,22 +1225,38 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL", art_kind="hero")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
+    # Restore before the mode selector so a human-design draft opens in its
+    # actual mode on a new browser session.
+    if draft_application is not None:
+        st.session_state[f"workflow-draft-application:{ws}"] = draft_application
+        draft_key = f"workflow-form-draft:{ws}"
+        if not st.session_state.get(f"workflow-draft-loaded:{ws}"):
+            try:
+                saved = draft_application.load()
+                st.session_state[draft_key] = {**saved, **st.session_state.get(draft_key, {})}
+                st.session_state[f"workflow-draft-loaded:{ws}"] = True
+            except (OSError, ValueError):
+                st.session_state[f"workflow-draft-error:{ws}"] = True
     with st.container(key="workbench-entry-bar"):
-        mode_column, journey_column = (st.columns([1.6, 3.2], gap="medium", vertical_alignment="center")
-                                        if manual_application is not None else (None, st.container()))
-    if manual_application is not None:
+        mode_column, journey_column = st.columns([2.5, 3.2], gap="medium", vertical_alignment="center")
+    with mode_column:
         creation_key = f"workflow-creation-mode:{ws}"
-        if st.session_state.get(creation_key) not in {"自动生成", "人工制作图文"}:
+        modes = ["自动生成", "人工问答增强"] + (["人工制作图文"] if manual_application is not None else [])
+        saved = st.session_state.get(f"workflow-form-draft:{ws}", {})
+        if creation_key not in st.session_state:
+            st.session_state[creation_key] = saved.get(creation_key, "人工问答增强" if saved.get(f"workflow-human-enabled:{ws}") else "自动生成")
+        if st.session_state[creation_key] not in modes:
             st.session_state[creation_key] = "自动生成"
-        with mode_column:
-            creation_mode = st.segmented_control(
-                "制作方式", ("自动生成", "人工制作图文"), default=None, key=creation_key,
-                label_visibility="collapsed",
-            )
-        if creation_mode == "人工制作图文":
-            from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
-            render_manual_datasets(manual_application, ws, show_title=False)
-            return
+        if creation_key not in saved:
+            _save_draft_value(ws, creation_key)
+        creation_mode = st.segmented_control(
+            "制作方式", modes, default=None, key=creation_key,
+            label_visibility="collapsed", on_change=_change_creation_mode, args=(ws,),
+        )
+    if creation_mode == "人工制作图文" and manual_application is not None:
+        from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
+        render_manual_datasets(manual_application, ws, show_title=False)
+        return
     journey_column.html(
         '<div class="df-wizard-steps">'
         '<div class="df-wizard-step active"><b>1</b><span><strong>配置本次任务</strong><small>来源、目标与节点模型</small></span></div>'
@@ -1212,15 +1272,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if notice.get("evaluation_references_omitted"):
             st.info("评测参照未复制，请在需要时重新添加。")
     if draft_application is not None:
-        st.session_state[f"workflow-draft-application:{ws}"] = draft_application
-        draft_key = f"workflow-form-draft:{ws}"
-        if not st.session_state.get(f"workflow-draft-loaded:{ws}"):
-            try:
-                saved = draft_application.load()
-                st.session_state[draft_key] = {**saved, **st.session_state.get(draft_key, {})}
-                st.session_state[f"workflow-draft-loaded:{ws}"] = True
-            except (OSError, ValueError):
-                st.session_state[f"workflow-draft-error:{ws}"] = True
         if st.session_state.get(f"workflow-draft-error:{ws}"):
             st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
         else:
@@ -1339,6 +1390,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             selected_node = graph_nodes[0]
         st.session_state[selection_key] = selected_node
         model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
+        if source_mode == "开放需求" and qa_director.get("human_augmentation", {}).get("enabled"):
+            # The run snapshots these designs as input units. It never calls
+            # the open-brief planning model to parse an existing human QA.
+            model_source_mode = "人工设计"
         bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws,
                                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing)
         parser_role = "vision" if document_parser.get("mode") == "vision" else "generation"
@@ -1465,6 +1520,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
     trim_invalid = trim_has_issue(reasoning_trim)
     director_invalid = director_has_issue(qa_director)
+    human_enabled = bool(qa_director.get("human_augmentation", {}).get("enabled"))
+    human_mode_unavailable = creation_mode == "人工问答增强" and not human_enabled
+    human_ready = human_enabled and not director_invalid
+    human_source_compatible = human_ready and set(targets) <= HUMAN_QA_TARGETS
     node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                                        qa_director=qa_director) if targets else {}
@@ -1483,9 +1542,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 _render_setup_issue(ws, "ingest", "图片输入能力尚未确认，点击核实模型能力", kind="vision")
             if source_mode == "开放需求":
                 uploaded, selected = [], []
-                st.caption("描述任务、领域和使用场景，系统会规划并生成候选。")
-                brief = _draft_brief("开放性需求", key=f"workflow-open-brief:{ws}", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
-                with st.container(border=True, key=f"workbench-web-research:{ws}"):
+                st.caption("问题与参考答案在指导员节点编辑；可以直接使用人工设计，也可补充要求或加入资料核对。" if human_enabled else
+                           "描述任务、领域和使用场景，系统会规划并生成候选。")
+                if human_enabled:
+                    st.button("编辑人工问答设计", key=f"workflow-human-open:{ws}",
+                        on_click=_select_setup_node, args=(f"workflow-setup-node:{ws}", "director"))
+                brief = _draft_brief("补充生成要求（可选）" if human_enabled else "开放性需求", key=f"workflow-open-brief:{ws}", placeholder="例如：为设备维护助手生成中文训练数据，覆盖故障诊断、多轮追问与操作解释。")
+                with (st.expander("联网资料（可选）") if human_enabled else
+                      st.container(border=True, key=f"workbench-web-research:{ws}")):
                     search_connection = application.web_research_capabilities()
                     web_research, web_unavailable = _draft_web_control(
                         ws, application,
@@ -1606,8 +1670,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             with batch_col:
                 a, b = st.columns(2, gap="small")
                 with a:
-                    concurrency = _draft_number("并发请求上限", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
-                                              help="同一节点内同时处理的样本数。可按模型服务的限流调低；阶段仍按数据依赖顺序执行。")
+                    concurrency = _draft_number("流水线并发", 1, MAX_CONCURRENCY, 4, key=f"workflow-concurrency:{ws}",
+                                              help="本任务同时处理的样本数；模型调用仍需取得节点配置的共享并发额度。阶段按数据依赖顺序执行。")
                 with b:
                     batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
                                              help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
@@ -1689,7 +1753,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     validate_qa_director(qa_director)
                 except (ValueError, TypeError) as error:
                     director_tab = "prompts" if str(error) == "invalid_qa_director_rules" else "settings"
-                _render_setup_issue(ws, "director", "指导员配置尚未完成，点击检查指导方式与指令",
+                _render_setup_issue(ws, "director", ("人工设计尚未完成，点击填写问题、参考答案和设计要求" if human_enabled else
+                                    "指导员配置尚未完成，点击检查指导方式与指令"),
                                     kind="director", tab=director_tab)
             if prompts_invalid:
                 for node, prompts in node_prompts.items():
@@ -1725,7 +1790,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if reasoning_trim["enabled"]:
                 run_summary += " · " + translate("推理链修剪", language)
             if qa_director["enabled"]:
-                run_summary += " · " + translate("对话指导员", language)
+                run_summary += " · " + translate("人工问答增强" if human_enabled else "对话指导员", language)
             if package_review["enabled"]:
                 run_summary += " · " + translate("JEV 抽检" if package_review["mode"] == "sample" else "JEV 全量评审", language)
             if evaluation_uploads:
@@ -1739,7 +1804,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption("先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
                 source_missing = (not brief.strip() if source_mode == "开放需求"
-                                  else not (selected or uploaded))
+                                  else not (selected or uploaded)) and not human_source_compatible
+                human_needs_real_source = human_ready and bool(set(targets) - HUMAN_QA_TARGETS) and not (selected or uploaded)
+                source_missing = source_missing or human_needs_real_source
                 source_suffixes = {Path(path).suffix.lower() for path in selected}
                 source_suffixes.update(Path(upload.name).suffix.lower() for upload in uploaded or [])
                 parser_unavailable = (document_parser.get("mode") in {"model", "vision"} and
@@ -1747,11 +1814,16 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 parser_unavailable = parser_unavailable or (source_mode == "文档资料" and document_parser.get("mode") != "vision"
                     and bool(source_suffixes.intersection({".png", ".jpg", ".jpeg", ".webp"})))
                 if source_missing:
-                    st.caption("先填写上方的开放性需求。" if source_mode == "开放需求" else
+                    st.caption("人工设计不能替代 CPT 等目标的真实资料，请切换来源并上传文档。" if human_needs_real_source else
+                               "先补全指导员节点中的人工问题与参考答案。" if human_enabled and not human_ready else
+                               "先填写上方的开放性需求。" if source_mode == "开放需求" else
                                "先在上方上传或选择本次资料。")
+                if human_mode_unavailable:
+                    st.caption("人工增强需要对话或偏好目标，并开启对话指导员；也可切回自动生成。")
                 elif not targets:
                     st.caption("先选择至少一类训练目标。")
                 submitted = st.button("开始自动生成", type="primary", disabled=source_missing or bool(brief_issue)
+                                      or human_mode_unavailable
                                       or agent_source_missing or source_limit_exceeded or source_size_exceeded
                                       or source_unavailable or not targets or bool(model_issues)
                                       or bool(pricing_issues) or agent_unavailable or web_unavailable
@@ -1786,9 +1858,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         path.write_bytes(upload.getvalue())
                         evaluation_sources.append(path)
                         evaluation_source_names[str(path.resolve())] = upload.name
-                    if source_mode != "开放需求" and not sources:
+                    if source_mode != "开放需求" and not sources and not human_source_compatible:
                         raise ValueError(f"请先上传或选择{source_mode}来源。")
-                    if source_mode == "开放需求" and not brief.strip():
+                    if source_mode == "开放需求" and not brief.strip() and not human_source_compatible:
                         raise ValueError("请描述开放性需求。")
                     run_id = application.create_run(sources=sources, brief=brief, name=name, targets=targets,
                                         node_models=model_application.snapshot(graph_nodes, model_source_mode, bindings,

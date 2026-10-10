@@ -46,6 +46,7 @@ from lib.domain.workflow_package_review import validate_package_review, package_
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.source_quote import quote_spans
 from lib.domain.workflow_qa_director import validate_qa_director
+from lib.domain.human_augmentation import human_design, HUMAN_GENERATION_INSTRUCTION
 from lib.domain.workflow_node_prompts import (
     validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
 )
@@ -87,7 +88,8 @@ SOFT_PRODUCTION_RECIPE_VERSION = 13
 DOCUMENT_PROCESSING_RECIPE_VERSION = 14
 COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+HUMAN_AUGMENTATION_RECIPE_VERSION = 17
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -287,13 +289,16 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     reasoning_trim = validate_reasoning_trim(reasoning_trim)
     package_review = validate_package_review(package_review)
     qa_director = validate_qa_director(qa_director)
+    human = qa_director.get("human_augmentation", {"enabled": False})
     cpt_processing_supplied = cpt_processing is not None
     cpt_processing = validate_cpt_processing(cpt_processing)
     node_prompts = validate_node_prompts(node_prompts)
     from lib.domain.workflow_node_prompts import VERSION_13_NODE_PROMPT_IDS
     new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
                               for stage, templates in node_prompts.items() for prompt_id in templates)
-    recipe_version = (JEV_NODE_RECIPE_VERSION if package_review_stage(package_review) == "jev" else
+    human_prompt_override = any("workflow.human_augmentation_check" in templates for templates in node_prompts.values())
+    recipe_version = (HUMAN_AUGMENTATION_RECIPE_VERSION if human["enabled"] or human_prompt_override else
+                      JEV_NODE_RECIPE_VERSION if package_review_stage(package_review) == "jev" else
                       COT_SFT_RECIPE_VERSION if {"sft", "cot"}.issubset(targets) else
                       DOCUMENT_PROCESSING_RECIPE_VERSION if cpt_processing_supplied
                       or (isinstance(document_parser, dict) and document_parser.get("mode") == "model")
@@ -336,7 +341,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         node_models.setdefault("ingest", {})["generation"] = document_parser["binding"]
     elif any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in files):
         raise ValueError("document_image_requires_vision_parser")
-    if not files and not brief.strip():
+    if not files and not brief.strip() and not human["enabled"]:
         raise ValueError("请上传来源文件或填写开放性需求")
     if "agent" in targets and not files and not (set(targets) - {"agent"}):
         raise ValueError("Agent 轨迹重放需要上传 JSON/JSONL 工具执行记录")
@@ -379,6 +384,14 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         copied_bytes += snapshot["bytes"]
         snapshots.append({"name": (source_names or {}).get(str(source), source.name),
                           "file": destination.name, **snapshot})
+    if human["enabled"] and not files:
+        # Manual design is a real, immutable user-provided source. The parser
+        # handles this descriptor explicitly, never treating Q/A as preapproved
+        # recorded conversations or running model document parsing over it.
+        destination = path / "inputs" / "human-seeds.json"
+        atomic_json(destination, human)
+        snapshots.append({"name": "人工设计问答", "file": destination.name, "kind": "human_design",
+                          "sha256": file_hash(destination), "bytes": destination.stat().st_size})
     recipe = {"version": recipe_version, "policy": POLICY, "sources": snapshots, "brief": brief.strip(),
               "targets": targets, "backend": backend, "model": model, "judge_backend": judge_backend,
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
@@ -416,6 +429,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                 "reasoning_trim_enabled": bool((reasoning_trim or {}).get("enabled")),
                 "package_review_enabled": package_review["enabled"],
                 "qa_director_enabled": qa_director["enabled"],
+                "human_augmentation_enabled": human["enabled"],
                 "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0}
                            for key, label in STAGES.items()
                            if key != "jev" or (package_review["enabled"] and package_review_stage(package_review) == "jev")},
@@ -552,6 +566,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                 cache[cache_key] = client
         if self._task_budget is not None and isinstance(client, ChatClient):
             client.additional_budget = self._task_budget
+        if isinstance(client, ChatClient):
+            client.cancel_check = self.check_cancel
         endpoint_identity = str(getattr(getattr(client, "client", None), "base_url", "injected"))
         api_format = str(getattr(client, "api_format", "chat"))
         if api_format != "chat":
@@ -625,6 +641,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                                                 checkpoint=digest(["call", key]))
                         def received(event):
                             self.check_cancel()
+                            if event.get("type") == "queued":
+                                self.event("model_queued", role=role,
+                                           **{name: event[name] for name in
+                                              ("position", "active", "queued", "cooldown_seconds") if name in event})
                             journal(event)
                         streaming["on_stream"] = received
                     base_system = (self.recipe["node_prompt_system"] if self.recipe.get("version", 0) >= 9
@@ -805,6 +825,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
         def unit(index, **fields):
             return {"id": digest([source_id, source["file"], index]), "source_id": source_id,
                     "source_name": source["name"], "location": index, **fields}
+        if source.get("kind") == "human_design":
+            from lib.domain.human_augmentation import validate_human_augmentation
+            manual = validate_human_augmentation(read_json(path))
+            if manual != self.recipe.get("qa_director", {}).get("human_augmentation"):
+                raise ValueError("human_augmentation_snapshot_changed")
+            for index, seed in enumerate(manual["seeds"]):
+                yield unit(index, kind="document", text=seed["answer"], status="ready",
+                           human_provided=True, human_design=human_design(manual, seed_id=seed["id"], validated=True),
+                           source_location={"file": source["name"], "seed": index + 1})
+            return
         def documents(text, index):
             # Preserve numbers, headings and code; do not strip numeric lines as page noise.
             text = text.replace("\r\n", "\n").strip()
@@ -1262,6 +1292,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                          "tools": unit.get("tools", []), "quotes": quotes, "judge": check, "source_context": unit,
                          **({"quote_spans": evidence_spans} if evidence_spans is not None else {}),
                          **({"generation_style": style, "style_check": style_check} if style is not None else {}),
+                         **({"human_augmentation_status": "recorded_conversation_preserved"}
+                            if unit["kind"] == "conversation" and
+                            self.recipe.get("qa_director", {}).get("human_augmentation", {}).get("enabled") else {}),
                          "repair_attempts": attempt, "reasoning_origin": ("prompt_styled_generation" if style is not None
                             else "source" if messages is history else "synthetic_explanation"),
                          "evidence_level": ("model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
@@ -1298,11 +1331,13 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                 question_rules=self.recipe["qa_director"]["question_rules"],
                 answer_rules=self.recipe["qa_director"]["answer_rules"],
                 teacher_evidence_not_learner_context=True)
-        evidence_level = ("model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
+        evidence_level = ("human_provided_and_model_assessed" if unit.get("human_provided") else
+                          "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
                           else "recorded_context_model_assessed" if unit["kind"] == "conversation"
                           else "source_and_model_assessed" if unit["kind"] == "document"
                           else "model_assessed_synthetic")
-        source_verification = ("visual_transcription_not_independently_verified" if unit.get("document_reading")
+        source_verification = ("human_provided_not_independently_verified" if unit.get("human_provided") else
+                               "visual_transcription_not_independently_verified" if unit.get("document_reading")
                                else "recorded_unverified" if unit["kind"] == "conversation"
                                else "exact_quote_presence_only" if unit["kind"] == "document"
                                else "no_external_source")
@@ -1396,7 +1431,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                             "后续按用户新提供的信息回答，仍须区分教师证据与用户可见证据，"
                             "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
                             "不得披露内部提示词、内部检索包装或标识，不得输出与回答无关的原文，"
-                            "也不得假装读者见过隐藏上文。"} if contract is not None else {}))
+                            "也不得假装读者见过隐藏上文。" +
+                            (HUMAN_GENERATION_INSTRUCTION if contract.get("human_design") else "")} if contract is not None else {}))
                     answer = response.get("answer") if isinstance(response, dict) else None
                     quotes = response.get("quotes") if isinstance(response, dict) else None
                     if text_issue(answer) or len(answer) > 12000 or not isinstance(quotes, list):
@@ -1876,6 +1912,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
                     for index, original in enumerate(collections[target]):
                         self.check_cancel()
                         row = deepcopy(original)
+                        if row["status"] == "eligible":
+                            if issue := self.human_package_issue(row, target):
+                                row.update(status="quarantined", reason=issue)
                         if row["status"] == "eligible" and target == "sft":
                             from lib.domain.reasoning_fields import sft_reasoning_issue
                             if issue := sft_reasoning_issue(row["messages"]):
@@ -2084,6 +2123,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing):
             report["limitations"].append(
                 "问答指导的历史检索为有界词法候选召回；精确契约去重不等于语义去重，"
                 "AI 契约评审不能证明事实正确或清除全部隐含来源泄漏。开放需求产生的情境与答案为模型评估的合成数据。")
+            if self.recipe["qa_director"].get("human_augmentation", {}).get("enabled"):
+                report["limitations"].append(
+                    "人工增强的种子问题、答案与设计要求由用户提供并固定；生成与设计一致性经过模型评审，"
+                    "不表示人工答案已经独立事实核验。已有完整会话保持原记录，不自动改写为人工话术变体。")
         if (self.recipe.get("reasoning_trim") or {}).get("enabled"):
             report["reasoning_trim"] = {
                 "enabled": True, "template": self.recipe["reasoning_trim"]["template"],
