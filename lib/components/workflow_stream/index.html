@@ -10,7 +10,13 @@
   <section id="stream-panel" class="stream-panel" aria-label="节点模型输出">
     <header class="stream-header">
       <div class="stream-heading"><span id="activity-dot" class="activity-dot" aria-hidden="true"></span><strong id="stream-title"></strong><span id="stream-status" class="stream-status" role="status" aria-live="polite"></span></div>
-      <button id="follow-request" class="quiet-button" type="button" hidden></button>
+      <div class="stream-actions">
+        <div id="stream-view" class="stream-view" role="group">
+          <button id="stream-read" class="view-button" type="button" aria-pressed="true"></button>
+          <button id="stream-raw" class="view-button" type="button" aria-pressed="false"></button>
+        </div>
+        <button id="follow-request" class="quiet-button" type="button" hidden></button>
+      </div>
     </header>
     <div id="request-tabs" class="request-tabs" role="tablist" hidden></div>
     <div id="stream-meta" class="stream-meta"></div>
@@ -19,6 +25,10 @@
         <summary id="reasoning-label"></summary>
         <div id="reasoning-output" class="response-text reasoning-text"></div>
       </details>
+      <div id="read-section" class="read-section" hidden>
+        <div id="reading-fields" class="reading-fields"></div>
+        <span id="read-cursor" class="stream-cursor" aria-hidden="true" hidden></span>
+      </div>
       <div id="answer-section" class="answer-section" hidden>
         <div id="answer-label" class="answer-label"></div>
         <div class="answer-body"><span id="answer-output" class="response-text"></span><span id="stream-cursor" class="stream-cursor" aria-hidden="true" hidden></span></div>

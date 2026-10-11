@@ -79,7 +79,7 @@ from lib.infrastructure.agent_docker_replay import (DockerLedgerReplay, IMAGE_EN
                                                     validate_sandbox_image)
 from lib.doc2corpus import SUPPORTED_EXTS, chunk_text, import_text
 from lib.io_utils import _replace_state, atomic_json
-from lib.llm_client import BudgetGuard, ChatClient, chat_json, load_backend, snapshot_backend_endpoint
+from lib.llm_client import ChatClient, chat_json, load_backend, snapshot_backend_endpoint
 from lib.infrastructure.workflow_stream_journal import StreamJournal
 from lib.prompts import get, registry, render
 
@@ -502,9 +502,6 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         self._task_budget = None
         if self.production_enabled():
             self._production_checkpoints = ProductionCheckpoints(self.path / "production-checkpoints.sqlite3")
-            limit = self.recipe["production"]["budget_usd"]
-            if limit:
-                self._task_budget = BudgetGuard(self.path, limit)
 
     def save(self, *, force=True):
         with self._lock:
@@ -2676,9 +2673,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             except Exception as error:
                 # Never persist raw provider exceptions: they can contain credentials or source text.
                 code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else type(error).__name__
+                from lib.model_request_reliability import ModelRequestError, classify_request_error
+                failure = classify_request_error(error)
+                if isinstance(error, ModelRequestError):
+                    code = failure["code"]
                 if self.production_enabled():
-                    from lib.model_request_reliability import classify_request_error
-                    failure = classify_request_error(error)
                     code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else failure["code"]
                     if "production" in self.state:
                         self.state["production"].update(status="paused", stop_reason=code)

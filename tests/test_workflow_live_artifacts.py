@@ -293,3 +293,48 @@ def test_invalid_completion_wrapper_does_not_become_a_training_record(tmp_path):
     snapshot = live.live_artifacts(tmp_path, state(sft={"status": "running"}))
     assert snapshot["rows"] == [{"id": "valid", "status": "eligible"}]
     assert snapshot["stages"][0]["written"] == 1 and snapshot["stages"][0]["invalid"] == 3
+
+
+@pytest.mark.parametrize("changed", ["attempt", "started_at", "round"])
+def test_writer_generation_resets_same_inode_regrowth_with_unchanged_boundaries(tmp_path, changed):
+    """A fast rebuild may be longer again before the browser's next poll."""
+    path = journal(tmp_path, "sft", [])
+    def wrap(index, row):
+        return (json.dumps({"item_index": index, "record": row}, separators=(",", ":")) + "\n").encode()
+    prefix = wrap(0, {"id": "first", "status": "eligible", "padding": "x" * 300})
+    old_middle = wrap(1, {"id": "middle", "status": "eligible", "padding": "aaa"})
+    new_middle = wrap(1, {"id": "middle", "status": "quarantined", "padding": ""})
+    suffix = wrap(2, {"id": "last", "status": "eligible", "padding": "y" * 300})
+    assert len(old_middle) == len(new_middle)
+    path.write_bytes(prefix + old_middle + suffix)
+    current = state(sft={"status": "running", "started_at": "first-start"})
+    current.update(attempt=1, production={"round": 1})
+    before = live.live_artifacts(tmp_path, current)
+    assert before["stages"][0]["eligible"] == 3
+    previous_inode = path.stat().st_ino
+    path.write_bytes(prefix + new_middle + suffix + wrap(3, {"id": "new", "status": "eligible"}))
+    assert path.stat().st_ino == previous_inode
+    if changed == "attempt":
+        current["attempt"] = 2
+    elif changed == "started_at":
+        current["stages"]["sft"]["started_at"] = "second-start"
+    else:
+        current["production"]["round"] = 2
+    after = live.live_artifacts(tmp_path, current)
+    assert after["stages"][0]["written"] == 4
+    assert after["stages"][0]["eligible"] == 3
+    assert after["stages"][0]["quarantined"] == 1
+    assert all("generation" not in row for row in after["rows"])
+
+
+def test_next_production_round_does_not_reindex_reused_completed_source_stage(tmp_path, monkeypatch):
+    write(tmp_path, "cpt", [{"id": str(index), "status": "ready", "text": "source" * 100}
+                            for index in range(10)])
+    monkeypatch.setattr(live, "SCAN_BYTES", 256)
+    current = state(cpt={"status": "completed", "started_at": "cleaned-once"})
+    current.update(attempt=1, production={"round": 1})
+    first = live.live_artifacts(tmp_path, current)
+    assert first["stages"][0]["scanned_bytes"] == 256
+    current["production"]["round"] = 2
+    second = live.live_artifacts(tmp_path, current)
+    assert second["stages"][0]["scanned_bytes"] == 512

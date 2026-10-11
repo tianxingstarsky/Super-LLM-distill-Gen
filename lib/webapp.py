@@ -610,8 +610,8 @@ def page_system_settings():
     from lib.presentation.streamlit.generation_settings_page import render_workflow_defaults
     from lib.bootstrap.generation_settings import generation_settings_application
     render_workflow_defaults(generation_settings_application(ROOT))
-    with st.expander("服务连接与预算（高级）", expanded=bool(st.session_state.pop("open-model-admin", False))):
-        st.caption("每次任务使用的模型在工作流节点选择；这里仅维护共用连接与预算。")
+    with st.expander("服务连接与用量", expanded=bool(st.session_state.pop("open-model-admin", False))):
+        st.caption("每次任务使用的模型在工作流节点选择；这里维护共用连接与调用记录。")
         from lib.bootstrap.backends import backend_application
         from lib.presentation.streamlit.backend_page import render_backend_page
         render_backend_page(backend_application(ROOT), embedded=True)

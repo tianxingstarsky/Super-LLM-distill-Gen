@@ -105,6 +105,26 @@ def test_document_all_targets_complete_with_evidence_and_training_schemas(tmp_pa
     assert list_runs(out)[0]["id"] == rid
 
 
+def test_provider_quota_error_keeps_safe_code_and_existing_sources_for_resume(tmp_path):
+    from lib.model_request_reliability import ModelRequestError
+
+    out, rid, source = make_run(tmp_path, targets=["sft"])
+    generator = Generator()
+    def quota_error():
+        raise ModelRequestError("service_quota_exhausted", "fatal", 1)
+    generator.hook = quota_error
+    state = execute(out, rid, generator)
+    assert state["status"] == "failed"
+    assert state["error"] == "service_quota_exhausted"
+    assert state["stages"]["ingest"]["status"] == "completed"
+    assert state["stages"]["sft"]["quarantined"] == 0
+    generator.hook = None
+    restored = Workflow(out, rid, tmp_path, generator=generator, jev=Judge()).execute(resume_run=True)
+    assert restored["status"] == "completed"
+    assert source.read_text(encoding="utf-8") == TEXT
+    assert verify_artifacts(run_path(out, rid))["counts"]["sft"] == 1
+
+
 def test_only_verified_completed_sft_artifacts_are_available_for_manual_review(tmp_path):
     from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
 

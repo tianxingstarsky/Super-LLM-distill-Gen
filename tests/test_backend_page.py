@@ -87,32 +87,35 @@ def test_connection_errors_do_not_render_exception_details():
     assert 'RuntimeError' in ui.error[0].value
 
 
-def test_service_page_budget_reset_uses_current_application_budget():
+def test_service_page_has_read_only_usage_and_no_budget_actions():
     ui = AppTest.from_string(SCRIPT).run()
-    ui.checkbox(key='budget-reset-confirm').check().run()
-    # Simulate an external budget edit after the overview was rendered.
-    ui.session_state['fixture-local']={'budget':{'max_total_usd':9}}
-    next(button for button in ui.button if button.label=='Reset budget').click().run()
     assert not ui.exception
-    assert ui.session_state['fixture-budget-reset']==('console',9.0)
-    assert ui.session_state['fixture-budget-audit']==('console',1.25)
+    assert not any('budget' in button.label.lower() for button in ui.button)
+    assert not any('budget' in checkbox.label.lower() for checkbox in ui.checkbox)
+    assert not any('price' in widget.label.lower() for widget in ui.number_input)
+    markup = ''.join(item.proto.body for item in ui.get('html'))
+    assert '$1.2500' in markup
+    assert 'Historical cost records' in markup
+    assert 'Records from older versions only' in markup
+    assert 'Budget limit' not in markup and 'Remaining budget' not in markup
+    assert 'fixture-budget-reset' not in ui.session_state
+    assert 'fixture-budget-audit' not in ui.session_state
 
 
-def test_budget_reset_explains_active_requests_without_claiming_success():
+def test_opening_service_settings_preserves_saved_budget_and_usage():
     ui = AppTest.from_string(SCRIPT).run()
-    ui.session_state['fixture-budget-active'] = True
-    ui.checkbox(key='budget-reset-confirm').check().run()
-    next(button for button in ui.button if button.label == 'Reset budget').click().run()
+    saved = {'budget': {'max_total_usd': 9, 'hard_stop': True}}
+    ui.session_state['fixture-local'] = saved
+    ui.run()
     assert not ui.exception
-    assert any('Model requests are still running. Reset the budget after they finish.' in item.value
-               for item in ui.error)
+    assert ui.session_state['fixture-local'] == saved
+    assert not ui.error
     assert 'fixture-budget-reset' not in ui.session_state
     assert 'fixture-budget-audit' not in ui.session_state
 
 
 def test_service_registration_saves_through_application_port():
     ui = AppTest.from_string(SCRIPT).run()
-    ui.checkbox(key='backend-add-free').check()
     next(button for button in ui.button if button.label=='Save endpoint').click().run()
     assert not ui.exception
     saved = ui.session_state['fixture-local']['backends']['local_gpu']
@@ -120,7 +123,7 @@ def test_service_registration_saves_through_application_port():
     assert saved['api_format']=='chat'
     assert saved['api_key_env']=='OPENAI_API_KEY'
     assert 'api_key' not in saved
-    assert saved['prices'] == {'input_per_1m_usd': 0.0, 'output_per_1m_usd': 0.0}
+    assert 'prices' not in saved
 
 
 @pytest.mark.parametrize(('api_format', 'base_url', 'key_env', 'label'), [
@@ -134,8 +137,6 @@ def test_service_registration_saves_selected_api_format_and_shows_it(
     assert not ui.exception
     assert ui.text_input(key=f'backend-add-base-url:{api_format}').value == base_url
     ui.text_input(key=f'backend-add-models:{api_format}').set_value('chosen-model')
-    ui.number_input(key='backend-add-input-price').set_value(0.25)
-    ui.number_input(key='backend-add-output-price').set_value(1.0)
     next(button for button in ui.button if button.label == 'Save endpoint').click().run()
     assert not ui.exception
     saved = ui.session_state['fixture-local']['backends'][
@@ -144,6 +145,19 @@ def test_service_registration_saves_selected_api_format_and_shows_it(
     assert saved['base_url'] == base_url
     assert saved['models'] == ['chosen-model']
     assert saved['api_key_env'] == key_env
-    assert saved['prices'] == {'input_per_1m_usd': 0.25, 'output_per_1m_usd': 1.0}
+    assert 'prices' not in saved
     markup = ''.join(item.proto.body for item in ui.get('html'))
     assert label in markup
+
+
+def test_replacing_an_endpoint_keeps_its_existing_accounting_metadata():
+    ui = AppTest.from_string(SCRIPT)
+    prices = {'input_per_1m_usd': 0.25, 'output_per_1m_usd': 1.0}
+    ui.session_state['fixture-local'] = {'backends': {'local_gpu': {
+        'base_url': 'http://127.0.0.1:11434/v1', 'models': ['existing'],
+        'api_key_env': 'FIXTURE_SECRET', 'prices': prices}}}
+    ui.run()
+    next(widget for widget in ui.checkbox if widget.label == 'Replace provider with the same name').check()
+    next(button for button in ui.button if button.label == 'Save endpoint').click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-local']['backends']['local_gpu']['prices'] == prices

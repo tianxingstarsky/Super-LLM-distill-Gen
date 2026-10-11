@@ -67,16 +67,16 @@ def test_million_default_applies_to_all_targets_until_explicitly_overridden(tmp_
     assert ui.session_state["fixture-production"]["goals"] == {"sft": 400000, "dpo": 700000}
 
 
-def test_quantity_overrides_budget_and_mode_survive_a_fresh_session(tmp_path):
+def test_quantity_overrides_and_mode_survive_a_fresh_session_without_local_budget(tmp_path):
     ui = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
     ui.number_input(key="workflow-count:fixture").set_value(1000000).run()
     ui.number_input(key="production-goal-editor:fixture:sft").set_value(300000).run()
-    ui.number_input(key="workflow-production-budget:fixture").set_value(1250.5).run()
     expected = ui.session_state["fixture-production"]
     fresh = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
     assert not fresh.exception
     assert fresh.number_input(key="workflow-count:fixture").value == 1000000
-    assert fresh.number_input(key="workflow-production-budget:fixture").value == 1250.5
+    assert not any(widget.key == "workflow-production-budget:fixture" for widget in fresh.number_input)
+    assert fresh.session_state["fixture-production"]["budget_usd"] == 0
     assert fresh.session_state["fixture-production"] == expected
     fresh.toggle(key="workflow-production-enabled:fixture").set_value(False).run()
     candidate = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
@@ -109,7 +109,7 @@ def test_legacy_copied_candidate_draft_restarts_without_refill(tmp_path):
     assert ui.number_input(key="workflow-count:fixture").value == 50000
 
 
-def test_copied_production_goals_and_budget_restart_without_becoming_candidates(tmp_path):
+def test_copied_production_goals_ignore_legacy_budget_without_rewriting_the_draft(tmp_path):
     from lib.presentation.streamlit.workflow_reuse import recipe_to_draft
 
     values = recipe_to_draft({"sources": [], "targets": ["sft", "dpo"], "sample_count": 10000,
@@ -119,7 +119,8 @@ def test_copied_production_goals_and_budget_restart_without_becoming_candidates(
     ui = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
     assert not ui.exception
     assert ui.session_state["fixture-production"]["goals"] == {"sft": 1000000, "dpo": 300000}
-    assert ui.session_state["fixture-production"]["budget_usd"] == 2500
+    assert ui.session_state["fixture-production"]["budget_usd"] == 0
+    assert creation_draft_application(tmp_path).load()["workflow-production-budget:fixture"] == 2500
 
 
 def coverage_screen():
@@ -213,7 +214,7 @@ def vision_workbench_screen(output, confirmed, with_services=False):
 
     class Sources:
         def default_sft_output_style(self): return "separated"
-        def source_files(self, *args, **kwargs): return [{"path": "fixture.png", "label": "Saved image"}]
+        def source_files(self, *args, **kwargs): return [{"path": str(Path(output) / "fixture.png"), "label": "Saved image"}]
         def task_runs(self): return []
         def agent_replay_capabilities(self): return {}
         def web_research_capabilities(self): return {"brave_configured": False}
@@ -235,18 +236,27 @@ def vision_workbench_screen(output, confirmed, with_services=False):
                                        backend_application=Services() if with_services else None)
 
 
-def vision_draft():
+def vision_draft(output=None):
+    import base64
+    from pathlib import Path
+    source = "fixture.png"
+    if output is not None:
+        path = Path(output) / source
+        path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        source = str(path)
     binding = {"backend": "local", "model": "writer", "context_window_tokens": 131072,
                "max_output_tokens": 32768}
     return {"workflow-preset:fixture": "自动推荐", "workflow-targets:fixture:自动推荐": ["sft"],
-            "workflow-source-mode:fixture": "文档资料", "workflow-sources:fixture:文档资料": ["fixture.png"],
+            "workflow-source-mode:fixture": "文档资料", "workflow-sources:fixture:文档资料": [source],
+            "workflow-cpt-processing-mode:fixture": "native",
             "workflow-document-parse-mode:fixture": "vision", "workflow-node-bindings:fixture": {
                 "ingest": {"vision": binding},
+                "review": {"generation": binding},
                 "sft": {"generation": binding, "jev": {**binding, "model": "judge"}}}}
 
 
 def test_fresh_workbench_restores_vision_binding_before_start_validation(tmp_path):
-    creation_draft_application(tmp_path).replace(vision_draft())
+    creation_draft_application(tmp_path).replace(vision_draft(tmp_path))
     ui = AppTest.from_function(vision_workbench_screen, args=(str(tmp_path), True)).run()
     assert not ui.exception
     assert ui.session_state["workflow-setup-node:fixture"] == "sft"
@@ -254,14 +264,14 @@ def test_fresh_workbench_restores_vision_binding_before_start_validation(tmp_pat
 
 
 def test_restored_vision_reference_still_requires_current_model_capability(tmp_path):
-    creation_draft_application(tmp_path).replace(vision_draft())
+    creation_draft_application(tmp_path).replace(vision_draft(tmp_path))
     ui = AppTest.from_function(vision_workbench_screen, args=(str(tmp_path), False)).run()
     assert not ui.exception
     assert ui.button(key="workflow-create:fixture").disabled
 
 
 def test_saved_candidate_mode_does_not_activate_stale_production_budget_on_first_render(tmp_path):
-    creation_draft_application(tmp_path).replace({**vision_draft(),
+    creation_draft_application(tmp_path).replace({**vision_draft(tmp_path),
                                                  "workflow-production-enabled:fixture": False,
                                                  "workflow-production-budget:fixture": 1250.5})
     ui = AppTest.from_function(vision_workbench_screen, args=(str(tmp_path), True, True)).run()

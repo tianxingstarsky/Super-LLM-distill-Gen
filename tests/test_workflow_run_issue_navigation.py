@@ -162,6 +162,43 @@ def test_english_failure_message_keeps_error_translation_when_opening_evidence()
     assert 'fixture-begin-calls' not in ui.session_state
 
 
+@pytest.mark.parametrize('error', ['BudgetExceeded', 'budget_exhausted', 'service_quota_exhausted'])
+@pytest.mark.parametrize('language', ['zh', 'en'])
+def test_account_and_legacy_local_limit_errors_open_node_without_running_or_modifying_the_task(error, language):
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['ui_language'] = language
+    ui.run()
+    state = deepcopy(ui.session_state['fixture-state'])
+    state['error'] = error
+    state['stages']['sft']['error'] = error
+    ui.session_state['fixture-state'] = state
+    ui.run()
+    before = {key: deepcopy(ui.session_state[key]) for key in
+              ('fixture-state', 'fixture-recipe', 'workflow-form-draft:fixture')}
+    action = ui.button(key='workflow-run-failure:fixture')
+    if language == 'en':
+        assert not re.search(r'[\u3400-\u9fff]', action.label)
+        assert ('provider' if error == 'service_quota_exhausted' else 'old local cost limit') in action.label.lower()
+    elif error == 'service_quota_exhausted':
+        assert '对应服务平台充值' in action.label
+    else:
+        assert '该限制已取消' in action.label and '不表示模型服务账户余额不足' in action.label
+    action.click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-selected'] == 'sft'
+    assert ui.session_state['canvas-open:live-canvas:fixture'] is True
+    assert 'fixture-begin-calls' not in ui.session_state
+    assert 'nav' not in ui.session_state or ui.session_state['nav'] != '系统设置'
+    for key, value in before.items():
+        assert ui.session_state[key] == value
+
+
+def test_live_budget_exception_is_translated_like_a_saved_legacy_error():
+    from lib.llm_client import BudgetExceeded
+    from lib.presentation.streamlit.workflow_page import _workflow_error
+    assert _workflow_error(BudgetExceeded('Budget exhausted; no request sent')) == _workflow_error('BudgetExceeded')
+
+
 def test_later_error_click_is_not_consumed_by_a_stale_or_invalid_bridge_receipt():
     ui = AppTest.from_string(SCRIPT).run()
     ui.button(key='workflow-run-failure:fixture').click().run()

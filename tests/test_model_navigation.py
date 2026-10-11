@@ -13,7 +13,7 @@ def test_model_service_is_not_a_primary_navigation_item():
                 if button.key == "nav-button:模型与密钥"]
     ui.sidebar.button(key="nav-button:系统设置").click().run()
     assert not ui.exception
-    assert any(item.label == "服务连接与预算（高级）" for item in ui.expander)
+    assert any(item.label == "服务连接与用量" for item in ui.expander)
 
 
 def test_legacy_model_service_route_opens_settings():

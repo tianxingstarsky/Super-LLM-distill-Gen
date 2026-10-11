@@ -15,7 +15,6 @@ from filelock import Timeout
 from lib.application.workflow_service import WorkflowApplication
 from lib.application.creation_draft_service import CreationDraftApplication
 from lib.domain.workflow_graph import execution_graph, sft_uses_cot_output, uses_shared_source_cleaning
-from lib.domain.backend_config import validate_token_prices
 from lib.presentation.streamlit.i18n import UntranslatedText, translate, translate_label
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
@@ -148,6 +147,8 @@ def _save_sft_output_style(workspace: str) -> None:
 
 
 def _workflow_error(error) -> str:
+    if type(error).__name__ == "BudgetExceeded":
+        error = "BudgetExceeded"
     if str(error).startswith("latex_") and str(error) not in {"latex_external_dependencies", "latex_unsupported_syntax"}:
         return "LaTeX 结构不完整，请检查文档环境、公式、表格和括号。"
     return {
@@ -168,14 +169,15 @@ def _workflow_error(error) -> str:
         "review_repair_inputs_too_large": "本次修正内容过大，请减少候选数量或精简内容。",
         "invalid_review_repair": "评分与修正配置无效，请检查方式、通过分数和修正次数。",
         "invalid_repair_inputs": "修正候选无效，请从原结果重新打开评分与修正。",
-        "invalid_production": "生产计划配置无效，请检查期望数量与预算。",
+        "invalid_production": "生产计划配置无效，请检查期望数量与运行方式。",
         "invalid_production_goals": "期望数量应为每类 1 到 1,000,000 条。",
-        "invalid_production_limits": "生产限制无效，请检查数量、轮数与预算。",
-        "budget_exhausted": "预算不足，任务已暂停。已完成结果与模型响应保留，可检查预算后继续。",
+        "invalid_production_limits": "生产限制无效，请检查数量、轮数与停止条件。",
+        "budget_exhausted": "此任务曾被旧版本的本地预算限制停止。该限制已取消，可从保存的断点继续；这不表示模型服务账户余额不足。",
+        "BudgetExceeded": "此任务曾被旧版本的本地预算限制停止。该限制已取消，可从保存的断点继续；这不表示模型服务账户余额不足。",
         "service_authentication_failed": "模型服务鉴权失败，请检查本机凭据后继续。",
         "service_permission_denied": "模型服务拒绝访问，请检查账号权限后继续。",
         "service_model_or_endpoint_missing": "模型或接口不存在，请检查节点连接。",
-        "service_quota_exhausted": "模型服务额度已用尽，请补充额度后继续。",
+        "service_quota_exhausted": "模型服务返回额度不足。请前往对应服务平台充值或调整账户额度，再从断点继续。",
         "service_request_rejected": "模型服务拒绝了请求，请检查节点模型与参数。",
         "service_rate_limited": "模型服务持续限流，当前样本已隔离或任务已暂停。",
         "service_unavailable": "模型服务暂时不可用，已保留断点。",
@@ -266,7 +268,7 @@ def _workflow_error(error) -> str:
         "workflow_endpoint_url_or_protocol_invalid": "模型服务地址或接口格式无效。请检查服务连接后重试。",
         "workflow_endpoint_models_invalid": "模型服务的模型列表无效。请检查服务连接后重试。",
         "workflow_endpoint_credential_ref_invalid": "模型服务的密钥引用无效。请在服务连接中填写环境变量名。",
-        "model_budget_prices_required": "模型服务未配置输入和输出单价。请在节点连接中填写，或明确设为免费服务。",
+        "model_budget_prices_required": "本地费用单价不再是运行前提，可从保存的断点继续。",
         "workflow_endpoint_pin_invalid": "本次任务的模型配置快照无效。请新建任务。",
         "workflow_endpoint_changed_create_new_run": "模型服务配置已改变。为避免任务使用不同服务，请新建任务。",
         "document_model_vision_not_confirmed": "模型尚未确认图片输入能力，请在输入节点核实并保存确认。",
@@ -314,20 +316,8 @@ def _workflow_error(error) -> str:
 
 
 def _missing_budget_prices(nodes, source_mode, bindings, endpoints, budget, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None):
-    if not (budget.get("max_total_usd") and budget.get("hard_stop", True)):
-        return []
-    missing = []
-    for node in nodes:
-        for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair):
-            binding = bindings.get(node, {}).get(role, {})
-            endpoint = endpoints.get(binding.get("backend"))
-            if endpoint is None:
-                continue
-            try:
-                validate_token_prices(endpoint.get("prices"))
-            except ValueError:
-                missing.append((node, role))
-    return missing
+    """Compatibility for callers predating the removal of local cost limits."""
+    return []
 
 
 ICONS = {"pending": "○", "queued": "○", "running": "◉", "completed": "✓", "failed": "!", "cancelled": "■", "skipped": "—"}
@@ -1544,7 +1534,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if qa_director["enabled"] and source_mode == "Agent 上下文":
             st.caption("已有完整对话保留原文并绕过指导员；指导员只设计文档与开放需求生成的新互动。")
     model_issues = []
-    pricing_issues = []
     sft_output_style = None
     if "sft" in targets:
         style_key = f"workflow-sft-output-style:{ws}"
@@ -1593,18 +1582,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 document_parser["unconfirmed"] = True
         model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
-        if backend_application is not None:
-            budget = dict(backend_application.list_backends().get("budget") or {})
-            if st.session_state.get(f"workflow-production-enabled:{ws}", st.session_state.get(
-                    f"workflow-form-draft:{ws}", {}).get(f"workflow-production-enabled:{ws}", True)) and st.session_state.get(
-                    f"workflow-production-budget:{ws}", st.session_state.get(
-                        f"workflow-form-draft:{ws}", {}).get(f"workflow-production-budget:{ws}", 0)):
-                budget.update(max_total_usd=1, hard_stop=True)
-            pricing_issues = _missing_budget_prices(
-                graph_nodes, model_source_mode, bindings, endpoints,
-                budget,
-                node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-            )
     workbench = st.container(key="workbench-layout")
     if targets:
         with workbench, st.container(border=True, key="workbench-canvas-panel"):
@@ -1704,9 +1681,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         [(issue_node, role) for issue_node, role in model_issues if issue_node == node],
                         st.session_state.get("ui_language", "zh"), node_generation, source_cleaning=source_cleaning)
                     _render_setup_issue(ws, node, description, kind="model", full_label=True)
-            if pricing_issues:
-                for node in dict.fromkeys(node for node, _ in pricing_issues):
-                    _render_setup_issue(ws, node, "模型服务缺少预算单价，点击检查服务连接", kind="prices")
     source_previews = st.container(key="workbench-source-previews")
     setup_col = st.container(key="workbench-plan-entry")
     # Source previews and common run controls stay in normal document flow.
@@ -1843,7 +1817,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 render_knowledge_preview(ws)
         with setup_col, st.container(
                 border=True, key="workbench-parameters-panel"):
-            section_heading("本次生产计划", "期望规模、预算与运行方式", "⚙")
+            section_heading("本次生产计划", "期望规模与运行方式", "⚙")
             scale_col, batch_col = st.columns([1.1, 1], gap="large")
             with scale_col:
                 default_run_name = ("Automatic data generation"
@@ -1976,8 +1950,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 goal_text = goal_text or translate("按实际来源处理", language)
                 run_summary = (translate_label(source_mode, language) + " · " +
                                translate("期望规模", language) + " " + goal_text)
-                if production["budget_usd"]:
-                    run_summary += f" · USD {production['budget_usd']:,.2f}"
             else:
                 run_summary = translate(
                     f"{source_mode} · 已选 {len(targets)} 类目标 · 候选规模 {int(sample_count):,}"
@@ -2028,7 +2000,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       or human_mode_unavailable
                                       or agent_source_missing or source_limit_exceeded or source_size_exceeded
                                       or source_unavailable or not targets or bool(model_issues)
-                                      or bool(pricing_issues) or agent_unavailable or web_unavailable
+                                      or agent_unavailable or web_unavailable
                                       or bool(generation_invalid) or trim_invalid or prompts_invalid or director_invalid
                                       or parser_unavailable or cpt_vision_blocked
                                       or bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")),

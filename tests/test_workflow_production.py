@@ -118,6 +118,17 @@ def test_million_goal_is_valid_only_with_bounded_production():
     assert attempted == 1_000_000 and rounds == 1004 and peak < 1_000_000
 
 
+def test_legacy_per_run_budget_does_not_construct_a_guard_or_stop_production(tmp_path):
+    output, run_id, path = create(tmp_path, budget_usd=.00001)
+    generator = Generator()
+    workflow = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=Reviewer())
+    assert workflow._task_budget is None
+    state = workflow.execute()
+    assert state["status"] == "completed", state.get("error")
+    assert generator.sft_calls == 3
+    assert not (path / "data/output/budget.json").exists()
+
+
 def test_delivery_fills_post_dedup_gap_without_reusing_ids(tmp_path):
     output, run_id, path = create(tmp_path, goals={"sft": 3})
     generator = Generator(duplicate_first=2)

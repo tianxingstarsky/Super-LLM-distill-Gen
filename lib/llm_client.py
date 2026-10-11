@@ -39,29 +39,47 @@ MODEL_POOL_TIMEOUT_SECONDS = 15.0
 
 
 def parse_json_robust(output: str) -> Dict[str, Any]:
-    """容错 JSON 解析：剥代码围栏 → 取首个平衡对象 → 尾部截断重试。"""
+    """Decode a complete value before considering an external code fence."""
     text = output.strip()
-    if text.count("```") >= 2:
-        # 取首对围栏之间的内容（split 后中间段），并去掉可能的语言标签行
-        text = text.split("```", 2)[1].strip()
+    try:
+        # A document or answer can legitimately contain Markdown code fences.
+        # Removing those first would corrupt an otherwise valid JSON response.
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    fence = text.find("```")
+    first_object = text.find("{")
+    if fence >= 0 and (first_object < 0 or fence < first_object):
+        # Only unwrap a fence outside the JSON value. Take its closing fence
+        # from the end so embedded code blocks remain part of the document.
+        end = text.rfind("```")
+        if end > fence:
+            text = text[fence + 3:end].strip()
         first_line = text.split("\n", 1)[0].strip()
         if first_line and first_line.isalpha() and "\n" in text:
             text = text.split("\n", 1)[1].strip()
-    for candidate in (text,):
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
     # 平衡扫描取首个完整对象
     start = text.find("{")
     if start >= 0:
         depth = 0
         in_str = False
+        escaped = False
         for i in range(start, len(text)):
             ch = text[i]
-            if ch == '"' and (i == 0 or text[i - 1] != "\\"):
-                in_str = not in_str
-            elif not in_str:
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            else:
                 if ch == "{":
                     depth += 1
                 elif ch == "}":
@@ -71,13 +89,6 @@ def parse_json_robust(output: str) -> Dict[str, Any]:
                             return json.loads(text[start : i + 1])
                         except json.JSONDecodeError:
                             break
-    # 尾部截断重试（多余尾随文本）
-    last = text.rfind("}")
-    if last > 0:
-        try:
-            return json.loads(text[: last + 1])
-        except json.JSONDecodeError:
-            pass
     raise ValueError("JSON 解析失败")
 
 
@@ -738,13 +749,16 @@ def _configured_backends(root: pathlib.Path) -> Dict[str, Any]:
     return cfg
 
 
-def _configured_token_prices(backend: dict, budget: dict) -> dict[str, float]:
-    """Never interpret an absent rate as a free model under a hard budget."""
+def _configured_token_prices(backend: dict, budget: dict | None = None) -> dict[str, float]:
+    """Optional historical rates never control admission to a provider."""
     raw = backend.get("prices")
-    if not raw and not (budget.get("max_total_usd")
-                        and budget.get("hard_stop", True)):
+    if not raw:
         return {"input_per_1m_usd": 0.0, "output_per_1m_usd": 0.0}
-    return validate_token_prices(raw)
+    try:
+        return validate_token_prices(raw)
+    except ValueError:
+        # An obsolete or partial billing field is not a model connection error.
+        return {"input_per_1m_usd": 0.0, "output_per_1m_usd": 0.0}
 
 
 def _endpoint_pin(name: str, model: str, backend: dict,
@@ -786,12 +800,14 @@ def snapshot_backend_endpoint(root: pathlib.Path, backend: str, model: str) -> d
     """Pin a node's selected service before its queued run is created."""
     config = _configured_backends(pathlib.Path(root))
     selected = (config.get("backends") or {}).get(backend)
-    budget = config.get("budget") or {}
     prices = None
-    if isinstance(selected, dict):
-        rates = _configured_token_prices(selected, budget)
-        if budget.get("max_total_usd") and budget.get("hard_stop", True):
-            prices = rates
+    if isinstance(selected, dict) and selected.get("prices"):
+        # Retain version-2 identity for existing endpoint snapshots. Rates are
+        # optional metadata; neither their absence nor old budgets block calls.
+        try:
+            prices = validate_token_prices(selected["prices"])
+        except ValueError:
+            prices = None
     return _endpoint_pin(backend, model, selected, prices)
 
 
@@ -813,7 +829,7 @@ def load_backend(
     role ∈ {generation, judge, jev, vision, refine, simulate, translation}。JEV 可用 JEV_BACKEND/JEV_MODEL 环境变量独立配置；
     judge=True 等价 role='judge'。base_url 自定义端点（本地 Ollama/llama.cpp 等）
     时 api_key 走 OPENAI_API_KEY 环境变量。
-    预算：backends.yaml 的 budget + 各后端 prices 生效，超限抛 BudgetExceeded。"""
+    旧配置中的 budget 不再限制请求；服务额度由上游平台管理。"""
     cfg = _configured_backends(root)
 
     if judge and role is None:
@@ -842,11 +858,7 @@ def load_backend(
     role_model = os.environ.get(f"{role.upper()}_MODEL") if role else None
     global_model = os.environ.get("LLM_MODEL") if role != "jev" else None
     model = model or role_model or global_model or (b.get("models", [""])[0] if b.get("models") else "") or cfg.get("default_model", "")
-    budget_cfg = cfg.get("budget") or {}
-    effective_budget = budget_cfg
-    if additional_budget is not None and additional_budget.hard_stop:
-        effective_budget = {**budget_cfg, "max_total_usd": additional_budget.limit, "hard_stop": True}
-    prices = _configured_token_prices(b, effective_budget)
+    prices = _configured_token_prices(b)
     if expected_endpoint_pin is not None:
         if type(expected_endpoint_pin) is not dict:
             raise ValueError("workflow_endpoint_pin_invalid")
@@ -864,9 +876,6 @@ def load_backend(
     configured_key_env = b.get("api_key_env") if "api_key_env" in b else default_key_env
     api_key = b.get("api_key") or os.environ.get(configured_key_env or "", "")
 
-    guard = None
-    if budget_cfg.get("max_total_usd"):
-        guard = BudgetGuard(root, budget_cfg["max_total_usd"], bool(budget_cfg.get("hard_stop", True)))
     client = ChatClient(
         base_url=b.get("base_url", ""),
         api_key=api_key,
@@ -875,8 +884,10 @@ def load_backend(
         context_window_tokens=context_window_tokens,
         price_input_per_1m=float(prices.get("input_per_1m_usd", 0.0)),
         price_output_per_1m=float(prices.get("output_per_1m_usd", 0.0)),
-        budget=guard,
-        additional_budget=additional_budget,
+        # Keep the legacy argument callable for old integrations, but product
+        # clients must not enforce either a global or per-run dollar ceiling.
+        budget=None,
+        additional_budget=None,
     )
     from lib.model_request_scheduler import SharedModelScheduler, model_pool_identity
     scheduler = SharedModelScheduler(root, model_pool_identity(b.get("base_url", ""), api_key, model))

@@ -1,6 +1,7 @@
 """Real Streamlit forms; run separately from distilabel multiprocessing tests."""
 from pathlib import Path
 import hashlib
+import html
 import json
 import re
 
@@ -456,7 +457,7 @@ def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatc
     app.session_state["nav"] = "模型与密钥"
     app.run()
     assert not app.exception and app.session_state["nav"] == "系统设置"
-    assert any(item.label == "Connections and budget (advanced)" for item in app.expander)
+    assert any(item.label == "Connections and usage" for item in app.expander)
     assert not any(widget.key == "backend-role-edit" for widget in app.selectbox)
 
 
@@ -533,6 +534,12 @@ def test_expanded_english_task_view_uses_full_canvas_and_localized_quality(tmp_p
     assert spec["selected"] == "package"
     assert not re.search(r"[\u4e00-\u9fff]", json.dumps(spec, ensure_ascii=False))
     markup = "".join(str(node.value) for node in app.get("html"))
+    # The live preview must retain the uploaded document's language. Exclude
+    # this exact source body in the user-content container, while checking every
+    # UI label. The latest review-stage preview uses the artifact body renderer.
+    source_body = '<div class="df-artifact-body">' + html.escape(source.read_text(encoding="utf-8")) + '</div>'
+    assert source_body in markup
+    markup = markup.replace(source_body, "")
     visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
     visible = re.sub(r"<[^>]*>", "", visible)
     assert not re.search(r"[\u4e00-\u9fff]", visible), visible
@@ -546,8 +553,14 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
     app.run()
     assert not app.exception
 
-    def assert_preview(targets):
-        nodes, edges = execution_graph(targets, recipe_version=18)
+    def assert_preview(targets, *, source_cleaning=True):
+        nodes, edges = execution_graph(targets, recipe_version=19,
+                                       source_cleaning=source_cleaning, review_repair={"mode": "auto"})
+        if source_cleaning:
+            assert ("ingest", "cpt") in edges and ("cpt", "sft") in edges
+            assert ("ingest", "sft") not in edges
+        else:
+            assert "cpt" not in nodes
         markup = [str(item.value) for item in app.get("html")]
         summary = next(value for value in markup if 'class="df-wb-plan"' in value)
         detail = next(value for value in markup if 'class="df-wb-plan-detail"' in value)
@@ -569,7 +582,7 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
     next(widget for widget in app.pills if widget.label == "训练目标").set_value(
         ["agent", "gsm8k"]).run()
     assert not app.exception
-    summary, detail = assert_preview(["agent", "gsm8k"])
+    summary, detail = assert_preview(["agent", "gsm8k"], source_cleaning=False)
     assert "SFT 中间候选" not in summary
     assert 'data-from="agent" data-to="gsm8k"' not in detail
 

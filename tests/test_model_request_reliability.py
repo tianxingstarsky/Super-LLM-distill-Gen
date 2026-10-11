@@ -41,6 +41,7 @@ def call(item, **kwargs):
 
 @pytest.mark.parametrize("status,kind,code", [
     (401, "fatal", "service_authentication_failed"),
+    (402, "fatal", "service_quota_exhausted"),
     (403, "fatal", "service_permission_denied"),
     (404, "fatal", "service_model_or_endpoint_missing"),
     (422, "fatal", "service_request_rejected"),

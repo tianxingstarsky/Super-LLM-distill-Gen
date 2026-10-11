@@ -88,6 +88,7 @@ def _record(payload, wrapped):
 @dataclass
 class _Index:
     identity: tuple | None = None
+    generation: tuple | None = None
     filename: str = ""
     offset: int = 0
     carry: bytes = b""
@@ -174,13 +175,19 @@ def _latest(handle, size, limit, *, wrapped=False):
     return list(reversed(rows))
 
 
-def _snapshot(run, stage, path, *, limit):
+def _snapshot(run, stage, path, *, limit, generation=None):
     key = (os.path.normcase(os.path.abspath(run)), stage)
     wrapped = path.name == f".{stage}.live.jsonl"
     with _LOCK, _open(path)[0] as handle:
         current = os.fstat(handle.fileno())
         identity = _identity(current)
-        index = _CACHE.pop(key, _Index())
+        index = _CACHE.pop(key, _Index(generation=generation))
+        # A restarted writer can truncate and regrow the same file between
+        # browser polls, preserving both boundary anchors. Worker generation
+        # changes therefore reset the count even when file identity looks like
+        # an ordinary append. This also covers production rounds in one run.
+        if index.generation != generation:
+            index = _Index(generation=generation)
         changed = index.identity is not None and identity != index.identity
         if index.identity is not None:
             replaced = identity[:2] != index.identity[:2] or current.st_size < index.offset
@@ -192,7 +199,7 @@ def _snapshot(run, stage, path, *, limit):
                     replaced = (handle.read(len(index.first)) != index.first
                                 or _anchor(handle, index.offset) != index.anchor)
             if replaced:
-                index = _Index()
+                index = _Index(generation=generation)
         handle.seek(index.offset)
         payload = handle.read(min(SCAN_BYTES, max(0, current.st_size - index.offset)))
         _consume(index, payload, wrapped=wrapped)
@@ -259,17 +266,20 @@ which can still be rejected by later review or package checks.
         if not re.fullmatch(r"[a-z_]{1,80}", name) or not isinstance(metrics, dict):
             continue
         path, source_kind = _stage_file(directory, name, metrics, state)
+        production_round = ((state.get("production") or {}).get("round")
+                            if metrics.get("status") in {"running", "failed", "cancelled"} else None)
+        generation = (state.get("attempt", 0), metrics.get("started_at"), production_round)
         snapshot = {"written": 0, "eligible": 0, "ready": 0, "quarantined": 0, "reviewed": 0,
                     "review_accepted": 0, "unreviewed": 0,
                     "invalid": 0, "oversized": 0, "indexing": False, "partial_line": False, "rows": []}
         if path is not None:
             try:
-                snapshot = _snapshot(run, name, path, limit=limit)
+                snapshot = _snapshot(run, name, path, limit=limit, generation=generation)
             except FileNotFoundError:
                 # Atomic pending promotion is normal while the UI is polling.
                 path, source_kind = _stage_file(directory, name, metrics, state)
                 if path is not None:
-                    snapshot = _snapshot(run, name, path, limit=limit)
+                    snapshot = _snapshot(run, name, path, limit=limit, generation=generation)
         snapshots[name] = snapshot
         descriptors.append({"stage": name, "label": metrics.get("label", STAGES.get(name, name)),
                             "status": metrics.get("status", "pending"),

@@ -203,12 +203,9 @@ def _render_call_tests(application, backend, model, info, *, prefix) -> None:
                 result = application.test_model(backend, model, features=features)
         except (OSError, ValueError, RuntimeError) as error:
             if str(error) == "model_budget_prices_required":
-                st.warning("请先为此连接填写单价；硬预算不会调用价格未知的模型。")
+                st.warning("本地费用单价不再是测试前提，请重新测试模型调用。")
             elif type(error).__name__ == "BudgetExceeded":
-                if str(error) == "Budget exhausted; no request sent":
-                    st.warning("预算不足，未发送模型测试。请检查剩余额度。")
-                else:
-                    st.warning("测试用量超过预留预算，已记录费用。请检查计费记录后再调用。")
+                st.warning("旧版本地额度限制已取消，请重新测试模型调用。")
             elif str(error) == "model_connection_changed":
                 st.warning("测试期间连接已变更，结果未用于当前模型。请重新测试。")
             else:

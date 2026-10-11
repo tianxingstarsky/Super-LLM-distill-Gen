@@ -662,5 +662,292 @@ scenario('reader_height_changes_preserve_delta_prefix_request_pin_and_receipts',
   assert.equal(selectedEvents(p).length, choices);
 });
 
+const readField = (p, key) => [...p.get('reading-fields').children].find(node => node.dataset.field === key)
+  ?.querySelector('.reading-field-text')?.textContent;
+function parseCounter(p) {
+  const original = p.w.JSON.parse;
+  let count = 0;
+  p.w.JSON.parse = (...args) => {count++; return original(...args);};
+  return () => count;
+}
+
+scenario('read_view_is_default_and_raw_roundtrip_keeps_real_tokens', p => {
+  const raw = '{"text":"Line one\\nLine two","reason":"Original record"}';
+  const rows = [row('first', {status: 'completed', text: raw})];
+  p.render(rows);
+  assert.equal(p.get('stream-read').textContent, 'Read');
+  assert.equal(p.get('stream-raw').textContent, 'Raw');
+  assert.equal(p.get('stream-read').getAttribute('aria-pressed'), 'true');
+  assert.equal(p.get('read-section').hidden, false);
+  assert.equal(p.get('answer-section').hidden, true);
+  assert.equal(readField(p, 'text'), 'Line one\nLine two');
+  const rawNode = p.get('answer-output').firstChild, beforeEvents = componentEvents(p).length;
+  p.get('stream-raw').click();
+  assert.equal(p.get('read-section').hidden, true);
+  assert.equal(p.get('answer-section').hidden, false);
+  assert.equal(text(p), raw);
+  p.get('stream-read').click();
+  assert.equal(readField(p, 'text'), 'Line one\nLine two');
+  assert.equal(p.get('answer-output').firstChild, rawNode);
+  assert.equal(componentEvents(p).length, beforeEvents, 'views are local and do not send a receipt');
+  p.render(rows, {language: 'zh'});
+  assert.equal(p.get('stream-read').textContent, '阅读');
+  assert.equal(p.get('stream-raw').textContent, '原始');
+});
+
+scenario('complete_cpt_text_and_sft_fields_are_readable_without_losing_reasoning', p => {
+  const cpt = {text: '公式 $x=1$。\n章节二', uncertain: ['Footnote'], removed_noise: ['Page header'], reason: 'Kept equations'};
+  p.render([row('first', {stage: 'cpt', status: 'completed', text: JSON.stringify(cpt)})]);
+  for (const key of Object.keys(cpt)) assert.equal(readField(p, key), Array.isArray(cpt[key]) ? cpt[key].join('\n') : cpt[key]);
+  const sft = {question: 'How does this work?', answer: 'It uses the supplied source.', reasoning: 'Compare the evidence.'};
+  const raw = JSON.stringify(sft);
+  p.render([row('sft', {status: 'completed', text: raw, reasoning: 'Actual API reasoning'})]);
+  for (const [key, value] of Object.entries(sft)) assert.equal(readField(p, key), value);
+  assert.equal(p.get('reasoning-output').textContent, 'Actual API reasoning');
+  assert.equal(readField(p, 'text'), undefined, 'a prior CPT field cannot leak into SFT');
+  p.get('stream-raw').click();
+  assert.equal(text(p), raw);
+});
+
+scenario('judge_scores_and_preservation_are_readable_without_quality_approval', p => {
+  const verdict = {scores: {correctness: 5, grounding: 4}, preservation: {source_faithful: true, coverage_complete: false},
+    score: 4.5, reason: 'A paragraph is missing.', accepted: false};
+  p.render([row('first', {role: 'jev', status: 'completed', text: JSON.stringify(verdict)})]);
+  assert.equal(readField(p, 'scores'), 'Correctness: 5\nGrounding: 4');
+  assert.equal(readField(p, 'preservation'), 'Faithful to source: Yes\nComplete coverage: No');
+  assert.equal(readField(p, 'score'), '4.5');
+  assert.equal(readField(p, 'reason'), verdict.reason);
+  assert.equal(readField(p, 'accepted'), 'No');
+  assert.match(p.get('stream-note').textContent, /quality depends on the node checks/);
+  assert.doesNotMatch(p.get('stream-status').textContent, /accepted|approved/i);
+});
+
+scenario('cpt_progressive_decoding_waits_for_complete_escapes_without_json_parse', p => {
+  const parses = parseCounter(p), rows = [row('first', {stage: 'cpt'})];
+  const pieces = ['{"text":"A', '\\', 'nB', '\\', '"C', '\\', '\\D', '\\', 'tE', '","reason":"Still a draft"}'];
+  const expected = ['A', 'A', 'A\nB', 'A\nB', 'A\nB"C', 'A\nB"C', 'A\nB"C\\D', 'A\nB"C\\D', 'A\nB"C\\D\tE', 'A\nB"C\\D\tE'];
+  let raw = '';
+  pieces.forEach((piece, index) => {
+    renderDelta(p, rows, 'first', delta('first', index, index + 1, [token(piece)]));
+    raw += piece;
+    assert.equal(readField(p, 'text'), expected[index]);
+    assert.equal(text(p), raw, 'raw tokens retain every backslash and field');
+    assert.equal(parses(), 0, 'progressive decoding cannot parse unfinished JSON');
+    assert.equal(p.get('stream-status').textContent, 'Receiving');
+  });
+  const fieldNode = p.get('reading-fields').firstChild.querySelector('.reading-field-text').firstChild;
+  renderDelta(p, rows, 'first', delta('first', pieces.length, pieces.length, [], {status: 'completed', done: true}));
+  assert.equal(parses(), 1);
+  assert.equal(readField(p, 'reason'), 'Still a draft');
+  assert.equal(p.get('reading-fields').firstChild.querySelector('.reading-field-text').firstChild, fieldNode);
+});
+
+scenario('unicode_progressive_reading_waits_for_complete_surrogate_pairs', p => {
+  const rows = [row('first', {stage: 'cpt'})], parses = parseCounter(p);
+  let raw = '{"text":"';
+  renderDelta(p, rows, 'first', delta('first', 0, 1, [token(raw)]));
+  const escaped = '\\u4e2d\\ud83d\\ude0a';
+  [...escaped].forEach((char, index) => {
+    raw += char;
+    renderDelta(p, rows, 'first', delta('first', index + 1, index + 2, [token(char)]));
+    const expected = index < 5 ? '' : index < 17 ? '中' : '中😊';
+    assert.equal(readField(p, 'text'), expected);
+    assert.equal(parses(), 0);
+  });
+  const rawEmoji = '🚀';
+  renderDelta(p, rows, 'first', delta('first', 19, 20, [token(rawEmoji[0])]));
+  assert.equal(readField(p, 'text'), '中😊');
+  renderDelta(p, rows, 'first', delta('first', 20, 21, [token(rawEmoji[1]), token('"}')]));
+  assert.equal(readField(p, 'text'), '中😊🚀');
+  renderDelta(p, rows, 'first', delta('first', 21, 21, [], {status: 'completed', done: true}));
+  assert.equal(readField(p, 'text'), '中😊🚀');
+  assert.equal(parses(), 1);
+});
+
+scenario('complex_partial_json_stays_raw_until_full_receipt', p => {
+  const parses = parseCounter(p), rows = [row('first')], raw = '{"question":"A?","answer":"B","reasoning":"C"}';
+  [...raw].forEach((char, index) => {
+    renderDelta(p, rows, 'first', delta('first', index, index + 1, [token(char)]));
+    assert.equal(p.get('read-section').hidden, true);
+    assert.equal(text(p), raw.slice(0, index + 1));
+    assert.equal(parses(), 0);
+    assert.doesNotMatch(p.get('stream-panel').textContent, /cannot parse|parse failed|无法解析|解析失败/i);
+  });
+  assert.match(p.get('answer-label').textContent, /Raw fragment/);
+  renderDelta(p, rows, 'first', delta('first', raw.length, raw.length, [], {status: 'completed', done: true}));
+  assert.equal(parses(), 1);
+  assert.equal(readField(p, 'question'), 'A?');
+  assert.equal(readField(p, 'answer'), 'B');
+});
+
+scenario('completed_metadata_with_more_events_does_not_parse_a_prefix', p => {
+  const parses = parseCounter(p), rows = [row('first', {status: 'completed'})];
+  const raw = '{"question":"A?","answer":"B"}';
+  renderDelta(p, rows, 'first', delta('first', 0, 1, [token(raw)], {status: 'completed', done: false}));
+  assert.equal(p.get('stream-status').textContent, 'Loading the complete response');
+  assert.equal(p.get('read-section').hidden, true);
+  assert.equal(parses(), 0, 'a balanced prefix is not proof of full receipt');
+  renderDelta(p, rows, 'first', delta('first', 1, 2, [token('\n')], {status: 'completed', done: true}));
+  assert.equal(parses(), 1);
+  assert.equal(readField(p, 'answer'), 'B');
+  assert.equal(text(p), raw + '\n');
+});
+
+scenario('interrupted_and_truncated_json_never_becomes_a_complete_sample', p => {
+  const parses = parseCounter(p), raw = '{"question":"A?","answer":"B"}';
+  p.render([row('first', {status: 'interrupted', text: raw})]);
+  assert.equal(parses(), 0);
+  assert.equal(p.get('read-section').hidden, true);
+  assert.match(p.get('stream-note').textContent, /not a training sample/);
+  p.render([row('first', {status: 'completed', text: raw, truncated: true})]);
+  assert.equal(parses(), 0);
+  assert.equal(p.get('read-section').hidden, true);
+  assert.match(p.get('stream-note').textContent, /only part/);
+  renderDelta(p, [row('first', {status: 'completed'})], 'first', {id: 'first', legacy: true,
+    text: raw, reasoning: '', status: 'completed', done: true, truncated: true});
+  assert.equal(parses(), 0);
+  renderDelta(p, [row('cpt', {stage: 'cpt', status: 'interrupted'})], 'cpt', delta('cpt', 0, 1,
+    [token('{"text":"Readable\\nfragment\\')], {status: 'interrupted', done: true}));
+  assert.equal(readField(p, 'text'), 'Readable\nfragment');
+  assert.equal(parses(), 0);
+  assert.match(p.get('stream-note').textContent, /unfinished text is not a training sample/);
+});
+
+scenario('fenced_json_preserves_inner_code_fences_and_xss_stays_inert', p => {
+  const attack = '<img src=x onerror="window.infected=true"><script>window.infected=true</script>';
+  const value = {question: attack, answer: 'Example:\n```python\nprint("hi")\n```', '__proto__': 'not inherited'};
+  // Build an own __proto__ key too, rather than the object literal setter.
+  const raw = '```json\n' + JSON.stringify({...value, ['__proto__']: 'Prototype text'}) + '\n```';
+  p.render([row('first', {status: 'completed', text: raw})]);
+  assert.equal(readField(p, 'question'), attack);
+  assert.equal(readField(p, 'answer'), value.answer);
+  assert.equal(readField(p, '__proto__'), 'Prototype text');
+  assert.equal(p.get('reading-fields').querySelector('img,script,svg'), null);
+  assert.equal(p.w.infected, undefined);
+  assert.equal(text(p), raw);
+  p.get('stream-raw').click();
+  assert.equal(p.get('answer-output').querySelector('img,script,svg'), null);
+  p.render([row('cpt', {stage: 'cpt', text: '```json\n{"text":"A\\nB\\'})]);
+  p.get('stream-read').click();
+  assert.equal(readField(p, 'text'), 'A\nB');
+});
+
+scenario('invalid_json_escapes_and_free_text_remain_visible_without_parse_errors', p => {
+  const invalid = '{"text":"Known prefix\\qInvalid"}';
+  p.render([row('first', {text: invalid})]);
+  assert.equal(p.get('read-section').hidden, true);
+  assert.equal(text(p), invalid);
+  p.render([row('first', {status: 'completed', text: invalid})]);
+  assert.equal(p.get('answer-section').hidden, false);
+  assert.equal(text(p), invalid);
+  assert.doesNotMatch(p.get('stream-panel').textContent, /cannot parse|parse failed|无法解析|解析失败/i);
+  p.render([row('first', {status: 'completed', text: 'Free text with `code` and <markup>.'})]);
+  assert.equal(p.get('read-section').hidden, true);
+  assert.equal(text(p), 'Free text with `code` and <markup>.');
+});
+
+scenario('reading_fields_clear_on_context_switch_and_retry', p => {
+  p.render([row('first', {text: '{"text":"Private first'})]);
+  assert.equal(readField(p, 'text'), 'Private first');
+  p.render([row('first', {text: '{"text":"Retry body'})]);
+  assert.equal(readField(p, 'text'), 'Retry body');
+  assert.doesNotMatch(p.get('reading-fields').textContent, /Private/);
+  p.get('stream-raw').click();
+  p.render([row('first')], {context: 'other-run:cpt'});
+  assert.equal(p.get('stream-read').getAttribute('aria-pressed'), 'true');
+  assert.equal(p.get('reading-fields').textContent, '');
+  assert.equal(text(p), '');
+  assert.equal(p.get('read-section').hidden, true);
+});
+
+scenario('view_switching_preserves_cursor_selection_and_manual_scroll', p => {
+  const rows = [row('first'), row('other')];
+  renderDelta(p, rows, 'first', delta('first', 0, 1, [token('{"text":"Latest') ]));
+  p.get('request-tabs').children[1].click();
+  const selection = selectedEvents(p).at(-1), pinned = {ack_serial: selection.serial, follow_latest: false};
+  renderDelta(p, rows, 'other', delta('other', 0, 7, [token('{"text":"Pinned')]), pinned);
+  p.reader.dispatchEvent(new p.w.Event('scroll'));
+  p.reader.scrollTop = 30;
+  p.reader.dispatchEvent(new p.w.Event('scroll'));
+  const beforeEvents = componentEvents(p).length;
+  p.get('stream-raw').click();
+  p.get('stream-read').click();
+  assert.equal(p.reader.scrollTop, 30);
+  assert.equal(p.get('follow-bottom').hidden, false);
+  assert.equal(p.get('follow-request').hidden, false);
+  assert.equal(componentEvents(p).length, beforeEvents);
+  assert.equal(p.get('request-tabs').children[1].getAttribute('aria-selected'), 'true');
+  renderDelta(p, rows, 'other', delta('other', 7, 9, [token('\\ncontinued')]), pinned);
+  assert.equal(readField(p, 'text'), 'Pinned\ncontinued');
+  assert.equal(p.reader.scrollTop, 30);
+  assert.equal(receipts(p).at(-1).next_offset, 9);
+  assert.equal(receipts(p).at(-1).selection_serial, selection.serial);
+  assert.equal(selectedEvents(p).length, 1);
+});
+
+scenario('identical_structured_snapshots_do_not_parse_or_rebuild_fields', p => {
+  const parses = parseCounter(p), rows = [row('first', {status: 'completed', text: '{"question":"A?","answer":"B"}'})];
+  p.render(rows);
+  assert.equal(parses(), 1);
+  const fields = [...p.get('reading-fields').children], bodyNode = fields[1].querySelector('.reading-field-text').firstChild;
+  const observer = new p.w.MutationObserver(() => {});
+  observer.observe(p.get('stream-panel'), {subtree: true, childList: true, characterData: true});
+  p.render(rows);
+  assert.equal(observer.takeRecords().length, 0);
+  assert.equal(parses(), 1);
+  assert.equal(p.get('reading-fields').children[1], fields[1]);
+  assert.equal(fields[1].querySelector('.reading-field-text').firstChild, bodyNode);
+});
+
+scenario('manual_history_opens_at_top_while_active_and_latest_keep_following', p => {
+  const latest = row('latest', {text: 'New live text', started_at: '2026-10-07T11:00:00Z'});
+  const history = row('history', {text: '{"text":"Original beginning'});
+  const interrupted = row('interrupted', {status: 'interrupted', text: '{"text":"Interrupted beginning',
+    started_at: '2026-10-07T09:00:00Z'});
+  p.render([latest, history, interrupted]);
+  assert.equal(p.reader.scrollTop, 200, 'latest initially follows the live output');
+  const fullHistory = {...history, status: 'completed', text: '{"text":"Original beginning\\nRest of document","reason":"Check result"}'};
+  p.render([latest, fullHistory, interrupted]);
+  p.get('request-tabs').children[1].click();
+  assert.equal(p.reader.scrollTop, 0, 'an existing tab uses the new completed status');
+  assert.equal(readField(p, 'text'), 'Original beginning\nRest of document');
+  assert.equal(p.get('follow-bottom').hidden, false);
+  p.reader.dispatchEvent(new p.w.Event('scroll')); // Acknowledge the explicit scroll to top.
+  p.render([{...latest, text: 'New live text grew'}, fullHistory, interrupted]);
+  assert.equal(p.reader.scrollTop, 0, 'background output does not move a historical reading');
+  assert.equal(text(p), fullHistory.text);
+  p.get('request-tabs').children[2].click();
+  assert.equal(p.reader.scrollTop, 0, 'interrupted history also starts at the top');
+  assert.match(p.get('stream-note').textContent, /not a training sample/);
+  p.get('request-tabs').children[0].click();
+  assert.equal(p.reader.scrollTop, 200, 'selecting a running request resumes live following');
+  p.get('request-tabs').children[1].click();
+  p.get('follow-request').click();
+  assert.equal(p.reader.scrollTop, 200, 'following latest explicitly resumes automatic scrolling');
+  // If the latest request is the same completed row, choose() does not change
+  // its id. Follow latest must still override a prior historical reading.
+  p.render([fullHistory, interrupted]);
+  p.get('request-tabs').children[0].click();
+  assert.equal(p.reader.scrollTop, 0);
+  p.get('follow-request').click();
+  assert.equal(p.reader.scrollTop, 200);
+
+  const rows = [row('latest', {started_at: '2026-10-07T11:00:00Z'}), fullHistory];
+  renderDelta(p, rows, 'latest', delta('latest', 0, 1, [token('Streaming')]), {context: 'delta-history:sft'});
+  [...p.get('request-tabs').children].find(button => button.dataset.status === 'completed').click();
+  const selection = selectedEvents(p).at(-1), pinned = {context: 'delta-history:sft', ack_serial: selection.serial, follow_latest: false};
+  const beforeReceipts = receipts(p).length;
+  renderDelta(p, rows, 'history', delta('history', 0, 8, [token(fullHistory.text)], {status: 'completed', done: true}), pinned);
+  assert.equal(p.reader.scrollTop, 0, 'a terminal delta acknowledgement preserves the selected reading position');
+  assert.equal(readField(p, 'text'), 'Original beginning\nRest of document');
+  assert.equal(receipts(p).length, beforeReceipts + 1);
+  assert.equal(receipts(p).at(-1).next_offset, 8);
+  assert.equal(receipts(p).at(-1).selection_serial, selection.serial);
+  renderDelta(p, rows, 'history', delta('history', 8, 8, [], {status: 'completed', done: true}), pinned);
+  assert.equal(p.reader.scrollTop, 0);
+  assert.equal(receipts(p).length, beforeReceipts + 1, 'the reading position does not replay a receipt');
+  assert.equal(text(p), fullHistory.text);
+});
+
 console.log(JSON.stringify({scenarios: results}));
 if (Object.values(results).some(result => !result.ok)) process.exitCode = 1;

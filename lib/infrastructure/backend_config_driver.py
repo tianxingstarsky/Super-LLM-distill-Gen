@@ -147,52 +147,28 @@ class FilesystemBackendConfigDriver:
                      budget: dict[str, Any] | None = None) -> dict[str, Any]:
         from lib.infrastructure.model_capability_probe import probe_model
         from lib.domain.backend_config import validate_token_prices
-        from lib.llm_client import BudgetGuard
-        from lib.infrastructure.model_capability_probe import MAX_OUTPUT_TOKENS
         allowed = {"text", "vision", "pdf", "tools"}
         selected = allowed if features is None else set(features) if isinstance(features, (list, tuple)) else None
         if selected is None or selected - allowed:
             raise ValueError("invalid_model_probe_features")
         if not selected:
             return probe_model(backend, model, features)
-        config = budget or {}
-        limit = float(config.get("max_total_usd") or 0)
-        hard = bool(config.get("hard_stop", True)) and limit > 0
         raw_prices = backend.get("prices")
         if not raw_prices:
-            if hard:
-                raise ValueError("model_budget_prices_required")
             result = probe_model(backend, model, features)
             return {**result, "cost_usd": None, "cost_status": "unknown_prices"}
-        prices = validate_token_prices(raw_prices)
-        input_rate, output_rate = prices["input_per_1m_usd"], prices["output_per_1m_usd"]
-        # Fixtures are a 96px image and one tiny PDF page. A short test cannot
-        # establish the model's true context boundary; this is billing admission.
-        calls_bound = 1 + len(selected - {"text"})
-        per_call_ceiling = (4096 * input_rate + MAX_OUTPUT_TOKENS * output_rate) / 1e6
-        ceiling = calls_bound * per_call_ceiling
-        guard = BudgetGuard(self.root, limit, hard_stop=hard)
-        token = guard.reserve(ceiling) if hard and ceiling > 0 else None
-        if token is None and hard:
-            guard.check()
         try:
+            prices = validate_token_prices(raw_prices)
+        except ValueError:
             result = probe_model(backend, model, features)
-        except BaseException:
-            # After interruption the service may already have billed a call.
-            if token is not None:
-                guard.settle(token, ceiling)
-            elif not hard:
-                guard.add_usd(ceiling)
-            raise
+            return {**result, "cost_usd": None, "cost_status": "unknown_prices"}
+        input_rate, output_rate = prices["input_per_1m_usd"], prices["output_per_1m_usd"]
+        result = probe_model(backend, model, features)
         usage = result.get("usage") or {}
         count = lambda name: max(0, usage.get(name, 0)) if type(usage.get(name, 0)) is int else 0
         input_tokens, output_tokens = count("input_tokens"), count("output_tokens")
         calls, reported = count("calls"), count("reported_calls")
         missing = max(0, calls - reported)
-        charge = (input_tokens * input_rate + output_tokens * output_rate) / 1e6 + missing * per_call_ceiling
-        if token is not None:
-            guard.settle(token, charge)
-        else:
-            guard.add_usd(charge)
+        charge = (input_tokens * input_rate + output_tokens * output_rate) / 1e6
         return {**result, "cost_usd": charge,
-                "cost_status": "reserved_for_missing_usage" if missing else "reported"}
+                "cost_status": "partial_usage" if missing else "reported"}

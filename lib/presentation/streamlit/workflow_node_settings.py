@@ -315,14 +315,17 @@ def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, en
                   help=help_text, width="stretch")
         return
     with st.popover("复用其他节点模型", width="stretch"):
-        candidates = dict(choices)
+        candidates = deepcopy(dict(choices))
+        # Streamlit can serialize the selection after the page changes. Keep
+        # labels bound to this render instead of reading its later node scope.
+        labels = {source: UntranslatedText(
+            _reuse_node_label(source, workspace) + " · " + reusable["backend"]
+            + " · " + reusable["model"]) for source, reusable in candidates.items()}
         source_key = prefix + ":reuse-source"
         if source_key in st.session_state and st.session_state[source_key] not in candidates:
             st.session_state.pop(source_key)
         source = st.selectbox("已有模型配置", list(candidates), key=source_key,
-                              format_func=lambda source: UntranslatedText(
-                                  _reuse_node_label(source, workspace) + " · " + candidates[source]["backend"]
-                                  + " · " + candidates[source]["model"]))
+                              format_func=labels.__getitem__)
         st.button("用于当前角色", key=prefix + ":reuse-apply",
                   on_click=_reuse_binding, args=(workspace, node, role, deepcopy(candidates[source])),
                   help=help_text, width="stretch")
@@ -375,15 +378,6 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
                 st.warning("模型列表过长或响应超时，仅显示已获取的模型。")
             discover = (st.form_submit_button("获取模型", width="stretch")
                         if hasattr(application, "discover_models") else False)
-            st.caption("硬预算需要输入、输出两项单价。按服务商报价填写每百万 tokens 的美元价格；一个连接有多个模型时按最高价填写。")
-            price_columns = st.columns(2, gap="small")
-            with price_columns[0]:
-                input_price = st.number_input("输入单价（美元 / 百万 tokens）", min_value=0.0,
-                                              value=None, step=0.01, format="%.4f")
-            with price_columns[1]:
-                output_price = st.number_input("输出单价（美元 / 百万 tokens）", min_value=0.0,
-                                               value=None, step=0.01, format="%.4f")
-            free_service = st.checkbox("此服务明确无需按 token 计费")
             replace = st.checkbox("覆盖同名连接")
             submit = st.form_submit_button("保存并用于当前节点" if missing_role else "保存连接",
                                            type="primary", width="stretch")
@@ -419,12 +413,9 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
         if credential_mode == "直接填写密钥" and not secret:
             st.error("请填写密钥，或改用环境变量。")
             return
-        if not free_service and (input_price is None or output_price is None
-                                 or input_price + output_price <= 0):
-            st.error("请填写输入和输出单价；明确免费的服务可勾选无需计费。")
-            return
-        prices = {"input_per_1m_usd": 0.0 if free_service else input_price,
-                  "output_per_1m_usd": 0.0 if free_service else output_price}
+        # Keep accounting metadata when replacing a saved endpoint. It is not
+        # a prerequisite for a new connection or a workflow model request.
+        prices = deepcopy((endpoints.get(name.strip()) or {}).get("prices") or None)
         try:
             default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
             if credential_mode == "直接填写密钥":

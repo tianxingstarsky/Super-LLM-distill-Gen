@@ -82,6 +82,8 @@ def classify_request_error(error: Exception) -> dict[str, str]:
         return {"kind": "fatal", "code": "service_quota_exhausted"}
     if status == 401:
         return {"kind": "fatal", "code": "service_authentication_failed"}
+    if status == 402:
+        return {"kind": "fatal", "code": "service_quota_exhausted"}
     if status == 403:
         return {"kind": "fatal", "code": "service_permission_denied"}
     if status == 404:

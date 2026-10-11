@@ -821,7 +821,7 @@ def cmd_backend(args) -> int:
 
     if args.action == "list":
         info = bm.list_backends()
-        print(f"默认后端 {info['default_backend']}（模型 {info['default_model']}）；预算上限 ${info['budget'].get('max_total_usd', 0)}，已用 ${info['spent']:.4f}")
+        print(f"默认后端 {info['default_backend']}（模型 {info['default_model']}）")
         for row in info["backends"]:
             roles = ",".join(row["roles"]) or "-"
             print(f"  [{row['name']}] {row['base_url']}  models={row['models']}")

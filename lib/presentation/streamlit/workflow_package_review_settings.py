@@ -71,8 +71,8 @@ def render_package_review_settings(workspace: str, *, save_field) -> None:
         st.number_input("抽检失败升级阈值（%）", min_value=0.0, max_value=100.0,
                         step=1.0, format="%.1f", key=escalation_key,
                         on_change=save_field, args=(workspace, escalation_key),
-                        help="自动补齐模式生效。0 表示任一失败即对本轮该类数据升级全量评审；其他值按抽检失败比例触发，仍受预算限制。")
+                        help="自动补齐模式生效。0 表示任一失败即对本轮该类数据升级全量评审；其他值按抽检失败比例触发。")
         st.caption("抽检发现问题后可扩大本轮检查，保留已完成评审，不重复调用。")
     else:
-        st.caption("逐条评审所有规则检查合格的样本；请求数随数据量增加，请设置预算。")
-    st.caption("评分与修正共用本节点的并发和预算限制；点击运行中的节点可查看模型流式输出。")
+        st.caption("逐条评审所有规则检查合格的样本；请求数随数据量增加，可按需选择抽检。")
+    st.caption("评分与修正共享模型并发额度；点击运行中的节点可查看模型流式输出。")

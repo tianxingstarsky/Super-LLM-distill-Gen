@@ -274,7 +274,6 @@ def test_unsaved_connection_discovery_preserves_form_and_does_not_save_credentia
     assert next(item for item in ui.text_input if item.label == '环境变量名或密钥').value == 'CUSTOM_KEY'
     fetched = next(item for item in ui.selectbox if item.label == '获取到的模型')
     fetched.set_value('beta')
-    next(item for item in ui.checkbox if item.label == '此服务明确无需按 token 计费').set_value(True)
     next(item for item in ui.button if item.label == '保存并用于当前节点').click().run()
     assert not ui.exception
     assert ui.session_state['fixture-new-endpoint']['models'] == ['beta']
@@ -290,7 +289,6 @@ def test_discovered_connection_requires_selection_before_saving():
     next(item for item in ui.text_input if item.label == '服务名称').set_value('custom')
     next(item for item in ui.text_input if item.label == '服务 API 地址').set_value('https://models.example.test/v1')
     next(item for item in ui.button if item.label == '获取模型').click().run()
-    next(item for item in ui.checkbox if item.label == '此服务明确无需按 token 计费').set_value(True)
     next(item for item in ui.button if item.label == '保存并用于当前节点').click().run()
     assert not ui.exception
     assert 'fixture-new-endpoint' not in ui.session_state
@@ -311,7 +309,6 @@ def test_unsaved_connection_discovery_limits_do_not_follow_a_changed_connection(
     assert not ui.exception
     next(item for item in ui.text_input if item.label == '服务 API 地址').set_value('https://replacement.example.test/v1')
     next(item for item in ui.text_input if item.label == '模型名称').set_value('beta')
-    next(item for item in ui.checkbox if item.label == '此服务明确无需按 token 计费').set_value(True)
     next(item for item in ui.button if item.label == '保存并用于当前节点').click().run()
     assert not ui.exception
     assert ui.session_state['workflow-node-bindings:demo']['sft']['generation'] == {

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -47,6 +48,19 @@ def test_parse_json_robust_handles_fences_and_trailing():
     assert parse_json_robust('```json\n{"a": 1}\n```') == {"a": 1}
     assert parse_json_robust('{"a": 1} 尾随文本') == {"a": 1}
     assert parse_json_robust('前缀 {"a": [1, {"b": 2}]}') == {"a": [1, {"b": 2}]}
+
+
+@pytest.mark.parametrize("wrapper", ["{}", "```json\n{}\n```", "解释：{} 完成"])
+def test_json_documents_preserve_embedded_code_fences_and_even_backslash_escapes(wrapper):
+    document = {"text": "步骤\n```python\nprint('hello')\n```\nC:\\folder\\",
+                "note": "引号 \" 和 } 花括号", "metadata": {"source": "paper"}}
+    response = json.dumps(document, ensure_ascii=False)
+    assert parse_json_robust(wrapper.format(response)) == document
+
+
+def test_incomplete_outer_document_cannot_be_replaced_with_complete_nested_metadata():
+    with pytest.raises(ValueError, match="JSON 解析失败"):
+        parse_json_robust('{"text":"unfinished", "metadata":{"source":"paper"}')
 
 
 def test_chat_json_can_bound_output_tokens_for_team_workers():

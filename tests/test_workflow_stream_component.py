@@ -38,6 +38,20 @@ SCENARIOS = (
     "empty_terminal_delta_completes_and_invalid_cursors_never_get_receipts",
     "reader_height_override_restores_default_without_touching_pinned_content",
     "reader_height_changes_preserve_delta_prefix_request_pin_and_receipts",
+    "read_view_is_default_and_raw_roundtrip_keeps_real_tokens",
+    "complete_cpt_text_and_sft_fields_are_readable_without_losing_reasoning",
+    "judge_scores_and_preservation_are_readable_without_quality_approval",
+    "cpt_progressive_decoding_waits_for_complete_escapes_without_json_parse",
+    "unicode_progressive_reading_waits_for_complete_surrogate_pairs",
+    "complex_partial_json_stays_raw_until_full_receipt",
+    "completed_metadata_with_more_events_does_not_parse_a_prefix",
+    "interrupted_and_truncated_json_never_becomes_a_complete_sample",
+    "fenced_json_preserves_inner_code_fences_and_xss_stays_inert",
+    "invalid_json_escapes_and_free_text_remain_visible_without_parse_errors",
+    "reading_fields_clear_on_context_switch_and_retry",
+    "view_switching_preserves_cursor_selection_and_manual_scroll",
+    "identical_structured_snapshots_do_not_parse_or_rebuild_fields",
+    "manual_history_opens_at_top_while_active_and_latest_keep_following",
 )
 
 

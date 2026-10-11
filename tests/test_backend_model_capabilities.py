@@ -9,7 +9,7 @@ import yaml
 from lib.application.backend_service import BackendApplication
 from lib.domain.document_parser import supports_vision
 from lib.infrastructure.backend_config_driver import FilesystemBackendConfigDriver
-from lib.llm_client import BudgetExceeded, snapshot_backend_endpoint
+from lib.llm_client import snapshot_backend_endpoint
 
 
 def _application(tmp_path, *, prices=None, budget=None):
@@ -227,18 +227,19 @@ def test_connection_change_during_probe_does_not_save_stale_evidence(tmp_path, m
     assert app.get_model_info("chosen", "saved")["probes"] == {}
 
 
-def test_capability_test_cost_uses_shared_budget_and_missing_usage_is_not_free(tmp_path, monkeypatch):
+def test_capability_probe_uses_optional_prices_without_local_budget_accounting(tmp_path, monkeypatch):
     prices = {"input_per_1m_usd": 1.0, "output_per_1m_usd": 2.0}
     app, driver = _application(tmp_path, prices=prices, budget={"max_total_usd": 1.0, "hard_stop": True})
     _probe(monkeypatch)
     result = app.test_model("chosen", "saved", ["text"])
     assert result["cost_usd"] == pytest.approx(124 / 1e6)
     ledger = tmp_path / "data" / "output" / "budget.json"
-    assert json.loads(ledger.read_text())["spent_usd"] == pytest.approx(result["cost_usd"])
+    assert not ledger.exists()
     _probe(monkeypatch, usage={"input_tokens": 0, "output_tokens": 0, "calls": 1, "reported_calls": 0})
     second = app.test_model("chosen", "saved", ["vision"])
-    assert second["cost_status"] == "reserved_for_missing_usage"
-    assert second["cost_usd"] == pytest.approx((4096 + 512) / 1e6)
+    assert second["cost_status"] == "partial_usage"
+    assert second["cost_usd"] == 0
+    assert not ledger.exists()
 
 
 @pytest.mark.parametrize("budget", [None, {"max_total_usd": 0, "hard_stop": False},
@@ -249,21 +250,25 @@ def test_priced_probe_without_hard_limit_records_cost_without_closing_admission(
     result = app.test_model("chosen", "saved", ["text"])
     assert result["cost_usd"] == pytest.approx(124 / 1e6)
     assert app.get_model_info("chosen", "saved")["probes"]["last_tests"]["text"]["status"] == "passed"
-    ledger = json.loads((tmp_path / "data" / "output" / "budget.json").read_text())
-    assert ledger["spent_usd"] == pytest.approx(result["cost_usd"])
-    assert not ledger.get("budget_bound_exceeded")
-    assert ledger["reservations"] == {}
+    assert not (tmp_path / "data" / "output" / "budget.json").exists()
 
 
-def test_hard_budget_rejects_unpriced_or_unaffordable_probe_before_call(tmp_path, monkeypatch):
+def test_old_hard_budget_does_not_block_unpriced_or_priced_capability_probe(tmp_path, monkeypatch):
     app, driver = _application(tmp_path, budget={"max_total_usd": 0.001, "hard_stop": True})
     calls = _probe(monkeypatch)
-    with pytest.raises(ValueError, match="model_budget_prices_required"):
-        app.test_model("chosen", "saved")
-    assert calls == []
+    assert app.test_model("chosen", "saved")["cost_status"] == "unknown_prices"
+    assert len(calls) == 1
     app.save_endpoint("chosen", "https://service.test/v1", ["saved"],
                       prices={"input_per_1m_usd": 1, "output_per_1m_usd": 2},
                       explicit_replace=True, api_key_env="UNIT_MODEL_KEY")
-    with pytest.raises(BudgetExceeded):
-        app.test_model("chosen", "saved")
-    assert calls == []
+    assert app.test_model("chosen", "saved")["cost_status"] == "reported"
+    assert len(calls) == 2
+    assert not (tmp_path / "data" / "output" / "budget.json").exists()
+
+
+def test_partial_legacy_prices_do_not_block_capability_probe(tmp_path, monkeypatch):
+    app, driver = _application(tmp_path, prices={"input_per_1m_usd": 1},
+                               budget={"max_total_usd": .001, "hard_stop": True})
+    calls = _probe(monkeypatch)
+    assert app.test_model("chosen", "saved", ["text"])["cost_status"] == "unknown_prices"
+    assert len(calls) == 1

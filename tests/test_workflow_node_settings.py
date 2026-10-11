@@ -40,8 +40,6 @@ def _submit(ui, *, name='writer', model='alpha'):
     _field(ui, '服务名称').set_value(name)
     _field(ui, '服务 API 地址').set_value('https://models.example.test/v1')
     _field(ui, '模型名称').set_value(model)
-    next(item for item in ui.number_input if item.label == '输入单价（美元 / 百万 tokens）').set_value(0.25)
-    next(item for item in ui.number_input if item.label == '输出单价（美元 / 百万 tokens）').set_value(1.0)
     next(button for button in ui.button if button.label == '保存并用于当前节点').click().run()
     assert not ui.exception
     return ui
@@ -55,7 +53,7 @@ def test_empty_node_connects_service_and_binds_generation_in_place():
     saved = ui.session_state['fixture-local']['backends']['writer']
     assert saved['models'] == ['alpha']
     assert saved['api_format'] == 'chat'
-    assert saved['prices'] == {'input_per_1m_usd': 0.25, 'output_per_1m_usd': 1.0}
+    assert 'prices' not in saved
     assert saved['api_key_env'] == 'OPENAI_API_KEY'
     assert ui.session_state['workflow-node-bindings:demo']['sft'] == {
         'generation': {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS},
@@ -87,8 +85,6 @@ def test_invalid_connection_does_not_leak_secret_or_save_endpoint():
     _field(ui, '服务名称').set_value('bad name')
     _field(ui, '服务 API 地址').set_value('https://models.example.test/v1')
     _field(ui, '模型名称').set_value('alpha')
-    next(item for item in ui.number_input if item.label == '输入单价（美元 / 百万 tokens）').set_value(0.25)
-    next(item for item in ui.number_input if item.label == '输出单价（美元 / 百万 tokens）').set_value(1.0)
     _field(ui, '环境变量名或密钥').set_value('PRIVATE_TEST_VALUE')
     next(button for button in ui.button if button.label == '保存并用于当前节点').click().run()
     assert not ui.exception
@@ -96,27 +92,39 @@ def test_invalid_connection_does_not_leak_secret_or_save_endpoint():
     assert 'PRIVATE_TEST_VALUE' not in '\n'.join(item.value for item in ui.error)
 
 
-def test_missing_prices_cannot_save_a_silent_budget_bypass():
+def test_new_connection_does_not_require_local_token_prices():
     ui = AppTest.from_string(SCRIPT).run()
     _field(ui, '服务名称').set_value('writer')
     _field(ui, '服务 API 地址').set_value('https://models.example.test/v1')
     _field(ui, '模型名称').set_value('alpha')
     next(button for button in ui.button if button.label == '保存并用于当前节点').click().run()
     assert not ui.exception
-    assert any('请填写输入和输出单价' in item.value for item in ui.error)
-    assert 'fixture-local' not in ui.session_state
+    assert not ui.error
+    assert 'prices' not in ui.session_state['fixture-local']['backends']['writer']
 
 
-def test_explicit_free_service_saves_both_zero_rates():
+def test_connection_form_omits_local_prices_and_budget_controls():
     ui = AppTest.from_string(SCRIPT).run()
     _field(ui, '服务名称').set_value('local')
     _field(ui, '服务 API 地址').set_value('http://127.0.0.1:11434/v1')
     _field(ui, '模型名称').set_value('local-model')
-    next(item for item in ui.checkbox if item.label == '此服务明确无需按 token 计费').set_value(True)
+    assert not any('单价' in item.label for item in ui.number_input)
+    assert not any('计费' in item.label for item in ui.checkbox)
     next(button for button in ui.button if button.label == '保存并用于当前节点').click().run()
     assert not ui.exception
-    assert ui.session_state['fixture-local']['backends']['local']['prices'] == {
-        'input_per_1m_usd': 0.0, 'output_per_1m_usd': 0.0}
+    assert 'prices' not in ui.session_state['fixture-local']['backends']['local']
+
+
+def test_replacing_a_saved_connection_preserves_existing_token_prices():
+    ui = AppTest.from_string(SCRIPT)
+    prices = {'input_per_1m_usd': 0.25, 'output_per_1m_usd': 1.0}
+    ui.session_state['fixture-local'] = {
+        'backends': {'writer': {'base_url': 'https://models.example.test/v1',
+                                'models': ['alpha'], 'api_key_env': 'WRITER_KEY', 'prices': prices}}}
+    ui.run()
+    next(item for item in ui.checkbox if item.label == '覆盖同名连接').set_value(True)
+    _submit(ui, name='writer', model='alpha')
+    assert ui.session_state['fixture-local']['backends']['writer']['prices'] == prices
 
 
 def test_saved_key_is_not_left_in_the_node_form():
@@ -149,8 +157,6 @@ def test_new_connection_does_not_replace_models_already_selected_on_both_roles()
     _field(ui, '服务名称').set_value('alternative')
     _field(ui, '服务 API 地址').set_value('https://models.example.test/v1')
     _field(ui, '模型名称').set_value('beta')
-    next(item for item in ui.number_input if item.label == '输入单价（美元 / 百万 tokens）').set_value(0.25)
-    next(item for item in ui.number_input if item.label == '输出单价（美元 / 百万 tokens）').set_value(1.0)
     next(button for button in ui.button if button.label == '保存连接').click().run()
     assert not ui.exception
     assert ui.session_state['workflow-node-bindings:demo'] == original
@@ -286,8 +292,10 @@ def test_reviewer_explicitly_reuses_own_writer_and_keeps_limits_independent(exis
     assert ui.number_input(key='node-model:demo:sft:jev:output:writer:alpha').value == 48_000
 
 
-def test_configured_node_can_choose_existing_model_without_overwriting_until_apply():
+@pytest.mark.parametrize('source_cleaning', [False, True])
+def test_configured_node_can_choose_existing_model_without_overwriting_until_apply(source_cleaning):
     ui = AppTest.from_string(SCRIPT)
+    ui.session_state['workflow-node-scope:demo'] = {'source_cleaning': source_cleaning}
     ui.session_state['fixture-local'] = {'backends': {
         'writer': {'base_url': 'https://models.example.test/v1', 'models': ['alpha', 'beta']},
     }}
@@ -300,7 +308,11 @@ def test_configured_node_can_choose_existing_model_without_overwriting_until_app
     }
     ui.run()
     assert not ui.exception
+    label = '资料清洗' if source_cleaning else 'CPT'
+    assert f'{label} · writer · alpha' in ui.selectbox(
+        key='node-model:demo:sft:generation:reuse-source').options
     ui.selectbox(key='node-model:demo:sft:generation:reuse-source').set_value('cpt').run()
+    assert not ui.exception
     assert ui.session_state['workflow-node-bindings:demo']['sft']['generation'] == original
     ui.button(key='node-model:demo:sft:generation:reuse-apply').click().run()
     assert not ui.exception

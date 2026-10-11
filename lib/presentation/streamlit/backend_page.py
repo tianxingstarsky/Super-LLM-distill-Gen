@@ -1,7 +1,8 @@
-"""Model service credentials and budget administration for the console."""
+"""Model service credentials and recorded usage for the console."""
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import deepcopy
 import html
 
 import streamlit as st
@@ -34,12 +35,11 @@ def _summary(info: dict) -> None:
     rows = info.get("backends") or []
     configured = sum(_credential_ready(row) for row in rows)
     spent = float(info.get("spent") or 0)
-    limit = float((info.get("budget") or {}).get("max_total_usd") or 0)
     cards = (
         ("已登记端点", str(len(rows)), "可供工作流选择的模型服务", "blue"),
         ("密钥已配置", str(configured), "仅表示凭据存在，连接需单独测试", "green"),
         ("模型选择位置", "工作流节点", "点击节点分别选择生成与评审模型", "purple"),
-        ("预算已用", f"${spent:.2f}", f"上限 ${limit:.2f}" if limit > 0 else "尚未设置预算上限", "amber"),
+        ("历史费用记录", f"${spent:.2f}", "仅保留旧版本记录", "amber"),
     )
     st.html('<div class="df-model-summary">' + ''.join(
         '<div data-tone="' + tone + '"><small>' + _safe(label) + '</small><strong>'
@@ -108,23 +108,13 @@ def _endpoint_form(application: BackendApplication, *, inline: bool = False) -> 
                                    placeholder="填写所选服务提供的模型名")
             mode = st.radio("密钥来源", ["环境变量（推荐）", "写入本地配置"], horizontal=True)
             secret = st.text_input("密钥（环境变量名 或 密钥值）", type="password")
-            price_left, price_right = st.columns(2)
-            input_price = price_left.number_input("输入单价（美元 / 百万 tokens）", min_value=0.0,
-                                                  value=None, step=0.01, format="%.4f",
-                                                  key="backend-add-input-price")
-            output_price = price_right.number_input("输出单价（美元 / 百万 tokens）", min_value=0.0,
-                                                     value=None, step=0.01, format="%.4f",
-                                                     key="backend-add-output-price")
-            free_service = st.checkbox("此服务明确无需按 token 计费", key="backend-add-free")
             overwrite = st.checkbox("覆盖同名后端")
             submit = st.form_submit_button("保存端点", type="primary")
         if submit:
             try:
-                if not free_service and (input_price is None or output_price is None
-                                         or input_price + output_price <= 0):
-                    raise ValueError("请填写输入和输出单价；明确免费的服务可勾选无需计费。")
-                prices_obj = {"input_per_1m_usd": 0.0 if free_service else input_price,
-                              "output_per_1m_usd": 0.0 if free_service else output_price}
+                # Updating a connection preserves prior accounting metadata.
+                # New services do not need local prices to become usable.
+                prices_obj = deepcopy((application.merged_backends().get(name.strip()) or {}).get("prices") or None)
                 model_names = [part.strip() for part in models.split(",") if part.strip()]
                 default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
                 if mode.startswith("环境变量"):
@@ -156,51 +146,27 @@ def _connection_probe(application: BackendApplication, names: list[str], default
             st.error(f"连接失败（{type(error).__name__}）。请检查地址、密钥与服务状态。")
 
 
-def _budget(application: BackendApplication, info: dict) -> None:
-    limit = float((info.get("budget") or {}).get("max_total_usd") or 0)
+def _usage(info: dict) -> None:
+    """Label the retained legacy amount; current token usage belongs to tasks."""
     spent = float(info.get("spent") or 0)
-    remaining = max(0.0, limit - spent)
-    ratio = min(1.0, spent / limit) if limit > 0 else 0.0
-    if limit > 0:
-        headline = f"${spent:.4f} / ${limit:.2f}"
-        detail = f"剩余额度 ${remaining:.4f}"
-    else:
-        headline = f"${spent:.4f}"
-        detail = "当前未设置预算上限"
-    usage, actions = st.columns([1.45, 1], gap="medium")
-    with usage, st.container(border=True, key="model-budget-usage"):
-        _panel_heading("预算与用量", "已用额度读取磁盘审计记录。", "◷")
-        st.html('<div class="df-model-budget"><div class="df-model-budget-top"><div><small>累计已用</small>'
-                '<strong>' + _safe(headline) + '</strong><em>' + _safe(detail) + '</em></div>'
-                '<div><small>预算状态</small><strong>' + (f"{ratio * 100:.1f}%" if limit > 0 else "—")
-                + '</strong></div></div><div class="df-model-budget-track"><i style="width:'
-                + f"{ratio * 100:.1f}%" + '"></i></div><div class="df-model-budget-notes"><span>已使用</span>'
-                '<span>' + ("预算上限" if limit > 0 else "未设上限") + '</span></div></div>')
-    with actions, st.container(border=True, key="model-budget-actions"):
-        _panel_heading("预算操作", "清零会留下审计记录。", "↻")
-        st.caption("仅重置本地累计额度，不会修改外部服务账单或预算上限。")
-        confirm = st.checkbox("我确认清零预算（审计记录本次操作）", key="budget-reset-confirm")
-        if st.button("清零预算", disabled=not confirm, width="stretch"):
-            from lib.llm_client import BudgetExceeded
-            try:
-                previous = application.reset_budget("console")
-            except BudgetExceeded:
-                st.error("仍有模型请求正在执行；待这些请求结算后再清零预算。")
-            else:
-                st.success(f"预算已清零（原已用 ${previous:.4f}，已记审计）")
+    with st.container(border=True, key="model-recorded-usage"):
+        _panel_heading("历史费用记录", "仅保留旧版本记录", "◷")
+        st.html('<div class="df-model-budget"><div class="df-model-budget-top"><div><small>历史费用记录</small>'
+                '<strong>' + _safe(f"${spent:.4f}") + '</strong><em>仅保留旧版本记录</em></div></div></div>')
+        st.caption("仅保留旧版本记录；当前任务的调用次数和 token 用量见任务管理。")
 
 
 def render_backend_page(application: BackendApplication, *, embedded: bool = False) -> None:
-    """Render shared connection and budget administration inside settings."""
+    """Render shared connections and usage inside settings."""
     if not embedded:
-        page_header("模型服务", "登记服务地址、凭据与预算；具体模型在工作流节点中选择。", "MODEL CONNECTIONS")
+        page_header("模型服务", "登记服务地址与凭据；具体模型在工作流节点中选择。", "MODEL CONNECTIONS")
     st.html(CSS)
     info = application.list_backends()
     rows = info.get("backends") or []
     names = [row["name"] for row in rows]
     if not embedded:
         _summary(info)
-    endpoint_tab, budget_tab = st.tabs(["端点与连接", "预算与用量"])
+    endpoint_tab, usage_tab = st.tabs(["端点与连接", "用量记录"])
     with endpoint_tab:
         with st.container(border=True):
             _endpoints(rows)
@@ -209,5 +175,5 @@ def render_backend_page(application: BackendApplication, *, embedded: bool = Fal
             _endpoint_form(application, inline=embedded)
         with right, st.container(border=True):
             _connection_probe(application, names, info.get("default_backend", ""))
-    with budget_tab:
-        _budget(application, info)
+    with usage_tab:
+        _usage(info)

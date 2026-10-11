@@ -12,6 +12,7 @@ import re
 from typing import Callable
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 from lib.domain.workflow_delivery import has_deliverable_results
 
 from lib.application.workflow_service import WorkflowApplication
@@ -272,6 +273,54 @@ def _jump_to_page(page_key: str, jump_key: str) -> None:
     st.session_state[page_key] = int(st.session_state[jump_key]) - 1
 
 
+def _task_inventory_active(workspace_id: str) -> bool:
+    """Ignore a queued timer after the operator leaves this task view."""
+    if st.session_state.get("ws", workspace_id) != workspace_id:
+        return False
+    route = st.session_state.get("nav")
+    if route is not None and route not in {"任务管理", "工作管理"}:
+        return False
+    return st.session_state.get(f"task-view:{workspace_id}") in {None, "数据工作流"}
+
+
+@st.fragment(run_every=2)
+def _render_task_summary(application: WorkflowApplication, workspace_id: str) -> None:
+    if _task_inventory_active(workspace_id):
+        st.html(_summary_html(application.task_runs()))
+
+
+@st.fragment(run_every=2)
+def _render_task_cards(application: WorkflowApplication, workspace_id: str, visible: list[dict]) -> None:
+    """Refresh status in place without rebuilding inputs or the run inspector.
+
+The outer render owns filtering, pagination and selection. A timer keeps that
+same visible page and refreshes its persisted summaries; only a user's card
+click requests a full render to select a different detail view.
+    """
+    if not _task_inventory_active(workspace_id):
+        return
+    current = {str(run["id"]): run for run in application.task_runs()}
+    selection_key = f"task-center-run:{workspace_id}"
+    selected_id = st.session_state.get(selection_key)
+    with st.container(height=600 if len(visible) > 3 else "content", border=False):
+        for saved in visible:
+            run_id = str(saved["id"])
+            run = current.get(run_id, saved)
+            status = str(run.get("status", "queued"))
+            style_status = "selected" if run_id == selected_id else status
+            label = _button_text(run.get("name") or "未命名任务")
+            heading, detail = _run_card_html(run, language=st.session_state.get("ui_language", "zh"))
+            with st.container(key=f"task_card_{style_status}_{run_id}"):
+                st.html(heading)
+                if st.button(UntranslatedText(f"**{label}**　→"),
+                             key=f"task-card:{workspace_id}:{run_id}", use_container_width=True,
+                             on_click=_select_run, args=(selection_key, run_id)):
+                    context = get_script_run_ctx()
+                    if context is not None and context.fragment_ids_this_run:
+                        st.rerun()
+                st.html(detail)
+
+
 def render_task_management(application: WorkflowApplication, workspace_id: str,
                            begin: Callable[[list[str]], None],
                            on_new_workflow: Callable[[], None], *, draft_application=None, backend_application=None, human_application=None) -> str | None:
@@ -318,7 +367,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         toolbar = st.columns([4.3, 1.8, 2.1, 1.65] if show_quick_switch else [4.3, 1.8, 1.65],
                              gap="small", vertical_alignment="center")
     with toolbar[0]:
-        st.html(_summary_html(runs))
+        _render_task_summary(application, workspace_id)
     focus_column, create_column = toolbar[1], toolbar[-1]
     with focus_column:
         focus = st.toggle("放大工作流视图", value=False, key=focus_key,
@@ -407,19 +456,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
             if not visible:
                 st.html('<div class="df-task-no-match">没有符合当前筛选条件的任务。调整状态或搜索词后再查看。</div>')
                 return None
-            with st.container(height=600 if len(visible) > 3 else "content", border=False):
-                for run in visible:
-                    run_id = str(run["id"])
-                    status = str(run.get("status", "queued"))
-                    style_status = "selected" if run_id == selected_id else status
-                    label = _button_text(run.get("name") or "未命名任务")
-                    heading, detail = _run_card_html(run, language=st.session_state.get("ui_language", "zh"))
-                    with st.container(key=f"task_card_{style_status}_{run_id}"):
-                        st.html(heading)
-                        st.button(UntranslatedText(f"**{label}**　→"),
-                                  key=f"task-card:{workspace_id}:{run_id}", use_container_width=True,
-                                  on_click=_select_run, args=(selection_key, run_id))
-                        st.html(detail)
+            _render_task_cards(application, workspace_id, visible)
         with right:
             if selected_id:
                 selected_run = next(run for run in visible if run["id"] == selected_id)
