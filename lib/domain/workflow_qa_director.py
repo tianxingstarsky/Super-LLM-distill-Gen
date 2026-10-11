@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from lib.domain.human_augmentation import validate_human_augmentation
+from lib.domain.source_line_ranges import normalize_source_line_ranges, resolve_source_line_ranges
 
 
 QA_TYPES = ("closed_book", "grounded", "partial", "multi_source", "distractor")
@@ -110,15 +111,24 @@ def allocate_qa_types(count: int, weights: Mapping[str, int], *, offset: int = 0
 
 
 def validate_director_task(value: dict, *, expected_type: str | None, source_text: str | None = None,
-                           expected_id: str | None = None) -> dict:
+                           expected_id: str | None = None, source_materials: list | None = None) -> dict:
     """Enforce the contract even when the editable director prompt is replaced."""
     required = {"id", "qa_type", "question", "visible_context", "answer_policy", "guidance", "evidence_quotes"}
-    optional = {"topic", "skill", "difficulty", "dialogue_design"}
+    optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges"}
     if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
         raise ValueError("invalid_qa_director_task")
     if value["qa_type"] not in QA_TYPES or (expected_type is not None and value["qa_type"] != expected_type):
         raise ValueError("qa_director_type_mismatch")
     expected_type = value["qa_type"]
+    line_focus = None
+    if "source_line_ranges" in value:
+        if source_materials is None:
+            raise ValueError("source_line_materials_required")
+        line_focus = resolve_source_line_ranges(source_materials, value["source_line_ranges"])
+        # The model chooses boundaries. The backend selects the unchanged
+        # original bodies rather than trusting a copied or rewritten context.
+        if expected_type != "closed_book":
+            value = {**value, "visible_context": "\n\n".join(item["text"].rstrip("\r\n") for item in line_focus)}
     limits = {"id": 200, "question": 12_000, "visible_context": 40_000, "guidance": 12_000,
               "topic": 200, "skill": 200, "difficulty": 200}
     for key, limit in limits.items():
@@ -147,12 +157,16 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
             raise ValueError("qa_director_evidence_not_in_source")
         if visible and any(line not in source_text for line in visible.splitlines() if line.strip()):
             raise ValueError("qa_director_visible_context_not_in_source")
+    if line_focus is not None and any(not any(quote in item["text"] for item in line_focus) for quote in quotes):
+        raise ValueError("qa_director_evidence_not_in_source_line_ranges")
     if expected_type == "multi_source" and len(set(quotes)) < 2:
         raise ValueError("qa_director_multiple_evidence_required")
     if expected_type in {"grounded", "multi_source", "distractor"} and any(quote not in visible for quote in quotes):
         raise ValueError("qa_director_evidence_not_visible")
     return {**value, "id": value["id"].strip(), "question": value["question"].strip(),
             "visible_context": visible, "evidence_quotes": list(quotes),
+            **({"source_line_ranges": normalize_source_line_ranges(value["source_line_ranges"]),
+                "source_line_focus": line_focus} if line_focus is not None else {}),
             **({"dialogue_design": validate_dialogue_design(value["dialogue_design"])}
                if "dialogue_design" in value else {})}
 

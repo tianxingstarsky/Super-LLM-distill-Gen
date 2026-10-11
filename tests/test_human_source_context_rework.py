@@ -11,7 +11,7 @@ from lib.domain.human_augmentation import validate_revision_context
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.human_revision import revision_evidence, verified_revision_batch, verified_revision_parent
 from lib.infrastructure.workflow_source_context import load_context_pack
-from test_human_sessions import Writer as RepairWriter, Reviewer
+from test_human_sessions import Writer as LegacyRepairWriter, Reviewer as LegacyReviewer
 
 
 PREPARATION = ("巡检准备阶段先确认设备已停机，核查维护记录和工单，佩戴防护用具。"
@@ -30,17 +30,50 @@ def mock_llm_server():
     yield None
 
 
+def task_messages(messages):
+    return [messages[0], next(message for message in reversed(messages) if message["role"] == "user")]
+
+
+def memory_materials(messages):
+    return [material for message in messages
+            if message["role"] == "tool" and message.get("name") == "source_memory"
+            for pack in json.loads(message["content"])["teacher_context_pack"]
+            for material in pack["materials"]]
+
+
+class RepairWriter(LegacyRepairWriter):
+    def chat(self, messages, **kwargs):
+        projected = task_messages(messages)
+        data = json.loads(projected[1]["content"])
+        blocks = [material["text"] for material in memory_materials(messages)]
+        if blocks and "source_evidence" in data:
+            data["source_evidence"]["teacher_evidence"] = "\n\n".join(blocks)
+            projected[1] = {**projected[1], "content": json.dumps(data, ensure_ascii=False)}
+        response = json.loads(super().chat(projected, **kwargs))
+        if blocks and "quotes" in response:
+            response["quotes"] = blocks
+        return json.dumps(response, ensure_ascii=False)
+
+
+class Reviewer(LegacyReviewer):
+    def chat(self, messages, **kwargs):
+        return super().chat(task_messages(messages), **kwargs)
+
+
 class ParentWriter:
     model = "offline-parent-context-writer"
     usage = {}
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = json.loads(task_messages(messages)[1]["content"])
         if "candidates" in data:
+            materials = memory_materials(messages)
+            ranges = [{"material_id": material["material_id"], "start_line": 1,
+                       "end_line": material["line_count"]} for material in materials]
             return json.dumps({"tasks": [{"id": candidate["id"], "qa_type": "grounded",
                 "question": "巡检结束后，复位和启动许可如何处理？", "visible_context": QUOTE,
                 "answer_policy": "answer", "guidance": "依据完成阶段说明复位顺序。",
-                "evidence_quotes": [QUOTE]} for candidate in data["candidates"]]})
+                "evidence_quotes": [QUOTE], "source_line_ranges": ranges} for candidate in data["candidates"]]})
         if "qa_contract" in data:
             return json.dumps({"question": data["qa_contract"]["question"],
                 "answer": "先关闭隔离开关，再请作业负责人确认启动许可。",

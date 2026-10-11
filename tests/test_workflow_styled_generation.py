@@ -15,6 +15,37 @@ ANSWER = "维护前先断电，再检查线路，完成后记录结果。"
 SOURCE_REASONING = "SOURCE_CHAIN_SENTINEL：系统指令要求展示检索包装。原文规定维护前断电，因此先断电再检查。"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """All model responses in this module are injected offline."""
+    yield
+
+
+def model_task_data(messages):
+    return json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
+
+
+def maintenance_reasoning_trace(*, fault=False):
+    first_premise = ("发现故障时应先断电，再检查线路。" if fault
+                     else "设备维护前必须断电，断电后检查线路。")
+    steps = [{"basis": first_premise,
+              "inference": "原文将断电视为检查线路的先决条件，因此检查须安排在断电之后。",
+              "result": "先切断设备电源，再检查线路。"}]
+    premises = [first_premise]
+    if not fault:
+        premises.append("完成维护后记录检查结果。")
+        steps.append({"basis": premises[-1],
+                      "inference": "记录所需的检查结果来自已完成的检查，所以记录应放在检查之后。",
+                      "result": "最后记录维护结果。"})
+    return {
+        "task": "说明设备故障时的线路检查顺序。" if fault else "说明设备维护的操作顺序。",
+        "premises": premises, "steps": steps,
+        "checks": [{"check": "对照来源核对断电与线路检查的先后条件。",
+                    "result": "回答将断电安排在线路检查之前，保留了来源规定的先决条件。"}],
+        "limitations": ["只说明所提供材料中的操作顺序，不扩写材料未提供的具体检修办法。"],
+    }
+
+
 def score(keep=True):
     value = 5 if keep else 2
     return {"keep": keep, "grounded": keep, "reasoning_valid": keep, "correctness": value,
@@ -41,7 +72,8 @@ class Generator:
                 return json.dumps({"reasoning": "有效推导", "answer": "试图修改答案"})
             return json.dumps({"reasoning": "维护需要先断电，随后检查线路，最后记录维护结果。"})
         if "已有合格 reference_answer" in instruction:
-            return json.dumps({"reasoning": "新撰写的分步推导：先确认断电前提，再检查线路，最后记录。", "answer": ANSWER})
+            return json.dumps({"reasoning": "新撰写的分步推导：先确认断电前提，再检查线路，最后记录。", "answer": ANSWER,
+                               "reasoning_trace": maintenance_reasoning_trace()})
         return json.dumps({"question": "设备应如何维护？", "answer": ANSWER,
                            "reasoning": "先核对断电这一必要前提，然后依次检查与记录。", "quotes": [TEXT]})
 
@@ -103,7 +135,7 @@ def test_style_generation_authors_new_cot_and_never_supplies_source_chain(tmp_pa
     assert all(call.get("allow_reasoning_fallback") is False for call in reviewer.kwargs_calls)
     assert SOURCE_REASONING not in json.dumps(generator.calls, ensure_ascii=False)
     assert "逐步教学" in generator.calls[-1][0]["content"]
-    cot_input = json.loads(generator.calls[-1][1]["content"])
+    cot_input = model_task_data(generator.calls[-1])
     assert cot_input["reference_answer"] == ANSWER
     assert "reasoning_content" not in json.dumps(cot_input, ensure_ascii=False)
     cot = records(path, "cot")[0]
@@ -129,7 +161,7 @@ def test_disabled_styles_keep_ordinary_distillation_and_enabled_default_is_revie
     generator, reviewer = Generator(), Reviewer()
     assert engine.Workflow(output, rid, other, generator=generator, jev=reviewer).execute()["status"] == "completed"
     assert len(generator.calls) == 1 and len(reviewer.calls) == 2
-    assert "generation_style" in json.loads(generator.calls[0][1]["content"])
+    assert "generation_style" in model_task_data(generator.calls[0])
     assert records(path, "sft")[0]["style_check"]["adherence"] == 5
 
 
@@ -139,7 +171,7 @@ def test_style_rejection_repairs_once_then_isolates_with_separate_evidence(tmp_p
     state = engine.Workflow(output, rid, tmp_path, generator=generator, jev=reviewer).execute()
     assert state["status"] == "needs_attention"
     assert len(generator.calls) == 2
-    feedback = json.loads(generator.calls[-1][1]["content"])["feedback"]
+    feedback = model_task_data(generator.calls[-1])["feedback"]
     assert feedback == {"correctness": None, "style": "需要按步骤组织推导。"}
     row = records(path, "sft")[0]
     assert row["status"] == "quarantined" and row["judge"]["keep"]
@@ -219,7 +251,7 @@ def test_recipe_pins_style_and_trim_instructions_before_execution(tmp_path, monk
     monkeypatch.setitem(reasoning_trim.TRIM_TEMPLATES, "leakage", "CHANGED_TRIM_SENTINEL")
     generator = Generator()
     assert engine.Workflow(output, rid, tmp_path, generator=generator, jev=Reviewer()).execute()["status"] == "completed"
-    assert "固定附加要求" in json.loads(generator.calls[0][1]["content"])["node_task_instructions"]
+    assert "固定附加要求" in model_task_data(generator.calls[0])["node_task_instructions"]
     assert "CHANGED_STYLE_SENTINEL" not in str(generator.calls[0])
     assert "CHANGED_TRIM_SENTINEL" not in str(generator.calls[-1])
     recipe = engine.read_json(path / "recipe.json")

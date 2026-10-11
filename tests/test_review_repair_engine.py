@@ -10,6 +10,7 @@ from lib.domain.review_repair import validate_review_repair, validate_repair_inp
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.human_revision import record_messages, revision_evidence
 from lib.io_utils import atomic_json
+from tests.test_workflow_production import model_request_data
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -35,10 +36,12 @@ class Client:
 
     def __init__(self, *, repair_ok=True, fail_score_once=False):
         self.calls, self.usage = [], {"calls": 0}
+        self.message_history = []
         self.repair_ok, self.fail_score_once = repair_ok, fail_score_once
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        self.message_history.append(deepcopy(messages))
+        data = model_request_data(messages)
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         if "review_feedback" in data:
@@ -151,7 +154,12 @@ def test_repair_child_never_reenters_sft_and_preserves_origin(tmp_path, monkeypa
     assert repaired["revision_context"]["parent_run_id"] == parent_id
     assert repaired["source_id"] == record["source_id"]
     assert repaired["messages"][-1]["content"] == RIGHT
-    assert client.calls[0]["source_evidence"]["teacher_evidence"] == SOURCE
+    materials = [material for message in client.message_history[0] if message["role"] == "tool"
+                 for pack in json.loads(message["content"])["teacher_context_pack"]
+                 for material in pack["materials"]]
+    assert [material["text"] for material in materials] == [SOURCE]
+    assert all(SOURCE not in message["content"] for history in client.message_history
+               for message in history if message["role"] == "user")
     assert "candidates" not in client.calls[0] and "source" not in client.calls[0]
     assert (engine.run_path(output, parent_id) / "artifacts/sft.records.json").read_bytes() == parent_bytes
 
@@ -286,7 +294,7 @@ def test_changed_parent_context_fails_before_any_model_call(tmp_path, monkeypatc
 def test_real_generation_pipeline_sft_cot_and_dpo_grade_only_in_review_node(tmp_path):
     class PipelineClient(Client):
         def chat(self, messages, **kwargs):
-            data = json.loads(messages[1]["content"])
+            data = model_request_data(messages)
             if "source_evidence" in data:
                 self.calls.append(deepcopy(data))
                 self.usage["calls"] += 1
@@ -338,7 +346,7 @@ def test_canonical_cot_is_repaired_once_and_sft_inherits_the_exact_assessment(tm
 
     class CanonicalClient(Client):
         def chat(self, messages, **kwargs):
-            data = json.loads(messages[1]["content"])
+            data = model_request_data(messages)
             self.calls.append(deepcopy(data))
             self.usage["calls"] += 1
             assert data["target"] == "cot", "The derived SFT format must never be independently repaired."
@@ -449,7 +457,7 @@ def test_manual_rlaif_retains_existing_ai_evidence_but_requires_ai_rescoring_aft
 
     class PreferenceClient(Client):
         def chat(self, messages, **kwargs):
-            data = json.loads(messages[1]["content"])
+            data = model_request_data(messages)
             self.calls.append(deepcopy(data))
             self.usage["calls"] += 1
             native = data["candidate"]

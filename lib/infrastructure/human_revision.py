@@ -66,7 +66,7 @@ def record_messages(record):
     return deepcopy(messages or [])
 
 
-def revision_evidence(record, recipe, run_path=None):
+def revision_evidence(record, recipe, run_path=None, *, with_blocks=False):
     """Project authenticated source evidence from a selected sealed result.
 
     Callers derive run_path from their verified parent run identity. A packed
@@ -76,25 +76,52 @@ def revision_evidence(record, recipe, run_path=None):
     context = record.get("source_context") or {}
     text = context.get("text") or context.get("task")
     reference = context.get("source_context_pack") or record.get("source_context_pack")
-    pack_identity = None
-    if recipe.get("source_context_pack_version") == 1 and reference is not None:
+    ranges = (record.get("qa_contract") or {}).get("source_line_ranges")
+    pack_identity, source_kind, selection = None, None, {}
+    prior = (record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {})
+             .get("seed", {}).get("revision_context") or {})
+    if prior.get("evidence_pack_sha256") is not None:
+        # A repair child has no local copy of its parent's pack. Keep the
+        # authenticated selection pinned in its revision context, and only
+        # recover block boundaries through the authorized parent lineage.
+        prior = validate_revision_context(prior, review=True)
+        if prior["source_id"] != record.get("source_id"):
+            raise ValueError("human_session_result_changed")
+        text, pack_identity, source_kind = (prior["teacher_evidence"],
+            prior["evidence_pack_sha256"], prior["source_kind"])
+        if with_blocks:
+            if run_path is None:
+                raise ValueError("human_session_source_evidence_unavailable")
+            from lib.infrastructure.training_workflow import read_json, run_path as workflow_path
+            current_path = Path(run_path)
+            parent = verified_revision_parent(current_path.parent.parent, current_path.name, prior)
+            parent_path = workflow_path(current_path.parent.parent, prior["parent_run_id"])
+            original = revision_evidence(parent, read_json(parent_path / "recipe.json"), parent_path,
+                                         with_blocks=True)
+            if any(original[key] != prior[key] for key in (
+                    "teacher_evidence", "source_id", "source_kind", "evidence_pack_sha256")):
+                raise ValueError("human_session_result_changed")
+            selection = {key: original[key] for key in (
+                "source_line_scope", "source_line_ranges", "teacher_evidence_blocks") if key in original}
+    elif recipe.get("source_context_pack_version") == 1 and reference is not None:
         if run_path is None:
             raise ValueError("human_session_source_evidence_unavailable")
         from lib.infrastructure.workflow_source_context import load_context_pack
         pack = load_context_pack(run_path, reference)
-        text = "\n\n".join(material["text"] for material in pack["materials"])
+        if recipe.get("source_line_protocol_version") == 1 and ranges is not None:
+            from lib.domain.source_line_ranges import resolve_source_line_ranges
+            resolved = resolve_source_line_ranges(pack["materials"], ranges)
+            blocks = [block["text"] for block in resolved]
+            text = "\n\n".join(blocks)
+            if with_blocks:
+                selection = {"source_line_scope": "selected", "teacher_evidence_blocks": blocks,
+                    "source_line_ranges": [{key: block[key] for key in (
+                        "material_id", "start_line", "end_line")} for block in resolved]}
+        else:
+            text = "\n\n".join(material["text"] for material in pack["materials"])
         pack_identity = pack["prefix_sha256"]
-    else:
-        prior = (record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {})
-                 .get("seed", {}).get("revision_context") or {})
-        if prior.get("evidence_pack_sha256") is not None:
-            # A review-only child pins the already authenticated full text in
-            # its recipe. Its source pack still belongs to the earlier parent;
-            # never resolve that relative reference under the child directory.
-            prior = validate_revision_context(prior, review=True)
-            if prior["source_id"] != record.get("source_id"):
-                raise ValueError("human_session_result_changed")
-            text, pack_identity = prior["teacher_evidence"], prior["evidence_pack_sha256"]
+    elif recipe.get("source_line_protocol_version") == 1 and ranges is not None:
+        raise ValueError("human_session_source_evidence_unavailable")
     if not isinstance(text, str) or not text.strip():
         quotes = record.get("qa_contract", {}).get("evidence_quotes") or record.get("quotes") or []
         # Multi-turn records store per-turn lists. Only actual quoted source
@@ -109,8 +136,8 @@ def revision_evidence(record, recipe, run_path=None):
     if not isinstance(text, str) or not text.strip():
         raise ValueError("human_session_source_evidence_unavailable")
     return {"teacher_evidence": text.strip(), "source_id": record["source_id"],
-            "source_kind": "document" if real_source else "human_provided" if human else "synthetic",
-            **({"evidence_pack_sha256": pack_identity} if pack_identity is not None else {})}
+            "source_kind": source_kind or ("document" if real_source else "human_provided" if human else "synthetic"),
+            **({"evidence_pack_sha256": pack_identity} if pack_identity is not None else {}), **selection}
 
 
 def verified_revision_parent(output, run_id, supplied):

@@ -302,7 +302,8 @@ from lib.prompts.workflow_dialogue_legacy import (
 # Keep every previous public version and every saved node snapshot usable.
 # New defaults make teacher evidence and actual learner context explicit.
 from lib.prompts.workflow_context import (context_version, GENERATION_CONTEXT, CONTEXT_REVIEW,
-    BLIND_REVIEW, SFT_VISIBLE_CONTEXT, CONVERSATION_DESIGN, ROLE_RESPONSE)
+    BLIND_REVIEW, SFT_VISIBLE_CONTEXT, CONVERSATION_DESIGN, ROLE_RESPONSE,
+    SOURCE_LINE_SELECTION, SELECTED_TEACHER_CONTEXT)
 
 SFT_V1, SFT_STYLED_V1 = SFT, SFT_STYLED
 QA_DIRECTOR_V1_1, SFT_DIRECTED_V1_1 = QA_DIRECTOR, SFT_DIRECTED
@@ -332,3 +333,26 @@ REVIEW_SCORE = context_version(REVIEW_SCORE, version="1.1.0", body=CONTEXT_REVIE
 REVIEW_REPAIR = context_version(REVIEW_REPAIR, version="1.1.0", body=GENERATION_CONTEXT + ROLE_RESPONSE + CONTEXT_REVIEW)
 PACKAGE_REVIEW = context_version(PACKAGE_REVIEW, version="1.1.0", body=CONTEXT_REVIEW)
 JEV_SCORE = context_version(JEV_SCORE, version="1.1.0", body=CONTEXT_REVIEW)
+
+# Line addressing and selected tool evidence opt new snapshots in; prior
+# public text remains registered exactly as originally saved.
+SFT_V1_1, SFT_STYLED_V1_1 = SFT, SFT_STYLED
+QA_DIRECTOR_V1_2, SFT_DIRECTED_V1_2 = QA_DIRECTOR, SFT_DIRECTED
+COT_GENERATE_V1_1 = COT_GENERATE
+SFT = context_version(SFT, version="1.2.0", body=SELECTED_TEACHER_CONTEXT)
+SFT_STYLED = context_version(SFT_STYLED, version="1.2.0", body=SELECTED_TEACHER_CONTEXT)
+QA_DIRECTOR = context_version(QA_DIRECTOR, version="1.3.0", body=SOURCE_LINE_SELECTION)
+SFT_DIRECTED = context_version(SFT_DIRECTED, version="1.3.0", body=SELECTED_TEACHER_CONTEXT)
+COT_GENERATE = context_version(COT_GENERATE, version="1.2.0", body=SELECTED_TEACHER_CONTEXT)
+
+# Authored reasoning is a versioned public explanation, not a hidden trace.
+from lib.prompts.workflow_reasoning import COT_GENERATE_BODY, RATIONALE_CHECK_BODY, REASONING_RESEARCH_SOURCE
+COT_GENERATE_V1_2, RATIONALE_CHECK_V1 = COT_GENERATE, RATIONALE_CHECK
+COT_GENERATE = context_version(COT_GENERATE, version="1.3.0", body=COT_GENERATE_BODY.replace("{", "{{").replace("}", "}}"))
+RATIONALE_CHECK = context_version(RATIONALE_CHECK, version="1.1.0", body=(
+    "下述显式教学解释结构规则仅用于提供reasoning_trace或明确开启该协议的候选。"
+    "未开启风格化的普通蒸馏不强制新增审计字段或固定检查栏目，仍核验其实际推理正确性。\n"
+    + RATIONALE_CHECK_BODY.replace("{", "{{").replace("}", "}}")))
+from dataclasses import replace as _reasoning_spec_replace
+COT_GENERATE = _reasoning_spec_replace(COT_GENERATE, source=COT_GENERATE.source + "; " + REASONING_RESEARCH_SOURCE)
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, source=RATIONALE_CHECK.source + "; " + REASONING_RESEARCH_SOURCE)

@@ -119,7 +119,8 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                 '</strong><span>' + html.escape(translate(STYLE_LABELS[style], language)) + '</span></div>'
                 '<p>' + html.escape(translate(description if enabled else inactive_description, language)) + '</p></div>')
         if enabled:
-            st.caption("教师根据提示词生成显式推理与答案，正确性与风格分别检查。")
+            st.caption("显式解释包含具体前提、支持桥梁和针对性检查；步骤按任务调整，推理规范可在节点提示词编辑。" if node == "cot" else
+                       "教师根据提示词生成显式推理与答案，正确性与风格分别检查。")
 
 
 def _import_generation_instruction(workspace: str, node: str, save_field) -> None:

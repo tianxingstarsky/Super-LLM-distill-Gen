@@ -10,6 +10,7 @@ from lib.domain.workflow_qa_director import (
 )
 from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
+from tests.test_workflow_qa_director_engine import request_data, source_materials, candidate_material
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -53,7 +54,7 @@ class Expert:
     def chat(self, messages, **kwargs):
         self.calls.append(deepcopy(messages))
         self.usage["calls"] += 1
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         if data.get("request_phase") == "batch_design":
             assert data["planning_mode"] == "adaptive"
             assert data["type_weights_are_not_quotas"] is True
@@ -64,10 +65,16 @@ class Expert:
                     tasks.append({"id": candidate["id"], "skip_reason": self.skip,
                                   "guidance": "已无新的资料支持，不改写凑数。"})
                 else:
-                    tasks.append({"id": candidate["id"], "qa_type": "grounded",
+                    task = {"id": candidate["id"], "qa_type": "grounded",
                         "question": FIRST_MESSAGE, "visible_context": SOURCE, "answer_policy": "answer",
                         "guidance": "协作完成操作卡，不强行改成问答。", "evidence_quotes": [SOURCE],
-                        "dialogue_design": design()})
+                        "dialogue_design": design()}
+                    material = candidate_material(candidate, source_materials(messages))
+                    if material is not None and material.get("source_line_protocol_version") == 1:
+                        assert material["text"] == SOURCE
+                        task["source_line_ranges"] = [{"material_id": material["material_id"],
+                            "start_line": 1, "end_line": material["line_count"]}]
+                    tasks.append(task)
             return json.dumps({"tasks": tasks}, ensure_ascii=False)
         assert data["request_phase"] == "next_turn"
         if self.fail_step_once:
@@ -109,7 +116,7 @@ class Worker:
     def chat(self, messages, **kwargs):
         self.calls.append(deepcopy(messages))
         self.usage["calls"] += 1
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         assert data["dialogue_design"]["interaction_goal"] == design()["interaction_goal"]
         assert data["dialogue_state"] is not None
         turn = len([message for message in data["messages"] if message["role"] == "user"])
@@ -129,7 +136,7 @@ class Reviewer:
     def chat(self, messages, **kwargs):
         self.calls.append(deepcopy(messages))
         self.usage["calls"] += 1
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         keep = "用户已说设备是999伏。" not in json.dumps(data, ensure_ascii=False)
         score = 5 if keep else 1
         if '"adherence"' in messages[0]["content"]:
@@ -177,7 +184,7 @@ class FramedExpert(Expert):
         self.fabricate_frame = fabricate_frame
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         reply = json.loads(super().chat(messages, **kwargs))
         if data.get("request_phase") == "batch_design":
             for contract in reply["tasks"]:
@@ -199,7 +206,7 @@ class FramedExpert(Expert):
 def test_role_register_frame_flows_through_actual_turns_updates_and_stays_out_of_training(tmp_path, monkeypatch):
     state, path, expert, worker, reviewer, _ = execute(tmp_path, monkeypatch, FramedExpert())
     assert state["status"] == "completed", state.get("error")
-    requests = [json.loads(call[1]["content"]) for call in worker.calls]
+    requests = [request_data(call) for call in worker.calls]
     assert requests[0]["dialogue_design"]["conversational_frame"] == FRAME
     assert requests[0]["dialogue_state"]["conversational_frame"] == FRAME
     assert requests[1]["dialogue_state"]["conversational_frame"] == UPDATED_FRAME
@@ -210,8 +217,7 @@ def test_role_register_frame_flows_through_actual_turns_updates_and_stays_out_of
     trainer = json.loads((path / "artifacts/trl_multiturn.jsonl").read_text(encoding="utf-8"))
     assert "conversational_frame" not in json.dumps(trainer, ensure_ascii=False)
     assert "dialogue_design" not in trainer and "dialogue_state" not in trainer
-    blinded = [json.loads(call[1]["content"]) for call in reviewer.calls
-               if json.loads(call[1]["content"]).get("learner_context_only")]
+    blinded = [request_data(call) for call in reviewer.calls if request_data(call).get("learner_context_only")]
     assert blinded and all("conversational_frame" not in json.dumps(data, ensure_ascii=False) for data in blinded)
 
 
@@ -238,7 +244,8 @@ def test_new_dialogue_assets_keep_original_version_lookups_and_render_safely():
         prompt_id = "workflow." + name
         current = get(prompt_id)
         old = get(prompt_id, version="1.0.0")
-        expected_version = "1.1.0" if name in {"plan", "multiturn_consistency"} else "1.2.0"
+        expected_version = ("1.1.0" if name in {"plan", "multiturn_consistency"} else
+                            "1.3.0" if name in {"qa_director", "sft_directed"} else "1.2.0")
         assert current.version == expected_version and old.version == "1.0.0"
         assert render(current) != render(old)
     assert "request_phase=next_turn" in render(get("workflow.qa_director"))
@@ -279,9 +286,9 @@ def test_live_replanning_uses_director_binding_actual_answers_and_natural_two_tu
     assert "用户消息：" in first and FIRST_MESSAGE in first and "问题：" not in first
     assert row["messages"][2]["content"] == SECOND_MESSAGE
     assert row["dialogue_steps"][1]["dialogue_state"]["shared_understanding"] == [FIRST_ANSWER]
-    next_turn = json.loads(expert.calls[1][1]["content"])
+    next_turn = request_data(expert.calls[1])
     assert next_turn["dialogue_messages"][1]["content"] == FIRST_ANSWER
-    reviewed = [json.loads(call[1]["content"]) for call in reviewer.calls]
+    reviewed = [request_data(call) for call in reviewer.calls]
     blinded = [data for data in reviewed if data.get("learner_context_only")]
     assert blinded and all("dialogue_state" not in data and "dialogue_steps" not in data for data in blinded)
     assert all(data["learner_messages"] for data in blinded)
@@ -317,7 +324,7 @@ def test_natural_end_state_is_adopted_but_fabricated_shared_fact_is_rejected(tmp
     assert state["status"] == "needs_attention", state.get("error")
     row = engine.read_json(path / "artifacts/multiturn.records.json")[0]
     assert row["reason"] == "multiturn_consistency_rejected"
-    final_review = json.loads(reviewer.calls[-1][1]["content"])["context"]
+    final_review = request_data(reviewer.calls[-1])["context"]
     assert final_review["dialogue_state"]["shared_understanding"] == ["用户已说设备是999伏。"]
     assert not (path / "artifacts/multiturn.jsonl").read_text(encoding="utf-8")
 
@@ -338,7 +345,7 @@ def test_same_user_words_can_advance_different_versions_in_adaptive_dialogue(tmp
     assert row["messages"][2]["content"] == row["messages"][4]["content"] == "再简短一点。"
     assert row["messages"][3]["content"] != row["messages"][5]["content"]
     assert row["turn_reviews"][2]["surface_repetition"] is True
-    reviewed = [json.loads(call[1]["content"]) for call in reviewer.calls]
+    reviewed = [request_data(call) for call in reviewer.calls]
     assert any(data.get("context", {}).get("surface_repetition") for data in reviewed)
 
 
@@ -349,7 +356,7 @@ def test_turn_limit_marks_last_planning_state_scope_instead_of_claiming_final_su
     row = engine.read_json(path / "artifacts/multiturn.records.json")[0]
     assert row["dialogue_end_reason"] == "turn_limit"
     assert row["dialogue_state_scope"] == "before_last_turn" and row["dialogue_state_after_turn"] == 1
-    final_review = json.loads(reviewer.calls[-1][1]["content"])["context"]
+    final_review = request_data(reviewer.calls[-1])["context"]
     assert final_review["dialogue_state_scope"] == "before_last_turn"
 
 
@@ -360,7 +367,7 @@ def test_repeated_words_without_actual_revision_are_quarantined_by_progress_revi
     original = reviewer.chat
 
     def check_progress(messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         context = data.get("context", {})
         previous_answers = [message["content"] for message in context.get("dialogue_before_answer", [])
                             if message["role"] == "assistant"]
@@ -395,9 +402,9 @@ def test_resume_keeps_completed_answer_and_replans_from_identical_actual_history
         tmp_path, monkeypatch, Expert(fail_step_once=True))
     state = engine.Workflow(output, run_id, tmp_path, jev=reviewer).execute()
     assert state["status"] == "failed"
-    before = json.loads(expert.calls[-1][1]["content"])
+    before = request_data(expert.calls[-1])
     state = engine.resume(output, run_id, tmp_path, jev=reviewer)
     assert state["status"] == "completed", state.get("error")
-    assert json.loads(expert.calls[-2][1]["content"]) == before
+    assert request_data(expert.calls[-2]) == before
     assert len(worker.calls) == 2  # the accepted first answer is reused
     assert engine.read_json(path / "artifacts/multiturn.records.json")[0]["turn_count"] == 2

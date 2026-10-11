@@ -208,7 +208,8 @@ def test_director_explains_clean_source_route_and_visible_context_without_new_co
     ui = AppTest.from_string(SCRIPT).run()
     _director(ui)
     assert any("CPT / 资料清洗 → 对话指导员" in row.value for row in ui.caption)
-    assert any("教师资料包用于设计与核验" in row.value for row in ui.caption)
+    assert any("指导员按行号选完整知识块" in row.value and "资料记忆工具收到所选原文" in row.value
+               for row in ui.caption)
     rules = ui.text_area(key="workflow-director-answer-rules:fixture").value
     ui.segmented_control(key="workflow-source-mode:fixture").set_value("开放需求").run()
     ui.button(key="fixture-node:director").click().run()

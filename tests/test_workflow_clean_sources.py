@@ -29,23 +29,88 @@ def verdict(keep=True):
             "reason": "Source facts, numbers, units and formulas agree."}
 
 
+def request_data(messages):
+    """Read the dynamic task after the completed source-memory tool history."""
+    return json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
+
+
+def source_packs(messages):
+    """Read actual tool results, retaining the pinned legacy request fallback."""
+    packs = []
+    for message in messages:
+        if message["role"] == "tool":
+            packs.extend(json.loads(message["content"])["teacher_context_pack"])
+    return packs or request_data(messages).get("teacher_context_pack", [])
+
+
+def source_materials(messages):
+    """Restore numbered evidence only inside the offline model's local view."""
+    materials = []
+    for pack in source_packs(messages):
+        for original in pack["materials"]:
+            material = deepcopy(original)
+            if "numbered_text" in material:
+                lines = material["numbered_text"].splitlines(keepends=True)
+                assert len(lines) == material["line_count"]
+                raw = []
+                for index, line in enumerate(lines, 1):
+                    prefix = f"{index}: "
+                    assert line.startswith(prefix)
+                    raw.append(line[len(prefix):])
+                material["text"] = "".join(raw)
+                assert engine.digest(material["text"]) == material["cleaned_text_sha256"]
+            materials.append(material)
+    return materials
+
+
+def candidate_material(candidate, materials):
+    identity = (candidate.get("source_line_material_id") or
+                candidate.get("source_line_anchor", {}).get("material_id") or
+                (candidate.get("generation_variant") or {}).get("source_unit_id") or candidate["id"])
+    return next((material for material in materials
+                 if material.get("material_id", material.get("unit_id")) == identity), None)
+
+
+def whole_material_range(material):
+    return {"material_id": material["material_id"], "start_line": 1,
+            "end_line": material["line_count"]}
+
+
+def model_source(source, messages):
+    """A fake may read memory without adding evidence to the product user task."""
+    result = deepcopy(source)
+    packs, materials = source_packs(messages), source_materials(messages)
+    if any(pack.get("source_line_scope") == "selected" for pack in packs):
+        result["text"] = "\n\n".join(material["text"] for material in materials)
+    elif materials:
+        material = candidate_material(source, materials)
+        assert material is not None
+        result["text"] = material["text"]
+    return result
+
+
 class Generator:
     model = "offline-clean-source-generator"
 
     def __init__(self, *, uncertain=False):
         self.uncertain = uncertain
         self.calls, self.clean_calls, self.sft_sources = [], [], []
+        self.message_history = []
         self.usage = {"calls": 0}
 
-    def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+    def record_request(self, data, messages):
         self.usage["calls"] += 1
         self.calls.append(deepcopy(data))
+        self.message_history.append(deepcopy(messages))
+
+    def chat(self, messages, **kwargs):
+        data = request_data(messages)
+        self.record_request(data, messages)
         if "source_text" in data:
             self.clean_calls.append(data)
             return json.dumps({"text": CLEAN, "uncertain": self.uncertain,
                                "removed_noise": ["页码 12"], "reason": "Remove the page number only."})
-        source = data["source"]
+        source = model_source(data["source"], messages)
         self.sft_sources.append(deepcopy(source))
         return json.dumps({"question": f"停机后如何检查？情境 {source['id'][:16]}",
                            "answer": "额定温度为 75 ℃，停机后检查阀门。",
@@ -60,7 +125,7 @@ class Reviewer:
         self.usage = {"calls": 0}
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         result = verdict()
@@ -76,24 +141,31 @@ class DirectedGenerator(Generator):
     def __init__(self, *, fail_plan=False, **options):
         super().__init__(**options)
         self.director_inputs, self.fail_plan = [], fail_plan
+        self.director_materials = []
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         if "candidates" in data:
-            self.usage["calls"] += 1
-            self.calls.append(deepcopy(data))
+            self.record_request(data, messages)
             self.director_inputs.append(deepcopy(data))
+            materials = source_materials(messages)
+            self.director_materials.append(materials)
             if self.fail_plan:
                 raise RuntimeError("offline interrupted director")
-            return json.dumps({"tasks": [{"id": unit["id"], "qa_type": "closed_book",
-                "question": f"停机后如何检查？情境 {unit['id'][:16]}",
-                "visible_context": "", "answer_policy": "answer",
-                "guidance": "回答停机后的检查操作。", "evidence_quotes": [CLEAN]}
-                for index, unit in enumerate(data["candidates"])]})
+            tasks = []
+            for unit in data["candidates"]:
+                task = {"id": unit["id"], "qa_type": "closed_book",
+                    "question": f"停机后如何检查？情境 {unit['id'][:16]}",
+                    "visible_context": "", "answer_policy": "answer",
+                    "guidance": "回答停机后的检查操作。", "evidence_quotes": [CLEAN]}
+                material = candidate_material(unit, materials)
+                if material is not None and material.get("source_line_protocol_version") == 1:
+                    task["source_line_ranges"] = [whole_material_range(material)]
+                tasks.append(task)
+            return json.dumps({"tasks": tasks})
         if "qa_contract" in data and "source_context" in data:
-            self.usage["calls"] += 1
-            self.calls.append(deepcopy(data))
-            self.sft_sources.append(deepcopy(data["source_context"]))
+            self.record_request(data, messages)
+            self.sft_sources.append(model_source(data["source_context"], messages))
             return json.dumps({"question": data["qa_contract"]["question"],
                 "answer": "额定温度为 75 ℃，停机后检查阀门。", "reasoning": "检查需要在停机之后进行。",
                 "quotes": [CLEAN]})
@@ -103,7 +175,7 @@ class DirectedGenerator(Generator):
 class DirectedReviewer(Reviewer):
     def chat(self, messages, **kwargs):
         if '"adherence"' in messages[0]["content"]:
-            self.calls.append(json.loads(messages[1]["content"]))
+            self.calls.append(request_data(messages))
             self.usage["calls"] += 1
             return json.dumps({"keep": True, "adherence": 5, "reason": "The visible question is self-contained."})
         return super().chat(messages, **kwargs)
@@ -193,7 +265,7 @@ def test_resume_reuses_successful_cleaning_after_generation_failure(tmp_path):
     generator, reviewer = Generator(), Reviewer()
     class FailFirstGeneration(Generator):
         def chat(self, messages, **kwargs):
-            if "source" in json.loads(messages[1]["content"]):
+            if "source" in request_data(messages):
                 raise RuntimeError("offline generation interruption")
             return super().chat(messages, **kwargs)
     interrupted = FailFirstGeneration()
@@ -293,9 +365,11 @@ def test_structured_document_director_reads_qualified_cleaning_only(tmp_path, su
     assert recipe["sources"][0]["kind"] == "document_collection"
     assert len(generator.clean_calls) == 1
     assert len(generator.director_inputs) == (2 if production else 1)
-    for plan in generator.director_inputs:
+    for plan, materials in zip(generator.director_inputs, generator.director_materials):
         candidate = plan["candidates"][0]
-        assert candidate["teacher_evidence"] == CLEAN
+        assert "teacher_evidence" not in candidate
+        assert candidate_material(candidate, materials)["text"] == CLEAN
+        assert "页码 12" not in json.dumps(materials, ensure_ascii=False)
         assert candidate["evidence_origin"] == "qualified_cleaned_source"
         assert candidate["source_cleaning"]["status"] == "accepted"
         assert candidate["source_cleaning"]["cleaned_text_sha256"] == engine.digest(CLEAN)
@@ -342,7 +416,9 @@ def test_resume_after_director_failure_reuses_cleaning(tmp_path):
     state = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=DirectedReviewer()).execute(resume_run=True)
     assert state["status"] == "completed", state.get("error")
     assert generator.clean_calls == []
-    assert generator.director_inputs[0]["candidates"][0]["teacher_evidence"] == CLEAN
+    candidate = generator.director_inputs[0]["candidates"][0]
+    assert candidate_material(candidate, generator.director_materials[0])["text"] == CLEAN
+    assert "teacher_evidence" not in candidate
 
 
 @pytest.mark.parametrize("cleaning,status,text", [
@@ -383,7 +459,9 @@ def test_mixed_structured_sources_clean_documents_and_preserve_real_conversation
     state = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=DirectedReviewer()).execute()
     assert state["status"] == "completed", state.get("error")
     assert len(generator.clean_calls) == len(generator.director_inputs) == 1
-    assert generator.director_inputs[0]["candidates"][0]["teacher_evidence"] == CLEAN
+    candidate = generator.director_inputs[0]["candidates"][0]
+    assert candidate_material(candidate, generator.director_materials[0])["text"] == CLEAN
+    assert "teacher_evidence" not in candidate
     rows = engine.read_json(engine.run_path(output, run_id) / "artifacts/sft.records.json")
     assert any(row["messages"] == conversation for row in rows)
     assert state["qa_director"]["recorded_conversations_preserved"] == 1
@@ -411,7 +489,7 @@ def test_director_context_batch_splits_preserve_offsets_results_and_progress(tmp
     assert engine.verify_artifacts(path)["counts"] == {"sft": 4}
 
 
-def test_director_can_plan_from_clean_neighbor_material_and_sft_receives_same_pack(tmp_path):
+def test_director_selects_complete_clean_neighbor_block_for_sft_tool_memory(tmp_path):
     preparation = ("巡检准备阶段先确认设备已停机，核查维护记录和工单，佩戴防护用具。"
                    "随后检查现场照明、通道与警示标记，确认作业负责人和设备编号一致。"
                    "将检查结果填入工单；发现编号不一致时先核对身份，不进入后续操作。"
@@ -433,14 +511,18 @@ def test_director_can_plan_from_clean_neighbor_material_and_sft_receives_same_pa
         usage = {}
         def __init__(self):
             self.calls = []
+            self.message_history = []
         def chat(self, messages, **kwargs):
-            data = json.loads(messages[1]["content"])
+            data = request_data(messages)
             self.calls.append(deepcopy(data))
+            self.message_history.append(deepcopy(messages))
             if "candidates" in data:
+                material = next(material for material in source_materials(messages) if quote in material["text"])
                 return json.dumps({"tasks": [{"id": candidate["id"], "qa_type": "grounded",
                     "question": "巡检结束后，复位和启动许可如何处理？", "visible_context": quote,
                     "answer_policy": "answer", "guidance": "依据完成阶段说明复位顺序。",
-                    "evidence_quotes": [quote]} for candidate in data["candidates"]]})
+                    "evidence_quotes": [quote], "source_line_ranges": [whole_material_range(material)]}
+                    for candidate in data["candidates"]]})
             if "qa_contract" in data:
                 return json.dumps({"question": data["qa_contract"]["question"],
                     "answer": "先关闭隔离开关，再请作业负责人确认启动许可。",
@@ -450,10 +532,28 @@ def test_director_can_plan_from_clean_neighbor_material_and_sft_receives_same_pa
     state = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=DirectedReviewer()).execute()
     assert state["status"] == "completed", state.get("error")
     plan, sft = generator.calls
-    assert quote not in plan["candidates"][0]["teacher_evidence"]
-    assert plan["teacher_context_pack"] == sft["teacher_context_pack"]
-    materials = plan["teacher_context_pack"][0]["materials"]
+    plan_messages, sft_messages = generator.message_history
+    materials = source_materials(plan_messages)
+    assert quote not in candidate_material(plan["candidates"][0], materials)["text"]
+    assert "teacher_context_pack" not in plan and "teacher_context_pack" not in sft
+    assert source_packs(plan_messages) != source_packs(sft_messages)
     assert len(materials) >= 2 and all(material["cleaning_status"] == "accepted" for material in materials)
-    assert any(quote in material["text"] for material in materials)
+    selected = next(material for material in materials if quote in material["text"])
+    expected_ranges = [whole_material_range(selected)]
+    assert selected["text"] == completion
+    assert sft["source_line_scope"] == "selected" and sft["source_line_ranges"] == expected_ranges
+    blocks = source_materials(sft_messages)
+    assert len(blocks) == 1 and blocks[0]["text"] == completion
+    assert blocks[0]["material_id"] == selected["material_id"]
+    assert {key: blocks[0][key] for key in ("material_id", "start_line", "end_line")} == expected_ranges[0]
+    assert "numbered_text" not in blocks[0]
+    assert "若许可尚未确认，保持设备停止并联系负责人，不得自行启动。" in blocks[0]["text"]
+    assert preparation not in json.dumps(source_packs(sft_messages), ensure_ascii=False)
+    assert any(message["role"] == "tool" and completion in message["content"] for message in sft_messages)
+    assert "text" not in sft["source_context"] and "source_line_focus" not in sft["source_context"]
+    assert "teacher_evidence" not in sft["source_context"] and "evidence_quotes" not in sft["qa_contract"]
+    assert completion not in json.dumps(sft["source_context"], ensure_ascii=False)
     row = engine.read_json(engine.run_path(output, run_id) / "artifacts/sft.records.json")[0]
     assert row["status"] == "eligible" and quote in row["messages"][0]["content"]
+    assert row["qa_contract"]["source_line_ranges"] == expected_ranges
+    assert completion in row["messages"][0]["content"]

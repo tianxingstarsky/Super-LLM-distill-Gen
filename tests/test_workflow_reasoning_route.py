@@ -13,9 +13,9 @@ from lib.infrastructure.workflow_production import WorkflowProduction
 from lib.infrastructure.workflow_rows import WorkflowRows, write_jsonl
 from lib.io_utils import atomic_json
 from tests.test_workflow_styled_generation import (
-    ANSWER, Generator, Reviewer, records, run,
+    ANSWER, Generator, Reviewer, maintenance_reasoning_trace, records, run,
 )
-from tests.test_workflow_production import Generator as ProductionWriter, TEXT
+from tests.test_workflow_production import Generator as ProductionWriter, TEXT, model_request_data
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -32,12 +32,21 @@ class RewritingGenerator(Generator):
         result = json.loads(super().chat(messages, **kwargs))
         if "已有合格 reference_answer" in messages[0]["content"]:
             result["answer"] = NEW_ANSWER
+            result["reasoning_trace"] = maintenance_reasoning_trace()
         return json.dumps(result, ensure_ascii=False)
 
 
 def set_version(path, version):
+    from lib.domain.workflow_node_prompts import snapshot_node_prompts
+    from lib.prompts import get, render
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = version
+    recipe["node_prompt_templates"] = snapshot_node_prompts(None, recipe_version=version)
+    for prompt_id in ("workflow.cot_generate", "workflow.rationale_check"):
+        recipe["node_prompt_templates"]["cot"][prompt_id] = render(get(prompt_id, version="1.0.0"))
+    for field in ("authored_reasoning_protocol_version", "source_line_protocol_version",
+                  "source_memory_protocol_version", "source_context_pack_version"):
+        recipe.pop(field, None)
     atomic_json(path / "recipe.json", recipe)
     saved = engine.read_json(path / "state.json")
     saved["recipe_hash"] = engine.digest(recipe)
@@ -257,12 +266,13 @@ class ProductionCoTWriter(ProductionWriter):
 
     def chat(self, messages, **kwargs):
         if "已有合格 reference_answer" in messages[0]["content"]:
-            data = json.loads(messages[1]["content"])
+            data = model_request_data(messages)
             self.calls.append(data)
             self.usage["calls"] += 1
             self.cot_calls += 1
             return json.dumps({"reasoning": "核对断电前提，再安排线路检查。",
-                               "answer": "FINAL " + data["reference_answer"]})
+                               "answer": "FINAL " + data["reference_answer"],
+                               "reasoning_trace": maintenance_reasoning_trace(fault=True)})
         return super().chat(messages, **kwargs)
 
 

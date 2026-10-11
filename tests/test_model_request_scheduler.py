@@ -231,11 +231,14 @@ def test_final_429_publishes_shared_cooldown_and_releases_budget(tmp_path):
         client.chat([{"role": "user", "content": "x"}], max_tokens=1, retries=1)
     assert caught.value.code == "service_rate_limited"
     peer = scheduler(tmp_path)
+    before = time.monotonic()
     state = peer.snapshot()
     assert state["active"] == state["queued"] == 0 and state["cooldown_seconds"] > 0
-    before = time.monotonic()
     with peer.acquire():
-        assert time.monotonic() - before >= .25
+        # Release/accounting may already consume part of Retry-After. Measure
+        # from before the snapshot against its actual shared remainder, with
+        # 25ms tolerance for monotonic-clock rounding and metadata reads.
+        assert time.monotonic() - before + .025 >= state["cooldown_seconds"]
     assert json.loads(client.budget.path.read_text())["spent_usd"] == 0
 
 

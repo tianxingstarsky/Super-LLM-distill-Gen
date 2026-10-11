@@ -394,7 +394,10 @@ class ChatClient:
             elif isinstance(content, list):
                 text_parts.extend(part.get("text", "") for part in content
                                   if isinstance(part, dict) and isinstance(part.get("text"), str))
-        if sum(len(part.encode("utf-8")) for part in text_parts) + output > context_limit:
+            if message.get("tool_calls"):
+                text_parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+        tool_overhead = 1024 if any(message.get("role") == "tool" for message in messages) else 0
+        if sum(len(part.encode("utf-8")) for part in text_parts) + tool_overhead + output > context_limit:
             raise ValueError("model_context_window_exceeded")
 
     def _budget_request_bound(self, messages: List[Dict[str, Any]],
@@ -491,6 +494,8 @@ class ChatClient:
             return self._full_result((response_text(response), getattr(usage, "input_tokens", 0) or 0,
                                       getattr(usage, "output_tokens", 0) or 0), on_stream,
                                      getattr(response, "status", None), {"completed"})
+        from lib.model_protocols import _paired_tools
+        _paired_tools(messages)
         kwargs = {"model": self.model, "messages": messages, "temperature": temperature}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
@@ -893,4 +898,9 @@ def load_backend(
     scheduler = SharedModelScheduler(root, model_pool_identity(b.get("base_url", ""), api_key, model))
     scheduler.synchronize(model)
     client.scheduler = scheduler
+    # A declared lack of tool support uses a labelled internal memory message.
+    # Unknown capabilities try the real protocol; errors are never disguised as
+    # successful tool use, nor silently rewritten into a user-supplied document.
+    declaration = (b.get("model_capabilities") or {}).get(model, {})
+    client.source_memory_transport = "system" if declaration.get("tools") is False else "tool"
     return client, model

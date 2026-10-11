@@ -24,6 +24,49 @@ def mock_llm_server():
 TEXT = "设备启动前必须检查电源连接。发现故障时应先断电，再检查线路。维护结束后记录检查结果。"
 
 
+def model_request_data(messages):
+    """Simulate reading the actual user task and independently supplied memory.
+
+    This reconstruction exists only inside the offline model fixture. Private
+    teacher material must remain outside the product's user task message.
+    """
+    data = json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
+    packs = {}
+    for message in messages:
+        if message["role"] not in {"tool", "system"}:
+            continue
+        content = message.get("content", "")
+        if content.startswith("<untrusted_source_memory>\n"):
+            content = content.removeprefix("<untrusted_source_memory>\n").removesuffix("\n</untrusted_source_memory>")
+        try:
+            memory = json.loads(content)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(memory, dict):
+            for pack in memory.get("teacher_context_pack", []):
+                packs[pack["id"]] = pack
+
+    def read(value):
+        if isinstance(value, dict):
+            reference = value.get("source_context_pack")
+            if isinstance(reference, dict) and reference.get("id") in packs:
+                def material_text(material):
+                    if "text" in material:
+                        return material["text"]
+                    return "".join(line.split(": ", 1)[1]
+                                   for line in material["numbered_text"].splitlines(keepends=True))
+                value.setdefault("text", "\n\n".join(material_text(material)
+                                                      for material in packs[reference["id"]]["materials"]))
+            for child in value.values():
+                read(child)
+        elif isinstance(value, list):
+            for child in value:
+                read(child)
+
+    read(data)
+    return data
+
+
 def verdict(keep=True):
     score = 5 if keep else 1
     return {"keep": keep, "grounded": keep, "reasoning_valid": keep, "correctness": score,
@@ -40,7 +83,7 @@ class Generator:
         self.duplicate_first, self.bad_first, self.budget_at = duplicate_first, bad_first, budget_at
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = model_request_data(messages)
         self.calls.append(data)
         self.usage["calls"] += 1
         if "count" in data:
@@ -70,7 +113,7 @@ class Reviewer:
 
     def chat(self, messages, **kwargs):
         self.usage["calls"] += 1
-        data = json.loads(messages[1]["content"])
+        data = model_request_data(messages)
         if "target" in data.get("context", {}):
             self.package_calls += 1
             return json.dumps(verdict(self.package_calls > self.reject_package))
@@ -218,7 +261,7 @@ def test_unproductive_runs_stop_at_explicit_limits(tmp_path, limits, reason):
 def test_transient_one_item_failure_does_not_abort_healthy_items(tmp_path):
     class Intermittent(Generator):
         def chat(self, messages, **kwargs):
-            data = json.loads(messages[1]["content"])
+            data = model_request_data(messages)
             if data.get("source", {}).get("generation_variant") is None:
                 raise TimeoutError("source text and key must not be saved")
             return super().chat(messages, **kwargs)

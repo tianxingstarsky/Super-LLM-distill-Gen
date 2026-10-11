@@ -1,11 +1,14 @@
 """Bounded planner repair isolates invalid production batches only."""
 from copy import deepcopy
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from lib.domain.workflow_qa_director import validate_qa_director
-from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DirectorPlanError
+from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DirectorPlanError, DirectorBatchTooLarge
+from lib.domain.workflow_quality import canonical
 from lib.model_request_reliability import ModelRequestError
 
 
@@ -34,6 +37,11 @@ class Planner(WorkflowQADirector):
 
     def activate_directed_stage(self, stage):
         self.stage = stage
+
+    def shared_source_cleaning(self):
+        # This pure planner fixture predates shared cleaning. Production keeps
+        # its real cleaning guard; legacy fixture evidence remains explicit.
+        return False
 
     def save(self):
         pass
@@ -111,3 +119,44 @@ def test_old_run_keeps_validation_error_and_no_extra_paid_repair_calls(tmp_path)
     with pytest.raises(ValueError, match="invalid_qa_director_batch"):
         planner.run_plan()
     assert len(planner.calls) == 1
+
+
+def packed_unit(identity="candidate-1"):
+    from lib.infrastructure.workflow_source_context import _pack_payload
+    material = {"unit_id": identity, "source_id": "source-1", "text": SOURCE,
+                "cleaning_status": "accepted",
+                "cleaned_text_sha256": hashlib.sha256(canonical(SOURCE).encode("utf-8")).hexdigest()}
+    return {**UNIT, "id": identity, "source_context_pack": _pack_payload([material])}
+
+
+@pytest.mark.parametrize("expansion", ["tool_result", "tool_arguments"])
+def test_memory_preflight_counts_real_tool_bodies_and_arguments_before_planning(tmp_path, monkeypatch, expansion):
+    from lib.infrastructure import source_memory_messages as memory
+    original = memory.source_memory_messages
+    def enlarged(system, context):
+        messages = original(system, context)
+        if expansion == "tool_result":
+            next(message for message in messages if message["role"] == "tool")["content"] += "x" * 9000
+        else:
+            call = next(message for message in messages if message.get("tool_calls"))["tool_calls"][0]
+            arguments = json.loads(call["function"]["arguments"])
+            call["function"]["arguments"] = canonical({**arguments, "retrieval_receipt": "x" * 9000})
+        return messages
+    monkeypatch.setattr(memory, "source_memory_messages", enlarged)
+    planner = Planner(tmp_path, [VALID])
+    planner.recipe.update(source_context_pack_version=1, source_memory_protocol_version=1,
+        node_models={"director": {"generation": {"context_window_tokens": 12000, "max_output_tokens": 1024}}})
+    with pytest.raises(DirectorBatchTooLarge, match="batch_context_too_large"):
+        planner.run_plan([packed_unit(), packed_unit("candidate-2")])
+    assert planner.calls == []
+
+
+def test_legacy_pack_preflight_keeps_its_pinned_serializer_without_new_memory_messages(tmp_path, monkeypatch):
+    from lib.infrastructure import source_memory_messages as memory
+    def forbidden(*args, **kwargs):
+        raise AssertionError("An old pinned pack request must not acquire a new tool wrapper.")
+    monkeypatch.setattr(memory, "source_memory_messages", forbidden)
+    planner = Planner(tmp_path, [VALID])
+    planner.recipe.update(source_context_pack_version=1,
+        node_models={"director": {"generation": {"context_window_tokens": 12000, "max_output_tokens": 1024}}})
+    assert planner.run_plan([packed_unit()])[0]["qa_contract"]["question"] == VALID["tasks"][0]["question"]

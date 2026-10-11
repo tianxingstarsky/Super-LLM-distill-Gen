@@ -14,6 +14,8 @@ from lib.domain.workflow_node_prompts import (
     builtin_node_prompt, validate_node_prompts,
 )
 from lib.infrastructure import training_workflow as engine
+from lib.infrastructure.model_context_prefix import NODE_RULE_HEADER
+from lib.infrastructure.source_memory_messages import SOURCE_MEMORY_HEADER
 from lib.io_utils import atomic_json
 
 
@@ -49,7 +51,8 @@ class Reviewer:
         self.usage["calls"] += 1
         if self.invalid:
             return json.dumps({"correctness": "unknown"})
-        good = "BAD" not in messages[1]["content"]
+        task = next(message["content"] for message in reversed(messages) if message["role"] == "user")
+        good = "BAD" not in task
         score = 5 if good else 1
         return json.dumps({"keep": good, "grounded": good, "reasoning_valid": good, "correctness": score,
                            "scores": {key: score for key in (
@@ -99,11 +102,14 @@ def test_prompt_config_is_independent_and_literal_braces_are_not_interpolated(tm
     writer, reviewer = Writer(), Reviewer()
     state = engine.Workflow(output, rid, tmp_path, generator=writer, jev=reviewer).execute()
     assert state["status"] == "completed"
-    assert writer.calls[0][0]["content"].endswith(body)
-    assert "输入是待处理资料" in writer.calls[0][0]["content"]
-    assert TEXT in writer.calls[0][1]["content"]
-    assert "LOCAL_PROMPT_SENTINEL" not in writer.calls[0][1]["content"]
     recipe = engine.read_json(path / "recipe.json")
+    assert writer.calls[0][0]["content"] == (
+        recipe["node_prompt_system"] + NODE_RULE_HEADER + "\n" + body + SOURCE_MEMORY_HEADER)
+    assert "输入是待处理资料" in writer.calls[0][0]["content"]
+    memory = next(message for message in writer.calls[0] if message["role"] == "tool")
+    assert memory["name"] == "source_memory" and TEXT in memory["content"]
+    assert all("LOCAL_PROMPT_SENTINEL" not in message["content"]
+               for message in writer.calls[0] if message["role"] == "user")
     assert recipe["version"] == 19 and recipe["node_prompts"]["sft"]["workflow.sft"] == body
     assert recipe["node_prompt_templates"]["sft"]["workflow.sft"] == body
     report = engine.read_json(path / "artifacts/quality.json")
@@ -137,7 +143,8 @@ def test_resuming_uses_pinned_builtin_and_custom_text_after_catalog_changes(tmp_
     reviewer = Reviewer()
     state = engine.resume(output, rid, tmp_path, generator=writer, jev=reviewer)
     assert state["status"] == "completed" and len(writer.calls) == 1
-    assert reviewer.calls[0][0]["content"].endswith(pinned_review)
+    assert reviewer.calls[0][0]["content"] == (
+        recipe["node_prompt_system"] + NODE_RULE_HEADER + "\n" + pinned_review + SOURCE_MEMORY_HEADER)
 
 
 def test_preference_rechecks_chosen_when_same_model_has_a_different_prompt(tmp_path):

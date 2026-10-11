@@ -86,7 +86,7 @@ def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
 def render_director_settings(workspace: str, *, save_field) -> None:
     if st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning"):
         st.caption("资料解析 → CPT / 资料清洗 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
-    st.caption("教师资料包用于设计与核验；最终训练输入另行组织。知识内化样本独立可理解，带资料样本把必要上下文写进用户输入。")
+    st.caption("指导员按行号选完整知识块，生成模型通过资料记忆工具收到所选原文。训练输入按线索类型组织。")
     key = f"workflow-director-mode:{workspace}"
     st.session_state[key] = _field(workspace, key, "adaptive")
     language = st.session_state.get("ui_language", "zh")

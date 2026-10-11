@@ -20,6 +20,9 @@ import threading
 from lib.domain.workflow_quality import canonical
 from lib.domain.workflow_scale import DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS
 from lib.domain.workflow_targets import PREFERENCE_TARGETS
+from lib.domain.source_line_ranges import (
+    SOURCE_LINE_PROTOCOL_VERSION, number_source_material, teacher_material, validate_numbered_material,
+)
 from lib.infrastructure.workflow_rows import WorkflowRows
 
 VERSION = 1
@@ -37,16 +40,17 @@ def _bytes(value):
     return len(canonical(value).encode("utf-8"))
 
 
-def _material(unit):
+def _material(unit, *, numbered=False):
     receipt = unit.get("source_cleaning") or {}
     text = unit.get("text")
     if (unit.get("status") not in {"ready", "eligible"} or unit.get("kind") != "document"
             or receipt.get("status") != "accepted" or not isinstance(text, str) or not text.strip()
             or receipt.get("cleaned_text_sha256") != _digest(text)):
         raise ValueError("source_context_requires_accepted_clean_text")
-    return {"source_id": unit["source_id"], "source_name": unit.get("source_name", ""),
+    material = {"source_id": unit["source_id"], "source_name": unit.get("source_name", ""),
             "unit_id": unit["id"], "source_location": unit.get("source_location", {}), "text": text,
             "cleaning_status": "accepted", "cleaned_text_sha256": receipt["cleaned_text_sha256"]}
+    return number_source_material(material) if numbered else material
 
 
 def _terms(text, *, limit=24):
@@ -111,6 +115,11 @@ def _pack_payload(materials):
             "materials": materials}
 
 
+def teacher_context_pack(pack):
+    """Original bodies remain on disk; the teacher receives their numbered view."""
+    return {**pack, "materials": [teacher_material(item) for item in pack["materials"]]}
+
+
 def _save_pack(directory, materials):
     pack = _pack_payload(materials)
     path = directory / "packs" / (pack["id"] + ".json")
@@ -118,8 +127,10 @@ def _save_pack(directory, materials):
         temporary = path.with_suffix(".pending")
         temporary.write_text(canonical(pack), encoding="utf-8")
         temporary.replace(path)
+    numbered = all(item.get("source_line_protocol_version") == SOURCE_LINE_PROTOCOL_VERSION for item in materials)
     return {"version": VERSION, "id": pack["id"], "prefix_sha256": pack["prefix_sha256"],
-            "material_count": len(materials), "input_bytes": _bytes(pack),
+            **({"source_line_protocol_version": SOURCE_LINE_PROTOCOL_VERSION} if numbered else {}),
+            "material_count": len(materials), "input_bytes": _bytes(teacher_context_pack(pack)),
             "relative_path": "source-context/packs/" + pack["id"] + ".json"}
 
 
@@ -166,6 +177,16 @@ def load_context_pack(run_path, reference):
                    or not item["text"].strip() or item.get("cleaning_status") != "accepted"
                    or item.get("cleaned_text_sha256") != _digest(item["text"]) for item in materials)):
         raise ValueError("source_context_pack_invalid")
+    if any("source_line_protocol_version" in item for item in materials):
+        try:
+            for item in materials:
+                validate_numbered_material(item)
+            if len({item["material_id"] for item in materials}) != len(materials):
+                raise ValueError("invalid_source_line_material")
+        except ValueError:
+            raise ValueError("source_context_pack_invalid") from None
+        if reference.get("source_line_protocol_version", SOURCE_LINE_PROTOCOL_VERSION) != SOURCE_LINE_PROTOCOL_VERSION:
+            raise ValueError("source_context_pack_invalid")
     expected = _digest({"version": VERSION, "materials": materials})
     if (pack.get("id") != expected or pack.get("prefix_sha256") != expected
             or reference.get("id") != expected or reference.get("prefix_sha256") != expected):
@@ -197,7 +218,10 @@ class ContextPackRows(WorkflowRows):
                 found = database.execute("SELECT reference FROM assignments WHERE unit_id=?", (unit["id"],)).fetchone()
                 if found is None:
                     raise ValueError("source_context_pack_missing")
-                yield {**unit, "source_context_pack": json.loads(found[0])}
+                reference = json.loads(found[0])
+                yield {**unit, "source_context_pack": reference,
+                       **({"source_line_material_id": unit["id"]}
+                          if reference.get("source_line_protocol_version") == SOURCE_LINE_PROTOCOL_VERSION else {})}
 
 
 def prepare_source_context_packs(workflow, rows):
@@ -210,8 +234,10 @@ def prepare_source_context_packs(workflow, rows):
     pending = directory / "index.pending.sqlite3"
     pending.unlink(missing_ok=True)
     capacity = context_capacity(workflow.recipe)
+    numbered = workflow.recipe.get("source_line_protocol_version") == SOURCE_LINE_PROTOCOL_VERSION
     source_hash = hashlib.sha256()
-    source_hash.update(canonical({"version": VERSION, "capacity": capacity}).encode())
+    source_hash.update(canonical({"version": VERSION, "capacity": capacity,
+                                 **({"source_line_protocol_version": SOURCE_LINE_PROTOCOL_VERSION} if numbered else {})}).encode())
     with closing(sqlite3.connect(pending)) as database:
         database.execute("PRAGMA cache_size=-2048")
         database.executescript("""
@@ -225,11 +251,13 @@ def prepare_source_context_packs(workflow, rows):
             workflow.check_cancel()
             if unit.get("kind") != "document":
                 continue
-            material = _material(unit)
+            material = _material(unit, numbered=numbered)
             encoded = canonical(material)
             source_hash.update(encoded.encode("utf-8"))
             source_hash.update(b"\n")
-            size = len(encoded.encode("utf-8")) + 1
+            # Capacity follows the actual teacher projection: numbering adds
+            # bytes, while the audited raw body is not transmitted twice.
+            size = _bytes(teacher_material(material)) + 1
             # Never clip away the useful body of a source unit.
             if size + 512 > capacity:
                 raise ValueError("source_context_model_capacity_too_small")

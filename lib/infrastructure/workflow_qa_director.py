@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+import json
 from itertools import islice
 from filelock import FileLock, Timeout
 
@@ -294,6 +295,8 @@ class WorkflowQADirector:
             "teacher_evidence": (unit.get("text", "") if unit.get("source_context_pack")
                                  else unit.get("text", "")[:20_000]),
             **({"source_context_pack": unit["source_context_pack"]} if unit.get("source_context_pack") else {}),
+            **({"source_line_material_id": unit["source_line_material_id"]}
+               if unit.get("source_line_material_id") else {}),
             "teacher_evidence_not_shared_understanding": True,
             "completed_turns": len(messages) // 2,
             "maximum_turns": self.recipe.get("conversation_turns", 3),
@@ -342,6 +345,12 @@ class WorkflowQADirector:
         if style is not None:
             context = self.without_source_reasoning(context)
             context["generation_style"] = style
+        from lib.infrastructure.source_memory_messages import directed_source_request, directed_evidence_text, directed_evidence_blocks
+        context = directed_source_request(self.recipe, context, unit, contract)
+        if self.recipe.get("source_memory_protocol_version") == 1:
+            context["learner_messages"] = [{"role": "user", "content": learner_prompt(contract)}]
+        selected_blocks = (directed_evidence_blocks(self.path, unit, contract)
+                           if context.get("source_line_scope") == "selected" else None)
         feedback = None
         check = contract_check = style_check = None
         instructions = ([human_generation_instruction(contract)] if contract.get("human_design") else [])
@@ -361,10 +370,12 @@ class WorkflowQADirector:
             evidence_text = unit.get("text", "")
             if unit.get("source_context_pack"):
                 from lib.infrastructure.workflow_source_context import pack_evidence_text
-                evidence_text = pack_evidence_text(unit, self.path)
+                evidence_text = (directed_evidence_text(self.path, unit, contract)
+                    if context.get("source_line_scope") == "selected" else pack_evidence_text(unit, self.path))
             if (not isinstance(quotes, list) or len(quotes) > 32
                     or any(not isinstance(q, str) or not q.strip() for q in quotes)
                     or any(q not in evidence_text for q in quotes)
+                    or (selected_blocks is not None and any(not any(q in block for block in selected_blocks) for q in quotes))
                     or (unit["kind"] == "document" and contract["answer_policy"] in {"answer", "correct_premise"}
                         and not quotes)):
                 feedback = "证据必须是教师来源中的逐字片段；不能把历史答案当作事实依据。"
@@ -456,6 +467,8 @@ class WorkflowQADirector:
                                               else unit.get("text", "")[:text_limit]),
                          **({"source_context_pack": deepcopy(unit["source_context_pack"])}
                             if unit.get("source_context_pack") else {}),
+                         **({"source_line_material_id": unit["source_line_material_id"]}
+                            if unit.get("source_line_material_id") else {}),
                          "generation_variant": unit.get("generation_variant"),
                          "assigned_type": qa_type,
                          "source_is_synthetic": unit["kind"] == "brief",
@@ -474,6 +487,8 @@ class WorkflowQADirector:
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
                     "targets": list(stages)}
+            if self.recipe.get("source_line_protocol_version") == 1:
+                data["source_line_protocol_version"] = 1
             if adaptive:
                 data.update(request_phase="batch_design", planning_mode="adaptive",
                     evidence_modes=list(config["type_weights"]),
@@ -485,16 +500,33 @@ class WorkflowQADirector:
             available = context_limit - output_limit - len(system.encode("utf-8")) - 512
             if self.recipe.get("source_context_pack_version") == 1 and any(
                     candidate.get("source_context_pack") for candidate in data["candidates"]):
-                from lib.infrastructure.model_context_prefix import serialize_context_request, NODE_RULE_HEADER
+                from lib.infrastructure.model_context_prefix import (
+                    serialize_context_request, split_context_request, NODE_RULE_HEADER,
+                )
                 instruction = None
                 if human.get("enabled"):
                     instruction = HUMAN_DIRECTOR_INSTRUCTION + (
                         HUMAN_REVISION_INSTRUCTION if any("revision_context" in seed for seed in human["seeds"]) else "")
-                # Reserve room for bounded repair feedback as well as the
-                # exact serialized, deduplicated source prefix used by ask().
-                available -= 2048 + len(NODE_RULE_HEADER.encode("utf-8"))
-                def request_size():
-                    return len(serialize_context_request(self.path, data, instruction=instruction).encode("utf-8"))
+                if self.recipe.get("source_memory_protocol_version") == 1:
+                    from lib.infrastructure.source_memory_messages import source_memory_messages
+                    # Match ask() and ChatClient's real text preflight. Tool
+                    # receipts, arguments and the source-memory header all
+                    # consume context; a JSON-pack estimate omits those bytes.
+                    memory_system = (self.recipe["node_prompt_system"] + NODE_RULE_HEADER
+                                     + "\n" + self.prompt_text("workflow.qa_director"))
+                    available = context_limit - output_limit - 2048 - 512
+                    def request_size():
+                        messages = source_memory_messages(memory_system,
+                            split_context_request(self.path, data, instruction=instruction))
+                        size = sum(len(message.get("content", "").encode("utf-8")) for message in messages)
+                        size += sum(len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
+                                    for message in messages if message.get("tool_calls"))
+                        return size + (1024 if any(message.get("role") == "tool" for message in messages) else 0)
+                else:
+                    # Preserve immutable requests from before source memory.
+                    available -= 2048 + len(NODE_RULE_HEADER.encode("utf-8"))
+                    def request_size():
+                        return len(serialize_context_request(self.path, data, instruction=instruction).encode("utf-8"))
                 while data["history"] and request_size() > available:
                     data["history"].pop()
                 if request_size() > available:
@@ -557,10 +589,20 @@ class WorkflowQADirector:
                             continue
                         if adaptive and "dialogue_design" not in task:
                             raise ValueError("qa_director_dialogue_design_required")
+                        if (self.recipe.get("source_line_protocol_version") == 1
+                                and candidate.get("kind") == "document"
+                                and candidate.get("source_context_pack")
+                                and "source_line_ranges" not in task
+                                and "workflow.qa_director" not in self.recipe.get("node_prompts", {}).get("director", {})):
+                            # New default planners must actually select the
+                            # blocks that their SFT workers will receive.
+                            # Literal custom prompts retain their old contract.
+                            raise ValueError("source_line_ranges_required")
                         contracts[candidate["id"]] = validate_director_task(
                             task, expected_type=candidate["assigned_type"],
                             source_text=self._director_evidence_text(candidate),
-                            expected_id=candidate["id"])
+                            expected_id=candidate["id"],
+                            source_materials=self._director_evidence_materials(candidate))
                         if candidate.get("human_design"):
                             contracts[candidate["id"]]["human_design"] = deepcopy(candidate["human_design"])
                     return contracts
@@ -578,6 +620,10 @@ class WorkflowQADirector:
                             " teacher_evidence；无线索题的 visible_context 必须为空。不得新增资料或引用历史为事实。",
                         "attempt": attempt + 1,
                     }
+                    if self.recipe.get("source_line_protocol_version") == 1:
+                        repair_feedback["instruction"] += (
+                            "编号资料的 source_line_ranges 只能引用该包 material_id 和实际1-based行号；"
+                            "范围包含完整事实及条件，不把辅助行号写入问题、答案或逐字引用。")
                     self.event("director_plan_repair", attempt=attempt + 1,
                                reason="qa_director_contract_validation_failed")
             raise DirectorPlanError()
@@ -631,6 +677,13 @@ class WorkflowQADirector:
             from lib.infrastructure.workflow_source_context import pack_evidence_text
             return pack_evidence_text(candidate, self.path)
         return candidate["teacher_evidence"]
+
+    def _director_evidence_materials(self, candidate):
+        if (self.recipe.get("source_line_protocol_version") == 1
+                and candidate.get("source_context_pack")):
+            from lib.infrastructure.workflow_source_context import load_context_pack
+            return load_context_pack(self.path, candidate["source_context_pack"])["materials"]
+        return None
 
     def _directed_worker_batch(self, stage, batch, offset, handle, local_history, published_history):
         """Workers may finish out of order; acceptance and dedup commit in order."""

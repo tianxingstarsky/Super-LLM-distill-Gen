@@ -19,6 +19,8 @@ ZH_EN: dict[str, str] = {
     "资料包需要核对合格的清洗正文，请检查资料清洗节点中的隔离原因。": "Source packs need accepted clean text. Check the quarantine reasons in the source cleaning node.",
     "指导员需要合格的清洗资料，请检查资料清洗节点。": "The director needs accepted clean sources. Check the source cleaning node.",
     "教师资料包用于设计与核验；最终训练输入另行组织。知识内化样本独立可理解，带资料样本把必要上下文写进用户输入。": "Teacher source packs support planning and verification. Training inputs are built separately. Knowledge-learning examples stand on their own. Context-based examples include the needed context in the user input.",
+    "指导员按行号选完整知识块，生成模型通过资料记忆工具收到所选原文。训练输入按线索类型组织。": "The director selects complete knowledge blocks by line number. The generation model receives the selected source text through the source memory tool. Training inputs are organized by clue type.",
+    "显式解释包含具体前提、支持桥梁和针对性检查；步骤按任务调整，推理规范可在节点提示词编辑。": "Explicit explanations include concrete premises, supporting links and targeted checks. Steps adapt to the task. Edit reasoning rules in the node prompt.",
     "指导员样本还会按实际训练输入核验上下文是否足够；未通过时走本节点修正分支。": "Director examples also check whether the actual training input provides enough context. Failed checks enter this node's repair branch.",
     "此旧任务按原配方执行，生成前未接入共享资料清洗。新建任务可使用“资料清洗 → 对话指导员 → SFT”；点击“复制配置并修改”可沿用来源和节点设置。": "This old run keeps its saved workflow without shared source cleaning before generation. New runs can use Source cleaning → Dialogue director → SFT. Select Copy and edit to reuse its sources and node settings.",
     "此旧任务按原配方执行，生成前未接入共享资料清洗。新建任务可使用“资料清洗 → 对话指导员 → SFT”。": "This old run keeps its saved workflow without shared source cleaning before generation. New runs can use Source cleaning → Dialogue director → SFT.",

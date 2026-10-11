@@ -430,7 +430,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
               "conversation_turns": conversation_turns, "math_generator_version": 2,
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
-              **({"source_cleaning": True, "source_context_pack_version": 1} if source_cleaning else {}),
+              **({"source_cleaning": True, "source_context_pack_version": 1,
+                  "source_line_protocol_version": 1} if source_cleaning else {}),
+              "source_memory_protocol_version": 1,
+              "authored_reasoning_protocol_version": 1,
               "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
@@ -693,13 +696,29 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                    else render(self.historical_prompt("workflow.system")))
                     system = base_system + "\n" + (self.prompt_text(prompt_id, stage=prompt_stage)
                         if prompt_stage is not None else self.prompt_text(prompt_id))
-                    source_pack_request = (self.recipe.get("source_context_pack_version") == 1
+                    sealed_review_request = (self.recipe.get("source_memory_protocol_version") == 1
+                                             and bool(self.recipe.get("repair_inputs"))
+                                             and isinstance(data, dict)
+                                             and isinstance(data.get("source_evidence"), dict)
+                                             and not data.get("learner_context_only"))
+                    source_pack_request = ((self.recipe.get("source_context_pack_version") == 1 or sealed_review_request)
                                            and image is None and isinstance(data, dict)
                                            and not data.get("learner_context_only"))
+                    memory_context = None
                     if source_pack_request:
-                        from lib.infrastructure.model_context_prefix import serialize_context_request, NODE_RULE_HEADER
-                        request_text = serialize_context_request(self.path, data, instruction=instruction)
-                        if request_text.startswith('{"teacher_context_pack":'):
+                        from lib.infrastructure.model_context_prefix import serialize_context_request, split_context_request, NODE_RULE_HEADER
+                        if self.recipe.get("source_memory_protocol_version") == 1:
+                            if sealed_review_request:
+                                from lib.infrastructure.source_memory_messages import sealed_review_memory_context
+                                memory_context = sealed_review_memory_context(data, instruction=instruction)
+                            else:
+                                memory_context = split_context_request(self.path, data, instruction=instruction)
+                            request_text = canonical(memory_context["task_payload"])
+                            has_pack = bool(memory_context["teacher_context_pack"])
+                        else:
+                            request_text = serialize_context_request(self.path, data, instruction=instruction)
+                            has_pack = request_text.startswith('{"teacher_context_pack":')
+                        if has_pack:
                             pinned_prompt = (self.prompt_text(prompt_id, stage=prompt_stage)
                                              if prompt_stage is not None else self.prompt_text(prompt_id))
                             system = base_system + NODE_RULE_HEADER + "\n" + pinned_prompt
@@ -709,14 +728,23 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         request_text = canonical(data)
                     if instruction is not None and not source_pack_request:
                         system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
-                    visible_only = (not allow_reasoning_fallback or prompt_id in {
-                        "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
-                        "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
-                    return chat_json(client, [
+                    request_messages = [
                         {"role": "system", "content": system},
                         {"role": "user", "content": request_text if image is None else [
                             {"type": "text", "text": request_text},
-                            {"type": "image_url", "image_url": {"url": image}}]}],
+                            {"type": "image_url", "image_url": {"url": image}}]}]
+                    if source_pack_request and self.recipe.get("source_memory_protocol_version") == 1:
+                        from lib.infrastructure.source_memory_messages import source_memory_messages
+                        transport = getattr(client, "source_memory_transport", "tool")
+                        request_messages = source_memory_messages(system, memory_context, transport=transport)
+                        if memory_context["teacher_context_pack"]:
+                            with self._lock:
+                                self.state.setdefault("source_memory_transports", {})[
+                                    f"{model_stage or self.stage}.{role}"] = transport
+                    visible_only = (not allow_reasoning_fallback or prompt_id in {
+                        "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
+                        "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
+                    return chat_json(client, request_messages,
                         max_tokens=binding.get("max_output_tokens"), **streaming,
                         **({"allow_reasoning_fallback": False} if visible_only else {}))
                 finally:
@@ -743,6 +771,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         return value
 
     def stage_items(self, stage, items, action, *, stream_sources=False, finalize=True):
+        from lib.infrastructure.workflow_stage_order import StageResultOrder
+
         self.stage = stage
         self._abort.clear()
         metrics = self.state["stages"][stage]
@@ -761,75 +791,97 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         pending = directory / f".{stage}.pending"
         live = directory / f".{stage}.live.jsonl"
         processing_started = None
+        first_error = None
         def process(index, item):
-            nonlocal processing_started
-            checkpoint_key = ["item", index, digest(item)]
-            if stage == "agent":
-                checkpoint_key.extend((REPLAY_POLICY_VERSION, RUNNER_SHA256,
-                                       self.recipe.get("agent_sandbox_image")))
-            cached = self.checkpoint_has(checkpoint_key)
-            if not cached:
+            nonlocal processing_started, first_error
+            try:
+                self.check_cancel()
+                checkpoint_key = ["item", index, digest(item)]
+                if stage == "agent":
+                    checkpoint_key.extend((REPLAY_POLICY_VERSION, RUNNER_SHA256,
+                                           self.recipe.get("agent_sandbox_image")))
+                cached = self.checkpoint_has(checkpoint_key)
+                if not cached:
+                    with self._lock:
+                        if processing_started is None:
+                            processing_started = time.monotonic()
+                value = (row_checkpoint(self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json",
+                                        lambda: self.iter_source_units(item), self.check_cancel)
+                         if stream_sources else self.checkpoint(checkpoint_key, lambda: self.run_item_safely(stage, item, action)))
                 with self._lock:
-                    if processing_started is None:
-                        processing_started = time.monotonic()
-            value = (row_checkpoint(self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json",
-                                    lambda: self.iter_source_units(item), self.check_cancel)
-                     if stream_sources else self.checkpoint(checkpoint_key, lambda: self.run_item_safely(stage, item, action)))
-            with self._lock:
-                metrics["done"] += 1
-                metrics["outputs"] += len(value)
-                metrics["eligible"] += sum(row.get("status") in {"ready", "eligible"} for row in value)
-                metrics["quarantined"] += sum(row.get("status") == "quarantined" for row in value)
-                metrics["cached"] += int(cached)
-                processed = metrics["done"] - metrics["cached"]
-                if processed and processing_started is not None:
-                    elapsed = max(0.001, time.monotonic() - processing_started)
-                    metrics["rate_per_minute"] = round(processed * 60 / elapsed, 1)
-                    metrics["eta_seconds"] = round((metrics["total"] - metrics["done"]) * elapsed / processed)
-                self.save(force=False)
-            return value
+                    metrics["done"] += 1
+                    metrics["outputs"] += len(value)
+                    metrics["eligible"] += sum(row.get("status") in {"ready", "eligible"} for row in value)
+                    metrics["quarantined"] += sum(row.get("status") == "quarantined" for row in value)
+                    metrics["cached"] += int(cached)
+                    processed = metrics["done"] - metrics["cached"]
+                    if processed and processing_started is not None:
+                        elapsed = max(0.001, time.monotonic() - processing_started)
+                        metrics["rate_per_minute"] = round(processed * 60 / elapsed, 1)
+                        metrics["eta_seconds"] = round((metrics["total"] - metrics["done"]) * elapsed / processed)
+                    self.save(force=False)
+                return value
+            except BaseException as error:
+                # Stop replenishment as soon as a worker fails, before the
+                # coordinator observes its future. Preserve the original error
+                # when sibling requests subsequently report cancellation.
+                with self._lock:
+                    if first_error is None:
+                        first_error = error
+                    self._abort.set()
+                raise
         source_iterator = iter(items)
         iterator = enumerate(source_iterator)
         with ExitStack() as resources, pending.open("w", encoding="utf-8") as handle, \
                 live.open("w", encoding="utf-8") as preview, ThreadPoolExecutor(max_workers=workers) as executor:
             if callable(close_iterator := getattr(source_iterator, "close", None)):
                 resources.callback(close_iterator)
-            while batch := list(islice(iterator, batch_size)):
+            ordered = resources.enter_context(StageResultOrder(directory, stage))
+            futures = {}
+            exhausted = False
+            completed = 0
+            def replenish():
+                nonlocal exhausted
+                while not exhausted and len(futures) < workers:
+                    self.check_cancel()
+                    try:
+                        index, item = next(iterator)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                    futures[executor.submit(process, index, item)] = index
+            try:
+                replenish()
+                while futures:
+                    # Only the running window is submitted. A completed request
+                    # releases its slot immediately, regardless of batch_size or
+                    # an earlier item's latency.
+                    future = next(as_completed(futures))
+                    index = futures.pop(future)
+                    value = future.result()
+                    ordered.append(index, value, preview)
+                    del value, future
+                    if ordered.flush(handle):
+                        self.save(force=False)
+                    completed += 1
+                    batches_done = completed // batch_size
+                    if completed == metrics["total"]:
+                        batches_done = metrics["batches_total"]
+                    if batches_done != metrics["batches_done"]:
+                        metrics["batches_done"] = batches_done
+                        self.save()
+                    replenish()
+                # Cancellation after the last completion must not promote an
+                # interrupted attempt into the canonical stage artifact.
                 self.check_cancel()
-                futures = {executor.submit(process, index, item): index for index, item in batch}
-                ordered = {}
-                next_index = batch[0][0]
-                try:
-                    for future in as_completed(futures):
-                        index = futures[future]
-                        value = future.result()
-                        # Preview completion order independently of the training
-                        # result order. A slow first item must not conceal later
-                        # finished records. Only the ordered file is canonical.
-                        for row in value:
-                            preview.write(canonical({"item_index": index, "record": row}) + "\n")
-                        preview.flush()
-                        ordered[index] = value
-                        # Publish each completed contiguous prefix immediately.
-                        # Item order and historic checkpoint identities stay
-                        # stable, while a slow final item cannot hide the batch.
-                        wrote = False
-                        while next_index in ordered:
-                            for row in ordered.pop(next_index):
-                                handle.write(canonical(row) + "\n")
-                            next_index += 1
-                            wrote = True
-                        if wrote:
-                            handle.flush()
-                            self.save(force=False)
-                except BaseException:
-                    self._abort.set()
-                    for future in futures:
-                        future.cancel()
-                    raise
-                handle.flush()
-                metrics["batches_done"] += 1
-                self.save()
+            except BaseException as error:
+                self._abort.set()
+                for future in futures:
+                    future.cancel()
+                if first_error is not None and isinstance(error, Cancelled):
+                    raise first_error
+                raise
+            handle.flush()
         pending.replace(destination)
         if finalize:
             metrics.update(status="completed", finished_at=now())
@@ -1473,6 +1525,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         source_context = {"provenance": provenance, "task": unit.get("text"),
                           "brief": self.recipe.get("brief", ""), "tools": unit.get("tools", [])}
         pack_evidence = None
+        selected_evidence_blocks = None
         if self.recipe.get("source_context_pack_version") == 1 and unit.get("source_context_pack"):
             from lib.infrastructure.workflow_source_context import pack_evidence_text
             source_context["source_context_pack"] = deepcopy(unit["source_context_pack"])
@@ -1483,6 +1536,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 question_rules=self.recipe["qa_director"]["question_rules"],
                 answer_rules=self.recipe["qa_director"]["answer_rules"],
                 teacher_evidence_not_learner_context=True)
+            from lib.infrastructure.source_memory_messages import directed_source_request, directed_evidence_text, directed_evidence_blocks
+            source_context = directed_source_request(self.recipe, source_context, unit, contract)
+            if source_context.get("source_line_scope") == "selected":
+                source_context.pop("task", None)
+                pack_evidence = directed_evidence_text(self.path, unit, contract)
+                selected_evidence_blocks = directed_evidence_blocks(self.path, unit, contract)
+        if self.recipe.get("source_memory_protocol_version") == 1 and source_context.get("source_context_pack"):
+            source_context.pop("task", None)
         evidence_level = (unit.get("revision_source_level") or ("human_provided_and_model_assessed" if unit.get("human_provided") else
                           "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
                           else "recorded_context_model_assessed" if unit["kind"] == "conversation"
@@ -1597,6 +1658,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             (contract is None or contract["answer_policy"] in {"answer", "correct_premise"})) or any(
                             not isinstance(quote, str) or not quote.strip()
                             or quote not in (pack_evidence if pack_evidence is not None else unit["text"])
+                            or (selected_evidence_blocks is not None and not any(quote in block for block in selected_evidence_blocks))
                             for quote in quotes)):
                         feedback = "文档回答缺少可逐字匹配的原文依据"
                         continue
@@ -1857,23 +1919,40 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             task.update(qa_contract=sample["qa_contract"],
                 question_rules=self.recipe["qa_director"]["question_rules"],
                 answer_rules=self.recipe["qa_director"]["answer_rules"])
+        if isinstance(source, dict):
+            from lib.infrastructure.source_memory_messages import directed_source_request
+            task = directed_source_request(self.recipe, task, source, sample.get("qa_contract"))
+        protocol = self.recipe.get("authored_reasoning_protocol_version") == 1
+        instruction = "生成风格要求：\n" + style["instruction"]
+        if protocol:
+            from lib.domain.authored_reasoning import AUTHORED_REASONING_PROTOCOL_INSTRUCTION, authored_reasoning_issue
+            instruction += "\n" + AUTHORED_REASONING_PROTOCOL_INSTRUCTION
         feedback, check, style_check, contract_check = None, None, None, None
         for attempt in range(2):
             value = self.ask([sample["id"], "cot_generate_v1", attempt], "generation",
                              "workflow.cot_generate", {**task, "feedback": feedback},
-                             instruction="生成风格要求：\n" + style["instruction"])
+                             instruction=instruction)
             if not isinstance(value, dict) or any(text_issue(value.get(key)) for key in ("reasoning", "answer")):
                 feedback = "推理和答案必须是有效的完整文本"
                 continue
+            if protocol and (issue := authored_reasoning_issue(value)):
+                feedback = {"reasoning_protocol": issue,
+                    "repair": "补齐具体前提、支持桥梁与本题针对性检查，保持任务和风格；不要只加字数或机械凑步骤。"}
+                continue
+            reasoning_audit = ({"reasoning_protocol_version": 1,
+                "reasoning_trace": deepcopy(value["reasoning_trace"]), "reasoning_trace_status": "authored",
+                "reasoning_trace_content_sha256": digest({"reasoning": value["reasoning"], "answer": value["answer"]})}
+                if protocol else {})
             if self.recipe.get("review_repair") is not None:
                 return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                          "question": task["prompt"], "reasoning": [value["reasoning"]], "answer": value["answer"],
                          "source_context": source, "quotes": sample.get("quotes", []), "generation_style": style,
                          "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation",
-                         "evidence_level": sample["evidence_level"], **self.qa_metadata(sample)}]
+                         "evidence_level": sample["evidence_level"], **reasoning_audit, **self.qa_metadata(sample)}]
             check = self.judge_answer([sample["id"], "cot_generated_check_v1", attempt],
                                       {key: item for key, item in task.items() if key != "generation_style"},
-                                      {"reasoning": value["reasoning"], "answer": value["answer"]},
+                                      {"reasoning": value["reasoning"], "answer": value["answer"],
+                                       **({"reasoning_trace": value["reasoning_trace"]} if protocol else {})},
                                       prompt_id="workflow.rationale_check", allow_reasoning_fallback=False)
             style_check = self.style_check([sample["id"], "cot_style_v1", attempt], style,
                                           value["reasoning"], value["answer"])
@@ -1889,7 +1968,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                          "judge": check, "style_check": style_check, "generation_style": style,
                          "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation",
                          "evidence_level": sample["evidence_level"],
-                         **self.qa_metadata(sample, contract_check)}]
+                         **reasoning_audit, **self.qa_metadata(sample, contract_check)}]
             feedback = {"correctness": check["reason"] if not accepted(check) else None,
                         "style": style_check["reason"] if not (style_check["keep"] and
                                   style_check["adherence"] >= 4) else None}
@@ -1930,6 +2009,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 key = [row["id"], "trim_v1", target, field, original_hash, attempt]
                 context = {"prompt": prompt, "source": self.without_source_reasoning(row.get("source_context")),
                            "final_answer": answer, "original_reasoning": original}
+                if row.get("qa_contract"):
+                    from lib.infrastructure.source_memory_messages import directed_source_request
+                    context["qa_contract"] = deepcopy(row["qa_contract"])
+                    context = directed_source_request(self.recipe, context, row.get("source_context") or {}, row["qa_contract"])
                 replacement = self.ask(key, "generation", "workflow.trim",
                                        {**context, "feedback": feedback}, instruction=instruction)
                 if (not isinstance(replacement, dict) or set(replacement) != {"reasoning"}
@@ -1979,6 +2062,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         if linked_cot:
             row["question"] = deepcopy(row["messages"][:-1])
             row["reasoning"] = [row["messages"][-1]["reasoning_content"]]
+        if row.get("reasoning_protocol_version") == 1 and receipts:
+            row["reasoning_trace_status"] = "superseded_by_trim"
         if "source_context" in row:
             row["source_context"] = self.without_source_reasoning(row["source_context"])
         row["reasoning_trim"] = {"version": 1, "template": config["template"],

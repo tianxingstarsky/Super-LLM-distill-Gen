@@ -14,9 +14,12 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
+import threading
 import time
 from urllib.parse import urlsplit, urlunsplit
 import uuid
+import weakref
 
 from filelock import FileLock, Timeout
 
@@ -25,8 +28,37 @@ from lib.io_utils import atomic_json
 
 
 POLL_SECONDS = .15
+MAX_POLL_SECONDS = 1.2
+CLEANUP_SECONDS = .3
 MAX_QUEUE_ENTRIES = 4096
 _LEASE_NAME = re.compile(r"^[a-f0-9]{32}\.lease$")
+
+
+class _PoolSignal:
+    """Process-local wakeups; the file ledger remains the only authority."""
+
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.metadata = threading.Lock()
+        self.revision = 0
+
+    def notify(self):
+        with self.condition:
+            self.revision += 1
+            self.condition.notify_all()
+
+
+_SIGNALS_LOCK = threading.Lock()
+_SIGNALS: weakref.WeakValueDictionary[str, _PoolSignal] = weakref.WeakValueDictionary()
+
+
+def _pool_signal(directory: Path) -> _PoolSignal:
+    key = os.path.normcase(str(directory.resolve()))
+    with _SIGNALS_LOCK:
+        signal = _SIGNALS.get(key)
+        if signal is None:
+            signal = _SIGNALS[key] = _PoolSignal()
+        return signal
 
 
 class ModelQueueTimeout(RuntimeError):
@@ -94,27 +126,67 @@ class SharedModelScheduler:
         self.path = self.directory / "state.json"
         self._default_policy = validate_model_scheduling(policy)
         self._next_housekeeping = 0.
+        self._signal = _pool_signal(self.directory)
 
-    @contextmanager
-    def _locked(self, *, deadline=None, cancel_check=None):
-        lock = FileLock(str(self.path) + ".lock", timeout=0)
-        limit = time.monotonic() + 10 if deadline is None else min(deadline, time.monotonic() + 10)
+    def _wait(self, seconds: float, *, revision: int, cancel_check=None):
+        """Poll cancellation cheaply while distant waiters leave the disk idle."""
+        deadline = time.monotonic() + seconds
         while True:
             if cancel_check:
                 cancel_check()
-            if time.monotonic() >= limit:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            with self._signal.condition:
+                if self._signal.revision != revision:
+                    return
+                self._signal.condition.wait(min(POLL_SECONDS, remaining))
+
+    @staticmethod
+    def _poll_interval(position: int, limit: int, cooldown: float) -> float:
+        if cooldown > 0:
+            return min(MAX_POLL_SECONDS, max(POLL_SECONDS, cooldown))
+        # Keep two admission windows (at least eight entries) responsive even
+        # across processes. Only deeper waiters read the ledger less often.
+        lookahead = max(2 * limit, 8)
+        further = max(0, position + 1 - lookahead)
+        extra_intervals = (further + limit - 1) // limit
+        return min(MAX_POLL_SECONDS, POLL_SECONDS * (1 + extra_intervals))
+
+    @contextmanager
+    def _locked(self, *, deadline=None, cancel_check=None):
+        limit = time.monotonic() + 10 if deadline is None else min(deadline, time.monotonic() + 10)
+        # Serialize same-process contenders in memory. Otherwise each thread
+        # repeatedly opens the same file and joins a synchronized retry convoy.
+        while True:
+            if cancel_check:
+                cancel_check()
+            remaining = limit - time.monotonic()
+            if remaining <= 0:
                 raise ModelQueueTimeout("model_request_queue_timeout") from None
-            try:
-                lock.acquire()
+            if self._signal.metadata.acquire(timeout=min(POLL_SECONDS, remaining)):
                 break
-            except Timeout:
+        try:
+            lock = FileLock(str(self.path) + ".lock", timeout=0)
+            while True:
+                if cancel_check:
+                    cancel_check()
                 if time.monotonic() >= limit:
                     raise ModelQueueTimeout("model_request_queue_timeout") from None
-                time.sleep(min(POLL_SECONDS, max(0., limit - time.monotonic())))
-        try:
-            yield
+                try:
+                    lock.acquire()
+                    break
+                except Timeout:
+                    remaining = limit - time.monotonic()
+                    if remaining <= 0:
+                        raise ModelQueueTimeout("model_request_queue_timeout") from None
+                    time.sleep(min(POLL_SECONDS, remaining))
+            try:
+                yield
+            finally:
+                lock.release()
         finally:
-            lock.release()
+            self._signal.metadata.release()
 
     def _state(self):
         if not self.path.exists():
@@ -165,15 +237,22 @@ class SharedModelScheduler:
             return True
         else:
             probe.release()
-            self._lease_path(token).unlink(missing_ok=True)
+            try:
+                self._lease_path(token).unlink(missing_ok=True)
+            except OSError:
+                # Successful probing already proved this lease was released.
+                # Another Windows reader can briefly prevent deletion; retain
+                # the dead-lease result and let housekeeping reclaim the file.
+                pass
             return False
 
-    def _prune(self, state, *, full=False):
+    def _prune(self, state, *, full=False, active=True):
         changed = False
-        for token in tuple(state["active"]):
-            if not self._alive(token):
-                state["active"].remove(token)
-                changed = True
+        if active:
+            for token in tuple(state["active"]):
+                if not self._alive(token):
+                    state["active"].remove(token)
+                    changed = True
         if full:
             previous = state["waiting"]
             state["waiting"] = [token for token in previous if self._alive(token)]
@@ -208,10 +287,15 @@ class SharedModelScheduler:
         """Read authority inside the pool lock; stale clients never reset limits."""
         with self._locked():
             state = self._state()
-            state.update(_configured_policy(self.root, self.directory.name, model))
+            policy = _configured_policy(self.root, self.directory.name, model)
+            changed = any(state[key] != value for key, value in policy.items())
+            state.update(policy)
             self._prune(state)
             atomic_json(self.path, state)
-            return self._summary(state)
+            summary = self._summary(state)
+        if changed:
+            self._signal.notify()
+        return summary
 
     def snapshot(self) -> dict:
         with self._locked():
@@ -237,6 +321,7 @@ class SharedModelScheduler:
             state.update(cooldown_until=time.time() + duration, cooldown_monotonic_set=clock,
                          cooldown_monotonic_until=clock + duration)
             atomic_json(self.path, state)
+        self._signal.notify()
 
     @contextmanager
     def acquire(self, *, cancel_check=None, on_wait=None):
@@ -248,6 +333,7 @@ class SharedModelScheduler:
         live = FileLock(str(self._lease_path(token)), timeout=0)
         live.acquire()
         enqueued = False
+        admitted = False
         try:
             with self._locked(cancel_check=cancel_check):
                 state = self._state()
@@ -258,15 +344,27 @@ class SharedModelScheduler:
                 if time.monotonic() >= deadline:
                     raise ModelQueueTimeout("model_request_queue_timeout")
                 state["waiting"].append(token)
+                available = state["max_concurrency"] - len(state["active"])
+                if (state["waiting"] == [token] and available > 0
+                        and state["cooldown_monotonic_until"] <= time.monotonic()):
+                    state["waiting"].remove(token)
+                    state["active"].append(token)
+                    admitted = True
                 atomic_json(self.path, state)
                 enqueued = True
             notified = False
-            while True:
+            while not admitted:
                 if cancel_check:
                     cancel_check()
+                # Take the revision before reading capacity so a completion
+                # between that read and the wait cannot be lost.
+                revision = self._signal.revision
                 with self._locked(deadline=deadline, cancel_check=cancel_check):
                     state = self._state()
-                    changed = self._prune(state)
+                    near_front = state["waiting"].index(token) < state["max_concurrency"]
+                    changed = self._prune(state, active=near_front)
+                    if not near_front and state["waiting"].index(token) < state["max_concurrency"]:
+                        changed |= self._prune(state)
                     if time.monotonic() >= deadline:
                         raise ModelQueueTimeout("model_request_queue_timeout")
                     cooldown = max(0., state["cooldown_monotonic_until"] - time.monotonic())
@@ -276,6 +374,7 @@ class SharedModelScheduler:
                         state["waiting"].remove(token)
                         state["active"].append(token)
                         atomic_json(self.path, state)
+                        admitted = True
                         break
                     if changed:
                         atomic_json(self.path, state)
@@ -286,19 +385,37 @@ class SharedModelScheduler:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ModelQueueTimeout("model_request_queue_timeout")
-                time.sleep(min(POLL_SECONDS, remaining))
+                interval = self._poll_interval(position, info["max_concurrency"], cooldown)
+                self._wait(min(interval, remaining), revision=revision, cancel_check=cancel_check)
             if cancel_check:
                 cancel_check()
             yield
         finally:
+            # Release the capacity lease first, including on cancellation. A
+            # contended metadata lock must not extend cancellation or mask its
+            # original exception; the next reader can prune the dead entry.
+            failed = sys.exc_info()[0] is not None
+            live.release()
             try:
                 if enqueued:
-                    with self._locked():
+                    with self._locked(deadline=time.monotonic() + CLEANUP_SECONDS):
                         state = self._state()
                         for collection in ("waiting", "active"):
                             if token in state[collection]:
                                 state[collection].remove(token)
                         atomic_json(self.path, state)
+            except ModelQueueTimeout:
+                pass
+            except Exception:
+                if not failed:
+                    raise
             finally:
-                live.release()
-                self._lease_path(token).unlink(missing_ok=True)
+                try:
+                    self._lease_path(token).unlink(missing_ok=True)
+                except OSError:
+                    # A concurrent Windows probe may still have this released
+                    # file open. Housekeeping reclaims it; successful generation
+                    # must not be replaced by an incidental unlink failure.
+                    pass
+                finally:
+                    self._signal.notify()

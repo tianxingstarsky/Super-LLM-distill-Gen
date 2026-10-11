@@ -7,6 +7,7 @@ being silently dropped from a training-data prompt.
 from __future__ import annotations
 
 import re
+import json
 from typing import Any
 
 
@@ -20,14 +21,56 @@ def validate_api_format(value: str) -> str:
     return value
 
 
-def _tool_result(message: dict[str, Any]) -> dict[str, str]:
-    name = str(message.get("name") or message.get("toolName") or "tool")
-    call_id = str(message.get("toolCallId") or "")
-    label = f"Tool result ({name}{', ' + call_id if call_id else ''}): "
-    content = message.get("content")
-    if not isinstance(content, str):
-        raise ValueError("unsupported_model_message_content")
-    return {"role": "user", "content": label + content}
+def _calls(message):
+    calls = message.get("tool_calls", [])
+    if not isinstance(calls, list):
+        raise ValueError("invalid_model_tool_call")
+    result = []
+    for call in calls:
+        if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+            raise ValueError("invalid_model_tool_call")
+        function = call["function"]
+        identity = call.get("id")
+        name, arguments = function.get("name"), function.get("arguments")
+        if (call.get("type") != "function" or not isinstance(identity, str) or not identity
+                or not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name)
+                or not isinstance(arguments, str)):
+            raise ValueError("invalid_model_tool_call")
+        try:
+            parsed = json.loads(arguments)
+        except (TypeError, ValueError) as error:
+            raise ValueError("invalid_model_tool_arguments") from error
+        if not isinstance(parsed, dict):
+            raise ValueError("invalid_model_tool_arguments")
+        result.append((identity, name, arguments, parsed))
+    return result
+
+
+def _paired_tools(messages):
+    """Reject missing/duplicate results before crossing a provider boundary."""
+    pending, seen = {}, set()
+    for message in messages:
+        role = message.get("role")
+        calls = _calls(message)
+        if calls and role != "assistant":
+            raise ValueError("invalid_model_tool_call")
+        if role == "tool":
+            identity = message.get("tool_call_id", message.get("toolCallId"))
+            if not isinstance(identity, str) or identity not in pending or not isinstance(message.get("content"), str):
+                raise ValueError("orphan_model_tool_result")
+            name = message.get("name", message.get("toolName"))
+            if name is not None and name != pending[identity]:
+                raise ValueError("model_tool_result_name_mismatch")
+            del pending[identity]
+        elif pending:
+            raise ValueError("missing_model_tool_result")
+        for identity, name, _, _ in calls:
+            if identity in seen:
+                raise ValueError("duplicate_model_tool_call")
+            seen.add(identity)
+            pending[identity] = name
+    if pending:
+        raise ValueError("missing_model_tool_result")
 
 
 def _image_url(part: dict[str, Any]) -> str:
@@ -40,10 +83,25 @@ def _image_url(part: dict[str, Any]) -> str:
 
 def responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map Chat-style messages to Responses input items, including images."""
+    _paired_tools(messages)
     converted = []
-    for original in messages:
-        message = _tool_result(original) if original.get("role") == "tool" else original
+    for message in messages:
         role = message.get("role")
+        if role == "tool":
+            converted.append({"type": "function_call_output",
+                "call_id": message.get("tool_call_id", message.get("toolCallId")),
+                "output": message["content"]})
+            continue
+        calls = _calls(message)
+        if calls:
+            content = message.get("content")
+            if content:
+                if not isinstance(content, str):
+                    raise ValueError("unsupported_model_message_content")
+                converted.append({"role": "assistant", "content": content})
+            converted.extend({"type": "function_call", "call_id": identity,
+                "name": name, "arguments": arguments} for identity, name, arguments, _ in calls)
+            continue
         if role not in {"system", "developer", "user", "assistant"}:
             raise ValueError("unsupported_model_message_role")
         content = message.get("content")
@@ -68,14 +126,36 @@ def responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def anthropic_request(messages: list[dict[str, Any]], *, json_mode: bool) -> dict[str, Any]:
     """Move system instructions to the top level and translate image blocks."""
+    _paired_tools(messages)
     system = []
     conversation = []
+    tool_names = set()
     if json_mode:
         system.append("Return only a valid JSON object.")
-    for original in messages:
-        message = _tool_result(original) if original.get("role") == "tool" else original
+    for message in messages:
         role = message.get("role")
         content = message.get("content")
+        if role == "tool":
+            block = {"type": "tool_result",
+                "tool_use_id": message.get("tool_call_id", message.get("toolCallId")),
+                "content": content}
+            if conversation and conversation[-1]["role"] == "user" and isinstance(conversation[-1]["content"], list):
+                conversation[-1]["content"].append(block)
+            else:
+                conversation.append({"role": "user", "content": [block]})
+            continue
+        calls = _calls(message)
+        if calls:
+            parts = []
+            if content:
+                if not isinstance(content, str):
+                    raise ValueError("unsupported_model_message_content")
+                parts.append({"type": "text", "text": content})
+            for identity, name, _, parsed in calls:
+                parts.append({"type": "tool_use", "id": identity, "name": name, "input": parsed})
+                tool_names.add(name)
+            conversation.append({"role": "assistant", "content": parts})
+            continue
         if role in {"system", "developer"}:
             if not isinstance(content, str):
                 raise ValueError("unsupported_model_message_content")
@@ -84,6 +164,9 @@ def anthropic_request(messages: list[dict[str, Any]], *, json_mode: bool) -> dic
         if role not in {"user", "assistant"}:
             raise ValueError("unsupported_model_message_role")
         if isinstance(content, str):
+            if conversation and conversation[-1]["role"] == role and isinstance(conversation[-1]["content"], list):
+                conversation[-1]["content"].append({"type": "text", "text": content})
+                continue
             conversation.append({"role": role, "content": content})
             continue
         if not isinstance(content, list):
@@ -109,6 +192,11 @@ def anthropic_request(messages: list[dict[str, Any]], *, json_mode: bool) -> dic
     request: dict[str, Any] = {"messages": conversation}
     if system:
         request["system"] = "\n\n".join(system)
+    if tool_names:
+        request["tools"] = [{"name": name, "description": "Read-only source memory already retrieved by the workflow.",
+            "input_schema": {"type": "object", "properties": {}, "additionalProperties": True}}
+            for name in sorted(tool_names)]
+        request["tool_choice"] = {"type": "none"}
     return request
 
 

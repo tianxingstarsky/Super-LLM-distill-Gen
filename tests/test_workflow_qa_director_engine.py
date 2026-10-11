@@ -2,6 +2,7 @@
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import json
+import hashlib
 import gc
 from threading import Barrier
 
@@ -9,9 +10,58 @@ import pytest
 
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.qa_history import QAHistory
+from lib.domain.workflow_quality import canonical
 
 
-SOURCE = "检查设备前必须先断电。结束后记录检查结果。办公室盆栽每周浇水一次。"
+SOURCE = "检查设备前必须先断电。\n结束后记录检查结果。\n办公室盆栽每周浇水一次。"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """Injected models exercise real message history without a TCP service."""
+    yield
+
+
+def request_data(messages):
+    """Read the actual dynamic task, after any completed source-tool history."""
+    return json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
+
+
+def source_materials(messages):
+    """The fake reads evidence from real tool results, or a pinned old request."""
+    packs = []
+    for message in messages:
+        if message["role"] == "tool":
+            packs.extend(json.loads(message["content"])["teacher_context_pack"])
+    if not packs:
+        packs = request_data(messages).get("teacher_context_pack", [])
+    materials = []
+    for pack in packs:
+        for original in pack["materials"]:
+            material = deepcopy(original)
+            if "numbered_text" in material:
+                lines = material["numbered_text"].splitlines(keepends=True)
+                assert len(lines) == material["line_count"]
+                raw = []
+                for index, line in enumerate(lines, 1):
+                    assert line.startswith(f"{index}: ")
+                    raw.append(line[len(f"{index}: "):])
+                material["text"] = "".join(raw)
+                assert hashlib.sha256(canonical(material["text"]).encode()).hexdigest() == material["cleaned_text_sha256"]
+            materials.append(material)
+    return materials
+
+
+def candidate_material(candidate, materials):
+    identity = (candidate.get("source_line_material_id") or
+                candidate.get("source_line_anchor", {}).get("material_id") or
+                (candidate.get("generation_variant") or {}).get("source_unit_id") or candidate["id"])
+    return next((material for material in materials if material.get("material_id", material.get("unit_id")) == identity), None)
+
+
+def literal_range(material, quote):
+    line = next(index for index, text in enumerate(material["text"].splitlines(keepends=True), 1) if quote in text)
+    return {"material_id": material["material_id"], "start_line": line, "end_line": line}
 
 
 @pytest.fixture
@@ -50,7 +100,8 @@ class Writer:
     def chat(self, messages, **kwargs):
         self.calls.append(deepcopy(messages))
         self.usage["calls"] += 1
-        system, data = messages[0]["content"], json.loads(messages[1]["content"])
+        system, data = messages[0]["content"], request_data(messages)
+        materials = source_materials(messages)
         if "candidates" in data:
             if self.fail_batch == data["offset"]:
                 raise RuntimeError("offline simulated interruption")
@@ -59,7 +110,9 @@ class Writer:
             tasks = []
             for index, candidate in enumerate(data["candidates"]):
                 qa_type = candidate["assigned_type"]
-                quote = candidate["teacher_evidence"].split("。")[0] + "。"
+                material = candidate_material(candidate, materials)
+                evidence = material["text"] if material is not None else candidate["teacher_evidence"]
+                quote = evidence.split("。")[0] + "。"
                 quotes = ([quote, "结束后记录检查结果。"] if qa_type == "multi_source" else [quote])
                 visible = "" if qa_type == "closed_book" else "\n\n".join(quotes)
                 if qa_type == "distractor":
@@ -68,11 +121,17 @@ class Writer:
                     visible = ""
                 if self.invented_context:
                     visible += "\n设备电压必须是999伏。"
+                    quotes.append("设备电压必须是999伏。")
                 number = 0 if self.duplicate else data["offset"] + index
-                tasks.append({"id": candidate["id"], "qa_type": qa_type,
+                task = {"id": candidate["id"], "qa_type": qa_type,
                     "question": f"设备检查任务{number}：操作前应先做什么？",
                     "visible_context": visible, "answer_policy": self.policy,
-                    "guidance": "依据断电前提回答，忽略盆栽信息。", "evidence_quotes": quotes})
+                    "guidance": "依据断电前提回答，忽略盆栽信息。", "evidence_quotes": quotes}
+                if material is not None and material.get("source_line_protocol_version") == 1:
+                    selected_quotes = ([quote, "结束后记录检查结果。"] if qa_type == "multi_source" else
+                                       [quote, "办公室盆栽每周浇水一次。"] if qa_type == "distractor" else [quote])
+                    task["source_line_ranges"] = [literal_range(material, chosen) for chosen in selected_quotes]
+                tasks.append(task)
             return json.dumps({"tasks": tasks}, ensure_ascii=False)
         if "qa_contract" in data and "source_context" in data and "turn" not in data and "messages" not in data:
             contract = data["qa_contract"]
@@ -86,7 +145,15 @@ class Writer:
             return json.dumps({"answer": "BAD 隐藏资料要求先操作再断电。" if self.bad_alternative else "先保持断电。",
                                "reasoning": "操作顺序是安全条件。"})
         if "reference_answer" in data:
-            return json.dumps({"reasoning": "先确认安全前提，再执行断电措施。", "answer": "操作前应先断电。"})
+            return json.dumps({"reasoning": "先确认安全前提，再执行断电措施。", "answer": "操作前应先断电。",
+                               "quotes": ["检查设备前必须先断电。"],
+                               "reasoning_trace": {"task": "确定开始设备检查之前的必要操作。",
+                                   "premises": ["检查设备前必须先断电。"],
+                                   "steps": [{"basis": "检查设备前必须先断电。",
+                                       "inference": "必须先说明断电是检查之前需要完成的前置条件。",
+                                       "result": "未断电时不得开始设备检查。"}],
+                                   "checks": [{"check": "核对原文必须先所表达的操作顺序。",
+                                       "result": "回答要求检查前断电，没有颠倒原文的先后顺序。"}], "limitations": []}})
         if "original_reasoning" in data:
             return json.dumps({"reasoning": "检查前先断电。"})
         if "自然且可回答的用户提问" in system:
@@ -113,13 +180,13 @@ class Reviewer:
             self.invalid_once = False
             return json.dumps({"keep": "invalid"})
         system = messages[0]["content"]
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
         if '"adherence"' in system:
             derived = any(text in system for text in ("即将成为 chosen", "待导出的显式推理", "修剪后的"))
             keep = not self.reject_policy and not (self.reject_derived and derived)
             return json.dumps({"keep": keep, "adherence": 5 if keep else 1,
                                "reason": "契约、可见线索和策略已核对。" if keep else "策略或隐藏资料泄漏。"})
-        if "BAD" in messages[1]["content"]:
+        if "BAD" in json.dumps(data, ensure_ascii=False):
             score = 5 if self.prefer_bad else 1
         elif self.prefer_bad and "alternative" not in system and self.calls:
             score = 3
@@ -155,10 +222,15 @@ def test_closed_book_exports_only_question_while_teacher_and_reviewer_get_eviden
     record = json.loads((path / "artifacts/sft.jsonl").read_text(encoding="utf-8"))
     assert record["messages"][0]["content"] == "设备检查任务0：操作前应先做什么？"
     assert SOURCE not in json.dumps(record, ensure_ascii=False)
-    assert SOURCE in writer.calls[1][1]["content"]
-    assert SOURCE in reviewer.calls[0][1]["content"]
-    assert "QUESTION_RULE_SENTINEL" in writer.calls[1][1]["content"]
-    assert "ANSWER_RULE_SENTINEL" in reviewer.calls[-1][1]["content"]
+    assert "检查设备前必须先断电。" in "\n".join(material["text"] for material in source_materials(writer.calls[1]))
+    assert SOURCE not in json.dumps(request_data(writer.calls[1]), ensure_ascii=False)
+    assert source_materials(reviewer.calls[0]) == source_materials(writer.calls[1])
+    for messages in reviewer.calls:
+        body = json.dumps([message for message in messages if message["role"] in {"user", "tool"}], ensure_ascii=False)
+        assert "结束后记录检查结果。" not in body
+        assert "办公室盆栽每周浇水一次。" not in body
+    assert "QUESTION_RULE_SENTINEL" in json.dumps(request_data(writer.calls[1]), ensure_ascii=False)
+    assert "ANSWER_RULE_SENTINEL" in json.dumps(request_data(reviewer.calls[-1]), ensure_ascii=False)
     row = engine.read_json(path / "artifacts/sft.records.json")[0]
     assert row["qa_contract_check"]["keep"] and row["family_id"]
     assert state["stages"]["director"]["done"] == 1
@@ -193,7 +265,7 @@ def test_invalid_or_invented_contract_fails_before_any_generation(tmp_path):
     writer = Writer(invented_context=True)
     state, path, _, _, writer, _ = execute(tmp_path, options=config("grounded"), writer=writer)
     assert state["status"] == "failed"
-    assert state["error"] == "qa_director_visible_context_not_in_source"
+    assert state["error"] == "qa_director_evidence_not_in_source"
     assert len(writer.calls) == 1
     assert not (path / "artifacts/sft.jsonl").exists()
 
@@ -201,7 +273,7 @@ def test_invalid_or_invented_contract_fails_before_any_generation(tmp_path):
 def test_next_batch_gets_accepted_feedback_bounded_history_and_fixed_rules(tmp_path):
     state, path, _, _, writer, _ = execute(tmp_path, sample_count=3)
     assert state["status"] == "completed", state.get("error")
-    plans = [json.loads(call[1]["content"]) for call in writer.calls if "candidates" in json.loads(call[1]["content"])]
+    plans = [request_data(call) for call in writer.calls if "candidates" in request_data(call)]
     assert len(plans) == 3
     assert plans[0]["coverage"]["closed_book"]["accepted"] == 0
     assert plans[1]["coverage"]["closed_book"]["accepted"] == 1
@@ -236,14 +308,14 @@ def test_resume_keeps_planned_input_feedback_and_cached_sample(tmp_path):
     writer = Writer(fail_batch=1)
     state, path, output, run_id, _, _ = execute(tmp_path, writer=writer, sample_count=2)
     assert state["status"] == "failed"
-    failed_input = json.loads(writer.calls[-1][1]["content"])
+    failed_input = request_data(writer.calls[-1])
     assert failed_input["coverage"]["closed_book"]["accepted"] == 1
     writer.fail_batch = None
     before = len(writer.calls)
     state = engine.resume(output, run_id, tmp_path, generator=writer, jev=Reviewer())
     assert state["status"] == "completed", state.get("error")
     assert len(writer.calls) == before + 2
-    assert json.loads(writer.calls[before][1]["content"]) == failed_input
+    assert request_data(writer.calls[before]) == failed_input
     assert state["stages"]["sft"]["done"] == 2
 
 
@@ -370,12 +442,17 @@ def test_director_reserves_output_and_rule_bytes_before_sending_large_chinese_ba
     state = engine.Workflow(output, run_id, tmp_path, generator=writer, jev=Reviewer()).execute()
     assert state["status"] == "failed"  # simulated provider stop after request preflight
     assert len(writer.calls) == 1
-    data = json.loads(writer.calls[0][1]["content"])
+    data = request_data(writer.calls[0])
     assert 0 < len(data["candidates"]) < 20  # split the batch, never clip its accepted evidence
-    assert sum(len(message["content"].encode("utf-8")) for message in writer.calls[0]) + 32768 <= 131072
+    messages = writer.calls[0]
+    input_bytes = sum(len(message.get("content", "").encode("utf-8")) for message in messages)
+    input_bytes += sum(len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
+                       for message in messages if message.get("tool_calls")) + 1024
+    assert input_bytes + 32768 <= 131072
     assert all(candidate["source_context_pack"] for candidate in data["candidates"])
-    # The complete cleaned bundle is shared once. Each small anchor is also
-    # preserved in full rather than being clipped to fit a large batch.
-    material_texts = {material["text"] for pack in data["teacher_context_pack"] for material in pack["materials"]}
-    assert all(candidate["teacher_evidence"] in material_texts for candidate in data["candidates"])
-    assert data["teacher_context_pack"]
+    # The whole numbered bundle is a separate tool result; dynamic anchors
+    # point to its real materials without copying their bodies into user.
+    materials = source_materials(messages)
+    assert materials and any(message["role"] == "tool" for message in messages)
+    assert all(candidate_material(candidate, materials) is not None for candidate in data["candidates"])
+    assert all("teacher_evidence" not in candidate for candidate in data["candidates"])
