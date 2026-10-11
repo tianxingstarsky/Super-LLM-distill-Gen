@@ -45,10 +45,12 @@ def validate_qa_director(value: dict | None) -> dict:
     """Normalize a bounded, serializable director recipe without hidden fields."""
     if value is None:
         return {"enabled": False}
-    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation"}
+    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation", "question_separation"}
     if not isinstance(value, dict) or set(value) - allowed or type(value.get("enabled", False)) is not bool:
         raise ValueError("invalid_qa_director")
     human = validate_human_augmentation(value.get("human_augmentation"))
+    if type(value.get("question_separation", False)) is not bool:
+        raise ValueError("invalid_question_separation")
     if not value.get("enabled", False):
         if human["enabled"]:
             raise ValueError("human_augmentation_requires_director")
@@ -81,6 +83,8 @@ def validate_qa_director(value: dict | None) -> dict:
     # into those snapshots or change their weighted scheduling on resume.
     if "planning_mode" in value:
         result["planning_mode"] = planning_mode
+    if "question_separation" in value:
+        result["question_separation"] = value["question_separation"]
     if human["enabled"]:
         result["human_augmentation"] = human
         # Human intent is the design brief, never a rigid evidence-type quota.
@@ -114,7 +118,7 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
                            expected_id: str | None = None, source_materials: list | None = None) -> dict:
     """Enforce the contract even when the editable director prompt is replaced."""
     required = {"id", "qa_type", "question", "visible_context", "answer_policy", "guidance", "evidence_quotes"}
-    optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges"}
+    optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges", "question_brief"}
     if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
         raise ValueError("invalid_qa_director_task")
     if value["qa_type"] not in QA_TYPES or (expected_type is not None and value["qa_type"] != expected_type):
@@ -168,7 +172,26 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
             **({"source_line_ranges": normalize_source_line_ranges(value["source_line_ranges"]),
                 "source_line_focus": line_focus} if line_focus is not None else {}),
             **({"dialogue_design": validate_dialogue_design(value["dialogue_design"])}
-               if "dialogue_design" in value else {})}
+               if "dialogue_design" in value else {}),
+            **({"question_brief": validate_question_brief(value["question_brief"])}
+               if "question_brief" in value else {})}
+
+
+def validate_question_brief(value):
+    """A source-free editorial brief, never a copied question or answer key."""
+    strings = {"topic": 200, "communication_goal": 1200, "speaker_role": 400,
+               "listener_role": 400, "relationship": 600, "register": 400}
+    if (not isinstance(value, dict) or not {"topic", "communication_goal"} <= set(value)
+            or set(value) - set(strings) - {"behaviors"}):
+        raise ValueError("invalid_question_brief")
+    result = {key: _bounded_text(text, strings[key], "invalid_question_brief")
+              for key, text in value.items() if key in strings}
+    behaviors = value.get("behaviors", [])
+    if (not isinstance(behaviors, list) or len(behaviors) > 6
+            or any(not isinstance(item, str) or len(item) > 100 or not item.strip() for item in behaviors)):
+        raise ValueError("invalid_question_brief")
+    result["behaviors"] = list(dict.fromkeys(behaviors))
+    return result
 
 
 def _bounded_text(value, limit, error, *, empty=False):
@@ -228,7 +251,8 @@ def validate_director_skip(value, expected_id):
 def validate_dialogue_step(value, *, completed_turns):
     """Validate only transport and minimum trace shape, not inferred meaning."""
     error = "invalid_dialogue_step"
-    if (not isinstance(value, dict) or set(value) != {"continue", "user_message", "reason", "dialogue_state"}
+    if (not isinstance(value, dict) or not {"continue", "user_message", "reason", "dialogue_state"} <= set(value)
+            or set(value) - {"continue", "user_message", "reason", "dialogue_state", "question_brief"}
             or type(value["continue"]) is not bool):
         raise ValueError(error)
     if not value["continue"] and completed_turns < 2:
@@ -243,4 +267,6 @@ def validate_dialogue_step(value, *, completed_turns):
                   if key in strings else _bounded_notes(text, error) for key, text in state.items()}
     return {"continue": value["continue"],
             "user_message": _bounded_text(value["user_message"], 6000, error, empty=not value["continue"]),
-            "reason": _bounded_text(value["reason"], 2000, error), "dialogue_state": normalized}
+            "reason": _bounded_text(value["reason"], 2000, error), "dialogue_state": normalized,
+            **({"question_brief": validate_question_brief(value["question_brief"])}
+               if "question_brief" in value else {})}

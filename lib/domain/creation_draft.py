@@ -62,6 +62,8 @@ NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-st
                           'workflow-generation-instruction'}
 HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
                 'workflow-human-question-requirements', 'workflow-human-answer-requirements'}
+_MODEL_INITIALIZATION_MARKERS = frozenset(
+    node + ':' + role for node, roles in NODE_ROLES.items() for role in roles)
 _HUMAN_SEED_LIMITS = {'question': 12_000, 'answer': 12_000,
                       'question_requirements': 6000, 'answer_requirements': 6000}
 
@@ -100,6 +102,8 @@ def validate_creation_draft(values):
             raise ValueError('invalid_creation_draft')
         parts = key.split(':')
         field = parts[0]
+        model_initialized = (field == 'workflow-node-bindings' and len(parts) == 3
+                             and parts[2] == 'initialized')
         if (not re.fullmatch(r'[A-Za-z0-9_-]{1,48}', parts[1])
                 or any(ord(character) < 32 for character in key)):
             raise ValueError('invalid_creation_draft')
@@ -109,7 +113,7 @@ def validate_creation_draft(values):
         if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
                      'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
-                     *HUMAN_FIELDS} and len(parts) != 2:
+                     *HUMAN_FIELDS} and len(parts) != 2 and not model_initialized:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:
             parts = key.split(':')
@@ -150,10 +154,18 @@ def validate_creation_draft(values):
         elif field == 'workflow-node-bindings':
             # Persist references and limits only. The model validator rejects
             # endpoint URLs, credentials and arbitrary node/role keys.
-            try:
-                valid = isinstance(value, dict) and validate_node_models(value) == value
-            except ValueError:
-                valid = False
+            if model_initialized:
+                # One finite metadata key records deliberately cleared roles.
+                # Arbitrary nested binding keys and marker strings remain
+                # invalid; accepting this does not relax model references.
+                valid = (isinstance(value, list) and len(value) <= len(_MODEL_INITIALIZATION_MARKERS)
+                         and all(isinstance(marker, str) and marker in _MODEL_INITIALIZATION_MARKERS
+                                 for marker in value) and len(set(value)) == len(value))
+            else:
+                try:
+                    valid = isinstance(value, dict) and validate_node_models(value) == value
+                except ValueError:
+                    valid = False
         elif field == 'workflow-node-model-confirmations':
             valid = (isinstance(value, dict) and not set(value) - set(NODE_ROLES)
                      and all(isinstance(signature, str) and re.fullmatch(r'[0-9a-f]{64}', signature)

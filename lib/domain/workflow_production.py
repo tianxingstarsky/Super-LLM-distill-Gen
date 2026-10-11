@@ -17,7 +17,7 @@ def validate_production(value, targets):
             "min_acceptance_rate", "low_acceptance_rounds", "budget_usd", "item_retries"}
     version = value.get("version", 1) if isinstance(value, dict) else None
     if version == 2:
-        keys.add("quantity_policy")
+        keys.update({"quantity_policy", "quality_stop_version"})
     if (not isinstance(value, dict) or set(value) - keys or type(value.get("version", 1)) is not int
             or version not in (1, 2)):
         raise ValueError("invalid_production")
@@ -30,16 +30,23 @@ def validate_production(value, targets):
     if version == 2 and (not isinstance(policy, str) or policy not in {"quality_first", "bounded_replenishment"}):
         raise ValueError("invalid_production")
     quality_first = version == 2 and policy == "quality_first"
+    evaluated_stop = version == 2 and value.get("quality_stop_version") == 1
+    default_round_size = min(100 if evaluated_stop else 10_000, largest)
+    default_rounds = max(300, min(10_000, math.ceil(largest / default_round_size))) if evaluated_stop else 300
     result = {"version": version, "goals": dict(goals),
               "max_attempts": value.get("max_attempts", min(MAX_PRODUCTION_ATTEMPTS, largest * 3)),
-              "max_rounds": value.get("max_rounds", 300),
-              "round_size": value.get("round_size", min(10_000, largest)),
+              "max_rounds": value.get("max_rounds", default_rounds),
+              "round_size": value.get("round_size", default_round_size),
               "min_acceptance_rate": value.get("min_acceptance_rate", 0.2 if quality_first else 0.01),
               "low_acceptance_rounds": value.get("low_acceptance_rounds", 2 if quality_first else 3),
               "budget_usd": value.get("budget_usd", 0.0),
               "item_retries": value.get("item_retries", 2)}
     if version == 2:
         result["quantity_policy"] = policy
+        if "quality_stop_version" in value:
+            if type(value["quality_stop_version"]) is not int or value["quality_stop_version"] != 1:
+                raise ValueError("invalid_production")
+            result["quality_stop_version"] = 1
     for key, low, high in (("max_attempts", 1, MAX_PRODUCTION_ATTEMPTS), ("max_rounds", 1, 10_000),
                             ("round_size", 1, MAX_PRODUCTION_ROUND_SIZE), ("low_acceptance_rounds", 1, 100),
                             ("item_retries", 0, 5)):
@@ -74,6 +81,11 @@ def quality_first_production(config):
 
 def soft_expectation_production(config):
     return config.get("version") == 2
+
+
+def evaluated_quality_stop(config):
+    """Opt in new runs without changing the meaning of immutable old recipes."""
+    return soft_expectation_production(config) and config.get("quality_stop_version") == 1
 
 
 def production_completion_status(config, counts, selected_targets, *, source_limited=False, attention_required=False):

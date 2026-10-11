@@ -158,7 +158,7 @@ def test_missing_models_are_separate_clickable_node_errors():
     ui = AppTest.from_string(code).run()
     ui.button(key="fixture-node:ingest").click().run()
     action = ui.button(key="workflow-config-fix:fixture:model:sft")
-    assert "生成模型" in action.label and "过程核对模型" in action.label
+    assert "生成模型" in action.label and "过程核对模型" not in action.label
     assert not any(button.key == "workflow-next-config:fixture" for button in ui.button)
     action.click().run()
     _assert_open(ui, "sft", "节点设置")
@@ -199,7 +199,7 @@ def test_isolated_agent_environment_warning_opens_the_agent_verification_setting
     assert ui.button(key="workflow-create:fixture").disabled
 
 
-def test_missing_budget_rates_open_the_affected_node_without_changing_model_selection():
+def test_old_budget_metadata_does_not_add_a_price_configuration_barrier():
     code = SCRIPT.replace("'roles':{},", "'roles':{},'budget':{'max_total_usd':1,'hard_stop':True},")
     code = code.replace("WorkflowNodeModelsApplication(Inventory()))",
                         "WorkflowNodeModelsApplication(Inventory()), backend_application=Inventory())")
@@ -207,9 +207,18 @@ def test_missing_budget_rates_open_the_affected_node_without_changing_model_sele
     assert not ui.exception
     chosen = ui.selectbox(key="node-model:fixture:sft:generation:model:local").value
     ui.button(key="fixture-node:ingest").click().run()
-    ui.button(key="workflow-config-fix:fixture:prices:sft").click().run()
-    _assert_open(ui, "sft", "节点设置")
-    assert ui.selectbox(key="node-model:fixture:sft:generation:model:local").value == chosen
+    assert not any(button.key == "workflow-config-fix:fixture:prices:sft" for button in ui.button)
+    assert ui.session_state['workflow-node-bindings:fixture']['sft']['generation']['model'] == chosen
+    # Actual missing configuration still has a repair entry. Clearing a model
+    # remains an explicit edit; old budget metadata must not replace it.
+    ui.button(key='fixture-node:sft').click().run()
+    ui.selectbox(key='node-model:fixture:sft:generation:model:local').set_value(None).run()
+    ui.button(key='fixture-node:ingest').click().run()
+    ui.button(key='workflow-config-fix:fixture:model:sft').click().run()
+    _assert_open(ui, 'sft', '节点设置')
+    assert ui.selectbox(key='node-model:fixture:sft:generation:backend').value is None
+    assert 'generation' not in ui.session_state['workflow-node-bindings:fixture']['sft']
+    assert not any(button.key == 'workflow-config-fix:fixture:prices:sft' for button in ui.button)
     assert ui.button(key="workflow-create:fixture").disabled
 
 

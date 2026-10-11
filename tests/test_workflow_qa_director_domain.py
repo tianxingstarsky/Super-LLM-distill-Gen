@@ -120,7 +120,8 @@ def test_director_controls_only_generated_qa_paths_including_implicit_sft():
     assert ("ingest", "sft") not in edges and ("ingest", "multiturn") not in edges
     assert ("ingest", "cpt") in edges and ("ingest", "agent") in edges
     assert "director" not in execution_graph(["cpt"], qa_director=True)[0]
-    assert node_roles("director", "文档资料") == ("generation",)
+    assert node_roles("director", "文档资料") == ("generation", "question")
+    assert node_roles("director", "文档资料", recipe_version=19) == ("generation",)
 
 
 def test_incomplete_editable_draft_keeps_graph_and_prompts_available():

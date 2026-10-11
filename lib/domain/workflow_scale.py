@@ -12,7 +12,7 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 131_072
 DEFAULT_MAX_OUTPUT_TOKENS = 32_768
 MAX_CONTEXT_WINDOW_TOKENS = 4_000_000
 NODE_ROLES = {
-    "director": ("generation",),
+    "director": ("generation", "question"),
     "ingest": ("generation", "vision"), "cpt": ("generation", "jev"),
     "sft": ("generation", "jev"), "multiturn": ("generation", "jev"),
     "preference": ("generation", "jev"), "cot": ("generation", "jev"),
@@ -26,6 +26,10 @@ NODE_ROLES = {
 def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None,
                package_review: dict | None = None, cpt_processing: dict | None = None,
                review_repair: dict | None = None, recipe_version: int | None = None) -> tuple[str, ...]:
+    if stage == "director" and recipe_version is not None and recipe_version <= 19:
+        # Resuming a saved run must not introduce a second model call or a new
+        # required binding. New drafts configure the separated question role.
+        return ("generation",)
     if stage == "review":
         if (review_repair or {}).get("mode", "auto") == "human":
             return ()

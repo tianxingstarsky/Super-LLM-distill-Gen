@@ -201,3 +201,41 @@ def test_incomplete_custom_instruction_does_not_crash_model_draft_preparation():
     from lib.domain.workflow_creation import validate_creation
     with pytest.raises(ValueError, match='invalid_node_generation'):
         validate_creation(targets=['cot'], node_generation=incomplete)
+
+
+def test_director_question_role_copies_writer_once_and_keeps_an_independent_binding():
+    app = WorkflowNodeModelsApplication(Inventory())
+    original = {'director': {'generation': {
+        'backend': 'writer', 'model': 'custom-director',
+        'context_window_tokens': 180_000, 'max_output_tokens': 40_000}}}
+    draft, initialized, endpoints = app.prepare_draft(['director'], '文档', original, [])
+    assert draft['director']['question'] == draft['director']['generation']
+    assert 'question' not in original['director']
+    draft['director']['question']['model'] = 'write-v1'
+    draft['director']['question']['max_output_tokens'] = 8192
+    restored, _, _ = app.prepare_draft(['director'], '文档', draft, initialized)
+    assert restored['director']['generation']['model'] == 'custom-director'
+    assert restored['director']['generation']['max_output_tokens'] == 40_000
+    assert restored['director']['question']['max_output_tokens'] == 8192
+    assert not missing_bindings(['director'], '文档', restored, endpoints)
+    snapshot = app.snapshot(['director'], '文档', restored)
+    assert set(snapshot['director']) == {'generation', 'question'}
+    snapshot['director']['question']['model'] = 'changed'
+    assert restored['director']['question']['model'] == 'write-v1'
+
+
+def test_cleared_director_question_role_stays_empty_after_initialization():
+    app = WorkflowNodeModelsApplication(Inventory())
+    draft, initialized, endpoints = app.prepare_draft(['director'], '文档', {}, [])
+    draft['director'].pop('question')
+    restored, _, _ = app.prepare_draft(['director'], '文档', draft, initialized)
+    assert 'question' not in restored['director']
+    assert missing_bindings(['director'], '文档', restored, endpoints) == [('director', 'question')]
+
+
+def test_old_director_recipes_require_only_the_original_role():
+    from lib.domain.workflow_scale import node_roles
+    assert node_roles('director', '文档', recipe_version=19) == ('generation',)
+    assert node_roles('director', '文档', recipe_version=13) == ('generation',)
+    assert node_roles('director', '文档', recipe_version=20) == ('generation', 'question')
+    assert node_roles('director', '文档') == ('generation', 'question')

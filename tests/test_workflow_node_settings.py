@@ -406,6 +406,61 @@ def test_incomplete_model_selection_cannot_be_confirmed():
     assert ui.session_state['workflow-node-model-confirmations:demo'] == {}
 
 
+def _director_ui_script():
+    script = SCRIPT[:SCRIPT.index('endpoints =')]
+    return script + '''
+from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
+from lib.presentation.streamlit.workflow_node_settings import node_bindings
+bindings, endpoints = node_bindings(WorkflowNodeModelsApplication(application),
+    ['director'], '文档资料', 'demo')
+render_node_models('director', '文档资料', 'demo', bindings, endpoints,
+                   backend_application=application)
+'''
+
+
+def test_director_model_roles_migrate_confirm_and_keep_context_limits_independent():
+    binding = {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}
+    local = {'backends': {'writer': {
+        'base_url': 'https://models.example.test/v1', 'models': ['alpha', 'beta']}}}
+    ui = AppTest.from_string(_director_ui_script())
+    ui.session_state['fixture-local'] = deepcopy(local)
+    ui.session_state['workflow-form-draft:demo'] = {'workflow-node-bindings:demo': {
+        'director': {'generation': deepcopy(binding)}}}
+    ui.run()
+    assert not ui.exception
+    roles = ui.session_state['workflow-node-bindings:demo']['director']
+    assert roles['question'] == roles['generation']
+    assert not ui.button(key='node-model-confirm:demo:director').disabled
+    ui.button(key='node-model-confirm:demo:director').click().run()
+    assert ui.button(key='node-model-confirm:demo:director').disabled
+    ui.number_input(key='node-model:demo:director:question:output:writer:alpha').set_value(8192).run()
+    assert not ui.exception
+    assert ui.session_state['workflow-node-bindings:demo']['director']['generation']['max_output_tokens'] == 32768
+    assert 'director' not in ui.session_state['workflow-node-model-confirmations:demo']
+    ui.button(key='node-model:demo:director:question:reuse-generation').click().run()
+    assert ui.session_state['workflow-node-bindings:demo']['director']['question'] == binding
+    assert any('不接收资料、答案或私有记忆' in row.value for row in ui.caption)
+
+    ui.selectbox(key='node-model:demo:director:question:model:writer').set_value(None).run()
+    assert ui.button(key='node-model-confirm:demo:director').disabled
+    saved = deepcopy(ui.session_state['workflow-form-draft:demo'])
+    restarted = AppTest.from_string(_director_ui_script())
+    restarted.session_state['fixture-local'] = deepcopy(local)
+    restarted.session_state['workflow-form-draft:demo'] = saved
+    restarted.run()
+    assert not restarted.exception
+    assert 'question' not in restarted.session_state['workflow-node-bindings:demo']['director']
+    assert restarted.button(key='node-model-confirm:demo:director').disabled
+    assert restarted.selectbox(key='node-model:demo:director:question:backend').value is None
+
+
+def test_context_free_question_role_can_explicitly_reuse_another_nodes_writer():
+    from lib.presentation.streamlit.workflow_node_settings import _reusable_bindings
+    binding = {'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}
+    choices = _reusable_bindings('director', 'question', {'sft': {'generation': binding}}, {'writer': {}})
+    assert choices == [('sft', binding)]
+
+
 def test_confirmation_rechecks_service_existence_at_click_time():
     ui = _confirmation_ui()
     ui.session_state['fixture-local'] = {'backends': {}}

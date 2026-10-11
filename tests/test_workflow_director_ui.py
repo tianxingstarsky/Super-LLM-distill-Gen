@@ -24,6 +24,24 @@ def _director(ui, *, balanced=False):
         ui.selectbox(key="workflow-director-mode:fixture").set_value("balanced").run()
 
 
+def test_empty_draft_enables_separated_director_but_explicit_disabled_choice_is_preserved():
+    code = SCRIPT.replace("st.session_state.setdefault('workflow-director-enabled:fixture', False)", '')
+    ui = AppTest.from_string(code).run()
+    assert not ui.exception
+    assert ui.toggle(key='workflow-director-enabled:fixture').value is True
+    assert any(button.key == 'fixture-node:director' for button in ui.button)
+    assert ui.selectbox(key='workflow-node-prompt-selection:fixture:sft').value == 'workflow.sft_answer'
+    assert set(ui.session_state['workflow-node-bindings:fixture']['director']) == {'generation', 'question'}
+    ui.toggle(key='workflow-director-enabled:fixture').set_value(False).run()
+    saved = ui.session_state['workflow-form-draft:fixture']
+    restarted = AppTest.from_string(code)
+    restarted.session_state['workflow-form-draft:fixture'] = saved
+    restarted.run()
+    assert not restarted.exception
+    assert restarted.toggle(key='workflow-director-enabled:fixture').value is False
+    assert not any(button.key == 'fixture-node:director' for button in restarted.button)
+
+
 def test_director_rules_type_weights_and_prompts_survive_node_changes():
     ui = AppTest.from_string(SCRIPT).run()
     assert not any(button.key == "fixture-node:director" for button in ui.button)
@@ -36,7 +54,7 @@ def test_director_rules_type_weights_and_prompts_survive_node_changes():
     prompt = "workflow-node-prompt:fixture:director:workflow.qa_director"
     ui.text_area(key=prompt).set_value("Custom batch planning instructions.").run()
     ui.button(key="fixture-node:sft").click().run()
-    assert ui.selectbox(key="workflow-node-prompt-selection:fixture:sft").value == "workflow.sft_directed"
+    assert ui.selectbox(key="workflow-node-prompt-selection:fixture:sft").value == "workflow.sft_answer"
     ui.button(key="fixture-node:director").click().run()
     assert ui.number_input(key="workflow-director-batch:fixture").value == 7
     assert ui.number_input(key="workflow-director-history:fixture").value == 3
@@ -79,15 +97,55 @@ def test_submission_pins_dispatch_rules_and_node_prompts(tmp_path):
     assert not ui.exception
     recipe = ui.session_state["fixture-submitted"]
     assert recipe["qa_director"]["enabled"] is True
+    assert recipe["qa_director"]["question_separation"] is True
     assert recipe["qa_director"]["planning_mode"] == "adaptive"
     assert recipe["qa_director"]["answer_rules"] == "Clarify missing conditions."
     assert recipe["node_prompts"]["director"]["workflow.qa_director"] == "My planner prompt."
     assert recipe["node_models"]["director"]["generation"]["max_output_tokens"] == 32768
+    assert recipe["node_models"]["director"]["question"] == recipe["node_models"]["director"]["generation"]
     copied = recipe_to_draft({**recipe, "sources": []}, "Copy", "fixture", [])["values"]
     assert copied["workflow-director-enabled:fixture"] is True
     assert copied["workflow-director-mode:fixture"] == "adaptive"
     assert copied["workflow-director-answer-rules:fixture"] == "Clarify missing conditions."
     assert copied["workflow-node-prompt:fixture:director:workflow.qa_director"] == "My planner prompt."
+
+
+def test_director_explains_role_separation_and_editable_question_prompt():
+    ui = AppTest.from_string(SCRIPT).run()
+    _director(ui)
+    assert any('无线索提问交给没有资料上下文的独立模型' in row.value for row in ui.caption)
+    selection = ui.selectbox(key='workflow-node-prompt-selection:fixture:director')
+    assert set(selection.options) == {'对话设计与逐轮指导', '提问简报资料隔离检查',
+                                      '无线索提问模板', '问题适配检查'}
+    selection.set_value('workflow.question_user').run()
+    key = 'workflow-node-prompt:fixture:director:workflow.question_user'
+    ui.text_area(key=key).set_value('Use a curious learner voice without private sources.').run()
+    ui.button(key='fixture-node:sft').click().run()
+    ui.button(key='fixture-node:director').click().run()
+    ui.selectbox(key='workflow-node-prompt-selection:fixture:director').set_value('workflow.question_user').run()
+    assert ui.text_area(key=key).value == 'Use a curious learner voice without private sources.'
+    ui.button(key='workflow-node-prompt-reset:fixture:director:workflow.question_user').click().run()
+    assert not ui.exception
+    assert ui.text_area(key=key).value != 'Use a curious learner voice without private sources.'
+
+
+def test_question_brief_isolation_template_is_editable_and_restorable_on_director():
+    ui = AppTest.from_string(SCRIPT).run()
+    _director(ui)
+    selection = 'workflow-node-prompt-selection:fixture:director'
+    ui.selectbox(key=selection).set_value('workflow.question_brief_check').run()
+    key = 'workflow-node-prompt:fixture:director:workflow.question_brief_check'
+    default = ui.text_area(key=key).value
+    custom = 'Check whether the brief contains any source facts before the question model receives it.'
+    ui.text_area(key=key).set_value(custom).run()
+    ui.button(key='fixture-node:sft').click().run()
+    ui.button(key='fixture-node:director').click().run()
+    ui.selectbox(key=selection).set_value('workflow.question_brief_check').run()
+    assert not ui.exception
+    assert ui.text_area(key=key).value == custom
+    ui.button(key='workflow-node-prompt-reset:fixture:director:workflow.question_brief_check').click().run()
+    assert not ui.exception
+    assert ui.text_area(key=key).value == default
 
 
 def test_director_labels_have_english_translations():
@@ -120,6 +178,9 @@ def test_invalid_director_outputs_have_actionable_localized_errors():
         "qa_director_multiple_evidence_required", "qa_director_recorded_conversation_changed",
         "qa_history_question_required", "qa_history_question_too_long", "qa_history_dimension_too_long",
         "qa_history_sample_id_required", "qa_history_sample_id_conflict",
+        "invalid_question_separation", "invalid_question_brief", "invalid_question_brief_assessment", "question_brief_contains_private_source",
+        "private_context_in_question_request", "invalid_visible_dialogue", "invalid_question_output",
+        "invalid_question_assessment", "question_not_suitable",
     ):
         chinese = _workflow_error(ValueError(code))
         assert chinese != code and re.search(r"[\u4e00-\u9fff]", chinese)
@@ -161,6 +222,67 @@ def test_director_canvas_adds_a_column_without_overlapping_existing_nodes():
     for row in nodes.values():
         assert 0 <= row["x"] <= spec["width"] - 218
         assert 0 <= row["y"] <= spec["height"] - 78
+
+
+def test_separated_director_canvas_shows_both_models_and_names_the_missing_question_role():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    from lib.presentation.streamlit.workflow_page import GRAPH_LABELS, STAGE_GLYPHS
+    binding = {'backend': 'writer', 'model': 'fixture', 'context_window_tokens': 131072,
+               'max_output_tokens': 32768}
+    arguments = {'qa_director': {'enabled': True, 'question_separation': True},
+                 'recipe_version': 20, 'source_cleaning': True}
+    spec = canvas_spec(['sft'], {'director': {'status': 'configuration_required'}}, 'director',
+                       GRAPH_LABELS, STAGE_GLYPHS, bindings={'director': {'generation': binding}},
+                       **arguments)
+    director = next(row for row in spec['nodes'] if row['id'] == 'director')
+    assert director['subtitle'] == '缺少：无线索提问模型'
+    complete = canvas_spec(['sft'], {}, 'director', GRAPH_LABELS, STAGE_GLYPHS,
+                           bindings={'director': {'generation': binding, 'question': binding}}, **arguments)
+    director = next(row for row in complete['nodes'] if row['id'] == 'director')
+    assert director['models'] == ['指导员: writer · fixture', '无线索提问: writer · fixture']
+    assert '无线索提问交给独立模型' in director['description']
+    assert '独立问题与资料记忆' in next(row for row in complete['nodes'] if row['id'] == 'sft')['description']
+    legacy = canvas_spec(['sft'], {}, 'director', GRAPH_LABELS, STAGE_GLYPHS,
+                         bindings={'director': {'generation': binding}}, qa_director={'enabled': True},
+                         recipe_version=19)
+    assert next(row for row in legacy['nodes'] if row['id'] == 'director')['models'] == ['指导员: writer · fixture']
+
+
+def test_missing_question_model_has_a_clickable_node_issue_without_changing_prompts():
+    ui = AppTest.from_string(SCRIPT).run()
+    _director(ui)
+    prompt = 'workflow-node-prompt:fixture:director:workflow.qa_director'
+    ui.text_area(key=prompt).set_value('Keep my director rules.').run()
+    ui.selectbox(key='node-model:fixture:director:question:model:local').set_value(None).run()
+    assert not ui.exception
+    ui.button(key='fixture-node:sft').click().run()
+    issue = ui.button(key='workflow-config-fix:fixture:model:director')
+    assert '无线索提问模型' in issue.label
+    issue.click().run()
+    assert not ui.exception
+    assert ui.session_state['workflow-setup-node:fixture'] == 'director'
+    assert ui.session_state['workflow-form-draft:fixture'][prompt] == 'Keep my director rules.'
+    assert ui.button(key='workflow-create:fixture').disabled
+
+
+def test_director_run_configuration_uses_the_actual_roles_and_separate_token_limits(monkeypatch):
+    from types import SimpleNamespace
+    from lib.presentation.streamlit import workflow_page
+    monkeypatch.setattr(workflow_page, 'st', SimpleNamespace(session_state={'ui_language': 'zh'}))
+    bindings = {'generation': {'backend': 'director', 'model': 'expert',
+                               'context_window_tokens': 180_000, 'max_output_tokens': 40_000},
+                'question': {'backend': 'questioner', 'model': 'learner',
+                             'context_window_tokens': 64_000, 'max_output_tokens': 8192}}
+    recipe = {'version': 20, 'targets': ['sft'], 'node_models': {'director': bindings},
+              'qa_director': {'enabled': True, 'question_separation': True}}
+    config = workflow_page._stage_configuration('director', recipe, {})
+    assert config['对话指导员模型'] == 'director / expert'
+    assert config['无线索提问模型'] == 'questioner / learner'
+    assert config['指导员单次输出上限'] == '40,000 tokens'
+    assert config['提问单次输出上限'] == '8,192 tokens'
+    old = workflow_page._stage_configuration('director', {**recipe, 'version': 19}, {})
+    assert '无线索提问模型' not in old
+    assert workflow_page._missing_model_role_summary([('director', 'question')], 'en') == 'Dialogue director: missing Context-free question model'
 
 
 @pytest.mark.parametrize("targets", [["sft"], ["cpt", "sft"], ["sft", "cot"], ["multiturn"], ["dpo"]])

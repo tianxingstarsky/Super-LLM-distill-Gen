@@ -226,6 +226,15 @@ def _workflow_error(error) -> str:
         "invalid_qa_director_plan": "指导员返回的任务不符合本次规则，请重试当前批次。",
         "invalid_qa_director_batch": "指导员返回的任务数量或结构无效，请重试当前批次。",
         "invalid_qa_director_task": "指导员任务字段无效，请检查节点提示词后重试。",
+        "invalid_question_separation": "问答角色配置无效，请复制配置并检查指导员节点后新建任务。",
+        "invalid_question_brief": "无线索提问简报格式无效，请检查指导员提示词后重试。",
+        "invalid_question_brief_assessment": "提问简报的资料隔离检查未返回有效结果，已阻止提问调用。请检查指导员节点的简报检查模板。",
+        "question_brief_contains_private_source": "无线索提问简报含内部资料，已阻止传给提问模型。请检查指导员提示词后重试。",
+        "private_context_in_question_request": "提问请求包含私有上下文，已阻止调用。请保留任务记录并检查指导员节点。",
+        "invalid_visible_dialogue": "实际对话的角色或内容无效，请检查问题与对话来源后重试。",
+        "invalid_question_output": "提问模型未返回有效的用户消息，已隔离该候选。请检查提问模板或输出上限。",
+        "invalid_question_assessment": "问题适配检查没有返回有效结果，已隔离该候选。请检查指导员的问题适配模板。",
+        "question_not_suitable": "独立问题与可用资料不匹配，已隔离该候选。请调整指导员简报或提问规则。",
         "qa_director_type_mismatch": "指导员返回的题型与本批分配不符，请调整指导员提示词后新建任务。",
         "qa_director_id_mismatch": "指导员返回的任务标识与来源不符，请检查指导员提示词并保留任务记录。",
         "qa_director_batch_id_mismatch": "指导员返回了重复或不匹配的任务标识，请调整指导员提示词后新建任务。",
@@ -349,18 +358,18 @@ def _stage_configuration(key, recipe, state):
         mode = "文档资料" if recipe.get("sources") else "开放需求"
         # Old CoT runs only checked an existing explanation and had no writer.
         roles = (("jev",) if key == "cot" and not (recipe.get("node_generation") or {}).get("cot")
-                 else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair")))
+                 else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"), recipe_version=recipe.get("version", 0)))
         for role in roles:
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
-            prefix = "" if role == "generation" else "jev_"
-            label = (("修正模型" if (recipe.get("package_review") or {}).get("enabled") else "评分与修正模型") if key == "review" and role == "generation"
+            prefix = "question_" if role == "question" else "" if role == "generation" else "jev_"
+            label = ("无线索提问模型" if role == "question" else "对话指导员模型" if key == "director" and role == "generation" else ("修正模型" if (recipe.get("package_review") or {}).get("enabled") else "评分与修正模型") if key == "review" and role == "generation"
                      else "生成模型" if role == "generation" else "JEV 评分模型" if key in {"review", "jev"}
                      else "质量评审模型" if key == "package" else "过程核对模型")
             fallback = translate("旧版默认配置", st.session_state.get("ui_language", "zh"))
             details[label] = UntranslatedText((binding.get("backend") or recipe.get(prefix + "backend") or fallback)
                               + " / " + (binding.get("model") or recipe.get(prefix + "model") or fallback))
             if "context_window_tokens" in binding and "max_output_tokens" in binding:
-                limit_label = "生成" if role == "generation" else "评审"
+                limit_label = "提问" if role == "question" else "指导员" if key == "director" and role == "generation" else "生成" if role == "generation" else "评审"
                 details[limit_label + "上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details[limit_label + "单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
         if roles:
@@ -534,13 +543,13 @@ def _missing_model_role_summary(issues, language, node_generation=None, *, sourc
     pending_roles = {}
     for node, role in issues:
         pending_roles.setdefault(node, []).append(role)
-    role_labels = {"generation": "生成模型", "jev": "质量评审模型", "vision": "多模态识别模型"}
+    role_labels = {"generation": "生成模型", "jev": "质量评审模型", "vision": "多模态识别模型", "question": "无线索提问模型"}
     descriptions = []
     for node, roles in pending_roles.items():
         node_label = translate_label(node_display_label(node, GRAPH_LABELS, node_generation,
             source_cleaning=source_cleaning, recipe_version=19 if source_cleaning else None), language)
         missing = [translate_label(("JEV 评分模型" if node in {"review", "jev"} else "质量评审模型" if node == "package"
-                                    else "过程核对模型") if role == "jev" else ("评分与修正模型" if node == "review" else role_labels[role]), language) for role in roles]
+                                    else "过程核对模型") if role == "jev" else ("评分与修正模型" if node == "review" else "对话指导员模型" if node == "director" and role == "generation" else role_labels[role]), language) for role in roles]
         if language == "en":
             descriptions.append(f"{node_label}: missing {', '.join(missing)}")
         else:
@@ -1536,8 +1545,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         package_review = package_review_snapshot(ws)
         review_repair = review_repair_snapshot(ws)
         source_cleaning = uses_shared_source_cleaning(targets, source_mode=source_mode)
+        draft_recipe_version = 20 if qa_director.get("question_separation") is True else 19
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
-                                                   qa_director=qa_director, package_review=package_review, recipe_version=19,
+                                                   qa_director=qa_director, package_review=package_review, recipe_version=draft_recipe_version,
                                                    source_cleaning=source_cleaning, review_repair=review_repair)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
@@ -1611,8 +1621,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                                   node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                      qa_director=qa_director, recipe_version=19, source_cleaning=source_cleaning,
-                                      feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": 19}, {},
+                                      qa_director=qa_director, recipe_version=draft_recipe_version, source_cleaning=source_cleaning,
+                                      feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": draft_recipe_version}, {},
                                           target=next(iter(targets), None))
                                           if targets else None)),
                           selection_key, key=f"setup-canvas:{ws}",
@@ -1623,7 +1633,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
                 with title:
                     section_heading(node_display_label(selected_node, GRAPH_LABELS, node_generation,
-                        source_cleaning=source_cleaning, recipe_version=19), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
+                        source_cleaning=source_cleaning, recipe_version=draft_recipe_version), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
                 with expand:
                     wide_key = f"canvas-wide:setup-canvas:{ws}"
                     st.button("收窄编辑" if st.session_state.get(wide_key) else "展开编辑",
@@ -1835,14 +1845,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 render_knowledge_preview(ws)
         with setup_col, st.container(
                 border=True, key="workbench-parameters-panel"):
-            section_heading("本次生产计划", "期望规模与运行方式", "⚙")
+            section_heading("本次生产计划", "数量上限与运行方式", "⚙")
             scale_col, batch_col = st.columns([1.1, 1], gap="large")
             with scale_col:
                 default_run_name = ("Automatic data generation"
                                     if st.session_state.get("ui_language") == "en" else "自动数据生成")
                 name = _draft_name(default_run_name, ws)
                 if any(target != "agent" and (target != "cpt" or source_mode == "开放需求") for target in targets):
-                    st.caption("快捷规模 · 仍可输入自定义数量")
+                    st.caption("快捷上限 · 仍可输入自定义数量")
                     for size_column, count in zip(st.columns(3, gap="small"), (1000, 10000, 50000)):
                         with size_column:
                             st.button(f"{count:,}", key=f"workflow-count-preset:{ws}:{count}",
@@ -1967,7 +1977,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 goal_text = ", ".join(f"{target.upper()} {count:,}" for target, count in production["goals"].items())
                 goal_text = goal_text or translate("按实际来源处理", language)
                 run_summary = (translate_label(source_mode, language) + " · " +
-                               translate("期望规模", language) + " " + goal_text)
+                               translate("数量上限", language) + " " + goal_text)
             else:
                 run_summary = translate(
                     f"{source_mode} · 已选 {len(targets)} 类目标 · 候选规模 {int(sample_count):,}"

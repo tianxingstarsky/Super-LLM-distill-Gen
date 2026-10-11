@@ -94,7 +94,7 @@ COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
 HUMAN_AUGMENTATION_RECIPE_VERSION = 17
 REVIEW_REPAIR_RECIPE_VERSION = 18
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19})
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -301,12 +301,15 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     cpt_processing_supplied = cpt_processing is not None
     cpt_processing = validate_cpt_processing(cpt_processing)
     node_prompts = validate_node_prompts(node_prompts)
-    from lib.domain.workflow_node_prompts import VERSION_13_NODE_PROMPT_IDS
+    from lib.domain.workflow_node_prompts import VERSION_13_NODE_PROMPT_IDS, VERSION_19_NODE_PROMPT_IDS
     new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
                               for stage, templates in node_prompts.items() for prompt_id in templates)
+    separated_prompt_override = any(prompt_id not in VERSION_19_NODE_PROMPT_IDS.get(stage, ())
+                                    for stage, templates in node_prompts.items() for prompt_id in templates)
     human_prompt_override = any("workflow.human_augmentation_check" in templates for templates in node_prompts.values())
     source_cleaning = not repair_inputs and uses_shared_source_cleaning(targets, sources)
-    recipe_version = (SOURCE_CLEANING_RECIPE_VERSION if source_cleaning else
+    recipe_version = (20 if qa_director.get("question_separation") or separated_prompt_override else
+                      SOURCE_CLEANING_RECIPE_VERSION if source_cleaning else
                       REVIEW_REPAIR_RECIPE_VERSION if review_repair is not None else
                       HUMAN_AUGMENTATION_RECIPE_VERSION if human["enabled"] or human_prompt_override else
                       JEV_NODE_RECIPE_VERSION if package_review_stage(package_review) == "jev" else
@@ -414,7 +417,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     # as PDF/Markdown; actual conversation-only containers keep their path.
     if not repair_inputs and not source_cleaning and uses_shared_source_cleaning(targets, snapshots):
         source_cleaning = True
-        recipe_version = SOURCE_CLEANING_RECIPE_VERSION
+        recipe_version = 20 if recipe_version == 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
@@ -485,7 +488,7 @@ class Cancelled(Exception):
 
 
 class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, WorkflowReviewRepair, WorkflowSourceLibrary):
-    def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None):
+    def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None, questioner=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)
         self.state = read_json(self.path / "state.json")
@@ -502,6 +505,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 raise ValueError("cpt_visual_review_model_required")
             require_vision_model(self.root, binding)
         self.generator, self.judge = generator, judge
+        self.questioner = questioner
         # Keep the earlier judge injection point usable while all new workflow
         # calls and accounting use the dedicated JEV role.
         self.jev = jev if jev is not None else judge
@@ -576,7 +580,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             from lib.infrastructure.document_vision import require_vision_model
             parser = validate_document_parser(self.recipe.get("document_parser"))
             require_vision_model(self.root, parser["binding"])
-        field = {"judge": "judge", "jev": "jev"}.get(role, "generator")
+        field = {"judge": "judge", "jev": "jev", "question": "questioner"}.get(role, "generator")
         client = getattr(self, field)
         if client is None:
             cache = getattr(self._local, "clients", None)
@@ -741,6 +745,13 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             with self._lock:
                                 self.state.setdefault("source_memory_transports", {})[
                                     f"{model_stage or self.stage}.{role}"] = transport
+                    if self.recipe.get("qa_director", {}).get("question_separation"):
+                        from lib.infrastructure.dialogue_role_messages import answer_role_messages, question_role_messages
+                        transport = getattr(client, "source_memory_transport", "tool")
+                        if prompt_id == "workflow.question_user":
+                            request_messages = question_role_messages(system, data, transport=transport)
+                        elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
+                            request_messages = answer_role_messages(system, memory_context, data, transport=transport)
                     visible_only = (not allow_reasoning_fallback or prompt_id in {
                         "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
                         "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
@@ -1640,6 +1651,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     response = self.ask([unit["id"], "multiturn_answer", turn_index, attempt],
                         "generation", "workflow.multiturn_assistant",
                         {**source_context, "messages": [*messages, user_message], "feedback": feedback,
+                         **({"learner_messages": [*messages, user_message]} if self.separated_questions() else {}),
                          **({"dialogue_state": current_dialogue_state,
                              "dialogue_step": planned_step} if adaptive_dialogue else {})},
                         **({"instruction": "遵循问答指导契约和回答规则。首轮严格遵循answer_policy；"

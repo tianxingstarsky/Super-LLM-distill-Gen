@@ -32,7 +32,7 @@ def test_sft_without_cpt_export_shows_a_prior_shared_cleaning_column():
     assert ("cpt", "director") in spec["edges"]
     assert ("director", "sft") in spec["edges"]
     assert "合格" in nodes["cpt"]["description"]
-    assert "无需先导出 CPT" in nodes["sft"]["description"]
+    assert "基于清洗合格资料" in nodes["sft"]["description"]
     assert "生成模型" not in nodes["cpt"]["subtitle"]
 
 

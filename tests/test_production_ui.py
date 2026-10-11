@@ -5,13 +5,17 @@ from lib.bootstrap.creation_drafts import creation_draft_application
 from tests.test_workflow_draft import SCRIPT
 
 
-def production_screen(output):
+def production_screen(output, english=False):
     from pathlib import Path
     import streamlit as st
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.presentation.streamlit.workflow_page import TARGET_LABELS, _draft_number, _save_draft_value
     from lib.presentation.streamlit.workflow_production_settings import render_delivery_goal
 
+    if english:
+        from lib.presentation.streamlit.i18n import install_streamlit_localization
+        st.session_state['ui_language'] = 'en'
+        install_streamlit_localization()
     st.session_state["ws"] = "fixture"
     drafts = creation_draft_application(Path(output))
     st.session_state["workflow-draft-application:fixture"] = drafts
@@ -29,8 +33,9 @@ def test_fresh_workbench_defaults_to_one_sft_goal():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
     assert ui.pills(key="workflow-targets:fixture:自动推荐").value == ["sft"]
-    assert ui.toggle(key="workflow-production-enabled:fixture").value is True
-    assert ui.number_input(key="workflow-count:fixture").label == "期望样本量（非必达）"
+    assert ui.session_state["workflow-production-enabled:fixture"] is True
+    assert not any(item.key == "workflow-production-enabled:fixture" for item in ui.toggle)
+    assert ui.number_input(key="workflow-count:fixture").label == "样本量上限"
     assert ui.selectbox(key="workflow-production-policy:fixture").value == "quality_first"
     assert ui.number_input(key="workflow-max-units:fixture").max == 1000000
 
@@ -48,12 +53,12 @@ def test_delivery_progress_does_not_duplicate_internal_request_error_codes():
     assert "10 / 100" in ui.get("progress")[0].proto.text
 
 
-def test_candidate_mode_clamps_saved_production_source_scope():
+def test_source_scope_keeps_million_capacity_without_a_fixed_candidate_mode():
     ui = AppTest.from_string(SCRIPT).run()
     ui.number_input(key="workflow-max-units:fixture").set_value(800000).run()
-    ui.toggle(key="workflow-production-enabled:fixture").set_value(False).run()
     assert not ui.exception
-    assert ui.number_input(key="workflow-max-units:fixture").value == 100000
+    assert ui.number_input(key="workflow-max-units:fixture").value == 800000
+    assert not any(item.key == "workflow-production-enabled:fixture" for item in ui.toggle)
 
 
 def test_million_default_applies_to_all_targets_until_explicitly_overridden(tmp_path):
@@ -67,7 +72,7 @@ def test_million_default_applies_to_all_targets_until_explicitly_overridden(tmp_
     assert ui.session_state["fixture-production"]["goals"] == {"sft": 400000, "dpo": 700000}
 
 
-def test_quantity_overrides_and_mode_survive_a_fresh_session_without_local_budget(tmp_path):
+def test_quantity_overrides_and_soft_stops_survive_a_fresh_session_without_local_budget(tmp_path):
     ui = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
     ui.number_input(key="workflow-count:fixture").set_value(1000000).run()
     ui.number_input(key="production-goal-editor:fixture:sft").set_value(300000).run()
@@ -78,13 +83,9 @@ def test_quantity_overrides_and_mode_survive_a_fresh_session_without_local_budge
     assert not any(widget.key == "workflow-production-budget:fixture" for widget in fresh.number_input)
     assert fresh.session_state["fixture-production"]["budget_usd"] == 0
     assert fresh.session_state["fixture-production"] == expected
-    fresh.toggle(key="workflow-production-enabled:fixture").set_value(False).run()
-    candidate = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
-    assert not candidate.exception
-    assert candidate.toggle(key="workflow-production-enabled:fixture").value is False
-    assert candidate.session_state["fixture-production"] is None
-    assert candidate.number_input(key="workflow-count:fixture").value <= 100000
-    assert any("不自动补齐" in item.value for item in candidate.caption)
+    assert fresh.session_state["fixture-production"]["quality_stop_version"] == 1
+    assert not any(item.key == "workflow-production-enabled:fixture" for item in fresh.toggle)
+    assert any("数量只作上限" in item.value for item in fresh.caption)
 
 
 def test_existing_single_target_override_stays_visible_when_other_targets_removed(tmp_path):
@@ -96,7 +97,7 @@ def test_existing_single_target_override_stays_visible_when_other_targets_remove
     assert any(item.key == "production-goal-editor:fixture:sft" for item in ui.number_input)
 
 
-def test_legacy_copied_candidate_draft_restarts_without_refill(tmp_path):
+def test_legacy_copied_candidate_draft_creates_a_quality_stopping_new_run(tmp_path):
     from lib.presentation.streamlit.workflow_reuse import recipe_to_draft
 
     values = recipe_to_draft({"sources": [], "targets": ["sft"], "sample_count": 50000},
@@ -104,8 +105,10 @@ def test_legacy_copied_candidate_draft_restarts_without_refill(tmp_path):
     creation_draft_application(tmp_path).replace(values)
     ui = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
     assert not ui.exception
-    assert ui.toggle(key="workflow-production-enabled:fixture").value is False
-    assert ui.session_state["fixture-production"] is None
+    assert not any(item.key == "workflow-production-enabled:fixture" for item in ui.toggle)
+    assert ui.session_state["fixture-production"]["version"] == 2
+    assert ui.session_state["fixture-production"]["quality_stop_version"] == 1
+    assert ui.session_state["fixture-production"]["quantity_policy"] == "quality_first"
     assert ui.number_input(key="workflow-count:fixture").value == 50000
 
 
@@ -136,12 +139,14 @@ def test_package_sampling_hint_uses_per_target_sampling_cap():
     assert any("100 / 10,000" in item.value and "每轮每类" in item.value for item in ui.caption)
 
 
-def test_candidate_draft_with_old_million_count_is_clamped_before_widget_creation(tmp_path):
+def test_old_fixed_candidate_draft_preserves_count_as_a_soft_upper_limit(tmp_path):
     creation_draft_application(tmp_path).replace({"workflow-production-enabled:fixture": False,
                                                  "workflow-count:fixture": 1000000})
     ui = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
     assert not ui.exception
-    assert ui.number_input(key="workflow-count:fixture").value == 100000
+    assert ui.number_input(key="workflow-count:fixture").value == 1000000
+    assert ui.session_state["fixture-production"]["quality_stop_version"] == 1
+    assert creation_draft_application(tmp_path).load()["workflow-production-enabled:fixture"] is True
 
 
 def test_reset_per_class_goals_restores_common_quantity_and_persists_it(tmp_path):
@@ -200,8 +205,19 @@ def test_completed_below_expectation_is_informational_not_a_warning():
     ui = AppTest.from_function(screen).run()
     assert not ui.exception and not ui.warning
     assert "20 / 1,000" in ui.get("progress")[0].proto.text
-    assert any("实际产出 / 期望规模" in item.value for item in ui.markdown)
+    assert any("实际产出 / 数量上限" in item.value for item in ui.markdown)
     assert any("当前素材已覆盖" in item.value for item in ui.caption)
+
+
+def test_soft_limit_and_stop_controls_translate_to_english(tmp_path):
+    import re
+    ui = AppTest.from_function(production_screen, args=(str(tmp_path), True)).run()
+    assert not ui.exception
+    assert ui.number_input(key='workflow-count:fixture').label == 'Sample limit'
+    assert ui.session_state['fixture-production']['quality_stop_version'] == 1
+    for item in (*ui.number_input, *ui.caption, *ui.expander, *ui.selectbox):
+        text = item.label if hasattr(item, 'label') else item.value
+        assert not re.search(r'[\u4e00-\u9fff]', text), text
 
 
 def vision_workbench_screen(output, confirmed, with_services=False):
@@ -247,6 +263,7 @@ def vision_draft(output=None):
     binding = {"backend": "local", "model": "writer", "context_window_tokens": 131072,
                "max_output_tokens": 32768}
     return {"workflow-preset:fixture": "自动推荐", "workflow-targets:fixture:自动推荐": ["sft"],
+            "workflow-director-enabled:fixture": False,
             "workflow-source-mode:fixture": "文档资料", "workflow-sources:fixture:文档资料": [source],
             "workflow-cpt-processing-mode:fixture": "native",
             "workflow-document-parse-mode:fixture": "vision", "workflow-node-bindings:fixture": {
@@ -276,5 +293,6 @@ def test_saved_candidate_mode_does_not_activate_stale_production_budget_on_first
                                                  "workflow-production-budget:fixture": 1250.5})
     ui = AppTest.from_function(vision_workbench_screen, args=(str(tmp_path), True, True)).run()
     assert not ui.exception
-    assert ui.toggle(key="workflow-production-enabled:fixture").value is False
+    assert not any(item.key == "workflow-production-enabled:fixture" for item in ui.toggle)
+    assert ui.session_state["workflow-production-enabled:fixture"] is True
     assert not ui.button(key="workflow-create:fixture").disabled

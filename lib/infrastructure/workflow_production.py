@@ -15,7 +15,8 @@ from uuid import uuid4
 from lib.domain.corpus_quality import CorpusNearDuplicateIndex
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue, validate_short_task_plan
 from lib.domain.workflow_production import (production_batch_size, validate_production,
-    quality_first_production, soft_expectation_production, production_completion_status)
+    quality_first_production, soft_expectation_production, production_completion_status,
+    evaluated_quality_stop)
 from lib.domain.workflow_quality import canonical
 from lib.domain.workflow_reasoning_route import cot_updates_sft
 from lib.domain.workflow_package_review import package_review_stage
@@ -35,6 +36,40 @@ def _digest(value):
 def _hash_file(path):
     with Path(path).open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def _quality_assessment_valid(row):
+    """Only an actual quality outcome may contribute to saturation evidence.
+
+    Parse/provider errors are operational failures. Older records sometimes
+    conflated failed shape repairs with quality rejection; remain conservative
+    when they do not carry an explicit verdict or failure classification.
+    """
+    if (row.get("request_error") or row.get("generation_failure_kind") == "invalid_output"
+            or row.get("reason") in {"invalid_model_result", "request_retries_exhausted",
+                                     "qa_director_plan_invalid_after_repair"}):
+        return False
+    for name in ("review_repair", "package_review"):
+        if isinstance(row.get(name), dict) and row[name].get("error"):
+            return False
+    if row.get("status") in {"eligible", "duplicate", "surplus"}:
+        return True
+    if row.get("reason") in {"source_exhausted", "no_new_grounded_scenario"}:
+        return True
+    if row.get("generation_failure_kind") == "quality":
+        return True
+    review = row.get("review_repair")
+    checks = [row.get("judge"), row.get("checks"),
+              review.get("verdict") if isinstance(review, dict) else None]
+    from lib.domain.workflow_quality import verdict
+    for check in checks:
+        for value in check if isinstance(check, list) else [check]:
+            try:
+                verdict(value)
+            except ValueError:
+                continue
+            return True
+    return False
 
 
 def _production_collection_file(directory, receipt, target):
@@ -100,6 +135,36 @@ class ProductionCollections:
 class WorkflowProduction:
     def production_enabled(self):
         return self.recipe.get("version", 0) >= 12 and self.recipe.get("production") is not None
+
+    @staticmethod
+    def _production_stop_signals(config, receipt, production, low_rounds, director_rounds,
+                                 *, may_stop_expansion, directed_targets):
+        """Rebuild decisions solely from committed receipts, including resume."""
+        evaluated = evaluated_quality_stop(config)
+        consecutive = max(2, config["low_acceptance_rounds"]) if evaluated else config["low_acceptance_rounds"]
+        saturation = receipt.get("director_saturation", {})
+        for target in config["goals"]:
+            tried = receipt["attempts"].get(target, 0)
+            valid = True
+            if evaluated:
+                assessment = receipt.get("quality_assessments", {}).get(target, {})
+                valid = bool(assessment.get("valid_for_saturation"))
+                tried = assessment.get("assessed", 0)
+            low_rounds[target] = (low_rounds[target] + 1 if valid and tried and
+                receipt["eligible"].get(target, 0) / tried < config["min_acceptance_rate"] else 0)
+            if (may_stop_expansion and low_rounds[target] >= consecutive
+                    and production["goals"][target]["remaining"]):
+                production["goals"][target]["stop_reason"] = (
+                    "diminishing_returns" if soft_expectation_production(config) else "low_acceptance_rate")
+            if evaluated:
+                director_rounds[target] = (director_rounds[target] + 1 if target in directed_targets
+                    and saturation.get("valid_assessment") and saturation.get("fraction", 0) >= .8 else 0)
+                exhausted = may_stop_expansion and director_rounds[target] >= consecutive
+            else:
+                exhausted = saturation.get("stop_expansion")
+            if (soft_expectation_production(config) and target in directed_targets
+                    and production["goals"][target]["remaining"] and exhausted):
+                production["goals"][target]["stop_reason"] = "director_saturation"
 
     def run_item_safely(self, stage, unit, action):
         if not self.production_enabled():
@@ -305,6 +370,12 @@ class WorkflowProduction:
                         except Exception as error:
                             if type(error).__name__ == "Cancelled":
                                 raise
+                            from lib.model_request_reliability import ModelRequestError
+                            if isinstance(error, ModelRequestError):
+                                # The transport already used its bounded retry
+                                # policy. Do not turn provider failure into a
+                                # planner's declaration that ideas ran out.
+                                raise
                             failure = classify_request_error(error)
                             if failure["kind"] in {"fatal", "unknown"}:
                                 raise
@@ -380,6 +451,42 @@ class WorkflowProduction:
                     raise ValueError("production_round_integrity_error")
             elif "planning.json" in receipt["sha256"]:
                 raise ValueError("production_round_integrity_error")
+            if evaluated_quality_stop(self.recipe["production"]):
+                assessments = receipt.get("quality_assessments")
+                if not isinstance(assessments, dict) or set(assessments) != set(receipt["attempts"]):
+                    raise ValueError("production_round_integrity_error")
+                for target, saved in assessments.items():
+                    if (not isinstance(saved, dict) or type(saved.get("assessed")) is not int
+                            or type(saved.get("unassessed")) is not int
+                            or type(saved.get("valid_for_saturation")) is not bool):
+                        raise ValueError("production_round_integrity_error")
+                    assessed = unassessed = 0
+                    selected_file = _production_collection_file(directory, receipt, target)
+                    for row in WorkflowRows(selected_file, receipt["rows"][target]):
+                        valid = _quality_assessment_valid(row)
+                        assessed += int(valid)
+                        unassessed += int(not valid)
+                    expected = {"assessed": assessed, "unassessed": unassessed}
+                    if "upstream_stage" in saved:
+                        source_file = "sft.upstream-quality.jsonl"
+                        if (saved["upstream_stage"] != "sft" or source_file not in receipt["sha256"]
+                                or type(saved.get("upstream_assessed")) is not int
+                                or type(saved.get("upstream_unassessed")) is not int):
+                            raise ValueError("production_round_integrity_error")
+                        blocked_assessed = blocked_unassessed = 0
+                        for row in WorkflowRows(path.parent / source_file,
+                                                saved["upstream_assessed"] + saved["upstream_unassessed"]):
+                            valid = _quality_assessment_valid(row)
+                            blocked_assessed += int(valid)
+                            blocked_unassessed += int(not valid)
+                        assessed += blocked_assessed
+                        unassessed += blocked_unassessed
+                        expected.update(upstream_stage="sft", upstream_assessed=blocked_assessed,
+                                        upstream_unassessed=blocked_unassessed)
+                    expected.update(assessed=assessed, unassessed=unassessed,
+                                    valid_for_saturation=bool(assessed) and not unassessed)
+                    if saved != expected:
+                        raise ValueError("production_round_integrity_error")
             receipts.append(receipt)
             attempted += receipt["attempted"]
         return receipts
@@ -403,6 +510,14 @@ class WorkflowProduction:
                         for receipt in receipts if receipt.get("director_saturation")]
             if evidence:
                 state["director_saturation_evidence"] = evidence
+            if evaluated_quality_stop(config):
+                state["quality_stop_version"] = 1
+                state["quality_assessment_history"] = [
+                    {"round": receipt["round"], "targets": deepcopy(receipt.get("quality_assessments", {}))}
+                    for receipt in receipts[-max(2, config["low_acceptance_rounds"]):]]
+                state["invalid_assessment_count"] = sum(
+                    item.get("unassessed", 0) for receipt in receipts
+                    for item in receipt.get("quality_assessments", {}).values())
             if not self.recipe["sources"]:
                 state["planning_requested"] = sum(receipt.get("planning", {}).get("requested", receipt["attempted"])
                                                    for receipt in receipts)
@@ -438,7 +553,8 @@ class WorkflowProduction:
             if production["status"] in {"completed", "needs_attention"}:
                 production["status"] = production_completion_status(config, production["counts"], self.recipe["targets"],
                     source_limited=production["stop_reason"] == "source_limit_reached",
-                    attention_required=production["stop_reason"] == "planning_failed_after_repair")
+                    attention_required=production["stop_reason"] == "planning_failed_after_repair" or
+                        bool(production.get("invalid_assessment_count")))
         report["production"] = production
         if not report["package_review"].get("enabled"):
             return
@@ -478,6 +594,7 @@ class WorkflowProduction:
         self._production_counts[target] += 1
 
     def _production_round(self, generated, source_rows, active):
+        self._production_blocked_sft_quality = None
         selected = set(active)
         collections = {target: [] for target in TARGETS}
         needs_sft = bool(selected & (PREFERENCE_TARGETS | {"sft", "cot"}))
@@ -512,6 +629,22 @@ class WorkflowProduction:
             collections["gsm8k"] = self.stage_items("gsm8k", generated, self.gsm8k)
         if cot_updates_sft(self.recipe):
             self.finalize_reasoning_outputs(collections, delivery_targets=selected)
+        if evaluated_quality_stop(self.recipe["production"]) and selected & (PREFERENCE_TARGETS | {"cot"}):
+            blocked = RowSpool(self._production_destination.parent / "sft.upstream-quality.jsonl")
+            assessed = unassessed = 0
+            for row in collections["sft"]:
+                if row.get("status") == "eligible":
+                    continue
+                evidence = {key: deepcopy(row[key]) for key in (
+                    "id", "status", "reason", "request_error", "generation_failure_kind", "judge", "checks",
+                    "review_repair", "package_review") if key in row}
+                blocked.append(evidence)
+                valid = _quality_assessment_valid(evidence)
+                assessed += int(valid)
+                unassessed += int(not valid)
+            blocked.close()
+            self._production_blocked_sft_quality = {"upstream_stage": "sft", "upstream_assessed": assessed,
+                                                    "upstream_unassessed": unassessed}
         # Intermediate candidates are processed before suppressing unrequested
         # formats, including CoT required after its own delivery goal is met.
         for target in set(collections) - selected:
@@ -592,6 +725,7 @@ class WorkflowProduction:
                     path = _production_collection_file(directory, receipt, target)
                     version_path = round_dir / f"{target}.reconciled-{revision}.jsonl"
                     count = 0
+                    assessed = unassessed = 0
                     with version_path.open("x", encoding="utf-8") as handle:
                         for original in WorkflowRows(path, receipt["rows"][target]):
                             found = connection.execute("SELECT payload FROM final_rows WHERE target=? AND id=?",
@@ -599,9 +733,21 @@ class WorkflowProduction:
                             row = json.loads(found[0]) if found else original
                             handle.write(canonical(row) + "\n")
                             count += int(row["status"] == "eligible")
+                            if target in replacement.get("quality_assessments", {}):
+                                valid = _quality_assessment_valid(row)
+                                assessed += int(valid)
+                                unassessed += int(not valid)
                         handle.flush()
                         os.fsync(handle.fileno())
                     replacement["eligible"][target] = count
+                    if target in replacement.get("quality_assessments", {}):
+                        prior = replacement["quality_assessments"][target]
+                        upstream = {key: prior[key] for key in (
+                            "upstream_stage", "upstream_assessed", "upstream_unassessed") if key in prior}
+                        assessed += upstream.get("upstream_assessed", 0)
+                        unassessed += upstream.get("upstream_unassessed", 0)
+                        replacement["quality_assessments"][target] = {"assessed": assessed, "unassessed": unassessed,
+                            "valid_for_saturation": bool(assessed) and not unassessed, **upstream}
                     replacement["files"][target] = version_path.name
                     replacement["sha256"].pop(path.name)
                     replacement["sha256"][version_path.name] = _hash_file(version_path)
@@ -620,6 +766,7 @@ class WorkflowProduction:
         config = validate_production(self.recipe["production"], self.recipe["targets"])
         quality_first = quality_first_production(config)
         soft = soft_expectation_production(config)
+        evaluated_stop = evaluated_quality_stop(config)
         reached_reason = "expectation_reached" if soft else "goal_reached"
         directory = self.path / "production"
         directory.mkdir(exist_ok=True)
@@ -686,21 +833,16 @@ class WorkflowProduction:
                                 if unit.get("status") == "ready")
             identities.commit()
             low_rounds = {target: 0 for target in config["goals"]}
+            director_rounds = {target: 0 for target in config["goals"]}
             directed_targets = set(self.recipe["targets"]) & (PREFERENCE_TARGETS | {"sft", "cot", "multiturn"})
             covered = 0
             for receipt in receipts:
                 covered += receipt["attempted"]
-                may_stop_expansion = not soft or not self.recipe["sources"] or covered >= source_index.count
-                for target in config["goals"]:
-                    tried = receipt["attempts"].get(target, 0)
-                    low_rounds[target] = (low_rounds[target] + 1 if tried and
-                        receipt["eligible"].get(target, 0) / tried < config["min_acceptance_rate"] else 0)
-                    if (may_stop_expansion and low_rounds[target] >= config["low_acceptance_rounds"]
-                            and production["goals"][target]["remaining"]):
-                        production["goals"][target]["stop_reason"] = "diminishing_returns" if soft else "low_acceptance_rate"
-                    if (soft and target in directed_targets and production["goals"][target]["remaining"] and
-                            receipt.get("director_saturation", {}).get("stop_expansion")):
-                        production["goals"][target]["stop_reason"] = "director_saturation"
+                may_stop_expansion = (not soft or not self.recipe["sources"] or covered >= source_index.count)
+                if evaluated_stop and self.state["input_summary"].get("deferred"):
+                    may_stop_expansion = False
+                self._production_stop_signals(config, receipt, production, low_rounds, director_rounds,
+                    may_stop_expansion=may_stop_expansion, directed_targets=directed_targets)
             stop = None
             while True:
                 self.check_cancel()
@@ -743,7 +885,13 @@ class WorkflowProduction:
                     # of the same design. Quality-first still caps the initial
                     # candidate window and never replaces rejected variants.
                     human = self.recipe.get("qa_director", {}).get("human_augmentation", {}).get("enabled", False)
-                    for unit in source_index.rows(production["attempted"], size, expand=not quality_first or human):
+                    guided_expansion = evaluated_stop and self.recipe.get("qa_director", {}).get("enabled", False)
+                    # A document may support several useful dialogue acts.
+                    # The director may revisit it inside the same initial
+                    # candidate cap, until valid feedback shows saturation.
+                    # Rejecting a sample never creates additional quota debt.
+                    for unit in source_index.rows(production["attempted"], size,
+                                                  expand=not quality_first or human or guided_expansion):
                         generated.append(unit)
                     generated.close()
                 elif set(active) == {"gsm8k"}:
@@ -788,23 +936,40 @@ class WorkflowProduction:
                 self.stage = "package"
                 self.state["stages"]["package"].update(status="running", total=1, done=0)
                 self.package(collections)
-                rows, eligible, attempts = {}, {}, {}
+                rows, eligible, attempts, assessments = {}, {}, {}, {}
                 for target in self.recipe["targets"]:
                     record_path = self._production_destination / f"{target}.records.json"
                     spool = RowSpool(round_dir / f"{target}.jsonl")
+                    assessed = unassessed = 0
                     for row in iter_json_records(record_path):
                         spool.append(row)
+                        if evaluated_stop and target in active:
+                            valid = _quality_assessment_valid(row)
+                            assessed += int(valid)
+                            unassessed += int(not valid)
                     spool.close()
                     rows[target] = len(spool)
                     eligible[target] = self.state["quality"]["targets"][target]["eligible"]
                     if target in active:
                         attempts[target] = len(source_batch) if target in {"cpt", "agent"} and self.recipe["sources"] else len(generated)
+                        if evaluated_stop:
+                            upstream = (self._production_blocked_sft_quality or {}
+                                if target in PREFERENCE_TARGETS | {"cot"} else {})
+                            assessed += upstream.get("upstream_assessed", 0)
+                            unassessed += upstream.get("upstream_unassessed", 0)
+                            assessments[target] = {"assessed": assessed, "unassessed": unassessed,
+                                "valid_for_saturation": bool(assessed) and not unassessed, **upstream}
                 attempted = len(generated)
                 receipt = {"round": number, "attempted": attempted, "attempts": attempts,
                            "planned_ready": generated_count,
                            "rows": rows, "eligible": eligible, "sha256": {
                                f"{target}.jsonl": _hash_file(round_dir / f"{target}.jsonl") for target in rows},
                            "package_review": deepcopy(self.state["quality"]["package_review"])}
+                if evaluated_stop:
+                    receipt["quality_assessments"] = assessments
+                    if self._production_blocked_sft_quality is not None:
+                        source_file = "sft.upstream-quality.jsonl"
+                        receipt["sha256"][source_file] = _hash_file(round_dir / source_file)
                 if (soft and set(active) & directed_targets and
                         self.recipe.get("qa_director", {}).get("planning_mode") == "adaptive"):
                     feedback = self.state.get("qa_director", {}).get("feedback", {})
@@ -820,6 +985,18 @@ class WorkflowProduction:
                         receipt["director_saturation"] = {"guided": guided, **reasons,
                             "explicit_skip_count": skipped, "fraction": round(skipped / guided, 4),
                             "stop_expansion": may_stop and skipped / guided >= .8}
+                        if evaluated_stop:
+                            may_stop = may_stop and not self.state["input_summary"].get("deferred")
+                            valid_assessment = (skipped <= guided and
+                                not feedback.get("qa_director_plan_invalid_after_repair", 0) and
+                                all(assessments.get(target, {}).get("valid_for_saturation")
+                                    for target in active if target in directed_targets))
+                            prior = min((director_rounds[target] for target in active if target in director_rounds
+                                         and target in directed_targets), default=0)
+                            continued = prior + 1 if valid_assessment and skipped / guided >= .8 else 0
+                            receipt["director_saturation"].update(valid_assessment=valid_assessment,
+                                consecutive_rounds=continued, stop_expansion=may_stop and
+                                    continued >= max(2, config["low_acceptance_rounds"]))
                 if (round_dir / "planned.jsonl").exists():
                     receipt["sha256"]["planned.jsonl"] = _hash_file(round_dir / "planned.jsonl")
                 if soft and (round_dir / "planning.json").exists():
@@ -832,17 +1009,13 @@ class WorkflowProduction:
                 previous = production
                 production = self._production_state(config, receipts)
                 may_stop_expansion = not soft or not self.recipe["sources"] or production["attempted"] >= source_index.count
+                if evaluated_stop and self.state["input_summary"].get("deferred"):
+                    may_stop_expansion = False
                 for target in config["goals"]:
                     if previous["goals"][target]["stop_reason"]:
                         production["goals"][target]["stop_reason"] = previous["goals"][target]["stop_reason"]
-                    tried = attempts.get(target, 0)
-                    low_rounds[target] = (low_rounds[target] + 1 if tried and eligible[target] / tried < config["min_acceptance_rate"] else 0)
-                    if (may_stop_expansion and low_rounds[target] >= config["low_acceptance_rounds"]
-                            and production["goals"][target]["remaining"]):
-                        production["goals"][target]["stop_reason"] = "diminishing_returns" if soft else "low_acceptance_rate"
-                    if (soft and target in directed_targets and production["goals"][target]["remaining"] and
-                            receipt.get("director_saturation", {}).get("stop_expansion")):
-                        production["goals"][target]["stop_reason"] = "director_saturation"
+                self._production_stop_signals(config, receipt, production, low_rounds, director_rounds,
+                    may_stop_expansion=may_stop_expansion, directed_targets=directed_targets)
                 self.state["input_summary"]["generation_candidates"] = production["attempted"]
                 self.save()
                 self.event("production_round_completed", round=number, eligible=eligible, attempted=attempted)
@@ -862,7 +1035,8 @@ class WorkflowProduction:
             if unavailable and stop == reached_reason:
                 stop = "source_exhausted"
             production.update(stop_reason=stop, status=production_completion_status(config, production["counts"], self.recipe["targets"],
-                source_limited=stop == "source_limit_reached", attention_required=stop == "planning_failed_after_repair"))
+                source_limited=stop == "source_limit_reached", attention_required=stop == "planning_failed_after_repair" or
+                    bool(production.get("invalid_assessment_count"))))
             for progress in production["goals"].values():
                 if not progress["remaining"]:
                     progress["stop_reason"] = reached_reason
@@ -901,7 +1075,8 @@ class WorkflowProduction:
             production.pop("current_batch", None)
             unavailable = any(counts[target] == 0 for target in self.recipe["targets"] if target not in config["goals"])
             production.update(status=production_completion_status(config, counts, self.recipe["targets"],
-                source_limited=stop == "source_limit_reached", attention_required=stop == "planning_failed_after_repair"), stop_reason=stop)
+                source_limited=stop == "source_limit_reached", attention_required=stop == "planning_failed_after_repair" or
+                    bool(production.get("invalid_assessment_count"))), stop_reason=stop)
             if soft:
                 production["below_expectation"] = {target: progress["remaining"] for target, progress in production["goals"].items()
                                                   if progress["remaining"]}

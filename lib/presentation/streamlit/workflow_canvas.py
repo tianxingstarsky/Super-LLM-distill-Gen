@@ -40,7 +40,11 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         "review": "在同一节点评分、修正并重新评分；通过后才进入打包，修正不会回到 SFT 生成。",
         "package": "检查结构、去重并导出训练文件、报告与清单。",
     }
-    if source_cleaning and (recipe_version or 0) >= 19 and node == "cpt":
+    if node == "director" and (recipe_version or 0) >= 20:
+        description = "指导员设计角色与沟通目标；有线索提问直接发出，无线索提问交给独立模型。回答模型在 SFT / 多轮节点配置。"
+    elif node == "sft" and (recipe_version or 0) >= 20:
+        description = "接收独立问题与资料记忆后生成回答；不同时编造问题和答案。"
+    elif source_cleaning and (recipe_version or 0) >= 19 and node == "cpt":
         description = "清洗并核对解析资料，隔离不可靠片段；合格资料供指导员、SFT 与多轮对话复用。"
     elif source_cleaning and (recipe_version or 0) >= 19 and node == "director":
         description = "基于清洗合格的资料设计互动；知识内化样本独立可理解，带资料样本把必要上下文写入用户输入。"
@@ -217,14 +221,16 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         status_label = {"completed": "完成", "running": "执行中", "failed": "失败", "cancelled": "已停止",
                         "pending": "等待", "queued": "待启动"}.get(status, "等待")
         missing_roles = metrics.get("missing_roles", [role for role in roles if role not in node_bindings])
-        role_names = ({"generation": "Generation model", "jev": "Review model", "vision": "Image-reading model"}
-                      if language == "en" else {"generation": "生成模型", "jev": "核对模型", "vision": "图片识别模型"})
+        role_names = ({"generation": "Generation model", "jev": "Review model", "vision": "Image-reading model", "question": "Context-free question model"}
+                      if language == "en" else {"generation": "生成模型", "jev": "核对模型", "vision": "图片识别模型", "question": "无线索提问模型"})
         if key == "review":
             role_names.update(generation=("Repair model" if language == "en" else "修正模型") if "jev" in roles
                               else ("Scoring and repair model" if language == "en" else "评分与修正模型"),
                               jev="Scoring model" if language == "en" else "评分模型")
         elif key == "cpt" and shared_cleaning:
             role_names["generation"] = "Cleaning model" if language == "en" else "清洗模型"
+        elif key == "director":
+            role_names["generation"] = "Dialogue director model" if language == "en" else "对话指导员模型"
         missing_hint = (("Missing: " if language == "en" else "缺少：") +
                         (", " if language == "en" else "、").join(role_names[role] for role in missing_roles if role in role_names))
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
@@ -236,7 +242,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                     translate_label("点击配置节点", language))
         models = []
         if not live:
-            for role_key, zh, en in (("generation", "生成", "Generate"), ("jev", "评审", "Review"), ("vision", "识别", "Read")):
+            for role_key, zh, en in (("generation", "生成", "Generate"), ("question", "无线索提问", "Question"), ("jev", "评审", "Review"), ("vision", "识别", "Read")):
                 binding = node_bindings.get(role_key)
                 if binding:
                     review_title = (("Repair" if language == "en" else "修正") if "jev" in roles else
@@ -245,6 +251,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                     title = review_title if key == "review" else en if language == "en" else zh
                     if key == "cpt" and shared_cleaning and role_key == "generation":
                         title = "Clean" if language == "en" else "清洗"
+                    elif key == "director" and role_key == "generation":
+                        title = "Director" if language == "en" else "指导员"
                     models.append(f"{title}: {binding['backend']} · {binding['model']}")
         description = ("Verify the selected source and candidate, without another model parse." if language == "en" else
                        "核验选中的来源与候选结果，不重新调用模型解析。") if repair_only and key == "ingest" else " ".join(

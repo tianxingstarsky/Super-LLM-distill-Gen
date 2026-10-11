@@ -38,6 +38,12 @@ def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_
             if marker in initialized or role in draft.get(node, {}):
                 initialized.add(marker)
                 continue
+            if node == "director" and role == "question" and draft.get(node, {}).get("generation"):
+                # Default to the existing connection, while keeping model and
+                # token settings independent for the context-free questioner.
+                draft[node][role] = deepcopy(draft[node]["generation"])
+                initialized.add(marker)
+                continue
             slot = (inventory.get("roles") or {}).get(role) or {}
             backend = slot.get("backend") or inventory.get("default_backend")
             endpoint = endpoints.get(backend)

@@ -34,6 +34,14 @@ from tests.test_workflow_draft import SCRIPT
     ('workflow-review-repair-rounds:w', True),
     ('workflow-review-repair-threshold:w', -1), ('workflow-review-repair-threshold:w', 101),
     ('workflow-review-repair-threshold:w:review', 80),
+    ('workflow-node-bindings:w:other', ['director:question']),
+    ('workflow-node-bindings:w:initialized:extra', ['director:question']),
+    ('workflow-node-bindings:w:initialized', None),
+    ('workflow-node-bindings:w:initialized', {'director': ['question']}),
+    ('workflow-node-bindings:w:initialized', ['director:question', 'director:question']),
+    ('workflow-node-bindings:w:initialized', ['director:unknown']),
+    ('workflow-node-bindings:w:initialized', ['unknown:generation']),
+    ('workflow-node-bindings:w:initialized', ['director:question', 123]),
 ])
 def test_draft_rejects_invalid_or_non_form_values(key, value):
     with pytest.raises(ValueError, match='invalid_creation_draft'):
@@ -51,6 +59,28 @@ def test_node_model_confirmations_survive_draft_restart(tmp_path):
     values = {'workflow-node-model-confirmations:w': {'sft': 'a' * 64, 'jev': 'b' * 64}}
     creation_draft_application(tmp_path).replace(values)
     assert creation_draft_application(tmp_path).load() == values
+
+
+def test_director_initialization_markers_and_independent_bindings_survive_disk_and_named_restore(tmp_path):
+    values = {'workflow-node-bindings:w': {'director': {
+        'generation': {'backend': 'writer', 'model': 'teacher', 'context_window_tokens': 131072,
+                       'max_output_tokens': 32768},
+        'question': {'backend': 'writer', 'model': 'teacher', 'context_window_tokens': 64000,
+                     'max_output_tokens': 8192}}},
+        'workflow-node-bindings:w:initialized': ['director:generation', 'director:question'],
+        'workflow-production-enabled:w': True,
+        'workflow-node-prompt:w:director:workflow.question_user': 'Keep my question instructions.'}
+    application = creation_draft_application(tmp_path)
+    application.replace(values)
+    identifier = application.save_snapshot('Question roles')
+    assert creation_draft_application(tmp_path).load() == values
+    before = (tmp_path / '.creation-draft.json').read_bytes()
+    with pytest.raises(ValueError, match='invalid_creation_draft'):
+        application.update({'workflow-node-bindings:w:initialized': ['director:unknown']})
+    assert (tmp_path / '.creation-draft.json').read_bytes() == before
+    assert application.load() == values
+    application.replace({'workflow-name:w': 'Another draft'})
+    assert creation_draft_application(tmp_path).restore_snapshot(identifier) == values
 
 
 def test_review_node_mode_and_bounds_survive_restart_and_named_restore(tmp_path):
@@ -136,6 +166,43 @@ def persistent_script(tmp_path):
     code = code.replace('WorkflowNodeModelsApplication(Inventory()))',
                         'WorkflowNodeModelsApplication(Inventory()), draft_application=draft_app)')
     return code.encode('ascii', 'backslashreplace').decode('ascii')
+
+
+def test_persistent_director_node_saves_cleared_question_role_and_exact_prompt_across_restarts(tmp_path):
+    script = persistent_script(tmp_path)
+    application = creation_draft_application(tmp_path)
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    assert not any('草稿未能' in warning.value for warning in ui.warning)
+    ui.toggle(key='workflow-director-enabled:fixture').set_value(True).run()
+    ui.button(key='fixture-node:director').click().run()
+    assert not ui.exception
+    assert ui.session_state['workflow-setup-node:fixture'] == 'director'
+    assert not any('草稿未能' in warning.value for warning in ui.warning)
+    marker_key = 'workflow-node-bindings:fixture:initialized'
+    assert 'director:question' in application.load()[marker_key]
+    assert set(application.load()['workflow-node-bindings:fixture']['director']) == {'generation', 'question'}
+    prompt_key = 'workflow-node-prompt:fixture:director:workflow.qa_director'
+    custom = 'Preserve these exact user instructions across real disk autosave.'
+    ui.text_area(key=prompt_key).set_value(custom).run()
+    ui.selectbox(key='node-model:fixture:director:question:model:local').set_value(None).run()
+    ui.button(key='fixture-node:sft').click().run()
+    saved = application.load()
+    assert 'question' not in saved['workflow-node-bindings:fixture']['director']
+    assert 'director:question' in saved[marker_key]
+    assert saved[prompt_key] == custom
+    assert not any('草稿未能' in warning.value for warning in ui.warning)
+    fresh = AppTest.from_string(script).run()
+    assert not fresh.exception
+    fresh.button(key='fixture-node:director').click().run()
+    assert not fresh.exception
+    assert 'question' not in fresh.session_state['workflow-node-bindings:fixture']['director']
+    assert fresh.selectbox(key='node-model:fixture:director:question:backend').value is None
+    assert fresh.text_area(key=prompt_key).value == custom
+    assert fresh.button(key='node-model-confirm:fixture:director').disabled
+    assert fresh.button(key='workflow-create:fixture').disabled
+    assert not any('草稿未能' in warning.value for warning in fresh.warning)
+    assert application.load()[prompt_key] == custom
 
 
 def test_new_ui_session_restores_bulk_settings_goals_and_cleared_brief(tmp_path):

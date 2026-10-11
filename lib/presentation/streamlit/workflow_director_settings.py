@@ -48,11 +48,12 @@ def _field(workspace, key, default):
 
 
 def director_snapshot(workspace: str, *, eligible=True) -> dict:
-    if not eligible or not _field(workspace, f"workflow-director-enabled:{workspace}", False):
+    if not eligible or not _field(workspace, f"workflow-director-enabled:{workspace}", True):
         return {"enabled": False}
     mode = _field(workspace, f"workflow-director-mode:{workspace}", "adaptive")
     return {
         "enabled": True,
+        "question_separation": True,
         "planning_mode": mode,
         "batch_size": _field(workspace, f"workflow-director-batch:{workspace}", 20),
         "history_limit": _field(workspace, f"workflow-director-history:{workspace}", 10),
@@ -76,7 +77,7 @@ def director_has_issue(config: dict) -> bool:
 def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
     eligible = bool(DIRECTED_TARGETS.intersection(targets))
     key = f"workflow-director-enabled:{workspace}"
-    st.session_state[key] = _field(workspace, key, False)
+    st.session_state[key] = _field(workspace, key, True)
     st.toggle("加入对话指导员", key=key, disabled=not eligible,
               on_change=save_field, args=(workspace, key),
               help="文档先清洗，再由指导员设计互动，交给生成节点。连续多轮按实际回应调整；模型与提示词在节点内配置。")
@@ -87,6 +88,7 @@ def render_director_settings(workspace: str, *, save_field) -> None:
     if st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning"):
         st.caption("资料解析 → CPT / 资料清洗 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
     st.caption("指导员按行号选完整知识块，生成模型通过资料记忆工具收到所选原文。训练输入按线索类型组织。")
+    st.caption("有线索提问由指导员发出；无线索提问交给没有资料上下文的独立模型。SFT / 多轮模型收到问题和资料记忆后只负责回答。")
     key = f"workflow-director-mode:{workspace}"
     st.session_state[key] = _field(workspace, key, "adaptive")
     language = st.session_state.get("ui_language", "zh")

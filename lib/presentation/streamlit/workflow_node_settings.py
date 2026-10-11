@@ -46,11 +46,18 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
         NODE_ROLES[node] if node in {"jev", "package"} else node_roles(
             node, source_mode, node_generation=node_generation, package_review=package_review,
             cpt_processing=cpt_processing, review_repair=review_repair))]
+    if "director" in draft and "question" not in draft["director"]:
+        # The old draft schema had no question role. Initialize it once; a
+        # persisted marker thereafter distinguishes an intentional clear.
+        restored_markers = [marker for marker in restored_markers if marker != "director:question"]
+    saved_markers = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(
+        initialized_key, restored_markers)
     draft, initialized, endpoints = application.prepare_draft(
-        nodes, source_mode, draft, st.session_state.get(initialized_key, restored_markers),
+        nodes, source_mode, draft, st.session_state.get(initialized_key, saved_markers),
         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
+    _persist_draft_value(workspace, initialized_key, sorted(initialized))
     st.session_state[f"workflow-node-scope:{workspace}"] = {
         "nodes": list(nodes), "source_mode": source_mode,
         "node_generation": deepcopy(node_generation), "package_review": deepcopy(package_review),
@@ -246,7 +253,7 @@ def _fill_missing_models(workspace: str, copies) -> None:
 
 
 def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) -> list[tuple[str, dict]]:
-    """Offer only usable models already chosen for the same role on another node."""
+    """Offer usable saved choices; the questioner can reuse a writer model."""
     current = bindings.get(node, {}).get(role, {})
     seen = {(current.get("backend"), current.get("model"),
              current.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS),
@@ -255,7 +262,7 @@ def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) ->
     for source, roles in bindings.items():
         if source == node:
             continue
-        binding = roles.get(role, {})
+        binding = roles.get(role, {}) or (roles.get("generation", {}) if role == "question" else {})
         backend = binding.get("backend")
         if backend not in endpoints or not binding.get("model"):
             continue
@@ -291,7 +298,13 @@ def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, en
     binding = bindings.get(node, {}).get(role, {})
     prefix = f"node-model:{workspace}:{node}:{role}"
     writer = bindings.get(node, {}).get("generation", {})
-    if (allow_generation_reuse and role == "jev" and writer.get("backend") in endpoints and writer.get("model")
+    if (node == "director" and role == "question" and writer.get("backend") in endpoints
+            and writer.get("model") and writer != binding):
+        st.button("沿用本节点指导员模型", key=prefix + ":reuse-generation",
+                  on_click=_reuse_binding, args=(workspace, node, role, deepcopy(writer)),
+                  help="只复制服务、模型和 token 上限；提问模型仍使用独立上下文，不会收到指导员的资料记忆。",
+                  width="stretch")
+    elif (allow_generation_reuse and role == "jev" and writer.get("backend") in endpoints and writer.get("model")
             and writer != binding):
         cleaning = node == "cpt" and source_cleaning
         st.button("沿用本节点修正模型" if node == "review" else "沿用本节点清洗模型" if cleaning else
@@ -497,12 +510,15 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
     _render_model_confirmation(node, roles, workspace, bindings, endpoints, backend_application,
                                confirmation_action=confirmation_action, confirmation_args=confirmation_args)
     for role in roles:
-        writer_label = (("修正模型" if (package_review or {}).get("enabled") else "评分与修正模型") if node == "review" else "清洗模型" if node == "cpt" and source_mode != "开放需求" else
+        writer_label = ("对话指导员模型" if node == "director" else ("修正模型" if (package_review or {}).get("enabled") else "评分与修正模型") if node == "review" else "清洗模型" if node == "cpt" and source_mode != "开放需求" else
                         "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
         review_label = ("JEV 评分模型" if node in {"review", "jev"} else
                         "质量评审模型" if node == "package" else "过程核对模型")
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'
-                + ("多模态识别模型" if role == "vision" else writer_label if role == "generation" else review_label) + '</strong></p>')
+                + ("无线索提问模型" if role == "question" else "多模态识别模型" if role == "vision" else writer_label if role == "generation" else review_label) + '</strong></p>')
+        if node == "director":
+            st.caption("设计角色、沟通目标和资料选区；有线索问题由指导员发出。" if role == "generation" else
+                       "只接收用户角色、沟通目的和已有公开对话，不接收资料、答案或私有记忆。回答模型在 SFT / 多轮节点配置。")
         if role == "jev":
             if node == "review":
                 st.caption("JEV 模型只负责评分；低分候选由本节点的修正模型修改，再回到评分。")
@@ -604,7 +620,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                   help="按相同角色复制当前节点的模型与 token 上限。保留已有选择，之后仍可逐个修改。",
                   width="stretch")
         st.caption(UntranslatedText("、".join(targets)))
-    st.caption("同一模型可用于生成和评审。上下文与输出上限按角色保存，并发额度在全部节点与任务间共享。")
+    st.caption("同一模型可用于指导与提问。两者使用独立上下文与输出上限，共享模型并发额度。" if node == "director" else
+               "同一模型可用于生成和评审。上下文与输出上限按角色保存，并发额度在全部节点与任务间共享。")
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()

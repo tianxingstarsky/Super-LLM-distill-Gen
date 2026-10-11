@@ -9,7 +9,7 @@ from lib.domain.workflow_production import validate_production, production_batch
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.infrastructure import training_workflow as engine
 from lib.io_utils import atomic_json
-from tests.test_workflow_production import Generator, Reviewer, TEXT, create
+from tests.test_workflow_production import Generator, Reviewer, TEXT, create, model_request_data
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -62,7 +62,7 @@ def test_document_generation_uses_source_once_without_forced_variants(tmp_path):
     assert state["production"]["attempted"] == 1
     assert state["production"]["goals"]["sft"]["remaining"] == 99
     assert state["production"]["stop_reason"] == "source_coverage_complete"
-    assert engine.read_json(path / "recipe.json")["version"] == engine.SOFT_PRODUCTION_RECIPE_VERSION
+    assert engine.read_json(path / "recipe.json")["version"] >= engine.SOFT_PRODUCTION_RECIPE_VERSION
     assert_final_report_agrees(path, state)
 
 
@@ -213,7 +213,7 @@ def test_partial_soft_export_keeps_final_dedup_shortfall_in_state_and_report(tmp
 
 class ExhaustedDirector(Generator):
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = model_request_data(messages)
         if "candidates" in data:
             self.calls.append(data)
             return json.dumps({"tasks": [{"id": candidate["id"], "skip_reason": "no_new_grounded_scenario",
