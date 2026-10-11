@@ -57,6 +57,29 @@ def test_catalog_rejects_changed_and_forged_paths(tmp_path, monkeypatch):
         app.excerpt(name, forged)
 
 
+def test_catalog_reads_persistent_parse_status_and_hides_reuse_indexes(tmp_path, monkeypatch):
+    from lib.infrastructure.source_library import SourceLibrary
+    import hashlib
+
+    workspace, source, name = _workspace(tmp_path, monkeypatch)
+    original = source / "notes.txt"
+    original.write_text("Source facts are reusable across independent tasks.", encoding="utf-8")
+    output = workspace.out(name)
+    library = SourceLibrary(output)
+    saved = library.register_source(original, hashlib.sha256(original.read_bytes()).hexdigest(), original.name)
+    list(library.native_parts(saved))
+    index = output / "workflows" / ("a" * 32) / "human-review" / ".indexes"
+    index.mkdir(parents=True)
+    (index / "sft.rework.receipt.json").write_text('{}', encoding="utf-8")
+    app = AssetCatalogApplication(FilesystemAssetCatalogDriver())
+    assets = app.inventory(name).assets
+    assert [row.name for row in assets] == ["notes.txt"]
+    status = app.source_status(name, assets[0])
+    assert status["status"] == "parsed" and status["parses"] == 1
+    assert status["text_chars"] == len(original.read_text(encoding="utf-8"))
+    assert "api_key" not in status
+
+
 def test_catalog_ignores_linked_output(tmp_path, monkeypatch):
     workspace, _, name = _workspace(tmp_path, monkeypatch)
     outside = tmp_path / "outside"

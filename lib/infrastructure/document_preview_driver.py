@@ -15,6 +15,7 @@ from lib.application.document_preview_service import (
 from lib.application.local_input_service import MAX_UPLOAD_BYTES
 from lib.doc2corpus import SUPPORTED_EXTS, chunk_text, import_text
 from lib.infrastructure.local_input_cache import _assert_unlinked
+from lib.infrastructure.source_library import SourceLibrary
 
 
 class FilesystemDocumentPreviewDriver:
@@ -98,7 +99,14 @@ class FilesystemDocumentPreviewDriver:
             snapshot.write_bytes(data)
             try:
                 self._preflight(snapshot)
-                text = import_text(snapshot).replace("\r\n", "\n").strip()
+                library = SourceLibrary(workspace.out(self.workspace_id, self.root))
+                cached_source = library.register_source(snapshot, hashlib.sha256(data).hexdigest(), row["name"])
+                parts = list(library.native_parts(cached_source, text_reader=import_text))
+                # Preview limits apply even when a full reading came from a run
+                # which permits more pages than this compact preview panel.
+                if path.suffix.lower() == ".pdf" and len(parts) > MAX_PREVIEW_PAGES:
+                    raise ValueError("preview_page_limit")
+                text = "\n".join(part["text"] for part in parts).replace("\r\n", "\n").strip()
             except (ImportError, ModuleNotFoundError) as error:
                 raise ValueError("preview_parser_unavailable") from error
             except ValueError as error:

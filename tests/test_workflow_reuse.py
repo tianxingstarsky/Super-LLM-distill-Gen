@@ -59,6 +59,26 @@ def test_recipe_maps_bounded_settings_and_keeps_secrets_out_of_draft():
     assert original == unchanged
 
 
+def test_reuse_preserves_review_and_parsing_settings_for_batch_work():
+    binding = {"backend": "local", "model": "parser", "context_window_tokens": 131072,
+               "max_output_tokens": 32768}
+    copied = recipe_to_draft(recipe(version=18,
+        review_repair={"mode": "auto", "max_rounds": 4, "score_threshold": .91},
+        document_parser={"mode": "model", "binding": binding},
+        node_prompt_templates={"ingest": {"workflow.document_parse": "Preserve all source facts and equations."},
+            "review": {"workflow.review_score": "Check every claim against the supplied evidence.",
+                       "workflow.review_repair": "Correct this candidate using its saved feedback."}}), "Batch source", "w", [])
+    values = copied["values"]
+    assert values["workflow-review-repair-mode:w"] == "auto"
+    assert values["workflow-review-repair-rounds:w"] == 4
+    assert values["workflow-review-repair-threshold:w"] == 91
+    assert values["workflow-document-parse-mode:w"] == "model"
+    assert copied["node_bindings"]["ingest"]["generation"] == binding
+    assert values["workflow-node-prompt:w:ingest:workflow.document_parse"] == "Preserve all source facts and equations."
+    assert values["workflow-node-prompt:w:review:workflow.review_score"].startswith("Check every claim")
+    assert values["workflow-node-prompt:w:review:workflow.review_repair"].startswith("Correct this candidate")
+
+
 @pytest.mark.parametrize("style,expected", [("drop", "drop"), ("separated", "separated"), ("inline", "separated")])
 def test_older_recipe_uses_pinned_generation_style_and_task_count(style, expected):
     copied = recipe_to_draft(recipe(sample_count=None, tasks=1200, sft_output_style=None,

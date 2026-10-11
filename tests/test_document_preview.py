@@ -177,7 +177,7 @@ def test_preview_is_lazy_and_parameter_change_removes_old_result(inputs, monkeyp
     assert not ui.code
     assert "document-preview:default" not in ui.session_state
     ui.button(key="document-preview:default:read").click().run()
-    assert len(calls) == 2
+    assert len(calls) == 1  # The full extraction survives a new preview/chunk configuration.
     assert ui.session_state["document-preview:default"]["chunk_count"] == 3
 
 

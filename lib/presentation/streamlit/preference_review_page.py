@@ -64,7 +64,7 @@ def _comparison_html(candidate: dict) -> str:
     )
 
 
-def render_preference_review(application: PreferenceReviewApplication, *, show_header: bool = True):
+def render_preference_review(application: PreferenceReviewApplication, *, show_header: bool = True, rework_application=None):
     target = getattr(application, "target", "dpo")
     label = target.upper()
     if show_header:
@@ -197,6 +197,9 @@ def render_preference_review(application: PreferenceReviewApplication, *, show_h
             st.progress(finished / total, text=f"已审核 {finished} 对 · 待处理 {counts['pending'] + counts['skipped']} 对")
             st.html('<div class="df-review-mini-stats"><span>已通过 <b>' + str(counts["approved"]) +
                     '</b></span><span>已退回 <b>' + str(counts["rejected"]) + '</b></span></div>')
+            if rework_application is not None:
+                from lib.presentation.streamlit.review_rework_controls import render_review_rework_controls
+                render_review_rework_controls(rework_application, run_id, target, counts["rejected"], widgets=st)
 
     if approve or swap or reject or skip:
         try:

@@ -138,7 +138,11 @@ class FilesystemKnowledgeDriver:
                                 if (len(entries) > 5000 or sum(item.file_size for item in entries) > 100 * 1024 * 1024
                                         or any(item.flag_bits & 1 for item in entries)):
                                     raise ValueError("knowledge_docx_limit")
-                        text = import_text(snapshot).replace("\r\n", "\n").strip()
+                        from lib.infrastructure.source_library import SourceLibrary
+                        library = SourceLibrary(workspace.out(self.workspace_id, self.root))
+                        cached_source = library.register_source(snapshot, hashlib.sha256(raw).hexdigest(), info["name"])
+                        text = "\n".join(part["text"] for part in library.native_parts(
+                            cached_source, text_reader=import_text)).replace("\r\n", "\n").strip()
                 except Exception as error:
                     if isinstance(error, ValueError) and str(error).startswith("knowledge_"):
                         raise

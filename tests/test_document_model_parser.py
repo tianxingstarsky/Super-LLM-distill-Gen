@@ -288,9 +288,10 @@ def test_native_parser_still_uses_real_text_without_model_calls(tmp_path):
 
 
 def test_model_text_input_is_split_before_calling_the_reader(tmp_path):
+    from lib.infrastructure.source_library import MODEL_PARSE_CHARS
     configure(tmp_path)
     source = tmp_path / "large-manual.md"
-    paragraphs = [f"Section {index} uses {12 + index} V. " + PAGE_ONE * 4 for index in range(12)]
+    paragraphs = [f"Section {index} uses {12 + index} V. " + PAGE_ONE * 4 for index in range(40)]
     source.write_text("\n\n".join(paragraphs), encoding="utf-8")
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
@@ -300,7 +301,8 @@ def test_model_text_input_is_split_before_calling_the_reader(tmp_path):
     run.stage = "ingest"
     rows = list(run.iter_source_units(run.recipe["sources"][0]))
     assert len(reader.calls) > 1
-    assert all(len(call[2]["text"]) <= 600 for call in reader.calls)
+    assert all(len(call[2]["text"]) <= MODEL_PARSE_CHARS for call in reader.calls)
+    assert any(len(call[2]["text"]) > 600 for call in reader.calls)
     combined = "\n".join(row["text"] for row in rows if row.get("status") == "ready")
     assert all(f"Section {index} uses {12 + index} V." in combined for index in range(12))
 

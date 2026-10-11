@@ -18,7 +18,8 @@ from lib.bootstrap.workflows import workflow_application
 from lib.domain.document_parser import validate_document_parser
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS, validate_human_augmentation
 from lib.domain.human_session import (MAX_REVISION_DEPTH, MAX_SESSION_ROUNDS,
-    identifier, request_identifier, validate_draft, validate_feedback)
+    MAX_ISSUE_BATCH, MAX_ISSUE_BATCH_CHARS, bounded_text, identifier, request_identifier,
+    validate_draft, validate_feedback, validate_issue_selection)
 from lib.domain.human_round_projection import project_feedback_branch
 from lib.domain.workflow_creation import validate_creation
 from lib.domain.workflow_node_prompts import snapshot_node_prompts
@@ -28,6 +29,8 @@ from lib.infrastructure.json_stream import iter_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.verified_preview import verified_snapshot, inventory_identity
 from lib.infrastructure.human_revision import record_messages, revision_evidence
+from lib.infrastructure.human_issue_store import HumanIssueStore, STATUSES as ISSUE_STATUSES
+from lib.infrastructure.human_round_store import store_human_round, verified_human_round
 from lib.infrastructure.training_workflow import (create_run, digest, file_hash,
     read_json, run_path, verify_artifacts, EXTENSIONS, MAX_FILE_BYTES)
 from lib.io_utils import atomic_json
@@ -61,6 +64,23 @@ class FilesystemHumanSessionDriver:
     def _read(self, path):
         state = read_json(path / "session.json")
         blueprint = read_json(path / "blueprint.json")
+        journal = path / ".review-model-update.json"
+        if journal.is_file():
+            pending = read_json(journal)
+            actual_hash = digest(blueprint)
+            if (pending.get("after_sha256") == actual_hash and pending.get("before_sha256") == state["blueprint_sha256"]
+                    and pending.get("expected_version") == state["version"]):
+                # A user-confirmed node configuration is durable even if the
+                # process stopped after replacing the blueprint but before its
+                # corresponding session hash/version was committed.
+                state["blueprint_sha256"] = actual_hash
+                state["version"] += 1
+                state["updated_at"] = _now()
+                atomic_json(path / "session.json", state)
+                journal.unlink()
+            elif actual_hash == state["blueprint_sha256"] and actual_hash in {
+                    pending.get("before_sha256"), pending.get("after_sha256")}:
+                journal.unlink()
         if digest(blueprint) != state["blueprint_sha256"]:
             raise ValueError("human_session_configuration_changed")
         state["blueprint"] = blueprint
@@ -69,6 +89,10 @@ class FilesystemHumanSessionDriver:
     def _save(self, path, state, *, bump=True):
         state = deepcopy(state)
         state.pop("blueprint", None)
+        for row in state["rounds"]:
+            if "details_ref" in row:
+                row.pop("parent_results", None)
+                row.pop("issue_ids", None)
         if bump:
             state["version"] += 1
             state["updated_at"] = _now()
@@ -83,6 +107,8 @@ class FilesystemHumanSessionDriver:
         identifier(round_id, "invalid_human_session_round_id")
         for row in state["rounds"]:
             if row["id"] == round_id:
+                if "details_ref" in row:
+                    row.update(verified_human_round(self._path(state["id"]), row))
                 return row
         raise ValueError("human_session_round_not_found")
 
@@ -121,7 +147,11 @@ class FilesystemHumanSessionDriver:
 
     def _view(self, state):
         view = deepcopy(state)
-        view["rounds"] = [self._view_round(row) for row in state["rounds"]]
+        recent_ids = {row["id"] for row in state["rounds"][-MAX_SESSION_ROUNDS:]}
+        selected = [row for row in state["rounds"] if row["id"] in recent_ids or row["kind"] == "imported"]
+        view["rounds"] = [self._view_round(verified_human_round(self._path(state["id"]), row)) for row in selected]
+        view["round_total"] = len(state["rounds"])
+        view["history_truncated"] = len(selected) < len(state["rounds"])
         current = next((row for row in reversed(view["rounds"]) if row["active"] or row["status"] in
             {"prepared", "running", "interrupted", "creating", "cancel_requested"}),
             view["rounds"][-1] if view["rounds"] else {})
@@ -138,11 +168,17 @@ class FilesystemHumanSessionDriver:
         rows = []
         for file in (self.output / "human-sessions").glob("*/session.json"):
             try:
-                state = self.session(file.parent.name)
-                rows.append({key: state[key] for key in ("id", "name", "version", "created_at", "updated_at",
-                    "current_run_id", "current_round_id")} | {
+                with FileLock(str(file.parent / ".session.lock")):
+                    state = self._read(file.parent)
+                    current = self._view_round(state["rounds"][-1]) if state["rounds"] else {}
+                issue_counts = self.issues(state["id"], status="all", limit=1)["issue_counts"] if (
+                    file.parent / "review-issues.sqlite3").is_file() else {key: 0 for key in ISSUE_STATUSES}
+                rows.append({key: state[key] for key in ("id", "name", "version", "created_at", "updated_at")} | {
+                        "current_run_id": current.get("run_id"), "current_round_id": current.get("id"),
                         "round_count": len(state["rounds"]), "targets": state["blueprint"]["targets"],
-                        "status": state["rounds"][-1]["status"] if state["rounds"] else "draft"})
+                        "review_only": bool(state.get("review_only")),
+                        "status": current.get("status", "draft"),
+                        "issue_counts": issue_counts})
             except (OSError, ValueError, KeyError):
                 continue
         return sorted(rows, key=lambda row: row["updated_at"], reverse=True)
@@ -227,8 +263,25 @@ class FilesystemHumanSessionDriver:
             paths.append(str(destination))
             snapshots.append({"file": destination.name, "name": source_name, **snapshot})
         blueprint["sources"], blueprint["source_names"] = paths, names
-        pins = {stage: {role: snapshot_backend_endpoint(self.root, binding["backend"], binding["model"])
-            for role, binding in roles.items()} for stage, roles in blueprint["node_models"].items()}
+        if review_only and parent is not None:
+            # Recording problems in historical work is independent of whether
+            # its old model services remain connected. Reuse sealed pins and
+            # require an explicit current confirmation before any new review.
+            pins = {}
+            for stage, roles in blueprint["node_models"].items():
+                pins[stage] = {}
+                for role, binding in roles.items():
+                    pin = parent.get("endpoint_pins", {}).get(stage, {}).get(role)
+                    if pin is None:
+                        pin = next((parent.get("endpoint_pins", {}).get(old_stage, {}).get(old_role)
+                            for old_stage, old_roles in parent.get("node_models", {}).items()
+                            for old_role, old_binding in old_roles.items()
+                            if old_binding == binding and parent.get("endpoint_pins", {}).get(old_stage, {}).get(old_role)), None)
+                    if pin is not None:
+                        pins[stage][role] = deepcopy(pin)
+        else:
+            pins = {stage: {role: snapshot_backend_endpoint(self.root, binding["backend"], binding["model"])
+                for role, binding in roles.items()} for stage, roles in blueprint["node_models"].items()}
         blueprint["session_source_snapshots"] = snapshots
         blueprint["session_endpoint_pins"] = pins
         atomic_json(path / "blueprint.json", blueprint)
@@ -245,6 +298,56 @@ class FilesystemHumanSessionDriver:
         atomic_json(path / "session.json", state)
         return session_id
 
+    def review_session(self, from_run_id):
+        """Reuse the local review workspace for an imported sealed result."""
+        identifier(from_run_id, "invalid_workflow_id")
+        folder = self.output / "human-sessions"
+        folder.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(folder / ".review-sessions.lock")):
+            for file in folder.glob("*/session.json"):
+                state = read_json(file)
+                if state.get("review_only") and any(row.get("run_id") == from_run_id
+                        and row.get("kind") == "imported" for row in state.get("rounds", [])):
+                    return state["id"]
+            return self.create_session(from_run_id=from_run_id, review_only=True)
+
+    def configure_review_models(self, session_id, bindings, *, expected_version):
+        """Confirm models for this workspace's review node, including old work."""
+        from lib.domain.workflow_scale import validate_node_models
+        if (not isinstance(bindings, dict) or not bindings or set(bindings) - {"generation", "jev"}
+                or not bindings.get("generation")):
+            raise ValueError("human_session_review_model_required")
+        roles = validate_node_models({"review": bindings})["review"]
+        path = self._path(session_id)
+        with FileLock(str(path / ".session.lock")):
+            state = self._read(path)
+            self._cas(state, expected_version)
+            # Configuring an old workspace remains possible when its history
+            # reached the generation-round limit; only active/pending work is
+            # a conflict. Every already-created child's recipe stays sealed.
+            for row in state["rounds"]:
+                if row["status"] in {"completed", "needs_attention", "cancelled", "preparation_failed"}:
+                    continue
+                view = self._view_round(row)
+                if view["active"] or view["status"] in {"prepared", "running", "interrupted", "creating", "cancel_requested"}:
+                    raise ValueError("human_session_round_pending")
+            pins = {role: snapshot_backend_endpoint(self.root, binding["backend"], binding["model"])
+                    for role, binding in roles.items()}
+            blueprint = deepcopy(state["blueprint"])
+            blueprint.setdefault("node_models", {})["review"] = deepcopy(roles)
+            blueprint.setdefault("session_endpoint_pins", {})["review"] = pins
+            if (blueprint.get("package_review") or {}).get("enabled") and "jev" not in roles:
+                raise ValueError("human_session_review_jev_model_required")
+            pending = {"before_sha256": state["blueprint_sha256"], "after_sha256": digest(blueprint),
+                       "expected_version": state["version"]}
+            journal = path / ".review-model-update.json"
+            atomic_json(journal, pending)
+            atomic_json(path / "blueprint.json", blueprint)
+            state["blueprint"], state["blueprint_sha256"] = blueprint, pending["after_sha256"]
+            self._save(path, state)
+            journal.unlink(missing_ok=True)
+            return self._view(self._read(path))
+
     def save_draft(self, session_id, human_augmentation, *, expected_version):
         draft, path = validate_draft(human_augmentation), self._path(session_id)
         with FileLock(str(path / ".session.lock")):
@@ -259,7 +362,7 @@ class FilesystemHumanSessionDriver:
             if row["request_id"] == request_id:
                 if row["kind"] != kind:
                     raise ValueError("human_session_request_conflict")
-                view = self._view_round(row)
+                view = self._view_round(self._round(state, row["id"]))
                 if view["status"] in {"cancelled", "preparation_failed"}:
                     raise ValueError("human_session_round_cancelled")
                 if view["launchable"]:
@@ -267,17 +370,24 @@ class FilesystemHumanSessionDriver:
                 return view
         return None
 
-    def _can_prepare(self, state):
-        if len(state["rounds"]) >= state["limits"]["max_rounds"]:
+    def _can_prepare(self, state, *, issue_rework=False):
+        authored_rounds = sum("details_ref" not in row for row in state["rounds"])
+        if not issue_rework and authored_rounds >= state["limits"]["max_rounds"]:
             raise ValueError("human_session_round_limit")
         for row in state["rounds"]:
+            if row["status"] in {"completed", "needs_attention", "cancelled", "preparation_failed"}:
+                continue
             view = self._view_round(row)
             if view["active"] or view["status"] in {"prepared", "running", "interrupted", "creating", "cancel_requested"}:
                 raise ValueError("human_session_round_pending")
+            if view["status"] in {"completed", "needs_attention", "cancelled", "preparation_failed"}:
+                row["status"] = view["status"]
 
     def _assert_resume_safe(self, state, round_id):
         for other in state["rounds"]:
             if other["id"] == round_id:
+                continue
+            if other["status"] in {"completed", "needs_attention", "cancelled", "preparation_failed"}:
                 continue
             current = self._view_round(other)
             if current["active"] or current["status"] in {"prepared", "running", "interrupted", "creating", "cancel_requested"}:
@@ -312,11 +422,15 @@ class FilesystemHumanSessionDriver:
         return blueprint, pins
 
     def _prepare(self, path, state, human, *, request_id, kind, sample_count=None,
-                 parents=None, feedback_ids=None, repair_inputs=None, review_mode=None):
-        self._can_prepare(state)
+                 parents=None, feedback_ids=None, repair_inputs=None, review_mode=None, issue_ids=None,
+                 common_instruction="", repair_node_models=None):
+        self._can_prepare(state, issue_rework=issue_ids is not None)
         human_review = repair_inputs is not None and (review_mode or
             (state["blueprint"].get("review_repair") or {}).get("mode")) == "human"
-        blueprint, pins = self._checked_blueprint(path, state, check_models=not human_review)
+        blueprint, pins = self._checked_blueprint(path, state,
+            check_models=not human_review and repair_node_models is None)
+        if repair_node_models is not None:
+            blueprint["node_models"] = deepcopy(repair_node_models)
         blueprint["qa_director"] = {**blueprint["qa_director"], "human_augmentation": human}
         if repair_inputs is not None:
             # Existing answers are immutable repair evidence, never new SFT
@@ -380,6 +494,11 @@ class FilesystemHumanSessionDriver:
                "parent_results": deepcopy(parents or []), "feedback_ids": list(feedback_ids or [])}
         if repair_inputs is not None:
             row["repair_inputs_sha256"] = digest(repair_inputs)
+        if issue_ids is not None:
+            row["issue_ids"] = list(issue_ids)
+            row["common_instruction"] = common_instruction
+            row["issue_count"] = len(issue_ids)
+            row["details_ref"] = store_human_round(path, state["id"], row)
         state["rounds"].append(row)
         # Consume selections in the same durable write as the reserved child.
         # A crash after child creation cannot leave these feedback IDs reusable.
@@ -457,9 +576,18 @@ class FilesystemHumanSessionDriver:
                 "question": question, "answer": answer, "content_sha256": digest(record),
                 "lineage": deepcopy(revision), "feedback": feedback}
 
+    def _inspection_state(self, session_id, round_id=None):
+        """Resolve an exact historical round without expanding a browser history page."""
+        path = self._path(session_id)
+        with FileLock(str(path / ".session.lock")):
+            state = self._read(path)
+            if not state["rounds"]:
+                return state, None
+            identity = round_id or state["rounds"][-1]["id"]
+            return state, self._view_round(self._round(state, identity))
+
     def branch_projection(self, session_id, *, round_id=None, target=None, candidate_id=None, result=None):
-        state = self.session(session_id)
-        row = self._round(state, round_id or state.get("current_round_id")) if state["rounds"] else None
+        state, row = self._inspection_state(session_id, round_id)
         target = target or (result or {}).get("target") or state["blueprint"]["targets"][0]
         if target not in TARGETS or target not in state["blueprint"]["targets"]:
             raise ValueError("human_session_requires_qa_targets")
@@ -502,8 +630,14 @@ class FilesystemHumanSessionDriver:
                        for key, value in quality.get("targets", {}).items()):
                     raise ValueError("artifact_integrity_error")
                 source = "sealed_state_summary"
-        pending = next((other["id"] for other in state["rounds"] if other["active"] or other["status"] in
-            {"prepared", "running", "interrupted", "creating", "cancel_requested"}), None)
+        pending = None
+        for other in state["rounds"]:
+            if other["status"] in {"completed", "needs_attention", "cancelled", "preparation_failed"}:
+                continue
+            view = self._view_round(other)
+            if view["active"] or view["status"] in {"prepared", "running", "interrupted", "creating", "cancel_requested"}:
+                pending = other["id"]
+                break
         projection = project_feedback_branch(recipe, row["state"],
             {**row, "limits": state["limits"], "feedback_summary": summary, "pending_round_id": pending},
             result, quality, target=target)
@@ -513,8 +647,7 @@ class FilesystemHumanSessionDriver:
     def results(self, session_id, *, round_id=None, target="sft", offset=0, limit=20):
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("invalid_human_session_page")
-        state = self.session(session_id)
-        row = self._round(state, round_id or state.get("current_round_id")) if state["rounds"] else None
+        state, row = self._inspection_state(session_id, round_id)
         if row is None:
             return {"rows": [], "total": 0, "has_more": False, "offset": offset, "limit": limit,
                     "round_id": None, "run_id": None, "status": "draft", "state": {}}
@@ -552,6 +685,14 @@ class FilesystemHumanSessionDriver:
             records.close()
         raise ValueError("human_session_candidate_not_found")
 
+    def _lookup_many(self, row, target, candidate_ids):
+        """Authenticate a selected batch with one streaming scan per parent/target."""
+        from lib.infrastructure.rework_candidate_index import lookup_candidates
+        found = lookup_candidates(run_path(self.output, row["run_id"]), target, candidate_ids)
+        if sum(len(json.dumps(record, ensure_ascii=False)) for record in found.values()) > MAX_ISSUE_BATCH_CHARS:
+            raise ValueError("human_session_issue_batch_too_large")
+        return found
+
     def save_feedback(self, session_id, round_id, target, candidate_id, *, instruction="",
                       question=None, answer=None, decision="revise", expected_version):
         correction = validate_feedback(instruction=instruction, question=question, answer=answer, decision=decision)
@@ -578,14 +719,14 @@ class FilesystemHumanSessionDriver:
             self._save(path, state)
             return {**self._view(self._read(path)), "feedback_id": feedback_id, "new_feedback_id": feedback_id}
 
-    def _revision_design(self, path, state, feedback):
-        snapshot = read_json(path / "feedback" / f"{feedback['id']}.json")
+    def _revision_design(self, path, state, feedback, *, snapshot=None, actual=None):
+        snapshot = snapshot or read_json(path / "feedback" / f"{feedback['id']}.json")
         record = snapshot["record"]
         if snapshot["feedback"] != {key: value for key, value in feedback.items()
                                     if key not in {"superseded_by"}} or digest(record) != feedback["content_sha256"]:
             raise ValueError("human_session_feedback_changed")
         parent = self._round(state, feedback["round_id"])
-        actual = self._lookup(parent, feedback["target"], feedback["candidate_id"])
+        actual = actual if actual is not None else self._lookup(parent, feedback["target"], feedback["candidate_id"])
         if digest(actual) != feedback["content_sha256"]:
             raise ValueError("human_session_result_changed")
         previous_design = record.get("qa_contract", {}).get("human_design", {})
@@ -614,12 +755,216 @@ class FilesystemHumanSessionDriver:
                 "question_requirements": seed.get("question_requirements", ""),
                 "answer_requirements": seed.get("answer_requirements", "")}
 
-    def _repair_input(self, path, state, feedback):
-        context = self._revision_design(path, state, feedback)["revision_context"]
-        record = read_json(path / "feedback" / f"{feedback['id']}.json")["record"]
+    def _repair_input(self, path, state, feedback, *, snapshot=None, actual=None):
+        context = self._revision_design(path, state, feedback, snapshot=snapshot, actual=actual)["revision_context"]
+        record = (snapshot or read_json(path / "feedback" / f"{feedback['id']}.json"))["record"]
         return {"target": feedback["target"], "record": record, "revision_context": context,
                 "instruction": feedback["instruction"],
-                **{key: feedback[key] for key in ("question", "answer") if feedback.get(key) is not None}}
+                **{key: feedback[key] for key in ("question", "answer", "corrected_record") if feedback.get(key) is not None}}
+
+    @staticmethod
+    def _issue_preview(value):
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return text[:400]
+
+    def save_issues(self, session_id, selections, *, instruction="", expected_version, request_id=None):
+        """Save a bounded selection for later rework, without configuring/calling a model."""
+        selections = validate_issue_selection(selections, instruction=instruction)
+        request_id = request_identifier(request_id) if request_id is not None else None
+        payload_hash = digest(selections)
+        path = self._path(session_id)
+        with FileLock(str(path / ".session.lock")):
+            state, store = self._read(path), HumanIssueStore(path)
+            if previous := store.request(request_id):
+                if previous["payload_sha256"] != payload_hash:
+                    raise ValueError("human_session_request_conflict")
+                # Complete a durable issue write interrupted before the small
+                # session version was saved. Replaying never creates duplicates.
+                if state["version"] < previous["version"]:
+                    state["version"] = previous["version"]
+                    state["updated_at"] = _now()
+                    self._save(path, state, bump=False)
+                ids = json.loads(previous["issue_ids"])
+                return {"session_id": session_id, "version": state["version"], "issue_ids": ids,
+                        "saved_count": len(ids), "issue_counts": store.page(limit=1)["issue_counts"]}
+            self._cas(state, expected_version)
+            groups = {}
+            for item in selections:
+                groups.setdefault((item["round_id"], item["target"]), []).append(item["candidate_id"])
+            authenticated, batch_chars = {}, 0
+            for (round_id, target), candidates in groups.items():
+                parent = self._round(state, round_id)
+                # A concurrent job elsewhere does not prevent recording issues.
+                # The selected parent's artifacts must still be fully sealed.
+                records = self._lookup_many(parent, target, candidates)
+                batch_chars += sum(len(json.dumps(record, ensure_ascii=False)) for record in records.values())
+                if batch_chars > MAX_ISSUE_BATCH_CHARS:
+                    raise ValueError("human_session_issue_batch_too_large")
+                authenticated[(round_id, target)] = (parent, records)
+            snapshots = []
+            for item in selections:
+                parent, records = authenticated[(item["round_id"], item["target"])]
+                record = records[item["candidate_id"]]
+                messages = _messages(record)
+                question = next((message.get("content", "") for message in messages if message.get("role") == "user"), "")
+                answer = next((message.get("content", "") for message in reversed(messages) if message.get("role") == "assistant"), "")
+                feedback = {"id": uuid.uuid4().hex, "round_id": item["round_id"], "run_id": parent["run_id"],
+                    "target": item["target"], "candidate_id": item["candidate_id"], "content_sha256": digest(record),
+                    "revision_depth": _record_revision(record).get("depth", 0), "created_at": _now(),
+                    "applied_round_id": None, "instruction": item["instruction"], "decision": "revise",
+                    "question": item.get("question"), "answer": item.get("answer"),
+                    **({"corrected_record": item["corrected_record"]} if item.get("corrected_record") is not None else {})}
+                snapshots.append({"feedback": feedback, "record": record,
+                    "question_preview": self._issue_preview(question), "answer_preview": self._issue_preview(answer)})
+            saved_ids = store.save(snapshots, request_id=request_id, payload_sha256=payload_hash, version=state["version"] + 1)
+            self._save(path, state)
+            return {"session_id": session_id, "version": state["version"] + 1,
+                    "issue_ids": saved_ids, "saved_count": len(saved_ids),
+                    "issue_counts": store.page(limit=1)["issue_counts"]}
+
+    def _refresh_issue_states(self, path, state, store):
+        # The child ledger also repairs a crash between child reservation and
+        # assigning the SQLite issue rows. No paid child can be submitted twice.
+        assigned = {item["id"]: item for item in store.assigned()}
+        # Only the newest reservation can lack its SQLite assignment. Previous
+        # batches are already durable and indexed; do not hydrate thousands of
+        # historical parent-result lists during a page refresh.
+        for summary in state["rounds"][-1:]:
+            row = verified_human_round(path, summary)
+            if not row.get("issue_ids") or row["status"] == "preparation_failed":
+                continue
+            missing = [identity for identity in row["issue_ids"] if identity not in assigned]
+            if missing:
+                existing = store.selected(missing)
+                reserve = [item["id"] for item in existing if item["applied_round_id"] is None]
+                if reserve:
+                    store.assign(reserve, row["id"])
+                    assigned.update({item["id"]: {**item["snapshot"]["feedback"], "applied_round_id": row["id"]}
+                                     for item in existing if item["id"] in reserve})
+        by_round = {}
+        for item in assigned.values():
+            by_round.setdefault(item["applied_round_id"], []).append(item)
+        for round_id, issues in by_round.items():
+            row = self._view_round(self._round(state, round_id))
+            if row["active"] or row["status"] in {"prepared", "running", "interrupted", "creating", "cancel_requested"}:
+                continue
+            outcomes = []
+            if row["status"] not in {"completed", "needs_attention"}:
+                outcomes = [(item["id"], "needs_revision", {"run_id": row["run_id"],
+                    "reason": row["state"].get("error") or row["status"]}) for item in issues]
+            else:
+                expected = {(item["run_id"], item["target"], item["candidate_id"]): item for item in issues}
+                results = {}
+                for target in {item["target"] for item in issues}:
+                    records = self._records(row["run_id"], target, strict=True)
+                    try:
+                        for record in records:
+                            context = _record_revision(record)
+                            key = (context.get("parent_run_id"), target, context.get("candidate_id"))
+                            if key in expected:
+                                results[key] = record
+                    finally:
+                        records.close()
+                for key, item in expected.items():
+                    result = results.get(key, {})
+                    receipt = result.get("review_repair", {})
+                    status = "completed" if receipt.get("status") == "accepted" else "needs_revision"
+                    outcomes.append((item["id"], status, {"run_id": row["run_id"],
+                        "candidate_id": result.get("id"), "score": receipt.get("score"),
+                        "review_status": receipt.get("status"),
+                        "reason": receipt.get("reason") or result.get("reason") or "review_result_unavailable"}))
+            store.apply_outcomes(outcomes)
+            if row["status"] in {"completed", "needs_attention", "cancelled", "preparation_failed"}:
+                self._round(state, round_id)["status"] = row["status"]
+                self._save(path, state, bump=False)
+
+    def issues(self, session_id, *, status="pending", target=None, round_id=None, offset=0, limit=20):
+        if (status not in ISSUE_STATUSES | {"all"} or target is not None and target not in TARGETS
+                or type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100):
+            raise ValueError("invalid_human_session_issue_page")
+        path = self._path(session_id)
+        with FileLock(str(path / ".session.lock")):
+            state, store = self._read(path), HumanIssueStore(path)
+            if round_id is not None:
+                self._round(state, round_id)
+            self._refresh_issue_states(path, state, store)
+            return {**store.page(status=status, target=target, round_id=round_id, offset=offset, limit=limit),
+                    "session_id": session_id, "version": state["version"]}
+
+    def _issue_review_models(self, state):
+        """Migrate explicit historical roles, never select a global paid fallback."""
+        blueprint = state["blueprint"]
+        models, pins = blueprint.get("node_models", {}), blueprint.get("session_endpoint_pins", {})
+        targets = list(dict.fromkeys("preference" if target in {"dpo", "rlaif", "orpo"} else target
+                                    for target in blueprint["targets"]))
+        roles = {}
+        for role in (["generation", "jev"] if (blueprint.get("package_review") or {}).get("enabled") else ["generation"]):
+            choices = ([('review', role), *((target, role) for target in targets), ('sft', role)] if role == "generation"
+                       else [('review', role), ('jev', role), ('package', role), *((target, role) for target in targets)])
+            selected = next(((stage, models[stage][candidate_role]) for stage, candidate_role in choices
+                             if models.get(stage, {}).get(candidate_role)), None)
+            if selected is None:
+                raise ValueError("human_session_review_model_required" if role == "generation" else "human_session_review_jev_model_required")
+            stage, binding = selected
+            current = snapshot_backend_endpoint(self.root, binding["backend"], binding["model"])
+            if pins.get(stage, {}).get(role) != current:
+                raise ValueError("human_session_model_configuration_changed")
+            roles[role] = deepcopy(binding)
+        return {"review": roles}
+
+    def revise_issues(self, session_id, *, selected_issue_ids=None, request_id, expected_version, instruction=""):
+        """Prepare one authenticated review-only batch, preserving each issue's note."""
+        if selected_issue_ids is not None and (not isinstance(selected_issue_ids, list) or not 1 <= len(selected_issue_ids) <= MAX_ISSUE_BATCH
+                or any(not isinstance(value, str) for value in selected_issue_ids)
+                or len(set(selected_issue_ids)) != len(selected_issue_ids)):
+            raise ValueError("invalid_human_session_issue_selection")
+        for identity in selected_issue_ids or []:
+            identifier(identity, "invalid_human_session_issue_selection")
+        instruction = bounded_text(instruction)
+        path, request_id = self._path(session_id), request_identifier(request_id)
+        with FileLock(str(path / ".session.lock")):
+            state, store = self._read(path), HumanIssueStore(path)
+            if existing := self._existing_request(state, request_id, "revision"):
+                if (selected_issue_ids is not None and existing.get("issue_ids") != selected_issue_ids
+                        or existing.get("common_instruction", "") != instruction):
+                    raise ValueError("human_session_request_conflict")
+                self._refresh_issue_states(path, state, store)
+                return self._reserve_resume(path, state, self._round(state, existing["id"]))
+            self._cas(state, expected_version)
+            self._can_prepare(state, issue_rework=True)
+            self._refresh_issue_states(path, state, store)
+            selected_issue_ids = selected_issue_ids if selected_issue_ids is not None else store.next_batch(limit=MAX_ISSUE_BATCH)
+            if not selected_issue_ids:
+                raise ValueError("human_session_feedback_required")
+            selected = store.selected(selected_issue_ids)
+            if len(selected) != len(selected_issue_ids) or any(item["status"] not in {"pending", "needs_revision"} for item in selected):
+                raise ValueError("human_session_issue_not_available")
+            review_models = self._issue_review_models(state)
+            groups = {}
+            for item in selected:
+                feedback = item["snapshot"]["feedback"]
+                groups.setdefault((feedback["round_id"], feedback["target"]), []).append(feedback["candidate_id"])
+            authenticated = {(round_id, target): self._lookup_many(self._round(state, round_id), target, ids)
+                             for (round_id, target), ids in groups.items()}
+            inputs, parents = [], []
+            for item in selected:
+                snapshot, feedback = item["snapshot"], deepcopy(item["snapshot"]["feedback"])
+                correction = "\n".join(dict.fromkeys(value for value in (feedback["instruction"], instruction) if value))
+                if feedback.get("corrected_record") is not None:
+                    feedback.update({**validate_feedback(instruction=correction, decision="approve"), "decision": "revise"})
+                else:
+                    feedback.update(validate_feedback(instruction=correction, question=feedback.get("question"),
+                                                      answer=feedback.get("answer")))
+                snapshot = {**snapshot, "feedback": feedback}
+                actual = authenticated[(feedback["round_id"], feedback["target"])][feedback["candidate_id"]]
+                inputs.append(self._repair_input(path, state, feedback, snapshot=snapshot, actual=actual))
+                parents.append({key: feedback[key] for key in ("run_id", "round_id", "target", "candidate_id", "content_sha256")})
+            row = self._prepare(path, state, {"enabled": False}, request_id=request_id, kind="revision",
+                parents=parents, repair_inputs=inputs, review_mode="auto", issue_ids=selected_issue_ids,
+                common_instruction=instruction, repair_node_models=review_models)
+            latest = self._read(path)
+            store.assign(selected_issue_ids, row["id"])
+            return self._view_round(self._round(latest, row["id"]))
 
     def revise_round(self, session_id, *, request_id, expected_version,
                      selected_feedback_ids=None, sample_count=None):

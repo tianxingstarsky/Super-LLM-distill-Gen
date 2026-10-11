@@ -68,6 +68,7 @@ from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DialoguePlanError
 from lib.infrastructure.workflow_cpt_processing import WorkflowCPTProcessing
 from lib.infrastructure.workflow_review_repair import WorkflowReviewRepair
+from lib.infrastructure.workflow_source_library import WorkflowSourceLibrary
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_targets import (INPUT_EXTENSIONS, PREFERENCE_TARGETS, STAGES, TARGETS,
                                          rlaif_feedback_issue, rlaif_reward_model_record, training_record)
@@ -414,7 +415,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
               "conversation_turns": conversation_turns, "math_generator_version": 2,
-              "planning_policy_version": 2, "source_processing_version": 2,
+              "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
               "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
@@ -464,7 +465,7 @@ class Cancelled(Exception):
     pass
 
 
-class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, WorkflowReviewRepair):
+class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, WorkflowReviewRepair, WorkflowSourceLibrary):
     def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)
@@ -846,6 +847,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             return part["image"] if part else None
 
     def iter_source_units(self, source):
+        manual = self.recipe.get("qa_director", {}).get("human_augmentation", {})
+        revision_round = bool(manual.get("enabled") and manual.get("seeds")
+                              and all("revision_context" in seed for seed in manual["seeds"]))
+        if (self.recipe.get("source_library_version") == 1
+                and source.get("kind") != "human_design" and not revision_round):
+            yield from self._iter_library_source_units(source)
+            return
+        yield from self._iter_source_units_uncached(source)
+
+    def _iter_source_units_uncached(self, source):
         path = self.path / "inputs" / source["file"]
         if file_hash(path) != source["sha256"]:
             raise ValueError("source_snapshot_changed")

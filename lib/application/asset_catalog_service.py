@@ -37,3 +37,7 @@ class AssetCatalogApplication:
         mode = generation_source_mode(asset)
         return {"path": self._driver.source_path_for_generation(workspace_id, asset),
                 "source_mode": mode}
+
+    def source_status(self, workspace_id: str, asset: Asset) -> dict:
+        method = getattr(self._driver, "source_status", None)
+        return method(workspace_id, asset) if method else {"status": "unavailable"}

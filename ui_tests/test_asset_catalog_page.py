@@ -72,7 +72,10 @@ def test_english_directory_translates_origin_prefixes_without_changing_chinese_p
     table = app.dataframe[0].value
     assert table["File name"].tolist() == ["首页.txt", "样本.jsonl"]
     assert table["Source / folder"].tolist() == [
-        "Source / uploads/用户资料/首页.txt", "Result / exports/生成结果/样本.jsonl"]
+        "Source / uploads/用户资料", "Result / exports/生成结果"]
+    # The table has a separate file-name column; the selected detail retains
+    # the complete path without translating user-authored folder names.
+    assert any("uploads/用户资料/首页.txt" in item.proto.body for item in app.get("html"))
 
     app.session_state["ui_language"] = "zh"
     app.run()
@@ -80,4 +83,4 @@ def test_english_directory_translates_origin_prefixes_without_changing_chinese_p
     table = app.dataframe[0].value
     assert table["文件名"].tolist() == ["首页.txt", "样本.jsonl"]
     assert table["来源 / 目录"].tolist() == [
-        "来源 / uploads/用户资料/首页.txt", "产物 / exports/生成结果/样本.jsonl"]
+        "来源 / uploads/用户资料", "产物 / exports/生成结果"]

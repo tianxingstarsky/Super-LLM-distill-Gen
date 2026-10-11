@@ -67,7 +67,8 @@ def _history_html(review: dict) -> str:
             f'<p>{reason}</p></div>')
 
 
-def render_sft_review(application: SftReviewApplication, *, legacy_review: Callable[[], None] | None = None):
+def render_sft_review(application: SftReviewApplication, *, legacy_review: Callable[[], None] | None = None,
+                      rework_application=None):
     st.subheader("SFT 数据调整")
     runs = application.reviewable_runs()
     if not runs:
@@ -197,6 +198,9 @@ def render_sft_review(application: SftReviewApplication, *, legacy_review: Calla
             st.progress(finished / total, text=f"已审核 {finished} 条 · 待处理 {counts['pending'] + counts['skipped']} 条")
             st.html('<div class="df-review-mini-stats"><span>已通过 <b>' + str(counts["approved"]) +
                     '</b></span><span>已退回 <b>' + str(counts["rejected"]) + '</b></span></div>')
+            if rework_application is not None:
+                from lib.presentation.streamlit.review_rework_controls import render_review_rework_controls
+                render_review_rework_controls(rework_application, run_id, "sft", counts["rejected"], widgets=st)
 
     if approve or reject or skip:
         try:

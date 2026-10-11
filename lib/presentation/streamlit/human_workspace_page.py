@@ -54,6 +54,17 @@ def _error(error):
         "invalid_manual_review_record": "候选内容格式无效，请检查对话、答案和推理字段。",
         "invalid_manual_review_score": "人工评分需在 0 到 100 之间。",
         "human_review_below_threshold": "通过结论的评分低于通过分数，请调整评分或改为不通过。",
+        "human_session_review_model_required": "批量返工需要修正模型。请在原工作流的评分与修正节点绑定模型，已有问题仍保留。",
+        "human_session_review_jev_model_required": "本工作启用了 JEV 评分，请先在评分与修正节点绑定评分模型，已有问题仍保留。",
+        "human_session_no_pending_issues": "没有可返工的问题，请刷新工作状态或选择其他分类。",
+        "human_session_issue_not_available": "所选问题已被其他批次处理，请刷新后重新选择。",
+        "human_session_issue_batch_too_large": "本次问题内容超过批量限制，请减少选中条数后再提交。",
+        "invalid_human_session_issue_selection": "问题选择无效，请重新选择已保存的结果。",
+        "rework_index_busy_retry": "结果索引正在准备，请稍后重试。已有问题与结果保留。",
+        "rework_index_integrity_error": "返工候选索引校验失败，已停止处理。请重新打开原任务。",
+        "review_rework_candidate_mapping_missing": "该结果无法对应到已保存的原候选，已停止返工。请重新打开原任务。",
+        "human_session_round_details_changed": "返工版本记录校验失败，已停止处理。请检查本机记录并重新打开原工作。",
+        "human_session_round_details_conflict": "返工版本记录已存在，未覆盖原版本。请刷新工作状态后重试。",
     }.get(str(error), fallback)
 
 
@@ -154,6 +165,91 @@ def _render_record(row):
                 st.text(UntranslatedText(str(reasoning)))
 
 
+_ISSUE_LABELS = {"pending": "待返工", "running": "返工中", "completed": "修正通过",
+                 "needs_revision": "仍需修正", "all": "全部问题"}
+
+
+def _render_rework_collection(application, session, context, begin, *, active):
+    """Read a bounded saved issue page; a batch only repairs selected candidates."""
+    session_id = session["id"]
+    language = st.session_state.get("ui_language", "zh")
+    st.caption("问题与原结果保存在本机。可以继续审查，再集中返工；原数据和每条意见始终保留。")
+    status = st.segmented_control("问题状态", list(_ISSUE_LABELS), default="pending",
+        key=f"rework-status:{context}", required=True,
+        format_func=lambda value: translate_label(_ISSUE_LABELS[value], language))
+    offset_key = f"rework-offset:{context}:{status}"
+    offset = st.session_state.get(offset_key, 0)
+    try:
+        result = application.issues(session_id, status=status, offset=offset, limit=50)
+    except (ValueError, OSError, Timeout) as error:
+        st.error(_error(error))
+        return
+    rows = result["rows"]
+    if offset > 0 and offset >= result["total"]:
+        st.session_state[offset_key] = max(0, ((result["total"] - 1) // 50) * 50)
+        st.rerun()
+    st.session_state[f"human-version:{context}"] = result.get("version", session["version"])
+    counts = result.get("counts") or result.get("issue_counts") or {}
+    st.caption(UntranslatedText(
+        f"Pending {counts.get('pending', 0):,} · Running {counts.get('running', 0):,} · Passed {counts.get('completed', 0):,} · Needs revision {counts.get('needs_revision', 0):,}"
+        if language == "en" else
+        f"待返工 {counts.get('pending', 0):,} · 返工中 {counts.get('running', 0):,} · 修正通过 {counts.get('completed', 0):,} · 仍需修正 {counts.get('needs_revision', 0):,}"))
+    if not rows:
+        st.info("此分类还没有问题记录。在结果审查中填写意见并存入返工集合，关闭窗口后仍可继续处理。")
+        return
+    previous, count, following = st.columns([1, 2, 1], vertical_alignment="center")
+    previous.button("上一页问题", key=f"rework-prev:{context}:{status}", disabled=offset == 0,
+        on_click=st.session_state.update, args=({offset_key: max(0, offset - 50)},), width="stretch")
+    count.caption(f"{offset + 1}–{offset + len(rows)} / {result['total']:,}")
+    following.button("下一页问题", key=f"rework-next:{context}:{status}", disabled=not result.get("has_more"),
+        on_click=st.session_state.update, args=({offset_key: offset + 50},), width="stretch")
+    headings = {key: translate_label(label, language) for key, label in (
+        ("target", "训练目标"), ("preview", "问题样本"), ("instruction", "修正意见"), ("status", "处理状态"))}
+    st.dataframe([{headings["target"]: str(row["target"]).upper(),
+                   headings["preview"]: str(row.get("preview") or row.get("question_preview") or row.get("answer_preview") or row.get("question") or row["candidate_id"])[:140],
+                   headings["instruction"]: str(row.get("instruction", ""))[:240],
+                   headings["status"]: translate_label(_ISSUE_LABELS.get(row["status"], row["status"]), language)}
+                  for row in rows], hide_index=True, width="stretch",
+                 height=min(410, 38 + len(rows) * 35))
+    available = {row["issue_id"]: row for row in rows if row["status"] in {"pending", "needs_revision"}}
+    if not available and status not in {"pending", "needs_revision", "all"}:
+        return
+    with st.form(f"rework-batch:{context}:{status}:{offset}"):
+        selected = st.multiselect("本页返工结果", list(available),
+            format_func=lambda value: UntranslatedText(str(available[value]["target"]).upper() + " · " +
+                str(available[value].get("preview") or available[value].get("question_preview") or available[value].get("answer_preview") or available[value].get("question") or available[value]["candidate_id"])[:90]))
+        instruction = st.text_area("本批共同修正要求（可选）", max_chars=6000, height=90,
+            help="补充本批统一要求。每条已保存的问题意见仍会分别送给修正模型。")
+        st.caption("AI 批量返工只修正已保存的候选并重新评分，每批最多 200 条。其余问题保留；人工评分仍在结果审查中逐条提交。")
+        chosen, next_batch = st.columns(2)
+        with chosen:
+            submit = st.form_submit_button("AI 返工选中结果", type="primary", disabled=active or not available,
+                width="stretch")
+        with next_batch:
+            submit_next = st.form_submit_button("AI 返工下一批", disabled=active or not any(
+                counts.get(key, 0) for key in ("pending", "needs_revision")),
+                width="stretch")
+    if submit or submit_next:
+        if submit and not selected:
+            st.warning("请先选择需要返工的结果。")
+            return
+        request_key = f"human-rework-request:{context}"
+        request_id = st.session_state.setdefault(request_key, uuid.uuid4().hex)
+        try:
+            round_row = application.revise_issues(session_id, request_id=request_id,
+                expected_version=st.session_state[f"human-version:{context}"],
+                selected_issue_ids=None if submit_next else selected, instruction=instruction)
+            fresh = application.session(session_id)
+            st.session_state[f"human-version:{context}"] = fresh["version"]
+            st.session_state[f"human-round-pending:{context}"] = round_row["id"]
+            st.session_state[f"human-result-view-pending:{context}"] = "results"
+            st.session_state.pop(request_key, None)
+            begin(["workflow", "--action", "resume", "--run-id", round_row["run_id"]])
+            st.rerun()
+        except (ValueError, OSError, Timeout) as error:
+            st.error(_error(error))
+
+
 def _render_manual_review(application, session_id, context, begin, round_id, target,
                           candidate_id, row, projection, *, disabled):
     """One form owns both the human verdict and the exact edited candidate."""
@@ -207,7 +303,9 @@ def _render_manual_review(application, session_id, context, begin, round_id, tar
             value=str(projection.get("reviewer_feedback") or "")[:6000], key=form_key + ":instruction")
         submitted = st.form_submit_button("提交人工评分与修正", type="primary", width="stretch",
             disabled=disabled)
-    if not submitted:
+        saved_issue = st.form_submit_button("存入返工集合", width="stretch", disabled=disabled,
+            help="保存问题和修改草稿，稍后批量修正；此操作不启动模型。") if hasattr(application, "save_issues") else False
+    if not submitted and not saved_issue:
         return
     request_key = form_key + ":request"
     request_id = st.session_state.setdefault(request_key, uuid.uuid4().hex)
@@ -226,6 +324,14 @@ def _render_manual_review(application, session_id, context, begin, round_id, tar
             else:
                 messages[1].pop("reasoning_content", None)
             payload = {"messages": messages}
+        if saved_issue:
+            application.save_issues(session_id, selections=[{"round_id": round_id, "target": target,
+                "candidate_id": candidate_id, "corrected_record": payload}], instruction=instruction,
+                expected_version=st.session_state[f"human-version:{context}"])
+            st.session_state[f"human-version:{context}"] = application.session(session_id)["version"]
+            st.session_state[f"human-result-view-pending:{context}"] = "issues"
+            st.session_state.pop(request_key, None)
+            st.rerun()
         round_row = application.submit_manual_review(session_id, round_id=round_id, target=target,
             candidate_id=candidate_id, request_id=request_id, score=human_score,
             decision=human_decision, instruction=instruction, corrected_record=payload,
@@ -239,8 +345,47 @@ def _render_manual_review(application, session_id, context, begin, round_id, tar
         st.error(_error(error))
 
 
+def _confirm_rework_models(application, session_id, context):
+    from lib.presentation.streamlit.workflow_node_settings import _model_fingerprint
+
+    model_context = f"rework:{context}"
+    roles = st.session_state.get(f"workflow-node-bindings:{model_context}", {}).get("review", {})
+    try:
+        saved = application.configure_review_models(session_id, bindings=roles,
+            expected_version=st.session_state[f"human-version:{context}"])
+    except (ValueError, OSError, Timeout) as error:
+        st.session_state[f"human-model-error:{context}"] = _error(error)
+        return
+    st.session_state[f"human-version:{context}"] = saved["version"]
+    st.session_state[f"workflow-node-model-confirmations:{model_context}"] = {"review": _model_fingerprint("review", roles)}
+    st.session_state.pop(f"human-model-error:{context}", None)
+    st.toast("返工节点模型已确认，后续批次使用此配置。")
+
+
+def _render_rework_models(application, backends, session, context):
+    from lib.application.workflow_node_models_service import WorkflowNodeModelsApplication
+    from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models
+
+    model_context = f"rework:{context}"
+    draft_key = f"workflow-node-bindings:{model_context}"
+    if draft_key not in st.session_state:
+        saved = deepcopy(session["blueprint"].get("node_models") or {})
+        st.session_state[draft_key] = saved
+        st.session_state[f"workflow-form-draft:{model_context}"] = {draft_key: saved}
+    st.caption("这些模型用于主动提交的 AI 返工。确认后保存到本工作，原任务和已有结果版本保留。")
+    package_review = session["blueprint"].get("package_review")
+    review = {**(session["blueprint"].get("review_repair") or {}), "mode": "auto"}
+    bindings, endpoints = node_bindings(WorkflowNodeModelsApplication(backends), ["review"], "文档资料", model_context,
+        package_review=package_review, review_repair=review)
+    render_node_models("review", "文档资料", model_context, bindings, endpoints, backend_application=backends,
+        package_review=package_review, review_repair=review, confirmation_action=_confirm_rework_models,
+        confirmation_args=(application, session["id"], context))
+    if error := st.session_state.get(f"human-model-error:{context}"):
+        st.error(error)
+
+
 @st.fragment(run_every=2)
-def _live_workflow(workflows, backends, session, round_row, context):
+def _live_workflow(workflows, backends, session, round_row, context, human_application=None):
     recipe = session["blueprint"]
     run_id = round_row.get("run_id") if round_row else None
     try:
@@ -296,8 +441,12 @@ def _live_workflow(workflows, backends, session, round_row, context):
         if feedback_event is not None:
             st.caption("已打开下方修正分支。请选择具体结果，确认意见后提交。")
     with configuration, st.popover("查看所选节点配置", width="stretch"):
-        st.html(_config_html(_stage_configuration(st.session_state.get(selection_key, selected), recipe, state)))
-        render_run_scheduling(backends, recipe.get("node_models", {}).get(st.session_state.get(selection_key, selected), {}))
+        chosen_node = st.session_state.get(selection_key, selected)
+        if chosen_node == "review" and backends is not None and hasattr(human_application, "configure_review_models") and not active:
+            _render_rework_models(human_application, backends, session, context)
+        else:
+            st.html(_config_html(_stage_configuration(chosen_node, recipe, state)))
+            render_run_scheduling(backends, recipe.get("node_models", {}).get(chosen_node, {}))
     if run_id:
         st.caption(translate_label(LABELS.get(state.get("status", "queued"), "等待"), st.session_state.get("ui_language", "zh")))
         if active:
@@ -379,7 +528,7 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
         if round_ids and st.session_state.get(selected_round_key) not in round_ids:
             st.session_state[selected_round_key] = current["id"] if current else round_ids[-1]
         shown_round = next((row for row in rounds if row["id"] == st.session_state.get(selected_round_key)), current)
-        _live_workflow(workflows, backend_application, session, shown_round, context)
+        _live_workflow(workflows, backend_application, session, shown_round, context, application)
         active = any(row.get("active") or row.get("status") in {
             "queued", "prepared", "running", "interrupted", "creating", "cancel_requested"} for row in rounds)
         if current and current.get("launchable") and not current.get("active"):
@@ -421,6 +570,16 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
                             st.error(_error(error))
         with right, st.container(border=True, key="human-results-editor"):
             section_heading("评分与修正", "评分、修改内容和重新核验都在同一个节点完成。", "✦")
+            if hasattr(application, "issues"):
+                view_key = f"human-result-view:{context}"
+                if pending_view := st.session_state.pop(f"human-result-view-pending:{context}", None):
+                    st.session_state[view_key] = pending_view
+                result_view = st.segmented_control("审查与返工", ("results", "issues"), default="results",
+                    required=True, key=view_key, format_func=lambda value: translate_label(
+                        "结果审查" if value == "results" else "返工集合", st.session_state.get("ui_language", "zh")))
+                if result_view == "issues":
+                    _render_rework_collection(application, session, context, begin, active=active)
+                    return
             if not rounds:
                 st.html('<div class="df-human-empty"><strong>从一组问答开始</strong>在左侧写下问题和参考答案，点击生成本轮话术。结果与修正记录会留在这个窗口。</div>')
                 return
@@ -522,6 +681,19 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
                     answer = st.text_area("修订参考答案", max_chars=12000)
                 revise = st.form_submit_button("修正答案并重新评分",
                     type="primary", disabled=active or not can_revise or not has_repair_model or not has_score_model, width="stretch")
+                save_issue = st.form_submit_button("存入返工集合", disabled=active or not can_revise, width="stretch",
+                    help="只保存问题，稍后在返工集合中批量处理，不调用模型。") if hasattr(application, "save_issues") else False
+            if save_issue:
+                try:
+                    application.save_issues(session_id, selections=[{"round_id": selected_round, "target": target,
+                        "candidate_id": selected_id, **({"question": question.strip()} if question.strip() else {}),
+                        **({"answer": answer.strip()} if answer.strip() else {})}], instruction=instruction,
+                        expected_version=st.session_state[f"human-version:{context}"])
+                    st.session_state[f"human-version:{context}"] = application.session(session_id)["version"]
+                    st.session_state[f"human-result-view-pending:{context}"] = "issues"
+                    st.rerun()
+                except (ValueError, OSError, Timeout) as error:
+                    st.error(_error(error))
             if revise:
                 try:
                     feedback = application.save_feedback(session_id, round_id=selected_round, target=target, candidate_id=selected_id, instruction=instruction,
@@ -545,14 +717,21 @@ def render_human_history(application, workspace):
         st.error(_error(error))
         return
     if not rows:
-        st.info("还没有人工增强工作。启动后会自动保存在这里。")
+        st.info("还没有人工增强或返工工作。启动后会自动保存在这里。")
     for row in rows:
         with st.container(border=True):
             name, action = st.columns([4, 1], vertical_alignment="center")
             with name:
                 st.text(UntranslatedText(str(row.get("name", row["id"]))))
-                st.caption(translate_label("人工问答增强", st.session_state.get("ui_language", "zh")))
+                language = st.session_state.get("ui_language", "zh")
+                st.caption(translate_label("评分与修正工作室" if row.get("review_only") else "人工问答增强", language))
+                counts = row.get("issue_counts") or {}
+                if pending := counts.get("pending", 0) + counts.get("needs_revision", 0):
+                    st.caption(UntranslatedText(f"{pending:,} saved issues to rework" if language == "en" else f"已存 {pending:,} 条待返工问题"))
             with action:
-                if st.button("继续设计", key=f"human-history-open:{row['id']}", width="stretch"):
+                if st.button("打开返工集合" if pending else "继续审查" if row.get("review_only") else "继续设计",
+                             key=f"human-history-open:{row['id']}", width="stretch"):
+                    if pending:
+                        st.session_state[f"human-result-view-pending:{_context(workspace, row['id'])}"] = "issues"
                     st.session_state["human-open-session"] = {"workspace": workspace, "session_id": row["id"]}
                     st.rerun()

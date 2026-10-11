@@ -17,7 +17,7 @@ from lib.domain.source_quote import quote_spans
 from lib.domain.corpus_quality import inspect_corpus
 from lib.domain.workflow_reasoning_route import cot_updates_sft, finalized_cot_sft_row
 from lib.infrastructure.workflow_rows import RowSpool, WorkflowRows, write_json_array
-from lib.infrastructure.human_revision import verified_revision_parent, revision_evidence
+from lib.infrastructure.human_revision import verified_revision_parent, verified_revision_batch, revision_evidence
 
 
 def _payload_issue(target, row):
@@ -364,10 +364,12 @@ class WorkflowReviewRepair:
         from lib.infrastructure.training_workflow import digest, now
         inputs = validate_repair_inputs(self.recipe["repair_inputs"], self.recipe["review_repair"])
         # Authenticate every selected immutable parent before any model request.
-        for item in inputs:
-            actual = verified_revision_parent(self.path.parent.parent, self.state["id"], item["revision_context"])
-            if digest(actual) != digest(item["record"]):
-                raise ValueError("human_session_result_changed")
+        with verified_revision_batch(self.path.parent.parent, self.state["id"],
+                                     [item["revision_context"] for item in inputs]):
+            for item in inputs:
+                actual = verified_revision_parent(self.path.parent.parent, self.state["id"], item["revision_context"])
+                if digest(actual) != digest(item["record"]):
+                    raise ValueError("human_session_result_changed")
         for stage, metrics in self.state["stages"].items():
             if stage not in {"review", "package"}:
                 metrics.update(status="skipped", done=0, total=0)

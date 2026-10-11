@@ -21,6 +21,7 @@ from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_node_prompts import validate_node_prompts, active_node_prompt_ids
 from lib.domain.workflow_graph import execution_graph
 from lib.domain.workflow_production import validate_production
+from lib.domain.review_repair import validate_review_repair
 
 
 _DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".tex", ".latex", ".png", ".jpg", ".jpeg", ".webp"})
@@ -142,6 +143,11 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         if style not in {"separated", "drop"}:
             style = "separated"
     values[f"workflow-sft-output-style:{workspace}"] = style
+    review_repair = validate_review_repair(recipe.get("review_repair"))
+    if review_repair is not None:
+        values[f"workflow-review-repair-mode:{workspace}"] = review_repair["mode"]
+        values[f"workflow-review-repair-rounds:{workspace}"] = review_repair["max_rounds"]
+        values[f"workflow-review-repair-threshold:{workspace}"] = round(review_repair["score_threshold"] * 100)
     copied_bindings = validate_node_models(recipe.get("node_models"))
     parser = validate_document_parser(recipe.get("document_parser"))
     if parser["mode"] == "vision":
@@ -217,10 +223,12 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     if review_prompt is not None:
         values[f"workflow-node-prompt:{workspace}:jev:workflow.package_review"] = review_prompt
     prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")),
-                                     qa_director=director, package_review=package_review)
+                                     qa_director=director, package_review=package_review,
+                                     recipe_version=18 if review_repair else recipe.get("version", 16))
     for node in prompt_nodes:
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
-                                                package_review=package_review, qa_director=director, cpt_processing=cpt_processing):
+                                                package_review=package_review, review_repair=review_repair,
+                                                qa_director=director, cpt_processing=cpt_processing):
             if prompt_id in copied_prompts.get(node, {}):
                 values[f"workflow-node-prompt:{workspace}:{node}:{prompt_id}"] = copied_prompts[node][prompt_id]
     research = recipe.get("web_research")

@@ -368,14 +368,18 @@ def page_review():
 
 def page_preference_review():
     from lib.bootstrap.preference_reviews import preference_review_application
+    from lib.bootstrap.review_rework import review_rework_application
     from lib.presentation.streamlit.preference_review_page import render_preference_review
-    render_preference_review(preference_review_application(_ws_out()))
+    render_preference_review(preference_review_application(_ws_out()),
+                            rework_application=review_rework_application(ROOT, _ws_out()))
 
 
 def page_corpus_review():
     from lib.bootstrap.corpus_reviews import corpus_review_application
+    from lib.bootstrap.review_rework import review_rework_application
     from lib.presentation.streamlit.corpus_review_page import render_corpus_review
-    render_corpus_review(corpus_review_application(_ws_out()))
+    render_corpus_review(corpus_review_application(_ws_out()),
+                         rework_application=review_rework_application(ROOT, _ws_out()))
 
 
 def page_human_review():
@@ -386,7 +390,9 @@ def page_human_review():
     from lib.bootstrap.corpus_reviews import corpus_review_application
     from lib.bootstrap.preference_reviews import preference_review_application
     from lib.bootstrap.sft_reviews import sft_review_application
+    from lib.bootstrap.review_rework import review_rework_application
     output = _ws_out()
+    rework_application = review_rework_application(ROOT, output)
     applications = {
         modes[0]: sft_review_application(output),
         modes[1]: preference_review_application(output),
@@ -400,16 +406,16 @@ def page_human_review():
     mode = st.session_state[mode_key]
     if mode == modes[0]:
         from lib.presentation.streamlit.sft_review_page import render_sft_review
-        render_sft_review(applications[mode], legacy_review=page_review)
+        render_sft_review(applications[mode], legacy_review=page_review, rework_application=rework_application)
     elif mode == modes[1]:
         from lib.presentation.streamlit.preference_review_page import render_preference_review
-        render_preference_review(applications[mode], show_header=False)
+        render_preference_review(applications[mode], show_header=False, rework_application=rework_application)
     elif mode in modes[2:4]:
         from lib.presentation.streamlit.preference_review_page import render_preference_review
-        render_preference_review(applications[mode], show_header=False)
+        render_preference_review(applications[mode], show_header=False, rework_application=rework_application)
     else:
         from lib.presentation.streamlit.corpus_review_page import render_corpus_review
-        render_corpus_review(applications[mode], show_header=False)
+        render_corpus_review(applications[mode], show_header=False, rework_application=rework_application)
 
 
 def page_output_packages():

@@ -192,6 +192,22 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
             except ValueError:
                 pass
             else:
+                if hasattr(catalog, "source_status"):
+                    try:
+                        saved = catalog.source_status(workspace_id, selected)
+                        if saved.get("status") == "parsed":
+                            st.success("已有可复用解析")
+                            st.caption(translate("解析版本", ui_language) + f" {saved.get('parses', 0):,} · " +
+                                translate("来源片段", ui_language) + f" {saved.get('parts', 0):,}")
+                            st.caption("下次生成自动复用匹配的解析版本；更换解析模型或提示词时另存新版本。")
+                        elif saved.get("status") == "unparsed":
+                            st.caption("原件已保存。首次解析后自动进入可复用资料库，重启后仍保留。")
+                        elif saved.get("status") == "requires_vision":
+                            st.info("原生提取已保存，但扫描页仍需多模态识别。请在输入解析节点选择支持图片的模型。")
+                        elif saved.get("status") == "empty":
+                            st.warning("已保存提取结果，但没有可用正文。请检查原件或调整输入解析方式。")
+                    except (OSError, ValueError, Timeout):
+                        st.warning("解析缓存状态暂不可读取，原件仍保留。")
                 if on_use_source is not None:
                     st.button("用于生成", key=f"asset-use:{workspace_id}:{selected.id}",
                               type="primary", width="stretch", on_click=_use_source,

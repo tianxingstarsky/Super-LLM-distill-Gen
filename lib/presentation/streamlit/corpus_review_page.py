@@ -57,7 +57,7 @@ def _corpus_html(title: str, text: str, *, original: bool = False) -> str:
             f'<div class="df-review-corpus-text">{html.escape(text)}</div></section>')
 
 
-def render_corpus_review(application: CorpusReviewApplication, *, show_header: bool = True):
+def render_corpus_review(application: CorpusReviewApplication, *, show_header: bool = True, rework_application=None):
     if show_header:
         page_header("CPT 语料审核", "逐条检查训练语料及其来源证据，修订通过的样本并保留完整审核记录。", "CPT　·　人工质量门")
     else:
@@ -169,6 +169,9 @@ def render_corpus_review(application: CorpusReviewApplication, *, show_header: b
             st.progress(finished / total, text=f"已审核 {finished} 条 · 待处理 {counts['pending'] + counts['skipped']} 条")
             st.html('<div class="df-review-mini-stats"><span>已通过 <b>' + str(counts["approved"]) +
                     '</b></span><span>已退回 <b>' + str(counts["rejected"]) + '</b></span></div>')
+            if rework_application is not None:
+                from lib.presentation.streamlit.review_rework_controls import render_review_rework_controls
+                render_review_rework_controls(rework_application, run_id, "cpt", counts["rejected"], widgets=st)
 
     if approve or reject or skip:
         try:

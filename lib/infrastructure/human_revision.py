@@ -2,11 +2,47 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager, ExitStack
+from contextvars import ContextVar
 from pathlib import Path
 
 from lib.domain.human_augmentation import validate_revision_context
 from lib.domain.workflow_quality import canonical
 from lib.infrastructure.json_stream import iter_json_records
+
+
+_BATCH = ContextVar("authenticated_revision_batch", default=None)
+
+
+def _identity(path):
+    if path.is_symlink():
+        raise ValueError("human_session_result_changed")
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
+
+
+@contextmanager
+def verified_revision_batch(output, run_id, contexts):
+    """Share strong artifact verification only during this bounded repair load.
+
+    Each parent artifact is hashed once on entry. Indexed record digests and
+    file identities are still checked for every selection. Nothing is leased
+    across jobs or retained after this context closes.
+    """
+    from lib.infrastructure.rework_candidate_index import rework_candidate_index
+    from lib.infrastructure.training_workflow import run_path
+
+    checked = [validate_revision_context(value, review=True) for value in contexts]
+    batch = {"output": str(Path(output).resolve()), "run_id": run_id, "indexes": {}, "parents": {}, "children": {}}
+    with ExitStack() as stack:
+        for parent_id, target in sorted(set((value["parent_run_id"], value["target"]) for value in checked)):
+            index = stack.enter_context(rework_candidate_index(run_path(output, parent_id), target))
+            batch["indexes"][(parent_id, target)] = index
+        token = _BATCH.set(batch)
+        try:
+            yield
+        finally:
+            _BATCH.reset(token)
 
 
 def record_messages(record):
@@ -56,32 +92,85 @@ def verified_revision_parent(output, run_id, supplied):
     context = validate_revision_context(supplied, review=True)
     path = Path(output) / "human-sessions" / context["session_id"]
     try:
-        session = read_json(path / "session.json")
-        child = next(row for row in session["rounds"] if row["run_id"] == run_id and row["kind"] in {"revision", "manual_review"})
+        batch = _BATCH.get()
+        if batch is not None and (batch["output"] != str(Path(output).resolve()) or batch["run_id"] != run_id):
+            batch = None
+        child_key = context["session_id"]
+        cached_child = batch["children"].get(child_key) if batch is not None else None
+        session_file = path / "session.json"
+        recipe_file = run_path(output, run_id) / "recipe.json"
+        if cached_child is None:
+            session = read_json(session_file)
+            child = next(row for row in session["rounds"] if row["run_id"] == run_id and row["kind"] in {"revision", "manual_review"})
+            sidecar_file = None
+            if child.get("details_ref"):
+                from lib.infrastructure.human_round_store import verified_human_round
+                child = verified_human_round(path, child)
+                sidecar_file = path / child["details_ref"]["file"]
+            child_recipe = read_json(recipe_file)
+            if child.get("repair_inputs_sha256") is not None and child["repair_inputs_sha256"] != digest(child_recipe.get("repair_inputs")):
+                raise ValueError("human_session_result_changed")
+            cached_child = (child, _identity(session_file), _identity(recipe_file),
+                            (sidecar_file, _identity(sidecar_file)) if sidecar_file is not None else None)
+            if batch is not None:
+                batch["children"][child_key] = cached_child
+        child, session_identity, recipe_identity, sidecar_identity = cached_child
+        if _identity(session_file) != session_identity:
+            # Other reviews may save issues during execution. Recheck this
+            # child's authorization instead of rejecting an unrelated update.
+            fresh_session = read_json(session_file)
+            fresh_child = next(row for row in fresh_session["rounds"] if row["run_id"] == run_id
+                               and row["kind"] in {"revision", "manual_review"})
+            if fresh_child.get("details_ref"):
+                from lib.infrastructure.human_round_store import verified_human_round
+                fresh_child = verified_human_round(path, fresh_child)
+            immutable = ("id", "run_id", "kind", "parent_results", "details_ref", "repair_inputs_sha256")
+            if (any(child.get(key) != fresh_child.get(key) for key in immutable)
+                    or fresh_child["status"] in {"cancelled", "preparation_failed"}):
+                raise ValueError("human_session_result_changed")
+            child, session_identity = fresh_child, _identity(session_file)
+            if batch is not None:
+                batch["children"][child_key] = (child, session_identity, recipe_identity, sidecar_identity)
+        if (_identity(recipe_file) != recipe_identity
+                or sidecar_identity is not None and _identity(sidecar_identity[0]) != sidecar_identity[1]):
+            raise ValueError("human_session_result_changed")
         expected = {"run_id": context["parent_run_id"], "round_id": context["round_id"],
                     "target": context["target"], "candidate_id": context["candidate_id"],
                     "content_sha256": context["content_sha256"]}
         if expected not in child["parent_results"] or child["status"] in {"cancelled", "preparation_failed"}:
             raise ValueError("human_session_revision_not_authorized")
-        child_recipe = read_json(run_path(output, run_id) / "recipe.json")
-        if child.get("repair_inputs_sha256") is not None and child["repair_inputs_sha256"] != digest(child_recipe.get("repair_inputs")):
-            raise ValueError("human_session_result_changed")
         parent_path = run_path(output, context["parent_run_id"])
-        manifest = verify_artifacts(parent_path)
-        parent_recipe = read_json(parent_path / "recipe.json")
-        parent_state = read_json(parent_path / "state.json")
-        if (manifest.get("run_id") != context["parent_run_id"] or manifest.get("recipe_hash") != digest(parent_recipe)
-                or parent_state.get("recipe_hash") != manifest.get("recipe_hash")):
-            raise ValueError("human_session_result_changed")
-        for source in parent_recipe["sources"]:
-            source_path = parent_path / "inputs" / source["file"]
-            if source_path.is_symlink() or file_hash(source_path) != source["sha256"]:
-                raise ValueError("human_session_source_changed")
-        records = iter_json_records(parent_path / "artifacts" / f"{context['target']}.records.json", max_record_chars=2_000_000)
-        try:
-            record = next(row for row in records if row.get("id") == context["candidate_id"])
-        finally:
-            records.close()
+        index = batch["indexes"].get((context["parent_run_id"], context["target"])) if batch is not None else None
+        cached_parent = batch["parents"].get(context["parent_run_id"]) if batch is not None else None
+        if cached_parent is None:
+            manifest = index.manifest if index is not None else verify_artifacts(parent_path)
+            parent_recipe = read_json(parent_path / "recipe.json")
+            parent_state = read_json(parent_path / "state.json")
+            if (manifest.get("run_id") != context["parent_run_id"] or manifest.get("recipe_hash") != digest(parent_recipe)
+                    or parent_state.get("recipe_hash") != manifest.get("recipe_hash")):
+                raise ValueError("human_session_result_changed")
+            files = [(parent_path / "recipe.json", _identity(parent_path / "recipe.json")),
+                     (parent_path / "state.json", _identity(parent_path / "state.json"))]
+            for source in parent_recipe["sources"]:
+                source_path = parent_path / "inputs" / source["file"]
+                if source_path.is_symlink() or file_hash(source_path) != source["sha256"]:
+                    raise ValueError("human_session_source_changed")
+                files.append((source_path, _identity(source_path)))
+            cached_parent = (parent_recipe, files)
+            if batch is not None:
+                batch["parents"][context["parent_run_id"]] = cached_parent
+        parent_recipe, checked_files = cached_parent
+        for checked_file, identity in checked_files:
+            if _identity(checked_file) != identity:
+                raise ValueError("human_session_result_changed")
+        if index is not None:
+            record = index.candidates([context["candidate_id"]])[context["candidate_id"]]
+        else:
+            records = iter_json_records(parent_path / "artifacts" / f"{context['target']}.records.json", max_record_chars=2_000_000)
+            try:
+                record = next(row for row in records if row.get("id") == context["candidate_id"])
+            finally:
+                records.close()
         prior = record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {}).get("seed", {}).get("revision_context", {})
         ancestry = [*prior.get("ancestors", []), {"run_id": context["parent_run_id"], "candidate_id": context["candidate_id"]}]
         evidence = revision_evidence(record, parent_recipe)

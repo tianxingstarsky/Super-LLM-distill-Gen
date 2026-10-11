@@ -666,7 +666,8 @@ def _toggle_run_reader(run_id: str) -> None:
 def _open_human_correction(application, run_id):
     """Open a preserved result version; model work starts only on submission."""
     try:
-        session_id = application.create_session(from_run_id=run_id, review_only=True)
+        session_id = (application.review_session(run_id) if hasattr(application, "review_session") else
+                      application.create_session(from_run_id=run_id, review_only=True))
         st.session_state["human-open-session"] = {"workspace": st.session_state["ws"], "session_id": session_id}
         st.rerun(scope="app")
     except (ValueError, OSError, Timeout) as error:
@@ -883,6 +884,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             render_stream_output(application, run_id, selected_stage, reader_height=380 if wide_reader else 220)
             if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
                 st.caption("开放需求任务规划：按批完成后再进入生成节点。")
+            if selected_stage == "ingest" and (source_library := state.get("source_library")):
+                reused, parsed = st.columns(2)
+                reused.metric("复用资料解析", source_library.get("hits", 0))
+                parsed.metric("本次新解析", source_library.get("misses", 0))
+                st.caption("解析结果长期保存，供后续任务复用；资料内容或解析配置改变时另存新版本。")
             if selected_stage in {"jev", "package"} and selected_status == "running":
                 phase_label = {"deterministic_checks": "正在核对结构、去重与打包规则。",
                                "preparing_candidates": "正在整理可评审样本，核对结构与去重结果。",
@@ -1709,6 +1715,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                "扫描件与图片可在输入节点配置多模态识别。")
                     if input_cache is not None:
                         st.caption("拖入文件即保存并选中，关闭或重启后仍可使用。")
+                        st.caption("解析一次，后续任务和批量生成自动复用；修改解析配置时另存新版本。")
         if preview_in_input:
             from lib.presentation.streamlit.document_preview import render_document_preview
             with source_previews, st.container(border=True, key="workbench-source-preview"):

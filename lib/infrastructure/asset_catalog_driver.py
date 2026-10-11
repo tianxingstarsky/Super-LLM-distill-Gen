@@ -52,7 +52,8 @@ class FilesystemAssetCatalogDriver:
             for current, directories, files in os.walk(output_root, followlinks=False):
                 parent = Path(current)
                 directories[:] = sorted(directory for directory in directories
-                                        if not workspace.is_linked(parent / directory))
+                                        if directory not in {".source-library", ".rework-index", ".indexes"}
+                                        and not workspace.is_linked(parent / directory))
                 if "review_batches" in parent.parts:
                     directories.clear()
                     continue
@@ -128,6 +129,11 @@ class FilesystemAssetCatalogDriver:
     def source_path_for_generation(self, workspace_id: str, asset: Asset) -> str:
         generation_source_mode(asset)
         return str(self._resolve(workspace_id, asset).resolve(strict=True))
+
+    def source_status(self, workspace_id: str, asset: Asset) -> dict:
+        generation_source_mode(asset)
+        from lib.infrastructure.source_library import SourceLibrary
+        return SourceLibrary(workspace.out(workspace_id)).describe_source(self._resolve(workspace_id, asset))
 
     def download(self, workspace_id: str, asset: Asset) -> bytes:
         path = self._resolve(workspace_id, asset)

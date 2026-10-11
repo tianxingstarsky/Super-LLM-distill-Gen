@@ -8,6 +8,7 @@ from streamlit.testing.v1 import AppTest
 
 SCRIPT = '''
 from copy import deepcopy
+from unittest.mock import patch
 import streamlit as st
 from lib.presentation.streamlit.workflow_page import render_run
 from lib.presentation.streamlit import workflow_canvas
@@ -40,7 +41,6 @@ def canvas(**kwargs):
     st.session_state['fixture-selected'] = kwargs['spec']['selected']
     st.session_state['fixture-canvas-spec'] = deepcopy(kwargs['spec'])
     return st.session_state.get('fixture-canvas-event')
-workflow_canvas._canvas = canvas
 class Application:
     def state(self, run_id): return deepcopy(st.session_state['fixture-state'])
     def recipe(self, run_id): return deepcopy(st.session_state['fixture-recipe'])
@@ -50,8 +50,15 @@ class Application:
         return []
 def begin(args):
     st.session_state.setdefault('fixture-begin-calls', []).append(args)
-render_run(Application(), 'fixture', begin)
+with patch.object(workflow_canvas, '_canvas', canvas):
+    render_run(Application(), 'fixture', begin)
 '''
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """Node navigation uses fixture state and never needs the shared API server."""
+    yield
 
 
 def _navigation_receipts(ui):

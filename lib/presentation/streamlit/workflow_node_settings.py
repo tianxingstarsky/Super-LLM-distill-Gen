@@ -155,7 +155,8 @@ def _confirm_node_models(workspace: str, node: str, roles: tuple[str, ...], endp
 
 
 def _render_model_confirmation(node: str, roles: tuple[str, ...], workspace: str,
-                               bindings: dict, endpoints: dict, application) -> None:
+                               bindings: dict, endpoints: dict, application, *, confirmation_action=None,
+                               confirmation_args=None) -> None:
     node_bindings = bindings.get(node, {})
     ready = _confirmation_ready(node, roles, node_bindings, endpoints)
     confirmed = (ready and _model_confirmations(workspace).get(node) == _model_fingerprint(node, node_bindings)
@@ -168,8 +169,8 @@ def _render_model_confirmation(node: str, roles: tuple[str, ...], workspace: str
     with action:
         st.button("确认模型配置", key=f"node-model-confirm:{workspace}:{node}",
                   disabled=not ready or confirmed, type="secondary" if confirmed else "primary",
-                  on_click=_confirm_node_models,
-                  args=(workspace, node, roles, tuple(endpoints), application), width="stretch",
+                  on_click=confirmation_action or _confirm_node_models,
+                  args=confirmation_args if confirmation_action else (workspace, node, roles, tuple(endpoints), application), width="stretch",
                   help="确认当前节点的模型与 token 上限，不会发起模型请求。")
 
 
@@ -455,7 +456,8 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
 
 
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
-                       backend_application: BackendApplication | None = None, node_generation=None, package_review=None, cpt_processing=None, review_repair=None):
+                       backend_application: BackendApplication | None = None, node_generation=None, package_review=None, cpt_processing=None, review_repair=None,
+                       confirmation_action=None, confirmation_args=None):
     pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
     if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair):
         prefix = f"node-model:{workspace}:{node}:{pending['role']}"
@@ -484,7 +486,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.info("当前没有可用的模型连接。请在下方登记服务地址和模型。")
         _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
         return
-    _render_model_confirmation(node, roles, workspace, bindings, endpoints, backend_application)
+    _render_model_confirmation(node, roles, workspace, bindings, endpoints, backend_application,
+                               confirmation_action=confirmation_action, confirmation_args=confirmation_args)
     for role in roles:
         writer_label = (("修正模型" if (package_review or {}).get("enabled") else "评分与修正模型") if node == "review" else "清洗模型" if node == "cpt" and source_mode != "开放需求" else
                         "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
