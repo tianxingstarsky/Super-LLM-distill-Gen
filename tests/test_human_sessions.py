@@ -241,7 +241,8 @@ def test_revision_reuses_selected_document_evidence_instead_of_an_unrelated_chun
     recipe = engine.read_json(engine.run_path(output, second["run_id"]) / "recipe.json")
     assert len(recipe["sources"]) == 1 and recipe["sources"][0].get("kind") != "human_design"
     assert writer.calls[0]["source_evidence"]["teacher_evidence"] == A
-    assert writer.calls[-1]["source_evidence"]["source_kind"] == "document"
+    source_reviews = [call for call in writer.calls if isinstance(call.get("source_evidence"), dict)]
+    assert source_reviews[-1]["source_evidence"]["source_kind"] == "document"
     assert parent["record"]["source_id"] == app.results(sid)["rows"][0]["record"]["source_id"]
 
 
@@ -256,8 +257,12 @@ def test_multiturn_revision_receives_full_selected_dialogue_and_final_feedback_c
     current = app.results(sid, target="multiturn")["rows"][0]
     assert current["lineage"]["messages"] == candidate["messages"]
     assert len(current["messages"]) == 4 and current["messages"][3]["content"].startswith("安全提醒：")
-    final = [call for call in writer.calls if "candidate" in call and "review_feedback" not in call]
+    final = [call for call in writer.calls if "candidate" in call and "review_feedback" not in call
+             and not call.get("learner_context_only")]
     assert len(final) == 1 and final[0]["candidate"]["messages"] == current["messages"]
+    blind = [call for call in writer.calls if call.get("learner_context_only")]
+    assert len(blind) == 1 and blind[0]["candidate"]["messages"] == current["messages"]
+    assert blind[0]["source_evidence"] is None
 
 
 def test_ending_multiturn_early_cannot_bypass_feedback_on_a_later_turn(tmp_path):

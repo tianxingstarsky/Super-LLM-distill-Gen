@@ -7,6 +7,7 @@ import json
 import re
 
 from lib.domain.workflow_quality import canonical, text_issue
+from lib.domain.workflow_scale import MAX_CONTEXT_WINDOW_TOKENS
 
 
 MAX_HUMAN_SEEDS = 200
@@ -43,7 +44,7 @@ HUMAN_REVISION_INSTRUCTION = (
 def validate_revision_context(value, *, review=False):
     fields = {"session_id", "round_id", "parent_run_id", "target", "candidate_id", "content_sha256",
               "messages", "instruction", "depth", "ancestors", "source_id", "source_kind", "teacher_evidence"}
-    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {"design_requirements"}:
+    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {"design_requirements", "evidence_pack_sha256"}:
         raise ValueError("invalid_human_revision_context")
     for field in ("session_id", "round_id", "parent_run_id"):
         if not isinstance(value[field], str) or not re.fullmatch(r"[a-f0-9]{32}", value[field]):
@@ -59,7 +60,13 @@ def validate_revision_context(value, *, review=False):
     result = deepcopy(value)
     result["candidate_id"] = _text(value["candidate_id"], limit=500, required=True)
     result["instruction"] = _text(value["instruction"], limit=6000)
-    result["teacher_evidence"] = _text(value["teacher_evidence"], limit=40_000, required=True)
+    if "evidence_pack_sha256" in value and (not isinstance(value["evidence_pack_sha256"], str)
+            or not re.fullmatch(r"[a-f0-9]{64}", value["evidence_pack_sha256"])):
+        raise ValueError("invalid_human_revision_context")
+    result["teacher_evidence"] = _text(value["teacher_evidence"],
+        # Accepted pack text is bounded by the supported request window. A
+        # separate 200K character cap would reject valid 1M-context rework.
+        limit=MAX_CONTEXT_WINDOW_TOKENS if "evidence_pack_sha256" in value else 40_000, required=True)
     if "design_requirements" in value:
         requirements = value["design_requirements"]
         if not isinstance(requirements, dict) or set(requirements) != {"question_requirements", "answer_requirements"}:

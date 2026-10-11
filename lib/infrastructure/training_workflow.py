@@ -405,6 +405,17 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         copied_bytes += snapshot["bytes"]
         snapshots.append({"name": (source_names or {}).get(str(source), source.name),
                           "file": destination.name, **snapshot})
+        if destination.suffix in {".json", ".jsonl"}:
+            from lib.infrastructure.structured_source_kind import contains_document_records
+            if contains_document_records(destination):
+                snapshots[-1]["kind"] = "document_collection"
+    # Classify the exact copied records, rather than a mutable upload path.
+    # Structured document collections need the same shared evidence cleaning
+    # as PDF/Markdown; actual conversation-only containers keep their path.
+    if not repair_inputs and not source_cleaning and uses_shared_source_cleaning(targets, snapshots):
+        source_cleaning = True
+        recipe_version = SOURCE_CLEANING_RECIPE_VERSION
+        node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -419,7 +430,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
               "conversation_turns": conversation_turns, "math_generator_version": 2,
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
-              **({"source_cleaning": True} if source_cleaning else {}),
+              **({"source_cleaning": True, "source_context_pack_version": 1} if source_cleaning else {}),
               "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
@@ -682,15 +693,29 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                    else render(self.historical_prompt("workflow.system")))
                     system = base_system + "\n" + (self.prompt_text(prompt_id, stage=prompt_stage)
                         if prompt_stage is not None else self.prompt_text(prompt_id))
-                    if instruction is not None:
+                    source_pack_request = (self.recipe.get("source_context_pack_version") == 1
+                                           and image is None and isinstance(data, dict)
+                                           and not data.get("learner_context_only"))
+                    if source_pack_request:
+                        from lib.infrastructure.model_context_prefix import serialize_context_request, NODE_RULE_HEADER
+                        request_text = serialize_context_request(self.path, data, instruction=instruction)
+                        if request_text.startswith('{"teacher_context_pack":'):
+                            pinned_prompt = (self.prompt_text(prompt_id, stage=prompt_stage)
+                                             if prompt_stage is not None else self.prompt_text(prompt_id))
+                            system = base_system + NODE_RULE_HEADER + "\n" + pinned_prompt
+                        elif instruction is not None:
+                            system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
+                    else:
+                        request_text = canonical(data)
+                    if instruction is not None and not source_pack_request:
                         system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
                     visible_only = (not allow_reasoning_fallback or prompt_id in {
                         "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
                         "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
                     return chat_json(client, [
                         {"role": "system", "content": system},
-                        {"role": "user", "content": canonical(data) if image is None else [
-                            {"type": "text", "text": canonical(data)},
+                        {"role": "user", "content": request_text if image is None else [
+                            {"type": "text", "text": request_text},
                             {"type": "image_url", "image_url": {"url": image}}]}],
                         max_tokens=binding.get("max_output_tokens"), **streaming,
                         **({"allow_reasoning_fallback": False} if visible_only else {}))
@@ -1350,16 +1375,36 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     continue
                 quotes = candidate.get("quotes", [])
                 if unit["kind"] == "document":
+                    evidence_text = unit["text"]
+                    if unit.get("source_context_pack"):
+                        from lib.infrastructure.workflow_source_context import pack_evidence_text
+                        evidence_text = pack_evidence_text(unit, self.path)
                     pdf_source = any(Path(source.get("file", "")).suffix.lower() == ".pdf"
                         and source.get("sha256") == unit.get("source_id")
                         and source.get("name") == unit.get("source_name")
                         for source in self.recipe.get("sources", ()))
-                    evidence_spans = quote_spans(unit["text"], quotes, pdf_whitespace=pdf_source)
+                    evidence_spans = quote_spans(evidence_text, quotes, pdf_whitespace=pdf_source)
                     if evidence_spans is None:
                         feedback = "需要原文中可逐字匹配的证据"
                         continue
                 if unit["kind"] == "document":
-                    prompt = f"请根据以下资料回答问题。只使用资料支持的内容。\n\n资料：\n{unit['text']}\n\n问题：\n{candidate['question']}"
+                    from lib.domain.learner_context import prompt_at_least
+                    prompt_id = "workflow.sft_styled" if style is not None else "workflow.sft"
+                    if prompt_at_least(self.recipe, prompt_id, (1, 1, 0)):
+                        visible_context = candidate.get("visible_context")
+                        if visible_context is not None:
+                            if (not isinstance(visible_context, str) or not visible_context.strip()
+                                    or len(visible_context) > len(evidence_text)
+                                    or any(line not in evidence_text for line in visible_context.splitlines() if line.strip())):
+                                feedback = "题面资料须使用清洗资料包中的真实片段，包含本题所需条件。"
+                                continue
+                        else:
+                            # Keep the anchor and every quoted supporting span
+                            # visible, including evidence from adjacent sections.
+                            visible_context = "\n\n".join(dict.fromkeys([unit["text"], *quotes]))
+                        prompt = f"资料：\n{visible_context}\n\n用户消息：\n{candidate['question']}"
+                    else:
+                        prompt = f"请根据以下资料回答问题。只使用资料支持的内容。\n\n资料：\n{unit['text']}\n\n问题：\n{candidate['question']}"
                     prefix = [{"role": "user", "content": prompt}]
                 elif unit["kind"] == "brief":
                     prompt = f"{self.recipe['brief']}\n\n任务：\n{candidate['question']}" if self.recipe["brief"] else candidate["question"]
@@ -1427,6 +1472,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                       "kind": unit["kind"]}
         source_context = {"provenance": provenance, "task": unit.get("text"),
                           "brief": self.recipe.get("brief", ""), "tools": unit.get("tools", [])}
+        pack_evidence = None
+        if self.recipe.get("source_context_pack_version") == 1 and unit.get("source_context_pack"):
+            from lib.infrastructure.workflow_source_context import pack_evidence_text
+            source_context["source_context_pack"] = deepcopy(unit["source_context_pack"])
+            pack_evidence = pack_evidence_text(unit, self.path)
         contract = unit.get("qa_contract")
         if contract is not None:
             source_context.update(qa_contract=contract,
@@ -1450,7 +1500,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         dialogue_steps = []
         dialogue_state = ({"user_intent": contract["dialogue_design"].get("user_intent", ""),
             "progress": "", "shared_understanding": [], "open_issues": [],
-            "active_constraints": [], "context_links": []} if adaptive_dialogue else None)
+            "active_constraints": [], "context_links": [],
+            **({"conversational_frame": deepcopy(contract["dialogue_design"]["conversational_frame"])}
+               if "conversational_frame" in contract["dialogue_design"] else {})} if adaptive_dialogue else None)
         dialogue_end_reason = "turn_limit"
         dialogue_end_guidance = ""
         dialogue_state_after_turn = 0
@@ -1543,7 +1595,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     if unit["kind"] == "document" and ((not quotes and
                             not adaptive_dialogue and
                             (contract is None or contract["answer_policy"] in {"answer", "correct_premise"})) or any(
-                            not isinstance(quote, str) or not quote.strip() or quote not in unit["text"]
+                            not isinstance(quote, str) or not quote.strip()
+                            or quote not in (pack_evidence if pack_evidence is not None else unit["text"])
                             for quote in quotes)):
                         feedback = "文档回答缺少可逐字匹配的原文依据"
                         continue

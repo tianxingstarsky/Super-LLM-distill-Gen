@@ -371,6 +371,11 @@ def test_director_reserves_output_and_rule_bytes_before_sending_large_chinese_ba
     assert state["status"] == "failed"  # simulated provider stop after request preflight
     assert len(writer.calls) == 1
     data = json.loads(writer.calls[0][1]["content"])
-    assert len(data["candidates"]) == 20
+    assert 0 < len(data["candidates"]) < 20  # split the batch, never clip its accepted evidence
     assert sum(len(message["content"].encode("utf-8")) for message in writer.calls[0]) + 32768 <= 131072
-    assert all(0 < len(candidate["teacher_evidence"]) < 2000 for candidate in data["candidates"])
+    assert all(candidate["source_context_pack"] for candidate in data["candidates"])
+    # The complete cleaned bundle is shared once. Each small anchor is also
+    # preserved in full rather than being clipped to fit a large batch.
+    material_texts = {material["text"] for pack in data["teacher_context_pack"] for material in pack["materials"]}
+    assert all(candidate["teacher_evidence"] in material_texts for candidate in data["candidates"])
+    assert data["teacher_context_pack"]

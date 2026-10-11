@@ -750,7 +750,8 @@ class FilesystemHumanSessionDriver:
                    "design_requirements": {field: previous_design.get(field) or
                        previous_context.get("design_requirements", {}).get(field, "")
                        for field in ("question_requirements", "answer_requirements")},
-                   **revision_evidence(record, self.workflow.recipe(feedback["run_id"]))}
+                   **revision_evidence(record, self.workflow.recipe(feedback["run_id"]),
+                                       run_path(self.output, feedback["run_id"]))}
         return {"question": question, "answer": answer, "revision_context": context,
                 "question_requirements": seed.get("question_requirements", ""),
                 "answer_requirements": seed.get("answer_requirements", "")}

@@ -66,9 +66,35 @@ def record_messages(record):
     return deepcopy(messages or [])
 
 
-def revision_evidence(record, recipe):
+def revision_evidence(record, recipe, run_path=None):
+    """Project authenticated source evidence from a selected sealed result.
+
+    Callers derive run_path from their verified parent run identity. A packed
+    source must be fully validated there; a caller cannot silently substitute
+    its small anchor when the fixed teacher context is unavailable.
+    """
     context = record.get("source_context") or {}
     text = context.get("text") or context.get("task")
+    reference = context.get("source_context_pack") or record.get("source_context_pack")
+    pack_identity = None
+    if recipe.get("source_context_pack_version") == 1 and reference is not None:
+        if run_path is None:
+            raise ValueError("human_session_source_evidence_unavailable")
+        from lib.infrastructure.workflow_source_context import load_context_pack
+        pack = load_context_pack(run_path, reference)
+        text = "\n\n".join(material["text"] for material in pack["materials"])
+        pack_identity = pack["prefix_sha256"]
+    else:
+        prior = (record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {})
+                 .get("seed", {}).get("revision_context") or {})
+        if prior.get("evidence_pack_sha256") is not None:
+            # A review-only child pins the already authenticated full text in
+            # its recipe. Its source pack still belongs to the earlier parent;
+            # never resolve that relative reference under the child directory.
+            prior = validate_revision_context(prior, review=True)
+            if prior["source_id"] != record.get("source_id"):
+                raise ValueError("human_session_result_changed")
+            text, pack_identity = prior["teacher_evidence"], prior["evidence_pack_sha256"]
     if not isinstance(text, str) or not text.strip():
         quotes = record.get("qa_contract", {}).get("evidence_quotes") or record.get("quotes") or []
         # Multi-turn records store per-turn lists. Only actual quoted source
@@ -83,7 +109,8 @@ def revision_evidence(record, recipe):
     if not isinstance(text, str) or not text.strip():
         raise ValueError("human_session_source_evidence_unavailable")
     return {"teacher_evidence": text.strip(), "source_id": record["source_id"],
-            "source_kind": "document" if real_source else "human_provided" if human else "synthetic"}
+            "source_kind": "document" if real_source else "human_provided" if human else "synthetic",
+            **({"evidence_pack_sha256": pack_identity} if pack_identity is not None else {})}
 
 
 def verified_revision_parent(output, run_id, supplied):
@@ -173,9 +200,10 @@ def verified_revision_parent(output, run_id, supplied):
                 records.close()
         prior = record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {}).get("seed", {}).get("revision_context", {})
         ancestry = [*prior.get("ancestors", []), {"run_id": context["parent_run_id"], "candidate_id": context["candidate_id"]}]
-        evidence = revision_evidence(record, parent_recipe)
+        evidence = revision_evidence(record, parent_recipe, parent_path)
         if (digest(record) != context["content_sha256"] or canonical(record_messages(record)) != canonical(context["messages"])
                 or ancestry != context["ancestors"] or context["depth"] != prior.get("depth", 0) + 1
+                or context.get("evidence_pack_sha256") != evidence.get("evidence_pack_sha256")
                 or any(context[key] != value for key, value in evidence.items())):
             raise ValueError("human_session_result_changed")
         return record

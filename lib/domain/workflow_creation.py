@@ -1,4 +1,5 @@
 """Pure creation rules shared by every workflow entry point."""
+from pathlib import PurePath
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_quality import text_issue
 from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, validate_node_models
@@ -12,7 +13,7 @@ from lib.domain.workflow_production import validate_production, MAX_PRODUCTION_G
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS
 from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
-from lib.domain.workflow_graph import uses_shared_source_cleaning
+from lib.domain.workflow_graph import SOURCE_QA_TARGETS, uses_shared_source_cleaning
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
@@ -55,8 +56,14 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     validate_node_prompts(node_prompts)
     validate_package_review(package_review)
     cpt = validate_cpt_processing(cpt_processing)
+    # JSON containers may hold plain document text or recorded conversations.
+    # Their fixed snapshots are inspected at creation; cleaning then operates
+    # only on document units, preserving actual messages unchanged.
+    structured_sources = bool(set(targets).intersection(SOURCE_QA_TARGETS)) and any(
+        PurePath(str(source)).suffix.lower() in {".json", ".jsonl"} for source in sources)
     if (not repair_rows and cpt["mode"] == "model" and "cpt" not in targets
-            and not uses_shared_source_cleaning(targets, sources)):
+            and not uses_shared_source_cleaning(targets, sources)
+            and not structured_sources):
         raise ValueError("cpt_processing_requires_cpt")
     director = validate_qa_director(qa_director)
     if director["enabled"] and not qa_director_applicable(targets):

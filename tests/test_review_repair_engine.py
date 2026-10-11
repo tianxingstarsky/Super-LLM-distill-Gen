@@ -89,7 +89,7 @@ def create_child(output, parent_id, record, *, mode="auto", max_rounds=2, target
         "target": target, "candidate_id": record["id"], "content_sha256": engine.digest(record),
         "messages": record_messages(record), "instruction": "Correct the unsafe power-on instruction.",
         "depth": 1, "ancestors": [{"run_id": parent_id, "candidate_id": record["id"]}],
-        **revision_evidence(record, parent_recipe)}
+        **revision_evidence(record, parent_recipe, engine.run_path(output, parent_id))}
     item = {"target": target, "record": record, "revision_context": context,
             "instruction": context["instruction"], **fields}
     child = engine.create_run(output, targets=[target], review_repair={"mode": mode, "max_rounds": max_rounds},

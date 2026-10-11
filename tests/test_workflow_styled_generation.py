@@ -219,11 +219,11 @@ def test_recipe_pins_style_and_trim_instructions_before_execution(tmp_path, monk
     monkeypatch.setitem(reasoning_trim.TRIM_TEMPLATES, "leakage", "CHANGED_TRIM_SENTINEL")
     generator = Generator()
     assert engine.Workflow(output, rid, tmp_path, generator=generator, jev=Reviewer()).execute()["status"] == "completed"
-    assert "固定附加要求" in generator.calls[0][0]["content"]
-    assert "CHANGED_STYLE_SENTINEL" not in generator.calls[0][0]["content"]
-    assert "CHANGED_TRIM_SENTINEL" not in generator.calls[-1][0]["content"]
+    assert "固定附加要求" in json.loads(generator.calls[0][1]["content"])["node_task_instructions"]
+    assert "CHANGED_STYLE_SENTINEL" not in str(generator.calls[0])
+    assert "CHANGED_TRIM_SENTINEL" not in str(generator.calls[-1])
     recipe = engine.read_json(path / "recipe.json")
-    assert recipe["version"] == engine.RECIPE_VERSION and recipe["reasoning_trim"]["template"] == "leakage"
+    assert recipe["version"] == engine.SOURCE_CLEANING_RECIPE_VERSION and recipe["reasoning_trim"]["template"] == "leakage"
 
 
 def test_trim_keeps_answers_and_upstream_rows_but_does_not_duplicate_original_chain_in_bundle(tmp_path):

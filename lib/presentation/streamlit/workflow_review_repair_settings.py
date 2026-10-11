@@ -46,4 +46,6 @@ def render_review_repair_settings(workspace: str, package_review: dict, *, save_
         st.caption("本节点配置两个角色：JEV 模型负责评分，修正模型负责修改答案。修正后回到本节点再次评分。")
     else:
         st.caption("本节点的同一个模型负责评分和修正。修正分支修改当前候选，再返回评分；不会回到 SFT 生成节点。")
+    if mode == "auto" and st.session_state.get(f"workflow-director-enabled:{workspace}", False):
+        st.caption("指导员样本还会按实际训练输入核验上下文是否足够；未通过时走本节点修正分支。")
     return review_repair_snapshot(workspace)

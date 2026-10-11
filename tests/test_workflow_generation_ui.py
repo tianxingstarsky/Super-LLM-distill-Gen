@@ -65,8 +65,8 @@ def test_cot_and_sft_keep_separate_style_drafts_after_page_and_goal_changes():
     ui = AppTest.from_string(SCRIPT).run()
     ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["cot"]).run()
     ui.button(key="fixture-node:cot").click().run()
-    assert not any(row.key == "node-model:fixture:cot:generation:backend" for row in ui.selectbox)
-    assert ui.selectbox(key="node-model:fixture:cot:jev:backend").value == "local"
+    assert ui.selectbox(key="node-model:fixture:cot:generation:backend").value == "local"
+    assert not any(row.key == "node-model:fixture:cot:jev:backend" for row in ui.selectbox)
     enabled = "workflow-generation-enabled:fixture:cot"
     ui.toggle(key=enabled).set_value(True).run()
     assert ui.selectbox(key="node-model:fixture:cot:generation:backend").value == "local"
@@ -236,7 +236,7 @@ def test_workbench_submits_active_node_styles_and_optional_trim_with_body():
         "enabled": True, "template": "custom", "instruction": "",
         "custom_prompt": "Remove only redundant framing.",
     }
-    assert set(created["node_models"]) == {"ingest", "sft", "cot", "trim"}
+    assert set(created["node_models"]) == {"ingest", "sft", "cot", "trim", "review"}
 
 
 def test_legacy_cot_details_handle_optional_none_settings_without_invented_writer(monkeypatch):

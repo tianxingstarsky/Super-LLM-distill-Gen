@@ -170,6 +170,19 @@ def _bounded_notes(value, error):
     return [_bounded_text(note, 1000, error) for note in value]
 
 
+def validate_conversational_frame(value, *, error="invalid_dialogue_design"):
+    """Open role and register notes, not verified claims about a real person.
+
+    Partial frames are valid. No role list, demographic quota or prescribed
+    speaking style is imposed; semantic grounding belongs to dialogue review.
+    """
+    limits = {"speaker_role": 800, "listener_role": 800, "relationship": 1200,
+              "setting": 2000, "register": 800}
+    if not isinstance(value, dict) or set(value) - set(limits):
+        raise ValueError(error)
+    return {key: _bounded_text(text, limits[key], error, empty=True) for key, text in value.items()}
+
+
 def validate_dialogue_design(value):
     """A soft language design brief, never an executable or trusted fact store.
 
@@ -179,9 +192,11 @@ def validate_dialogue_design(value):
     strings = {"interaction_goal": 4000, "user_intent": 2000, "stop_when": 2000}
     notes = {"context_links", "success_criteria", "turn_guidance"}
     error = "invalid_dialogue_design"
-    if not isinstance(value, dict) or "interaction_goal" not in value or set(value) - set(strings) - notes:
+    if (not isinstance(value, dict) or "interaction_goal" not in value
+            or set(value) - set(strings) - notes - {"conversational_frame"}):
         raise ValueError(error)
-    return {key: _bounded_text(text, strings[key], error) if key in strings else _bounded_notes(text, error)
+    return {key: validate_conversational_frame(text, error=error) if key == "conversational_frame"
+            else _bounded_text(text, strings[key], error) if key in strings else _bounded_notes(text, error)
             for key, text in value.items()}
 
 
@@ -207,9 +222,10 @@ def validate_dialogue_step(value, *, completed_turns):
     state = value["dialogue_state"]
     strings = {"user_intent": 2000, "progress": 2000}
     notes = {"shared_understanding", "open_issues", "active_constraints", "context_links"}
-    if not isinstance(state, dict) or set(state) - set(strings) - notes:
+    if not isinstance(state, dict) or set(state) - set(strings) - notes - {"conversational_frame"}:
         raise ValueError(error)
-    normalized = {key: _bounded_text(text, strings[key], error, empty=True)
+    normalized = {key: validate_conversational_frame(text, error=error) if key == "conversational_frame"
+                  else _bounded_text(text, strings[key], error, empty=True)
                   if key in strings else _bounded_notes(text, error) for key, text in state.items()}
     return {"continue": value["continue"],
             "user_message": _bounded_text(value["user_message"], 6000, error, empty=not value["continue"]),

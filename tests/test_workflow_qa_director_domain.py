@@ -14,9 +14,15 @@ from lib.domain.workflow_node_prompts import (
 )
 from lib.domain.workflow_qa_director import (
     DEFAULT_TYPE_WEIGHTS, DEFAULT_ANSWER_RULES, QA_TYPES, allocate_qa_types,
-    validate_director_task, validate_qa_director,
+    validate_director_task, validate_qa_director, validate_dialogue_design, validate_dialogue_step,
 )
 from lib.domain.workflow_scale import generation_units, generation_variant, node_roles
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """Domain contracts and service mocks below make no model HTTP requests."""
+    yield
 
 
 def task(qa_type="grounded", **changes):
@@ -24,6 +30,42 @@ def task(qa_type="grounded", **changes):
              "visible_context": "Disconnect power. Record the result.", "answer_policy": "answer",
              "guidance": "Keep the answer concise.", "evidence_quotes": ["Disconnect power."]}
     return {**value, **changes}
+
+
+def test_optional_role_frame_accepts_open_partial_language_without_taxonomy_or_aliasing():
+    design = {"interaction_goal": "共同整理项目演示材料。", "conversational_frame": {
+        "speaker_role": "  临时扮演来试听的合作方  ", "listener_role": "产品演示搭档",
+        "relationship": "共同探索，不预设客户已作出购买决定。",
+        "setting": "当前对话明确提出的演示情境。", "register": "自然、简洁；需要时转为严谨说明。"}}
+    normalized = validate_dialogue_design(design)
+    assert normalized["conversational_frame"]["speaker_role"] == "临时扮演来试听的合作方"
+    normalized["conversational_frame"]["register"] = "Changed by caller"
+    assert design["conversational_frame"]["register"] != "Changed by caller"
+    assert validate_dialogue_design({"interaction_goal": "完成整理。"}) == {"interaction_goal": "完成整理。"}
+    assert validate_dialogue_design({"interaction_goal": "澄清需求。", "conversational_frame": {
+        "speaker_role": "没有固定职业身份的人"}})["conversational_frame"] == {
+            "speaker_role": "没有固定职业身份的人"}
+
+
+@pytest.mark.parametrize("frame", ["roleplay", {"tool_command": "execute"},
+                                      {"setting": "x" * 2001}, {"register": ["formal"]},
+                                      {"speaker_role": "invalid\x00role"}])
+def test_role_frame_only_has_bounded_plain_text_transport_fields(frame):
+    with pytest.raises(ValueError, match="invalid_dialogue_design"):
+        validate_dialogue_design({"interaction_goal": "完成目标。", "conversational_frame": frame})
+    with pytest.raises(ValueError, match="invalid_dialogue_step"):
+        validate_dialogue_step({"continue": True, "user_message": "改用更简洁的讲法。", "reason": "回应上一轮要求。",
+            "dialogue_state": {"conversational_frame": frame}}, completed_turns=1)
+
+
+def test_role_frame_can_be_reassessed_in_next_turn_without_becoming_a_fact_store():
+    update = {"continue": True, "user_message": "不用演示了，帮我检查这份操作卡。", "reason": "用户改变了当前目标。",
+        "dialogue_state": {"user_intent": "核对操作卡。", "conversational_frame": {
+            "relationship": "共同核对当前文案", "register": "简短核对式"}}}
+    result = validate_dialogue_step(update, completed_turns=1)
+    assert result == update
+    result["dialogue_state"]["conversational_frame"]["register"] = "changed"
+    assert update["dialogue_state"]["conversational_frame"]["register"] == "简短核对式"
 
 
 def test_recipe_is_opt_in_and_copies_mutable_user_rules_and_weights():

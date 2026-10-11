@@ -50,9 +50,11 @@ class WorkflowCPTProcessing:
         self.save()
         def ready(row):
             return {**row, "status": "ready"}
-        return WorkflowRows(rows.path, accepted_count,
-                            predicate=lambda row: row.get("status") in {"ready", "eligible"},
-                            transform=ready)
+        cleaned = WorkflowRows(rows.path, accepted_count,
+                               predicate=lambda row: row.get("status") in {"ready", "eligible"},
+                               transform=ready)
+        from lib.infrastructure.workflow_source_context import prepare_source_context_packs
+        return prepare_source_context_packs(self, cleaned)
 
     def shared_cpt_collection(self):
         """Reuse cleaned evidence for CPT; do not send it to the cleaner twice."""

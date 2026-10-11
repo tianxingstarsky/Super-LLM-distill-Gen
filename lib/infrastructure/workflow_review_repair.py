@@ -125,6 +125,15 @@ class WorkflowReviewRepair:
         context = row.get("revision_context")
         if context:
             return {key: context[key] for key in ("teacher_evidence", "source_id", "source_kind")}
+        source = row.get("source_context") or {}
+        reference = source.get("source_context_pack") or row.get("source_context_pack")
+        if self.recipe.get("source_context_pack_version") == 1 and reference is not None:
+            # All same-run judges and repairs use the exact accepted teacher
+            # pack used by generation. A missing/changed pack is an error,
+            # never a reason to fall back to the small anchor.
+            evidence = revision_evidence(row, self.recipe, self.path)
+            return {**evidence, "source_context_pack": deepcopy(reference),
+                    "teacher_evidence_is_pack": True}
         try:
             return revision_evidence(row, self.recipe)
         except ValueError:
@@ -164,6 +173,22 @@ class WorkflowReviewRepair:
                     "rejected_feedback": rejected_check["reason"], "judge": "jev",
                     "judge_role": role, "review_node": "review",
                     "chosen_dimensions": check["scores"], "rejected_dimensions": rejected_check["scores"]}
+        from lib.domain.learner_context import learner_contract, learner_messages, prompt_at_least
+        if (row.get("qa_contract") and accepted(check)
+                and prompt_at_least(self.recipe, "workflow.review_score", (1, 1, 0))):
+            messages = learner_messages(target, data["candidate"])
+            if messages:
+                context_check = assessed([*key, "learner_context"], {
+                    "target": "sft", "candidate": {"messages": messages},
+                    "learner_messages": messages, "source_evidence": None,
+                    "qa_contract": learner_contract(row["qa_contract"]),
+                    "assessment": "learner_context_only", "learner_context_only": True,
+                })
+                row["learner_context_check"] = {**context_check, "scope": "actual_training_messages_only"}
+                if not accepted(context_check):
+                    check = {**check, "keep": False, "reason": context_check["reason"],
+                             "scores": {name: min(score, context_check["scores"][name])
+                                        for name, score in check["scores"].items()}}
         return check
 
     def _repair_content(self, target, row, evidence, key, check, instruction):
@@ -175,6 +200,7 @@ class WorkflowReviewRepair:
             {"target": target, "candidate": payload, "source_evidence": evidence,
              "review_feedback": check, "instruction": instruction,
              "design_requirements": (row.get("revision_context") or {}).get("design_requirements", {}),
+             "qa_contract": row.get("qa_contract"),
              "generation_style": row.get("generation_style")}, allow_reasoning_fallback=False)
         if (not isinstance(value, dict) or type(value.get("uncertain", False)) is not bool
                 or value.get("uncertain") or not isinstance(value.get("record"), dict)):

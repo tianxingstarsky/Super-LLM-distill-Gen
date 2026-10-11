@@ -199,6 +199,117 @@ def test_live_budget_exception_is_translated_like_a_saved_legacy_error():
     assert _workflow_error(BudgetExceeded('Budget exhausted; no request sent')) == _workflow_error('BudgetExceeded')
 
 
+@pytest.mark.parametrize('language', ['zh', 'en'])
+def test_director_clean_source_error_opens_cleaning_node_without_execution(language):
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['ui_language'] = language
+    ui.run()
+    state = deepcopy(ui.session_state['fixture-state'])
+    state['error'] = 'qa_director_clean_source_required'
+    state['stages']['cpt'] = {'label': '资料清洗', 'status': 'completed', 'done': 2, 'total': 2}
+    state['stages']['director'] = {'label': '对话指导员', 'status': 'failed', 'done': 0, 'total': 2,
+                                 'error': 'qa_director_clean_source_required'}
+    state['stages']['sft']['status'] = 'pending'
+    state['stages']['sft'].pop('error')
+    ui.session_state['fixture-state'] = state
+    recipe = {**ui.session_state['fixture-recipe'], 'version': 19, 'source_cleaning': True,
+              'qa_director': {'enabled': True}}
+    ui.session_state['fixture-recipe'] = recipe
+    ui.run()
+    action = ui.button(key='workflow-run-failure:fixture')
+    assert ('资料清洗节点' if language == 'zh' else 'source cleaning node') in action.label
+    action.click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-selected'] == 'cpt'
+    assert ui.session_state['fixture-stream-stage'] == 'cpt'
+    assert ui.session_state['fixture-recipe'] == recipe
+    assert 'fixture-begin-calls' not in ui.session_state
+
+
+@pytest.mark.parametrize('error', ['source_context_model_capacity_too_small',
+    'source_context_pack_missing', 'source_context_pack_invalid', 'source_context_pack_changed',
+    'source_context_requires_accepted_clean_text'])
+@pytest.mark.parametrize('language', ['zh', 'en'])
+def test_clean_source_context_errors_open_the_relevant_node_without_execution(error, language):
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['ui_language'] = language
+    ui.run()
+    state = deepcopy(ui.session_state['fixture-state'])
+    state['error'] = error
+    state['stages']['cpt'] = {'label': '资料清洗', 'status': 'completed', 'done': 2, 'total': 2}
+    state['stages']['director'] = {'label': '对话指导员', 'status': 'completed', 'done': 2, 'total': 2}
+    state['stages']['sft']['error'] = error
+    ui.session_state['fixture-state'] = state
+    recipe = {**ui.session_state['fixture-recipe'], 'version': 19, 'source_cleaning': True,
+              'qa_director': {'enabled': True}}
+    ui.session_state['fixture-recipe'] = recipe
+    before_draft = deepcopy(ui.session_state['workflow-form-draft:fixture'])
+    ui.run()
+    action = ui.button(key='workflow-run-failure:fixture')
+    if language == 'en':
+        assert not re.search(r'[\u3400-\u9fff]', action.label)
+    if error == 'source_context_model_capacity_too_small':
+        assert ('单次输出上限' if language == 'zh' else 'output limit') in action.label
+        assert 'budget' not in action.label.lower() and 'quota' not in action.label.lower()
+    action.click().run()
+    assert not ui.exception
+    expected = 'director' if error == 'source_context_model_capacity_too_small' else 'cpt'
+    assert ui.session_state['fixture-selected'] == expected
+    assert ui.session_state['fixture-stream-stage'] == expected
+    assert ui.session_state['fixture-state'] == state
+    assert ui.session_state['fixture-recipe'] == recipe
+    assert ui.session_state['workflow-form-draft:fixture'] == before_draft
+    assert 'fixture-begin-calls' not in ui.session_state
+
+
+def test_clean_source_capacity_error_opens_sft_when_there_is_no_director():
+    ui = AppTest.from_string(SCRIPT).run()
+    state = deepcopy(ui.session_state['fixture-state'])
+    state['error'] = 'source_context_model_capacity_too_small'
+    state['stages']['sft']['error'] = state['error']
+    ui.session_state['fixture-state'] = state
+    ui.run()
+    ui.button(key='workflow-run-failure:fixture').click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-selected'] == 'sft'
+    assert 'fixture-begin-calls' not in ui.session_state
+
+
+@pytest.mark.parametrize('language', ['zh', 'en'])
+def test_legacy_document_run_explains_new_cleaning_route_without_migrating_or_executing(language):
+    script = SCRIPT.replace("render_run(Application(), 'fixture', begin)",
+                            "render_run(Application(), 'fixture', begin, draft_application=object())")
+    ui = AppTest.from_string(script)
+    ui.session_state['ui_language'] = language
+    ui.run()
+    recipe = deepcopy(ui.session_state['fixture-recipe'])
+    recipe.update(version=18, sources=[{'name': 'preserved.pdf'}], qa_director={'enabled': True})
+    ui.session_state['fixture-recipe'] = recipe
+    ui.run()
+    assert not ui.exception
+    notices = [row.value for row in ui.caption if
+               ('此旧任务按原配方' if language == 'zh' else 'This old run keeps') in row.value]
+    assert len(notices) == 1
+    assert ('复制配置并修改' if language == 'zh' else 'Copy and edit') in notices[0]
+    if language == 'en':
+        assert not re.search(r'[\u3400-\u9fff]', notices[0])
+    spec = ui.session_state['fixture-canvas-spec']
+    assert ('ingest', 'director') in spec['edges']
+    assert ('cpt', 'director') not in spec['edges']
+    assert ui.session_state['fixture-recipe'] == recipe
+    assert 'fixture-begin-calls' not in ui.session_state
+
+    for replacement in ({'version': 19, 'source_cleaning': True},
+                        {'sources': []}, {'targets': ['cpt']},
+                        {'sources': [{'name': 'preserved.jsonl'}]}):
+        ui.session_state['fixture-recipe'] = {**recipe, **replacement}
+        ui.run()
+        assert not ui.exception
+        assert not any(('此旧任务按原配方' if language == 'zh' else 'This old run keeps') in row.value
+                       for row in ui.caption)
+        assert 'fixture-begin-calls' not in ui.session_state
+
+
 def test_later_error_click_is_not_consumed_by_a_stale_or_invalid_bridge_receipt():
     ui = AppTest.from_string(SCRIPT).run()
     ui.button(key='workflow-run-failure:fixture').click().run()

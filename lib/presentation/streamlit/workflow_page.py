@@ -232,6 +232,12 @@ def _workflow_error(error) -> str:
         "invalid_qa_director_answer_policy": "指导员返回了不支持的回答策略，请检查指导员提示词要求的输出字段。",
         "qa_director_closed_book_contract": "无线索任务包含了可见资料，请调整指导员提示词，或选择有线索题型。",
         "qa_director_visible_evidence_required": "本题型缺少必要的可见线索，请补充来源资料或调整指导员提示词。",
+        "qa_director_clean_source_required": "指导员需要合格的清洗资料，请检查资料清洗节点。",
+        "source_context_model_capacity_too_small": "节点上下文容量不足，无法容纳清洗资料包和本次输出。请提高上下文上限或减小单次输出上限。",
+        "source_context_pack_missing": "可复用清洗资料包缺失，请检查资料清洗节点后重试。",
+        "source_context_pack_invalid": "可复用清洗资料包无法读取，请检查资料清洗节点并保留任务记录。",
+        "source_context_pack_changed": "已保存清洗资料包发生变化。请检查资料清洗节点，并复制配置新建任务。",
+        "source_context_requires_accepted_clean_text": "资料包需要核对合格的清洗正文，请检查资料清洗节点中的隔离原因。",
         "invalid_qa_director_evidence": "指导员返回的证据格式无效，请检查来源资料与指导员提示词。",
         "qa_director_multiple_evidence_required": "多线索任务需要至少两段不同的来源证据，请补充资料或调整题型配比。",
         "qa_director_recorded_conversation_changed": "已有对话不应交由指导员改写，请保留任务记录并复制配置后新建任务。",
@@ -819,6 +825,13 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         failure_stage = (next((key for key in stage_keys if state["stages"][key].get("status") == "failed"), None)
                          or next((key for key in stage_keys if state["stages"][key].get("error")), None)
                          or selected_stage)
+        error_code = state.get("error")
+        if error_code == "source_context_model_capacity_too_small":
+            failure_stage = "director" if "director" in stage_keys else "sft" if "sft" in stage_keys else failure_stage
+        elif error_code in {"qa_director_clean_source_required", "source_context_pack_missing",
+                            "source_context_pack_invalid", "source_context_pack_changed",
+                            "source_context_requires_accepted_clean_text"} and "cpt" in stage_keys:
+            failure_stage = "cpt"
         message = f"运行失败：{_workflow_error(state.get('error', 'unknown'))}"
         with st.container(key=f"workflow-run-issue:{run_id}"):
             st.button(UntranslatedText(translate_label(message, st.session_state.get("ui_language", "zh"))),
@@ -860,6 +873,11 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     elif draft_application is not None:
         with st.container(key=f"workflow-run-actions:{run_id}"):
             copy_action = st.container()
+    if (recipe.get("version", 0) < 19 and not recipe.get("repair_inputs")
+            and uses_shared_source_cleaning(recipe["targets"], recipe.get("sources", ()))):
+        st.caption("此旧任务按原配方执行，生成前未接入共享资料清洗。新建任务可使用“资料清洗 → 对话指导员 → SFT”；点击“复制配置并修改”可沿用来源和节点设置。"
+                   if draft_application is not None else
+                   "此旧任务按原配方执行，生成前未接入共享资料清洗。新建任务可使用“资料清洗 → 对话指导员 → SFT”。")
     if draft_application is not None:
         from lib.presentation.streamlit.workflow_reuse import reuse_run_as_draft
         workspace = st.session_state["ws"]

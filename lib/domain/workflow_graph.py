@@ -33,6 +33,8 @@ def uses_shared_source_cleaning(targets, sources=(), *, source_mode=None) -> boo
         if isinstance(source, dict):
             if source.get("kind") == "human_design":
                 continue
+            if source.get("kind") in {"document", "document_collection"}:
+                return True
             source = source.get("file") or source.get("name") or ""
         if PurePath(str(source)).suffix.lower() in DOCUMENT_SOURCE_EXTENSIONS:
             return True

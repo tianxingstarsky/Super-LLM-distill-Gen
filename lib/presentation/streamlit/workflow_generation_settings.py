@@ -82,6 +82,8 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
     _restore_field(workspace, instruction_key, "")
     language = st.session_state.get("ui_language", "zh")
     with st.container(key=f"workbench-generation:{node}"):
+        if node == "sft":
+            st.caption("教师复用清洗资料包，按节点上下文容量安排相关资料；容纳不下时提示调整 token 上限。最终训练输入另行组织：知识内化样本独立作答，带资料样本写入必要上下文。")
         render_prompt_library(prompt_library, workspace, f"generation:{node}", save_field=save_field,
                               fields={"style": style_key, "instruction": instruction_key},
                               defaults={"style": "structured" if node == "cot" else "default", "instruction": ""},

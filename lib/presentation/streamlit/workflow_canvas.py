@@ -42,8 +42,10 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
     }
     if source_cleaning and (recipe_version or 0) >= 19 and node == "cpt":
         description = "清洗并核对解析资料，隔离不可靠片段；合格资料供指导员、SFT 与多轮对话复用。"
+    elif source_cleaning and (recipe_version or 0) >= 19 and node == "director":
+        description = "基于清洗合格的资料设计互动；知识内化样本独立可理解，带资料样本把必要上下文写入用户输入。"
     elif source_cleaning and (recipe_version or 0) >= 19 and node == "sft":
-        description = "基于已清洗、核对合格的资料生成指令对话；无需先导出 CPT 文件。"
+        description = "基于清洗合格资料与互动设计生成对话；答案只依赖训练输入中的线索或可独立回答的知识。"
     elif node == "cot":
         generation = (node_generation or {}).get("cot")
         description = ("按风格提示词生成显式推理与答案，并核验结果。" if generation and generation.get("enabled", True)

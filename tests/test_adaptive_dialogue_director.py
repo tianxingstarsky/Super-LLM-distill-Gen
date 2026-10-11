@@ -12,6 +12,12 @@ from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """All model behavior here uses injected doubles, never an HTTP service."""
+    yield
+
+
 SOURCE = "检查设备前必须先断电。结束后记录检查结果。"
 FIRST_MESSAGE = "我想把这份检查流程交给新同事，先给我一份操作卡。"
 SECOND_MESSAGE = "第二步那项请用最短的措辞，记录字段按你刚才那份卡继续。"
@@ -160,6 +166,64 @@ def execute(tmp_path, monkeypatch, expert=None):
     return state, path, expert, worker, reviewer, loaded
 
 
+FRAME = {"speaker_role": "给新同事整理操作卡的人", "listener_role": "协助改写操作卡的助手",
+         "relationship": "共同整理当前材料", "setting": "首条用户消息提出的流程交接", "register": "清楚、自然"}
+UPDATED_FRAME = {**FRAME, "register": "按真实修改要求使用最短的措辞"}
+
+
+class FramedExpert(Expert):
+    def __init__(self, *, fabricate_frame=False):
+        super().__init__()
+        self.fabricate_frame = fabricate_frame
+
+    def chat(self, messages, **kwargs):
+        data = json.loads(messages[1]["content"])
+        reply = json.loads(super().chat(messages, **kwargs))
+        if data.get("request_phase") == "batch_design":
+            for contract in reply["tasks"]:
+                contract["dialogue_design"]["conversational_frame"] = deepcopy(FRAME)
+        elif data["completed_turns"] == 1:
+            assert data["dialogue_design"]["conversational_frame"] == FRAME
+            assert data["previous_dialogue_state"]["conversational_frame"] == FRAME
+            assert data["dialogue_messages"][1]["content"] == FIRST_ANSWER
+            reply["dialogue_state"]["conversational_frame"] = deepcopy(UPDATED_FRAME)
+            if self.fabricate_frame:
+                reply["dialogue_state"]["conversational_frame"]["setting"] = "用户已说设备是999伏。"
+        else:
+            assert data["previous_dialogue_state"]["conversational_frame"] == UPDATED_FRAME
+            assert data["dialogue_messages"][-1]["content"] == SECOND_ANSWER
+            assert "conversational_frame" not in reply["dialogue_state"]
+        return json.dumps(reply, ensure_ascii=False)
+
+
+def test_role_register_frame_flows_through_actual_turns_updates_and_stays_out_of_training(tmp_path, monkeypatch):
+    state, path, expert, worker, reviewer, _ = execute(tmp_path, monkeypatch, FramedExpert())
+    assert state["status"] == "completed", state.get("error")
+    requests = [json.loads(call[1]["content"]) for call in worker.calls]
+    assert requests[0]["dialogue_design"]["conversational_frame"] == FRAME
+    assert requests[0]["dialogue_state"]["conversational_frame"] == FRAME
+    assert requests[1]["dialogue_state"]["conversational_frame"] == UPDATED_FRAME
+    record = engine.read_json(path / "artifacts/multiturn.records.json")[0]
+    assert record["dialogue_design"]["conversational_frame"] == FRAME
+    assert record["dialogue_state"]["conversational_frame"] == UPDATED_FRAME
+    assert record["messages"][2]["content"] == SECOND_MESSAGE
+    trainer = json.loads((path / "artifacts/trl_multiturn.jsonl").read_text(encoding="utf-8"))
+    assert "conversational_frame" not in json.dumps(trainer, ensure_ascii=False)
+    assert "dialogue_design" not in trainer and "dialogue_state" not in trainer
+    blinded = [json.loads(call[1]["content"]) for call in reviewer.calls
+               if json.loads(call[1]["content"]).get("learner_context_only")]
+    assert blinded and all("conversational_frame" not in json.dumps(data, ensure_ascii=False) for data in blinded)
+
+
+def test_role_frame_cannot_make_up_a_users_experience_and_bypass_actual_message_review(tmp_path, monkeypatch):
+    state, path, _, _, reviewer, _ = execute(tmp_path, monkeypatch, FramedExpert(fabricate_frame=True))
+    assert state["status"] == "needs_attention", state.get("error")
+    record = engine.read_json(path / "artifacts/multiturn.records.json")[0]
+    assert record["status"] == "quarantined" and record["failed_turn"] == 2
+    assert record["reason"] == "multiturn_turn_failed_after_repair"
+    assert reviewer.calls and not (path / "artifacts/multiturn.jsonl").read_text(encoding="utf-8")
+
+
 def test_old_recipe_does_not_acquire_new_mode_or_change_schedule():
     assert "planning_mode" not in validate_qa_director({"enabled": True})
     assert validate_qa_director(recipe())["planning_mode"] == "adaptive"
@@ -174,7 +238,8 @@ def test_new_dialogue_assets_keep_original_version_lookups_and_render_safely():
         prompt_id = "workflow." + name
         current = get(prompt_id)
         old = get(prompt_id, version="1.0.0")
-        assert current.version == "1.1.0" and old.version == "1.0.0"
+        expected_version = "1.1.0" if name in {"plan", "multiturn_consistency"} else "1.2.0"
+        assert current.version == expected_version and old.version == "1.0.0"
         assert render(current) != render(old)
     assert "request_phase=next_turn" in render(get("workflow.qa_director"))
     assert "request_phase=next_turn" not in render(get("workflow.qa_director", version="1.0.0"))
@@ -217,7 +282,9 @@ def test_live_replanning_uses_director_binding_actual_answers_and_natural_two_tu
     next_turn = json.loads(expert.calls[1][1]["content"])
     assert next_turn["dialogue_messages"][1]["content"] == FIRST_ANSWER
     reviewed = [json.loads(call[1]["content"]) for call in reviewer.calls]
-    assert any(data.get("dialogue_state", {}).get("context_links") for data in reviewed)
+    blinded = [data for data in reviewed if data.get("learner_context_only")]
+    assert blinded and all("dialogue_state" not in data and "dialogue_steps" not in data for data in blinded)
+    assert all(data["learner_messages"] for data in blinded)
     assert any(data.get("context", {}).get("whole_dialogue")
         and data.get("context", {}).get("dialogue_steps") for data in reviewed)
     trainer = json.loads((path / "artifacts/trl_multiturn.jsonl").read_text(encoding="utf-8"))

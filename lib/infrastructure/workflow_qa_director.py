@@ -8,6 +8,7 @@ coverage and duplicate avoidance, never authoritative evidence.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -64,7 +65,21 @@ class DialoguePlanError(ValueError):
         super().__init__(self.code)
 
 
+class DirectorBatchTooLarge(ValueError):
+    """Split a batch before any model request; never trim qualified context."""
+
+
 class WorkflowQADirector:
+    def _require_clean_director_evidence(self, unit):
+        """A shared document route must never plan from raw/rejected text."""
+        if not self.shared_source_cleaning() or unit.get("kind") != "document":
+            return
+        cleaning = unit.get("source_cleaning") or {}
+        if (unit.get("status") not in {"ready", "eligible"}
+                or cleaning.get("status") != "accepted"
+                or cleaning.get("cleaned_text_sha256") != _digest(unit.get("text"))):
+            raise ValueError("qa_director_clean_source_required")
+
     def human_package_issue(self, row, target):
         """No derived/cached sample may bypass its human-design assessment."""
         if self.recipe.get("review_repair") is not None:
@@ -210,11 +225,12 @@ class WorkflowQADirector:
 
     def qa_contract_check(self, key, unit, messages, *, prompt_id="workflow.sft_directed_check",
                           dialogue_state=None, dialogue_steps=None, review_scope="complete"):
+        from lib.domain.learner_context import learner_contract, prompt_at_least
         contract = unit["qa_contract"]
         source = unit.get("source_context", unit)
         if not isinstance(source, dict):
             source = unit
-        value = self.ask(key, "jev", prompt_id, {
+        data = {
             "qa_contract": contract, "teacher_evidence": source.get("text", ""), "source_context": source,
             "learner_messages": messages, "messages": messages, "user_input": messages[:-1],
             "answer": messages[-1].get("content", ""), "reasoning": messages[-1].get("reasoning_content", ""),
@@ -223,7 +239,15 @@ class WorkflowQADirector:
             "source_kind": source.get("kind", "brief"), "history_is_not_evidence": True,
             **({"dialogue_state": dialogue_state} if dialogue_state is not None else {}),
             **({"dialogue_steps": dialogue_steps} if dialogue_steps is not None else {}),
-        }, allow_reasoning_fallback=False)
+        }
+        minimum = (1, 2, 0) if prompt_id in {"workflow.sft_directed_check", "workflow.multiturn_directed_check"} else (1, 1, 0)
+        if prompt_at_least(self.recipe, prompt_id, minimum):
+            # The source-aware factual review is separate. This reviewer must
+            # not reconstruct missing learner context from private evidence.
+            data = {name: value for name, value in data.items()
+                    if name not in {"teacher_evidence", "source_context", "dialogue_state", "dialogue_steps"}}
+            data.update(qa_contract=learner_contract(contract), learner_context_only=True)
+        value = self.ask(key, "jev", prompt_id, data, allow_reasoning_fallback=False)
         if (not isinstance(value, dict) or set(value) != {"keep", "adherence", "reason"}
                 or type(value.get("keep")) is not bool
                 or type(value.get("adherence")) is not int
@@ -267,7 +291,9 @@ class WorkflowQADirector:
             "qa_contract": unit["qa_contract"],
             "dialogue_design": unit["qa_contract"].get("dialogue_design", {}),
             "dialogue_messages": messages, "previous_dialogue_state": previous_state,
-            "teacher_evidence": unit.get("text", "")[:20_000],
+            "teacher_evidence": (unit.get("text", "") if unit.get("source_context_pack")
+                                 else unit.get("text", "")[:20_000]),
+            **({"source_context_pack": unit["source_context_pack"]} if unit.get("source_context_pack") else {}),
             "teacher_evidence_not_shared_understanding": True,
             "completed_turns": len(messages) // 2,
             "maximum_turns": self.recipe.get("conversation_turns", 3),
@@ -282,7 +308,13 @@ class WorkflowQADirector:
         except ModelJSONError as error:
             raise DialoguePlanError() from error
         try:
-            return validate_dialogue_step(value, completed_turns=len(messages) // 2)
+            step = validate_dialogue_step(value, completed_turns=len(messages) // 2)
+            # An omitted update retains the last accepted role/register frame.
+            # Explicit updates remain untrusted and are checked with real turns.
+            if ("conversational_frame" not in step["dialogue_state"]
+                    and isinstance(previous_state, dict) and "conversational_frame" in previous_state):
+                step["dialogue_state"]["conversational_frame"] = deepcopy(previous_state["conversational_frame"])
+            return step
         except ValueError as error:
             self._invalidate_director_call(key)
             raise DialoguePlanError() from error
@@ -326,9 +358,13 @@ class WorkflowQADirector:
                 feedback = "保持指导员分配的问题原文，返回完整问题、答案和推理字段。"
                 continue
             quotes = candidate.get("quotes")
+            evidence_text = unit.get("text", "")
+            if unit.get("source_context_pack"):
+                from lib.infrastructure.workflow_source_context import pack_evidence_text
+                evidence_text = pack_evidence_text(unit, self.path)
             if (not isinstance(quotes, list) or len(quotes) > 32
                     or any(not isinstance(q, str) or not q.strip() for q in quotes)
-                    or any(q not in unit.get("text", "") for q in quotes)
+                    or any(q not in evidence_text for q in quotes)
                     or (unit["kind"] == "document" and contract["answer_policy"] in {"answer", "correct_premise"}
                         and not quotes)):
                 feedback = "证据必须是教师来源中的逐字片段；不能把历史答案当作事实依据。"
@@ -387,6 +423,8 @@ class WorkflowQADirector:
         guided = [unit for unit in batch if unit["kind"] != "conversation"]
         if not guided:
             return batch
+        for unit in guided:
+            self._require_clean_director_evidence(unit)
         key = ["director_batch", offset, _digest(guided)]
         adaptive = config.get("planning_mode", "balanced") == "adaptive"
         human = config.get("human_augmentation", {})
@@ -414,10 +452,16 @@ class WorkflowQADirector:
             text_limit = min(20_000, max(1000, 120_000 // len(guided)))
             data = {"candidates": [
                         {"id": unit["id"], "source_id": unit["source_id"], "kind": unit["kind"],
-                         "teacher_evidence": unit.get("text", "")[:text_limit],
+                         "teacher_evidence": (unit.get("text", "") if unit.get("source_context_pack")
+                                              else unit.get("text", "")[:text_limit]),
+                         **({"source_context_pack": deepcopy(unit["source_context_pack"])}
+                            if unit.get("source_context_pack") else {}),
                          "generation_variant": unit.get("generation_variant"),
                          "assigned_type": qa_type,
                          "source_is_synthetic": unit["kind"] == "brief",
+                         **({"evidence_origin": "qualified_cleaned_source",
+                             "source_cleaning": deepcopy(unit["source_cleaning"])}
+                            if unit.get("source_cleaning") else {}),
                          **({"human_design": human_design(human, design_offset + index,
                                   seed_id=(unit.get("human_design") or {}).get("seed", {}).get("id"), validated=True),
                              "source_kind": "human_provided" if unit.get("human_provided") else unit["kind"]}
@@ -439,6 +483,25 @@ class WorkflowQADirector:
             output_limit = binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
             system = self.recipe["node_prompt_system"] + "\n" + self.prompt_text("workflow.qa_director")
             available = context_limit - output_limit - len(system.encode("utf-8")) - 512
+            if self.recipe.get("source_context_pack_version") == 1 and any(
+                    candidate.get("source_context_pack") for candidate in data["candidates"]):
+                from lib.infrastructure.model_context_prefix import serialize_context_request, NODE_RULE_HEADER
+                instruction = None
+                if human.get("enabled"):
+                    instruction = HUMAN_DIRECTOR_INSTRUCTION + (
+                        HUMAN_REVISION_INSTRUCTION if any("revision_context" in seed for seed in human["seeds"]) else "")
+                # Reserve room for bounded repair feedback as well as the
+                # exact serialized, deduplicated source prefix used by ask().
+                available -= 2048 + len(NODE_RULE_HEADER.encode("utf-8"))
+                def request_size():
+                    return len(serialize_context_request(self.path, data, instruction=instruction).encode("utf-8"))
+                while data["history"] and request_size() > available:
+                    data["history"].pop()
+                if request_size() > available:
+                    if len(batch) > 1:
+                        raise DirectorBatchTooLarge("qa_director_batch_context_too_large")
+                    raise ValueError("qa_director_context_too_small")
+                return data
             original = [candidate["teacher_evidence"] for candidate in data["candidates"]]
             for candidate in data["candidates"]:
                 candidate["teacher_evidence"] = ""
@@ -496,7 +559,7 @@ class WorkflowQADirector:
                             raise ValueError("qa_director_dialogue_design_required")
                         contracts[candidate["id"]] = validate_director_task(
                             task, expected_type=candidate["assigned_type"],
-                            source_text=candidate["teacher_evidence"],
+                            source_text=self._director_evidence_text(candidate),
                             expected_id=candidate["id"])
                         if candidate.get("human_design"):
                             contracts[candidate["id"]]["human_design"] = deepcopy(candidate["human_design"])
@@ -562,6 +625,12 @@ class WorkflowQADirector:
         self.state["qa_director"]["batches_planned"] += 1
         self.save()
         return result
+
+    def _director_evidence_text(self, candidate):
+        if self.recipe.get("source_context_pack_version") == 1 and candidate.get("source_context_pack"):
+            from lib.infrastructure.workflow_source_context import pack_evidence_text
+            return pack_evidence_text(candidate, self.path)
+        return candidate["teacher_evidence"]
 
     def _directed_worker_batch(self, stage, batch, offset, handle, local_history, published_history):
         """Workers may finish out of order; acceptance and dedup commit in order."""
@@ -672,6 +741,7 @@ class WorkflowQADirector:
         directory.mkdir(exist_ok=True)
         guided_count, guided_batches, previous_batch = 0, 0, -1
         for index, unit in enumerate(units):
+            self._require_clean_director_evidence(unit)
             if unit["kind"] != "conversation":
                 guided_count += 1
                 current_batch = index // config["batch_size"]
@@ -690,6 +760,7 @@ class WorkflowQADirector:
             "teacher_evidence_export": "only_explicit_visible_context",
             "acceptance_basis": "generation_quality_and_contract_checks",
             "publication_basis": "final_package_eligible",
+            **({"evidence_source": "qualified_cleaning"} if self.shared_source_cleaning() else {}),
         }
         if config.get("human_augmentation"):
             self.state["qa_director"]["human_augmentation"] = {
@@ -716,9 +787,30 @@ class WorkflowQADirector:
                 for stage in stages:
                     handles[stage] = (directory / f".{stage}.pending").open("w", encoding="utf-8")
                 iterator, offset = iter(units), 0
-                while batch := list(islice(iterator, config["batch_size"])):
+                pending_batches = deque()
+                while True:
+                    if not pending_batches:
+                        batch = list(islice(iterator, config["batch_size"]))
+                        if not batch:
+                            break
+                        pending_batches.append(batch)
+                    batch = pending_batches.popleft()
                     self.check_cancel()
-                    planned = self._director_batch_plan(batch, offset, config, local_history, published_history, stages)
+                    try:
+                        planned = self._director_batch_plan(batch, offset, config, local_history, published_history, stages)
+                    except DirectorBatchTooLarge:
+                        midpoint = len(batch) // 2
+                        first, second = batch[:midpoint], batch[midpoint:]
+                        pending_batches.appendleft(second)
+                        pending_batches.appendleft(first)
+                        guided_parts = sum(any(unit["kind"] != "conversation" for unit in part)
+                                           for part in (first, second))
+                        self.state["stages"]["director"]["batches_total"] += guided_parts - 1
+                        for stage in stages:
+                            self.state["stages"][stage]["batches_total"] += 1
+                        self.event("director_batch_split", source_count=len(batch),
+                                   split_sizes=[len(first), len(second)], reason="model_context_window")
+                        continue
                     for unit in planned:
                         plans.write(canonical({"id": unit["id"], "source_id": unit["source_id"],
                             "status": "quarantined" if unit.get("director_plan_failure") or unit.get("director_skip_reason") else "ready",
@@ -727,6 +819,8 @@ class WorkflowQADirector:
                                 "guidance": unit.get("director_skip_guidance", "")} if unit.get("director_skip_reason") else {}),
                             "qa_contract": unit.get("qa_contract"),
                             "family_id": unit.get("family_id"), "director_batch": unit.get("director_batch"),
+                            **({"source_cleaning": unit["source_cleaning"]} if unit.get("source_cleaning") else {}),
+                            **({"source_context_pack": unit["source_context_pack"]} if unit.get("source_context_pack") else {}),
                             "route": "recorded_conversation_preserved" if unit["kind"] == "conversation" else
                                 [] if unit.get("director_plan_failure") or unit.get("director_skip_reason") else list(stages)}) + "\n")
                     plans.flush()
