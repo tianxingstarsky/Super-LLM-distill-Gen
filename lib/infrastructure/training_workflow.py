@@ -36,6 +36,7 @@ from lib.domain.corpus_quality import (CorpusClusterSizes, CorpusNearDuplicateIn
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_candidate
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_creation import validate_creation
+from lib.domain.workflow_graph import SOURCE_CLEANING_RECIPE_VERSION, uses_shared_source_cleaning
 from lib.domain.document_parser import validate_document_parser
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
@@ -93,7 +94,7 @@ COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
 HUMAN_AUGMENTATION_RECIPE_VERSION = 17
 REVIEW_REPAIR_RECIPE_VERSION = 18
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18})
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -304,7 +305,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
                               for stage, templates in node_prompts.items() for prompt_id in templates)
     human_prompt_override = any("workflow.human_augmentation_check" in templates for templates in node_prompts.values())
-    recipe_version = (REVIEW_REPAIR_RECIPE_VERSION if review_repair is not None else
+    source_cleaning = not repair_inputs and uses_shared_source_cleaning(targets, sources)
+    recipe_version = (SOURCE_CLEANING_RECIPE_VERSION if source_cleaning else
+                      REVIEW_REPAIR_RECIPE_VERSION if review_repair is not None else
                       HUMAN_AUGMENTATION_RECIPE_VERSION if human["enabled"] or human_prompt_override else
                       JEV_NODE_RECIPE_VERSION if package_review_stage(package_review) == "jev" else
                       COT_SFT_RECIPE_VERSION if {"sft", "cot"}.issubset(targets) else
@@ -416,6 +419,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
               "conversation_turns": conversation_turns, "math_generator_version": 2,
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
+              **({"source_cleaning": True} if source_cleaning else {}),
               "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
@@ -452,7 +456,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                 "package_review_enabled": package_review["enabled"],
                 "qa_director_enabled": qa_director["enabled"],
                 "human_augmentation_enabled": human["enabled"],
-                "stages": {key: {"label": label, "status": "pending", "done": 0, "total": 0}
+                "stages": {key: {"label": "资料清洗" if key == "cpt" and source_cleaning else label,
+                                 "status": "pending", "done": 0, "total": 0}
                            for key, label in STAGES.items()
                            if (key != "review" or review_repair is not None)
                            and (key != "jev" or (review_repair is None and package_review["enabled"]
@@ -732,6 +737,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         directory.mkdir(exist_ok=True)
         destination = directory / f"{stage}.jsonl"
         pending = directory / f".{stage}.pending"
+        live = directory / f".{stage}.live.jsonl"
         processing_started = None
         def process(index, item):
             nonlocal processing_started
@@ -762,24 +768,43 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             return value
         source_iterator = iter(items)
         iterator = enumerate(source_iterator)
-        with ExitStack() as resources, pending.open("w", encoding="utf-8") as handle, ThreadPoolExecutor(max_workers=workers) as executor:
+        with ExitStack() as resources, pending.open("w", encoding="utf-8") as handle, \
+                live.open("w", encoding="utf-8") as preview, ThreadPoolExecutor(max_workers=workers) as executor:
             if callable(close_iterator := getattr(source_iterator, "close", None)):
                 resources.callback(close_iterator)
             while batch := list(islice(iterator, batch_size)):
                 self.check_cancel()
                 futures = {executor.submit(process, index, item): index for index, item in batch}
                 ordered = {}
+                next_index = batch[0][0]
                 try:
                     for future in as_completed(futures):
-                        ordered[futures[future]] = future.result()
+                        index = futures[future]
+                        value = future.result()
+                        # Preview completion order independently of the training
+                        # result order. A slow first item must not conceal later
+                        # finished records. Only the ordered file is canonical.
+                        for row in value:
+                            preview.write(canonical({"item_index": index, "record": row}) + "\n")
+                        preview.flush()
+                        ordered[index] = value
+                        # Publish each completed contiguous prefix immediately.
+                        # Item order and historic checkpoint identities stay
+                        # stable, while a slow final item cannot hide the batch.
+                        wrote = False
+                        while next_index in ordered:
+                            for row in ordered.pop(next_index):
+                                handle.write(canonical(row) + "\n")
+                            next_index += 1
+                            wrote = True
+                        if wrote:
+                            handle.flush()
+                            self.save(force=False)
                 except BaseException:
                     self._abort.set()
                     for future in futures:
                         future.cancel()
                     raise
-                for index, _ in batch:
-                    for row in ordered[index]:
-                        handle.write(canonical(row) + "\n")
                 handle.flush()
                 metrics["batches_done"] += 1
                 self.save()
@@ -2546,15 +2571,17 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     "targets": list(self.recipe["targets"])}
                 write_json_array(self.path / "input_records.json", units)
                 selected = eligible if isinstance(eligible, WorkflowRows) else eligible[:self.recipe["max_units"]]
+                generation_sources = self.prepare_clean_sources(selected)
                 needs_generated_candidates = bool(selected_targets & (PREFERENCE_TARGETS | {'sft', 'multiturn', 'cot'}))
                 generated = (prepare_generation_rows(self.path / "stage-results" / "generation-inputs.jsonl",
-                                                     selected, self.recipe.get("sample_count"), self.check_cancel,
+                                                     generation_sources, self.recipe.get("sample_count"), self.check_cancel,
                                                      variant_policy_version=2 if self.recipe["version"] >= 11 else 1)
                              if needs_generated_candidates else [])
                 self.state["input_summary"]["generation_candidates"] = len(generated)
                 collections = {}
                 needs_sft = bool(selected_targets & (PREFERENCE_TARGETS | {"sft", "cot"}))
-                collections["cpt"] = self.stage_items("cpt", selected, self.cpt) if "cpt" in selected_targets else []
+                collections["cpt"] = (self.shared_cpt_collection() if self.shared_source_cleaning()
+                                      else self.stage_items("cpt", selected, self.cpt)) if "cpt" in selected_targets else []
                 directed = (self.directed_generation(generated, needs_sft=needs_sft,
                             needs_multiturn="multiturn" in selected_targets)
                             if self.recipe.get("qa_director", {}).get("enabled") else None)
@@ -2634,6 +2661,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                              or cpt_quarantined
                              or multiturn_quarantined
                              or agent_quarantined
+                             or self.state["input_summary"].get("source_cleaning", {}).get("quarantined", 0) > 0
                              or self.state["input_summary"]["quarantined"] > 0
                              or self.state["input_summary"]["deferred"] > 0)
                 self.state["status"] = "needs_attention" if attention else "completed"

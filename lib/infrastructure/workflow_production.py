@@ -482,7 +482,8 @@ class WorkflowProduction:
         collections = {target: [] for target in TARGETS}
         needs_sft = bool(selected & (PREFERENCE_TARGETS | {"sft", "cot"}))
         if "cpt" in selected:
-            collections["cpt"] = self.stage_items("cpt", source_rows if self.recipe["sources"] else generated, self.cpt)
+            collections["cpt"] = (self.shared_cpt_collection() if self.shared_source_cleaning()
+                                   else self.stage_items("cpt", source_rows if self.recipe["sources"] else generated, self.cpt))
         if "agent" in selected:
             collections["agent"] = self.stage_items("agent", source_rows, self.agent)
         directed = (self.directed_generation(generated, needs_sft=needs_sft, needs_multiturn="multiturn" in selected)
@@ -632,6 +633,8 @@ class WorkflowProduction:
             needed.add("sft")
         if set(self.recipe["targets"]) & PREFERENCE_TARGETS:
             needed.add("preference")
+        if self.shared_source_cleaning():
+            needed.add("cpt")
         if self.recipe.get("qa_director", {}).get("enabled"):
             needed.add("director")
         if (self.recipe.get("reasoning_trim") or {}).get("enabled"):
@@ -651,6 +654,7 @@ class WorkflowProduction:
                 "deferred": max(0, ready_count - len(sources)),
                 "targets": self.recipe["targets"], "generation_candidates": production["attempted"]}
             write_json_array(self.path / "input_records.json", units)
+            sources = self.prepare_clean_sources(sources)
         else:
             sources = []
             self.state["input_summary"] = {"units": 0, "ready": 0, "quarantined": 0, "deferred": 0,
@@ -755,7 +759,9 @@ class WorkflowProduction:
                 source_batch = RowSpool(round_dir / "source-batch.jsonl")
                 # Source-preserving targets consume all selected originals exactly once.
                 if not receipts:
-                    for unit in source_index.rows(0, source_index.count, expand=False):
+                    originals = (self._shared_cleaned_rows if self.shared_source_cleaning() and "cpt" in active
+                                 else source_index.rows(0, source_index.count, expand=False))
+                    for unit in originals:
                         source_batch.append(unit)
                 source_batch.close()
                 for target in ("cpt", "agent"):

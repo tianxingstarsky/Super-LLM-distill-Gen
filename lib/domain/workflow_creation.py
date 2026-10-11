@@ -12,6 +12,7 @@ from lib.domain.workflow_production import validate_production, MAX_PRODUCTION_G
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS
 from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
+from lib.domain.workflow_graph import uses_shared_source_cleaning
 
 
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
@@ -54,7 +55,8 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     validate_node_prompts(node_prompts)
     validate_package_review(package_review)
     cpt = validate_cpt_processing(cpt_processing)
-    if not repair_rows and cpt["mode"] == "model" and "cpt" not in targets:
+    if (not repair_rows and cpt["mode"] == "model" and "cpt" not in targets
+            and not uses_shared_source_cleaning(targets, sources)):
         raise ValueError("cpt_processing_requires_cpt")
     director = validate_qa_director(qa_director)
     if director["enabled"] and not qa_director_applicable(targets):

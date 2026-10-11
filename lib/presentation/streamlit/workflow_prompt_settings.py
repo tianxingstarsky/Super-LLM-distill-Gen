@@ -116,15 +116,24 @@ def _import_prompt(workspace: str, node: str, prompt_id: str, save_field) -> Non
     save_field(workspace, key)
 
 
+def _prompt_label(prompt_id: str, node: str, language: str, source_cleaning: bool = False) -> str:
+    label = ({"workflow.cpt_clean": "资料清洗", "workflow.cpt_review": "资料保真核对"}.get(prompt_id)
+             if node == "cpt" and source_cleaning else None)
+    return translate_label(label or PROMPT_LABELS.get(prompt_id, prompt_id), language)
+
+
 def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_field,
                         node_generation=None, package_review=None, qa_director=None,
-                        prompt_library=None, cpt_processing=None, review_repair=None) -> None:
+                        prompt_library=None, cpt_processing=None, review_repair=None,
+                        source_cleaning=None) -> None:
     """Show the active processing prompt beside this node's model settings."""
     prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation,
                                     package_review=package_review, qa_director=qa_director, cpt_processing=cpt_processing, review_repair=review_repair)
     if not prompts:
         return
     language = st.session_state.get("ui_language", "zh")
+    if source_cleaning is None:
+        source_cleaning = st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning", False)
     selection_key = f"workflow-node-prompt-selection:{workspace}:{node}"
     if st.session_state.get(selection_key) not in prompts:
         st.session_state[selection_key] = prompts[0]
@@ -135,7 +144,7 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
         step, reset = st.columns([1.65, 1], gap="small", vertical_alignment="bottom")
         with step:
             prompt_id = st.selectbox("处理步骤", prompts, key=selection_key,
-                                    format_func=lambda value: translate_label(PROMPT_LABELS.get(value, value), language))
+                                    format_func=lambda value: _prompt_label(value, node, language, source_cleaning))
         body_key = _prompt_key(workspace, node, prompt_id)
         default = builtin_node_prompt(prompt_id)
         st.session_state[body_key] = _field(workspace, body_key, default)
@@ -181,6 +190,7 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
     st.caption("本次任务已固定的提示词；复制为新草稿后可以修改。")
     prompt_id = st.selectbox("处理步骤", list(prompts),
                             key=f"workflow-run-prompt-selection:{run_id}:{node}",
-                            format_func=lambda value: translate_label(PROMPT_LABELS.get(value, value), language))
+                            format_func=lambda value: _prompt_label(value, node, language,
+                                recipe.get("version", 0) >= 19 and recipe.get("source_cleaning") is True))
     st.text_area("提示词正文", value=prompts[prompt_id], height=164, disabled=True,
                  key=f"workflow-run-prompt-body:{run_id}:{node}:{prompt_id}")

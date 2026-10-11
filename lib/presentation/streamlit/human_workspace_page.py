@@ -419,7 +419,8 @@ def _live_workflow(workflows, backends, session, round_row, context, human_appli
         live=bool(run_id), source_mode=("文档资料" if recipe.get("sources") else "开放需求") if session.get("review_only") else "人工设计", reasoning_trim=(recipe.get("reasoning_trim") or {}).get("enabled", False),
         node_generation=recipe.get("node_generation"), qa_director=recipe.get("qa_director"),
         package_review=recipe.get("package_review"), review_repair=recipe.get("review_repair"),
-        recipe_version=recipe.get("version", 18), repair_only=bool(recipe.get("repair_inputs")), feedback_branch=projection)
+        recipe_version=recipe.get("version", 18), repair_only=bool(recipe.get("repair_inputs")),
+        source_cleaning=recipe.get("source_cleaning", False), feedback_branch=projection)
     if selected not in {node["id"] for node in spec["nodes"]}:
         selected = spec["nodes"][0]["id"]
         st.session_state[selection_key] = selected

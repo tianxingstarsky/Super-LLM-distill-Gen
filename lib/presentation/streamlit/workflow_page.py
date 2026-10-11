@@ -14,12 +14,13 @@ from filelock import Timeout
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.application.creation_draft_service import CreationDraftApplication
-from lib.domain.workflow_graph import execution_graph, sft_uses_cot_output
+from lib.domain.workflow_graph import execution_graph, sft_uses_cot_output, uses_shared_source_cleaning
 from lib.domain.backend_config import validate_token_prices
 from lib.presentation.streamlit.i18n import UntranslatedText, translate, translate_label
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_stream_view import render_stream_output
+from lib.presentation.streamlit.workflow_live_artifacts_view import render_live_artifacts
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_delivery import has_deliverable_results
@@ -386,7 +387,7 @@ def _stage_configuration(key, recipe, state):
         elif key == "cpt":
             details.update({"分块目标字符数": recipe.get("chunk_chars"), "去重": "精确去重与保守近重复检查"})
             config = recipe.get("cpt_processing") or {"mode": "native"}
-            details["CPT 清洗方式"] = "模型清洗与评审" if config["mode"] == "model" else "仅本地检查"
+            details["资料清洗方式" if recipe.get("source_cleaning") else "CPT 清洗方式"] = "模型清洗与评审" if config["mode"] == "model" else "仅本地检查"
             if config["mode"] == "model":
                 details["原文核对方式"] = "多模态对照原页" if config.get("review_mode") == "vision" else "对照原文文字"
         elif key == "multiturn":
@@ -533,14 +534,15 @@ GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": 
                 "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "review": "评分与修正", "jev": "JEV 评分", "package": "输出打包"}
 
 
-def _missing_model_role_summary(issues, language, node_generation=None):
+def _missing_model_role_summary(issues, language, node_generation=None, *, source_cleaning=False):
     pending_roles = {}
     for node, role in issues:
         pending_roles.setdefault(node, []).append(role)
     role_labels = {"generation": "生成模型", "jev": "质量评审模型", "vision": "多模态识别模型"}
     descriptions = []
     for node, roles in pending_roles.items():
-        node_label = translate_label(node_display_label(node, GRAPH_LABELS, node_generation), language)
+        node_label = translate_label(node_display_label(node, GRAPH_LABELS, node_generation,
+            source_cleaning=source_cleaning, recipe_version=19 if source_cleaning else None), language)
         missing = [translate_label(("JEV 评分模型" if node in {"review", "jev"} else "质量评审模型" if node == "package"
                                     else "过程核对模型") if role == "jev" else ("评分与修正模型" if node == "review" else role_labels[role]), language) for role in roles]
         if language == "en":
@@ -563,15 +565,15 @@ def _planned_flow_html(targets, nodes: tuple[str, ...], edges: tuple[tuple[str, 
             + intermediate + '</div>')
 
 
-def _planned_dependencies_html(edges: tuple[tuple[str, str], ...], node_generation=None) -> str:
+def _planned_dependencies_html(edges: tuple[tuple[str, str], ...], node_generation=None, *, source_cleaning=False) -> str:
     """Render only the data-dependency edges supplied by execution_graph."""
     rows = []
     for origin, destination in edges:
         rows.append(
             f'<div class="df-wb-plan-edge" data-from="{origin}" data-to="{destination}">'
-            f'<span>{html.escape(node_display_label(origin, GRAPH_LABELS, node_generation))}</span>'
+            f'<span>{html.escape(node_display_label(origin, GRAPH_LABELS, node_generation, source_cleaning=source_cleaning, recipe_version=19))}</span>'
             '<i aria-hidden="true">→</i>'
-            f'<span>{html.escape(node_display_label(destination, GRAPH_LABELS, node_generation))}</span></div>')
+            f'<span>{html.escape(node_display_label(destination, GRAPH_LABELS, node_generation, source_cleaning=source_cleaning, recipe_version=19))}</span></div>')
     return ('<div class="df-wb-plan-detail">'
             '<p>箭头表示本次目标的真实数据依赖；各阶段仍按顺序执行。</p>'
             '<div class="df-wb-plan-edges">' + ''.join(rows) + '</div></div>')
@@ -706,7 +708,8 @@ def _run_activity(state: dict, recipe: dict | None = None, *, active=True) -> di
     role = next((value for key, value in saved_models.items() if key.startswith(stage + ".")), None)
     if role is None and recipe is not None:
         role = next(iter((recipe.get("node_models") or {}).get(stage, {}).values()), None)
-    return {"stage": stage, "title": GRAPH_LABELS.get(stage, stage), "details": details,
+    return {"stage": stage, "title": node_display_label(stage, GRAPH_LABELS,
+                source_cleaning=bool((recipe or {}).get("source_cleaning")), recipe_version=(recipe or {}).get("version")), "details": details,
             "source": source, "model": str((role or {}).get("model") or ""),
             "calls": calls, "request_state": request_state, "hint": hint}
 
@@ -793,7 +796,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         reasoning_trim_enabled = bool((recipe.get("reasoning_trim") or {}).get("enabled"))
         graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
                                          qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
-                                         recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")))
+                                         recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
+                                         source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"))
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
@@ -908,6 +912,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
                                       qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"),
                                       recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
+                                      source_cleaning=recipe.get("source_cleaning", False),
                                       feedback_branch=(project_feedback_branch(recipe, state, {"active": active},
                                           target=next(iter(recipe["targets"]), None))
                                           if human_application is not None and set(recipe["targets"]).intersection(TARGETS) else None),
@@ -923,8 +928,10 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         selected_status, done, total, percent = _stage_numbers(selected_metrics)
         if selected_stage not in active_stages:
             selected_status, done, total, percent = "skipped", 0, 0, 0
-        selected_label = (node_display_label(selected_stage, GRAPH_LABELS, recipe.get("node_generation"))
-                          if selected_stage == "cot" else str(selected_metrics.get("label", selected_stage)))
+        selected_label = (node_display_label(selected_stage, GRAPH_LABELS, recipe.get("node_generation"),
+                          source_cleaning=bool(recipe.get("source_cleaning")), recipe_version=recipe.get("version"))
+                          if selected_stage == "cot" or recipe.get("source_cleaning") and selected_stage == "cpt"
+                          else str(selected_metrics.get("label", selected_stage)))
         if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
             passed, quarantined = done, max(0, total - done)
             passed_label, quarantined_label = '已规划任务', '待规划任务'
@@ -1047,6 +1054,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             ) + '</div>')
     tabs = st.tabs(["产物与质量", "节点日志", "全部事件", "来源与配方"])
     with tabs[0]:
+        render_live_artifacts(application, run_id, state=state, recipe=recipe)
         quality = state.get("quality")
         if quality:
             st.html('<div class="df-run-section"><div><strong>训练产物与质量</strong>'
@@ -1113,7 +1121,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             with st.expander("产物保存位置"):
                 st.code(application.artifact_location(run_id))
         else:
-            st.caption("质量汇总将在生成与验证步骤结束后出现。进度会自动刷新。")
+            st.caption("最终质量汇总在评分与打包完成后出现；已保存的阶段结果可在上方持续查看。")
         if summary.get("quarantined"):
             with st.expander(f"输入隔离记录 · {summary['quarantined']}"):
                 if st.toggle("加载隔离记录", key=f"load-inputs:{run_id}"):
@@ -1519,12 +1527,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 qa_director = {**qa_director, "human_augmentation": {"enabled": False}}
         package_review = package_review_snapshot(ws)
         review_repair = review_repair_snapshot(ws)
+        source_cleaning = uses_shared_source_cleaning(targets, source_mode=source_mode)
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
-                                                   qa_director=qa_director, package_review=package_review, recipe_version=18)
+                                                   qa_director=qa_director, package_review=package_review, recipe_version=19,
+                                                   source_cleaning=source_cleaning, review_repair=review_repair)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
-                st.html(_planned_dependencies_html(graph_edges, generation_snapshot(ws, graph_nodes)))
+                st.html(_planned_dependencies_html(graph_edges, generation_snapshot(ws, graph_nodes), source_cleaning=source_cleaning))
                 if "sft" in graph_nodes and "sft" not in targets:
                     st.caption("仅用于下游目标的 SFT 中间候选不会单独导出。")
         if "agent" in targets:
@@ -1556,8 +1566,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             document_parser["binding"] = saved_binding
     package_review = package_review_snapshot(ws)
     review_repair = review_repair_snapshot(ws)
-    cpt_processing = (cpt_processing_snapshot(ws) if "cpt" in targets and source_mode != "开放需求"
-                      else {"mode": "native"} if "cpt" in targets else None)
+    cpt_processing = (cpt_processing_snapshot(ws) if "cpt" in graph_nodes and source_mode != "开放需求"
+                      else {"mode": "native"} if "cpt" in graph_nodes else None)
     if targets:
         node_generation = generation_snapshot(ws, graph_nodes)
         selection_key = f"workflow-setup-node:{ws}"
@@ -1571,7 +1581,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             # the open-brief planning model to parse an existing human QA.
             model_source_mode = "人工设计"
         bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws,
-                                           node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
+                                           node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                           source_cleaning=source_cleaning)
         parser_role = "vision" if document_parser.get("mode") == "vision" else "generation"
         if document_parser.get("mode") in {"model", "vision"} and bindings.get("ingest", {}).get(parser_role):
             document_parser["binding"] = bindings["ingest"][parser_role]
@@ -1605,8 +1616,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                                   node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                      qa_director=qa_director, recipe_version=18,
-                                      feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": 18}, {},
+                                      qa_director=qa_director, recipe_version=19, source_cleaning=source_cleaning,
+                                      feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": 19}, {},
                                           target=next(iter(targets), None))
                                           if targets else None)),
                           selection_key, key=f"setup-canvas:{ws}",
@@ -1616,7 +1627,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             with st.container(key="workbench-node-header"):
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
                 with title:
-                    section_heading(node_display_label(selected_node, GRAPH_LABELS, node_generation), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
+                    section_heading(node_display_label(selected_node, GRAPH_LABELS, node_generation,
+                        source_cleaning=source_cleaning, recipe_version=19), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
                 with expand:
                     wide_key = f"canvas-wide:setup-canvas:{ws}"
                     st.button("收窄编辑" if st.session_state.get(wide_key) else "展开编辑",
@@ -1652,7 +1664,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     render_knowledge_settings(knowledge_application, ws)
                 elif selected_node == "cpt":
                     cpt_processing = render_cpt_settings(ws, source_mode, bindings, endpoints,
-                        save_field=_save_draft_value, backend_application=backend_application)
+                        save_field=_save_draft_value, backend_application=backend_application, source_cleaning=source_cleaning)
                 else:
                     render_node_models(selected_node, model_source_mode, ws, bindings, endpoints,
                                        backend_application=backend_application, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
@@ -1690,7 +1702,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 for node in dict.fromkeys(node for node, _ in model_issues):
                     description = _missing_model_role_summary(
                         [(issue_node, role) for issue_node, role in model_issues if issue_node == node],
-                        st.session_state.get("ui_language", "zh"), node_generation)
+                        st.session_state.get("ui_language", "zh"), node_generation, source_cleaning=source_cleaning)
                     _render_setup_issue(ws, node, description, kind="model", full_label=True)
             if pricing_issues:
                 for node in dict.fromkeys(node for node, _ in pricing_issues):

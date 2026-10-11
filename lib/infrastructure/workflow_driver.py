@@ -194,6 +194,12 @@ class FilesystemWorkflowDriver:
             raise ValueError("preview_file_changed")
         return rows
 
+    def live_artifacts(self, run_id: str, *, stage: str | None = None, limit: int = 3) -> dict:
+        from lib.infrastructure.workflow_live_artifacts import live_artifacts
+
+        run = run_path(self.output, run_id)
+        return live_artifacts(run, self.state(run_id), stage=stage, limit=limit)
+
     def quarantined_inputs(self, run_id: str, limit: int = 100) -> list[dict]:
         if limit <= 0:
             return []

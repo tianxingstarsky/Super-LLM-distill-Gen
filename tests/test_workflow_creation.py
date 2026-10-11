@@ -75,7 +75,7 @@ def test_generator_targets_are_normalized_once_before_driver():
     assert driver.create.call_args.kwargs['targets'] == ['sft', 'orpo']
 
 
-@pytest.mark.parametrize('targets,version', [(['sft', 'cot'], 15), (['sft'], 11), (['cot'], 11)])
+@pytest.mark.parametrize('targets,version', [(['sft', 'cot'], 19), (['sft'], 19), (['cot'], 19)])
 def test_cot_sft_route_is_frozen_in_new_recipe_version(tmp_path, targets, version):
     from lib.infrastructure import training_workflow as engine
     source = tmp_path / 'source.txt'

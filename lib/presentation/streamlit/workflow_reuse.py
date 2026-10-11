@@ -224,7 +224,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-node-prompt:{workspace}:jev:workflow.package_review"] = review_prompt
     prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")),
                                      qa_director=director, package_review=package_review,
-                                     recipe_version=18 if review_repair else recipe.get("version", 16))
+                                     recipe_version=max(18 if review_repair else 16, recipe.get("version", 16)),
+                                     source_cleaning=recipe.get("source_cleaning", False), review_repair=review_repair)
     for node in prompt_nodes:
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
                                                 package_review=package_review, review_repair=review_repair,

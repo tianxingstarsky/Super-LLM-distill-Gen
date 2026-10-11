@@ -12,17 +12,19 @@ from lib.presentation.streamlit.i18n import translate_label
 _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__).with_name("workflow_canvas_frontend")))
 
 
-def node_display_label(node, labels, node_generation=None):
+def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None):
     """Name the actual CoT operation rather than implying a writer always runs."""
     if node == "cot":
         settings = (node_generation or {}).get("cot")
         generates = bool(settings and settings.get("enabled", True))
         return "CoT 推理生成" if generates else "CoT 推理核验"
+    if node == "cpt" and source_cleaning and (recipe_version or 0) >= 19:
+        return "资料清洗"
     return labels.get(node, "评分与修正" if node == "review" else node)
 
 
 def node_description(node, source_mode, *, node_generation=None, package_review=None, cpt_processing=None,
-                     review_repair=None, recipe_version=None):
+                     review_repair=None, recipe_version=None, source_cleaning=False):
     """A short purpose and cost hint available on every node without another card."""
     descriptions = {
         "ingest": "读取来源并整理为可处理的文档片段或任务。",
@@ -38,7 +40,11 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         "review": "在同一节点评分、修正并重新评分；通过后才进入打包，修正不会回到 SFT 生成。",
         "package": "检查结构、去重并导出训练文件、报告与清单。",
     }
-    if node == "cot":
+    if source_cleaning and (recipe_version or 0) >= 19 and node == "cpt":
+        description = "清洗并核对解析资料，隔离不可靠片段；合格资料供指导员、SFT 与多轮对话复用。"
+    elif source_cleaning and (recipe_version or 0) >= 19 and node == "sft":
+        description = "基于已清洗、核对合格的资料生成指令对话；无需先导出 CPT 文件。"
+    elif node == "cot":
         generation = (node_generation or {}).get("cot")
         description = ("按风格提示词生成显式推理与答案，并核验结果。" if generation and generation.get("enabled", True)
                        else "核验上游已有推理与答案；本节点不重新撰写推理。")
@@ -159,30 +165,38 @@ def extend_feedback_branch(spec, projection):
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
-                review_repair=None, repair_only=False):
+                review_repair=None, repair_only=False, source_cleaning=False):
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
-                                  repair_only=repair_only)
-    base = [key for key in BASE_STAGES if key in nodes]
+                                  repair_only=repair_only, source_cleaning=source_cleaning,
+                                  review_repair=review_repair)
+    shared_cleaning = (recipe_version >= 19 and source_cleaning is True
+                       and any(a == "cpt" and b in {"director", "sft", "multiturn"} for a, b in edges))
+    base = [key for key in BASE_STAGES if key in nodes and not (shared_cleaning and key == "cpt")]
     derived = [key for key in DERIVED_STAGES if key in nodes]
     # Center each column within its actual rows. Leave a clear outer lane for
     # base outputs that bypass the derived column on their way to packaging.
-    bypass = bool(derived or "trim" in nodes) and any(a in base and b in {"jev", "review", "package"} for a, b in edges)
+    bypass = shared_cleaning or (bool(derived or "trim" in nodes) and any(
+        a in base and b in {"jev", "review", "package"} for a, b in edges))
     margin = 44 if bypass else 24
     height = 2 * margin + 78 + 100 * (max(1, len(base), len(derived)) - 1)
     director_width = 270 if "director" in nodes else 0
+    clean_width = 270 if shared_cleaning else 0
     review_width = 270 if "jev" in nodes or "review" in nodes else 0
-    width = (540 if repair_only else 1080 if derived else 810) + (270 if "trim" in nodes else 0) + director_width + review_width
+    width = ((540 if repair_only else 1080 if derived else 810) + (270 if "trim" in nodes else 0)
+             + director_width + clean_width + review_width)
     positions = {"ingest": (24, (height - 78) / 2), "package": (width - 242, (height - 78) / 2)}
     if "director" in nodes:
-        positions["director"] = (294, (height - 78) / 2)
+        positions["director"] = (294 + clean_width, (height - 78) / 2)
+    if shared_cleaning:
+        positions["cpt"] = (294, (height - 78) / 2)
     if "trim" in nodes:
         positions["trim"] = (width - 512 - review_width, (height - 78) / 2)
     if "jev" in nodes:
         positions["jev"] = (width - 512, (height - 78) / 2)
     if "review" in nodes:
         positions["review"] = (width - 512, (height - 78) / 2)
-    for column, x in ((base, 294 + director_width), (derived, 564 + director_width)):
+    for column, x in ((base, 294 + director_width + clean_width), (derived, 564 + director_width + clean_width)):
         top = (height - (78 + 100 * (len(column) - 1))) / 2
         for index, key in enumerate(column):
             positions[key] = (x, top + index * 100)
@@ -207,6 +221,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
             role_names.update(generation=("Repair model" if language == "en" else "修正模型") if "jev" in roles
                               else ("Scoring and repair model" if language == "en" else "评分与修正模型"),
                               jev="Scoring model" if language == "en" else "评分模型")
+        elif key == "cpt" and shared_cleaning:
+            role_names["generation"] = "Cleaning model" if language == "en" else "清洗模型"
         missing_hint = (("Missing: " if language == "en" else "缺少：") +
                         (", " if language == "en" else "、").join(role_names[role] for role in missing_roles if role in role_names))
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
@@ -224,23 +240,28 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                     review_title = (("Repair" if language == "en" else "修正") if "jev" in roles else
                                     ("Score + repair" if language == "en" else "评分 + 修正")) if role_key == "generation" else (
                                         "Score" if language == "en" else "评分")
-                    title = (review_title if key == "review" else en if language == "en" else zh)
+                    title = review_title if key == "review" else en if language == "en" else zh
+                    if key == "cpt" and shared_cleaning and role_key == "generation":
+                        title = "Clean" if language == "en" else "清洗"
                     models.append(f"{title}: {binding['backend']} · {binding['model']}")
         description = ("Verify the selected source and candidate, without another model parse." if language == "en" else
                        "核验选中的来源与候选结果，不重新调用模型解析。") if repair_only and key == "ingest" else " ".join(
                        translate_label(text, language) for text in node_description(key, source_mode,
                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
-                           review_repair=review_repair, recipe_version=recipe_version))
-        data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation), language), "glyph": glyphs.get(key, "✓"),
+                           review_repair=review_repair, recipe_version=recipe_version, source_cleaning=shared_cleaning))
+        data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation,
+                         source_cleaning=shared_cleaning, recipe_version=recipe_version), language), "glyph": glyphs.get(key, "✓"),
                      "x": positions[key][0], "y": positions[key][1], "status": status,
                      "description": description,
                      "subtitle": subtitle, "models": models, "percent": min(100, done * 100 / total) if total else
                      100 if status == "completed" else 0,
-                     "intermediate": key == "sft" and ("sft" not in targets or
-                         sft_uses_cot_output(targets, recipe_version))})
+                     "intermediate": (key == "cpt" and shared_cleaning and "cpt" not in targets) or
+                     key == "sft" and ("sft" not in targets or sft_uses_cot_output(targets, recipe_version))})
     english = language == "en"
     result = {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
             "live": live, "language": language, "review_repair": dict(review_repair or {}),
+            "bypass_edges": [[a, b] for a, b in edges if shared_cleaning and (
+                a == "ingest" and b != "cpt" or a == "cpt" and b in {"review", "jev", "package"})],
             "labels": {"node_picker": "Go to node" if english else "定位节点",
                                        "fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
                                        "zoom_out": "Zoom out" if english else "缩小",

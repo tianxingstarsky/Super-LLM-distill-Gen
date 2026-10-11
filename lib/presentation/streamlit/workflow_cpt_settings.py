@@ -1,4 +1,4 @@
-"""Source-preserving CPT preparation configured on its workflow node."""
+"""Source-preserving document cleaning configured on its workflow node."""
 from copy import deepcopy
 
 import streamlit as st
@@ -25,7 +25,8 @@ def cpt_vision_unconfirmed(config, bindings, endpoints):
     return not binding or not supports_vision(endpoints.get(binding["backend"], {}), binding["model"])
 
 
-def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_field, backend_application=None):
+def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_field, backend_application=None,
+                        source_cleaning=False):
     if source_mode == "开放需求":
         st.caption("开放需求生成合成语料，由模型生成并独立评审；没有原文时不作原页保真声明。")
         render_node_models("cpt", source_mode, workspace, bindings, endpoints,
@@ -33,7 +34,7 @@ def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_fie
         return {"mode": "native"}
     mode_key = f"workflow-cpt-processing-mode:{workspace}"
     st.session_state[mode_key] = _field(workspace, "processing-mode", "model")
-    mode = st.radio("CPT 清洗方式", ("model", "native"), key=mode_key, horizontal=True,
+    mode = st.radio("资料清洗方式" if source_cleaning else "CPT 清洗方式", ("model", "native"), key=mode_key, horizontal=True,
                     format_func=lambda value: "模型清洗与评审" if value == "model" else "仅本地检查",
                     on_change=save_field, args=(workspace, mode_key))
     if mode == "model":
@@ -44,10 +45,12 @@ def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_fie
                  on_change=save_field, args=(workspace, review_key))
         st.caption("清洗排版与重复页眉，再独立核对事实、数字、单位、公式和表格；不扩写知识，不补足数量。")
     else:
-        st.caption("保留原文，仅做结构、隐私与去重检查；不调用 CPT 清洗或评审模型。")
+        st.caption("保留原文，仅做结构、隐私与去重检查；不调用清洗或评审模型。" if source_cleaning else
+                   "保留原文，仅做结构、隐私与去重检查；不调用 CPT 清洗或评审模型。")
     config = cpt_processing_snapshot(workspace)
     render_node_models("cpt", source_mode, workspace, bindings, endpoints,
-                       backend_application=backend_application, cpt_processing=config)
+                       backend_application=backend_application, cpt_processing=config,
+                       source_cleaning=source_cleaning)
     if config.get("review_mode") == "vision":
         st.caption("PDF、图片与 DOCX 图片块对照原页；Markdown、TXT、TeX 和 DOCX 文字块对照原文文字。报告记录实际评审方式。")
         binding = bindings.get("cpt", {}).get("jev")
@@ -65,5 +68,6 @@ def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_fie
                 else:
                     st.rerun()
             st.warning("评审模型尚未确认图片输入能力，请先核实并确认。")
-    st.info("来源解析 → CPT 清洗 → 原文核对 → 去重与打包")
+    st.info("来源解析 → 资料清洗与核对 → 指导与生成。只使用合格片段；不需要导出 CPT。" if source_cleaning else
+            "来源解析 → CPT 清洗 → 原文核对 → 去重与打包")
     return deepcopy(config)

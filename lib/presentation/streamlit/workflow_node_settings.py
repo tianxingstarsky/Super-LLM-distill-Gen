@@ -13,7 +13,7 @@ from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
                                        MAX_CONTEXT_WINDOW_TOKENS, NODE_ROLES, node_roles,
                                        validate_node_models)
 from lib.model_protocols import API_FORMATS
-from lib.presentation.streamlit.i18n import UntranslatedText
+from lib.presentation.streamlit.i18n import UntranslatedText, translate_label
 from lib.presentation.streamlit.model_scheduling_controls import render_model_scheduling
 from lib.presentation.streamlit.workflow_model_capabilities import (
     discovered_choices, model_info, render_model_capabilities,
@@ -33,7 +33,7 @@ _PROCESS_REVIEW_DESCRIPTIONS = {
 _PROCESS_REVIEW_HELP = "这是用于过程核对的普通大模型，并非特殊模型。可选 JEV 评分不替代这些核对。"
 
 
-def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None):
+def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None, source_cleaning=False):
     draft_key = f"workflow-node-bindings:{workspace}"
     saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(draft_key, {})
     draft = deepcopy(st.session_state.get(draft_key, saved))
@@ -55,6 +55,7 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
         "nodes": list(nodes), "source_mode": source_mode,
         "node_generation": deepcopy(node_generation), "package_review": deepcopy(package_review),
         "cpt_processing": deepcopy(cpt_processing), "review_repair": deepcopy(review_repair),
+        "source_cleaning": source_cleaning is True,
     }
     agent_key = f"workflow-agent-mode:{workspace}"
     if agent_key not in st.session_state:
@@ -278,17 +279,26 @@ def _reuse_binding(workspace: str, node: str, role: str, binding: dict) -> None:
     _persist_bindings(workspace, draft)
 
 
+def _reuse_node_label(node: str, workspace: str) -> str:
+    shared = st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning", False)
+    return (translate_label("资料清洗", st.session_state.get("ui_language", "zh"))
+            if node == "cpt" and shared else node.upper())
+
+
 def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, endpoints: dict, *,
-                        allow_generation_reuse: bool) -> None:
+                        allow_generation_reuse: bool, source_cleaning=False) -> None:
     """Keep reuse explicit, including replacement of an existing role choice."""
     binding = bindings.get(node, {}).get(role, {})
     prefix = f"node-model:{workspace}:{node}:{role}"
     writer = bindings.get(node, {}).get("generation", {})
     if (allow_generation_reuse and role == "jev" and writer.get("backend") in endpoints and writer.get("model")
             and writer != binding):
-        st.button("沿用本节点修正模型" if node == "review" else "沿用本节点生成模型", key=prefix + ":reuse-generation",
+        cleaning = node == "cpt" and source_cleaning
+        st.button("沿用本节点修正模型" if node == "review" else "沿用本节点清洗模型" if cleaning else
+                  "沿用本节点生成模型", key=prefix + ":reuse-generation",
                   on_click=_reuse_binding, args=(workspace, node, role, deepcopy(writer)),
-                  help="复制生成模型及 token 上限到评审配置；只在点击时替换，之后可分别调整。",
+                  help=("复制清洗模型及 token 上限到核对配置；只在点击时替换，之后可分别调整。" if cleaning else
+                        "复制生成模型及 token 上限到评审配置；只在点击时替换，之后可分别调整。"),
                   width="stretch")
     choices = _reusable_bindings(node, role, bindings, endpoints)
     if not choices:
@@ -296,7 +306,11 @@ def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, en
     help_text = "只复制到当前角色。模型服务、模型和 token 上限可继续分别调整。"
     if not binding and len(choices) == 1:
         source, reusable = choices[0]
-        st.button(f"沿用 {source.upper()} 节点的 {reusable['model']}", key=prefix + ":reuse:" + source,
+        source_label = _reuse_node_label(source, workspace)
+        label = (UntranslatedText(f"Reuse {source_label}: {reusable['model']}" if st.session_state.get("ui_language") == "en" else
+                                 f"沿用 {source_label} 节点的 {reusable['model']}")
+                 if source_label != source.upper() else f"沿用 {source_label} 节点的 {reusable['model']}")
+        st.button(label, key=prefix + ":reuse:" + source,
                   on_click=_reuse_binding, args=(workspace, node, role, deepcopy(reusable)),
                   help=help_text, width="stretch")
         return
@@ -307,7 +321,7 @@ def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, en
             st.session_state.pop(source_key)
         source = st.selectbox("已有模型配置", list(candidates), key=source_key,
                               format_func=lambda source: UntranslatedText(
-                                  source.upper() + " · " + candidates[source]["backend"]
+                                  _reuse_node_label(source, workspace) + " · " + candidates[source]["backend"]
                                   + " · " + candidates[source]["model"]))
         st.button("用于当前角色", key=prefix + ":reuse-apply",
                   on_click=_reuse_binding, args=(workspace, node, role, deepcopy(candidates[source])),
@@ -457,7 +471,9 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
 
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                        backend_application: BackendApplication | None = None, node_generation=None, package_review=None, cpt_processing=None, review_repair=None,
-                       confirmation_action=None, confirmation_args=None):
+                       confirmation_action=None, confirmation_args=None, source_cleaning=None):
+    if source_cleaning is None:
+        source_cleaning = st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning", False)
     pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
     if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair):
         prefix = f"node-model:{workspace}:{node}:{pending['role']}"
@@ -469,7 +485,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         explanation = {
             "ingest": ("固定人工问答设计，保留任务来源快照；此步骤不调用模型。" if source_mode == "人工设计" else
                        "解析上传来源并保留来源位置；此步骤不调用生成模型。"),
-            "cpt": "清洗、分块并去重已有语料；此步骤不调用生成模型。",
+            "cpt": ("检查资料结构、隐私与重复内容；合格片段供后续节点复用，此步骤不调用模型。" if source_cleaning else
+                    "清洗、分块并去重已有语料；此步骤不调用生成模型。"),
             "agent": "核对已记录的工具轨迹；此节点不调用模型。验证环境在下方选择。",
             "gsm8k": "生成可复现的多步整数算术题，核对计算标注和最终答案；不处理通用数学证明，此节点不调用模型。",
             "package": ("检查输出规则并整理产物，不调用模型。"
@@ -509,7 +526,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         binding = bindings.get(node, {}).get(role, {})
         prefix = f"node-model:{workspace}:{node}:{role}"
         _render_model_reuse(node, role, workspace, bindings, endpoints,
-                            allow_generation_reuse="generation" in roles)
+                            allow_generation_reuse="generation" in roles, source_cleaning=source_cleaning)
         names = list(endpoints)
         if binding.get("backend") and binding["backend"] not in endpoints:
             st.warning("已保存的模型连接不可用，请重新选择；原选择保留在草稿中。")
@@ -590,7 +607,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
     _persist_bindings(workspace, bindings)
     copies = _missing_role_copies(node, workspace, bindings, endpoints)
     if copies:
-        targets = list(dict.fromkeys(target.upper() for target, _, _ in copies))
+        targets = list(dict.fromkeys(_reuse_node_label(target, workspace) for target, _, _ in copies))
         st.button("填充其他节点未配置的模型", key=f"node-model-fill:{workspace}:{node}",
                   on_click=_fill_missing_models, args=(workspace, deepcopy(copies)),
                   help="按相同角色复制当前节点的模型与 token 上限。保留已有选择，之后仍可逐个修改。",

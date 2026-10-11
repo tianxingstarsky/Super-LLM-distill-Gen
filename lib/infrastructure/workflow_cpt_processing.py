@@ -1,14 +1,76 @@
 """Source-grounded CPT cleaning with independent, checkpointed review."""
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 from lib.domain.cpt_processing import cleaned_corpus, corpus_preservation, validate_cpt_processing
 from lib.domain.corpus_quality import inspect_corpus
 from lib.domain.workflow_quality import accepted
+from lib.domain.workflow_graph import SOURCE_CLEANING_RECIPE_VERSION
+from lib.infrastructure.workflow_rows import WorkflowRows, write_jsonl
 
 
 class WorkflowCPTProcessing:
+    def shared_source_cleaning(self) -> bool:
+        return (self.recipe.get("version", 0) >= SOURCE_CLEANING_RECIPE_VERSION
+                and self.recipe.get("source_cleaning") is True
+                and not self.recipe.get("repair_inputs"))
+
+    def clean_source_unit(self, unit: dict) -> list[dict]:
+        """Clean document evidence once; recorded conversations pass intact."""
+        if unit.get("kind") != "document":
+            return [deepcopy(unit)]
+        from lib.infrastructure.training_workflow import digest
+        rows = self.cpt(unit)
+        for row in rows:
+            row.setdefault("kind", "document")
+            row["source_cleaning"] = {"version": 1,
+                "status": "accepted" if row.get("status") == "eligible" else "rejected",
+                "source_text_sha256": digest(unit["text"]),
+                **({"cleaned_text_sha256": digest(row["text"])} if row.get("status") == "eligible" else {})}
+        return rows
+
+    def prepare_clean_sources(self, units):
+        """Only qualified text feeds dialogue planning or sample expansion.
+
+        The complete cleaning result stays on disk for review and optional CPT
+        delivery. An unrequested CPT export does not suppress preprocessing.
+        """
+        if not self.shared_source_cleaning():
+            return units
+        rows = self.stage_items("cpt", units, self.clean_source_unit)
+        self._shared_cleaned_rows = rows
+        accepted_count = sum(row.get("status") in {"ready", "eligible"} for row in rows)
+        rejected_count = sum(row.get("status") == "quarantined" for row in rows)
+        self.state.setdefault("input_summary", {}).update(
+            ready_after_cleaning=accepted_count,
+            source_cleaning={"candidates": len(units), "accepted": accepted_count,
+                             "quarantined": rejected_count})
+        self.save()
+        def ready(row):
+            return {**row, "status": "ready"}
+        return WorkflowRows(rows.path, accepted_count,
+                            predicate=lambda row: row.get("status") in {"ready", "eligible"},
+                            transform=ready)
+
+    def shared_cpt_collection(self):
+        """Reuse cleaned evidence for CPT; do not send it to the cleaner twice."""
+        source_rows = self._shared_cleaned_rows
+        destination = self.path / "stage-results" / "cpt-training-inputs.jsonl"
+        count = 0
+        self.stage = "cpt"
+        def project():
+            nonlocal count
+            for row in source_rows:
+                self.check_cancel()
+                output = [row] if row.get("kind") == "document" else self.cpt(row)
+                for record in output:
+                    count += 1
+                    yield record
+        write_jsonl(destination, project())
+        return WorkflowRows(destination, count)
+
     def cpt_processing(self) -> dict:
         return validate_cpt_processing(self.recipe.get("cpt_processing"))
 

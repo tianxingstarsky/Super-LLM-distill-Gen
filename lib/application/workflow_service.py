@@ -107,6 +107,10 @@ class WorkflowApplication:
             raise ValueError("unknown_training_target")
         return self._driver.artifact_preview(run_id, target, max(0, min(int(limit), 100)), max(0, int(offset)))
 
+    def live_artifacts(self, run_id: str, *, stage: str | None = None, limit: int = 3) -> dict:
+        """Preview completed node rows during generation, separate from releases."""
+        return self._driver.live_artifacts(run_id, stage=stage, limit=max(0, min(int(limit), 20)))
+
     def quarantined_inputs(self, run_id: str, limit: int = 100) -> list[dict]:
         return self._driver.quarantined_inputs(run_id, max(0, min(int(limit), 100)))
 

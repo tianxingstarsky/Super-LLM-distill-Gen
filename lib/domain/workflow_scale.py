@@ -32,7 +32,7 @@ def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = N
         return (("generation", "jev") if validate_package_review(package_review)["enabled"]
                 else ("generation",))
     if stage in {"package", "jev"}:
-        if review_repair is not None or recipe_version is not None and recipe_version >= 18:
+        if review_repair is not None or recipe_version == 18:
             return ()
         review = validate_package_review(package_review)
         review_node = review.get("node", "package")
@@ -44,7 +44,7 @@ def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = N
         from lib.domain.cpt_processing import validate_cpt_processing
         return (("generation", "jev") if validate_cpt_processing(cpt_processing)["mode"] == "model" else ())
     if (stage in {"sft", "multiturn", "preference", "cot", "trim"}
-            and (review_repair is not None or recipe_version is not None and recipe_version >= 18)):
+            and (review_repair is not None or recipe_version == 18)):
         # These stages construct the candidate; their final grade belongs to
         # the review stage. Any local consistency checks use the same model.
         return ("generation",)
