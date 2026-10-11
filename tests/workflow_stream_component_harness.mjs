@@ -482,6 +482,62 @@ scenario('consumed_cursor_receipt_is_exact_and_retries_are_throttled_without_rep
   assert.equal(selectedEvents(p).length, 0);
 });
 
+scenario('empty_and_terminal_polls_update_status_without_triggering_reruns', p => {
+  const rows = [row()];
+  for (let poll = 0; poll < 12; poll++) {
+    p.advance(1000);
+    renderDelta(p, rows, 'first', delta('first', 0, 0));
+  }
+  assert.equal(componentEvents(p).length, 0, 'waiting for the first token needs no callback');
+  assert.equal(p.get('stream-status').textContent, 'Receiving');
+
+  renderDelta(p, rows, 'first', delta('first', 0, 20, [token('Actual answer')]));
+  const before = componentEvents(p).length;
+  assert.equal(before, 1, 'an advancing data offer is acknowledged');
+  for (let poll = 0; poll < 12; poll++) {
+    p.advance(1000);
+    renderDelta(p, rows, 'first', delta('first', 20, 20));
+  }
+  assert.equal(componentEvents(p).length, before, 'idle polls cannot create another rerun');
+  assert.equal(text(p), 'Actual answer');
+
+  for (let poll = 0; poll < 12; poll++) {
+    p.advance(1000);
+    renderDelta(p, [row('first', {status: 'completed'})], 'first', delta('first', 20, 20, [], {
+      status: 'completed', done: true}));
+  }
+  assert.equal(componentEvents(p).length, before, 'terminal metadata needs no cursor acknowledgement');
+  assert.equal(p.get('stream-status').textContent, 'Response received');
+  assert.equal(p.get('stream-cursor').hidden, true);
+  assert.equal(text(p), 'Actual answer');
+});
+
+scenario('lost_data_receipt_retries_after_idle_poll_without_losing_characters', p => {
+  const rows = [row()];
+  const first = delta('first', 0, 20, [token('开始🙂'), token('先核对', 'reasoning')]);
+  renderDelta(p, rows, 'first', first);
+  const initial = receipts(p)[0];
+  p.advance(400);
+  renderDelta(p, rows, 'first', delta('first', 20, 20));
+  assert.equal(receipts(p).length, 1, 'an idle poll neither retries nor discards the pending receipt');
+  p.advance(400);
+  renderDelta(p, rows, 'first', first);
+  assert.equal(receipts(p).length, 2, 'the still-unconfirmed advancing offer retries after 750ms');
+  assert.notEqual(receipts(p)[1].serial, initial.serial);
+  assert.equal(text(p), '开始🙂', 'the repeated offer cannot replay its characters');
+  assert.equal(p.get('reasoning-output').textContent, '先核对');
+  renderDelta(p, rows, 'first', delta('first', 20, 40, [token('，继续。'), token('来源。', 'reasoning')]));
+  assert.equal(text(p), '开始🙂，继续。');
+  assert.equal(p.get('reasoning-output').textContent, '先核对来源。');
+  assert.equal(receipts(p).at(-1).next_offset, 40);
+  const before = receipts(p).length;
+  p.advance(1000);
+  renderDelta(p, rows, 'first', delta('first', 40, 40, [], {status: 'completed', done: true}));
+  assert.equal(receipts(p).length, before);
+  assert.equal(p.get('stream-status').textContent, 'Response received');
+  assert.equal(text(p), '开始🙂，继续。');
+});
+
 scenario('receipt_does_not_lock_selection_and_uses_the_accepted_selection_epoch', p => {
   const rows = [row('first'), row('other')];
   renderDelta(p, rows, 'first', delta('first', 0, 20, [token('First response')]), {
@@ -507,7 +563,7 @@ scenario('empty_terminal_delta_completes_and_invalid_cursors_never_get_receipts'
   const rows = [row('first', {status: 'completed'})];
   renderDelta(p, rows, 'first', delta('first', 0, 0, [], {status: 'completed', done: true}));
   assert.equal(p.get('stream-status').textContent, 'Response received');
-  assert.equal(receipts(p).at(-1).next_offset, 0);
+  assert.equal(receipts(p).length, 0, 'a terminal empty cursor does not cause a component rerun');
   const before = receipts(p).length;
   renderDelta(p, rows, 'first', delta('first', Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER + 1));
   assert.equal(receipts(p).length, before);

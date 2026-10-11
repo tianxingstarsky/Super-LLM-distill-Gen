@@ -18,7 +18,7 @@ from lib.application.workflow_service import WorkflowApplication
 from lib.domain.workflow_graph import execution_graph
 from lib.presentation.streamlit.task_management_styles import task_management_styles
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
-from lib.presentation.streamlit.workflow_page import EVENT_LABELS, LABELS, TARGET_LABELS, render_run
+from lib.presentation.streamlit.workflow_page import EVENT_LABELS, LABELS, TARGET_LABELS, render_run, _run_activity
 
 
 FILTERS = ("全部", "未结束", "已完成", "待处理")
@@ -60,6 +60,9 @@ def _display_time(value: object) -> str:
 def _stage_progress(run: dict) -> tuple[int, int]:
     """Count completed stages in the run's actual dependency graph."""
     stages = run.get("stages", {})
+    if isinstance(run.get("scheduled_stages"), list):
+        nodes = run["scheduled_stages"]
+        return sum(stages.get(key, {}).get("status") == "completed" for key in nodes), len(nodes)
     # Older runs also carry unused stage keys. Only a scheduled trim stage
     # contributes to progress; its recipe flag is copied into new run state.
     trimming = bool(run.get("reasoning_trim_enabled")) or stages.get("trim", {}).get("status") in {
@@ -121,10 +124,22 @@ def _run_card_html(run: dict, *, language: str = "zh") -> tuple[str, str]:
     if not source_text:
         source_text = str(run.get("source_brief") or "")
     source_title = html.escape(source_text, quote=True)
+    activity = _run_activity(run)
+    activity_markup = ""
+    if activity:
+        stage_label = translate(activity["title"], language)
+        request_label = translate(activity["request_state"], language)
+        parts = next((value for label, value in activity["details"] if label == "已解析段"), None)
+        tokens = [f'{html.escape(stage_label)} · {html.escape(request_label)}' if request_label else html.escape(stage_label)]
+        if parts is not None:
+            tokens.append(f'{html.escape(translate("已解析段", language))} <b>{parts:,}</b>')
+        if activity["calls"] is not None:
+            tokens.append(f'{html.escape(translate("累计模型调用", language))} <b>{activity["calls"]:,}</b>')
+        activity_markup = '<div class="df-task-card-activity">' + '<span> · </span>'.join(tokens) + '</div>'
     detail = (f'<div class="df-task-card-targets">{tags}</div>'
               f'<div class="df-task-card-source"><b>{source_label}</b>'
               f'<span data-user-content title="{source_title}">{html.escape(source_text)}</span></div>'
-              f'{output}'
+              f'{activity_markup}{output}'
               f'<div class="df-task-card-progress"><span>{count_text}</span>'
               f'<span>#{html.escape(str(run.get("id", ""))[:8])}</span></div>'
               f'<div class="df-task-meter" data-status="{safe_status}" role="progressbar" aria-label="{progress_label}" '
@@ -268,6 +283,8 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
     artifact-preview operations attached to the real run.
     """
     st.html(task_management_styles())
+    st.html('<style>.df-task-card-activity{color:#3677b6;font-size:11px;line-height:1.65;margin:6px 0;'
+            'font-variant-numeric:tabular-nums}.df-task-card-activity b{font-weight:650}</style>')
     if st.session_state.pop("workflow-scroll-top", False):
         # Streamlit keeps the workbench's long-form scroll position across a
         # rerun.  On a fresh handoff, start at this page's header and summary.

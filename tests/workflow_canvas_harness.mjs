@@ -274,6 +274,21 @@ assert.equal(nativePanel.dataset.workflowPlacement,'right');
 assert.equal(nativePanel.parentElement.dataset.workflowInspectorHost,'floating');
 assert.ok(parseFloat(nativePanel.style.left)>=110&&parseFloat(nativePanel.style.left)+430<=1110);
 assert.ok(parseFloat(nativePanel.style.top)>=76&&parseFloat(nativePanel.style.top)+parseFloat(nativePanel.style.maxHeight)<=884);
+// A token-reader refresh may change a neighboring native wrapper. Settled
+// positioning must not write identical attributes back into the parent DOM,
+// which would wake the separate setup-reveal observer again.
+const inspectorWrites=[];
+const unchangedPanelObserver=new outer.MutationObserver(records=>inspectorWrites.push(...records));
+unchangedPanelObserver.observe(nativePanel,{attributes:true});
+unchangedPanelObserver.observe(nativePanel.parentElement,{attributes:true});
+for(let index=0;index<12;index++){
+ const refreshedSibling=outerDocument.createElement('div');
+ outerDocument.body.append(refreshedSibling);refreshedSibling.remove();
+ await flushBridge(2);
+}
+unchangedPanelObserver.disconnect();
+assert.equal(inspectorWrites.length,0,'unchanged inspector geometry emits no parent attribute mutations');
+assert.equal(animationFrames.size,0,'neighboring refreshes settle without a continuing animation loop');
 const nativeInput=outerDocument.getElementById('native-model');nativeInput.value='edited-writer';nativeInput.focus();
 nativePanel.scrollTop=200;bridgeRender('ingest');await flushBridge();
 assert.equal(nativePanel.scrollTop,200,'same-node widget reruns retain the form scroll position');

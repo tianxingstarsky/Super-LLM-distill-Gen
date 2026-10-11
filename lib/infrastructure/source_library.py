@@ -17,6 +17,7 @@ import re
 import stat
 import tempfile
 import threading
+import time
 
 from filelock import FileLock, Timeout
 
@@ -26,6 +27,7 @@ from lib.infrastructure.source_snapshot import snapshot_source
 
 SOURCE_LIBRARY_VERSION = 1
 MODEL_PARSE_CHARS = 8000
+SOURCE_PROGRESS_INTERVAL_SECONDS = .5
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_HASHES = {}
 _SOURCE_HASH_LOCK = threading.Lock()
@@ -211,6 +213,17 @@ class SourceLibrary:
             fd, temporary = tempfile.mkstemp(dir=folder, prefix=".parts-", suffix=".pending")
             pending = Path(temporary)
             count, text_chars, usable_parts, requires_vision, empty_parts, successful = 0, 0, 0, 0, 0, True
+            last_progress = None
+            last_row = None
+            def progress(status, row=None):
+                if on_status is None:
+                    return
+                note = {"id": key, "source_id": source["id"], "mode": signature["mode"],
+                        "status": status, "cached": False, "parts": count, "text_chars": text_chars,
+                        "usable_parts": usable_parts, "requires_vision": requires_vision, "empty_parts": empty_parts}
+                if row is not None:
+                    note.update({name: row[name] for name in ("location", "parse_segment") if name in row})
+                on_status(note)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     iterator = iter(build())
@@ -220,6 +233,7 @@ class SourceLibrary:
                                 check_cancel()
                             if not isinstance(row, dict):
                                 raise ValueError("invalid_source_library_part")
+                            last_row = row
                             if valid is not None and not valid(row):
                                 successful = False
                             handle.write(_canonical(row) + "\n")
@@ -234,6 +248,13 @@ class SourceLibrary:
                                     empty_parts += 1
                             elif isinstance(row.get("record"), dict) and row["record"]:
                                 usable_parts += 1
+                            moment = time.monotonic()
+                            if last_progress is None or moment - last_progress >= SOURCE_PROGRESS_INTERVAL_SECONDS:
+                                # A completed reading is visible before the next
+                                # model call, without writing state per token or
+                                # for every tiny JSONL record in a large import.
+                                progress("parsing", row)
+                                last_progress = moment
                             yield row
                     finally:
                         close = getattr(iterator, "close", None)
@@ -242,10 +263,7 @@ class SourceLibrary:
                     handle.flush()
                     os.fsync(handle.fileno())
                 if not successful:
-                    if on_status:
-                        on_status({"id": key, "source_id": source["id"], "mode": signature["mode"],
-                                   "status": "incomplete", "cached": False,
-                                   "parts": count, "text_chars": text_chars})
+                    progress("incomplete", last_row)
                     return
                 self.source_path(source["id"])
                 record = {"version": SOURCE_LIBRARY_VERSION, "id": key, "source_id": source["id"],
@@ -255,6 +273,8 @@ class SourceLibrary:
                           "requires_vision": requires_vision, "empty_parts": empty_parts,
                           "parts_sha256": _hash_file(pending),
                           "created_at": _now()}
+                if last_row is not None:
+                    record.update({name: last_row[name] for name in ("location", "parse_segment") if name in last_row})
                 destination = folder / "parts.jsonl"
                 _unlinked(destination)
                 pending.replace(destination)
@@ -262,10 +282,7 @@ class SourceLibrary:
                 if on_status:
                     on_status({**record, "cached": False})
             except BaseException as error:
-                if on_status:
-                    on_status({"id": key, "source_id": source["id"], "mode": signature["mode"],
-                               "status": "interrupted" if isinstance(error, GeneratorExit) else "failed",
-                               "cached": False, "parts": count, "text_chars": text_chars})
+                progress("interrupted" if isinstance(error, GeneratorExit) else "failed", last_row)
                 raise
             finally:
                 pending.unlink(missing_ok=True)

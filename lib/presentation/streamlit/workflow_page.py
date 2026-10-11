@@ -650,6 +650,104 @@ def _open_run_failure(run_id: str, stage: str) -> None:
     st.session_state[f"workflow-run-reveal:{run_id}"] = {"node": stage, "serial": serial}
 
 
+def _run_activity(state: dict, recipe: dict | None = None, *, active=True) -> dict | None:
+    """Describe persisted work without inferring an overall completion percent."""
+    if state.get("status") not in {"queued", "running"}:
+        return None
+    stages = state.get("stages") or {}
+    stage = next((key for key, value in stages.items() if value.get("status") == "running"), None)
+    if stage is None:
+        return {"stage": "ingest" if "ingest" in stages else next(iter(stages), "ingest"),
+                "title": "等待执行", "details": [], "source": "", "model": "",
+                "hint": "工作已保存，等待执行进程开始。", "request_state": "", "calls": None}
+    metrics = stages[stage]
+    def count(value):
+        return value if type(value) is int and value >= 0 else None
+    source_library = state.get("source_library") or {}
+    source_rows = source_library.get("sources") or []
+    current_source = next((row for row in reversed(source_rows) if row.get("status") == "parsing"), {})
+    source = str(metrics.get("current_source") or current_source.get("name") or "") if stage == "ingest" else ""
+    details = []
+    if stage == "ingest":
+        parts = count(metrics.get("parsed_parts", source_library.get("parts")))
+        text_chars = count(metrics.get("input_chars", source_library.get("text_chars")))
+        if parts is not None:
+            details.append(("已解析段", parts))
+        if text_chars is not None:
+            details.append(("已读取文字", text_chars))
+        if count(metrics.get("total")) is not None:
+            completed = count(metrics.get("parsed_sources", metrics.get("done"))) or 0
+            details.append(("已解析文件", f"{completed:,} / {metrics['total']:,}"))
+    else:
+        done, total = count(metrics.get("done")), count(metrics.get("total"))
+        if done is not None and total is not None and total > 0:
+            details.append(("已处理单元", f"{done:,} / {total:,}"))
+    usage = state.get("usage")
+    if isinstance(usage, dict):
+        counts = [count(value.get("calls")) for value in usage.values() if isinstance(value, dict)]
+        calls = sum(value for value in counts if value is not None) if any(value is not None for value in counts) else None
+    else:
+        calls = count(state.get("model_calls"))
+    # Historical model_finished is emitted in finally, including failures.
+    # The latest event identifies activity; it is never called a passed result.
+    roles = {}
+    for event in state.get("events", ()):
+        if event.get("stage") == stage and event.get("kind") in {"model_started", "model_finished", "model_queued"}:
+            roles[event.get("role", "generation")] = event["kind"]
+    if not active:
+        request_state, hint = "执行已中断", "已保存的解析和输出保留，可从断点继续。"
+    elif "model_queued" in roles.values():
+        request_state, hint = "等待模型额度", "请求正在等待共享模型额度，节点中可查看输出和排队状态。"
+    elif "model_started" in roles.values():
+        request_state, hint = "模型正在处理", "模型正在逐段读取资料，文件完成后才计入已解析文件。" if stage == "ingest" else "节点正在请求模型，点击可查看实时输出。"
+    else:
+        request_state, hint = "正在处理", "解析和读取随实际结果更新，文件完成后才计入已解析文件。" if stage == "ingest" else "节点正在处理，进度随实际结果更新。"
+    saved_models = state.get("models") or {}
+    role = next((value for key, value in saved_models.items() if key.startswith(stage + ".")), None)
+    if role is None and recipe is not None:
+        role = next(iter((recipe.get("node_models") or {}).get(stage, {}).values()), None)
+    return {"stage": stage, "title": GRAPH_LABELS.get(stage, stage), "details": details,
+            "source": source, "model": str((role or {}).get("model") or ""),
+            "calls": calls, "request_state": request_state, "hint": hint}
+
+
+def _render_run_activity(state, recipe, run_id, *, active):
+    activity = _run_activity(state, recipe, active=active)
+    if activity is None:
+        return
+    st.html("""<style>
+    .df-run-activity{padding:10px 14px;border:1px solid #cfe2f6;border-radius:12px;
+      background:linear-gradient(115deg,#eef7ff,#fbfdff 74%);box-shadow:inset 0 1px 0 #fff,0 3px 9px #234f7810}
+    .df-run-activity-head{display:flex;align-items:center;gap:9px;color:#2469b0;font-size:13px;line-height:1.6}
+    .df-run-activity-head i{width:7px;height:7px;flex:none;border-radius:50%;background:#3489e9;box-shadow:0 0 0 4px #3489e915}
+    .df-run-activity-head strong{font-size:14px;color:#1c426c}.df-run-activity-head small{margin-left:auto;color:#63819e}
+    .df-run-activity-source{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#59708c;font-size:12px;margin:3px 0}
+    .df-run-activity-stats{display:flex;flex-wrap:wrap;gap:5px 17px;color:#637b96;font-size:12px;line-height:1.7}
+    .df-run-activity-stats b{color:#24496d;margin-left:5px;font-weight:650;font-variant-numeric:tabular-nums}
+    .df-run-activity-hint{font-size:12px;color:#69829b;line-height:1.5;margin-top:4px}
+    </style>""")
+    details = list(activity["details"])
+    if activity["calls"] is not None:
+        details.append(("累计模型调用", activity["calls"]))
+    statistics = "".join(f'<span>{html.escape(label)}<b>{html.escape(f"{value:,}" if type(value) is int else value)}</b></span>'
+                         for label, value in details)
+    source = (f'<div class="df-run-activity-source" data-user-content title="{html.escape(activity["source"], quote=True)}">'
+              f'{html.escape(activity["source"])}</div>') if activity["source"] else ""
+    model = f'<small data-user-content>{html.escape(activity["model"])}</small>' if activity["model"] else ""
+    summary, action = st.columns([4.6, 1.25], gap="small", vertical_alignment="center")
+    with summary:
+        st.html('<div class="df-run-activity" role="status" aria-live="polite">'
+                f'<div class="df-run-activity-head"><i aria-hidden="true"></i><strong>{html.escape(activity["title"])}</strong>'
+                f'<span>{html.escape(activity["request_state"])}</span>{model}</div>{source}'
+                f'<div class="df-run-activity-stats">{statistics}</div>'
+                f'<div class="df-run-activity-hint">{html.escape(activity["hint"])}</div></div>')
+    with action:
+        st.button("查看当前节点输出", key=f"workflow-run-activity:{run_id}", width="stretch",
+                  icon=":material/visibility:", on_click=_open_run_failure,
+                  args=(run_id, activity["stage"]), disabled=state.get("status") == "queued",
+                  help="打开正在处理的节点与真实流式输出，不启动新的模型请求。")
+
+
 def _run_panel_keys(run_id: str) -> dict[str, str]:
     """Keep native positioning selectors safe and unique for arbitrary run IDs."""
     suffix = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
@@ -745,6 +843,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         else:
             st.warning("运行已结束；有目标没有合格样本，或输入超过本次处理上限。查看下方质量报告。")
     render_delivery_progress(state)
+    _render_run_activity(state, recipe, run_id, active=active)
     console_job = st.session_state.get(f"job:{st.session_state.get('ws', '')}:{run_id}")
     if console_job is not None and status == "queued":
         exit_code, _ = console_job.snapshot()

@@ -377,3 +377,82 @@ def test_waiting_for_another_parser_can_be_cancelled_without_duplicate_work(tmp_
         finally:
             release.set()
         assert first.result(timeout=5)[0]["text"] == PAGE_ONE
+
+
+def test_first_reading_progress_is_published_before_document_completion(tmp_path):
+    library, source, _ = registered(tmp_path)
+    notes = []
+    signature = {"mode": "model"}
+    iterator = library.iter_parts(source, signature, lambda: iter([
+        {"location": "page:1", "text": PAGE_ONE},
+        {"location": "page:2", "text": PAGE_TWO}]), on_status=notes.append)
+    assert next(iterator)["text"] == PAGE_ONE
+    assert notes[-1]["status"] == "parsing"
+    assert notes[-1]["parts"] == 1 and notes[-1]["usable_parts"] == 1
+    assert notes[-1]["text_chars"] == len(PAGE_ONE)
+    assert notes[-1]["location"] == "page:1"
+    assert library.list_parses(source["id"]) == []
+    iterator.close()
+    assert notes[-1]["status"] == "interrupted" and notes[-1]["parts"] == 1
+    assert library.list_parses(source["id"]) == []
+
+
+def test_import_progress_is_throttled_and_complete_receipt_keeps_exact_counts(tmp_path, monkeypatch):
+    from lib.infrastructure import source_library as storage
+    library, source, _ = registered(tmp_path)
+    notes = []
+    clock = [0.0]
+    monkeypatch.setattr(storage.time, "monotonic", lambda: clock[0])
+    def build():
+        for index in range(1000):
+            if index == 500:
+                clock[0] = .5
+            yield {"location": index, "text": "A verified source paragraph."}
+    assert len(list(library.iter_parts(source, {"mode": "native"}, build, on_status=notes.append))) == 1000
+    # Opening, first part, interval progress, and final publication; not 1000 writes.
+    assert len(notes) == 4
+    assert [note["parts"] for note in notes] == [0, 1, 501, 1000]
+    assert notes[-1]["status"] == "complete" and notes[-1]["usable_parts"] == 1000
+
+
+def test_workflow_progress_is_durable_before_next_model_request(tmp_path):
+    configure(tmp_path)
+    source = text_pdf(tmp_path)
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                document_parser=model_parser())
+    path = engine.run_path(output, identity)
+    checked = []
+    class InspectingReader(Reader):
+        def chat(self, messages, **options):
+            if self.calls:
+                saved = json.loads((path / "state.json").read_text(encoding="utf-8"))
+                assert saved["source_library"]["parts"] == 1
+                assert saved["source_library"]["sources"][0]["status"] == "parsing"
+                assert saved["stages"]["ingest"]["parsed_parts"] == 1
+                assert saved["stages"]["ingest"]["input_chars"] == len(PAGE_ONE)
+                assert saved["stages"]["ingest"]["current_source"] == source.name
+                assert saved["stages"]["ingest"]["current_location"] == "page:1"
+                assert saved["stages"]["ingest"]["parsed_sources"] == 0
+                checked.append(True)
+            return super().chat(messages, **options)
+    run = engine.Workflow(output, identity, tmp_path, generator=InspectingReader())
+    assert len(parse(run)) == 2
+    assert checked == [True]
+    assert run.state["source_library"]["parts"] == 2
+    assert run.state["stages"]["ingest"]["parsed_sources"] == 1
+    assert run.state["stages"]["ingest"]["current_location"] == "page:2"
+
+
+def test_failed_parse_progress_remains_failed_without_publishing_successful_cache(tmp_path):
+    library, source, _ = registered(tmp_path)
+    notes = []
+    def build():
+        yield {"location": "page:1", "text": PAGE_ONE}
+        raise RuntimeError("Offline failure after first page")
+    with pytest.raises(RuntimeError):
+        list(library.iter_parts(source, {"mode": "model"}, build, on_status=notes.append))
+    assert notes[-1]["status"] == "failed"
+    assert notes[-1]["parts"] == 1 and notes[-1]["usable_parts"] == 1
+    assert not any(note["status"] == "complete" for note in notes)
+    assert library.list_parses(source["id"]) == []

@@ -265,10 +265,13 @@ function positionInspector(){
  const panel=parentDocument.querySelector(".st-key-"+key),button=[...canvas.querySelectorAll(".node")].find(element=>element.dataset.node===spec.selected);
  if(!panel||!button)return;
  if(panel!==inspectorPanel){clearInspectorPosition();inspectorPanel=panel;inspectorHost=panel.closest('[data-testid="stLayoutWrapper"]');if(inspectorHost===panel)inspectorHost=null}
- panel.setAttribute("data-workflow-inspector","floating");panel.setAttribute("data-workflow-inspector-open",String(Boolean(spec.inspector.open)));inspectorHost?.setAttribute("data-workflow-inspector-host","floating");
+ // Timed stream fragments can replace nearby native controls without moving
+ // this panel. Do not emit another parent mutation for unchanged attributes:
+ // the setup-reveal bridge observes them while waiting for a committed form.
+ relationAttribute(panel,"workflowInspector","floating");relationAttribute(panel,"workflowInspectorOpen",String(Boolean(spec.inspector.open)));if(inspectorHost)relationAttribute(inspectorHost,"workflowInspectorHost","floating");
  if(inspectorNode!==spec.selected){inspectorNode=spec.selected;panel.scrollTop=0}
- if(!spec.inspector.open){panel.style.setProperty("display","none");return}
- panel.style.removeProperty("display");
+ if(!spec.inspector.open){if(panel.style.getPropertyValue("display")!=="none")panel.style.setProperty("display","none");return}
+ if(panel.style.getPropertyValue("display"))panel.style.removeProperty("display");
  const frame=window.frameElement?.getBoundingClientRect();if(!frame)return;
  const node=button.getBoundingClientRect(),viewport=view.getBoundingClientRect(),windowWidth=parentWindow.innerWidth,windowHeight=parentWindow.innerHeight;
  const leftBound=Math.max(12,frame.left+viewport.left+8),rightBound=Math.min(windowWidth-12,frame.left+viewport.right-8);
@@ -285,7 +288,7 @@ function positionInspector(){
  let y=spec.inspector.wide?topBound:Math.max(topBound,Math.min(nodeTop,windowHeight-naturalHeight-16));
  if(spec.inspector.wide){placement="editor";}
  else if(spaceRight<width&&spaceLeft<width&&nodeBottom+gap+Math.min(naturalHeight,220)<windowHeight-16){placement="below";y=Math.max(topBound,nodeBottom+gap);}
- panel.setAttribute("data-workflow-placement",placement);
+ relationAttribute(panel,"workflowPlacement",placement);
  const styles={position:"fixed",left:x+"px",top:y+"px",width:width+"px","max-height":Math.min(maxHeight,Math.max(100,windowHeight-y-16))+"px","overflow-y":"auto","overscroll-behavior":"contain","z-index":"80","--workflow-anchor-x":Math.max(12,Math.min(width-12,(nodeLeft+nodeRight)/2-x))+"px","--workflow-anchor-y":Math.max(12,Math.min(maxHeight-12,(nodeTop+nodeBottom)/2-y))+"px"};
  for(const [property,value] of Object.entries(styles))if(panel.style.getPropertyValue(property)!==value)panel.style.setProperty(property,value);
  scheduleSetupReveal();

@@ -37,7 +37,13 @@ class WorkflowSourceLibrary:
             row = {"file": source["file"], "name": source["name"], "sha256": source["sha256"],
                    **{key: receipt[key] for key in ("id", "source_id", "mode", "status", "cached",
                                                     "parts", "text_chars", "usable_parts", "requires_vision",
-                                                    "empty_parts") if key in receipt}}
+                                                    "empty_parts", "location", "parse_segment") if key in receipt}}
+            if previous is not None:
+                # Completion and failure receipts retain the last actual source
+                # position instead of erasing the user's progress context.
+                for key in ("location", "parse_segment"):
+                    if key not in row and key in previous:
+                        row[key] = previous[key]
             if previous is None:
                 rows.append(row)
             else:
@@ -45,8 +51,20 @@ class WorkflowSourceLibrary:
             summary.update(files=len(rows), hits=sum(item.get("cached") is True for item in rows),
                 misses=sum(item.get("cached") is False for item in rows),
                 parts=sum(item.get("parts", 0) for item in rows),
-                text_chars=sum(item.get("text_chars", 0) for item in rows))
-            self.save(force=False)
+                text_chars=sum(item.get("text_chars", 0) for item in rows),
+                usable_parts=sum(item.get("usable_parts", 0) for item in rows),
+                requires_vision=sum(item.get("requires_vision", 0) for item in rows),
+                empty_parts=sum(item.get("empty_parts", 0) for item in rows))
+            ingest = self.state.get("stages", {}).get("ingest")
+            if ingest is not None:
+                ingest.update(parsed_parts=summary["parts"], input_chars=summary["text_chars"],
+                    parsed_sources=sum(item.get("status") == "complete" for item in rows),
+                    cached_sources=summary["hits"], current_source=source["name"],
+                    current_location=row.get("location"), current_segment=row.get("parse_segment"))
+            # iter_parts already throttles partial receipts. A just-finished
+            # model event must not consume save's interval and hide this update
+            # until another expensive request finishes.
+            self.save(force=True)
 
     def _source_library_signature(self, mode):
         prompt_id = "workflow.document_vision" if mode == "vision" else "workflow.document_parse"

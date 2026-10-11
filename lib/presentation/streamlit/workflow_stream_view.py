@@ -65,10 +65,21 @@ def accept_receipt(event, context, selected_id, selection_serial, offer):
     return event["next_offset"]
 
 
-@st.fragment(run_every=0.1)
+@st.fragment(run_every=0.5)
 def render_stream_output(application, run_id: str, stage: str, *, reader_height=None) -> None:
     # Only this small fragment refreshes rapidly. The component keeps its text
     # nodes and appends the received suffix; it never replays a finished answer.
+    # A queued fragment tick can outlive the page that mounted it. Leaving the
+    # workflow or its task view must stop disk reads before the next app render.
+    route = st.session_state.get("nav")
+    if route is not None and route not in {
+        "任务管理", "工作管理", "自动工作流", "数据生成", "人工问答增强"
+    }:
+        return
+    if (route in {"任务管理", "工作管理"}
+            and st.session_state.get(f"task-view:{st.session_state.get('ws', 'default')}")
+            not in {None, "数据工作流"}):
+        return
     if not st.session_state.get(f"canvas-open:live-canvas:{run_id}"):
         return
     # A fast fragment may still have the previous node's arguments while its

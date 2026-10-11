@@ -32,6 +32,8 @@ SCENARIOS = (
     "delta_scroll_pause_survives_new_tokens_and_reasoning_toggle",
     "missing_delta_request_clears_cursor_and_requests_prefix_when_it_returns",
     "consumed_cursor_receipt_is_exact_and_retries_are_throttled_without_replay",
+    "empty_and_terminal_polls_update_status_without_triggering_reruns",
+    "lost_data_receipt_retries_after_idle_poll_without_losing_characters",
     "receipt_does_not_lock_selection_and_uses_the_accepted_selection_epoch",
     "empty_terminal_delta_completes_and_invalid_cursors_never_get_receipts",
     "reader_height_override_restores_default_without_touching_pinned_content",

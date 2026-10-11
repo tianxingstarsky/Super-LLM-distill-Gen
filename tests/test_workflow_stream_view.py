@@ -170,6 +170,60 @@ def test_closed_node_never_reads_or_renders_model_output():
     assert 'reads' not in ui.session_state
 
 
+@pytest.mark.parametrize('route, area', [
+    ('总览', None), ('数据管理', None), ('系统设置', None), ('输出打包', None),
+    ('任务管理', '人工增强工作'), ('任务管理', '命令管线'), ('工作管理', '运行日志'),
+])
+def test_leaving_workflow_route_or_task_view_stops_old_fragment_reads(route, area):
+    ui = _pinned_stream_app()
+    ui.session_state['ws'] = 'selected-folder'
+    ui.session_state['nav'] = '任务管理'
+    ui.session_state['task-view:selected-folder'] = '数据工作流'
+    ui.run()
+    assert not ui.exception and component_spec(ui)['selected_id'] == 'manual-1'
+    before = _saved_stream_state(ui)
+    reads = ui.session_state['reads']
+    ui.session_state['nav'] = route
+    if area is not None:
+        ui.session_state['task-view:selected-folder'] = area
+    # A queued receipt from the removed iframe must not advance its saved
+    # cursor while another page is open, or perform another file read.
+    ui.session_state['component-event'] = {
+        'context': 'fixture:sft', 'request_id': 'manual-1', 'receipt': True,
+        'selection_serial': 'manual-selection', 'next_offset': 30, 'serial': 'late-route-receipt'}
+    ui.run()
+    assert not ui.exception and not ui.get('component_instance')
+    assert ui.session_state['reads'] == reads
+    assert 'delta-reads' not in ui.session_state
+    assert _saved_stream_state(ui) == before
+
+    ui.session_state['component-event'] = None
+    ui.session_state['nav'] = '任务管理'
+    ui.session_state['task-view:selected-folder'] = '数据工作流'
+    ui.run()
+    assert not ui.exception and component_spec(ui)['selected_id'] == 'manual-1'
+    assert ui.session_state['reads'] == reads + 1
+    assert _saved_stream_state(ui) == before
+
+
+@pytest.mark.parametrize('route, area', [
+    (None, None), ('任务管理', None), ('工作管理', '数据工作流'),
+    ('自动工作流', '命令管线'), ('数据生成', '运行日志'), ('人工问答增强', '人工增强工作'),
+])
+def test_current_workflow_routes_read_streams_and_ignore_other_pages_task_view(route, area):
+    ui = _pinned_stream_app()
+    ui.session_state['ws'] = 'selected-folder'
+    if route is not None:
+        ui.session_state['nav'] = route
+    if area is not None:
+        ui.session_state['task-view:selected-folder'] = area
+    ui.run()
+    assert not ui.exception
+    assert component_spec(ui)['selected_id'] == 'manual-1'
+    assert ui.session_state['reads'] == 1
+    assert 'delta-reads' not in ui.session_state
+
+
 def test_open_node_uses_real_incremental_data_and_filters_other_nodes():
     ui = AppTest.from_string(SCRIPT)
     ui.session_state['rows'] = [row('active-1'), dict(row('other'), stage='preference', text='OTHER NODE')]

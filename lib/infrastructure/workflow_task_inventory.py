@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from lib.infrastructure.training_workflow import read_json
+from lib.domain.workflow_graph import execution_graph
 
 
 def _identity(path):
@@ -62,17 +63,36 @@ def _summary(path, identity, recipe_identity):
             _recipe_identity(recipe_path) != recipe_identity):
         raise ValueError("task_state_changed_during_read")
     sources = _source_summary(recipe)
+    scheduled = None
+    if isinstance(recipe, dict) and isinstance(recipe.get("targets"), list):
+        try:
+            scheduled, _ = execution_graph(recipe["targets"],
+                reasoning_trim=bool((recipe.get("reasoning_trim") or {}).get("enabled")),
+                qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
+                recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")))
+        except (ValueError, TypeError, AttributeError):
+            pass
+    library = state.get("source_library") or {}
+    current = next((row for row in reversed(library.get("sources") or [])
+                    if row.get("status") == "parsing"), None)
     return {**{key: state[key] for key in
                ("id", "name", "status", "created_at", "updated_at", "targets") if key in state},
             **sources,
             "production": state.get("production"),
             "qa_director_enabled": state.get("qa_director_enabled", False),
             "reasoning_trim_enabled": state.get("reasoning_trim_enabled", False),
+            "scheduled_stages": list(scheduled) if scheduled is not None else None,
+            "usage": {role: {"calls": value.get("calls")} for role, value in (state.get("usage") or {}).items()
+                      if isinstance(value, dict)},
+            "source_library": {**{key: library[key] for key in ("parts", "text_chars") if key in library},
+                               "sources": [{key: current[key] for key in ("name", "status") if key in current}]
+                                          if current else []},
             "recipe_readable": (sources["source_mode"] != "unknown" and
                                 isinstance(recipe.get("targets"), list) and
                                 all(isinstance(target, str) for target in recipe["targets"])),
             "stages": {key: {field: value for field, value in stage.items()
-                             if field in {"label", "status"}}
+                             if field in {"label", "status", "done", "total", "parsed_parts", "input_chars",
+                                          "parsed_sources", "cached_sources", "current_source"}}
                        for key, stage in state.get("stages", {}).items()},
             "events": state.get("events", [])[-3:]}
 
