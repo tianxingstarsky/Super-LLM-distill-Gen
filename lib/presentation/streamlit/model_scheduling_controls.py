@@ -9,12 +9,21 @@ from filelock import Timeout
 from lib.presentation.streamlit.i18n import UntranslatedText
 
 
-def _save_scheduling(application, backend, model, prefix):
+def _save_scheduling(application, backend, model, prefix, changed="limit"):
+    # Streamlit may clean up the sibling widget when its node/popover is no
+    # longer rendered. Save only the edited field, using the current shared
+    # policy for the other field instead of a missing or stale widget value.
+    key = prefix + ":" + changed
+    if key not in st.session_state:
+        return
     try:
+        state = application.get_model_scheduling(backend, model)
+        limit = st.session_state[key] if changed == "limit" else state["max_concurrency"]
+        wait = st.session_state[key] if changed == "wait" else state["request_queue_timeout_seconds"]
         application.save_model_scheduling(
             backend, model,
-            max_concurrency=st.session_state[prefix + ":limit"],
-            request_queue_timeout_seconds=st.session_state[prefix + ":wait"],
+            max_concurrency=limit,
+            request_queue_timeout_seconds=wait,
         )
         st.session_state.pop(prefix + ":error", None)
     except (OSError, ValueError, Timeout):
@@ -51,7 +60,7 @@ def render_model_scheduling(application, backend, model, *, prefix):
         st.number_input(
             "此模型最大并发请求", min_value=1, max_value=256,
             key=prefix + ":limit", on_change=_save_scheduling,
-            args=(application, backend, model, prefix),
+            args=(application, backend, model, prefix, "limit"),
             help="相同服务、凭据与模型共享上限，涵盖全部节点与任务。流水线并发另行控制每个任务的处理量。降低上限不会截断正在输出的请求。",
         )
     with options_column:
@@ -59,7 +68,7 @@ def render_model_scheduling(application, backend, model, *, prefix):
             st.number_input(
                 "最长排队等待（秒）", min_value=1, max_value=3600,
                 key=prefix + ":wait", on_change=_save_scheduling,
-                args=(application, backend, model, prefix),
+                args=(application, backend, model, prefix, "wait"),
                 help="超时会保留断点并报告原因；排队和退避期间可响应停止。此值不限制已经开始的输出时长。",
             )
     st.caption(scheduling_caption(state, st.session_state.get("ui_language", "zh")))
