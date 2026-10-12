@@ -16,6 +16,16 @@ from lib.domain.review_repair import validate_review_repair, validate_repair_inp
 from lib.domain.workflow_graph import SOURCE_QA_TARGETS, uses_shared_source_cleaning
 
 
+def validate_generation_review(targets, review_repair, repair_inputs):
+    """Check actual starts after creation validation, not imported review blueprints."""
+    review_config = validate_review_repair(review_repair)
+    if ("rlaif" in targets and not repair_inputs
+            and review_config is not None and review_config["mode"] == "human"):
+        # New preference candidates have no AI evidence until automatic review.
+        # Existing repair inputs retain their saved evidence and per-row checks.
+        raise ValueError("rlaif_generation_requires_ai_review")
+
+
 def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       chunk_chars=2000, tasks=10, sample_count=None, concurrency=1,
                       batch_size=100, node_models=None, conversation_turns=3, brief="",

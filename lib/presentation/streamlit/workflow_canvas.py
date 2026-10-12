@@ -8,11 +8,12 @@ import streamlit.components.v1 as components
 from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES, execution_graph, sft_uses_cot_output
 from lib.domain.workflow_scale import node_roles
 from lib.presentation.streamlit.i18n import translate_label
+from lib.presentation.streamlit.workflow_preference_details import preference_stage_label, preference_route
 
 _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__).with_name("workflow_canvas_frontend")))
 
 
-def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None):
+def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None, targets=None):
     """Name the dataset stage; shared corpus reuse does not erase CPT."""
     if node == "cot":
         settings = (node_generation or {}).get("cot")
@@ -22,6 +23,8 @@ def node_display_label(node, labels, node_generation=None, *, source_cleaning=Fa
         return "CPT 语料处理"
     if node == "gsm8k":
         return "模板算术题"
+    if node == "preference" and targets is not None:
+        return preference_stage_label(targets)
     return labels.get(node, "评分与修正" if node == "review" else node)
 
 
@@ -43,7 +46,9 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         "review": "在同一节点评分、修正并重新评分；通过后才进入打包，修正不会回到 SFT 生成。",
         "package": "检查结构、去重并导出训练文件、报告与清单。",
     }
-    if node == "director" and (recipe_version or 0) >= 20:
+    if node == "preference":
+        description = preference_route(node, review_repair)
+    elif node == "director" and (recipe_version or 0) >= 20:
         description = "指导员设计角色与沟通目标；有线索提问直接发出，无线索提问交给独立模型。回答模型在 SFT / 多轮节点配置。"
     elif node == "sft" and (recipe_version or 0) >= 20:
         description = "接收独立问题与资料记忆后生成回答；不同时编造问题和答案。"
@@ -283,7 +288,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                            review_repair=review_repair, recipe_version=recipe_version, source_cleaning=shared_cleaning,
                            targets=targets, cpt_review_policy_version=0 if repair_only else cpt_review_policy_version))
         data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation,
-                         source_cleaning=shared_cleaning, recipe_version=recipe_version), language), "glyph": glyphs.get(key, "✓"),
+                         source_cleaning=shared_cleaning, recipe_version=recipe_version, targets=targets), language), "glyph": glyphs.get(key, "✓"),
                      "x": positions[key][0], "y": positions[key][1], "status": status,
                      "description": description,
                      "subtitle": subtitle, "models": models, "percent": min(100, done * 100 / total) if total else

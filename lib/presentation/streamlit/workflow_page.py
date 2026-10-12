@@ -20,6 +20,9 @@ from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.workflow_run_styles import workflow_run_styles
 from lib.presentation.streamlit.workflow_stream_view import render_stream_output
 from lib.presentation.streamlit.workflow_live_artifacts_view import render_live_artifacts
+from lib.presentation.streamlit.workflow_preference_details import (
+    preference_details_html, preference_route, selected_preferences,
+)
 from lib.presentation.streamlit.workflow_workbench_style import workbench_style
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_delivery import has_deliverable_results
@@ -69,6 +72,7 @@ PRESETS = {
     "Agent 轨迹": ("sft", "agent"),
     "偏好对齐": ("sft", "orpo", "dpo", "rlaif"),
     "ORPO 数据生成": ("orpo",),
+    "RLAIF 反馈数据": ("rlaif",),
     "数学推理": ("sft", "cot"),
     "自选目标": (),
 }
@@ -163,6 +167,7 @@ def _workflow_error(error) -> str:
         "invalid_arithmetic_ordinal": "算术题目断点编号无效。请保留任务文件，检查断点记录后重试。",
         "invalid_arithmetic_theme": "算术题目主题格式无效。请在新任务中填写文字主题，或留空使用默认主题。",
         "invalid_arithmetic_history_source": "历史算术来源标识无效。请保留历史文件，检查任务记录后重试。",
+        "rlaif_generation_requires_ai_review": "RLAIF 需要 AI 评分与评语。请在评分与修正节点选择自动模式；人工审核可在生成后进行。",
         "manual_rlaif_change_requires_ai_review": "修改后的 RLAIF 候选需要 AI 重新评分，不能沿用原来的 AI 标签。请切换自动评分与修正。",
         "manual_review_required": "等待人工评分与修正。",
         "manual_review_score_required": "请填写人工评分，再提交内容修正。",
@@ -418,6 +423,7 @@ def _stage_configuration(key, recipe, state):
             details["失败样本"] = "单独保存原因和执行证据，不混入训练样本"
         elif key == "preference":
             details["比较目标"] = [target.upper() for target in targets if target in {"dpo", "orpo", "rlaif"}]
+            details["导出数据流"] = preference_route(key, recipe.get("review_repair"))
         if key in {"sft", "cot"}:
             generation = (recipe.get("node_generation") or {}).get(key)
             if generation:
@@ -552,7 +558,7 @@ GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": 
                 "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "review": "评分与修正", "jev": "JEV 评分", "package": "输出打包"}
 
 
-def _missing_model_role_summary(issues, language, node_generation=None, *, source_cleaning=False):
+def _missing_model_role_summary(issues, language, node_generation=None, *, source_cleaning=False, targets=None):
     pending_roles = {}
     for node, role in issues:
         pending_roles.setdefault(node, []).append(role)
@@ -560,7 +566,7 @@ def _missing_model_role_summary(issues, language, node_generation=None, *, sourc
     descriptions = []
     for node, roles in pending_roles.items():
         node_label = translate_label(node_display_label(node, GRAPH_LABELS, node_generation,
-            source_cleaning=source_cleaning, recipe_version=19 if source_cleaning else None), language)
+            source_cleaning=source_cleaning, recipe_version=19 if source_cleaning else None, targets=targets), language)
         missing = [translate_label(("JEV 评分模型" if node in {"review", "jev"} else "质量评审模型" if node == "package"
                                     else "过程核对模型") if role == "jev" else ("评分与修正模型" if node == "review" else "对话指导员模型" if node == "director" and role == "generation" else role_labels[role]), language) for role in roles]
         if language == "en":
@@ -583,15 +589,15 @@ def _planned_flow_html(targets, nodes: tuple[str, ...], edges: tuple[tuple[str, 
             + intermediate + '</div>')
 
 
-def _planned_dependencies_html(edges: tuple[tuple[str, str], ...], node_generation=None, *, source_cleaning=False) -> str:
+def _planned_dependencies_html(edges: tuple[tuple[str, str], ...], node_generation=None, *, source_cleaning=False, targets=None) -> str:
     """Render only the data-dependency edges supplied by execution_graph."""
     rows = []
     for origin, destination in edges:
         rows.append(
             f'<div class="df-wb-plan-edge" data-from="{origin}" data-to="{destination}">'
-            f'<span>{html.escape(node_display_label(origin, GRAPH_LABELS, node_generation, source_cleaning=source_cleaning, recipe_version=19))}</span>'
+            f'<span>{html.escape(node_display_label(origin, GRAPH_LABELS, node_generation, source_cleaning=source_cleaning, recipe_version=19, targets=targets))}</span>'
             '<i aria-hidden="true">→</i>'
-            f'<span>{html.escape(node_display_label(destination, GRAPH_LABELS, node_generation, source_cleaning=source_cleaning, recipe_version=19))}</span></div>')
+            f'<span>{html.escape(node_display_label(destination, GRAPH_LABELS, node_generation, source_cleaning=source_cleaning, recipe_version=19, targets=targets))}</span></div>')
     return ('<div class="df-wb-plan-detail">'
             '<p>箭头表示本次目标的真实数据依赖；各阶段仍按顺序执行。</p>'
             '<div class="df-wb-plan-edges">' + ''.join(rows) + '</div></div>')
@@ -727,7 +733,8 @@ def _run_activity(state: dict, recipe: dict | None = None, *, active=True) -> di
     if role is None and recipe is not None:
         role = next(iter((recipe.get("node_models") or {}).get(stage, {}).values()), None)
     return {"stage": stage, "title": node_display_label(stage, GRAPH_LABELS,
-                source_cleaning=bool((recipe or {}).get("source_cleaning")), recipe_version=(recipe or {}).get("version")), "details": details,
+                source_cleaning=bool((recipe or {}).get("source_cleaning")), recipe_version=(recipe or {}).get("version"),
+                targets=(recipe or {}).get("targets")), "details": details,
             "source": source, "model": str((role or {}).get("model") or ""),
             "calls": calls, "request_state": request_state, "hint": hint}
 
@@ -968,8 +975,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         if selected_stage not in active_stages:
             selected_status, done, total, percent = "skipped", 0, 0, 0
         selected_label = (node_display_label(selected_stage, GRAPH_LABELS, recipe.get("node_generation"),
-                          source_cleaning=bool(recipe.get("source_cleaning")), recipe_version=recipe.get("version"))
-                          if selected_stage in {"cot", "cpt"}
+                          source_cleaning=bool(recipe.get("source_cleaning")), recipe_version=recipe.get("version"), targets=recipe["targets"])
+                          if selected_stage in {"cot", "cpt", "preference"}
                           else str(selected_metrics.get("label", selected_stage)))
         if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
             passed, quarantined = done, max(0, total - done)
@@ -1023,6 +1030,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             route = reasoning_route_description(selected_stage, recipe["targets"], recipe.get("version", 0))
             if route:
                 st.caption(route)
+            if selected_stage in {"preference", "review", "package"} and selected_preferences(recipe["targets"]):
+                st.caption(preference_route(selected_stage, recipe.get("review_repair")))
             if selected_metrics.get("error"):
                 st.error(f"节点错误：{_workflow_error(selected_metrics['error'])}")
             st.html('<div class="df-run-section df-run-reader-heading"><div><strong>实时输出</strong></div></div>')
@@ -1076,6 +1085,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             st.html('<div class="df-run-section df-run-recipe-heading"><div><strong>本次节点配方</strong>'
                     '<small>本次运行使用的模型、参数与提示词；修改时请复制为新任务。</small></div></div>')
             render_run_scheduling(backend_application, recipe.get("node_models", {}).get(selected_stage, {}))
+            if selected_stage in {"preference", "package"} and selected_preferences(recipe["targets"]):
+                st.html(preference_details_html(recipe["targets"], language=st.session_state.get("ui_language", "zh")))
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
             render_run_node_prompts(selected_stage, recipe, run_id)
             if selected_stage == "review" and (recipe.get("review_repair") or {}).get("mode") == "human":
@@ -1582,7 +1593,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
-                st.html(_planned_dependencies_html(graph_edges, generation_snapshot(ws, graph_nodes), source_cleaning=source_cleaning))
+                st.html(_planned_dependencies_html(graph_edges, generation_snapshot(ws, graph_nodes), source_cleaning=source_cleaning, targets=targets))
                 if "sft" in graph_nodes and "sft" not in targets:
                     st.caption("仅用于下游目标的 SFT 中间候选不会单独导出。")
         if "agent" in targets:
@@ -1664,7 +1675,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
                 with title:
                     section_heading(node_display_label(selected_node, GRAPH_LABELS, node_generation,
-                        source_cleaning=source_cleaning, recipe_version=draft_recipe_version), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
+                        source_cleaning=source_cleaning, recipe_version=draft_recipe_version, targets=targets), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
                 with expand:
                     wide_key = f"canvas-wide:setup-canvas:{ws}"
                     st.button("收窄编辑" if st.session_state.get(wide_key) else "展开编辑",
@@ -1684,8 +1695,19 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             settings_tab, prompts_tab = (_setup_node_tabs(ws, selected_node) if has_prompts
                                         else (nullcontext(), nullcontext()))
             with settings_tab:
+                if selected_node in {"preference", "review", "package"} and selected_preferences(targets):
+                    st.caption(preference_route(selected_node, review_repair))
+                    if selected_node != "review":
+                        st.html(preference_details_html(targets, language=st.session_state.get("ui_language", "zh")))
+                    if selected_node == "preference":
+                        st.button("配置评分与修正 →", key=f"preference-open-review:{ws}", width="stretch",
+                                  on_click=_select_setup_node, args=(selection_key, "review"))
+                    if selected_node == "package":
+                        st.caption("这里生成训练数据；ORPO 训练与 RLAIF 强化学习训练在外部完成。")
                 if selected_node == "review":
                     review_repair = render_review_repair_settings(ws, package_review, save_field=_save_draft_value)
+                    if "rlaif" in targets:
+                        st.caption("RLAIF 的 AI 评分、评语与评价维度在这里生成，并随结果保存。")
                     if review_repair["mode"] == "auto":
                         render_package_review_toggle(ws, save_field=_save_draft_value)
                         package_review = package_review_snapshot(ws)
@@ -1735,11 +1757,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                     save_field=_save_draft_value, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                     qa_director=qa_director, prompt_library=prompt_library)
         with workbench:
+            if "rlaif" in targets and review_repair.get("mode") == "human":
+                _render_setup_issue(ws, "review", _workflow_error("rlaif_generation_requires_ai_review"),
+                                    kind="rlaif-feedback", full_label=True)
             if model_issues:
                 for node in dict.fromkeys(node for node, _ in model_issues):
                     description = _missing_model_role_summary(
                         [(issue_node, role) for issue_node, role in model_issues if issue_node == node],
-                        st.session_state.get("ui_language", "zh"), node_generation, source_cleaning=source_cleaning)
+                        st.session_state.get("ui_language", "zh"), node_generation, source_cleaning=source_cleaning, targets=targets)
                     _render_setup_issue(ws, node, description, kind="model", full_label=True)
     source_previews = st.container(key="workbench-source-previews")
     setup_col = st.container(key="workbench-plan-entry")
@@ -2071,6 +2096,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.caption("先选择至少一类训练目标。")
                 submitted = st.button("启动人工增强窗口" if human_enabled else "开始自动生成", type="primary", disabled=source_missing or bool(brief_issue)
                                       or human_mode_unavailable
+                                      or ("rlaif" in targets and review_repair.get("mode") == "human")
                                       or agent_source_missing or source_limit_exceeded or source_size_exceeded
                                       or source_unavailable or not targets or bool(model_issues)
                                       or agent_unavailable or web_unavailable

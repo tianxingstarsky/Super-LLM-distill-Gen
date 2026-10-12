@@ -35,7 +35,7 @@ from lib.domain.corpus_quality import (CorpusClusterSizes, CorpusNearDuplicateIn
                                        inspect_corpus, summarize_corpus_sources)
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_candidate
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
-from lib.domain.workflow_creation import validate_creation
+from lib.domain.workflow_creation import validate_creation, validate_generation_review
 from lib.domain.workflow_graph import SOURCE_CLEANING_RECIPE_VERSION, uses_shared_source_cleaning
 from lib.domain.document_parser import validate_document_parser
 from lib.domain.web_research import validate_web_research
@@ -303,6 +303,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         review_repair=review_repair, repair_inputs=repair_inputs)
     review_repair = validate_review_repair(review_repair)
     repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
+    validate_generation_review(targets, review_repair, repair_inputs)
     cpt_only = targets == ["cpt"] and not repair_inputs
     production = validate_production(production, targets)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)

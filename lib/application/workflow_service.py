@@ -5,7 +5,7 @@ from typing import Any
 
 from lib.application.workflow_ports import WorkflowDriver
 from lib.domain.workflow_targets import TARGETS
-from lib.domain.workflow_creation import validate_creation
+from lib.domain.workflow_creation import validate_creation, validate_generation_review
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.reasoning_trim import validate_reasoning_trim
@@ -28,8 +28,9 @@ class WorkflowApplication:
             "batch_size", "node_models", "conversation_turns", "brief",
             "agent_replay_mode", "evaluation_sources", "web_research", "sources",
             "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director", "production",
-            "cpt_processing") if key in recipe}
+            "cpt_processing", "review_repair", "repair_inputs") if key in recipe}
         targets, node_models = validate_creation(**fields)
+        validate_generation_review(targets, recipe.get("review_repair"), recipe.get("repair_inputs"))
         research = validate_web_research(recipe.get("web_research"), brief=recipe.get("brief", ""),
                                          sources=recipe.get("sources", ()), targets=targets)
         return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models,

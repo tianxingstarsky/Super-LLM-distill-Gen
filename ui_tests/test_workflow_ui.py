@@ -4,6 +4,7 @@ import hashlib
 import html
 import json
 import re
+import pytest
 
 from streamlit.testing.v1 import AppTest
 
@@ -32,6 +33,48 @@ def setup_workspace(tmp_path, monkeypatch):
     source.write_text("操作前先断电，再检查线路。", encoding="utf-8")
     name = ws.DEFAULT
     return ws, name, source
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_preference_outputs_and_rlaif_review_fix_are_on_actual_nodes(tmp_path, monkeypatch, language):
+    from lib.application.backend_service import BackendApplication
+    from lib.presentation.streamlit.i18n import translate_label
+
+    _, workspace, _ = setup_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(BackendApplication, "list_backends", lambda self: {"backends": []})
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = workspace
+    app.session_state["nav"] = "自动工作流"
+    app.session_state["ui_language"] = language
+    app.run()
+    targets_key = next(widget.key for widget in app.pills if widget.key.startswith("workflow-targets:"))
+    app.pills(key=targets_key).set_value(["orpo", "rlaif"]).run()
+    app.session_state[f"setup-canvas:{workspace}"] = {"node": "preference", "serial": "preferences"}
+    app.run()
+    assert not app.exception
+    nodes = canvas(app, f"setup-canvas:{workspace}")["nodes"]
+    assert next(node for node in nodes if node["id"] == "preference")["label"] == "RLAIF · ORPO"
+    output = next(str(item.value) for item in app.get("html") if 'class="df-preference-outputs"' in str(item.value))
+    assert "orpo.jsonl" in output and "rlaif.jsonl" in output and "dpo.jsonl" not in output
+    if language == "en":
+        assert not re.search(r"[\u4e00-\u9fff]", output)
+    app.button(key=f"preference-open-review:{workspace}").click().run()
+    assert not app.exception
+    assert canvas(app, f"setup-canvas:{workspace}")["selected"] == "review"
+    mode_key = f"workflow-review-repair-mode:{workspace}"
+    app.segmented_control(key=mode_key).set_value("human").run()
+    fix_key = f"workflow-config-fix:{workspace}:rlaif-feedback:review"
+    assert app.button(key=fix_key).label == translate_label(
+        "RLAIF 需要 AI 评分与评语。请在评分与修正节点选择自动模式；人工审核可在生成后进行。", language)
+    assert app.button(key=f"workflow-create:{workspace}").disabled
+    app.button(key=f"workflow-close-config:{workspace}").click().run()
+    app.button(key=fix_key).click().run()
+    assert not app.exception
+    assert app.session_state[f"canvas-open:setup-canvas:{workspace}"]
+    assert app.session_state[f"workflow-setup-node:{workspace}"] == "review"
+    app.segmented_control(key=mode_key).set_value("auto").run()
+    assert not app.exception
+    assert not any(button.key == fix_key for button in app.button)
 
 
 def test_workbench_keeps_flow_and_common_generation_controls_visible(tmp_path, monkeypatch):
@@ -309,7 +352,7 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
             widget.set_value(8)
         elif widget.label == "每批候选数":
             widget.set_value(200)
-    next(widget for widget in app.number_input if widget.label == "每段对话轮数").set_value(5)
+    next(widget for widget in app.number_input if widget.label == "每段最多轮数").set_value(5)
     app.run()
     # This test covers local corpus processing and the multi-turn model node.
     app.session_state[f"setup-canvas:{name}"] = {"node": "ingest", "serial": "choose-native-parser"}
@@ -333,7 +376,7 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     app.run()
     assert not app.exception
     values = {widget.label: widget.value for widget in app.number_input}
-    assert values["期望样本量（非必达）"] == 50000
+    assert values["样本量上限"] == 50000
     assert values["流水线并发"] == 8 and values["每批候选数"] == 200
     next(b for b in app.button if b.label == "开始自动生成").click().run()
     assert not app.exception
@@ -347,7 +390,8 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     assert not any(item.label == "开始自动生成" for item in app.button)
     from lib.workflow import read_json, run_path
     recipe = read_json(run_path(ws.out(name), run_id) / "recipe.json")
-    assert set(recipe["node_models"]) == {"multiturn", "review"}
+    assert set(recipe["node_models"]) == {"director", "multiturn", "review"}
+    assert set(recipe["node_models"]["director"]) == {"generation", "question"}
     assert set(recipe["node_models"]["multiturn"]) == {"generation"}
     assert set(recipe["node_models"]["review"]) == {"generation", "jev"}
     assert recipe["sample_count"] == 50000 and recipe["concurrency"] == 8 and recipe["batch_size"] == 200
@@ -440,7 +484,7 @@ def test_english_workflow_controls_and_canvas_are_localized(tmp_path, monkeypatc
     app.session_state["ui_language"] = "en"
     app.run()
     assert not app.exception
-    assert any(widget.label == "Expected samples (not required)" for widget in app.number_input)
+    assert any(widget.label == "Sample limit" for widget in app.number_input)
     target_picker = app.pills(key=f"workflow-targets:{workspace}:自动推荐")
     assert len(target_picker.options) == 9
     assert not re.search(r"[\u4e00-\u9fff]", target_picker.label + " ".join(target_picker.options))
@@ -536,8 +580,8 @@ def test_expanded_english_task_view_uses_full_canvas_and_localized_quality(tmp_p
     markup = "".join(str(node.value) for node in app.get("html"))
     # The live preview must retain the uploaded document's language. Exclude
     # this exact source body in the user-content container, while checking every
-    # UI label. The latest review-stage preview uses the artifact body renderer.
-    source_body = '<div class="df-artifact-body">' + html.escape(source.read_text(encoding="utf-8")) + '</div>'
+    # UI label. CPT bypasses post-generation review and keeps its source preview.
+    source_body = '<pre data-user-content>' + html.escape(source.read_text(encoding="utf-8")) + '</pre>'
     assert source_body in markup
     markup = markup.replace(source_body, "")
     visible = re.sub(r"<style\b[^>]*>.*?</style>", "", markup, flags=re.S)
@@ -554,10 +598,12 @@ def test_target_plan_preview_follows_current_graph_edges(tmp_path, monkeypatch):
     assert not app.exception
 
     def assert_preview(targets, *, source_cleaning=True):
-        nodes, edges = execution_graph(targets, recipe_version=19,
-                                       source_cleaning=source_cleaning, review_repair={"mode": "auto"})
+        nodes, edges = execution_graph(targets, recipe_version=20, qa_director={"enabled": True},
+                                       source_cleaning=source_cleaning, review_repair={"mode": "auto"},
+                                       arithmetic_seed_protocol_version=1, cpt_review_policy_version=1)
         if source_cleaning:
-            assert ("ingest", "cpt") in edges and ("cpt", "sft") in edges
+            assert ("ingest", "cpt") in edges and ("cpt", "director") in edges
+            assert ("director", "sft") in edges
             assert ("ingest", "sft") not in edges
         else:
             assert "cpt" not in nodes

@@ -496,25 +496,32 @@ def test_math_expression_checker_rejects_executable_or_unbounded_input():
 
 
 def test_math_step_mismatch_is_quarantined_before_export(tmp_path, monkeypatch):
-    from lib.infrastructure import training_workflow
-    original = training_workflow.build_gsm8k
+    from lib.domain.math_tasks import validate_gsm8k
+    from lib.infrastructure import workflow_arithmetic
+    original = workflow_arithmetic.registered_arithmetic_sample
+    injected = []
 
     def mismatched(*args, **kwargs):
         sample = original(*args, **kwargs)
+        assert validate_gsm8k(sample)
         first = sample["_steps"][0]
+        original_answer = sample["answer"]
         sample["answer"] = sample["answer"].replace(
             f"<<{first['expression']}={first['result']}>>",
             f"<<0 + {first['result']}={first['result']}>>")
+        assert sample["answer"] != original_answer and not validate_gsm8k(sample)
+        injected.append(sample)
         return sample
 
-    monkeypatch.setattr(training_workflow, "build_gsm8k", mismatched)
+    monkeypatch.setattr(workflow_arithmetic, "registered_arithmetic_sample", mismatched)
     out, rid, _ = make_run(tmp_path, targets=["gsm8k"], tasks=4)
     state = execute(out, rid)
+    assert len(injected) == 4
     assert state["status"] == "needs_attention"
     manifest = verify_artifacts(run_path(out, rid))
     assert manifest["counts"]["gsm8k"] == 0
     report = read_json(run_path(out, rid) / "artifacts/quality.json")
-    assert report["targets"]["gsm8k"]["reasons"]["gsm8k_arithmetic_verification_failed"] > 0
+    assert report["targets"]["gsm8k"]["reasons"]["gsm8k_arithmetic_verification_failed"] == len(injected)
 
 
 def test_package_rechecks_persisted_math_step_evidence(tmp_path):

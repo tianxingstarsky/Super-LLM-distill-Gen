@@ -36,6 +36,41 @@ def test_domain_defaults_match_existing_creation_contract():
     assert validate_creation() == (['cpt', 'sft', 'dpo'], {})
 
 
+@pytest.mark.parametrize('targets', [['rlaif'], ['sft', 'orpo', 'rlaif']])
+def test_new_rlaif_with_manual_review_is_rejected_before_storage(targets):
+    driver = Mock()
+    with pytest.raises(ValueError, match='^rlaif_generation_requires_ai_review$'):
+        WorkflowApplication(driver).create_run(targets=targets, review_repair={'mode': 'human'})
+    driver.create.assert_not_called()
+
+
+@pytest.mark.parametrize('targets,review', [
+    (['rlaif'], {'mode': 'auto'}), (['rlaif'], None),
+    (['dpo', 'orpo'], {'mode': 'human'}),
+])
+def test_rlaif_generation_guard_preserves_other_supported_review_routes(targets, review):
+    driver = Mock()
+    WorkflowApplication(driver).create_run(targets=targets, review_repair=review)
+    assert driver.create.call_args.kwargs['targets'] == targets
+    assert driver.create.call_args.kwargs['review_repair'] == review
+
+
+def test_rlaif_review_blueprint_remains_valid_without_starting_generation():
+    # Human sessions import existing result recipes without their repair rows.
+    assert validate_creation(targets=['rlaif'], review_repair={'mode': 'human'}) == (['rlaif'], {})
+
+
+def test_direct_engine_rejects_new_manual_rlaif_before_source_reads(tmp_path, monkeypatch):
+    from lib.infrastructure import training_workflow as engine
+    catalog = Mock(side_effect=AssertionError('reference catalog must not be read'))
+    monkeypatch.setattr(engine, 'snapshot_released_corpus', catalog)
+    with pytest.raises(ValueError, match='^rlaif_generation_requires_ai_review$'):
+        engine.create_run(tmp_path, targets=['rlaif'], review_repair={'mode': 'human'},
+                          sources=[tmp_path / 'missing.txt'])
+    catalog.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize('targets', [None, 7, True, 'sft', b'sft', {'sft': True}, [['sft']], [None]])
 def test_malformed_target_collection_is_a_configuration_error(targets):
     driver = Mock()
