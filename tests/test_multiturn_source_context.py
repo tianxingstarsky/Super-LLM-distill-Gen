@@ -5,6 +5,7 @@ import json
 import pytest
 
 from lib.infrastructure import training_workflow as engine
+from tests.test_workflow_qa_director_engine import request_data, source_materials
 
 
 ANCHOR = "BluePump inspection begins by switching off power and closing the inlet valve."
@@ -24,7 +25,10 @@ class Generator:
         self.expect_pack, self.calls, self.usage = expect_pack, [], {"calls": 0}
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
+        materials = source_materials(messages)
+        if materials:
+            data["teacher_context_pack"] = [{"materials": materials}]
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         if self.expect_pack:
@@ -38,7 +42,10 @@ class Generator:
                 "dialogue_state": {"progress": "Restart steps have been explained.",
                     "shared_understanding": [data["dialogue_messages"][1]["content"]],
                     "open_issues": ["Complete the inspection record."]}})
-        assert data["task"] == ANCHOR  # precise primary anchor remains intact
+        if self.expect_pack:
+            assert "task" not in data  # source facts occur only in the memory tool
+        else:
+            assert data["task"] == ANCHOR
         turn = sum(message["role"] == "user" for message in data["messages"])
         return json.dumps({"answer": "Switch off power, close the inlet, then open the outlet before restart."
             if turn == 1 else "Record the outlet pressure after restart.",
@@ -52,7 +59,10 @@ class Reviewer:
         self.expect_pack, self.calls, self.usage = expect_pack, [], {"calls": 0}
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = request_data(messages)
+        materials = source_materials(messages)
+        if materials:
+            data["teacher_context_pack"] = [{"materials": materials}]
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         if data.get("learner_context_only"):
@@ -62,7 +72,7 @@ class Reviewer:
             return json.dumps({"keep": True, "adherence": 5, "reason": "Actual messages contain required context."})
         if self.expect_pack:
             assert NEIGHBOR in [item["text"] for item in data["teacher_context_pack"][0]["materials"]]
-            assert data["context"]["task"] == ANCHOR
+            assert "task" not in data["context"]
         else:
             assert "teacher_context_pack" not in data
         return json.dumps({"keep": True, "grounded": True, "reasoning_valid": True, "correctness": 5,

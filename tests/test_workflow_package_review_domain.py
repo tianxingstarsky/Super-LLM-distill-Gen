@@ -132,7 +132,7 @@ def test_package_review_creation_draft_is_bounded_and_literal():
             validate_creation_draft({key: value})
 
 
-def test_package_node_pins_endpoint_prices_and_uses_shared_budget(tmp_path, monkeypatch):
+def test_package_node_pins_endpoint_and_model_without_enforcing_legacy_local_budget(tmp_path, monkeypatch):
     from lib import llm_client
     from lib.infrastructure.training_workflow import Workflow, create_run, read_json, run_path
 
@@ -169,5 +169,7 @@ def test_package_node_pins_endpoint_prices_and_uses_shared_budget(tmp_path, monk
     assert constructed[0]["model"] == "review-model"
     assert constructed[0]["api_format"] == "responses"
     assert constructed[0]["context_window_tokens"] == 131072
-    assert constructed[0]["budget"].limit == 20
+    assert constructed[0]["budget"] is None
+    assert constructed[0]["base_url"] == entry["base_url"]
+    assert recipe["node_models"]["package"]["jev"] == bindings["package"]["jev"]
     assert "package.jev" in workflow.state["models"]

@@ -433,7 +433,15 @@ class WorkflowProduction:
         attempted = 0
         for path in sorted(directory.glob("round-*/receipt.json")):
             receipt = json.loads(path.read_text(encoding="utf-8"))
-            if receipt.get("round") != len(receipts) + 1:
+            targets = set(self.recipe["targets"])
+            if (not isinstance(receipt, dict) or type(receipt.get("round")) is not int
+                    or receipt["round"] != len(receipts) + 1
+                    or any(not isinstance(receipt.get(key), dict) for key in ("rows", "eligible", "attempts", "sha256"))
+                    or set(receipt["rows"]) != targets or set(receipt["eligible"]) != targets
+                    or set(receipt["attempts"]) - targets
+                    or type(receipt.get("attempted")) is not int or receipt["attempted"] < 0
+                    or any(type(count) is not int or count < 0
+                           for key in ("rows", "eligible", "attempts") for count in receipt[key].values())):
                 raise ValueError("production_round_integrity_error")
             for target in receipt["rows"]:
                 _production_collection_file(directory, receipt, target)
@@ -451,6 +459,25 @@ class WorkflowProduction:
                     raise ValueError("production_round_integrity_error")
             elif "planning.json" in receipt["sha256"]:
                 raise ValueError("production_round_integrity_error")
+            # Hashes protect the selected files, not the separately stored
+            # counters. Rebuild counts from those files before allowing a
+            # resumed run to use them for completion or saturation decisions.
+            file_assessments = {}
+            for target, expected_rows in receipt["rows"].items():
+                rows = eligible = assessed = unassessed = 0
+                selected_file = _production_collection_file(directory, receipt, target)
+                for row in WorkflowRows(selected_file, expected_rows):
+                    if not isinstance(row, dict):
+                        raise ValueError("production_round_integrity_error")
+                    rows += 1
+                    eligible += int(row.get("status") == "eligible")
+                    if evaluated_quality_stop(self.recipe["production"]):
+                        valid = _quality_assessment_valid(row)
+                        assessed += int(valid)
+                        unassessed += int(not valid)
+                if rows != expected_rows or eligible != receipt["eligible"][target]:
+                    raise ValueError("production_round_integrity_error")
+                file_assessments[target] = assessed, unassessed
             if evaluated_quality_stop(self.recipe["production"]):
                 assessments = receipt.get("quality_assessments")
                 if not isinstance(assessments, dict) or set(assessments) != set(receipt["attempts"]):
@@ -460,12 +487,7 @@ class WorkflowProduction:
                             or type(saved.get("unassessed")) is not int
                             or type(saved.get("valid_for_saturation")) is not bool):
                         raise ValueError("production_round_integrity_error")
-                    assessed = unassessed = 0
-                    selected_file = _production_collection_file(directory, receipt, target)
-                    for row in WorkflowRows(selected_file, receipt["rows"][target]):
-                        valid = _quality_assessment_valid(row)
-                        assessed += int(valid)
-                        unassessed += int(not valid)
+                    assessed, unassessed = file_assessments[target]
                     expected = {"assessed": assessed, "unassessed": unassessed}
                     if "upstream_stage" in saved:
                         source_file = "sft.upstream-quality.jsonl"
@@ -629,7 +651,7 @@ class WorkflowProduction:
             collections["gsm8k"] = self.stage_items("gsm8k", generated, self.gsm8k)
         if cot_updates_sft(self.recipe):
             self.finalize_reasoning_outputs(collections, delivery_targets=selected)
-        if evaluated_quality_stop(self.recipe["production"]) and selected & (PREFERENCE_TARGETS | {"cot"}):
+        if evaluated_quality_stop(self.recipe.get("production") or {}) and selected & (PREFERENCE_TARGETS | {"cot"}):
             blocked = RowSpool(self._production_destination.parent / "sft.upstream-quality.jsonl")
             assessed = unassessed = 0
             for row in collections["sft"]:

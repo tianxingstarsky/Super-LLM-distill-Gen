@@ -30,7 +30,8 @@ class Generator:
         self.calls.append(messages)
         self.usage["calls"] += 1
         instruction = messages[0]["content"]
-        data = json.loads(messages[1]["content"])
+        # Read the task after any source-memory tool exchange.
+        data = json.loads(messages[-1]["content"])
         if "规划互不重复" in instruction:
             return json.dumps({"tasks": [f"设备维护培训任务 {i}" for i in range(data["count"])]})
         if "自然且可回答的用户提问" in instruction:

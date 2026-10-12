@@ -182,7 +182,8 @@ class SourceLibrary:
         except (KeyError, TypeError, json.JSONDecodeError) as error:
             raise ValueError("source_library_integrity_error") from error
 
-    def iter_parts(self, source, signature, build, *, valid=None, check_cancel=None, on_status=None):
+    def iter_parts(self, source, signature, build, *, valid=None, check_cancel=None, on_status=None,
+                   cached_valid=None):
         """Stream all parts; closing or failing the producer never publishes a hit."""
         key = self.parse_id(source, signature)
         folder = self.path / "parses" / source["id"] / key
@@ -192,6 +193,19 @@ class SourceLibrary:
                 check_cancel()
             self.source_path(source["id"])
             cached = self._read_manifest(folder, source, signature)
+            if cached is not None and cached_valid is not None:
+                # A stricter consumer can retire only obsolete invalid results
+                # while preserving good expensive readings under the same key.
+                # Verify before yielding anything: a partial cache hit cannot
+                # hide the later page that must be rebuilt.
+                with (folder / "parts.jsonl").open(encoding="utf-8") as handle:
+                    for line in handle:
+                        if check_cancel:
+                            check_cancel()
+                        if not cached_valid(json.loads(line)):
+                            cached = None
+                            (folder / "parse.json").unlink()
+                            break
             if cached is not None:
                 if on_status:
                     on_status({**cached, "cached": True})
@@ -287,7 +301,7 @@ class SourceLibrary:
             finally:
                 pending.unlink(missing_ok=True)
 
-    def cached_value(self, source, signature, key, action, *, valid):
+    def cached_value(self, source, signature, key, action, *, valid, refresh_invalid=False):
         """Save successful individual model readings, including across restarts."""
         parse_key = self.parse_id(source, signature)
         value_key = _digest([parse_key, key])
@@ -298,9 +312,13 @@ class SourceLibrary:
                 try:
                     saved = json.loads(path.read_text(encoding="utf-8"))
                     value = saved["data"]
-                    if saved.get("sha256") != _digest(value) or not valid(value):
+                    if saved.get("sha256") != _digest(value):
                         raise ValueError("source_library_integrity_error")
-                    return value, True
+                    if valid(value):
+                        return value, True
+                    if not refresh_invalid:
+                        raise ValueError("source_library_integrity_error")
+                    path.unlink()
                 except (KeyError, TypeError, json.JSONDecodeError) as error:
                     raise ValueError("source_library_integrity_error") from error
             value = action()

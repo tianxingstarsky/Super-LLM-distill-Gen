@@ -579,3 +579,21 @@ def test_reconciled_selected_version_is_still_integrity_checked(tmp_path):
     selected.write_text(selected.read_text(encoding="utf-8") + "{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="production_round_integrity_error"):
         workflow._production_receipts(path / "production")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("eligible", 1000), ("eligible", -1), ("eligible", True),
+    ("rows", 0), ("rows", 1000), ("rows", True),
+])
+def test_resume_rejects_receipt_counters_that_disagree_with_hashed_rows(tmp_path, field, value):
+    output, run_id, path = create(tmp_path, goals={"sft": 1}, round_size=1)
+    workflow = engine.Workflow(output, run_id, tmp_path, generator=Generator(), jev=Reviewer())
+    assert workflow.execute()["status"] == "completed"
+    receipt_path = path / "production/round-000001/receipt.json"
+    receipt = engine.read_json(receipt_path)
+    receipt[field]["sft"] = value
+    # The model outputs and their hashes remain intact; metadata alone must
+    # not claim a delivery target is met or erase candidate rows on resume.
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(ValueError, match="production_round_integrity_error"):
+        workflow._production_receipts(path / "production")

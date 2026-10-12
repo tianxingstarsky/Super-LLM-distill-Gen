@@ -101,7 +101,8 @@ def test_new_review_repair_rejects_hidden_reference_without_using_teacher_to_res
 def test_prompt_upgrade_preserves_explicit_legacy_lookup_and_adds_semantic_context_rules():
     for name, old, new in (("sft", "1.0.0", "1.1.0"), ("qa_director", "1.1.0", "1.2.0"),
                           ("sft_directed", "1.1.0", "1.2.0"), ("review_score", "1.0.0", "1.1.0")):
-        previous, current = get("workflow." + name, version=old), get("workflow." + name)
+        previous = get("workflow." + name, version=old)
+        current = get("workflow." + name, version=new)
         assert previous.version == old and current.version == new
         assert render(current).startswith(render(previous))
         assert "https://aclanthology.org/2021.tacl-1.27/" in current.source

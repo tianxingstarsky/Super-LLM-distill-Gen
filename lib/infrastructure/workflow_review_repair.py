@@ -223,6 +223,10 @@ class WorkflowReviewRepair:
             return revision_evidence(row, self.recipe)
         except ValueError:
             source = row.get("source_context") or {}
+            if source.get("kind") == "conversation":
+                # Invalid/explicitly simulated recorded evidence cannot be
+                # rehabilitated by an unrelated open-task brief or quotes.
+                return None
             text = source.get("text") or source.get("task") or self.recipe.get("brief", "")
             if not isinstance(text, str) or not text.strip():
                 return None
@@ -251,6 +255,15 @@ class WorkflowReviewRepair:
                 raise
         check = assessed([*key, "score"], data)
         if target in PREFERENCE_TARGETS:
+            # A failed preferred answer/pair cannot be released regardless of
+            # its negative response's score. Do not pay for that second score
+            # until correction produces an acceptable candidate. Inherited
+            # labels describe an older body and must not survive this verdict.
+            row.pop("preference", None)
+            row.pop("rlaif", None)
+            threshold = validate_review_repair(self.recipe["review_repair"])["score_threshold"]
+            if not accepted(check) or min(check["scores"].values()) / 5 < threshold:
+                return check
             # A repaired preference needs fresh evidence for both response scores;
             # inherited scores must never describe edited responses.
             rejected_check = assessed([*key, "rejected_score"],
@@ -365,6 +378,11 @@ class WorkflowReviewRepair:
                     row["reason"] = receipt["reason"] if receipt["reason"] == "manual_rlaif_change_requires_ai_review" else "manual_review_rejected"
         else:
             check = None
+            # Each entry belongs to this one item's fixed evidence, prompt and
+            # instruction. A repair that returns to an already rejected body
+            # has made no progress; another paid score cannot add new evidence.
+            scored_candidates = {}
+            score_fields = ("preference", "rlaif", "learner_context_check")
             force_repair = bool(item.get("revision_context")) and config["max_rounds"] > 0
             for attempt in range(config["max_rounds"] if force_repair else config["max_rounds"] + 1):
                 key = [row["id"], target, "review_repair", attempt]
@@ -379,7 +397,23 @@ class WorkflowReviewRepair:
                         check = {"reason": issue}
                         force_repair = False
                         continue
+                candidate_hash = digest(self._review_payload(target, row))
+                if candidate_hash in scored_candidates:
+                    check, score_metadata = scored_candidates[candidate_hash]
+                    for field in score_fields:
+                        row.pop(field, None)
+                    row.update(deepcopy(score_metadata))
+                    score = min(check["scores"].values()) / 5
+                    receipt["history"].append({"attempt": attempt, "score": score,
+                        "status": "rejected", "verdict": deepcopy(check),
+                        "reused_assessment": True, "repair_issue": "review_repair_repeated_candidate"})
+                    receipt.update(status="rejected", score=score, verdict=deepcopy(check),
+                        reason=check["reason"], stop_reason="review_repair_repeated_candidate")
+                    row.update(status="quarantined", reason="review_repair_exhausted")
+                    break
                 check = self._review_score(target, row, evidence, key, instruction)
+                scored_candidates[candidate_hash] = (deepcopy(check),
+                    {field: deepcopy(row[field]) for field in score_fields if field in row})
                 score = min(check["scores"].values()) / 5
                 keep = accepted(check) and score >= config["score_threshold"]
                 if target in PREFERENCE_TARGETS and preference_score_issue(row):

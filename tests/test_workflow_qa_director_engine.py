@@ -283,6 +283,30 @@ def test_next_batch_gets_accepted_feedback_bounded_history_and_fixed_rules(tmp_p
     assert engine.read_json(path / "artifacts/quality.json")["qa_director"]["batches_planned"] == 3
 
 
+def test_director_recalls_recent_accepted_dialogues_when_source_has_no_lexical_match(tmp_path, monkeypatch):
+    monkeypatch.setattr(QAHistory, "similar", lambda *args, **kwargs: [])
+    state, path, _, _, writer, _ = execute(tmp_path, sample_count=3)
+    assert state["status"] == "completed", state.get("error")
+    plans = [request_data(call) for call in writer.calls if "candidates" in request_data(call)]
+    rows = engine.read_json(path / "artifacts/sft.records.json")
+    assert plans[0]["history"] == []
+    assert plans[1]["history"][0]["question"] == rows[0]["qa_contract"]["question"]
+    assert {item["question"] for item in plans[2]["history"]} == {
+        row["qa_contract"]["question"] for row in rows[:2]}
+    assert all(len(plan["history"]) <= 2 and plan["history_is_not_evidence"] for plan in plans)
+
+
+def test_disabled_director_history_never_reads_recall_or_recent_stores(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("History disabled, store must not be read")
+    monkeypatch.setattr(QAHistory, "similar", forbidden)
+    monkeypatch.setattr(QAHistory, "recent", forbidden)
+    state, _, _, _, writer, _ = execute(tmp_path, sample_count=2, options=config(history_limit=0))
+    assert state["status"] == "completed", state.get("error")
+    plans = [request_data(call) for call in writer.calls if "candidates" in request_data(call)]
+    assert plans and all(plan["history"] == [] for plan in plans)
+
+
 def test_duplicate_contract_registered_before_same_batch_model_calls(tmp_path):
     state, path, _, _, writer, _ = execute(tmp_path, sample_count=3,
         options=config(batch_size=3), writer=Writer(duplicate=True), concurrency=3)

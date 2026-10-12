@@ -11,60 +11,88 @@ from lib.presentation.streamlit.workflow_package_review_report import package_re
 from lib.presentation.streamlit.workflow_reuse import recipe_to_draft
 
 
-def test_review_toggle_models_prompts_and_scope_survive_node_changes():
+def confirm_cpt_models(ui):
+    """Complete the same node confirmation steps required in the workbench."""
+    for node in ('ingest', 'cpt', 'review'):
+        ui.button(key='fixture-node:' + node).click().run()
+        confirm = ui.button(key='node-model-confirm:fixture:' + node)
+        if not confirm.disabled:
+            confirm.click().run()
+    ui.button(key='fixture-node:review').click().run()
+
+
+def source_script(tmp_path, code=SCRIPT):
+    source = tmp_path / 'fixture.txt'
+    source.write_text('Inspect the cable before using the equipment.', encoding='utf-8')
+    return code.replace("'fixture.txt'", repr(str(source))), str(source)
+
+
+def test_review_roles_prompts_and_policy_survive_node_and_mode_changes():
     ui = AppTest.from_string(SCRIPT).run()
-    ui.button(key='fixture-node:package').click().run()
+    ui.button(key='fixture-node:review').click().run()
     enabled = 'workflow-package-review-enabled:fixture'
     assert sum(widget.key == enabled for widget in ui.toggle) == 1
     assert not ui.toggle(key=enabled).value
     assert not any(widget.key == 'fixture-node:jev' for widget in ui.button)
-    assert not any(w.key.startswith('node-model:fixture:jev:') for w in ui.selectbox)
+    assert ui.selectbox(key='node-model:fixture:review:generation:backend')
+    assert not any(w.key.startswith('node-model:fixture:review:jev:') for w in ui.selectbox)
     ui.toggle(key=enabled).set_value(True).run()
-    ui.button(key='fixture-node:jev').click().run()
-    assert not ui.exception
-    assert ui.segmented_control(key='workflow-package-review-mode:fixture').value == 'sample'
-    assert ui.number_input(key='workflow-package-review-percent:fixture').value == 1.0
-    assert ui.number_input(key='workflow-package-review-limit:fixture').value == 1000
-    assert ui.selectbox(key='node-model:fixture:jev:jev:backend')
-    prompt = 'workflow-node-prompt:fixture:jev:workflow.package_review'
-    assert ui.text_area(key=prompt).value
-    ui.number_input(key='workflow-package-review-percent:fixture').set_value(2.5).run()
-    ui.number_input(key='workflow-package-review-limit:fixture').set_value(250).run()
-    ui.text_area(key=prompt).set_value('Custom packaging quality instructions.').run()
-    ui.segmented_control(key='workflow-package-review-mode:fixture').set_value('all').run()
-    ui.button(key='fixture-node:sft').click().run()
-    ui.button(key='fixture-node:jev').click().run()
-    assert ui.segmented_control(key='workflow-package-review-mode:fixture').value == 'all'
-    assert ui.text_area(key=prompt).value == 'Custom packaging quality instructions.'
-    ui.segmented_control(key='workflow-package-review-mode:fixture').set_value('sample').run()
-    assert ui.number_input(key='workflow-package-review-percent:fixture').value == 2.5
-    assert ui.number_input(key='workflow-package-review-limit:fixture').value == 250
-    ui.toggle(key=enabled).set_value(False).run()
+    assert ui.selectbox(key='node-model:fixture:review:jev:backend')
     assert not any(widget.key == 'fixture-node:jev' for widget in ui.button)
-    assert not any(w.key.startswith('node-model:fixture:jev:') for w in ui.selectbox)
+    score = 'workflow-node-prompt:fixture:review:workflow.review_score'
+    repair = 'workflow-node-prompt:fixture:review:workflow.review_repair'
+    ui.number_input(key='workflow-review-repair-threshold:fixture').set_value(85).run()
+    ui.number_input(key='workflow-review-repair-rounds:fixture').set_value(3).run()
+    ui.text_area(key=score).set_value('Custom scoring instructions.').run()
+    ui.selectbox(key='workflow-node-prompt-selection:fixture:review').set_value('workflow.review_repair').run()
+    ui.text_area(key=repair).set_value('Correct only the flagged facts.').run()
+    ui.button(key='fixture-node:sft').click().run()
+    ui.button(key='fixture-node:review').click().run()
+    ui.selectbox(key='workflow-node-prompt-selection:fixture:review').set_value('workflow.review_repair').run()
+    assert ui.text_area(key=repair).value == 'Correct only the flagged facts.'
+    ui.segmented_control(key='workflow-review-repair-mode:fixture').set_value('human').run()
+    assert ui.number_input(key='workflow-review-repair-rounds:fixture').disabled
+    assert not any(w.key.startswith('node-model:fixture:review:') for w in ui.selectbox)
+    ui.segmented_control(key='workflow-review-repair-mode:fixture').set_value('auto').run()
+    assert ui.number_input(key='workflow-review-repair-threshold:fixture').value == 85
+    assert ui.number_input(key='workflow-review-repair-rounds:fixture').value == 3
+    ui.selectbox(key='workflow-node-prompt-selection:fixture:review').set_value('workflow.review_repair').run()
+    assert ui.text_area(key=repair).value == 'Correct only the flagged facts.'
+    ui.selectbox(key='workflow-node-prompt-selection:fixture:review').set_value('workflow.review_score').run()
+    assert ui.text_area(key=score).value == 'Custom scoring instructions.'
+    ui.toggle(key=enabled).set_value(False).run()
+    assert not any(w.key.startswith('node-model:fixture:review:jev:') for w in ui.selectbox)
+    assert ui.selectbox(key='node-model:fixture:review:generation:backend')
     ui.toggle(key=enabled).set_value(True).run()
-    ui.button(key='fixture-node:jev').click().run()
-    assert ui.text_area(key=prompt).value == 'Custom packaging quality instructions.'
+    assert ui.text_area(key=score).value == 'Custom scoring instructions.'
     assert not ui.exception
 
 
-def test_missing_review_model_blocks_only_enabled_packaging_review():
-    ui = AppTest.from_string(SCRIPT).run()
+def test_missing_separate_judge_blocks_auto_review_but_not_human_review(tmp_path):
+    code, source = source_script(tmp_path)
+    ui = AppTest.from_string(code).run()
     ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['cpt']).run()
-    ui.button(key='fixture-node:package').click().run()
+    ui.multiselect(key='workflow-sources:fixture:文档资料').set_value([source]).run()
+    confirm_cpt_models(ui)
     assert not ui.button(key='workflow-create:fixture').disabled
-    # Previously initialized with no binding: no new default should override
-    # an operator's empty selection when the optional role is enabled again.
-    ui.session_state['workflow-node-bindings:fixture'] = {}
-    ui.session_state['workflow-node-bindings:fixture:initialized'] = ['jev:jev']
+    bindings = deepcopy(ui.session_state['workflow-node-bindings:fixture'])
+    bindings['review'].pop('jev', None)
+    ui.session_state['workflow-node-bindings:fixture'] = bindings
+    initialized = list(ui.session_state['workflow-node-bindings:fixture:initialized'])
+    ui.session_state['workflow-node-bindings:fixture:initialized'] = list(dict.fromkeys([*initialized, 'review:jev']))
     ui.toggle(key='workflow-package-review-enabled:fixture').set_value(True).run()
-    ui.button(key='fixture-node:jev').click().run()
     assert ui.button(key='workflow-create:fixture').disabled
-    ui.selectbox(key='node-model:fixture:jev:jev:backend').set_value('local').run()
-    ui.selectbox(key='node-model:fixture:jev:jev:model:local').set_value('judge').run()
-    assert not ui.exception
+    ui.segmented_control(key='workflow-review-repair-mode:fixture').set_value('human').run()
     assert not ui.button(key='workflow-create:fixture').disabled
-    assert ui.number_input(key='node-model:fixture:jev:jev:output:local:judge').value == 32768
+    ui.segmented_control(key='workflow-review-repair-mode:fixture').set_value('auto').run()
+    assert ui.button(key='workflow-create:fixture').disabled
+    ui.selectbox(key='node-model:fixture:review:jev:backend').set_value('local').run()
+    ui.selectbox(key='node-model:fixture:review:jev:model:local').set_value('judge').run()
+    assert not ui.exception
+    assert ui.number_input(key='node-model:fixture:review:jev:output:local:judge').value == 32768
+    assert not ui.button(key='node-model-confirm:fixture:review').disabled
+    ui.button(key='node-model-confirm:fixture:review').click().run()
+    assert not ui.button(key='workflow-create:fixture').disabled
 
 
 def test_package_review_can_be_copied_back_to_an_editable_draft():
@@ -80,23 +108,22 @@ def test_package_review_can_be_copied_back_to_an_editable_draft():
     assert values['workflow-node-prompt:fixture:jev:workflow.package_review'] == 'Custom review.'
 
 
-def test_existing_package_prompt_is_migrated_once_and_jev_edits_take_precedence():
+def test_historical_package_prompt_is_preserved_without_overwriting_new_review_contract():
     old_key = 'workflow-node-prompt:fixture:package:workflow.package_review'
-    new_key = 'workflow-node-prompt:fixture:jev:workflow.package_review'
+    new_key = 'workflow-node-prompt:fixture:review:workflow.review_score'
     ui = AppTest.from_string(SCRIPT)
-    ui.session_state['workflow-form-draft:fixture'] = {old_key: 'Keep my existing review prompt.'}
+    ui.session_state['workflow-form-draft:fixture'] = {old_key: 'Keep my historical review prompt.'}
     ui.run()
+    ui.button(key='fixture-node:review').click().run()
     assert not ui.exception
-    assert ui.session_state['workflow-form-draft:fixture'][new_key] == 'Keep my existing review prompt.'
+    assert ui.text_area(key=new_key).value != 'Keep my historical review prompt.'
+    assert ui.session_state['workflow-form-draft:fixture'][old_key] == 'Keep my historical review prompt.'
+    ui.text_area(key=new_key).set_value('Updated scoring and correction criteria.').run()
     ui.toggle(key='workflow-package-review-enabled:fixture').set_value(True).run()
-    ui.button(key='fixture-node:jev').click().run()
-    assert ui.text_area(key=new_key).value == 'Keep my existing review prompt.'
-    ui.text_area(key=new_key).set_value('Updated JEV criteria.').run()
-    ui.toggle(key='workflow-package-review-enabled:fixture').set_value(False).run()
-    ui.toggle(key='workflow-package-review-enabled:fixture').set_value(True).run()
-    ui.button(key='fixture-node:jev').click().run()
-    assert ui.text_area(key=new_key).value == 'Updated JEV criteria.'
-    assert ui.session_state['workflow-form-draft:fixture'][old_key] == 'Keep my existing review prompt.'
+    ui.button(key='fixture-node:package').click().run()
+    ui.button(key='fixture-node:review').click().run()
+    assert ui.text_area(key=new_key).value == 'Updated scoring and correction criteria.'
+    assert ui.session_state['workflow-form-draft:fixture'][old_key] == 'Keep my historical review prompt.'
 
 
 def test_reuse_moves_old_reviewer_to_jev_without_editing_historical_recipe():
@@ -125,37 +152,45 @@ from lib.presentation.streamlit.i18n import install_streamlit_localization
 install_streamlit_localization()
 st.session_state['ui_language'] = 'en' ''', 1)
     ui = AppTest.from_string(code).run()
-    ui.button(key='fixture-node:package').click().run()
+    ui.button(key='fixture-node:review').click().run()
     ui.toggle(key='workflow-package-review-enabled:fixture').set_value(True).run()
-    ui.button(key='fixture-node:jev').click().run()
     assert ui.toggle(key='workflow-package-review-enabled:fixture').label == 'Add JEV scoring'
-    assert ui.segmented_control(key='workflow-package-review-mode:fixture').label == 'Review scope'
-    assert ui.number_input(key='workflow-package-review-limit:fixture').label == 'Sample cap per goal'
+    controls = [ui.segmented_control(key='workflow-review-repair-mode:fixture'),
+                ui.number_input(key='workflow-review-repair-threshold:fixture'),
+                ui.number_input(key='workflow-review-repair-rounds:fixture')]
+    assert all(item.label and not re.search(r'[\u4e00-\u9fff]', item.label) for item in controls)
+    assert not any(widget.key == 'fixture-node:jev' for widget in ui.button)
     assert not ui.exception
 
 
-def test_submission_pins_package_scope_model_limits_and_custom_prompt():
-    code = SCRIPT.replace('    def task_runs(self): return []', '''    def create_run(self, **kwargs):
-        st.session_state['fixture-submitted'] = kwargs
-        return '0' * 32
-    def task_runs(self): return []''')
+def test_submission_pins_unified_review_roles_policy_limits_and_custom_prompts(tmp_path):
+    code = SCRIPT.replace('    def task_runs(self): return []', "    def create_run(self, **kwargs):\n        st.session_state['fixture-submitted'] = kwargs\n        return '0' * 32\n    def task_runs(self): return []")
+    code, source = source_script(tmp_path, code)
     ui = AppTest.from_string(code).run()
     ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['cpt']).run()
-    ui.multiselect(key='workflow-sources:fixture:文档资料').set_value(['fixture.txt']).run()
-    ui.button(key='fixture-node:package').click().run()
+    ui.multiselect(key='workflow-sources:fixture:文档资料').set_value([source]).run()
+    ui.button(key='fixture-node:review').click().run()
     ui.toggle(key='workflow-package-review-enabled:fixture').set_value(True).run()
-    ui.button(key='fixture-node:jev').click().run()
-    ui.number_input(key='workflow-package-review-percent:fixture').set_value(2.5).run()
-    ui.text_area(key='workflow-node-prompt:fixture:jev:workflow.package_review').set_value('Custom review.').run()
+    ui.number_input(key='workflow-review-repair-threshold:fixture').set_value(85).run()
+    ui.number_input(key='workflow-review-repair-rounds:fixture').set_value(3).run()
+    ui.selectbox(key='node-model:fixture:review:jev:model:local').set_value('judge').run()
+    ui.number_input(key='node-model:fixture:review:jev:context:local:judge').set_value(262144).run()
+    ui.number_input(key='node-model:fixture:review:jev:output:local:judge').set_value(40000).run()
+    ui.text_area(key='workflow-node-prompt:fixture:review:workflow.review_score').set_value('Custom score.').run()
+    ui.selectbox(key='workflow-node-prompt-selection:fixture:review').set_value('workflow.review_repair').run()
+    ui.text_area(key='workflow-node-prompt:fixture:review:workflow.review_repair').set_value('Custom correction.').run()
+    confirm_cpt_models(ui)
     ui.button(key='workflow-create:fixture').click().run()
     assert not ui.exception
     saved = ui.session_state['fixture-submitted']
-    assert saved['package_review'] == {'enabled': True, 'node': 'jev', 'mode': 'sample',
-                                       'sample_percent': 2.5, 'max_samples_per_target': 1000,
-                                       'escalate_failure_percent': 0.0}
-    assert saved['node_models']['jev']['jev'] == {'backend': 'local', 'model': 'writer',
-        'context_window_tokens': 131072, 'max_output_tokens': 32768}
-    assert saved['node_prompts']['jev']['workflow.package_review'] == 'Custom review.'
+    assert saved['review_repair'] == {'mode': 'auto', 'max_rounds': 3, 'score_threshold': .85}
+    assert saved['package_review']['enabled'] is True and saved['package_review']['mode'] == 'all'
+    assert saved['node_models']['review']['jev'] == {'backend': 'local', 'model': 'judge',
+        'context_window_tokens': 262144, 'max_output_tokens': 40000}
+    assert saved['node_models']['review']['generation']['model'] == 'writer'
+    assert not {'package', 'jev'}.intersection(saved['node_models'])
+    assert saved['node_prompts']['review']['workflow.review_score'] == 'Custom score.'
+    assert saved['node_prompts']['review']['workflow.review_repair'] == 'Custom correction.'
 
 
 def test_live_packaging_shows_review_counts_and_distinguishes_file_writing():

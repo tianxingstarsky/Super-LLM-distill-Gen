@@ -208,6 +208,7 @@ class WorkflowSourceLibrary:
             def valid(result):
                 return (isinstance(result, dict) and set(result) == {"text", "uncertain"}
                         and result.get("uncertain") is False and isinstance(result.get("text"), str)
+                        and (mode != "model" or bool(result["text"].strip()))
                         and len(result["text"]) <= (120000 if mode == "vision" else 80000))
             def parsed():
                 if mode == "model":
@@ -237,7 +238,7 @@ class WorkflowSourceLibrary:
                             result, _ = library.cached_value(saved_source, signature, [location, index, _digest(segment)],
                                 lambda: self.ask(key, "generation", "workflow.document_parse",
                                     {"source": stable_name, "location": location, "text": segment},
-                                    allow_reasoning_fallback=False), valid=valid)
+                                    allow_reasoning_fallback=False), valid=valid, refresh_invalid=True)
                             if not valid(result):
                                 self.invalidate_checkpoint(["call", key])
                                 yield {"location": location, "status": "quarantined",
@@ -269,9 +270,16 @@ class WorkflowSourceLibrary:
                         yield {"location": location, "text": result["text"], "document_reading": {
                             "mode": "vision", "image_sha256": part["image_sha256"], "parse_id": parse_key,
                             "evidence_level": "model_transcribed_visual_source"}}
+            def reusable_part(part):
+                reading = part.get("document_reading") or {}
+                # Native blank pages never ran the model and remain reusable.
+                # Previously cached empty transcriptions of nonempty source
+                # segments must be retried without discarding the good pages.
+                return (mode != "model" or reading.get("mode") != "model"
+                        or isinstance(part.get("text"), str) and bool(part["text"].strip()))
             for part in library.iter_parts(saved_source, signature, parsed,
                     valid=lambda part: part.get("status") != "quarantined" and not part.get("requires_vision"),
-                    check_cancel=self.check_cancel, on_status=status):
+                    check_cancel=self.check_cancel, on_status=status, cached_valid=reusable_part):
                 yield from documents(part)
         except UnicodeError:
             yield unit("document", status="quarantined", reason="invalid_encoding")

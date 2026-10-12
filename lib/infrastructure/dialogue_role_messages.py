@@ -49,7 +49,12 @@ def answer_role_messages(system, memory_context, data, *, transport="tool"):
                "只生成本轮回答及审计元数据，不改写或生成用户问题。")
     context = memory_context or {"teacher_context_pack": [], "task_payload": {}}
     if not context["teacher_context_pack"]:
-        source = data.get("source_context", {})
+        # SFT wraps its source; multi-turn requests carry task/provenance at
+        # the top level. Both forms need the same private-memory boundary even
+        # when manual or open-task inputs have no persistent document pack.
+        source = data.get("source_context")
+        if not isinstance(source, dict):
+            source = data
         text = source.get("text") or source.get("task")
         if isinstance(text, str) and text.strip():
             kind = source.get("kind") or source.get("provenance", {}).get("kind", "synthetic")
@@ -62,6 +67,9 @@ def answer_role_messages(system, memory_context, data, *, transport="tool"):
     contract = data.get("qa_contract", {})
     dispatch = {key: deepcopy(contract[key]) for key in (
         "qa_type", "answer_policy", "guidance", "dialogue_design") if key in contract}
+    requirement = data.get("requirement", data.get("brief"))
+    if requirement:
+        dispatch["requirement"] = deepcopy(requirement)
     for key in ("generation_style", "feedback", "dialogue_state", "dialogue_step"):
         if data.get(key) is not None:
             dispatch[key] = deepcopy(data[key])

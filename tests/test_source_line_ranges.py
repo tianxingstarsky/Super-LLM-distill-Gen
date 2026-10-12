@@ -87,6 +87,27 @@ def test_director_boundaries_reconstruct_raw_context_and_verify_quotes_within_se
         validate_director_task(task, expected_type="grounded", source_text=body["text"], source_materials=[body])
 
 
+@pytest.mark.parametrize("visible", ["", "Condition: closed valve."])
+def test_partial_clues_do_not_expand_to_private_teacher_blocks(visible):
+    body = material()
+    task = {"id": "candidate", "qa_type": "partial", "question": "What pressure applies?",
+            "visible_context": visible, "answer_policy": "clarify", "guidance": "Ask for the missing setting.",
+            "evidence_quotes": ["Pressure: 45 kPa."], "source_line_ranges": [range_for()]}
+    checked = validate_director_task(task, expected_type="partial", source_text=body["text"], source_materials=[body])
+    assert checked["visible_context"] == visible
+    assert "Pressure: 45 kPa." in checked["source_line_focus"][0]["text"]
+    assert "Pressure: 45 kPa." not in checked["visible_context"]
+
+
+def test_partial_clues_cannot_reintroduce_unselected_material_lines():
+    body = material()
+    task = {"id": "candidate", "qa_type": "partial", "question": "What pressure applies?",
+            "visible_context": "OUTSIDE_SENTINEL", "answer_policy": "clarify", "guidance": "Ask for the missing setting.",
+            "evidence_quotes": ["Pressure: 45 kPa."], "source_line_ranges": [range_for()]}
+    with pytest.raises(ValueError, match="qa_director_visible_context_not_in_source"):
+        validate_director_task(task, expected_type="partial", source_text=body["text"], source_materials=[body])
+
+
 def test_selected_tool_projection_never_transmits_outside_anchor_or_cached_focus_in_user_payload():
     pack, ref, loader = pack_fixture()
     data = {"source_line_scope": "selected", "source_line_ranges": [range_for()],

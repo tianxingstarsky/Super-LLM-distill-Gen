@@ -451,6 +451,13 @@ class WorkflowQADirector:
             raise ValueError("qa_director_recorded_conversation_changed")
         contract = unit["qa_contract"]
         separated = self.separated_questions()
+        evidence_level = (unit.get("revision_source_level") or (
+            "human_provided_and_model_assessed" if unit.get("human_provided") else
+            "model_assessed_synthetic" if unit["kind"] == "brief" else
+            "model_restructured_source_text_and_model_assessed"
+                if (unit.get("document_reading") or {}).get("mode") == "model" else
+            "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading") else
+            "source_and_model_assessed"))
         style = self.generation_style("sft", unit["id"])
         context = {"source_context": {key: value for key, value in unit.items()
                                       if key not in {"qa_contract", "family_id", "parent_id", "director_batch"}},
@@ -514,8 +521,7 @@ class WorkflowQADirector:
                          "source_context": unit, "qa_contract": contract, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "generation_check": "structure_and_source_quotes",
                          "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
-                         "evidence_level": "human_provided_and_model_assessed" if unit.get("human_provided") else
-                             "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed",
+                         "evidence_level": evidence_level,
                          **({"generation_style": style} if style else {})}]
             check = self.judge_answer([unit["id"], "sft_directed_judge", attempt],
                 {**context, "rendered_prompt": messages[:-1]}, messages,
@@ -533,10 +539,7 @@ class WorkflowQADirector:
                          "qa_contract_check": contract_check, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "repair_attempts": attempt,
                          "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
-                         "evidence_level": (unit.get("revision_source_level") or ("human_provided_and_model_assessed" if unit.get("human_provided") else
-                                            "model_assessed_synthetic" if unit["kind"] == "brief"
-                                            else "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
-                                            else "source_and_model_assessed")),
+                         "evidence_level": evidence_level,
                          **({"generation_style": style, "style_check": style_check} if style else {})}]
             feedback = {"quality": check["reason"], "contract": contract_check["reason"],
                         "style": style_check["reason"] if style_check else None}
@@ -570,11 +573,18 @@ class WorkflowQADirector:
             history = []
             query = " ".join(unit.get("text", "")[:1000] for unit in guided[:4])
             if limit:
-                for store in (local_history, published_history):
-                    for stage in stages:
-                        history.extend(store.similar(query, limit=limit, namespace=stage))
+                def history_candidates():
+                    for store in (local_history, published_history):
+                        for stage in stages:
+                            yield from store.similar(query, limit=limit, namespace=stage)
+                    # Source wording can differ from the actual dialogue's
+                    # language, register or goal. Empty lexical recall must
+                    # not erase the immediately preceding accepted work.
+                    for store in (local_history, published_history):
+                        for stage in stages:
+                            yield from store.recent(limit=limit, namespace=stage)
                 seen, examples = set(), []
-                for example in history:
+                for example in history_candidates():
                     identity = (example["id"], example.get("run_id"))
                     if identity not in seen:
                         seen.add(identity)

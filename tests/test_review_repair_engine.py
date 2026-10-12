@@ -180,6 +180,128 @@ def test_manual_score_and_correction_are_one_zero_api_operation(tmp_path, monkey
     assert state["quality"]["human_review"] == "performed"
 
 
+@pytest.mark.parametrize("with_tools", [False, True])
+def test_recorded_conversation_rework_uses_original_inputs_not_candidate_answers(tmp_path, with_tools):
+    messages = [{"role": "user", "content": "We need to inspect the equipment."},
+                {"role": "assistant", "content": "Earlier candidate claim.",
+                 "reasoning_content": "Earlier candidate reasoning must not prove itself."},
+                {"role": "user", "content": "When should the power be turned off?"}]
+    tools = []
+    if with_tools:
+        tools = [{"type": "function", "function": {"name": "read_safety_rule"}}]
+        messages.extend([
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "safety-check", "type": "function",
+                "function": {"name": "read_safety_rule", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "safety-check", "content": SOURCE},
+        ])
+    messages.append({"role": "assistant", "content": WRONG,
+                     "reasoning_content": "Final candidate reasoning must not prove itself."})
+    source = tmp_path / "recorded.jsonl"
+    source.write_text(json.dumps({"messages": messages, "tools": tools}), encoding="utf-8")
+    output = tmp_path / "output"
+    parent_id = engine.create_run(output, sources=[source], targets=["sft"], review_repair={"mode": "human"})
+    parent = engine.Workflow(output, parent_id, ROOT, generator=NoCalls(), judge=NoCalls())
+    state = parent.execute()
+    assert state["status"] == "needs_attention", state.get("error")
+    row = engine.read_json(parent.path / "artifacts/sft.records.json")[0]
+    assert row["review_repair"]["status"] == "waiting_manual_review"
+    evidence = revision_evidence(row, parent.recipe, parent.path)
+    proof = json.loads(evidence["teacher_evidence"])
+    assert evidence["source_kind"] == "human_provided"
+    assert proof["verification"] == "recorded_not_independently_verified"
+    assert proof["tools"] == tools
+    assert len(proof["messages"]) == len(messages) - 1
+    assert WRONG not in evidence["teacher_evidence"]
+    assert "Earlier candidate claim." not in evidence["teacher_evidence"]
+    assert "candidate reasoning" not in evidence["teacher_evidence"]
+    assert (SOURCE in evidence["teacher_evidence"]) is with_tools
+    if with_tools:
+        assert proof["messages"][-1] == messages[-2]
+
+    child_id = create_child(output, parent_id, row, mode="human", score=.95, approved=True, answer=RIGHT)
+    child = engine.Workflow(output, child_id, ROOT, generator=NoCalls(), judge=NoCalls())
+    state = child.execute()
+    assert state["status"] == "completed", state.get("error")
+    repaired = engine.read_json(child.path / "artifacts/sft.records.json")[0]
+    assert repaired["messages"][-1]["content"] == RIGHT
+    assert repaired["messages"][:-1] == messages[:-1] and repaired["tools"] == tools
+    # A later rework continues to use original observations, never the edited answer.
+    assert revision_evidence(repaired, child.recipe, child.path) == evidence
+    assert not state["usage"]
+
+
+@pytest.mark.parametrize("invalid", ["synthetic", "tool_error", "orphan_tool"])
+@pytest.mark.parametrize("legacy_task", [False, True])
+def test_recorded_review_evidence_rejects_fabricated_or_invalid_observations(tmp_path, invalid, legacy_task):
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, brief="An unrelated task must not rescue bad source evidence.",
+        targets=["sft"], review_repair={"mode": "auto", "max_rounds": 1})
+    workflow = engine.Workflow(output, run_id, ROOT, generator=NoCalls(), judge=NoCalls())
+    messages = [{"role": "user", "content": "Can I inspect the equipment?"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "read", "type": "function",
+                    "function": {"name": "read_safety_rule", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "read", "content": SOURCE},
+                {"role": "assistant", "content": RIGHT}]
+    context = {"kind": "conversation", "messages": deepcopy(messages), "tools": []}
+    if legacy_task:
+        context["task"] = json.dumps(messages)
+    if invalid == "synthetic":
+        context["verification_status"] = "synthetic_unverified"
+    elif invalid == "tool_error":
+        context["messages"][-2]["isError"] = True
+    else:
+        context["messages"][-2]["tool_call_id"] = "invented"
+    row = {"id": "recorded-candidate", "source_id": "0" * 64, "status": "eligible",
+           "messages": messages, "source_context": context, "quotes": [SOURCE]}
+    with pytest.raises(ValueError, match="human_session_source_evidence_unavailable"):
+        revision_evidence(row, workflow.recipe)
+    checked = workflow._review_repair_item({"target": "sft", "record": row})[0]
+    assert checked["status"] == "quarantined"
+    assert checked["reason"] == "review_repair_source_evidence_unavailable"
+
+
+def test_agent_unified_review_and_legacy_task_keep_candidate_separate_from_tool_evidence(tmp_path):
+    tools = [{"type": "function", "function": {"name": "calculator", "parameters": {
+        "type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}}}]
+    messages = [{"role": "user", "content": "Compute 2 + 2."},
+                {"role": "assistant", "content": "", "reasoning_content": "Private tool-choice rationale.",
+                 "tool_calls": [{"id": "calculation", "type": "function", "function": {
+                    "name": "calculator", "arguments": '{"expression":"2+2"}'}}]},
+                {"role": "tool", "tool_call_id": "calculation", "content": "4"},
+                {"role": "assistant", "content": "4", "reasoning_content": "Private final-answer rationale."}]
+    source = tmp_path / "trajectory.jsonl"
+    source.write_text(json.dumps({"messages": messages, "tools": tools}), encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["agent"],
+        review_repair={"mode": "auto", "max_rounds": 0},
+        package_review={"enabled": True, "mode": "all", "node": "jev"})
+    scoring = Client()
+    workflow = engine.Workflow(output, run_id, ROOT, generator=NoCalls(), jev=scoring)
+    state = workflow.execute()
+    assert state["status"] == "completed", state.get("error")
+    assert len(scoring.calls) == 1
+    record = engine.read_json(workflow.path / "artifacts/agent.records.json")[0]
+    assert record["review_repair"]["status"] == "accepted"
+    assert "task" not in record["source_context"]
+    assert record["source_context"]["tools"] == tools
+    assert "verification_status" in record["source_context"]
+    evidence = scoring.calls[0]["source_evidence"]
+    proof = json.loads(evidence["teacher_evidence"])
+    assert evidence["source_kind"] == "human_provided"
+    assert proof["tools"] == tools
+    assert proof["messages"][-1] == messages[-2]
+    assert len(proof["messages"]) == len(messages) - 1
+    assert "rationale" not in evidence["teacher_evidence"]
+    assert "recorded_not_independently_verified" in evidence["teacher_evidence"]
+    assert record["verification"]["verified_call_ids"] == ["calculation"]
+
+    # Legacy stored Agent rows had the answer and rationale duplicated in task.
+    legacy = deepcopy(record)
+    legacy["source_context"]["task"] = json.dumps(messages)
+    assert revision_evidence(legacy, workflow.recipe) == evidence
+    assert workflow._review_evidence(legacy) == evidence
+
+
 @pytest.mark.parametrize("mode", ["auto", "human"])
 @pytest.mark.parametrize("parser_mode", ["vision", "model"])
 def test_repair_only_ignores_inherited_document_and_cpt_model_requirements(tmp_path, monkeypatch, mode, parser_mode):
@@ -249,6 +371,89 @@ def test_failed_repair_is_bounded_and_never_exported(tmp_path, monkeypatch):
     repaired = engine.read_json(engine.run_path(output, child) / "artifacts/sft.records.json")[0]
     assert repaired["review_repair"]["attempts"] == 2
     assert repaired["review_repair"]["status"] == "rejected"
+    assert state["quality"]["targets"]["sft"]["eligible"] == 0
+
+
+def test_unchanged_repair_stops_without_paying_for_the_same_failed_score_again(tmp_path, monkeypatch):
+    source = tmp_path / "source.txt"
+    source.write_text(SOURCE, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["sft"],
+        review_repair={"mode": "auto", "max_rounds": 5})
+    monkeypatch.setattr(engine.Workflow, "sft", lambda self, unit: generated(unit))
+    client = Client(repair_ok=False)
+    state = engine.Workflow(output, run_id, ROOT, generator=client).execute()
+    assert state["status"] == "needs_attention", state.get("error")
+    assert ["review_feedback" in data for data in client.calls] == [False, True]
+    row = engine.read_json(engine.run_path(output, run_id) / "artifacts/sft.records.json")[0]
+    assert row["review_repair"]["attempts"] == 1
+    assert row["review_repair"]["stop_reason"] == "review_repair_repeated_candidate"
+    assert row["review_repair"]["history"][-1]["reused_assessment"] is True
+    assert state["quality"]["targets"]["sft"]["eligible"] == 0
+    assert (engine.run_path(output, run_id) / "artifacts/sft.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_repair_cycle_stops_at_a_previously_rejected_body(tmp_path, monkeypatch):
+    class CyclingClient(Client):
+        def chat(self, messages, **kwargs):
+            data = model_request_data(messages)
+            if "review_feedback" not in data:
+                return super().chat(messages, **kwargs)
+            self.calls.append(deepcopy(data))
+            self.usage["calls"] += 1
+            payload = deepcopy(data["candidate"])
+            current = payload["messages"][-1]["content"]
+            payload["messages"][-1]["content"] = WRONG + " Always." if current == WRONG else WRONG
+            return json.dumps({"record": payload, "quotes": [SOURCE], "uncertain": False})
+
+    source = tmp_path / "source.txt"
+    source.write_text(SOURCE, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["sft"],
+        review_repair={"mode": "auto", "max_rounds": 5})
+    monkeypatch.setattr(engine.Workflow, "sft", lambda self, unit: generated(unit))
+    client = CyclingClient()
+    state = engine.Workflow(output, run_id, ROOT, generator=client).execute()
+    assert state["status"] == "needs_attention", state.get("error")
+    assert ["review_feedback" in data for data in client.calls] == [False, True, False, True]
+    row = engine.read_json(engine.run_path(output, run_id) / "artifacts/sft.records.json")[0]
+    assert row["messages"][-1]["content"] == WRONG
+    assert row["review_repair"]["attempts"] == 2
+    assert row["review_repair"]["stop_reason"] == "review_repair_repeated_candidate"
+    assert state["quality"]["targets"]["sft"]["eligible"] == 0
+
+
+def test_unscored_revision_still_gets_one_real_score_before_stopping(tmp_path, monkeypatch):
+    output, parent_id, record, _ = create_parent(tmp_path, monkeypatch)
+    child = create_child(output, parent_id, record, max_rounds=5)
+    client = Client(repair_ok=False)
+    state = engine.Workflow(output, child, ROOT, generator=client).execute()
+    assert state["status"] == "needs_attention", state.get("error")
+    assert ["review_feedback" in data for data in client.calls] == [True, False, True]
+    row = engine.read_json(engine.run_path(output, child) / "artifacts/sft.records.json")[0]
+    assert row["review_repair"]["stop_reason"] == "review_repair_repeated_candidate"
+
+
+def test_resume_rebuilds_no_progress_detection_from_the_paid_score_checkpoint(tmp_path, monkeypatch):
+    class InterruptedRepair(Client):
+        def chat(self, messages, **kwargs):
+            if "review_feedback" in model_request_data(messages):
+                raise ValueError("offline_interruption")
+            return super().chat(messages, **kwargs)
+
+    source = tmp_path / "source.txt"
+    source.write_text(SOURCE, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["sft"],
+        review_repair={"mode": "auto", "max_rounds": 5})
+    monkeypatch.setattr(engine.Workflow, "sft", lambda self, unit: generated(unit))
+    first = InterruptedRepair()
+    assert engine.Workflow(output, run_id, ROOT, generator=first).execute()["status"] == "failed"
+    assert len(first.calls) == 1 and "review_feedback" not in first.calls[0]
+    resumed = Client(repair_ok=False)
+    state = engine.Workflow(output, run_id, ROOT, generator=resumed).execute(resume_run=True)
+    assert state["status"] == "needs_attention", state.get("error")
+    assert len(resumed.calls) == 1 and "review_feedback" in resumed.calls[0]
     assert state["quality"]["targets"]["sft"]["eligible"] == 0
 
 
@@ -440,6 +645,67 @@ def test_manual_preference_approval_is_not_fabricated_ai_dimensions(tmp_path, mo
     row = engine.read_json(engine.run_path(output, child) / "artifacts/dpo.records.json")[0]
     assert row["status"] == "eligible" and "preference" not in row
     assert row["review_repair"]["mode"] == "human"
+
+
+@pytest.mark.parametrize("target", ["dpo", "orpo", "rlaif"])
+def test_rejected_preference_does_not_score_negative_or_retain_old_labels(tmp_path, monkeypatch, target):
+    source = tmp_path / "source.txt"
+    source.write_text(SOURCE, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=[target],
+        review_repair={"mode": "auto", "max_rounds": 0})
+    monkeypatch.setattr(engine.Workflow, "sft", lambda self, unit: generated(unit))
+    monkeypatch.setattr(engine.Workflow, "preference", lambda self, sample: [{
+        "id": sample["id"], "source_id": sample["source_id"], "source_context": sample["source_context"],
+        "status": "eligible", "prompt": sample["messages"][:-1],
+        "chosen": [{"role": "assistant", "content": WRONG}],
+        "rejected": [{"role": "assistant", "content": "No inspection is needed."}],
+        "preference": {"dimension": "correctness", "minimum_gap": 2,
+                       "chosen": check(True), "rejected": check(False)},
+        "rlaif": {"criterion": "correctness", "chosen_feedback": "Old body."}}])
+    client = Client()
+    state = engine.Workflow(output, run_id, ROOT, generator=client).execute()
+    assert state["status"] == "needs_attention", state.get("error")
+    assert len(client.calls) == 1
+    assert client.calls[0]["target"] == target
+    row = engine.read_json(engine.run_path(output, run_id) / f"artifacts/{target}.records.json")[0]
+    assert "preference" not in row and "rlaif" not in row
+    assert state["quality"]["targets"][target]["eligible"] == 0
+
+
+def test_repaired_preference_gets_both_fresh_scores_only_after_chosen_passes(tmp_path, monkeypatch):
+    class RepairPreference(Client):
+        def chat(self, messages, **kwargs):
+            data = model_request_data(messages)
+            self.calls.append(deepcopy(data))
+            self.usage["calls"] += 1
+            if "review_feedback" in data:
+                payload = deepcopy(data["candidate"])
+                payload["chosen"][-1]["content"] = RIGHT
+                return json.dumps({"record": payload, "quotes": [SOURCE], "uncertain": False})
+            candidate = data["candidate"]
+            answer = candidate.get("chosen", candidate.get("messages"))[-1]["content"]
+            return json.dumps(check(answer == RIGHT))
+
+    source = tmp_path / "source.txt"
+    source.write_text(SOURCE, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["dpo"],
+        review_repair={"mode": "auto", "max_rounds": 1})
+    monkeypatch.setattr(engine.Workflow, "sft", lambda self, unit: generated(unit))
+    monkeypatch.setattr(engine.Workflow, "preference", lambda self, sample: [{
+        "id": sample["id"], "source_id": sample["source_id"], "source_context": sample["source_context"],
+        "status": "eligible", "prompt": sample["messages"][:-1],
+        "chosen": [{"role": "assistant", "content": WRONG}],
+        "rejected": [{"role": "assistant", "content": "No inspection is needed."}]}])
+    client = RepairPreference()
+    state = engine.Workflow(output, run_id, ROOT, generator=client).execute()
+    assert state["status"] == "completed", state.get("error")
+    assert ["review_feedback" in data for data in client.calls] == [False, True, False, False]
+    assert [data["target"] for data in client.calls] == ["dpo", "dpo", "dpo", "sft"]
+    row = engine.read_json(engine.run_path(output, run_id) / "artifacts/dpo.records.json")[0]
+    assert row["preference"]["chosen"]["correctness"] == 5
+    assert row["preference"]["rejected"]["correctness"] == 1
 
 
 @pytest.mark.parametrize("changed", [False, True])

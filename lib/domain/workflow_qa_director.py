@@ -131,7 +131,10 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
         line_focus = resolve_source_line_ranges(source_materials, value["source_line_ranges"])
         # The model chooses boundaries. The backend selects the unchanged
         # original bodies rather than trusting a copied or rewritten context.
-        if expected_type != "closed_book":
+        # Partial-clue tasks deliberately hide some teacher facts. Selecting a
+        # complete verification block must not silently fill those gaps in the
+        # learner's actual input (and invalidate clarification/conditional tasks).
+        if expected_type not in {"closed_book", "partial"}:
             value = {**value, "visible_context": "\n\n".join(item["text"].rstrip("\r\n") for item in line_focus)}
     limits = {"id": 200, "question": 12_000, "visible_context": 40_000, "guidance": 12_000,
               "topic": 200, "skill": 200, "difficulty": 200}
@@ -163,6 +166,10 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
             raise ValueError("qa_director_visible_context_not_in_source")
     if line_focus is not None and any(not any(quote in item["text"] for item in line_focus) for quote in quotes):
         raise ValueError("qa_director_evidence_not_in_source_line_ranges")
+    if line_focus is not None and visible and any(
+            not any(line in item["text"] for item in line_focus)
+            for line in visible.splitlines() if line.strip()):
+        raise ValueError("qa_director_visible_context_not_in_source")
     if expected_type == "multi_source" and len(set(quotes)) < 2:
         raise ValueError("qa_director_multiple_evidence_required")
     if expected_type in {"grounded", "multi_source", "distractor"} and any(quote not in visible for quote in quotes):

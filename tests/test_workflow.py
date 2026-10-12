@@ -14,6 +14,12 @@ from lib.workflow_quality import conversation_issue, verdict
 TEXT = "设备启动前必须检查电源连接。发现故障时应先断电，再检查线路。维护结束后记录检查结果。"
 
 
+@pytest.fixture(autouse=True)
+def mock_llm_server():
+    """All requests in this module use injected clients; no TCP mock is needed."""
+    yield
+
+
 class Generator:
     model = "generator-test"
 
@@ -26,7 +32,8 @@ class Generator:
         self.calls.append(messages)
         self.usage["calls"] += 1
         instruction = messages[0]["content"]
-        data = json.loads(messages[1]["content"])
+        # Source memory may precede the request as tool messages.
+        data = json.loads(messages[-1]["content"])
         if self.hook:
             self.hook()
         if "规划" in instruction:
@@ -52,7 +59,7 @@ class Judge:
         self.usage["calls"] += 1
         if self.invalid:
             return json.dumps({"correctness": "unknown"})
-        bad = "BAD" in messages[1]["content"]
+        bad = "BAD" in messages[-1]["content"]
         score = 1 if bad else 5
         return json.dumps({"keep": not bad, "grounded": not bad, "reasoning_valid": not bad,
                            "correctness": score,
@@ -248,7 +255,7 @@ def test_rlaif_quarantines_conflicting_ai_score_evidence(tmp_path):
     class InconsistentJudge(Judge):
         def chat(self, messages, **kwargs):
             result = json.loads(super().chat(messages, **kwargs))
-            if "BAD" in messages[1]["content"]:
+            if "BAD" in messages[-1]["content"]:
                 result["scores"]["correctness"] = 2
             return json.dumps(result)
 
@@ -270,7 +277,7 @@ def test_preference_exports_quarantine_contradictory_correctness_dimensions(
     class InconsistentJudge(Judge):
         def chat(self, messages, **kwargs):
             result = json.loads(super().chat(messages, **kwargs))
-            bad = "BAD" in messages[1]["content"]
+            bad = "BAD" in messages[-1]["content"]
             if bad is (conflicting_response == "rejected"):
                 result["scores"]["correctness"] = 2 if bad else 4
             return json.dumps(result)
@@ -330,6 +337,99 @@ def test_context_input_keeps_tool_history_and_metadata(tmp_path):
     assert result["messages"] == messages
     assert result["tools"][0]["function"]["name"] == "read_power"
     assert not gen.calls
+
+
+@pytest.mark.parametrize("with_tools", [False, True])
+def test_recorded_answer_without_reasoning_is_preserved_without_regeneration(tmp_path, with_tools):
+    messages = [{"role": "user", "content": "设备可以检查了吗？"}]
+    tools = []
+    if with_tools:
+        messages.extend([
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call1", "type": "function",
+                "function": {"name": "read_power", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call1", "content": "电源已断开"},
+        ])
+        tools = [{"type": "function", "function": {"name": "read_power"}}]
+    messages.append({"role": "assistant", "content": "GOOD 电源已断开，可以检查。", "source_note": "original"})
+    source = tmp_path / "recorded.jsonl"
+    source.write_text(json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False), encoding="utf-8")
+    rid = create_run(tmp_path, sources=[source], targets=["sft"])
+    gen, judge = Generator(), Judge()
+    state = execute(tmp_path, rid, gen, judge)
+    assert state["status"] == "completed", state.get("error")
+    assert not gen.calls
+    assert judge.calls == 1
+    artifacts = run_path(tmp_path, rid) / "artifacts"
+    payload = json.loads((artifacts / "sft.jsonl").read_text(encoding="utf-8"))
+    assert payload["messages"] == messages
+    assert "reasoning_content" not in payload["messages"][-1]
+    row = read_json(artifacts / "sft.records.json")[0]
+    assert row["evidence_level"] == "recorded_context_model_assessed"
+
+
+@pytest.mark.parametrize("with_reasoning", [False, True])
+def test_unified_review_preserves_imported_conversation_source_and_actual_tool_evidence(tmp_path, with_reasoning):
+    messages = [{"role": "user", "content": "设备可以检查了吗？"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "power-check", "type": "function",
+                    "function": {"name": "read_power", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "power-check", "content": "电源已断开"},
+                {"role": "assistant", "content": "GOOD 电源已断开，可以检查。"}]
+    if with_reasoning:
+        messages[-1]["reasoning_content"] = "工具返回已断电，满足检查线路的前提。"
+    tools = [{"type": "function", "function": {"name": "read_power"}}]
+    source = tmp_path / "recorded.jsonl"
+    source.write_text(json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False), encoding="utf-8")
+    rid = create_run(tmp_path, sources=[source], targets=["sft"],
+        review_repair={"mode": "auto", "max_rounds": 0},
+        package_review={"enabled": True, "mode": "all", "node": "jev"})
+
+    class RecordReviewer(Judge):
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+
+        def chat(self, request_messages, **kwargs):
+            self.requests.append(json.loads(request_messages[-1]["content"]))
+            return super().chat(request_messages, **kwargs)
+
+    gen, judge = Generator(), RecordReviewer()
+    state = execute(tmp_path, rid, gen, judge)
+    artifacts = run_path(tmp_path, rid) / "artifacts"
+    row = read_json(artifacts / "sft.records.json")[0]
+    assert state["status"] == "completed", row.get("reason") or state.get("error")
+    assert not gen.calls
+    assert judge.calls == 1
+    assert row["messages"] == messages and row["tools"] == tools
+    assert row["reasoning_origin"] == "source"
+    assert row["evidence_level"] == "recorded_context_model_assessed"
+    assert row["review_repair"]["status"] == "accepted"
+    assert judge.requests[0]["candidate"]["messages"] == messages
+    evidence = json.dumps(judge.requests[0]["source_evidence"], ensure_ascii=False)
+    assert "电源已断开" in evidence and "read_power" in evidence
+    assert "GOOD 电源已断开，可以检查。" not in evidence
+    assert "工具返回已断电，满足检查线路的前提。" not in evidence
+    assert judge.requests[0]["source_evidence"]["source_kind"] == "human_provided"
+    assert "recorded_not_independently_verified" in evidence
+    exported = json.loads((artifacts / "sft.jsonl").read_text(encoding="utf-8"))
+    assert exported["messages"] == messages and exported["tools"] == tools
+
+
+def test_rejected_recorded_answer_is_quarantined_without_silent_rewriting(tmp_path):
+    messages = [{"role": "user", "content": "带电时可以检查线路吗？"},
+                {"role": "assistant", "content": "BAD 可以直接检查。"}]
+    source = tmp_path / "recorded.jsonl"
+    source.write_text(json.dumps({"messages": messages}, ensure_ascii=False), encoding="utf-8")
+    rid = create_run(tmp_path, sources=[source], targets=["sft"])
+    gen, judge = Generator(), Judge()
+    state = execute(tmp_path, rid, gen, judge)
+    assert state["status"] == "needs_attention", state.get("error")
+    assert not gen.calls
+    assert judge.calls == 1
+    artifacts = run_path(tmp_path, rid) / "artifacts"
+    assert (artifacts / "sft.jsonl").read_text(encoding="utf-8") == ""
+    row = read_json(artifacts / "sft.records.json")[0]
+    assert row["reason"] == "recorded_sft_judge_rejected"
+    assert row["messages"] == messages
 
 
 def test_document_question_carries_evidence_into_actual_training_prompt(tmp_path):

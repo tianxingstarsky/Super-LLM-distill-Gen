@@ -74,6 +74,9 @@ def context_capacity(recipe):
     """
     capacities = []
     director = recipe.get("qa_director", {})
+    # A changed pack can change a director plan. Pin capacity policy in the
+    # recipe so resumed tasks retain the evidence tied to their checkpoints.
+    revised_capacity = recipe.get("source_context_capacity_version") == 2
     extra_rules = len((director.get("question_rules", "") + "\n" + director.get("answer_rules", "")
                        + "\n" + recipe.get("brief", "")).encode("utf-8"))
     styles = recipe.get("node_generation_prompts", {})
@@ -93,12 +96,20 @@ def context_capacity(recipe):
     templates = recipe.get("node_prompt_templates", {})
     for stage in stages:
         prompts = templates.get(stage, {})
+        if revised_capacity and stage == "director" and director.get("question_separation") is True:
+            prompts = {key: value for key, value in prompts.items() if key != "workflow.question_user"}
         if not prompts:
             continue
         overhead = len(recipe.get("node_prompt_system", "").encode("utf-8"))
         overhead += max(len(text.encode("utf-8")) for text in prompts.values())
         bindings = recipe.get("node_models", {}).get(stage, {}) or {"generation": {}}
-        for binding in bindings.values():
+        for role, binding in bindings.items():
+            # The separate questioner receives only a public brief/history.
+            # Its smaller context must not truncate evidence for the director
+            # and answerer; its actual request is preflighted independently.
+            if (revised_capacity and stage == "director" and role == "question"
+                    and director.get("question_separation") is True):
+                continue
             context = binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
             output = binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
             capacities.append(context - output - overhead - extra_rules - style_bytes - 8192 - 1024)
@@ -265,9 +276,11 @@ def prepare_source_context_packs(workflow, rows):
                              (sequence, unit["id"], unit["source_id"], encoded, size))
             database.execute("INSERT INTO search(rowid,terms) VALUES(?,?)",
                              (sequence, " ".join(_terms(material["text"], limit=4096))))
-        # The variable suffix still includes the precise anchor for auditing.
-        # Reserve the largest whole anchor; never solve capacity by head clipping.
-        largest_anchor = database.execute("SELECT COALESCE(MAX(size),0) FROM units").fetchone()[0]
+        # Numbered requests carry only an address in the dynamic task; the full
+        # body is already in source memory. Legacy recipes retain their exact
+        # reserve; unnumbered requests still need a second complete body.
+        largest_anchor = (0 if numbered and workflow.recipe.get("source_context_capacity_version") == 2 else
+            database.execute("SELECT COALESCE(MAX(size),0) FROM units").fetchone()[0])
         capacity -= largest_anchor
         if largest_anchor and capacity < largest_anchor + 512:
             raise ValueError("source_context_model_capacity_too_small")

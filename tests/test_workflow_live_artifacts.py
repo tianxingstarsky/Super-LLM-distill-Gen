@@ -14,8 +14,10 @@ from lib.io_utils import atomic_json
 _CPT_PREVIEW_SCRIPT = '''
 from copy import deepcopy
 import streamlit as st
+from lib.presentation.streamlit.i18n import install_streamlit_localization
 from lib.presentation.streamlit.workflow_live_artifacts_view import render_live_artifacts
 
+install_streamlit_localization()
 recipe = {"version": 19, "targets": st.session_state.get("fixture-targets", ["sft"]),
           "source_cleaning": True, "qa_director": {"enabled": True}}
 saved_state = {"status": "running", "stages": {"cpt": {
@@ -42,7 +44,9 @@ def test_cpt_live_preview_keeps_identity_and_explains_actual_export_without_rewr
     ui.run()
     assert not ui.exception
     label = "CPT 语料处理" if language == "zh" else "CPT corpus processing"
-    assert ui.dataframe[0].value.iloc[0]["节点"] == label
+    assert ui.dataframe[0].value.iloc[0]["节点" if language == "zh" else "Stage"] == label
+    if language == "en":
+        assert "Review passed" in ui.dataframe[0].value.columns
     assert ui.selectbox[0].options[-1] == label
     expected = ("本次导出 CPT 语料，合格正文同时供下游节点复用。" if "cpt" in targets else
                 "本次不导出 CPT，合格正文仅供下游节点复用。")

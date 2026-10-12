@@ -8,6 +8,12 @@ from lib.infrastructure.dialogue_role_messages import answer_role_messages, ques
 from lib.model_protocols import responses_input, anthropic_request
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """These pure message projections do not need a shared HTTP fixture."""
+    yield
+
+
 BRIEF = {"topic": "设备检查", "communication_goal": "请求指导安全的检查准备步骤。", "behaviors": ["request_action"]}
 PRIVATE = "SOURCE_PRIVATE_SENTINEL: 检查前应断电；完成后记录结果。"
 CONTEXT = {"teacher_context_pack": [{"id": "pack-1", "materials": [{"text": PRIVATE}]}], "task_payload": {}}
@@ -117,3 +123,39 @@ def test_manual_source_is_a_separate_tool_with_honest_verification_scope():
     assert pack["materials"][0] == {"text": PRIVATE, "source_kind": "human_provided"}
     assert pack["verification"] == "application_source_only_not_independent_fact_verification"
     assert PRIVATE not in messages[-1]["content"]
+
+
+@pytest.mark.parametrize("transport", ["tool", "system"])
+def test_multiturn_flat_manual_source_and_user_requirements_reach_answerer(transport):
+    data = answer_data()
+    data.update(task=PRIVATE, brief="用简短英文回答，保留实际步骤。", provenance={"kind": "human_provided"})
+    original = deepcopy(data)
+    messages = answer_role_messages("system", None, data, transport=transport)
+    body = json.dumps(messages, ensure_ascii=False)
+    assert PRIVATE in body
+    assert data["brief"] in body
+    assert messages[-1] == original["learner_messages"][-1]
+    ordinary = "\n".join(item["content"] for item in messages if item["role"] == "user")
+    assert PRIVATE not in ordinary and data["brief"] not in ordinary
+    assert data == original
+    if transport == "tool":
+        memory = json.loads(next(item["content"] for item in messages if item.get("name") == "source_memory"
+                                 and item["role"] == "tool"))
+        assert memory["teacher_context_pack"][0]["materials"][0]["source_kind"] == "human_provided"
+        dispatch = json.loads(next(item["content"] for item in messages if item.get("name") == "dialogue_dispatch"
+                                   and item["role"] == "tool"))
+        assert dispatch["requirement"] == data["brief"]
+
+
+def test_packed_sft_preserves_user_requirement_in_dispatch_without_changing_source_prefix():
+    data = answer_data()
+    data["requirement"] = "Output a compact checklist in English."
+    plain = answer_role_messages("system", CONTEXT, answer_data())
+    messages = answer_role_messages("system", CONTEXT, data)
+    source_end = next(index for index, item in enumerate(plain)
+                      if item["role"] == "tool" and item.get("name") == "source_memory")
+    assert messages[:source_end + 1] == plain[:source_end + 1]
+    dispatch = json.loads(next(item["content"] for item in messages if item.get("name") == "dialogue_dispatch"
+                               and item["role"] == "tool"))
+    assert dispatch["requirement"] == data["requirement"]
+    assert messages[-1] == data["learner_messages"][-1]

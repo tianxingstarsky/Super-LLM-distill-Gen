@@ -21,6 +21,12 @@ CLEAN = "额定温度为 75 ℃，停机后检查阀门。公式：$E = mc^2$。
 MODEL_CONFIG = {"mode": "model", "review_mode": "text"}
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """Cleaning and review clients are in-memory doubles, with no TCP server."""
+    yield
+
+
 class Cleaner:
     model = "offline-cleaner"
 
@@ -195,7 +201,8 @@ def test_complete_parser_output_is_reviewed_for_missing_paragraph_before_chunk_p
                 self.fail_dimension = "coverage_sufficient"
             return super().chat(messages, **kwargs)
     reviewer = CoverageReviewer()
-    workflow = Workflow(output, rid, tmp_path, generator=Cleaner(), jev=reviewer)
+    cleaner = Cleaner()
+    workflow = Workflow(output, rid, tmp_path, generator=cleaner, jev=reviewer)
     workflow.stage = "cpt"
     row = workflow.cpt({"id": "parsed-chunk", "kind": "document", "text": CLEAN,
                         "document_reading": {"mode": "model", "source_text": ORIGINAL + "\n" + missing,
@@ -206,6 +213,34 @@ def test_complete_parser_output_is_reviewed_for_missing_paragraph_before_chunk_p
     assert "reading_evidence_sha256" in row["cpt_processing"]
     evidence = json.loads(reviewer.calls[0][1]["content"])
     assert evidence["parsed_source_text"] == CLEAN and missing in evidence["reading_source_text"]
+    cleaning_request = json.loads(cleaner.calls[0][1]["content"])
+    assert cleaning_request["source_text"] == CLEAN
+    assert "source_text" not in cleaning_request["source_reading"]
+    assert "parsed_text" not in cleaning_request["source_reading"]
+    assert missing not in json.dumps(cleaning_request, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("fail_dimension", [None, "coverage_sufficient"])
+def test_identical_parser_reading_uses_programmatic_proof_without_duplicate_page_bodies(tmp_path, fail_dimension):
+    output, rid, _ = make_run(tmp_path, cpt_processing=MODEL_CONFIG)
+    cleaner, reviewer = Cleaner(), Reviewer(fail_dimension=fail_dimension)
+    workflow = Workflow(output, rid, tmp_path, generator=cleaner, jev=reviewer)
+    workflow.stage = "cpt"
+    whole_page = ORIGINAL + "\n" + "其他完整知识段落，额定压力是 80 kPa。\n" * 100
+    row = workflow.cpt({"id": "unchanged-parser-chunk", "kind": "document", "text": CLEAN,
+        "document_reading": {"mode": "model", "source_text": whole_page, "parsed_text": whole_page}})[0]
+    assert row["status"] == ("eligible" if fail_dimension is None else "quarantined")
+    assert len(cleaner.calls) == len(reviewer.calls) == 1
+    assert row["cpt_processing"]["reading_verification"] == "identical_source_text"
+    if fail_dimension is None:
+        assert row["document_reading"]["source_text"] == whole_page
+    else:
+        assert row["reason"] == "cpt_source_review_rejected"
+    request = json.loads(reviewer.calls[0][1]["content"])
+    assert request["original_source_text"] == CLEAN and request["cleaned_text"] == CLEAN
+    assert request["reading_source_text"] is None and request["parsed_source_text"] is None
+    assert request["source_reading"]["reading_verification"] == "identical_source_text"
+    assert whole_page not in json.dumps(request, ensure_ascii=False)
 
 
 def test_visual_review_requires_confirmed_vision_before_creation(tmp_path, monkeypatch):

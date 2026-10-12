@@ -131,6 +131,16 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
+def document_evidence_level(unit, *, assessed=False):
+    reading = unit.get("document_reading") or {}
+    mode = reading.get("mode") or ("vision" if reading.get("image_sha256") else None)
+    level = {"model": "model_restructured_source_text",
+             "vision": "model_transcribed_visual_source"}.get(mode, "source_text")
+    if assessed:
+        return "source_and_model_assessed" if level == "source_text" else level + "_and_model_assessed"
+    return level
+
+
 def file_hash(path):
     with Path(path).open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
@@ -434,7 +444,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "conversation_turns": conversation_turns, "math_generator_version": 2,
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
               **({"source_cleaning": True, "source_context_pack_version": 1,
-                  "source_line_protocol_version": 1} if source_cleaning else {}),
+                  "source_line_protocol_version": 1, "source_context_capacity_version": 2} if source_cleaning else {}),
               "source_memory_protocol_version": 1,
               "authored_reasoning_protocol_version": 1,
               "cpt_reference_releases": references,
@@ -1060,7 +1070,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             allow_reasoning_fallback=False)
                         if (not isinstance(result, dict) or set(result) != {"text", "uncertain"}
                                 or type(result.get("uncertain")) is not bool or not isinstance(result.get("text"), str)
-                                or len(result["text"]) > 80_000):
+                                or not result["text"].strip() or len(result["text"]) > 80_000):
                             self.invalidate_checkpoint(["call", key])
                             yield {**self.rejected(segment, "invalid_document_parse_schema")}
                             continue
@@ -1383,8 +1393,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 return [{**unit, "status": "quarantined", "reason": quality["reason"], "quality": quality}]
             return [{**unit, "status": "eligible", "text": unit["text"], "quality": quality,
                      **({"source_context": deepcopy(unit)} if self.recipe.get("review_repair") is not None else {}),
-                     "retention_reason": "source_text_passed_deterministic_checks", "evidence_level": (
-                         "model_transcribed_visual_source" if unit.get("document_reading") else "source_text")}]
+                     "retention_reason": "source_text_passed_deterministic_checks",
+                     "evidence_level": document_evidence_level(unit)}]
         data = self.ask([unit["id"], "corpus"], "generation", "workflow.corpus", unit)
         text = data.get("text") if isinstance(data, dict) else None
         quality = inspect_corpus(text)
@@ -1425,7 +1435,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         check, style_check = None, None
         for attempt in range(2):
             evidence_spans = None
-            if style is None and history and attempt == 0 and history[-1].get("reasoning_content"):
+            if style is None and history and unit["kind"] == "conversation":
                 messages = history
                 quotes = []
             else:
@@ -1487,9 +1497,15 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                          "source_context": unit, "generation_check": "structure_and_source_quotes",
                          **({"quote_spans": evidence_spans} if evidence_spans is not None else {}),
                          **({"generation_style": style} if style is not None else {}),
-                         "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
-                         "evidence_level": "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed"}]
-            check = self.judge_answer([unit["id"], "sft_judge", attempt], {**context, "rendered_prompt": messages[:-1]}, messages,
+                         "repair_attempts": attempt, "reasoning_origin": ("prompt_styled_generation" if style is not None
+                            else "source" if messages is history else "synthetic_explanation"),
+                         "evidence_level": ("recorded_context_model_assessed" if messages is history else
+                            "model_assessed_synthetic" if unit["kind"] == "brief" else document_evidence_level(unit, assessed=True))}]
+            # Recorded answers need no generation call. Key their verdict to
+            # the exact record so an old generated-answer score cannot be reused.
+            judge_key = ([unit["id"], "recorded_sft_judge_v1", digest(messages)] if messages is history
+                         else [unit["id"], "sft_judge", attempt])
+            check = self.judge_answer(judge_key, {**context, "rendered_prompt": messages[:-1]}, messages,
                                       **({"allow_reasoning_fallback": False} if style is not None else {}))
             style_check = (self.style_check([unit["id"], "sft_style", attempt], style,
                                            messages[-1]["reasoning_content"], messages[-1]["content"])
@@ -1505,8 +1521,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             self.recipe.get("qa_director", {}).get("human_augmentation", {}).get("enabled") else {}),
                          "repair_attempts": attempt, "reasoning_origin": ("prompt_styled_generation" if style is not None
                             else "source" if messages is history else "synthetic_explanation"),
-                         "evidence_level": ("model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
-                                            else "model_assessed_synthetic" if unit["kind"] == "brief" else "source_and_model_assessed")}]
+                         "evidence_level": ("recorded_context_model_assessed" if messages is history else
+                                            "model_assessed_synthetic" if unit["kind"] == "brief"
+                                            else document_evidence_level(unit, assessed=True))}]
+            if messages is history:
+                # Failed recorded evidence stays available for explicit rework;
+                # importing a conversation is not permission to invent its answer.
+                return [{**self.rejected(unit, "recorded_sft_judge_rejected"),
+                         "messages": messages, "tools": unit.get("tools", []), "quotes": quotes,
+                         "source_context": unit, "judge": check, "feedback": check["reason"],
+                         "reasoning_origin": "source", "evidence_level": "recorded_context_model_assessed"}]
             feedback = {"correctness": check["reason"] if not accepted(check) else None,
                         "style": style_check["reason"] if style_check is not None and
                         not (style_check["keep"] and style_check["adherence"] >= 4) else None}
@@ -1556,30 +1580,37 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         if self.recipe.get("source_memory_protocol_version") == 1 and source_context.get("source_context_pack"):
             source_context.pop("task", None)
         evidence_level = (unit.get("revision_source_level") or ("human_provided_and_model_assessed" if unit.get("human_provided") else
-                          "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading")
+                          document_evidence_level(unit, assessed=True) if unit.get("document_reading")
                           else "recorded_context_model_assessed" if unit["kind"] == "conversation"
                           else "source_and_model_assessed" if unit["kind"] == "document"
                           else "model_assessed_synthetic"))
         source_verification = ("human_provided_not_independently_verified" if unit.get("human_provided") else
-                               "visual_transcription_not_independently_verified" if unit.get("document_reading")
+                               "text_restructuring_not_independently_verified" if (unit.get("document_reading") or {}).get("mode") == "model"
+                               else "visual_transcription_not_independently_verified" if unit.get("document_reading")
                                else "recorded_unverified" if unit["kind"] == "conversation"
                                else "exact_quote_presence_only" if unit["kind"] == "document"
                                else "no_external_source")
         reviews = []
         quotes_by_turn = []
-        adaptive_dialogue = (contract is not None and contract.get("dialogue_design") is not None
+        dialogue_design = (contract or {}).get("dialogue_design") or {}
+        # Type balancing governs the initial scenario, not who may see source
+        # memory. Every separated dialogue keeps the director/questioner route
+        # for later turns, including contracts without an optional design.
+        legacy_adaptive_route = (contract is not None and contract.get("dialogue_design") is not None
             and self.recipe.get("qa_director", {}).get("planning_mode") == "adaptive")
+        separated_step_route = contract is not None and self.separated_questions() and not legacy_adaptive_route
+        adaptive_dialogue = legacy_adaptive_route or separated_step_route
         dialogue_steps = []
-        dialogue_state = ({"user_intent": contract["dialogue_design"].get("user_intent", ""),
+        dialogue_state = ({"user_intent": dialogue_design.get("user_intent", ""),
             "progress": "", "shared_understanding": [], "open_issues": [],
             "active_constraints": [], "context_links": [],
-            **({"conversational_frame": deepcopy(contract["dialogue_design"]["conversational_frame"])}
-               if "conversational_frame" in contract["dialogue_design"] else {})} if adaptive_dialogue else None)
+            **({"conversational_frame": deepcopy(dialogue_design["conversational_frame"])}
+               if "conversational_frame" in dialogue_design else {})} if adaptive_dialogue else None)
         dialogue_end_reason = "turn_limit"
         dialogue_end_guidance = ""
         dialogue_state_after_turn = 0
         if adaptive_dialogue:
-            source_context["dialogue_design"] = contract["dialogue_design"]
+            source_context["dialogue_design"] = dialogue_design
         if unit["kind"] == "conversation":
             messages = deepcopy(unit["messages"])
             ends, issue = completed_turn_ends(messages)
@@ -1648,7 +1679,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     elif turn_index == 0 and self.recipe.get("brief"):
                         user_text = f"任务背景：{self.recipe['brief']}\n\n问题：\n{user_text}"
                     user_message = {"role": "user", "content": user_text}
-                    response = self.ask([unit["id"], "multiturn_answer", turn_index, attempt],
+                    # Balanced runs used to ask later questions through the
+                    # answer model. A newly directed question must not inherit
+                    # an old answer or score when an interrupted run resumes.
+                    turn_identity = ([digest({"messages": [*messages, user_message],
+                        "contract": contract, "step": planned_step})] if separated_step_route and turn_index else [])
+                    response = self.ask([unit["id"], "multiturn_answer", turn_index, attempt, *turn_identity],
                         "generation", "workflow.multiturn_assistant",
                         {**source_context, "messages": [*messages, user_message], "feedback": feedback,
                          **({"learner_messages": [*messages, user_message]} if self.separated_questions() else {}),
@@ -1665,9 +1701,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     if text_issue(answer) or len(answer) > 12000 or not isinstance(quotes, list):
                         feedback = "回答或逐字证据结构不合格"
                         continue
+                    response_policy = ((planned_step or {}).get("response_policy") if turn_index else
+                                       (contract or {}).get("answer_policy", "answer"))
+                    # Routing later turns through the director does not waive
+                    # evidence for factual answers. An unlabelled adaptive
+                    # follow-up may be a nonfactual acknowledgement; its actual
+                    # content is still checked against the dialogue and source.
+                    quotes_required = (response_policy in {"answer", "correct_premise"} or
+                        not adaptive_dialogue and (contract is None or contract["answer_policy"] in {"answer", "correct_premise"}))
                     if unit["kind"] == "document" and ((not quotes and
-                            not adaptive_dialogue and
-                            (contract is None or contract["answer_policy"] in {"answer", "correct_premise"})) or any(
+                            quotes_required) or any(
                             not isinstance(quote, str) or not quote.strip()
                             or quote not in (pack_evidence if pack_evidence is not None else unit["text"])
                             or (selected_evidence_blocks is not None and not any(quote in block for block in selected_evidence_blocks))
@@ -1683,7 +1726,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     if issue:
                         feedback = issue
                         continue
-                    check = self.judge_answer([unit["id"], "multiturn_turn", turn_index, attempt],
+                    check = self.judge_answer([unit["id"], "multiturn_turn", turn_index, attempt, *turn_identity],
                         {**source_context, "dialogue_before_answer": [*messages, user_message],
                          "quotes": quotes, "source_text": unit.get("text"),
                          **({"dialogue_state": current_dialogue_state,
@@ -1693,7 +1736,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         feedback = check["reason"]
                         continue
                     contract_check = (self.qa_contract_check(
-                        [unit["id"], "multiturn_contract", turn_index, attempt], unit, candidate,
+                        [unit["id"], "multiturn_contract", turn_index, attempt, *turn_identity], unit, candidate,
                         prompt_id="workflow.multiturn_directed_check",
                         review_scope="completed_prefix",
                         **({"dialogue_state": current_dialogue_state,
@@ -1761,7 +1804,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                      else "not_applicable"),
                  "turn_count": len(ends), "turn_reviews": reviews, "consistency": consistency,
                  "quotes_by_turn": quotes_by_turn,
-                 **({"dialogue_design": contract["dialogue_design"], "dialogue_steps": dialogue_steps,
+                 **({"dialogue_design": dialogue_design, "dialogue_steps": dialogue_steps,
                      "dialogue_state": dialogue_state, "dialogue_end_reason": dialogue_end_reason,
                      "dialogue_state_after_turn": dialogue_state_after_turn,
                      "dialogue_state_scope": "final_summary" if dialogue_end_reason == "natural_completion" else "before_last_turn",
@@ -1799,8 +1842,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                "original_messages_sha256": digest(unit["messages"])}
         if result["status"] == "eligible":
             return [{**row, "messages": result["messages"], "tools": unit.get("tools", []),
-                     **({"source_context": {"kind": "conversation", "task": canonical(unit["messages"]),
-                                            "messages": deepcopy(unit["messages"])}}
+                     **({"source_context": {"kind": "conversation", "messages": deepcopy(unit["messages"]),
+                                            "tools": deepcopy(unit.get("tools", [])),
+                                            "verification_status": unit.get("verification_status")}}
                         if self.recipe.get("review_repair") is not None else {}),
                      "verification": result["verification"]}]
         row["reason"] = result["reason"]

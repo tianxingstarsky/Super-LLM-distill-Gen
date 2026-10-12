@@ -9,6 +9,8 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "评分通过": "Review passed",
+    "原始对话未通过评审，已保留供返工": "The recorded conversation failed review. Its content is kept for rework.",
     "CPT 语料处理": "CPT corpus processing",
     "本次导出 CPT 语料，合格正文同时供下游节点复用。": "Export CPT corpus and reuse accepted text in downstream nodes.",
     "本次不导出 CPT，合格正文仅供下游节点复用。": "Do not export CPT in this run. Reuse accepted text only in downstream nodes.",

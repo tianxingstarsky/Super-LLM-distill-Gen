@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from lib.domain.human_augmentation import validate_revision_context
-from lib.domain.workflow_quality import canonical
+from lib.domain.workflow_quality import canonical, conversation_issue
 from lib.infrastructure.json_stream import iter_json_records
 
 
@@ -66,6 +66,29 @@ def record_messages(record):
     return deepcopy(messages or [])
 
 
+def _recorded_conversation_evidence(context):
+    messages = context.get("messages")
+    if (context.get("verification_status") == "synthetic_unverified"
+            or conversation_issue(messages)):
+        raise ValueError("human_session_source_evidence_unavailable")
+    # Recorded input and tool observations can support assessment, but the
+    # answer under review cannot prove itself. Earlier assistant answers and
+    # their reasoning remain available in the candidate, not as source facts.
+    prefix = []
+    for original in messages[:-1]:
+        message = {key: deepcopy(original[key]) for key in (
+            "role", "content", "tool_calls", "toolCalls", "tool_call_id", "toolCallId", "name")
+            if key in original}
+        if message.get("role") == "assistant":
+            message["content"] = "[Recorded assistant answer omitted; not independent evidence.]"
+        prefix.append(message)
+    return canonical({"scope": "recorded_conversation_prefix",
+        "verification": "recorded_not_independently_verified",
+        "limitations": "User claims and tool observations are recorded context, not independently verified facts. "
+                       "Assistant answers and reasoning are excluded; judge the candidate against this context.",
+        "messages": prefix, "tools": deepcopy(context.get("tools", []))})
+
+
 def revision_evidence(record, recipe, run_path=None, *, with_blocks=False):
     """Project authenticated source evidence from a selected sealed result.
 
@@ -122,6 +145,12 @@ def revision_evidence(record, recipe, run_path=None, *, with_blocks=False):
         pack_identity = pack["prefix_sha256"]
     elif recipe.get("source_line_protocol_version") == 1 and ranges is not None:
         raise ValueError("human_session_source_evidence_unavailable")
+    if (context.get("kind") == "conversation" and ("messages" in context
+            or not isinstance(text, str) or not text.strip())):
+        # Older Agent rows serialized the complete transcript into task.
+        # Its assistant answers are still candidates, never source proof.
+        text = _recorded_conversation_evidence(context)
+        source_kind = "human_provided"
     if not isinstance(text, str) or not text.strip():
         quotes = record.get("qa_contract", {}).get("evidence_quotes") or record.get("quotes") or []
         # Multi-turn records store per-turn lists. Only actual quoted source

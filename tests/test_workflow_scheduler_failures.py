@@ -30,7 +30,9 @@ class Writer:
         self.usage = {"calls": 0}
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        # Source memory precedes the task; its position is not a generation request.
+        data = json.loads(next(message["content"] for message in reversed(messages)
+                               if message["role"] == "user"))
         identity = data["source"]["id"]
         self.calls.append(identity)
         self.usage["calls"] += 1

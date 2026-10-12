@@ -15,6 +15,12 @@ from tests.test_document_model_parser import PAGE_ONE, PAGE_TWO, Reader, configu
 from tests.test_document_vision import Vision, config as vision_config, parser as vision_parser, image
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """Readers are in-memory doubles; this module needs no shared TCP server."""
+    yield
+
+
 def registered(tmp_path):
     path = tmp_path / "original.md"
     path.write_text(PAGE_ONE + "\n\n" + PAGE_TWO, encoding="utf-8")
@@ -168,6 +174,147 @@ def test_uncertain_model_output_not_reused_in_a_different_run(tmp_path):
         rows = parse(run)
     assert len(invalid.calls) == 1 and len(good.calls) == 1
     assert rows[0]["status"] == "ready"
+
+
+@pytest.mark.parametrize("empty_text", ["", " \n\t"])
+def test_nonempty_source_model_erasure_is_quarantined_and_not_cached(tmp_path, empty_text):
+    configure(tmp_path)
+    source = text_pdf(tmp_path, pages=(PAGE_ONE,))
+    output = tmp_path / "output"
+    invalid = Reader(response={"text": empty_text, "uncertain": False})
+    good = Reader()
+    results = []
+    for reader in (invalid, good):
+        identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                    document_parser=model_parser())
+        run = engine.Workflow(output, identity, tmp_path, generator=reader)
+        results.append(parse(run))
+    assert len(results[0]) == 1
+    assert results[0][0]["status"] == "quarantined"
+    assert results[0][0]["reason"] == "invalid_document_parse_schema"
+    assert len(invalid.calls) == len(good.calls) == 1
+    assert results[1][0]["text"] == PAGE_ONE
+
+
+def test_stricter_text_reading_does_not_reuse_previous_empty_success_cache(tmp_path):
+    configure(tmp_path)
+    source = text_pdf(tmp_path, pages=(PAGE_ONE,))
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                document_parser=model_parser())
+    reader = Reader()
+    run = engine.Workflow(output, identity, tmp_path, generator=reader)
+    library = SourceLibrary(output)
+    snapshot = run.recipe["sources"][0]
+    saved = library.register_source(run.path / "inputs" / snapshot["file"], snapshot["sha256"], source.name)
+    old_signature = run._source_library_signature("model")
+    list(library.iter_parts(saved, old_signature, lambda: iter([
+        {"location": "page:1", "parse_segment": 0, "text": "",
+         "document_reading": {"mode": "model", "source_text": PAGE_ONE, "parsed_text": ""}}])))
+    rows = parse(run)
+    assert len(reader.calls) == 1
+    assert rows[0]["status"] == "ready" and rows[0]["text"] == PAGE_ONE
+    assert run.state["source_library"]["hits"] == 0
+
+
+def test_repairing_an_old_empty_page_reuses_the_good_paid_page(tmp_path):
+    configure(tmp_path)
+    source = text_pdf(tmp_path)
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                document_parser=model_parser())
+    reader = Reader()
+    run = engine.Workflow(output, identity, tmp_path, generator=reader)
+    library = SourceLibrary(output)
+    snapshot = run.recipe["sources"][0]
+    saved = library.register_source(run.path / "inputs" / snapshot["file"], snapshot["sha256"], source.name)
+    signature = run._source_library_signature("model")
+    old_parts = []
+    for index, original in enumerate((PAGE_ONE, PAGE_TWO), 1):
+        text = "" if index == 1 else original
+        result = {"text": text, "uncertain": False}
+        library.cached_value(saved, signature, [f"page:{index}", 0, engine.digest(original)],
+                             lambda value=result: value, valid=lambda value: True)
+        old_parts.append({"location": f"page:{index}", "parse_segment": 0, "text": text,
+                          "document_reading": {"mode": "model", "source_text": original,
+                                               "parsed_text": text}})
+    list(library.iter_parts(saved, signature, lambda: iter(old_parts)))
+    rows = parse(run)
+    assert [row["text"] for row in rows] == [PAGE_ONE, PAGE_TWO]
+    assert len(reader.calls) == 1 and reader.calls[0][2]["text"] == PAGE_ONE
+    assert [row["text"] for row in parse(run)] == [PAGE_ONE, PAGE_TWO]
+    assert len(reader.calls) == 1
+
+
+def test_genuinely_blank_pdf_page_still_skips_without_model_call(tmp_path):
+    configure(tmp_path)
+    source = text_pdf(tmp_path, pages=(None, PAGE_ONE))
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                document_parser=model_parser())
+    reader = Reader()
+    rows = parse(engine.Workflow(output, identity, tmp_path, generator=reader))
+    assert rows[0]["status"] == "skipped" and rows[0]["reason"] == "empty_document_page"
+    assert rows[1]["status"] == "ready" and rows[1]["text"] == PAGE_ONE
+    assert len(reader.calls) == 1
+
+
+@pytest.mark.parametrize("empty_text", ["", " \n\t"])
+def test_legacy_parser_rejects_empty_model_text_and_invalidates_call_checkpoint(tmp_path, empty_text):
+    configure(tmp_path)
+    source = text_pdf(tmp_path, pages=(PAGE_ONE,))
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                document_parser=model_parser())
+    path = engine.run_path(output, identity)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe.pop("source_library_version")
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    engine.atomic_json(path / "state.json", state)
+    invalid = Reader(response={"text": empty_text, "uncertain": False})
+    first = engine.Workflow(output, identity, tmp_path, generator=invalid)
+    first.stage = "ingest"
+    rows = parse(first)
+    assert len(rows) == 1 and rows[0]["status"] == "quarantined"
+    assert rows[0]["reason"] == "invalid_document_parse_schema"
+    snapshot = recipe["sources"][0]
+    unit_id = engine.digest([snapshot["sha256"], snapshot["file"], "page:1:chunk:0"])
+    call_key = ["call", [unit_id, "document_parse", engine.digest(PAGE_ONE)]]
+    assert len(invalid.calls) == 1 and not first.checkpoint_has(call_key)
+    reader = Reader()
+    restored = engine.Workflow(output, identity, tmp_path, generator=reader)
+    restored.stage = "ingest"
+    assert parse(restored)[0]["text"] == PAGE_ONE
+    assert len(reader.calls) == 1 and restored.checkpoint_has(call_key)
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("native", "source_text"),
+    ("model", "model_restructured_source_text"),
+    ("vision", "model_transcribed_visual_source"),
+])
+def test_native_cpt_keeps_the_actual_parser_evidence_modality(tmp_path, mode, expected):
+    if mode == "vision":
+        vision_config(tmp_path)
+        source, reader, parser = image(tmp_path), Vision(), vision_parser()
+    elif mode == "model":
+        configure(tmp_path)
+        source, reader, parser = text_pdf(tmp_path, pages=(PAGE_ONE,)), Reader(), model_parser()
+    else:
+        configure(tmp_path)
+        source = tmp_path / "manual.txt"
+        source.write_text(PAGE_ONE, encoding="utf-8")
+        reader, parser = Reader(), None
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                document_parser=parser)
+    run = engine.Workflow(output, identity, tmp_path, generator=reader)
+    assert run.execute()["status"] == "completed"
+    records = engine.read_json(run.path / "artifacts/cpt.records.json")
+    assert len(records) == 1 and records[0]["evidence_level"] == expected
+    assert len(reader.calls) == (0 if mode == "native" else 1)
 
 
 def test_partial_model_document_reuses_completed_pages_in_new_run(tmp_path):

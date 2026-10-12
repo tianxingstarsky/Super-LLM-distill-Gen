@@ -102,9 +102,13 @@ class WorkflowCPTProcessing:
                 # and DOCX text blocks are checked against their source text.
                 review_mode = "text"
         key = [unit["id"], "cpt_clean", digest(original)]
+        reading_metadata = {name: value for name, value in reading.items()
+                            if name not in {"source_text", "parsed_text"}}
         data = self.ask(key, "generation", "workflow.cpt_clean", {
             "source_text": original, "source_location": unit.get("source_location"),
-            "source_reading": reading,
+            # Only this chunk is editable. Whole parser input/output bodies
+            # belong to fidelity review, not to every cleaner request.
+            "source_reading": reading_metadata,
             "scope": "Clean this source unit only; retain substantive facts, never expand to meet a sample goal.",
         }, allow_reasoning_fallback=False)
         try:
@@ -123,15 +127,21 @@ class WorkflowCPTProcessing:
         reading_evidence = {"source_text": reading.get("source_text"), "parsed_text": reading.get("parsed_text")}
         if any(value is not None for value in reading_evidence.values()):
             trace["reading_evidence_sha256"] = digest(reading_evidence)
+        reading_identical = (isinstance(reading.get("source_text"), str)
+                             and reading["source_text"] == reading.get("parsed_text"))
+        if reading_identical:
+            # Exact equality establishes full reading preservation without
+            # repeatedly sending two identical page bodies for each chunk.
+            trace["reading_verification"] = "identical_source_text"
+            reading_metadata = {**reading_metadata, "reading_verification": "identical_source_text"}
         key = [unit["id"], "cpt_source_review", trace["source_text_sha256"], trace["cleaned_text_sha256"]]
         if reading.get("parsed_text") is not None:
             key.append(trace["reading_evidence_sha256"])
         check = self.ask(key, "jev", "workflow.cpt_review", {
             "original_source_text": original, "cleaned_text": data["text"],
-            "reading_source_text": reading.get("source_text"),
-            "parsed_source_text": reading.get("parsed_text"),
-            "source_reading": {key: value for key, value in reading.items()
-                               if key not in {"source_text", "parsed_text"}},
+            "reading_source_text": None if reading_identical else reading.get("source_text"),
+            "parsed_source_text": None if reading_identical else reading.get("parsed_text"),
+            "source_reading": reading_metadata,
             "source_location": unit.get("source_location"), "removed_noise": data["removed_noise"],
             "review_mode": review_mode,
             "scope": "First verify the full reading_source_text to parsed_source_text for substantive coverage and fidelity when both are supplied. Then verify this original_source_text chunk to cleaned_text. Other chunks must be retained in parsed_source_text, not copied into this cleaned chunk. A failure in either comparison rejects the chunk.",

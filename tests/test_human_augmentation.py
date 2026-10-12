@@ -13,6 +13,8 @@ from lib.domain.workflow_node_prompts import (
 )
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.infrastructure import training_workflow as engine
+from tests.test_workflow_production import model_request_data
+from tests.test_workflow_qa_director_engine import source_materials, candidate_material
 
 
 ANSWER = "检查设备前必须先断电。检查结束后记录结果。"
@@ -36,6 +38,23 @@ def director(**changes):
             "human_augmentation": manual(), **changes}
 
 
+def human_request_data(messages):
+    """The offline teacher reads real task and separately transported evidence."""
+    data = model_request_data(messages)
+    materials = source_materials(messages)
+    for candidate in data.get("candidates", []):
+        material = candidate_material(candidate, materials)
+        if material is not None:
+            candidate["teacher_evidence"] = material["text"]
+    evidence = data.get("source_evidence")
+    if isinstance(evidence, dict) and materials and "teacher_evidence" not in evidence:
+        evidence["teacher_evidence"] = "\n\n".join(material["text"] for material in materials).strip()
+    source = data.get("source_context")
+    if isinstance(source, dict) and materials and "text" not in source:
+        source["text"] = "\n\n".join(material["text"] for material in materials)
+    return data
+
+
 class Writer:
     model = "offline-human-writer"
 
@@ -44,7 +63,7 @@ class Writer:
         self.duplicate, self.fail_offset, self.change_answer = duplicate, fail_offset, change_answer
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = human_request_data(messages)
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         if "candidates" in data:
@@ -59,6 +78,8 @@ class Writer:
                     "visible_context": "", "answer_policy": "answer", "guidance": "保留人工设计的安全前提。",
                     "evidence_quotes": [candidate["teacher_evidence"].split("。")[0] + "。"],
                     "dialogue_design": {"interaction_goal": "设备检查前确认安全措施", "user_intent": "安全开始检查"}})
+                if candidate.get("source_line_anchor"):
+                    tasks[-1]["source_line_ranges"] = [deepcopy(candidate["source_line_anchor"])]
             return json.dumps({"tasks": tasks}, ensure_ascii=False)
         if "qa_contract" in data and "source_context" in data:
             return json.dumps({"question": data["qa_contract"]["question"],
@@ -75,7 +96,7 @@ class Reviewer:
         self.reject, self.inconsistent = reject, inconsistent
 
     def chat(self, messages, **kwargs):
-        data, prompt = json.loads(messages[1]["content"]), messages[0]["content"]
+        data, prompt = human_request_data(messages), messages[0]["content"]
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         if '"question_intent_preserved"' in prompt:
@@ -98,7 +119,7 @@ def canonical_text(value):
 
 class DerivedWriter(Writer):
     def chat(self, messages, **kwargs):
-        data, prompt = json.loads(messages[1]["content"]), messages[0]["content"]
+        data, prompt = human_request_data(messages), messages[0]["content"]
         if data.get("request_phase") == "next_turn":
             self.calls.append(deepcopy(data))
             self.usage["calls"] += 1

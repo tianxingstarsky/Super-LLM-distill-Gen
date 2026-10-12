@@ -145,6 +145,87 @@ def test_capacity_reserves_output_rules_and_whole_anchor_instead_of_head_clippin
         prepare_source_context_packs(worker, rows(tmp_path, [source]))
 
 
+def test_source_free_questioner_does_not_shrink_clean_evidence_capacity(tmp_path):
+    worker = workflow(tmp_path, context=131072, output=32768)
+    worker.recipe["source_context_capacity_version"] = 2
+    worker.recipe["qa_director"] = {"enabled": True, "question_separation": True}
+    worker.recipe["node_prompt_templates"]["director"] = {"workflow.qa_director": "Plan the dialogue."}
+    worker.recipe["node_models"]["director"] = {
+        "generation": {"context_window_tokens": 131072, "max_output_tokens": 32768}}
+    expected = context_capacity(worker.recipe)
+    worker.recipe["node_models"]["director"]["question"] = {
+        "context_window_tokens": 8192, "max_output_tokens": 2048}
+    worker.recipe["node_prompt_templates"]["director"]["workflow.question_user"] = "Public role instructions. " * 300
+    assert context_capacity(worker.recipe) == expected
+    source = cleaned(0, "Complete verified source material. " * 200)
+    prepared = list(prepare_source_context_packs(worker, rows(tmp_path, [source])))
+    assert pack_evidence_text(prepared[0], tmp_path) == source["text"]
+
+    # The source-aware planner still has to fit its evidence, independently of
+    # whether the separate questioner can process only a much smaller brief.
+    worker.recipe["node_models"]["director"]["generation"]["context_window_tokens"] = 8192
+    with pytest.raises(ValueError, match="capacity_too_small"):
+        context_capacity(worker.recipe)
+
+
+def test_numbered_request_does_not_reserve_a_second_copy_of_source_body(tmp_path):
+    from lib.infrastructure.model_context_prefix import split_context_request
+    worker = workflow(tmp_path)
+    worker.recipe["source_context_capacity_version"] = 2
+    worker.recipe["source_line_protocol_version"] = 1
+    source = cleaned(0, "Complete verified source material. " * 350)
+    prepared = list(prepare_source_context_packs(worker, rows(tmp_path, [source])))
+    request = split_context_request(tmp_path, {"source": prepared[0]})
+    body = request["teacher_context_pack"][0]["materials"][0]["numbered_text"]
+    assert body == "1: " + source["text"]
+    assert "text" not in request["task_payload"]["source"]
+    assert len(canonical(request).encode("utf-8")) < context_capacity(worker.recipe)
+    assert pack_evidence_text(prepared[0], tmp_path) == source["text"]
+
+
+def test_legacy_capacity_and_pack_remain_pinned_when_new_policy_is_available(tmp_path, monkeypatch):
+    from lib.infrastructure import workflow_source_context as context_module
+    old_path, new_path = tmp_path / "old-run", tmp_path / "new-run"
+    old_path.mkdir()
+    new_path.mkdir()
+    old = workflow(old_path)
+    old.recipe["source_line_protocol_version"] = 1
+    old.recipe["qa_director"] = {"enabled": True, "question_separation": True}
+    old.recipe["node_prompt_templates"]["director"] = {
+        "workflow.qa_director": "Plan the dialogue.",
+        "workflow.question_user": "Question style. " * 10}
+    old.recipe["node_models"]["director"] = {
+        "generation": {"context_window_tokens": 32768, "max_output_tokens": 4096},
+        "question": {"context_window_tokens": 20000, "max_output_tokens": 2048}}
+    units = [cleaned(index, f"Section {index}. " + "Verified complete source text. " * 90) for index in range(8)]
+    old_rows = rows(old_path, units)
+    first = list(prepare_source_context_packs(old, old_rows))
+    manifest_path = old_path / "source-context/manifest.json"
+    original_manifest = manifest_path.read_bytes()
+    original_index = (old_path / "source-context/index.sqlite3").stat().st_mtime_ns
+    manifest = json.loads(original_manifest)
+    pack = load_context_pack(old_path, first[0]["source_context_pack"])
+    largest_anchor = max(len(canonical(context_module.teacher_material(
+        context_module._material(unit, numbered=True))).encode("utf-8")) + 1 for unit in units)
+    assert manifest["capacity_bytes"] == context_capacity(old.recipe) - largest_anchor
+
+    with monkeypatch.context() as patch:
+        patch.setattr(context_module, "_save_pack", lambda *_: pytest.fail("Resume must reuse the pinned old pack"))
+        resumed = list(prepare_source_context_packs(old, old_rows))
+    assert resumed == first
+    assert manifest_path.read_bytes() == original_manifest
+    assert (old_path / "source-context/index.sqlite3").stat().st_mtime_ns == original_index
+
+    new = SimpleNamespace(path=new_path, recipe=deepcopy(old.recipe), check_cancel=lambda: None)
+    new.recipe["source_context_capacity_version"] = 2
+    assert context_capacity(new.recipe) > context_capacity(old.recipe)
+    updated = list(prepare_source_context_packs(new, rows(new_path, units)))
+    new_manifest = json.loads((new_path / "source-context/manifest.json").read_text(encoding="utf-8"))
+    assert new_manifest["capacity_bytes"] == context_capacity(new.recipe)
+    assert updated[0]["source_context_pack"]["id"] != first[0]["source_context_pack"]["id"]
+    assert len(load_context_pack(new_path, updated[0]["source_context_pack"])["materials"]) > len(pack["materials"])
+
+
 def test_legacy_recipe_rows_and_conversation_records_keep_existing_behavior(tmp_path):
     source_rows = rows(tmp_path, [cleaned(0, "Legacy exact source.")])
     assert prepare_source_context_packs(workflow(tmp_path, marker=None), source_rows) is source_rows

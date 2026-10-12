@@ -216,8 +216,9 @@ def make_run(tmp_path, *, writer=None, questioner=None, targets=None, **changes)
     source = tmp_path / "source.txt"
     source.write_text(writer.source_text, encoding="utf-8")
     output = tmp_path / "out"
+    options = changes.pop("qa_director", config(writer.qa_type))
     run_id = engine.create_run(output, sources=[source], targets=targets or ["sft"],
-        qa_director=config(writer.qa_type), **changes)
+        qa_director=options, **changes)
     workflow = engine.Workflow(output, run_id, tmp_path, generator=writer, questioner=questioner, jev=reviewer)
     return workflow, writer, questioner, reviewer
 
@@ -230,6 +231,52 @@ def run(tmp_path, **kwargs):
 
 def records(path, target="sft"):
     return engine.read_json(path / f"artifacts/{target}.records.json")
+
+
+def test_balanced_separated_document_answers_require_source_quotes_before_review(tmp_path):
+    class NoQuoteWriter(DirectorResponder):
+        def chat(self, messages, **kwargs):
+            value = super().chat(messages, **kwargs)
+            dispatch = tool_payload(messages, "dialogue_dispatch")
+            if dispatch is not None and "qa_type" in dispatch:
+                candidate = json.loads(value)
+                candidate["quotes"] = []
+                return json.dumps(candidate, ensure_ascii=False)
+            return value
+
+    state, path, writer, _, reviewer = run(tmp_path, writer=NoQuoteWriter(),
+        targets=["multiturn"], conversation_turns=2,
+        qa_director=config(planning_mode="balanced"))
+    assert state["status"] == "needs_attention", state.get("error")
+    assert state["quality"]["targets"]["multiturn"]["eligible"] == 0
+    row = records(path, "multiturn")[0]
+    assert row["reason"] == "multiturn_turn_failed_after_repair"
+    assert row["failed_turn"] == 1
+    assert len(writer.answers) == 2
+    # A permissive model judge must not bypass the deterministic evidence
+    # requirement merely because later turns use the separate questioner.
+    assert not reviewer.calls
+
+
+def test_balanced_followup_does_not_reuse_answer_to_a_legacy_generated_question(tmp_path):
+    workflow, writer, _, _ = make_run(tmp_path, targets=["multiturn"], conversation_turns=2,
+        qa_director=config(planning_mode="balanced"))
+    original_multiturn = workflow.multiturn
+
+    def with_old_answer(unit):
+        # A previously interrupted run answered a different second question
+        # through the old source-aware user generator.
+        workflow.checkpoint(["call", [unit["id"], "multiturn_answer", 1, 0]],
+            lambda: {"answer": "STALE_ANSWER_FOR_A_DIFFERENT_QUESTION", "quotes": [QUOTE]})
+        return original_multiturn(unit)
+
+    workflow.multiturn = with_old_answer
+    state = workflow.execute()
+    assert state["status"] == "completed", state.get("error")
+    row = records(workflow.path, "multiturn")[0]
+    assert row["messages"][2]["content"] == FOLLOWUP_QUESTION
+    assert len(writer.answers) == 2
+    assert "STALE_ANSWER" not in json.dumps(row, ensure_ascii=False)
 
 
 def test_closed_book_user_is_authored_by_blind_questioner_then_answered_separately(tmp_path):
@@ -284,6 +331,19 @@ def test_source_and_dispatch_are_distinct_completed_tools_not_user_envelopes(tmp
     assert dispatch["question_brief"] == brief()
     assert QUOTE not in json.dumps(initial_question_request, ensure_ascii=False)
     assert "盆栽" not in json.dumps(initial_question_request, ensure_ascii=False)
+
+
+def test_partial_question_keeps_only_planned_clues_while_answerer_has_complete_selected_evidence(tmp_path):
+    state, path, writer, questioner, _ = run(tmp_path, writer=DirectorResponder(qa_type="partial"))
+    assert state["status"] == "completed", state.get("error")
+    row = records(path)[0]
+    assert row["qa_contract"]["visible_context"] == QUOTE
+    assert QUOTE in row["messages"][0]["content"]
+    assert "结束后记录检查结果。" not in row["messages"][0]["content"]
+    teacher = materials(writer.answers[0])
+    assert teacher[0]["text"] == QUOTE + "\n结束后记录检查结果。\n"
+    assert writer.answers[0][-1] == row["messages"][0]
+    assert not questioner.calls
 
 
 def test_answerer_cannot_add_a_new_question_field_or_rewrite_user(tmp_path):
@@ -384,6 +444,33 @@ def test_multiturn_closed_followup_comes_from_blind_questioner_actual_visible_hi
     assert writer.answers[1][-3:] == row["messages"][:3]
     assert writer.answers[1][-1]["content"] == FOLLOWUP_QUESTION
     assert "内部续轮占位" not in json.dumps(row["messages"], ensure_ascii=False)
+
+
+def test_balanced_multiturn_without_design_keeps_blind_questioner_for_every_turn(tmp_path):
+    class BalancedDirector(DirectorResponder):
+        def chat(self, messages, **kwargs):
+            response = super().chat(messages, **kwargs)
+            data = task_payload(messages)
+            if data and "candidates" in data:
+                planned = json.loads(response)
+                for task in planned["tasks"]:
+                    task.pop("dialogue_design")
+                return json.dumps(planned, ensure_ascii=False)
+            return response
+
+    state, path, writer, questioner, _ = run(tmp_path, writer=BalancedDirector(),
+        targets=["multiturn"], conversation_turns=6,
+        qa_director=config(planning_mode="balanced"))
+    assert state["status"] == "completed", state.get("error")
+    row = records(path, "multiturn")[0]
+    assert "dialogue_design" not in row["qa_contract"]
+    assert [message["content"] for message in row["messages"]] == [
+        FIRST_QUESTION, FIRST_ANSWER, FOLLOWUP_QUESTION, FOLLOWUP_ANSWER]
+    assert row["dialogue_end_reason"] == "natural_completion"
+    assert len(questioner.calls) == len(writer.fits) == len(writer.answers) == 2
+    assert all(tool_payload(call, "source_memory") is None for call in questioner.calls)
+    assert tool_payload(questioner.calls[1], "dialogue_dispatch")["visible_dialogue"] == row["messages"][:2]
+    assert all("盆栽" not in json.dumps(call, ensure_ascii=False) for call in questioner.calls)
 
 
 def test_followup_fit_policy_applies_to_current_answer_without_overwriting_original_contract(tmp_path):

@@ -10,6 +10,7 @@ from lib.bootstrap.workflows import human_augmentation_application
 from lib.domain.human_augmentation import HUMAN_CHECK_FIELDS, validate_human_augmentation
 from lib.infrastructure import training_workflow as engine
 from lib.io_utils import atomic_json
+from tests.test_human_augmentation import human_request_data
 
 
 Q = "检查设备前应该先做什么？"
@@ -35,7 +36,7 @@ class Writer:
         self.target_turns = target_turns
 
     def chat(self, messages, **kwargs):
-        data = json.loads(messages[1]["content"])
+        data = human_request_data(messages)
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         if "candidate" in data and "source_evidence" in data:
@@ -68,6 +69,8 @@ class Writer:
                     "visible_context": "", "answer_policy": "answer", "guidance": "保持安全前提与人工设计。",
                     "evidence_quotes": [candidate["teacher_evidence"]],
                     "dialogue_design": {"interaction_goal": "安全完成检查", "user_intent": "安全操作设备"}})
+                if candidate.get("source_line_anchor"):
+                    tasks[-1]["source_line_ranges"] = [deepcopy(candidate["source_line_anchor"])]
             return json.dumps({"tasks": tasks}, ensure_ascii=False)
         if "qa_contract" in data:
             seed = data["qa_contract"]["human_design"]["seed"]
@@ -110,7 +113,7 @@ class Reviewer:
         self.calls, self.usage = [], {"calls": 0}
 
     def chat(self, messages, **kwargs):
-        data, prompt = json.loads(messages[1]["content"]), messages[0]["content"]
+        data, prompt = human_request_data(messages), messages[0]["content"]
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
         if "candidate" in data and "source_evidence" in data:
@@ -316,7 +319,7 @@ def test_real_feedback_revision_returns_to_jev_and_keeps_rejected_and_passed_ver
             self.reject = reject
 
         def chat(self, messages, **kwargs):
-            data = json.loads(messages[1]["content"])
+            data = human_request_data(messages)
             response = super().chat(messages, **kwargs)
             if self.reject and data.get("target") == "sft" and "candidate" in data:
                 value = json.loads(response)

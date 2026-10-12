@@ -96,6 +96,7 @@ REASON_LABELS = {
     "evaluation_verbatim_overlap": "命中评测参照原文",
     "evaluation_near_overlap": "与评测参照近重复",
     "sft_quality_failed_after_repair": "修订后指令样本仍未通过",
+    "recorded_sft_judge_rejected": "原始对话未通过评审，已保留供返工",
     "multiturn_consistency_rejected": "多轮一致性未通过",
     "recorded_tool_trajectory_required": "缺少真实工具轨迹",
     "invalid_dpo_candidate": "偏好候选结构无效",
