@@ -446,6 +446,13 @@ class WorkflowReviewRepair:
         if config is None:
             return collections
         workflow = self
+        review_targets = tuple(target for target in self.recipe["targets"]
+                               if not self.skips_post_generation_review(target))
+        if not review_targets:
+            if "review" in self.state["stages"]:
+                self.state["stages"]["review"].update(status="skipped", done=0, total=0,
+                                                      outputs=0, eligible=0)
+            return collections
         linked = bool(cot_updates_sft(self.recipe) and len(collections.get("cot", []))
                       and not self.recipe.get("repair_inputs")
                       and not getattr(self, "_production_finalizing", False))
@@ -453,10 +460,10 @@ class WorkflowReviewRepair:
                        if linked else 0)
         class Items:
             def __len__(self):
-                return sum(len(collections.get(target, [])) for target in workflow.recipe["targets"]) - skipped_sft
+                return sum(len(collections.get(target, [])) for target in review_targets) - skipped_sft
 
             def __iter__(self):
-                for target in workflow.recipe["targets"]:
+                for target in review_targets:
                     for record in collections.get(target, []):
                         workflow.check_cancel()
                         if linked and target == "sft" and record.get("reasoning_route") == "sft_via_cot":
@@ -473,7 +480,7 @@ class WorkflowReviewRepair:
                 valid = False
             return [{**item["record"], "_review_target": item["target"]}] if valid else workflow._review_repair_item(item)
         reviewed = self.stage_items("review", Items(), process)
-        result = self._split_review_rows(reviewed, collections)
+        result = self._split_review_rows(reviewed, collections, targets=review_targets)
         if linked and skipped_sft:
             canonical, unlinked = iter(result["cot"]), iter(result["sft"])
             spool = RowSpool(self.path / "stage-results" / "review-sft-from-cot.jsonl")
@@ -501,10 +508,19 @@ class WorkflowReviewRepair:
             result["sft"] = spool
         return result
 
-    def _split_review_rows(self, reviewed, collections=None):
+    def skips_post_generation_review(self, target):
+        """New CPT deliveries keep the cleaner's own quality result.
+
+        Historical tasks and explicit repair requests retain their saved review
+        contract. This never upgrades a rejected cleaning result to eligible.
+        """
+        return (target == "cpt" and self.recipe.get("cpt_review_policy_version") == 1
+                and not self.recipe.get("repair_inputs"))
+
+    def _split_review_rows(self, reviewed, collections=None, *, targets=None):
         result = dict(collections or {target: [] for target in TARGETS})
         spools = {target: RowSpool(self.path / "stage-results" / f"review-{target}.jsonl")
-                  for target in self.recipe["targets"]}
+                  for target in (self.recipe["targets"] if targets is None else targets)}
         try:
             for original in reviewed:
                 row = dict(original)

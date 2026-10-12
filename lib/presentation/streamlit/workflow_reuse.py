@@ -236,7 +236,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
                                      qa_director=director, package_review=package_review,
                                      recipe_version=max(18 if review_repair else 16, recipe.get("version", 16)),
                                      source_cleaning=recipe.get("source_cleaning", False), review_repair=review_repair,
-                                     arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
+                                     arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
+                                     cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0))
     for node in prompt_nodes:
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
                                                 package_review=package_review, review_repair=review_repair,

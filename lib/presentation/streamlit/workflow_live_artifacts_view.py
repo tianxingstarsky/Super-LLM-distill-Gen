@@ -76,7 +76,8 @@ def render_live_artifacts(application, run_id, *, state, recipe):
         qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
         review_repair=recipe.get("review_repair"), source_cleaning=source_cleaning,
         recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
-        arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
+        arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
+        cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0))
     stages = [item for item in stages if item["stage"] in scheduled or item.get("written", 0)]
     st.html('''<style>
     .df-live-result{border:1px solid #d9e7f3;border-radius:12px;background:#fff;

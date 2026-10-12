@@ -60,6 +60,7 @@ def test_template_arithmetic_submits_without_models_or_sources_and_ignores_stale
     assert not ui.get("file_uploader")
     assert not any(button.key == "fixture-node:ingest" for button in ui.button)
     assert not ui.button(key="workflow-create:fixture").disabled
+    assert any(item.value == "跨任务查重记录保存在本机；生成空间用尽后停止。" for item in ui.caption)
 
     ui.button(key="workflow-create:fixture").click().run()
     assert not ui.exception

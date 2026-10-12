@@ -421,7 +421,8 @@ def _live_workflow(workflows, backends, session, round_row, context, human_appli
         package_review=recipe.get("package_review"), review_repair=recipe.get("review_repair"),
         recipe_version=recipe.get("version", 18), repair_only=bool(recipe.get("repair_inputs")),
         source_cleaning=recipe.get("source_cleaning", False), feedback_branch=projection,
-        arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
+        arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
+        cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0))
     if selected not in {node["id"] for node in spec["nodes"]}:
         selected = spec["nodes"][0]["id"]
         st.session_state[selection_key] = selected

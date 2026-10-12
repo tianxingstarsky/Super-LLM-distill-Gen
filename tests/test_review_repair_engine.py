@@ -614,7 +614,7 @@ def test_manual_cpt_correction_uses_exact_selected_source_and_no_model(tmp_path,
     run_id = engine.create_run(output, sources=[source], targets=["cpt"], review_repair={"mode": "human"})
     monkeypatch.setattr(engine.Workflow, "cpt", lambda self, unit: [{**unit, "status": "eligible", "source_context": unit}])
     state = engine.Workflow(output, run_id, ROOT, generator=NoCalls()).execute()
-    assert state["status"] == "needs_attention", state.get("error")
+    assert state["status"] == "completed", state.get("error")
     record = engine.read_json(engine.run_path(output, run_id) / "artifacts/cpt.records.json")[0]
     child = create_child(output, run_id, record, target="cpt", mode="human", score=.9, approved=True,
         corrected_record={"text": SOURCE})

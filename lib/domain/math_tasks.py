@@ -2,11 +2,62 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import operator
 import re
 
 
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.FloorDiv: operator.floordiv}
+
+# The v2 parameter period is odd and coprime to the four template families.
+# This bounds candidate seeds, not the number of distinct normalized problems.
+GSM8K_V2_SEED_CAPACITY = 4 * 97 * 89 * 83
+GSM8K_V2_SEED_MULTIPLIER = 65537
+
+
+def canonical_arithmetic_expression(expression: str) -> str:
+    """Normalize bounded arithmetic syntax, without claiming algebraic equivalence.
+
+    Addition and multiplication are associative and commutative here. Their
+    operands are flattened and sorted. Subtraction and floor division remain
+    ordered. Values, distributivity, cancellation and word-problem semantics
+    are deliberately not used to decide identity.
+    """
+    expression = expression.strip() if isinstance(expression, str) else expression
+    evaluate_integer_expression(expression)
+    tree = ast.parse(expression, mode="eval")
+
+    def structure(node):
+        if isinstance(node, ast.Constant):
+            return ("int", node.value)
+        operation = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.FloorDiv: "//"}[type(node.op)]
+        left, right = structure(node.left), structure(node.right)
+        if operation in {"+", "*"}:
+            operands = []
+            for child in (left, right):
+                operands.extend(child[1:] if child[0] == operation else (child,))
+            return (operation, *sorted(operands, key=lambda item: json.dumps(item, separators=(",", ":"))))
+        return (operation, left, right)
+
+    return json.dumps(structure(tree.body), separators=(",", ":"))
+
+
+def verified_arithmetic_fingerprint(record: dict) -> str:
+    """Fingerprint checked raw or persisted arithmetic, independently of theme.
+
+    Caller-supplied fingerprints are ignored. Every recorded calculation and
+    the final result must pass the existing v1/v2 evidence validator first.
+    """
+    if not isinstance(record, dict):
+        raise ValueError("invalid_arithmetic_record")
+    persisted = "arithmetic_expression" in record
+    valid = validate_math_candidate(record) if persisted else validate_gsm8k(record)
+    if not valid:
+        raise ValueError("invalid_arithmetic_record")
+    expression = record["arithmetic_expression"] if persisted else record["_expression"]
+    canonical = canonical_arithmetic_expression(expression)
+    return hashlib.sha256(("arithmetic-expression-v1\0" + canonical).encode("utf-8")).hexdigest()
 
 
 def evaluate_integer_expression(expression: str) -> int:

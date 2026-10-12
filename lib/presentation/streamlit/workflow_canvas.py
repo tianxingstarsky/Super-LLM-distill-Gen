@@ -26,7 +26,8 @@ def node_display_label(node, labels, node_generation=None, *, source_cleaning=Fa
 
 
 def node_description(node, source_mode, *, node_generation=None, package_review=None, cpt_processing=None,
-                     review_repair=None, recipe_version=None, source_cleaning=False, targets=None):
+                     review_repair=None, recipe_version=None, source_cleaning=False, targets=None,
+                     cpt_review_policy_version=0):
     """A short purpose and cost hint available on every node without another card."""
     descriptions = {
         "ingest": "读取来源并整理为可处理的文档片段或任务。",
@@ -63,6 +64,8 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         description = "执行规则检查、模型评审与导出，保留旧任务处理方式。"
     else:
         description = descriptions.get(node, "")
+    if node == "cpt" and cpt_review_policy_version == 1 and "cpt" in (targets or ()):
+        description += " CPT 清洗完成后直接打包，仍执行结构、隐私与去重检查；不再进入生成后的评分与修正。"
     roles = node_roles(node, source_mode, node_generation=node_generation,
                        package_review=package_review, cpt_processing=cpt_processing,
                        review_repair=review_repair, recipe_version=recipe_version)
@@ -176,12 +179,13 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
                 review_repair=None, repair_only=False, source_cleaning=False,
-                arithmetic_seed_protocol_version=0):
+                arithmetic_seed_protocol_version=0, cpt_review_policy_version=0):
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
                                   repair_only=repair_only, source_cleaning=source_cleaning,
                                   review_repair=review_repair,
-                                  arithmetic_seed_protocol_version=arithmetic_seed_protocol_version)
+                                  arithmetic_seed_protocol_version=arithmetic_seed_protocol_version,
+                                  cpt_review_policy_version=cpt_review_policy_version)
     shared_cleaning = (recipe_version >= 19 and source_cleaning is True
                        and any(a == "cpt" and b in {"director", "sft", "multiturn"} for a, b in edges))
     independent_arithmetic = (arithmetic_seed_protocol_version == 1 and "gsm8k" in nodes
@@ -191,7 +195,9 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
     derived = [key for key in DERIVED_STAGES if key in nodes]
     # Center each column within its actual rows. Leave a clear outer lane for
     # base outputs that bypass the derived column on their way to packaging.
-    bypass = shared_cleaning or (bool(derived or "trim" in nodes) and any(
+    cpt_export_bypass = (("cpt", "package") in edges and cpt_review_policy_version == 1
+                         and not repair_only and ("review" in nodes or "jev" in nodes))
+    bypass = shared_cleaning or cpt_export_bypass or (bool(derived or "trim" in nodes) and any(
         a in base and b in {"jev", "review", "package"} for a, b in edges))
     margin = 44 if bypass else 24
     height = 2 * margin + 78 + 100 * (max(1, len(base), len(derived)) - 1)
@@ -275,7 +281,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                        translate_label(text, language) for text in node_description(key, source_mode,
                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                            review_repair=review_repair, recipe_version=recipe_version, source_cleaning=shared_cleaning,
-                           targets=targets))
+                           targets=targets, cpt_review_policy_version=0 if repair_only else cpt_review_policy_version))
         data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation,
                          source_cleaning=shared_cleaning, recipe_version=recipe_version), language), "glyph": glyphs.get(key, "✓"),
                      "x": positions[key][0], "y": positions[key][1], "status": status,
@@ -289,7 +295,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
             "live": live, "language": language, "review_repair": dict(review_repair or {}),
             "bypass_edges": [[a, b] for a, b in edges if
                 shared_cleaning and (a == "ingest" and b != "cpt" or a == "cpt" and b in {"review", "jev", "package"})
-                or independent_arithmetic and a == "gsm8k"],
+                or independent_arithmetic and a == "gsm8k"
+                or cpt_export_bypass and a == "cpt" and b == "package"],
             "labels": {"node_picker": "Go to node" if english else "定位节点",
                                        "fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
                                        "zoom_out": "Zoom out" if english else "缩小",

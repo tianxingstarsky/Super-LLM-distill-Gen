@@ -23,6 +23,7 @@ from lib.domain.workflow_package_review import package_review_stage
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE, generation_variant
 from lib.domain.workflow_targets import PREFERENCE_TARGETS, STAGES, TARGETS, rlaif_feedback_issue
 from lib.infrastructure.json_stream import iter_json_records
+from lib.infrastructure.workflow_arithmetic import arithmetic_completion_status
 from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.infrastructure.workflow_rows import RowSpool, WorkflowRows, write_json_array, write_jsonl
 from lib.io_utils import atomic_json
@@ -591,7 +592,7 @@ class WorkflowProduction:
             production["below_expectation"] = {target: progress["remaining"] for target, progress in production["goals"].items()
                                               if progress["remaining"]}
             if production["status"] in {"completed", "needs_attention"}:
-                production["status"] = production_completion_status(config, production["counts"], self.recipe["targets"],
+                production["status"] = arithmetic_completion_status(self, config, production["counts"], self.recipe["targets"],
                     source_limited=production["stop_reason"] == "source_limit_reached",
                     attention_required=production["stop_reason"] == "planning_failed_after_repair" or
                         bool(production.get("invalid_assessment_count")))
@@ -599,6 +600,8 @@ class WorkflowProduction:
         if not report["package_review"].get("enabled"):
             return
         for target in self.recipe["targets"]:
+            if self.skips_post_generation_review(target):
+                continue
             original = [receipt["package_review"].get("targets", {}).get(target, {}) for receipt in self._production_completed_receipts]
             result = {key: sum(plan.get(key, 0) for plan in original)
                       for key in ("candidates", "planned", "reviewed", "accepted", "rejected", "unreviewed")}
@@ -667,7 +670,9 @@ class WorkflowProduction:
             collections["cot"] = self.stage_items("cot", rows, self.cot)
         if "gsm8k" in selected:
             arithmetic = getattr(self, "_production_arithmetic_inputs", generated) if self.independent_arithmetic() else generated
-            collections["gsm8k"] = self.stage_items("gsm8k", arithmetic, self.gsm8k)
+            from lib.infrastructure.workflow_arithmetic import legacy_arithmetic_guard
+            with legacy_arithmetic_guard(self, arithmetic):
+                collections["gsm8k"] = self.stage_items("gsm8k", arithmetic, self.gsm8k)
         if cot_updates_sft(self.recipe):
             self.finalize_reasoning_outputs(collections, delivery_targets=selected)
         if evaluated_quality_stop(self.recipe.get("production") or {}) and selected & (PREFERENCE_TARGETS | {"cot"}):
@@ -814,7 +819,11 @@ class WorkflowProduction:
         receipts = self._production_receipts(directory)
         production = self._production_state(config, receipts)
         needed = {"ingest", "package"} | set(self.recipe["targets"])
-        if (self.recipe.get("package_review", {}).get("enabled")
+        review_targets = [target for target in self.recipe["targets"]
+                          if not self.skips_post_generation_review(target)]
+        if self.recipe.get("review_repair") is not None and review_targets:
+            needed.add("review")
+        elif (review_targets and self.recipe.get("package_review", {}).get("enabled")
                 and package_review_stage(self.recipe["package_review"]) == "jev"):
             needed.add("jev")
         if set(self.recipe["targets"]) & (PREFERENCE_TARGETS | {"cot"}):
@@ -986,6 +995,13 @@ class WorkflowProduction:
                         remaining = (max(0, progress["goal"] - math_attempts) if quality_first else progress["remaining"]) if progress else size
                         arithmetic_count = min(size, remaining)
                         arithmetic = self.arithmetic_inputs(round_dir / "arithmetic-seeds.json", arithmetic_count, math_attempts)
+                        arithmetic_count = len(arithmetic)
+                        if self.state.get("arithmetic_registry", {}).get("stop_reason") == "arithmetic_space_exhausted":
+                            if progress is not None:
+                                progress["stop_reason"] = "arithmetic_space_exhausted"
+                            self.state["stages"]["gsm8k"]["stop_reason"] = "arithmetic_space_exhausted"
+                            if not arithmetic_count:
+                                active.remove("gsm8k")
                     else:
                         arithmetic = []
                     write_jsonl(round_dir / "arithmetic-inputs.jsonl", arithmetic)
@@ -1006,7 +1022,8 @@ class WorkflowProduction:
                                 "source_limit_reached" if self.state["input_summary"]["deferred"] else
                                 "source_coverage_complete" if soft else "source_exhausted")
                 if not active:
-                    stop = ("source_limit_reached" if any(item["stop_reason"] == "source_limit_reached"
+                    stop = ("arithmetic_space_exhausted" if self.state.get("arithmetic_registry", {}).get("stop_reason") == "arithmetic_space_exhausted" else
+                            "source_limit_reached" if any(item["stop_reason"] == "source_limit_reached"
                                                          for item in production["goals"].values()) else
                             "source_coverage_complete" if soft and self.recipe["sources"] else "source_exhausted")
                     break
@@ -1130,10 +1147,13 @@ class WorkflowProduction:
             if stop == "source_exhausted" and any(item["stop_reason"] == low_reason
                                                   for item in production["goals"].values()):
                 stop = low_reason
+            if stop == "source_exhausted" and any(item["stop_reason"] == "arithmetic_space_exhausted"
+                                                  for item in production["goals"].values()):
+                stop = "arithmetic_space_exhausted"
             unavailable = any(production["counts"][target] == 0 for target in self.recipe["targets"] if target not in config["goals"])
             if unavailable and stop == reached_reason:
                 stop = "source_exhausted"
-            production.update(stop_reason=stop, status=production_completion_status(config, production["counts"], self.recipe["targets"],
+            production.update(stop_reason=stop, status=arithmetic_completion_status(self, config, production["counts"], self.recipe["targets"],
                 source_limited=stop == "source_limit_reached", attention_required=stop == "planning_failed_after_repair" or
                     bool(production.get("invalid_assessment_count"))))
             for progress in production["goals"].values():
@@ -1173,7 +1193,7 @@ class WorkflowProduction:
                 stop = low_reason
             production.pop("current_batch", None)
             unavailable = any(counts[target] == 0 for target in self.recipe["targets"] if target not in config["goals"])
-            production.update(status=production_completion_status(config, counts, self.recipe["targets"],
+            production.update(status=arithmetic_completion_status(self, config, counts, self.recipe["targets"],
                 source_limited=stop == "source_limit_reached", attention_required=stop == "planning_failed_after_repair" or
                     bool(production.get("invalid_assessment_count"))), stop_reason=stop)
             if soft:

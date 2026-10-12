@@ -11,9 +11,9 @@ from lib.presentation.streamlit.workflow_package_review_report import package_re
 from lib.presentation.streamlit.workflow_reuse import recipe_to_draft
 
 
-def confirm_cpt_models(ui):
+def confirm_source_review_models(ui):
     """Complete the same node confirmation steps required in the workbench."""
-    for node in ('ingest', 'cpt', 'review'):
+    for node in ('ingest', 'cpt', 'sft', 'review'):
         ui.button(key='fixture-node:' + node).click().run()
         confirm = ui.button(key='node-model-confirm:fixture:' + node)
         if not confirm.disabled:
@@ -71,9 +71,9 @@ def test_review_roles_prompts_and_policy_survive_node_and_mode_changes():
 def test_missing_separate_judge_blocks_auto_review_but_not_human_review(tmp_path):
     code, source = source_script(tmp_path)
     ui = AppTest.from_string(code).run()
-    ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['cpt']).run()
+    ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['cpt', 'sft']).run()
     ui.multiselect(key='workflow-sources:fixture:文档资料').set_value([source]).run()
-    confirm_cpt_models(ui)
+    confirm_source_review_models(ui)
     assert not ui.button(key='workflow-create:fixture').disabled
     bindings = deepcopy(ui.session_state['workflow-node-bindings:fixture'])
     bindings['review'].pop('jev', None)
@@ -167,7 +167,7 @@ def test_submission_pins_unified_review_roles_policy_limits_and_custom_prompts(t
     code = SCRIPT.replace('    def task_runs(self): return []', "    def create_run(self, **kwargs):\n        st.session_state['fixture-submitted'] = kwargs\n        return '0' * 32\n    def task_runs(self): return []")
     code, source = source_script(tmp_path, code)
     ui = AppTest.from_string(code).run()
-    ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['cpt']).run()
+    ui.pills(key='workflow-targets:fixture:自动推荐').set_value(['cpt', 'sft']).run()
     ui.multiselect(key='workflow-sources:fixture:文档资料').set_value([source]).run()
     ui.button(key='fixture-node:review').click().run()
     ui.toggle(key='workflow-package-review-enabled:fixture').set_value(True).run()
@@ -179,7 +179,7 @@ def test_submission_pins_unified_review_roles_policy_limits_and_custom_prompts(t
     ui.text_area(key='workflow-node-prompt:fixture:review:workflow.review_score').set_value('Custom score.').run()
     ui.selectbox(key='workflow-node-prompt-selection:fixture:review').set_value('workflow.review_repair').run()
     ui.text_area(key='workflow-node-prompt:fixture:review:workflow.review_repair').set_value('Custom correction.').run()
-    confirm_cpt_models(ui)
+    confirm_source_review_models(ui)
     ui.button(key='workflow-create:fixture').click().run()
     assert not ui.exception
     saved = ui.session_state['fixture-submitted']

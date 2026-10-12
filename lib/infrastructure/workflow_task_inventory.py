@@ -75,7 +75,8 @@ def _summary(path, identity, recipe_identity):
                 qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
                 recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
                 source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"),
-                arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
+                arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
+                cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0))
         except (ValueError, TypeError, AttributeError):
             pass
     library = state.get("source_library") or {}
@@ -89,6 +90,8 @@ def _summary(path, identity, recipe_identity):
             "reasoning_trim_enabled": state.get("reasoning_trim_enabled", False),
             "arithmetic_seed_protocol_version": (recipe.get("arithmetic_seed_protocol_version", 0)
                                                   if isinstance(recipe, dict) else 0),
+            "cpt_review_policy_version": (recipe.get("cpt_review_policy_version", 0)
+                                           if isinstance(recipe, dict) else 0),
             "scheduled_stages": list(scheduled) if scheduled is not None else None,
             "usage": {role: {"calls": value.get("calls")} for role, value in (state.get("usage") or {}).items()
                       if isinstance(value, dict)},

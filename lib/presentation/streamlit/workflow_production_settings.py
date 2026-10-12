@@ -143,6 +143,7 @@ def review_coverage_hint(production, review):
 
 
 STOP_LABELS = {
+    "arithmetic_space_exhausted": "算术题空间已用尽，已正常停止",
     "goal_reached": "已达到合格目标", "source_exhausted": "可用来源已处理完",
     "source_limit_reached": "已达到来源处理上限",
     "max_attempts": "已达到尝试上限", "max_rounds": "已达到轮数上限",
@@ -158,9 +159,16 @@ STOP_LABELS = {
 
 def render_delivery_progress(state):
     production = state.get("production")
+    language = st.session_state.get("ui_language", "zh")
+    arithmetic_exhausted = ((state.get("arithmetic_registry") or {}).get("stop_reason") == "arithmetic_space_exhausted"
+        or isinstance(production, dict) and (
+            production.get("stop_reason") == "arithmetic_space_exhausted"
+            or any(progress.get("stop_reason") == "arithmetic_space_exhausted"
+                   for progress in production.get("goals", {}).values())))
+    if arithmetic_exhausted:
+        st.caption(translate_label("本机算术题生成空间已用尽，本分支正常停止，不会补入重复题。已生成结果保留，可继续后续步骤或导出。", language))
     if not isinstance(production, dict):
         return
-    language = st.session_state.get("ui_language", "zh")
     goals = production.get("goals", {})
     if goals:
         soft = production.get("version", 1) >= 2
@@ -173,7 +181,7 @@ def render_delivery_progress(state):
                 label += " · " + translate_label(STOP_LABELS.get(reason, "待处理"), language)
             st.progress(min(1.0, eligible / goal), text=label)
     reason = production.get("stop_reason")
-    if reason in STOP_LABELS and reason not in {"goal_reached", "expectation_reached"}:
+    if reason in STOP_LABELS and reason not in {"goal_reached", "expectation_reached", "arithmetic_space_exhausted"}:
         message = translate_label(STOP_LABELS[reason], language)
         (st.caption if state.get("status") == "completed" else st.warning)(message)
     elif state.get("status") == "running":

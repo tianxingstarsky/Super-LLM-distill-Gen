@@ -303,6 +303,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         review_repair=review_repair, repair_inputs=repair_inputs)
     review_repair = validate_review_repair(review_repair)
     repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
+    cpt_only = targets == ["cpt"] and not repair_inputs
     production = validate_production(production, targets)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
@@ -313,6 +314,15 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     cpt_processing_supplied = cpt_processing is not None
     cpt_processing = validate_cpt_processing(cpt_processing)
     node_prompts = validate_node_prompts(node_prompts)
+    if cpt_only:
+        # CPT owns its source-preserving cleaning checks. Saved sample-review
+        # choices are inactive here, including bindings to removed services.
+        review_repair = None
+        package_review = validate_package_review(None)
+        node_models = {stage: roles for stage, roles in node_models.items()
+                       if stage not in {"review", "jev", "package"}}
+        node_prompts = {stage: templates for stage, templates in node_prompts.items()
+                        if stage not in {"review", "jev", "package"}}
     from lib.domain.workflow_node_prompts import VERSION_13_NODE_PROMPT_IDS, VERSION_19_NODE_PROMPT_IDS
     new_prompt_override = any(prompt_id not in VERSION_13_NODE_PROMPT_IDS.get(stage, ())
                               for stage, templates in node_prompts.items() for prompt_id in templates)
@@ -449,7 +459,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
               "conversation_turns": conversation_turns, "math_generator_version": 2,
-              **({"arithmetic_seed_protocol_version": 1} if "gsm8k" in targets and not repair_inputs else {}),
+              **({"cpt_review_policy_version": 1} if "cpt" in targets and not repair_inputs else {}),
+              **({"arithmetic_seed_protocol_version": 1, "arithmetic_registry_version": 1}
+                 if "gsm8k" in targets and not repair_inputs else {}),
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
               **({"source_cleaning": True, "source_context_pack_version": 1,
                   "source_line_protocol_version": 1, "source_context_capacity_version": 2} if source_cleaning else {}),
@@ -1400,7 +1412,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             if not quality["keep"]:
                 return [{**unit, "status": "quarantined", "reason": quality["reason"], "quality": quality}]
             return [{**unit, "status": "eligible", "text": unit["text"], "quality": quality,
-                     **({"source_context": deepcopy(unit)} if self.recipe.get("review_repair") is not None else {}),
+                     **({"source_context": deepcopy(unit)} if self.recipe.get("review_repair") is not None
+                        or self.skips_post_generation_review("cpt") else {}),
                      "retention_reason": "source_text_passed_deterministic_checks",
                      "evidence_level": document_evidence_level(unit)}]
         data = self.ask([unit["id"], "corpus"], "generation", "workflow.corpus", unit)
@@ -1408,13 +1421,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         quality = inspect_corpus(text)
         if not quality["keep"]:
             return [{**self.rejected(unit, "invalid_generated_corpus"), "quality": quality}]
-        if self.recipe.get("review_repair") is not None:
+        if self.recipe.get("review_repair") is not None and not self.skips_post_generation_review("cpt"):
             return [{**unit, "text": text, "status": "eligible", "quality": quality,
                      "source_context": deepcopy(unit), "evidence_level": "model_assessed_synthetic"}]
         check = self.judge_answer([unit["id"], "corpus_judge"], unit, {"content": text})
         if not accepted(check):
             return [{**self.rejected(unit, "corpus_judge_rejected"), "judge": check, "quality": quality}]
         return [{**unit, "text": text, "status": "eligible", "judge": check, "quality": quality,
+                 **({"source_context": deepcopy(unit)} if self.skips_post_generation_review("cpt") else {}),
                  "retention_reason": "synthetic_text_passed_deterministic_and_model_checks",
                  "evidence_level": "model_assessed_synthetic"}]
 
@@ -1917,6 +1931,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         return self.independent_arithmetic() and set(self.recipe["targets"]) == {"gsm8k"}
 
     def arithmetic_inputs(self, path, count, offset=0):
+        if self.recipe.get("arithmetic_registry_version") == 1:
+            from lib.infrastructure.workflow_arithmetic import registered_arithmetic_inputs
+            return registered_arithmetic_inputs(self, path, count, offset)
         theme = self.recipe["brief"] or "开放数学推理"
         identity = digest({"kind": "deterministic_synthetic_arithmetic", "theme": theme,
                            "generator_version": self.recipe.get("math_generator_version", 1)})
@@ -1929,7 +1946,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         seed = int(item["id"][:8], 16)
         theme = (self.recipe["brief"] or "开放数学推理" if self.independent_arithmetic() else
                  self.recipe["brief"] or (self.recipe["sources"][0]["name"] if self.recipe["sources"] else "开放数学推理"))
-        sample = build_gsm8k(theme, seed, version=self.recipe.get("math_generator_version", 1))
+        if self.recipe.get("arithmetic_registry_version") == 1 and self.independent_arithmetic():
+            from lib.infrastructure.workflow_arithmetic import registered_arithmetic_sample
+            sample = registered_arithmetic_sample(self, item)
+        else:
+            sample = build_gsm8k(theme, seed, version=self.recipe.get("math_generator_version", 1))
         if not validate_gsm8k(sample):
             return [self.rejected(item, "gsm8k_arithmetic_verification_failed")]
         return [{"id": item["id"], "source_id": item["source_id"], "status": "eligible",
@@ -1937,6 +1958,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                  "arithmetic_expression": sample["_expression"], "verified_result": sample["_result"],
                  "calculation_steps": sample.get("_steps", []),
                  "generator_version": self.recipe.get("math_generator_version", 1),
+                 **({"arithmetic_fingerprint": sample["_registry_fingerprint"],
+                     "arithmetic_registry_seed": sample["_registry_seed"]} if "_registry_fingerprint" in sample else {}),
                  **({"source_context": {"kind": "brief", "task": canonical({"arithmetic_expression": sample["_expression"],
                      "verified_result": sample["_result"], "calculation_steps": sample.get("_steps", [])})}}
                     if self.recipe.get("review_repair") is not None else {}),
@@ -2265,6 +2288,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             identities.execute("DROP TABLE IF EXISTS identities")
             identities.execute("CREATE TABLE identities (target TEXT, sha256 TEXT, PRIMARY KEY(target, sha256))")
             for target in self.recipe["targets"]:
+                target_review = review_config["enabled"] and not self.skips_post_generation_review(target)
                 spool = RowSpool(directory / f"package-{target}-candidates.jsonl")
                 candidate_count = 0
                 smallest = []
@@ -2272,7 +2296,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     for index, original in enumerate(collections[target]):
                         self.check_cancel()
                         row = deepcopy(original)
-                        if row["status"] == "eligible":
+                        if row["status"] == "eligible" and not self.skips_post_generation_review(target):
                             if issue := self.human_package_issue(row, target):
                                 row.update(status="quarantined", reason=issue)
                         if row["status"] == "eligible" and target == "sft":
@@ -2293,6 +2317,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                     row.update(status="quarantined", reason=evaluation_hit["reason"],
                                                evaluation_reference=evaluation_hit)
                                     quarantined_text = row.pop("text")
+                                    # The audit record must not re-export a
+                                    # held-out passage through retained evidence.
+                                    row.pop("source_context", None)
                                     row["quarantined_text_sha256"] = hashlib.sha256(
                                         quarantined_text.encode("utf-8")).hexdigest()
                                     row["quarantined_text_chars"] = len(quarantined_text)
@@ -2324,7 +2351,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                     row.update(status="duplicate", reason="duplicate_training_content")
                             if row["status"] == "eligible":
                                 candidate_count += 1
-                                if review_config["enabled"] and review_config["mode"] == "sample":
+                                if target_review and review_config["mode"] == "sample":
                                     # Select the lowest stable hashes. Memory is bounded by the
                                     # per-target cap, independent of candidate population size.
                                     rank = int(digest([self.state["id"], target, index, digest(payload)]), 16)
@@ -2337,7 +2364,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 finally:
                     spool.close()
                 candidates[target] = spool
-                if review_config["enabled"]:
+                if target_review:
                     planned = (candidate_count if review_config["mode"] == "all" else
                                min(candidate_count, review_config["max_samples_per_target"],
                                    math.ceil(candidate_count * review_config["sample_percent"] / 100)))
@@ -2361,7 +2388,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         if getattr(self, "_production_finalizing", False):
             spool = RowSpool(self.path / "stage-results" / "production-final-reviews.jsonl")
             try:
-                for target in self.recipe["targets"]:
+                for target in plans:
                     for index, row in enumerate(candidates[target]):
                         if row["status"] == "eligible" and row.get("package_review", {}).get("status") == "accepted":
                             payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
@@ -2377,7 +2404,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 return sum(plan["planned"] for plan in plans.values())
 
             def __iter__(self):
-                for target in workflow.recipe["targets"]:
+                for target in plans:
                     for index, row in enumerate(candidates[target]):
                         workflow.check_cancel()
                         if row["status"] != "eligible":
@@ -2431,6 +2458,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                   "GSM8K 是受限整数算术模板样例，不等同完整 GSM8K 基准",
                                   "TRL 格式相容不证明所选模型聊天模板或 tokenizer 可用于训练",
                                   "敏感信息规则不能覆盖所有隐私类型"]}
+        if "arithmetic_registry" in self.state:
+            report["arithmetic_registry"] = deepcopy(self.state["arithmetic_registry"])
         preferences = self.recipe.get("generation_preferences")
         node_style = self.recipe.get("sft_output_style")
         if node_style is not None and node_style not in {"separated", "drop"}:
@@ -2510,11 +2539,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         if "rlaif" in self.recipe["targets"]:
             report["limitations"].append(
                 "RLAIF 当前仅产出任务正确性准则下的 AI 反馈和奖励模型偏好候选；未训练奖励模型、提供在线奖励或运行强化学习")
-        review_config = (validate_package_review(None) if self.recipe.get("review_repair") is not None
+        review_targets = [target for target in self.recipe["targets"]
+                          if not self.skips_post_generation_review(target)]
+        review_config = (validate_package_review(None) if self.recipe.get("review_repair") is not None or not review_targets
                          else validate_package_review(self.recipe.get("package_review")))
-        if self.recipe.get("review_repair") is not None:
+        if self.skips_post_generation_review("cpt"):
+            report["cpt_review_policy"] = {"version": 1, "post_generation_review": "not_applicable",
+                "quality_checks": "cpt_node_and_deterministic_packaging"}
+        if self.recipe.get("review_repair") is not None and review_targets:
             report["review_repair"] = {**self.recipe["review_repair"], "node": "review", "targets": {}}
-            for target in self.recipe["targets"]:
+            for target in review_targets:
                 statuses, attempts = {}, 0
                 for row in collections[target]:
                     receipt = row.get("review_repair", {})
@@ -2525,7 +2559,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             if self.recipe["review_repair"]["mode"] == "human":
                 report["human_review"] = "performed" if any(
                     row.get("review_repair", {}).get("score") is not None
-                    for target in self.recipe["targets"] for row in collections[target]) else "pending"
+                    for target in review_targets for row in collections[target]) else "pending"
         independent_review = (review_config["enabled"] and package_review_stage(review_config) == "jev"
                               and not getattr(self, "_production_finalizing", False))
         if independent_review:
@@ -2584,7 +2618,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         self.check_cancel()
                         if row["status"] == "eligible":
                             payload = preferred_training_record(target, row, preferences, sft_output_style=node_style)
-                            if review_config["enabled"]:
+                            if target in review_plans:
                                 selected = selections[target] is None or index in selections[target]
                                 if getattr(self, "_production_finalizing", False):
                                     selected = row.get("package_review", {}).get("status") == "accepted"
@@ -2631,7 +2665,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     if row.get("reason"):
                         reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
                 report["targets"][target] = {"eligible": len(training), "total": len(records), "reasons": reasons}
-                if review_config["enabled"]:
+                if target in review_plans:
                     report["targets"][target]["package_review"] = review_plans[target]
                 if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:
                     # A trainer export is complete only if every eligible native row converts.
@@ -2853,7 +2887,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         lambda: ({"id": digest([seed_base, "gsm8k", index]),
                                   "source_id": source_id, "status": "ready"}
                                  for index in range(count)), self.check_cancel)
-                    collections["gsm8k"] = self.stage_items("gsm8k", items, self.gsm8k)
+                    from lib.infrastructure.workflow_arithmetic import legacy_arithmetic_guard
+                    with legacy_arithmetic_guard(self, items):
+                        collections["gsm8k"] = self.stage_items("gsm8k", items, self.gsm8k)
+                    if self.state.get("arithmetic_registry", {}).get("stop_reason") == "arithmetic_space_exhausted":
+                        self.state["stages"]["gsm8k"]["stop_reason"] = "arithmetic_space_exhausted"
+                        self.event("arithmetic_space_exhausted", generated=len(items))
                 else:
                     collections["gsm8k"] = []
                     self.state["stages"]["gsm8k"]["status"] = "skipped"
@@ -2877,7 +2916,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 cpt_quarantined = any(row["status"] == "quarantined" for row in collections["cpt"])
                 multiturn_quarantined = any(row["status"] == "quarantined" for row in collections["multiturn"])
                 agent_quarantined = any(row["status"] == "quarantined" for row in collections["agent"])
-                attention = (any(not v["eligible"] or v.get("negative", 0) for v in counts.values())
+                from lib.infrastructure.workflow_arithmetic import clean_arithmetic_exhaustion
+                attention = (any((not v["eligible"] and not (target == "gsm8k" and clean_arithmetic_exhaustion(self)))
+                                 or v.get("negative", 0) for target, v in counts.items())
                              or any(v.get("package_review", {}).get("rejected", 0) for v in counts.values())
                              or cpt_quarantined
                              or multiturn_quarantined

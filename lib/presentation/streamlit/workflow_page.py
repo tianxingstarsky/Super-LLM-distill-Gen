@@ -152,6 +152,17 @@ def _workflow_error(error) -> str:
     if str(error).startswith("latex_") and str(error) not in {"latex_external_dependencies", "latex_unsupported_syntax"}:
         return "LaTeX 结构不完整，请检查文档环境、公式、表格和括号。"
     return {
+        "arithmetic_registry_missing": "本机算术查重登记库缺失，已停止新增题目。请保留任务记录，恢复同一数据目录的登记库备份后重试。",
+        "arithmetic_registry_integrity_error": "本机算术查重登记库校验失败，已停止新增题目。请保留现有文件，从备份恢复登记库后重试；不要删除登记库重新生成。",
+        "arithmetic_registry_invalid_path": "算术查重登记库路径是链接，无法使用。请恢复本机数据目录中的实际登记库文件后重试。",
+        "arithmetic_history_invalid": "历史算术记录无法读取或核验未通过，已停止新增题目。请保留历史结果，检查并恢复相关记录后重试。",
+        "arithmetic_history_changed": "查重期间历史算术记录发生变化。请等待旧任务完成或停止后，再从断点重试。",
+        "arithmetic_legacy_run_active": "旧版算术任务仍在运行。请先完成或停止旧任务，再继续本次生成。",
+        "arithmetic_legacy_run_requires_migration": "旧版算术任务无法在新查重登记库启用后继续新增题目。请保留已有结果，使用“复制配置并修改”创建新任务。",
+        "invalid_arithmetic_run_id": "算术任务编号无效。请保留任务文件，检查任务记录后重试。",
+        "invalid_arithmetic_ordinal": "算术题目断点编号无效。请保留任务文件，检查断点记录后重试。",
+        "invalid_arithmetic_theme": "算术题目主题格式无效。请在新任务中填写文字主题，或留空使用默认主题。",
+        "invalid_arithmetic_history_source": "历史算术来源标识无效。请保留历史文件，检查任务记录后重试。",
         "manual_rlaif_change_requires_ai_review": "修改后的 RLAIF 候选需要 AI 重新评分，不能沿用原来的 AI 标签。请切换自动评分与修正。",
         "manual_review_required": "等待人工评分与修正。",
         "manual_review_score_required": "请填写人工评分，再提交内容修正。",
@@ -395,6 +406,8 @@ def _stage_configuration(key, recipe, state):
             details["CPT 清洗方式"] = "模型清洗与评审" if config["mode"] == "model" else "仅本地检查"
             if config["mode"] == "model":
                 details["原文核对方式"] = "多模态对照原页" if config.get("review_mode") == "vision" else "对照原文文字"
+            if recipe.get("cpt_review_policy_version") == 1 and not recipe.get("repair_inputs") and "cpt" in targets:
+                details["CPT 导出路径"] = "清洗与基础检查后直接打包"
         elif key == "multiturn":
             adaptive = (recipe.get("qa_director") or {}).get("planning_mode") == "adaptive"
             details.update({"每段最多轮数" if adaptive else "每段对话轮数": recipe.get("conversation_turns", 3),
@@ -803,7 +816,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                          qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
                                          recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
                                          source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"),
-                                         arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
+                                         arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
+                                         cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0))
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
@@ -836,7 +850,10 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                          or next((key for key in stage_keys if state["stages"][key].get("error")), None)
                          or selected_stage)
         error_code = state.get("error")
-        if error_code == "source_context_model_capacity_too_small":
+        if (isinstance(error_code, str) and error_code.startswith(("arithmetic_", "invalid_arithmetic_"))
+                and "gsm8k" in stage_keys):
+            failure_stage = "gsm8k"
+        elif error_code == "source_context_model_capacity_too_small":
             failure_stage = "director" if "director" in stage_keys else "sft" if "sft" in stage_keys else failure_stage
         elif error_code in {"qa_director_clean_source_required", "source_context_pack_missing",
                             "source_context_pack_invalid", "source_context_pack_changed",
@@ -932,9 +949,12 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
                                       source_cleaning=recipe.get("source_cleaning", False),
                                       arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
+                                      cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0),
                                       feedback_branch=(project_feedback_branch(recipe, state, {"active": active},
-                                          target=next(iter(recipe["targets"]), None))
-                                          if human_application is not None and set(recipe["targets"]).intersection(TARGETS) else None),
+                                          target=next((target for target in recipe["targets"]
+                                              if target != "cpt" or recipe.get("cpt_review_policy_version") != 1
+                                              or recipe.get("repair_inputs")), None))
+                                          if human_application is not None and "review" in graph_nodes else None),
                                       source_mode=("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
                                           else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
                                           else "文档资料" if recipe.get("sources") else "开放需求")),
@@ -1536,8 +1556,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             help="点击即可选中或取消，可以同时选择多类训练数据。",
         ) or []
         arithmetic_only = set(targets) == {"gsm8k"}
+        cpt_only = set(targets) == {"cpt"}
         if "gsm8k" in targets:
             st.caption("模板算术题独立生成，不使用解析后的正文。文档中的数学问题请使用 SFT / CoT。")
+            st.caption("跨任务查重记录保存在本机；生成空间用尽后停止。")
+        if "cpt" in targets:
+            st.caption("CPT 清洗完成后直接打包，仍执行结构、隐私与去重检查；不再进入生成后的评分与修正。")
         trim_option, director_option = st.columns(2, gap="medium")
         with trim_option:
             reasoning_trim = render_trim_toggle(ws, targets, save_field=_save_draft_value)
@@ -1554,7 +1578,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
                                                    qa_director=qa_director, package_review=package_review, recipe_version=draft_recipe_version,
                                                    source_cleaning=source_cleaning, review_repair=review_repair,
-                                                   arithmetic_seed_protocol_version=1)
+                                                   arithmetic_seed_protocol_version=1, cpt_review_policy_version=1)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
@@ -1628,10 +1652,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                       qa_director=qa_director, recipe_version=draft_recipe_version, source_cleaning=source_cleaning,
-                                      arithmetic_seed_protocol_version=1,
+                                      arithmetic_seed_protocol_version=1, cpt_review_policy_version=1,
                                       feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": draft_recipe_version}, {},
-                                          target=next(iter(targets), None))
-                                          if targets else None)),
+                                          target=next((target for target in targets if target != "cpt"), None))
+                                          if "review" in graph_nodes else None)),
                           selection_key, key=f"setup-canvas:{ws}",
                           inspector_key="workbench-node-panel", expanded=True,
                           reveal_key=f"workflow-setup-reveal:{ws}")
@@ -1910,7 +1934,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                if source_mode == "文档资料" else 2000)
                 if not production and source_mode == "开放需求" and maximum < sample_count:
                     st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
-                review_coverage_hint(production, package_review)
+                if not cpt_only:
+                    review_coverage_hint(production, package_review)
                 evaluation_uploads = []
                 if "cpt" in targets:
                     with st.expander("预训练评测集去污染（可选）"):
@@ -2007,7 +2032,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 run_summary += " · " + translate("推理链修剪", language)
             if qa_director["enabled"]:
                 run_summary += " · " + translate("人工问答增强" if human_enabled else "对话指导员", language)
-            review_summary = ("人工评分与修正" if review_repair["mode"] == "human" else
+            review_summary = ("CPT 清洗后直接打包" if cpt_only else
+                              "人工评分与修正" if review_repair["mode"] == "human" else
                               "JEV 评分 + 模型修正" if package_review["enabled"] else
                               "单模型评分与修正")
             run_summary += " · " + translate(review_summary, language)
@@ -2020,6 +2046,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         html.escape(translate(name.strip() or "未命名任务", language)) +
                         '</strong><span>' + html.escape(run_summary) + '</span></div>')
                 st.caption("启动只打开工作窗口；在窗口中提交设计后才调用模型，可反复生成、查看与回流修正。" if human_enabled else
+                           "CPT 清洗后直接打包；基础检查和所选清洗核对方式仍然生效。" if cpt_only else
                            "独立生成模板算术题，再按配置评审并导出。" if arithmetic_only else
                            "先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
@@ -2099,7 +2126,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         sft_output_style=sft_output_style,
                                         node_generation=node_generation,
                                         qa_director=qa_director,
-                                        package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                        package_review={"enabled": False} if cpt_only else package_review,
+                                        cpt_processing=cpt_processing, review_repair=None if cpt_only else review_repair,
                                         node_prompts=node_prompts,
                                         reasoning_trim=reasoning_trim,
                                         web_research=web_research,

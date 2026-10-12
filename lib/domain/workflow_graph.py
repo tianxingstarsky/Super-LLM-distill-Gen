@@ -49,7 +49,8 @@ def sft_uses_cot_output(targets, recipe_version=15) -> bool:
 def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
                     package_review=None, recipe_version=16,
                     repair_only=False, source_cleaning=None,
-                    review_repair=None, arithmetic_seed_protocol_version=0
+                    review_repair=None, arithmetic_seed_protocol_version=0,
+                    cpt_review_policy_version=0
                     ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
@@ -83,8 +84,11 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     # New recipes run scoring and repair together after the requested outputs
     # are complete. Their repair loop stays within this stage: rejected answers
     # must never be fed back to the SFT candidate generator as training inputs.
-    unified_review = recipe_version == 18 or recipe_version >= SOURCE_CLEANING_RECIPE_VERSION and review_repair is not None
-    reviewed = (not unified_review and bool(package_review and package_review.get("enabled")
+    cpt_direct = cpt_review_policy_version == 1 and not repair_only
+    has_review_outputs = bool(selected - {"cpt"}) if cpt_direct else True
+    unified_review = has_review_outputs and (recipe_version == 18 or
+        recipe_version >= SOURCE_CLEANING_RECIPE_VERSION and review_repair is not None)
+    reviewed = (has_review_outputs and not unified_review and bool(package_review and package_review.get("enabled")
                                            and package_review.get("node") == "jev"))
     if unified_review:
         active.add("review")
@@ -111,7 +115,8 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     if "sft" in selected and not sft_uses_cot_output(selected, recipe_version):
         outputs.add("sft")
     terminal = "review" if unified_review else "jev" if reviewed else "package"
-    edges.extend((key, "trim" if key in trimmed_outputs else terminal)
+    edges.extend((key, "package" if cpt_direct and key == "cpt" else
+                  "trim" if key in trimmed_outputs else terminal)
                  for key in (*BASE_STAGES, *DERIVED_STAGES) if key in active and key in outputs)
     if trimmed_outputs:
         edges.append(("trim", terminal))

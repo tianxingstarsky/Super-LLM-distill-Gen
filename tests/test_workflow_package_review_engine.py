@@ -55,7 +55,18 @@ def make_run(tmp_path, count=6, *, targets=None, **options):
     }) for index in range(count)), encoding="utf-8")
     output = tmp_path / "output"
     rid = engine.create_run(output, sources=[source], targets=targets or ["cpt"], **options)
-    return output, rid, engine.run_path(output, rid), source
+    path = engine.run_path(output, rid)
+    if "cpt" in (targets or ["cpt"]):
+        # These checks cover resumable historical CPT package review. New CPT
+        # deliveries bypass it; test_cpt_review_bypass covers that contract.
+        recipe = engine.read_json(path / "recipe.json")
+        recipe.pop("cpt_review_policy_version", None)
+        recipe["package_review"] = engine.validate_package_review(options.get("package_review"))
+        atomic_json(path / "recipe.json", recipe)
+        state = engine.read_json(path / "state.json")
+        state.update(recipe_hash=engine.digest(recipe), package_review_enabled=recipe["package_review"]["enabled"])
+        atomic_json(path / "state.json", state)
+    return output, rid, path, source
 
 
 def report(path):

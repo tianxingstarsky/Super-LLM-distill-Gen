@@ -258,3 +258,70 @@ def test_review_canvas_labels_roles_compactly_and_hides_models_in_human_mode():
     review = next(node for node in manual["nodes"] if node["id"] == "review")
     assert review["models"] == []
     assert review["subtitle"] == "Human scoring · Edit answer"
+
+
+def test_new_cpt_export_skips_post_generation_review_with_all_saved_review_modes():
+    for review_repair in (None, {"mode": "auto"}, {"mode": "human"}):
+        for package_review in ({"enabled": False}, {"enabled": True, "node": "jev"}):
+            nodes, edges = execution_graph(["cpt"], recipe_version=20,
+                cpt_review_policy_version=1, review_repair=review_repair, package_review=package_review)
+            assert nodes == ("ingest", "cpt", "package")
+            assert edges == (("ingest", "cpt"), ("cpt", "package"))
+
+
+def test_new_cpt_bypass_preserves_shared_cleaning_director_and_other_outputs_review():
+    nodes, edges = execution_graph(["cpt", "sft", "cot", "dpo", "gsm8k"], recipe_version=20,
+        source_cleaning=True, qa_director=True, reasoning_trim=True,
+        arithmetic_seed_protocol_version=1, cpt_review_policy_version=1,
+        review_repair={"mode": "auto"}, package_review={"enabled": True, "node": "jev"})
+    assert {"review", "cpt", "director", "sft", "cot", "preference", "gsm8k", "trim"} <= set(nodes)
+    assert "jev" not in nodes
+    assert ("cpt", "package") in edges and ("cpt", "review") not in edges
+    assert ("cpt", "director") in edges and ("director", "sft") in edges
+    assert ("sft", "cot") in edges and ("cot", "trim") in edges
+    assert ("trim", "review") in edges and ("preference", "review") in edges
+    assert ("gsm8k", "review") in edges
+    assert {origin for origin, destination in edges if destination == "package"} == {"cpt", "review"}
+
+
+def test_implicit_cpt_cleaning_is_not_exported_and_historical_or_repair_routes_stay_pinned():
+    options = {"recipe_version": 20, "source_cleaning": True, "review_repair": {"mode": "human"}}
+    _, edges = execution_graph(["sft"], cpt_review_policy_version=1, **options)
+    assert ("cpt", "sft") in edges and ("cpt", "package") not in edges
+    assert ("sft", "review") in edges
+    legacy = execution_graph(["cpt"], **options)
+    assert legacy == execution_graph(["cpt"], cpt_review_policy_version=0, **options)
+    assert ("cpt", "review") in legacy[1]
+    nodes, edges = execution_graph(["cpt"], cpt_review_policy_version=1, repair_only=True, **options)
+    assert nodes == ("ingest", "review", "package")
+    assert edges == (("ingest", "review"), ("review", "package"))
+
+
+def test_cpt_internal_cleaning_models_are_not_removed_with_terminal_review():
+    from lib.domain.workflow_node_models import missing_bindings
+    nodes, _ = execution_graph(["cpt"], recipe_version=20, cpt_review_policy_version=1,
+                               review_repair={"mode": "auto"}, package_review={"enabled": True})
+    for mode, expected in (("native", []), ("model", [("cpt", "generation"), ("cpt", "jev")])):
+        assert missing_bindings(nodes, "文档资料", {}, {}, cpt_processing={"mode": mode},
+            review_repair={"mode": "auto"}, package_review={"enabled": True}) == expected
+
+
+def test_cpt_canvas_routes_export_around_review_and_explains_local_checks_in_english():
+    import re
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    labels = {key: key for key in ("ingest", "cpt", "sft", "review", "package")}
+    options = {"recipe_version": 20, "cpt_review_policy_version": 1,
+               "review_repair": {"mode": "auto"}, "language": "en"}
+    for source_cleaning in (False, True):
+        spec = canvas_spec(["cpt", "sft"], {}, "cpt", labels, labels,
+                           source_cleaning=source_cleaning, **options)
+        cpt = next(node for node in spec["nodes"] if node["id"] == "cpt")
+        assert ["cpt", "package"] in spec["bypass_edges"]
+        assert "straight to packaging" in cpt["description"]
+        assert "Structure, privacy and duplicate checks still apply" in cpt["description"]
+        assert not re.search(r"[\u4e00-\u9fff]", cpt["description"])
+    pure = canvas_spec(["cpt"], {}, "cpt", labels, labels, **options)
+    assert {node["id"] for node in pure["nodes"]} == {"ingest", "cpt", "package"}
+    assert not pure.get("control_nodes") and not pure.get("feedback_branch")
+    repair = canvas_spec(["cpt"], {}, "review", labels, labels, repair_only=True, **options)
+    assert {node["id"] for node in repair["nodes"]} == {"ingest", "review", "package"}

@@ -230,6 +230,7 @@ def test_unflagged_legacy_arithmetic_retains_original_ingest_and_seed_identity(t
     path = engine.run_path(tmp_path, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe.pop("arithmetic_seed_protocol_version")
+    recipe.pop("arithmetic_registry_version")
     atomic_json(path / "recipe.json", recipe)
     state = engine.read_json(path / "state.json")
     state["recipe_hash"] = engine.digest(recipe)

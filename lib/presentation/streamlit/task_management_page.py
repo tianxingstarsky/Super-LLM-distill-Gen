@@ -71,7 +71,8 @@ def _stage_progress(run: dict) -> tuple[int, int]:
     nodes, _ = execution_graph(run.get("targets", []), reasoning_trim=trimming,
                                 qa_director={"enabled": bool(run.get("qa_director_enabled"))},
                                 package_review={"enabled": "jev" in stages, "node": "jev"},
-                                arithmetic_seed_protocol_version=run.get("arithmetic_seed_protocol_version", 0))
+                                arithmetic_seed_protocol_version=run.get("arithmetic_seed_protocol_version", 0),
+                                cpt_review_policy_version=run.get("cpt_review_policy_version", 0))
     return sum(stages.get(key, {}).get("status") == "completed" for key in nodes), len(nodes)
 
 

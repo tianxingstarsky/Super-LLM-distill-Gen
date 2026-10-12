@@ -136,6 +136,25 @@ def test_independent_arithmetic_without_source_or_brief_is_readable_and_counts_r
     assert historical["scheduled_stages"] == ["ingest", "gsm8k", "package"]
 
 
+def test_cpt_review_policy_counts_only_scheduled_stages_without_rewriting_history(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("A reusable source with local checks.", encoding="utf-8")
+    output = tmp_path / "out"
+    rid = create_run(output, sources=[source], targets=["cpt"])
+    recipe_path = run_path(output, rid) / "recipe.json"
+    recipe = {**read_json(recipe_path), "version": 20, "review_repair": {"mode": "auto"},
+              "package_review": {"enabled": True, "node": "jev"}, "cpt_review_policy_version": 1}
+    atomic_json(recipe_path, recipe)
+    summary = inventory.task_runs(output)[0]
+    assert summary["cpt_review_policy_version"] == 1
+    assert summary["scheduled_stages"] == ["ingest", "cpt", "package"]
+    recipe.pop("cpt_review_policy_version")
+    atomic_json(recipe_path, recipe)
+    legacy = inventory.task_runs(output)[0]
+    assert legacy["cpt_review_policy_version"] == 0
+    assert legacy["scheduled_stages"] == ["ingest", "cpt", "review", "package"]
+
+
 @pytest.mark.parametrize("recipe", [[], {}, {"sources": "invalid", "targets": ["cpt"]},
                                    {"sources": [1], "targets": ["cpt"]},
                                    {"sources": [], "brief": 1, "targets": ["cpt"]}])
