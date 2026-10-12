@@ -13,18 +13,18 @@ _canvas = components.declare_component("workflow_canvas", path=str(Path(__file__
 
 
 def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None):
-    """Name the actual CoT operation rather than implying a writer always runs."""
+    """Name the dataset stage; shared corpus reuse does not erase CPT."""
     if node == "cot":
         settings = (node_generation or {}).get("cot")
         generates = bool(settings and settings.get("enabled", True))
         return "CoT 推理生成" if generates else "CoT 推理核验"
-    if node == "cpt" and source_cleaning and (recipe_version or 0) >= 19:
-        return "资料清洗"
+    if node == "cpt":
+        return "CPT 语料处理"
     return labels.get(node, "评分与修正" if node == "review" else node)
 
 
 def node_description(node, source_mode, *, node_generation=None, package_review=None, cpt_processing=None,
-                     review_repair=None, recipe_version=None, source_cleaning=False):
+                     review_repair=None, recipe_version=None, source_cleaning=False, targets=None):
     """A short purpose and cost hint available on every node without another card."""
     descriptions = {
         "ingest": "读取来源并整理为可处理的文档片段或任务。",
@@ -45,7 +45,9 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
     elif node == "sft" and (recipe_version or 0) >= 20:
         description = "接收独立问题与资料记忆后生成回答；不同时编造问题和答案。"
     elif source_cleaning and (recipe_version or 0) >= 19 and node == "cpt":
-        description = "清洗并核对解析资料，隔离不可靠片段；合格资料供指导员、SFT 与多轮对话复用。"
+        description = "清洗并核对解析资料，隔离不可靠片段；合格正文直接供指导员、SFT 与多轮对话复用。"
+        description += (" 本次导出 CPT 语料，合格正文同时供下游节点复用。" if "cpt" in (targets or ()) else
+                        " 本次不导出 CPT，合格正文仅供下游节点复用。")
     elif source_cleaning and (recipe_version or 0) >= 19 and node == "director":
         description = "基于清洗合格的资料设计互动；知识内化样本独立可理解，带资料样本把必要上下文写入用户输入。"
     elif source_cleaning and (recipe_version or 0) >= 19 and node == "sft":
@@ -258,7 +260,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                        "核验选中的来源与候选结果，不重新调用模型解析。") if repair_only and key == "ingest" else " ".join(
                        translate_label(text, language) for text in node_description(key, source_mode,
                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
-                           review_repair=review_repair, recipe_version=recipe_version, source_cleaning=shared_cleaning))
+                           review_repair=review_repair, recipe_version=recipe_version, source_cleaning=shared_cleaning,
+                           targets=targets))
         data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation,
                          source_cleaning=shared_cleaning, recipe_version=recipe_version), language), "glyph": glyphs.get(key, "✓"),
                      "x": positions[key][0], "y": positions[key][1], "status": status,

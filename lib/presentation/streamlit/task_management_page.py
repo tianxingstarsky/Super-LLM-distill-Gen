@@ -160,7 +160,8 @@ def _recent_events_html(run: dict) -> str:
     rows = []
     for event in reversed(events):
         stage_key = str(event.get("stage", ""))
-        stage_name = str(stages.get(stage_key, {}).get("label", stage_key or "工作流"))
+        stage_name = ("CPT 语料处理" if stage_key == "cpt" else
+                      str(stages.get(stage_key, {}).get("label", stage_key or "工作流")))
         kind = str(event.get("kind", "event"))
         label = EVENT_LABELS.get(kind, kind.replace("_", " "))
         moment = _display_time(event.get("at"))

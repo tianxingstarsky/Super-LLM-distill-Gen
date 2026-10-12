@@ -241,12 +241,12 @@ def _workflow_error(error) -> str:
         "invalid_qa_director_answer_policy": "指导员返回了不支持的回答策略，请检查指导员提示词要求的输出字段。",
         "qa_director_closed_book_contract": "无线索任务包含了可见资料，请调整指导员提示词，或选择有线索题型。",
         "qa_director_visible_evidence_required": "本题型缺少必要的可见线索，请补充来源资料或调整指导员提示词。",
-        "qa_director_clean_source_required": "指导员需要合格的清洗资料，请检查资料清洗节点。",
+        "qa_director_clean_source_required": "指导员需要合格的清洗资料，请检查 CPT 语料处理节点。",
         "source_context_model_capacity_too_small": "节点上下文容量不足，无法容纳清洗资料包和本次输出。请提高上下文上限或减小单次输出上限。",
-        "source_context_pack_missing": "可复用清洗资料包缺失，请检查资料清洗节点后重试。",
-        "source_context_pack_invalid": "可复用清洗资料包无法读取，请检查资料清洗节点并保留任务记录。",
-        "source_context_pack_changed": "已保存清洗资料包发生变化。请检查资料清洗节点，并复制配置新建任务。",
-        "source_context_requires_accepted_clean_text": "资料包需要核对合格的清洗正文，请检查资料清洗节点中的隔离原因。",
+        "source_context_pack_missing": "可复用清洗资料包缺失，请检查 CPT 语料处理节点后重试。",
+        "source_context_pack_invalid": "可复用清洗资料包无法读取，请检查 CPT 语料处理节点并保留任务记录。",
+        "source_context_pack_changed": "已保存清洗资料包发生变化。请检查 CPT 语料处理节点，并复制配置新建任务。",
+        "source_context_requires_accepted_clean_text": "资料包需要核对合格的清洗正文，请检查 CPT 语料处理节点中的隔离原因。",
         "invalid_qa_director_evidence": "指导员返回的证据格式无效，请检查来源资料与指导员提示词。",
         "qa_director_multiple_evidence_required": "多线索任务需要至少两段不同的来源证据，请补充资料或调整题型配比。",
         "qa_director_recorded_conversation_changed": "已有对话不应交由指导员改写，请保留任务记录并复制配置后新建任务。",
@@ -392,7 +392,7 @@ def _stage_configuration(key, recipe, state):
         elif key == "cpt":
             details.update({"分块目标字符数": recipe.get("chunk_chars"), "去重": "精确去重与保守近重复检查"})
             config = recipe.get("cpt_processing") or {"mode": "native"}
-            details["资料清洗方式" if recipe.get("source_cleaning") else "CPT 清洗方式"] = "模型清洗与评审" if config["mode"] == "model" else "仅本地检查"
+            details["CPT 清洗方式"] = "模型清洗与评审" if config["mode"] == "model" else "仅本地检查"
             if config["mode"] == "model":
                 details["原文核对方式"] = "多模态对照原页" if config.get("review_mode") == "vision" else "对照原文文字"
         elif key == "multiturn":
@@ -534,7 +534,7 @@ def _quality_html(targets):
     return '<div class="df-run-quality-grid">' + "".join(cards) + "</div>"
 
 
-GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 清洗评审", "sft": "SFT 生成",
+GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 语料处理", "sft": "SFT 生成",
                 "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
                 "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "review": "评分与修正", "jev": "JEV 评分", "package": "输出打包"}
 
@@ -884,9 +884,9 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             copy_action = st.container()
     if (recipe.get("version", 0) < 19 and not recipe.get("repair_inputs")
             and uses_shared_source_cleaning(recipe["targets"], recipe.get("sources", ()))):
-        st.caption("此旧任务按原配方执行，生成前未接入共享资料清洗。新建任务可使用“资料清洗 → 对话指导员 → SFT”；点击“复制配置并修改”可沿用来源和节点设置。"
+        st.caption("此旧任务按原配方执行，生成前未接入共享语料处理。新建任务可使用“CPT 语料处理 → 对话指导员 → SFT”；点击“复制配置并修改”可沿用来源和节点设置。"
                    if draft_application is not None else
-                   "此旧任务按原配方执行，生成前未接入共享资料清洗。新建任务可使用“资料清洗 → 对话指导员 → SFT”。")
+                   "此旧任务按原配方执行，生成前未接入共享语料处理。新建任务可使用“CPT 语料处理 → 对话指导员 → SFT”。")
     if draft_application is not None:
         from lib.presentation.streamlit.workflow_reuse import reuse_run_as_draft
         workspace = st.session_state["ws"]
@@ -947,7 +947,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
             selected_status, done, total, percent = "skipped", 0, 0, 0
         selected_label = (node_display_label(selected_stage, GRAPH_LABELS, recipe.get("node_generation"),
                           source_cleaning=bool(recipe.get("source_cleaning")), recipe_version=recipe.get("version"))
-                          if selected_stage == "cot" or recipe.get("source_cleaning") and selected_stage == "cpt"
+                          if selected_stage in {"cot", "cpt"}
                           else str(selected_metrics.get("label", selected_stage)))
         if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
             passed, quarantined = done, max(0, total - done)
@@ -1669,7 +1669,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     render_knowledge_settings(knowledge_application, ws)
                 elif selected_node == "cpt":
                     cpt_processing = render_cpt_settings(ws, source_mode, bindings, endpoints,
-                        save_field=_save_draft_value, backend_application=backend_application, source_cleaning=source_cleaning)
+                        save_field=_save_draft_value, backend_application=backend_application,
+                        source_cleaning=source_cleaning, targets=targets)
                 else:
                     render_node_models(selected_node, model_source_mode, ws, bindings, endpoints,
                                        backend_application=backend_application, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)

@@ -196,6 +196,15 @@ def make_run(tmp_path, *, targets=("sft",), **options):
     return output, run_id, engine.run_path(output, run_id)
 
 
+@pytest.mark.parametrize("targets", [("cpt",), ("sft",), ("cpt", "sft")])
+def test_new_run_preserves_cpt_identity_with_or_without_shared_processing(tmp_path, targets):
+    _, _, path = make_run(tmp_path, targets=targets)
+    recipe = engine.read_json(path / "recipe.json")
+    saved_state = engine.read_json(path / "state.json")
+    assert saved_state["stages"]["cpt"]["label"] == "CPT 语料处理"
+    assert bool(recipe.get("source_cleaning")) is ("sft" in targets)
+
+
 @pytest.mark.parametrize("targets", [("sft",), ("cot",), ("dpo",), ("orpo",), ("rlaif",), ("multiturn",)])
 def test_document_qa_routes_include_shared_cleaning_without_cpt_export(targets):
     assert uses_shared_source_cleaning(targets, ["manual.pdf"])

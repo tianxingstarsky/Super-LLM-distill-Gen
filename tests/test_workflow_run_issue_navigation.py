@@ -217,7 +217,7 @@ def test_director_clean_source_error_opens_cleaning_node_without_execution(langu
     ui.session_state['fixture-recipe'] = recipe
     ui.run()
     action = ui.button(key='workflow-run-failure:fixture')
-    assert ('资料清洗节点' if language == 'zh' else 'source cleaning node') in action.label
+    assert ('CPT 语料处理节点' if language == 'zh' else 'CPT corpus processing node') in action.label
     action.click().run()
     assert not ui.exception
     assert ui.session_state['fixture-selected'] == 'cpt'

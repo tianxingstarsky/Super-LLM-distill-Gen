@@ -304,7 +304,7 @@ def test_document_director_canvas_follows_cleaned_sources_before_dialogue_genera
             assert nodes["director"]["x"] < nodes[stage]["x"]
             assert ("director", stage) in spec["edges"]
             assert ("ingest", stage) not in spec["edges"]
-    assert nodes["cpt"]["label"] == "资料清洗"
+    assert nodes["cpt"]["label"] == "CPT 语料处理"
     assert nodes["cpt"]["intermediate"] is ("cpt" not in targets)
     assert "用户输入" in nodes["director"]["description"]
     if live:
@@ -323,20 +323,20 @@ def test_legacy_and_open_brief_canvases_keep_their_actual_source_dependencies():
         assert ("ingest", "cpt") in spec["edges"]
         assert ("ingest", "director") in spec["edges"]
         assert ("cpt", "director") not in spec["edges"]
-        assert next(node for node in spec["nodes"] if node["id"] == "cpt")["label"] != "资料清洗"
+        assert next(node for node in spec["nodes"] if node["id"] == "cpt")["label"] == "CPT 语料处理"
 
 
 def test_director_explains_clean_source_route_and_visible_context_without_new_controls():
     ui = AppTest.from_string(SCRIPT).run()
     _director(ui)
-    assert any("CPT / 资料清洗 → 对话指导员" in row.value for row in ui.caption)
+    assert any("CPT 语料处理 → 对话指导员" in row.value for row in ui.caption)
     assert any("指导员按行号选完整知识块" in row.value and "资料记忆工具收到所选原文" in row.value
                for row in ui.caption)
     rules = ui.text_area(key="workflow-director-answer-rules:fixture").value
     ui.segmented_control(key="workflow-source-mode:fixture").set_value("开放需求").run()
     ui.button(key="fixture-node:director").click().run()
     assert not ui.exception
-    assert not any("CPT / 资料清洗 → 对话指导员" in row.value for row in ui.caption)
+    assert not any("CPT 语料处理 → 对话指导员" in row.value for row in ui.caption)
     assert ui.text_area(key="workflow-director-answer-rules:fixture").value == rules
 
 

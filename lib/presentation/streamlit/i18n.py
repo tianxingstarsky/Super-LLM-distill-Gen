@@ -9,6 +9,19 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "CPT 语料处理": "CPT corpus processing",
+    "本次导出 CPT 语料，合格正文同时供下游节点复用。": "Export CPT corpus and reuse accepted text in downstream nodes.",
+    "本次不导出 CPT，合格正文仅供下游节点复用。": "Do not export CPT in this run. Reuse accepted text only in downstream nodes.",
+    "清洗并核对解析资料，隔离不可靠片段；合格正文直接供指导员、SFT 与多轮对话复用。": "Clean and check parsed sources. Quarantine unreliable segments. Reuse accepted text in the director, SFT and multi-turn nodes.",
+    "来源解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。清洗、保真核对后的正文直接供下游再加工。": "Parse sources → CPT corpus processing → Dialogue director → SFT / Multi-turn. Downstream nodes reuse the cleaned and verified text.",
+    "资料解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。": "Parse sources → CPT corpus processing → Dialogue director → SFT / Multi-turn. The director uses only accepted clean sources.",
+    "指导员需要合格的清洗资料，请检查 CPT 语料处理节点。": "The director needs accepted clean sources. Check the CPT corpus processing node.",
+    "可复用清洗资料包缺失，请检查 CPT 语料处理节点后重试。": "The reusable clean source pack is missing. Check the CPT corpus processing node, then retry.",
+    "可复用清洗资料包无法读取，请检查 CPT 语料处理节点并保留任务记录。": "The reusable clean source pack cannot be read. Check the CPT corpus processing node and keep the run records.",
+    "已保存清洗资料包发生变化。请检查 CPT 语料处理节点，并复制配置新建任务。": "The saved clean source pack has changed. Check the CPT corpus processing node, then copy the settings into a new run.",
+    "资料包需要核对合格的清洗正文，请检查 CPT 语料处理节点中的隔离原因。": "Source packs need accepted clean text. Check the quarantine reasons in the CPT corpus processing node.",
+    "此旧任务按原配方执行，生成前未接入共享语料处理。新建任务可使用“CPT 语料处理 → 对话指导员 → SFT”；点击“复制配置并修改”可沿用来源和节点设置。": "This old run keeps its saved workflow. New runs can use CPT corpus processing → Dialogue director → SFT. Select Copy and edit to reuse its sources and node settings.",
+    "此旧任务按原配方执行，生成前未接入共享语料处理。新建任务可使用“CPT 语料处理 → 对话指导员 → SFT”。": "This old run keeps its saved workflow. New runs can use CPT corpus processing → Dialogue director → SFT.",
     "对话指导员模型": "Dialogue director model",
     "无线索提问模型": "Context-free question model",
     "沿用本节点指导员模型": "Use this node's director model",

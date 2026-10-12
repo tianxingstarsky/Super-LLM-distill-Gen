@@ -287,9 +287,8 @@ def _reuse_binding(workspace: str, node: str, role: str, binding: dict) -> None:
 
 
 def _reuse_node_label(node: str, workspace: str) -> str:
-    shared = st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning", False)
-    return (translate_label("资料清洗", st.session_state.get("ui_language", "zh"))
-            if node == "cpt" and shared else node.upper())
+    return (translate_label("CPT 语料处理", st.session_state.get("ui_language", "zh"))
+            if node == "cpt" else node.upper())
 
 
 def _render_model_reuse(node: str, role: str, workspace: str, bindings: dict, endpoints: dict, *,

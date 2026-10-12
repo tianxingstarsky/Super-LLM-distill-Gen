@@ -86,7 +86,7 @@ def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
 
 def render_director_settings(workspace: str, *, save_field) -> None:
     if st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning"):
-        st.caption("资料解析 → CPT / 资料清洗 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
+        st.caption("资料解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
     st.caption("指导员按行号选完整知识块，生成模型通过资料记忆工具收到所选原文。训练输入按线索类型组织。")
     st.caption("有线索提问由指导员发出；无线索提问交给没有资料上下文的独立模型。SFT / 多轮模型收到问题和资料记忆后只负责回答。")
     key = f"workflow-director-mode:{workspace}"

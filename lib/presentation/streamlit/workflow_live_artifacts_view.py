@@ -11,7 +11,7 @@ from lib.presentation.streamlit.i18n import UntranslatedText, translate
 
 
 _STAGE_LABELS = {
-    "ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 清洗评审",
+    "ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 语料处理",
     "sft": "SFT 生成", "multiturn": "多轮对话", "agent": "Agent 轨迹",
     "preference": "偏好评审", "gsm8k": "算术核验", "cot": "CoT 推理",
     "trim": "推理链修剪", "review": "评分与修正", "jev": "JEV 评分", "package": "输出打包",
@@ -23,7 +23,9 @@ _ROW_STATUS = {
 
 
 def _stage_label(key, *, source_cleaning=False):
-    return "资料清洗" if key == "cpt" and source_cleaning else _STAGE_LABELS.get(key, key)
+    # Shared preprocessing changes the delivery route, not the CPT stage's
+    # identity. Ignore old persisted labels without rewriting run records.
+    return _STAGE_LABELS.get(key, key)
 
 
 def _sample_target(stage, row):
@@ -97,6 +99,10 @@ def render_live_artifacts(application, run_id, *, state, recipe):
         st.caption("正在等待首条完整结果。节点的 token 输出可在画布中点开查看。")
         return
     language = st.session_state.get("ui_language", "zh")
+    if source_cleaning and "cpt" in scheduled:
+        st.caption(translate("本次导出 CPT 语料，合格正文同时供下游节点复用。"
+                             if "cpt" in recipe.get("targets", ()) else
+                             "本次不导出 CPT，合格正文仅供下游节点复用。", language))
     def count(item, field):
         value = item.get(field, 0)
         return f"≥ {value:,}" if item.get("indexing") else f"{value:,}"

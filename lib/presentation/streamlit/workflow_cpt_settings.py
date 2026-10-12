@@ -26,7 +26,7 @@ def cpt_vision_unconfirmed(config, bindings, endpoints):
 
 
 def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_field, backend_application=None,
-                        source_cleaning=False):
+                        source_cleaning=False, targets=None):
     if source_mode == "开放需求":
         st.caption("开放需求生成合成语料，由模型生成并独立评审；没有原文时不作原页保真声明。")
         render_node_models("cpt", source_mode, workspace, bindings, endpoints,
@@ -34,7 +34,7 @@ def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_fie
         return {"mode": "native"}
     mode_key = f"workflow-cpt-processing-mode:{workspace}"
     st.session_state[mode_key] = _field(workspace, "processing-mode", "model")
-    mode = st.radio("资料清洗方式" if source_cleaning else "CPT 清洗方式", ("model", "native"), key=mode_key, horizontal=True,
+    mode = st.radio("CPT 清洗方式", ("model", "native"), key=mode_key, horizontal=True,
                     format_func=lambda value: "模型清洗与评审" if value == "model" else "仅本地检查",
                     on_change=save_field, args=(workspace, mode_key))
     if mode == "model":
@@ -68,6 +68,10 @@ def render_cpt_settings(workspace, source_mode, bindings, endpoints, *, save_fie
                 else:
                     st.rerun()
             st.warning("评审模型尚未确认图片输入能力，请先核实并确认。")
-    st.info("来源解析 → 资料清洗与核对 → 指导与生成。只使用合格片段；不需要导出 CPT。" if source_cleaning else
-            "来源解析 → CPT 清洗 → 原文核对 → 去重与打包")
+    if source_cleaning:
+        st.caption("来源解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。清洗、保真核对后的正文直接供下游再加工。")
+        st.info("本次导出 CPT 语料，合格正文同时供下游节点复用。" if "cpt" in (targets or ()) else
+                "本次不导出 CPT，合格正文仅供下游节点复用。")
+    else:
+        st.info("来源解析 → CPT 清洗 → 原文核对 → 去重与打包")
     return deepcopy(config)

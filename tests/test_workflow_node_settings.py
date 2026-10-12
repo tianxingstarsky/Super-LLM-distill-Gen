@@ -308,7 +308,7 @@ def test_configured_node_can_choose_existing_model_without_overwriting_until_app
     }
     ui.run()
     assert not ui.exception
-    label = '资料清洗' if source_cleaning else 'CPT'
+    label = 'CPT 语料处理'
     assert f'{label} · writer · alpha' in ui.selectbox(
         key='node-model:demo:sft:generation:reuse-source').options
     ui.selectbox(key='node-model:demo:sft:generation:reuse-source').set_value('cpt').run()

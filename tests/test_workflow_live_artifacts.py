@@ -11,6 +11,49 @@ from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
 from lib.io_utils import atomic_json
 
 
+_CPT_PREVIEW_SCRIPT = '''
+from copy import deepcopy
+import streamlit as st
+from lib.presentation.streamlit.workflow_live_artifacts_view import render_live_artifacts
+
+recipe = {"version": 19, "targets": st.session_state.get("fixture-targets", ["sft"]),
+          "source_cleaning": True, "qa_director": {"enabled": True}}
+saved_state = {"status": "running", "stages": {"cpt": {
+    "label": "资料清洗", "status": "completed", "done": 1, "total": 1}}}
+original = deepcopy(saved_state)
+class Application:
+    def live_artifacts(self, run_id, **kwargs):
+        return {"stages": [{"stage": "cpt", "written": 1, "processed": 1,
+                             "eligible": 1}], "rows": [], "selected_stage": "cpt"}
+render_live_artifacts(Application(), "fixture", state=saved_state, recipe=recipe)
+assert saved_state == original
+st.session_state["fixture-old-state"] = saved_state
+'''
+
+
+@pytest.mark.parametrize("targets", [["sft"], ["cpt", "sft"]])
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_cpt_live_preview_keeps_identity_and_explains_actual_export_without_rewriting_history(targets, language):
+    from streamlit.testing.v1 import AppTest
+
+    ui = AppTest.from_string(_CPT_PREVIEW_SCRIPT)
+    ui.session_state["fixture-targets"] = targets
+    ui.session_state["ui_language"] = language
+    ui.run()
+    assert not ui.exception
+    label = "CPT 语料处理" if language == "zh" else "CPT corpus processing"
+    assert ui.dataframe[0].value.iloc[0]["节点"] == label
+    assert ui.selectbox[0].options[-1] == label
+    expected = ("本次导出 CPT 语料，合格正文同时供下游节点复用。" if "cpt" in targets else
+                "本次不导出 CPT，合格正文仅供下游节点复用。")
+    if language == "en":
+        expected = ("Export CPT corpus and reuse accepted text in downstream nodes."
+                    if "cpt" in targets else
+                    "Do not export CPT in this run. Reuse accepted text only in downstream nodes.")
+    assert expected in [caption.value for caption in ui.caption]
+    assert ui.session_state["fixture-old-state"]["stages"]["cpt"]["label"] == "资料清洗"
+
+
 @pytest.fixture(autouse=True)
 def empty_cache():
     live._CACHE.clear()

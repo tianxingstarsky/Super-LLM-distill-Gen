@@ -473,7 +473,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                 "package_review_enabled": package_review["enabled"],
                 "qa_director_enabled": qa_director["enabled"],
                 "human_augmentation_enabled": human["enabled"],
-                "stages": {key: {"label": "资料清洗" if key == "cpt" and source_cleaning else label,
+                "stages": {key: {"label": "CPT 语料处理" if key == "cpt" else label,
                                  "status": "pending", "done": 0, "total": 0}
                            for key, label in STAGES.items()
                            if (key != "review" or review_repair is not None)

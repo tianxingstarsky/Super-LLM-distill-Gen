@@ -25,7 +25,7 @@ def _spec(targets, **options):
 def test_sft_without_cpt_export_shows_a_prior_shared_cleaning_column():
     spec = _spec(["sft"], qa_director={"enabled": True}, cpt_processing={"mode": "native"})
     nodes = {node["id"]: node for node in spec["nodes"]}
-    assert nodes["cpt"]["label"] == "资料清洗"
+    assert nodes["cpt"]["label"] == "CPT 语料处理"
     assert nodes["cpt"]["intermediate"] is True
     assert nodes["ingest"]["x"] < nodes["cpt"]["x"] < nodes["director"]["x"] < nodes["sft"]["x"]
     assert ("ingest", "cpt") in spec["edges"]
@@ -41,20 +41,33 @@ def test_model_cleaning_role_is_named_for_cleaning_not_sample_generation():
     spec = _spec(["sft"], bindings=bindings, cpt_processing={"mode": "model"}, language="en")
     node = next(node for node in spec["nodes"] if node["id"] == "cpt")
     assert node["models"] == ["Clean: local · cleaner"]
-    assert node["label"] == "Source cleaning"
+    assert node["label"] == "CPT corpus processing"
 
 
-def test_legacy_and_cpt_only_nodes_keep_their_original_name_and_column():
-    assert node_display_label("cpt", LABELS, source_cleaning=True, recipe_version=18) == "CPT 清洗评审"
+def test_legacy_and_cpt_only_nodes_keep_their_dependencies_and_cpt_name():
+    assert node_display_label("cpt", LABELS, source_cleaning=True, recipe_version=18) == "CPT 语料处理"
     historical = canvas_spec(["cpt", "sft"], {}, "cpt", LABELS, {},
                              recipe_version=18, source_cleaning=True)
     nodes = {node["id"]: node for node in historical["nodes"]}
-    assert nodes["cpt"]["label"] == "CPT 清洗评审"
+    assert nodes["cpt"]["label"] == "CPT 语料处理"
     assert nodes["cpt"]["x"] == nodes["sft"]["x"]
     assert ("ingest", "sft") in historical["edges"]
     cpt_only = _spec(["cpt"])
     node = next(node for node in cpt_only["nodes"] if node["id"] == "cpt")
-    assert node["label"] == "CPT 清洗评审" and not node["intermediate"]
+    assert node["label"] == "CPT 语料处理" and not node["intermediate"]
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("targets", [["sft"], ["cpt", "sft"]])
+def test_shared_cpt_name_and_export_explanation_follow_selected_targets(targets, language):
+    node = next(row for row in _spec(targets, language=language)["nodes"] if row["id"] == "cpt")
+    assert node["label"] == ("CPT 语料处理" if language == "zh" else "CPT corpus processing")
+    assert node["intermediate"] is ("cpt" not in targets)
+    explanation = ("本次导出 CPT 语料" if "cpt" in targets else "本次不导出 CPT") if language == "zh" else (
+        "Export CPT corpus" if "cpt" in targets else "Do not export CPT in this run")
+    assert explanation in node["description"]
+    if language == "en":
+        assert not any("\u4e00" <= char <= "\u9fff" for char in node["description"])
 
 
 def test_all_new_target_combinations_have_clear_nonoverlapping_columns():
@@ -110,16 +123,24 @@ st.session_state["fixture-cleaning"] = config
 def test_sft_only_shared_node_exposes_models_prompts_and_local_cleaning():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
-    assert ui.radio(key="workflow-cpt-processing-mode:sft-only").label == "资料清洗方式"
+    assert ui.radio(key="workflow-cpt-processing-mode:sft-only").label == "CPT 清洗方式"
     assert ui.selectbox(key="node-model:sft-only:cpt:generation:backend")
     assert ui.selectbox(key="node-model:sft-only:cpt:jev:backend")
     prompt = ui.selectbox(key="workflow-node-prompt-selection:sft-only:cpt")
     assert prompt.options == ["资料清洗", "资料保真核对"]
-    assert any("不需要导出 CPT" in item.value for item in ui.info)
+    assert any("本次不导出 CPT" in item.value for item in ui.info)
     ui.radio(key="workflow-cpt-processing-mode:sft-only").set_value("native").run()
     assert not ui.exception and ui.session_state["fixture-cleaning"] == {"mode": "native"}
     assert not any(widget.key.startswith("node-model:sft-only:cpt:") for widget in ui.selectbox)
-    assert any("合格片段" in item.value for item in ui.info)
+    assert any("合格正文" in item.value for item in ui.info)
+
+
+def test_shared_cpt_settings_do_not_claim_cpt_export_is_unneeded_when_selected():
+    ui = AppTest.from_string(SCRIPT.replace(
+        "source_cleaning=True)", "source_cleaning=True, targets=['cpt', 'sft'])", 1)).run()
+    assert not ui.exception
+    assert any("本次导出 CPT 语料" in item.value for item in ui.info)
+    assert not any("不导出 CPT" in item.value or "不需要导出 CPT" in item.value for item in ui.info)
 
 
 def test_custom_cleaning_prompt_can_be_restored_to_default_in_place():
