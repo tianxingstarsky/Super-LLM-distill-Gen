@@ -20,6 +20,8 @@ def node_display_label(node, labels, node_generation=None, *, source_cleaning=Fa
         return "CoT 推理生成" if generates else "CoT 推理核验"
     if node == "cpt":
         return "CPT 语料处理"
+    if node == "gsm8k":
+        return "模板算术题"
     return labels.get(node, "评分与修正" if node == "review" else node)
 
 
@@ -33,7 +35,7 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         "sft": "生成指令对话并完成基础自检；为推理或偏好节点提供候选。",
         "multiturn": "生成连续多轮对话，检查逐轮质量与全段一致性。",
         "agent": "验证工具调用轨迹，保留可复查的执行证据。",
-        "gsm8k": "构建算术任务并核对答案。",
+        "gsm8k": "独立生成模板算术题，不读取上传文档；按主题与数量生成后进入评分或打包。",
         "preference": "比较候选回答，形成偏好训练数据。",
         "trim": "按提示词修剪推理中的泄漏或冗余，保留最终答案。",
         "jev": "额外的模型评分节点；按抽检或全量评审筛选最终样本。",
@@ -173,14 +175,19 @@ def extend_feedback_branch(spec, projection):
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
-                review_repair=None, repair_only=False, source_cleaning=False):
+                review_repair=None, repair_only=False, source_cleaning=False,
+                arithmetic_seed_protocol_version=0):
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
                                   repair_only=repair_only, source_cleaning=source_cleaning,
-                                  review_repair=review_repair)
+                                  review_repair=review_repair,
+                                  arithmetic_seed_protocol_version=arithmetic_seed_protocol_version)
     shared_cleaning = (recipe_version >= 19 and source_cleaning is True
                        and any(a == "cpt" and b in {"director", "sft", "multiturn"} for a, b in edges))
-    base = [key for key in BASE_STAGES if key in nodes and not (shared_cleaning and key == "cpt")]
+    independent_arithmetic = (arithmetic_seed_protocol_version == 1 and "gsm8k" in nodes
+                              and "ingest" in nodes and not repair_only)
+    base = [key for key in BASE_STAGES if key in nodes and not (shared_cleaning and key == "cpt")
+            and not (independent_arithmetic and key == "gsm8k")]
     derived = [key for key in DERIVED_STAGES if key in nodes]
     # Center each column within its actual rows. Leave a clear outer lane for
     # base outputs that bypass the derived column on their way to packaging.
@@ -191,8 +198,9 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
     director_width = 270 if "director" in nodes else 0
     clean_width = 270 if shared_cleaning else 0
     review_width = 270 if "jev" in nodes or "review" in nodes else 0
+    input_offset = 0 if "ingest" in nodes else 270
     width = ((540 if repair_only else 1080 if derived else 810) + (270 if "trim" in nodes else 0)
-             + director_width + clean_width + review_width)
+             + director_width + clean_width + review_width - input_offset)
     positions = {"ingest": (24, (height - 78) / 2), "package": (width - 242, (height - 78) / 2)}
     if "director" in nodes:
         positions["director"] = (294 + clean_width, (height - 78) / 2)
@@ -204,10 +212,16 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         positions["jev"] = (width - 512, (height - 78) / 2)
     if "review" in nodes:
         positions["review"] = (width - 512, (height - 78) / 2)
-    for column, x in ((base, 294 + director_width + clean_width), (derived, 564 + director_width + clean_width)):
+    for column, x in ((base, 294 + director_width + clean_width - input_offset),
+                      (derived, 564 + director_width + clean_width - input_offset)):
         top = (height - (78 + 100 * (len(column) - 1))) / 2
         for index, key in enumerate(column):
             positions[key] = (x, top + index * 100)
+    if independent_arithmetic:
+        # A separate root lane makes the absence of a document dependency
+        # visible, rather than placing arithmetic behind the cleaning chain.
+        positions["gsm8k"] = (24, height - margin + 22)
+        height += 100
     data = []
     for key in nodes:
         metrics = stages.get(key, {})
@@ -273,8 +287,9 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
     english = language == "en"
     result = {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
             "live": live, "language": language, "review_repair": dict(review_repair or {}),
-            "bypass_edges": [[a, b] for a, b in edges if shared_cleaning and (
-                a == "ingest" and b != "cpt" or a == "cpt" and b in {"review", "jev", "package"})],
+            "bypass_edges": [[a, b] for a, b in edges if
+                shared_cleaning and (a == "ingest" and b != "cpt" or a == "cpt" and b in {"review", "jev", "package"})
+                or independent_arithmetic and a == "gsm8k"],
             "labels": {"node_picker": "Go to node" if english else "定位节点",
                                        "fit": "Fit" if english else "适应画布", "zoom_in": "Zoom in" if english else "放大",
                                        "zoom_out": "Zoom out" if english else "缩小",

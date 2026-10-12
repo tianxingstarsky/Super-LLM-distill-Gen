@@ -40,6 +40,10 @@ def _source_summary(recipe):
         mode = "agent" if all(isinstance(value, str) and
                               Path(value).suffix.casefold() in {".json", ".jsonl"}
                               for value in formats) else "document"
+    elif (recipe.get("arithmetic_seed_protocol_version") == 1
+          and isinstance(recipe.get("targets"), list)
+          and recipe["targets"] and all(target == "gsm8k" for target in recipe["targets"])):
+        mode = "arithmetic"
     elif brief.strip():
         mode = "brief"
     else:
@@ -70,7 +74,8 @@ def _summary(path, identity, recipe_identity):
                 reasoning_trim=bool((recipe.get("reasoning_trim") or {}).get("enabled")),
                 qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
                 recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
-                source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"))
+                source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"),
+                arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
         except (ValueError, TypeError, AttributeError):
             pass
     library = state.get("source_library") or {}
@@ -82,6 +87,8 @@ def _summary(path, identity, recipe_identity):
             "production": state.get("production"),
             "qa_director_enabled": state.get("qa_director_enabled", False),
             "reasoning_trim_enabled": state.get("reasoning_trim_enabled", False),
+            "arithmetic_seed_protocol_version": (recipe.get("arithmetic_seed_protocol_version", 0)
+                                                  if isinstance(recipe, dict) else 0),
             "scheduled_stages": list(scheduled) if scheduled is not None else None,
             "usage": {role: {"calls": value.get("calls")} for role, value in (state.get("usage") or {}).items()
                       if isinstance(value, dict)},

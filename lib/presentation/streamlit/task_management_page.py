@@ -70,7 +70,8 @@ def _stage_progress(run: dict) -> tuple[int, int]:
         "running", "completed", "failed", "cancelled"}
     nodes, _ = execution_graph(run.get("targets", []), reasoning_trim=trimming,
                                 qa_director={"enabled": bool(run.get("qa_director_enabled"))},
-                                package_review={"enabled": "jev" in stages, "node": "jev"})
+                                package_review={"enabled": "jev" in stages, "node": "jev"},
+                                arithmetic_seed_protocol_version=run.get("arithmetic_seed_protocol_version", 0))
     return sum(stages.get(key, {}).get("status") == "completed" for key in nodes), len(nodes)
 
 
@@ -116,7 +117,8 @@ def _run_card_html(run: dict, *, language: str = "zh") -> tuple[str, str]:
     heading = (f'<div class="df-task-card-top"><span class="df-task-status" data-status="{safe_status}">'
                f'<i>{STATUS_GLYPHS.get(status, "?")}</i>{html.escape(LABELS.get(status, status))}</span>'
                f'<time title="{html.escape(moment, quote=True)}">{compact_moment}</time></div>')
-    source_modes = {"document": "文档资料", "agent": "Agent 上下文", "brief": "开放需求"}
+    source_modes = {"document": "文档资料", "agent": "Agent 上下文", "brief": "开放需求",
+                    "arithmetic": "模板算术题（GSM8K 格式）"}
     source_label = source_modes.get(run.get("source_mode"), "来源未知")
     source_names = run.get("source_names", [])
     source_text = "、".join(str(name) for name in source_names[:2])

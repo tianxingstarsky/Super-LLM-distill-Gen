@@ -29,7 +29,7 @@ NUMBER_FIELDS = {
 DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT, 100),
                   'workflow-package-review-escalation': (0, 100),
                   'workflow-production-budget': (0, 1_000_000_000)}
-TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000,
+TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-math-theme': 20000,
                'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
                'workflow-web-research-query': 160, 'workflow-web-research-more': 700,
                'workflow-knowledge-query': 2000,

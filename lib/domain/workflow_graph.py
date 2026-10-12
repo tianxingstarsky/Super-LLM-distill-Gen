@@ -49,7 +49,8 @@ def sft_uses_cot_output(targets, recipe_version=15) -> bool:
 def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
                     package_review=None, recipe_version=16,
                     repair_only=False, source_cleaning=None,
-                    review_repair=None) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+                    review_repair=None, arithmetic_seed_protocol_version=0
+                    ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
     unknown = selected.difference(TARGETS)
@@ -58,13 +59,15 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     if repair_only and recipe_version >= 18:
         return ("ingest", "review", "package"), (("ingest", "review"), ("review", "package"))
 
-    active = {"ingest", "package"}
+    independent_math = arithmetic_seed_protocol_version == 1
+    math_only = independent_math and selected == {"gsm8k"}
+    active = {"package"} if math_only else {"ingest", "package"}
     active.update(selected.intersection({"cpt", "sft", "multiturn", "agent", "gsm8k", "cot"}))
     if selected.intersection(PREFERENCE_TARGETS):
         active.add("preference")
     if "preference" in active or "cot" in active:
         active.add("sft")
-    shared_cleaning = recipe_version >= SOURCE_CLEANING_RECIPE_VERSION and (
+    shared_cleaning = not math_only and recipe_version >= SOURCE_CLEANING_RECIPE_VERSION and (
         source_cleaning is True or source_cleaning is None and bool(selected.intersection(SOURCE_QA_TARGETS)))
     if shared_cleaning:
         active.add("cpt")
@@ -97,7 +100,7 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
         edges.append((generation_source, "director"))
     edges.extend(("director" if directed and key in {"sft", "multiturn"}
                   else generation_source if key in {"sft", "multiturn"} else "ingest", key)
-                 for key in BASE_STAGES if key in active)
+                 for key in BASE_STAGES if key in active and not (independent_math and key == "gsm8k"))
     edges.extend(("sft", key) for key in DERIVED_STAGES if key in active)
     # Combined runs publish the final CoT records in both requested formats.
     # The earlier SFT candidates must not bypass CoT verification or trimming.

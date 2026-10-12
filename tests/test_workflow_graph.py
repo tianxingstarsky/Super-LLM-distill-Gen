@@ -56,6 +56,54 @@ def test_requested_sft_and_independent_branches_feed_package():
     assert all((key, "package") in edges for key in ("sft", "multiturn", "agent", "gsm8k"))
 
 
+def test_independent_arithmetic_has_no_source_dependency_and_keeps_selected_review():
+    for options, terminal in (
+            ({}, "package"),
+            ({"package_review": {"enabled": True, "node": "jev"}}, "jev"),
+            ({"review_repair": {"mode": "auto"}}, "review"),
+            ({"review_repair": {"mode": "human"}}, "review")):
+        nodes, edges = execution_graph(["gsm8k"], recipe_version=20,
+            arithmetic_seed_protocol_version=1, **options)
+        expected = ("gsm8k", "package") if terminal == "package" else ("gsm8k", terminal, "package")
+        assert nodes == expected
+        assert edges == ((("gsm8k", "package"),) if terminal == "package"
+                         else (("gsm8k", terminal), (terminal, "package")))
+        assert "ingest" not in nodes
+
+
+def test_independent_math_does_not_remove_other_targets_source_cleaning_or_director():
+    nodes, edges = execution_graph(["sft", "cpt", "gsm8k"], recipe_version=20,
+        source_cleaning=True, qa_director=True, review_repair={"mode": "auto"},
+        arithmetic_seed_protocol_version=1)
+    assert nodes == ("ingest", "cpt", "director", "sft", "gsm8k", "review", "package")
+    assert ("ingest", "cpt") in edges
+    assert ("cpt", "director") in edges
+    assert ("director", "sft") in edges
+    assert not any(destination == "gsm8k" for _, destination in edges)
+    assert all((target, "review") in edges for target in ("sft", "cpt", "gsm8k"))
+
+
+def test_arithmetic_protocol_preserves_old_graphs_and_repair_only_inputs():
+    for version in (16, 18, 19, 20):
+        options = {"recipe_version": version, "review_repair": {"mode": "human"}}
+        legacy = execution_graph(["gsm8k"], **options)
+        assert legacy == execution_graph(["gsm8k"], arithmetic_seed_protocol_version=0, **options)
+        assert "ingest" in legacy[0] and ("ingest", "gsm8k") in legacy[1]
+    nodes, edges = execution_graph(["gsm8k"], recipe_version=20, repair_only=True,
+        arithmetic_seed_protocol_version=1)
+    assert nodes == ("ingest", "review", "package")
+    assert edges == (("ingest", "review"), ("review", "package"))
+
+
+def test_independent_arithmetic_model_requirements_belong_only_to_explicit_review():
+    from lib.domain.workflow_node_models import missing_bindings
+    for review, expected in ((None, []), ({"mode": "human"}, []),
+                             ({"mode": "auto"}, [("review", "generation")])):
+        nodes, _ = execution_graph(["gsm8k"], recipe_version=20,
+            arithmetic_seed_protocol_version=1, review_repair=review)
+        assert missing_bindings(nodes, "开放需求", {}, {}, review_repair=review) == expected
+
+
 def test_optional_trim_processes_only_requested_reasoning_exports():
     nodes, edges = execution_graph(["sft", "cot", "dpo", "cpt"], reasoning_trim=True)
     assert nodes[-2:] == ("trim", "package")

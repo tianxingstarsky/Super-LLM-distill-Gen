@@ -32,7 +32,7 @@ _TARGET_TITLES = {
     "dpo": "偏好对照",
     "orpo": "ORPO 偏好对",
     "rlaif": "AI 反馈与排序",
-    "gsm8k": "算术推理题",
+    "gsm8k": "模板算术题（GSM8K 格式）",
     "cot": "可见推理解释",
 }
 

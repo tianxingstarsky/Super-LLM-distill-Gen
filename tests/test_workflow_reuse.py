@@ -132,6 +132,32 @@ def test_agent_context_sources_keep_the_agent_picker_mode(tmp_path):
     assert copied["missing_sources"] == []
 
 
+@pytest.mark.parametrize("theme", ["Warehouse inventory", ""])
+def test_independent_arithmetic_theme_copies_to_its_own_field(theme):
+    original = recipe(targets=["gsm8k"], brief=theme, arithmetic_seed_protocol_version=1,
+                      web_research=None)
+    copied = recipe_to_draft(original, "Arithmetic", "w", [])
+    assert copied["values"]["workflow-math-theme:w"] == theme
+    assert "workflow-open-brief:w" not in copied["values"]
+    assert original["brief"] == theme
+
+
+@pytest.mark.parametrize("brief", ["Inventory practice", ""])
+def test_legacy_arithmetic_reuse_keeps_sources_and_restores_effective_theme(tmp_path, brief):
+    document = tmp_path / "manual.txt"
+    document.write_text("An existing source.", encoding="utf-8")
+    original = recipe(targets=["gsm8k"], sources=[source(document)], brief=brief,
+                      web_research=None)
+    unchanged = deepcopy(original)
+    copied = recipe_to_draft(original, "Old arithmetic", "w", [{"path": str(document)}])
+    values = copied["values"]
+    assert values["workflow-math-theme:w"] == (brief or document.name)
+    assert values["workflow-source-mode:w"] == "文档资料"
+    assert values["workflow-sources:w:文档资料"] == [str(document)]
+    assert values["workflow-source-brief:w:文档资料"] == brief
+    assert original == unchanged
+
+
 def test_copy_can_find_a_document_beyond_the_old_picker_window(tmp_path, monkeypatch):
     from lib.infrastructure.training_workflow import create_run
     from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver

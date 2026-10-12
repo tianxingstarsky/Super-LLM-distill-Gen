@@ -18,6 +18,15 @@ def test_task_progress_counts_optional_jev_before_packaging():
     assert _stage_progress({"targets": ["sft"], "stages": stages}) == (3, 4)
 
 
+def test_arithmetic_task_progress_ignores_unused_ingest_only_for_new_protocol():
+    from lib.presentation.streamlit.task_management_page import _stage_progress
+    run = {"targets": ["gsm8k"], "stages": {
+        "ingest": {"status": "pending"}, "gsm8k": {"status": "completed"},
+        "package": {"status": "completed"}}}
+    assert _stage_progress(run) == (2, 3)
+    assert _stage_progress({**run, "arithmetic_seed_protocol_version": 1}) == (2, 2)
+
+
 def test_small_task_list_keeps_full_selection_without_duplicate_quick_switch():
     script = '''
 import streamlit as st

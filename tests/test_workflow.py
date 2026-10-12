@@ -538,6 +538,7 @@ def test_unversioned_math_recipe_keeps_legacy_generator_on_execution(tmp_path):
     path = run_path(out, rid)
     recipe = read_json(path / "recipe.json")
     recipe.pop("math_generator_version")
+    recipe.pop("arithmetic_seed_protocol_version", None)
     atomic_json(path / "recipe.json", recipe)
     state = read_json(path / "state.json")
     state["recipe_hash"] = digest(recipe)

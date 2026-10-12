@@ -431,6 +431,7 @@ class WorkflowProduction:
     def _production_receipts(self, directory):
         receipts = []
         attempted = 0
+        generation_offset = 0
         for path in sorted(directory.glob("round-*/receipt.json")):
             receipt = json.loads(path.read_text(encoding="utf-8"))
             targets = set(self.recipe["targets"])
@@ -449,12 +450,28 @@ class WorkflowProduction:
                 candidate = path.parent / name
                 if Path(name).name != name or candidate.is_symlink() or _hash_file(candidate) != expected:
                     raise ValueError("production_round_integrity_error")
+            generated_attempted = receipt["attempted"]
+            if self.independent_arithmetic():
+                generated_attempted = receipt.get("generation_attempted")
+                arithmetic_attempted = receipt.get("arithmetic_attempted")
+                generation_file = "planned.jsonl" if "planned.jsonl" in receipt["sha256"] else "generated.jsonl"
+                if (type(generated_attempted) is not int or generated_attempted < 0
+                        or type(arithmetic_attempted) is not int or arithmetic_attempted < 0
+                        or receipt["attempted"] != max(generated_attempted, arithmetic_attempted)
+                        or arithmetic_attempted != receipt["attempts"].get("gsm8k", 0)
+                        or generation_file not in receipt["sha256"]
+                        or sum(1 for _ in WorkflowRows(path.parent / generation_file, generated_attempted)) != generated_attempted
+                        or "arithmetic-inputs.jsonl" not in receipt["sha256"]
+                        or sum(1 for _ in WorkflowRows(path.parent / "arithmetic-inputs.jsonl", arithmetic_attempted))
+                           != arithmetic_attempted):
+                    raise ValueError("production_round_integrity_error")
             if "planning" in receipt:
                 if "planning.json" not in receipt["sha256"] or "planned.jsonl" not in receipt["sha256"]:
                     raise ValueError("production_round_integrity_error")
-                metadata = self._production_plan_metadata(path.parent, offset=attempted)
+                metadata = self._production_plan_metadata(path.parent,
+                    offset=generation_offset if self.independent_arithmetic() else attempted)
                 if (receipt["planning"] != self._production_planning_summary(metadata) or
-                        receipt["attempted"] != metadata["planned"] or
+                        generated_attempted != metadata["planned"] or
                         receipt.get("planned_ready") != metadata["planned"]):
                     raise ValueError("production_round_integrity_error")
             elif "planning.json" in receipt["sha256"]:
@@ -511,6 +528,7 @@ class WorkflowProduction:
                         raise ValueError("production_round_integrity_error")
             receipts.append(receipt)
             attempted += receipt["attempted"]
+            generation_offset += generated_attempted
         return receipts
 
     def _production_state(self, config, receipts):
@@ -648,7 +666,8 @@ class WorkflowProduction:
             rows = collections["sft"].eligible(self.state["stages"]["sft"]["eligible"])
             collections["cot"] = self.stage_items("cot", rows, self.cot)
         if "gsm8k" in selected:
-            collections["gsm8k"] = self.stage_items("gsm8k", generated, self.gsm8k)
+            arithmetic = getattr(self, "_production_arithmetic_inputs", generated) if self.independent_arithmetic() else generated
+            collections["gsm8k"] = self.stage_items("gsm8k", arithmetic, self.gsm8k)
         if cot_updates_sft(self.recipe):
             self.finalize_reasoning_outputs(collections, delivery_targets=selected)
         if evaluated_quality_stop(self.recipe.get("production") or {}) and selected & (PREFERENCE_TARGETS | {"cot"}):
@@ -714,9 +733,9 @@ class WorkflowProduction:
             for receipt in receipts:
                 path = directory / f"round-{receipt['round']:06d}" / "planned.jsonl"
                 if path.exists():
-                    yield from WorkflowRows(path, receipt["attempted"])
+                    yield from WorkflowRows(path, receipt.get("generation_attempted", receipt["attempted"]))
         write_json_array(self.path / "input_records.json", rows())
-        total = sum(receipt["attempted"] for receipt in receipts if "planned.jsonl" in receipt["sha256"])
+        total = sum(receipt.get("generation_attempted", receipt["attempted"]) for receipt in receipts if "planned.jsonl" in receipt["sha256"])
         ready = sum(receipt.get("planned_ready", receipt["attempted"]) for receipt in receipts if "planned.jsonl" in receipt["sha256"])
         self.state["input_summary"].update(units=total, ready=ready, quarantined=total - ready)
 
@@ -811,8 +830,8 @@ class WorkflowProduction:
         for stage in set(self.state["stages"]) - needed:
             self.state["stages"][stage]["status"] = "skipped"
         self.stage = "ingest"
-        self._research_document = self.research()
-        if self.recipe["sources"]:
+        self._research_document = None if self.arithmetic_only() else self.research()
+        if self.recipe["sources"] and not self.arithmetic_only():
             units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
             from collections import Counter
             input_statuses = Counter(unit["status"] for unit in units)
@@ -829,6 +848,8 @@ class WorkflowProduction:
             self.state["input_summary"] = {"units": 0, "ready": 0, "quarantined": 0, "deferred": 0,
                 "targets": self.recipe["targets"], "generation_candidates": production["attempted"]}
             write_json_array(self.path / "input_records.json", [])
+        if self.arithmetic_only():
+            self.state["stages"]["ingest"].update(status="skipped", done=0, total=0)
         with ExitStack() as resources:
             source_index = resources.enter_context(closing(ProductionInputs(directory / "source-index.sqlite3", sources)))
             seen = resources.enter_context(closing(PlanningIdentities(directory / "planning-identities.sqlite3")))
@@ -851,7 +872,7 @@ class WorkflowProduction:
                                 self._production_corpus.add_reference(row["text"], {"id": row["id"]})
                 plan = directory / f"round-{receipt['round']:06d}" / "planned.jsonl"
                 if plan.exists():
-                    seen.update(task_identity(unit["text"]) for unit in WorkflowRows(plan, receipt["attempted"])
+                    seen.update(task_identity(unit["text"]) for unit in WorkflowRows(plan, receipt.get("generation_attempted", receipt["attempted"]))
                                 if unit.get("status") == "ready")
             identities.commit()
             low_rounds = {target: 0 for target in config["goals"]}
@@ -859,7 +880,7 @@ class WorkflowProduction:
             directed_targets = set(self.recipe["targets"]) & (PREFERENCE_TARGETS | {"sft", "cot", "multiturn"})
             covered = 0
             for receipt in receipts:
-                covered += receipt["attempted"]
+                covered += receipt.get("generation_attempted", receipt["attempted"])
                 may_stop_expansion = (not soft or not self.recipe["sources"] or covered >= source_index.count)
                 if evaluated_stop and self.state["input_summary"].get("deferred"):
                     may_stop_expansion = False
@@ -869,9 +890,16 @@ class WorkflowProduction:
             while True:
                 self.check_cancel()
                 planning_stop = production.get("planning_exhaustion", {}).get("stop_reason")
-                if planning_stop:
+                math_progress = production["goals"].get("gsm8k", {})
+                math_pending = (self.independent_arithmetic() and math_progress.get("remaining", 0)
+                                and not math_progress.get("stop_reason"))
+                if planning_stop and not math_pending:
                     stop = planning_stop
                     break
+                if planning_stop:
+                    for target, progress in production["goals"].items():
+                        if target != "gsm8k" and progress["remaining"]:
+                            progress["stop_reason"] = planning_stop
                 active = [target for target in self.recipe["targets"] if
                     (target in config["goals"] and production["goals"][target]["remaining"] > 0
                      and not production["goals"][target]["stop_reason"])
@@ -893,6 +921,27 @@ class WorkflowProduction:
                     break
                 if not size:
                     size = min(source_index.count or (self.recipe.get("sample_count") or self.recipe["tasks"]), config["round_size"])
+                generation_size, generation_offset = size, production["attempted"]
+                if self.independent_arithmetic():
+                    # Arithmetic's large delivery window must never expand
+                    # paid generation. The other targets share only their own
+                    # candidate window and their own contiguous source offset.
+                    generation_offset = sum(receipt["generation_attempted"] for receipt in receipts)
+                    remaining_generation = []
+                    for target in list(active):
+                        if target == "gsm8k" or (self.recipe["sources"] and target in {"cpt", "agent"}):
+                            continue
+                        progress = production["goals"].get(target)
+                        if progress is not None:
+                            remaining = (max(0, progress["goal"] - progress["attempted"])
+                                         if quality_first else progress["remaining"])
+                            if not remaining and quality_first:
+                                progress["stop_reason"] = "candidate_budget_reached"
+                                active.remove(target)
+                        else:
+                            remaining = self.recipe.get("sample_count") or self.recipe["tasks"]
+                        remaining_generation.append(remaining)
+                    generation_size = min(size, max(remaining_generation, default=0))
                 number = len(receipts) + 1
                 round_dir = directory / f"round-{number:06d}"
                 round_dir.mkdir(exist_ok=True)
@@ -901,7 +950,10 @@ class WorkflowProduction:
                 self.save()
                 self._production_destination = round_dir / "artifacts"
                 self._production_collecting = True
-                if self.recipe["sources"]:
+                if self.independent_arithmetic() and not generation_size:
+                    generated = RowSpool(round_dir / "generated.jsonl")
+                    generated.close()
+                elif self.recipe["sources"]:
                     generated = RowSpool(round_dir / "generated.jsonl")
                     # Human enhancement explicitly requests multiple phrasings
                     # of the same design. Quality-first still caps the initial
@@ -912,7 +964,7 @@ class WorkflowProduction:
                     # The director may revisit it inside the same initial
                     # candidate cap, until valid feedback shows saturation.
                     # Rejecting a sample never creates additional quota debt.
-                    for unit in source_index.rows(production["attempted"], size,
+                    for unit in source_index.rows(generation_offset, generation_size,
                                                   expand=not quality_first or human or guided_expansion):
                         generated.append(unit)
                     generated.close()
@@ -923,9 +975,21 @@ class WorkflowProduction:
                                           "source_id": _digest(self.recipe["brief"]), "kind": "brief", "status": "ready"})
                     generated.close()
                 else:
-                    generated = self._production_plan(size, production["attempted"], round_dir, seen)
+                    generated = self._production_plan(generation_size, generation_offset, round_dir, seen)
                 generated_count = sum(unit["status"] == "ready" for unit in generated)
                 ready = WorkflowRows(generated.path, generated_count, predicate=lambda unit: unit["status"] == "ready")
+                arithmetic_count = 0
+                if self.independent_arithmetic():
+                    if "gsm8k" in active:
+                        math_attempts = sum(receipt["attempts"].get("gsm8k", 0) for receipt in receipts)
+                        progress = production["goals"].get("gsm8k")
+                        remaining = (max(0, progress["goal"] - math_attempts) if quality_first else progress["remaining"]) if progress else size
+                        arithmetic_count = min(size, remaining)
+                        arithmetic = self.arithmetic_inputs(round_dir / "arithmetic-seeds.json", arithmetic_count, math_attempts)
+                    else:
+                        arithmetic = []
+                    write_jsonl(round_dir / "arithmetic-inputs.jsonl", arithmetic)
+                    self._production_arithmetic_inputs = WorkflowRows(round_dir / "arithmetic-inputs.jsonl", arithmetic_count)
                 source_batch = RowSpool(round_dir / "source-batch.jsonl")
                 # Source-preserving targets consume all selected originals exactly once.
                 if not receipts:
@@ -946,13 +1010,19 @@ class WorkflowProduction:
                                                          for item in production["goals"].values()) else
                             "source_coverage_complete" if soft and self.recipe["sources"] else "source_exhausted")
                     break
-                if not ready and not source_batch:
+                if not ready and not source_batch and not arithmetic_count:
                     if self.recipe["sources"]:
                         stop = ("source_limit_reached" if self.state["input_summary"]["deferred"] else
                                 "source_coverage_complete" if quality_first else "source_exhausted")
                         break
+                if not ready and not source_batch and arithmetic_count and self.recipe["sources"]:
+                    for target in list(active):
+                        if target != "gsm8k":
+                            active.remove(target)
+                            if target in production["goals"]:
+                                production["goals"][target]["stop_reason"] = "source_exhausted"
                 production["round"] = number
-                production["current_batch"] = {"attempted": len(generated), "targets": list(active)}
+                production["current_batch"] = {"attempted": max(len(generated), arithmetic_count), "targets": list(active)}
                 self.save()
                 collections = self._production_round(ready, source_batch, active)
                 self.stage = "package"
@@ -973,7 +1043,8 @@ class WorkflowProduction:
                     rows[target] = len(spool)
                     eligible[target] = self.state["quality"]["targets"][target]["eligible"]
                     if target in active:
-                        attempts[target] = len(source_batch) if target in {"cpt", "agent"} and self.recipe["sources"] else len(generated)
+                        attempts[target] = (arithmetic_count if target == "gsm8k" and self.independent_arithmetic() else
+                            len(source_batch) if target in {"cpt", "agent"} and self.recipe["sources"] else len(generated))
                         if evaluated_stop:
                             upstream = (self._production_blocked_sft_quality or {}
                                 if target in PREFERENCE_TARGETS | {"cot"} else {})
@@ -981,12 +1052,16 @@ class WorkflowProduction:
                             unassessed += upstream.get("upstream_unassessed", 0)
                             assessments[target] = {"assessed": assessed, "unassessed": unassessed,
                                 "valid_for_saturation": bool(assessed) and not unassessed, **upstream}
-                attempted = len(generated)
+                attempted = max(len(generated), arithmetic_count)
                 receipt = {"round": number, "attempted": attempted, "attempts": attempts,
                            "planned_ready": generated_count,
                            "rows": rows, "eligible": eligible, "sha256": {
                                f"{target}.jsonl": _hash_file(round_dir / f"{target}.jsonl") for target in rows},
                            "package_review": deepcopy(self.state["quality"]["package_review"])}
+                if self.independent_arithmetic():
+                    receipt.update(generation_attempted=len(generated), arithmetic_attempted=arithmetic_count)
+                    receipt["sha256"]["arithmetic-inputs.jsonl"] = _hash_file(round_dir / "arithmetic-inputs.jsonl")
+                    receipt["sha256"][generated.path.name] = _hash_file(generated.path)
                 if evaluated_stop:
                     receipt["quality_assessments"] = assessments
                     if self._production_blocked_sft_quality is not None:
@@ -1003,7 +1078,7 @@ class WorkflowProduction:
                         # An exhausted local batch cannot erase unseen original
                         # sources. The signal only stops reuse/extension after
                         # initial source coverage, or open-requirement planning.
-                        may_stop = not self.recipe["sources"] or production["attempted"] + attempted >= source_index.count
+                        may_stop = not self.recipe["sources"] or generation_offset + len(generated) >= source_index.count
                         receipt["director_saturation"] = {"guided": guided, **reasons,
                             "explicit_skip_count": skipped, "fraction": round(skipped / guided, 4),
                             "stop_expansion": may_stop and skipped / guided >= .8}
@@ -1022,7 +1097,7 @@ class WorkflowProduction:
                 if (round_dir / "planned.jsonl").exists():
                     receipt["sha256"]["planned.jsonl"] = _hash_file(round_dir / "planned.jsonl")
                 if soft and (round_dir / "planning.json").exists():
-                    metadata = self._production_plan_metadata(round_dir, count=size, offset=production["attempted"])
+                    metadata = self._production_plan_metadata(round_dir, count=generation_size, offset=generation_offset)
                     receipt["planning"] = self._production_planning_summary(metadata)
                     receipt["sha256"]["planning.json"] = _hash_file(round_dir / "planning.json")
                 atomic_json(round_dir / "receipt.json", receipt)
@@ -1030,7 +1105,9 @@ class WorkflowProduction:
                 receipts.append(receipt)
                 previous = production
                 production = self._production_state(config, receipts)
-                may_stop_expansion = not soft or not self.recipe["sources"] or production["attempted"] >= source_index.count
+                generation_covered = (sum(receipt["generation_attempted"] for receipt in receipts)
+                                      if self.independent_arithmetic() else production["attempted"])
+                may_stop_expansion = not soft or not self.recipe["sources"] or generation_covered >= source_index.count
                 if evaluated_stop and self.state["input_summary"].get("deferred"):
                     may_stop_expansion = False
                 for target in config["goals"]:

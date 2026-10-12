@@ -290,6 +290,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                node_generation=None, reasoning_trim=None, node_prompts=None,
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
                review_repair=None, repair_inputs=None):
+    arithmetic_only = (targets == ["gsm8k"] or targets == ("gsm8k",) or targets == {"gsm8k"}) and not repair_inputs
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
@@ -298,7 +299,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         web_research=web_research, sources=sources, node_generation=node_generation,
         reasoning_trim=reasoning_trim, node_prompts=node_prompts,
         package_review=package_review, qa_director=qa_director, production=production,
-        cpt_processing=cpt_processing, review_repair=review_repair, repair_inputs=repair_inputs)
+        cpt_processing=None if arithmetic_only else cpt_processing,
+        review_repair=review_repair, repair_inputs=repair_inputs)
     review_repair = validate_review_repair(review_repair)
     repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
     production = validate_production(production, targets)
@@ -344,7 +346,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         raise ValueError("invalid_sft_output_style")
     preferences = preference_snapshot(settings_root or Path(__file__).resolve().parents[2])
     files = [Path(p).resolve(strict=True) for p in sources]
-    if not repair_inputs and cpt_processing["mode"] == "model" and cpt_processing["review_mode"] == "vision":
+    if not repair_inputs and not arithmetic_only and cpt_processing["mode"] == "model" and cpt_processing["review_mode"] == "vision":
         from lib.infrastructure.document_vision import require_vision_model
         binding = node_models.get("cpt", {}).get("jev")
         if settings_root is None or not binding:
@@ -352,7 +354,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         require_vision_model(Path(settings_root), binding)
         if not files:
             raise ValueError("cpt_visual_review_requires_documents")
-    document_parser = validate_document_parser(document_parser)
+    # Template arithmetic never consumes documents. Inactive parser settings
+    # must not require a service, modality probe, or a paid parsing request.
+    document_parser = validate_document_parser(None if arithmetic_only else document_parser)
     if not repair_inputs and document_parser["mode"] == "vision":
         from lib.infrastructure.document_vision import require_vision_model
         if settings_root is None or not files or any(path.suffix.lower() in {".json", ".jsonl"} for path in files):
@@ -363,9 +367,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         if not files or any(path.suffix.lower() in {".json", ".jsonl", ".png", ".jpg", ".jpeg", ".webp"} for path in files):
             raise ValueError("document_text_requires_document_sources")
         node_models.setdefault("ingest", {})["generation"] = document_parser["binding"]
-    elif not repair_inputs and any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in files):
+    elif not repair_inputs and not arithmetic_only and any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in files):
         raise ValueError("document_image_requires_vision_parser")
-    if not files and not brief.strip() and not human["enabled"] and not repair_inputs:
+    if not files and not brief.strip() and not human["enabled"] and not repair_inputs and not arithmetic_only:
         raise ValueError("请上传来源文件或填写开放性需求")
     if "agent" in targets and not files and not (set(targets) - {"agent"}) and not repair_inputs:
         raise ValueError("Agent 轨迹重放需要上传 JSON/JSONL 工具执行记录")
@@ -400,6 +404,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         active_roles = ({"generation", "jev"} if package_review["enabled"] else {"generation"}) if review_repair["mode"] == "auto" else set()
         bindings = {role: binding for role, binding in node_models.get("review", {}).items() if role in active_roles}
         node_models = {"review": bindings} if bindings else {}
+    elif arithmetic_only:
+        node_models = {stage: roles for stage, roles in node_models.items()
+                       if stage in {"review", "jev", "package"}}
     if settings_root is not None and node_models:
         # A submitted node binding must not follow a mutable service name to a
         # different URL, protocol or model inventory while waiting to run.
@@ -442,6 +449,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "judge_model": judge_model, "jev_backend": jev_backend, "jev_model": jev_model,
               "max_units": max_units, "chunk_chars": chunk_chars, "tasks": tasks,
               "conversation_turns": conversation_turns, "math_generator_version": 2,
+              **({"arithmetic_seed_protocol_version": 1} if "gsm8k" in targets and not repair_inputs else {}),
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
               **({"source_cleaning": True, "source_context_pack_version": 1,
                   "source_line_protocol_version": 1, "source_context_capacity_version": 2} if source_cleaning else {}),
@@ -504,11 +512,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         self.state = read_json(self.path / "state.json")
         self.recipe = read_json(self.path / "recipe.json")
         parser = validate_document_parser(self.recipe.get("document_parser"))
-        if not self.recipe.get("repair_inputs") and parser["mode"] == "vision":
+        if not self.recipe.get("repair_inputs") and not self.arithmetic_only() and parser["mode"] == "vision":
             from lib.infrastructure.document_vision import require_vision_model
             require_vision_model(self.root, parser["binding"])
         cpt_config = validate_cpt_processing(self.recipe.get("cpt_processing"))
-        if not self.recipe.get("repair_inputs") and cpt_config["mode"] == "model" and cpt_config["review_mode"] == "vision":
+        if not self.recipe.get("repair_inputs") and not self.arithmetic_only() and cpt_config["mode"] == "model" and cpt_config["review_mode"] == "vision":
             from lib.infrastructure.document_vision import require_vision_model
             binding = self.recipe.get("node_models", {}).get("cpt", {}).get("jev")
             if not binding:
@@ -1902,9 +1910,25 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                  "evidence_level": sample["evidence_level"],
                  **self.qa_metadata(sample, contract_check)}]
 
+    def independent_arithmetic(self):
+        return self.recipe.get("arithmetic_seed_protocol_version") == 1
+
+    def arithmetic_only(self):
+        return self.independent_arithmetic() and set(self.recipe["targets"]) == {"gsm8k"}
+
+    def arithmetic_inputs(self, path, count, offset=0):
+        theme = self.recipe["brief"] or "开放数学推理"
+        identity = digest({"kind": "deterministic_synthetic_arithmetic", "theme": theme,
+                           "generator_version": self.recipe.get("math_generator_version", 1)})
+        return row_checkpoint(path, lambda: (
+            {"id": digest([identity, "gsm8k", index]), "source_id": identity,
+             "kind": "arithmetic_seed", "status": "ready", "synthetic": True}
+            for index in range(offset, offset + count)), self.check_cancel)
+
     def gsm8k(self, item):
         seed = int(item["id"][:8], 16)
-        theme = self.recipe["brief"] or (self.recipe["sources"][0]["name"] if self.recipe["sources"] else "开放数学推理")
+        theme = (self.recipe["brief"] or "开放数学推理" if self.independent_arithmetic() else
+                 self.recipe["brief"] or (self.recipe["sources"][0]["name"] if self.recipe["sources"] else "开放数学推理"))
         sample = build_gsm8k(theme, seed, version=self.recipe.get("math_generator_version", 1))
         if not validate_gsm8k(sample):
             return [self.rejected(item, "gsm8k_arithmetic_verification_failed")]
@@ -2734,14 +2758,17 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     return self._execute_production()
                 selected_targets = set(self.recipe["targets"])
                 planned_targets = selected_targets & ({"cpt", "sft", "cot", "multiturn"} | PREFERENCE_TARGETS)
-                if self.recipe["brief"] and not self.recipe["sources"] and planned_targets:
+                if self.arithmetic_only():
+                    units = []
+                    self.state["stages"]["ingest"].update(status="skipped", done=0, total=0)
+                elif self.recipe["brief"] and not self.recipe["sources"] and planned_targets:
                     self.stage = "ingest"
                     units = self.plan()
                     self.state["stages"]["ingest"].update(status="completed", done=len(units),
                                                           total=len(units), outputs=len(units), eligible=len(units))
                 else:
                     units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
-                if "gsm8k" in selected_targets and not units:
+                if "gsm8k" in selected_targets and not units and not self.independent_arithmetic():
                     brief = self.recipe["brief"]
                     source_id = digest(brief)
                     units = row_checkpoint(
@@ -2755,7 +2782,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 eligible = (units.ready(eligible_count, self.recipe["max_units"]) if isinstance(units, WorkflowRows)
                             else [u for u in units if u["status"] == "ready"])
                 requested = self.recipe.get("sample_count") or self.recipe["tasks"]
-                planning_deferred = max(0, requested - self.recipe["max_units"]) if not self.recipe["sources"] else 0
+                planning_deferred = (max(0, requested - self.recipe["max_units"])
+                                     if not self.recipe["sources"] and not self.arithmetic_only() else 0)
                 self.state["input_summary"] = {"units": len(units), "ready": eligible_count,
                     "quarantined": input_statuses["quarantined"], "skipped": input_statuses["skipped"],
                     "deferred": max(max(0, eligible_count - self.recipe["max_units"]), planning_deferred),
@@ -2818,7 +2846,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     seed_base = self.recipe["brief"] or canonical(self.recipe["sources"])
                     source_id = digest(seed_base)
                     count = min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"])
-                    items = row_checkpoint(
+                    items = self.arithmetic_inputs(
+                        self.path / "checkpoints" / "gsm8k" / "independent-math-seeds.json",
+                        self.recipe.get("sample_count") or self.recipe["tasks"]) if self.independent_arithmetic() else row_checkpoint(
                         self.path / "checkpoints" / "gsm8k" / "math-seeds.json",
                         lambda: ({"id": digest([seed_base, "gsm8k", index]),
                                   "source_id": source_id, "status": "ready"}

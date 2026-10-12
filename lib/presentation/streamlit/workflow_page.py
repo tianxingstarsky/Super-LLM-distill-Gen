@@ -59,7 +59,7 @@ LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "c
           "cancelled": "已停止", "needs_attention": "待处理", "skipped": "未选择"}
 TARGET_LABELS = {"cpt": "CPT 预训练语料", "sft": "SFT 指令对话", "agent": "Agent 验证轨迹",
                  "multiturn": "多轮对话 SFT",
-                 "dpo": "DPO 偏好对", "rlaif": "RLAIF AI 反馈", "gsm8k": "基础算术（GSM8K 格式）",
+                 "dpo": "DPO 偏好对", "rlaif": "RLAIF AI 反馈", "gsm8k": "模板算术题（GSM8K 格式）",
                  "cot": "CoT 可见推理", "orpo": "ORPO 偏好对"}
 PRESETS = {
     "自动推荐": ("sft",),
@@ -69,7 +69,7 @@ PRESETS = {
     "Agent 轨迹": ("sft", "agent"),
     "偏好对齐": ("sft", "orpo", "dpo", "rlaif"),
     "ORPO 数据生成": ("orpo",),
-    "数学推理": ("sft", "gsm8k", "cot"),
+    "数学推理": ("sft", "cot"),
     "自选目标": (),
 }
 
@@ -535,7 +535,7 @@ def _quality_html(targets):
 
 
 GRAPH_LABELS = {"ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 语料处理", "sft": "SFT 生成",
-                "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "算术核验",
+                "multiturn": "多轮对话", "agent": "Agent 轨迹", "gsm8k": "模板算术题",
                 "preference": "偏好评审", "cot": "CoT 推理核验", "trim": "推理链修剪", "review": "评分与修正", "jev": "JEV 评分", "package": "输出打包"}
 
 
@@ -802,7 +802,8 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
         graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
                                          qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
                                          recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
-                                         source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"))
+                                         source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"),
+                                         arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
     except (OSError, ValueError, TypeError, KeyError):
         st.warning("历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。")
         return
@@ -930,6 +931,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
                                       qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"),
                                       recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
                                       source_cleaning=recipe.get("source_cleaning", False),
+                                      arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
                                       feedback_branch=(project_feedback_branch(recipe, state, {"active": active},
                                           target=next(iter(recipe["targets"]), None))
                                           if human_application is not None and set(recipe["targets"]).intersection(TARGETS) else None),
@@ -1533,6 +1535,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             on_change=_save_draft_value, args=(ws, target_key),
             help="点击即可选中或取消，可以同时选择多类训练数据。",
         ) or []
+        arithmetic_only = set(targets) == {"gsm8k"}
+        if "gsm8k" in targets:
+            st.caption("模板算术题独立生成，不使用解析后的正文。文档中的数学问题请使用 SFT / CoT。")
         trim_option, director_option = st.columns(2, gap="medium")
         with trim_option:
             reasoning_trim = render_trim_toggle(ws, targets, save_field=_save_draft_value)
@@ -1548,7 +1553,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         draft_recipe_version = 20 if qa_director.get("question_separation") is True else 19
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
                                                    qa_director=qa_director, package_review=package_review, recipe_version=draft_recipe_version,
-                                                   source_cleaning=source_cleaning, review_repair=review_repair)
+                                                   source_cleaning=source_cleaning, review_repair=review_repair,
+                                                   arithmetic_seed_protocol_version=1)
         st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
         if targets and graph_edges:
             with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
@@ -1574,7 +1580,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         sft_output_style = st.session_state[style_key]
     agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
     document_parser = {"mode": "native"}
-    if source_mode == "文档资料" and document_parser_mode(ws) in {"model", "vision"}:
+    if not arithmetic_only and source_mode == "文档资料" and document_parser_mode(ws) in {"model", "vision"}:
         parser_mode = document_parser_mode(ws)
         document_parser = {"mode": parser_mode}
         parser_role = "vision" if parser_mode == "vision" else "generation"
@@ -1622,6 +1628,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                       qa_director=qa_director, recipe_version=draft_recipe_version, source_cleaning=source_cleaning,
+                                      arithmetic_seed_protocol_version=1,
                                       feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": draft_recipe_version}, {},
                                           target=next(iter(targets), None))
                                           if targets else None)),
@@ -1736,10 +1743,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         knowledge_source_names = {}
         with source_slot, st.container(border=True, key="workbench-source-panel"):
             st.html('<span id="workflow-source-entry" aria-hidden="true"></span>')
-            section_heading("添加来源", "选择本次资料与补充要求。", "▤")
+            section_heading("模板算术题" if arithmetic_only else "添加来源",
+                            "未填写时使用默认主题。此分支不读取或解析上传资料。" if arithmetic_only else "选择本次资料与补充要求。", "▤")
             if document_parser.get("unconfirmed"):
                 _render_setup_issue(ws, "ingest", "图片输入能力尚未确认，点击核实模型能力", kind="vision")
-            if source_mode == "开放需求":
+            if arithmetic_only:
+                uploaded, selected = [], []
+                brief = _draft_brief("题目主题（可选）", key=f"workflow-math-theme:{ws}")
+            elif source_mode == "开放需求":
                 uploaded, selected = [], []
                 st.caption("启动后进入人工增强窗口，在同一页面反复设计问答、检查结果并提交修正意见。" if human_enabled else
                            "描述任务、领域和使用场景，系统会规划并生成候选。")
@@ -1840,7 +1851,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 if document_parser.get("mode") in {"model", "vision"}:
                     st.caption("此处展示本地提取文字；模型解析结果在运行时的输入节点实时展示。")
                 render_document_preview(document_preview, ws, native_sources, file_labels, int(chunk_chars))
-        if targets and source_mode == "知识库检索":
+        if targets and not arithmetic_only and source_mode == "知识库检索":
             from lib.presentation.streamlit.knowledge_page import render_knowledge_preview
             with source_previews, st.container(border=True, key="workbench-knowledge-preview"):
                 render_knowledge_preview(ws)
@@ -1877,22 +1888,26 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 with b:
                     batch_size = _draft_number("每批候选数", 1, MAX_BATCH_SIZE, 100, key=f"workflow-batch-size:{ws}",
                                              help="只将当前批次送入执行队列，完成后再读取下一批；每条结果单独保存断点。")
-                with st.expander("输入范围（可选）" if preview_in_input else "输入范围与文档分块（可选）"):
-                    range_col, chunk_col = (st.columns(2, gap="small") if source_mode == "文档资料" and not preview_in_input
-                                            else (nullcontext(), nullcontext()))
-                    with range_col:
-                        input_limit = MAX_PRODUCTION_GOAL if production else MAX_CANDIDATES
-                        input_key = f"workflow-max-units:{ws}"
-                        if st.session_state.get(input_key, st.session_state.get(
-                                f"workflow-form-draft:{ws}", {}).get(input_key, input_limit)) > input_limit:
-                            st.session_state[input_key] = input_limit
-                            _save_draft_value(ws, input_key)
-                        maximum = _draft_number("本次最多处理单元", 1, input_limit, input_limit, key=input_key,
-                                              help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
-                    if not preview_in_input:
-                        with chunk_col:
-                            chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
-                                           if source_mode == "文档资料" else 2000)
+                if arithmetic_only:
+                    maximum = MAX_PRODUCTION_GOAL if production else MAX_CANDIDATES
+                    chunk_chars = 2000
+                else:
+                    with st.expander("输入范围（可选）" if preview_in_input else "输入范围与文档分块（可选）"):
+                        range_col, chunk_col = (st.columns(2, gap="small") if source_mode == "文档资料" and not preview_in_input
+                                                else (nullcontext(), nullcontext()))
+                        with range_col:
+                            input_limit = MAX_PRODUCTION_GOAL if production else MAX_CANDIDATES
+                            input_key = f"workflow-max-units:{ws}"
+                            if st.session_state.get(input_key, st.session_state.get(
+                                    f"workflow-form-draft:{ws}", {}).get(input_key, input_limit)) > input_limit:
+                                st.session_state[input_key] = input_limit
+                                _save_draft_value(ws, input_key)
+                            maximum = _draft_number("本次最多处理单元", 1, input_limit, input_limit, key=input_key,
+                                                    help="限制来源解析后的处理范围。开放需求规划也受此上限约束。")
+                        if not preview_in_input:
+                            with chunk_col:
+                                chunk_chars = (_draft_number("文档分块目标字符数", 200, 20000, 2000, key=f"workflow-chunk-chars:{ws}")
+                                               if source_mode == "文档资料" else 2000)
                 if not production and source_mode == "开放需求" and maximum < sample_count:
                     st.warning("处理上限低于候选规模。本次开放需求只规划到处理上限；其余候选不会在本次运行中生成。")
                 review_coverage_hint(production, package_review)
@@ -1974,14 +1989,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                        st.session_state.get("ui_language", "zh"))
                              if "sft" in targets else "")
             language = st.session_state.get("ui_language", "zh")
+            summary_source = "模板算术题" if arithmetic_only else source_mode
             if production:
                 goal_text = ", ".join(f"{target.upper()} {count:,}" for target, count in production["goals"].items())
                 goal_text = goal_text or translate("按实际来源处理", language)
-                run_summary = (translate_label(source_mode, language) + " · " +
+                run_summary = (translate_label(summary_source, language) + " · " +
                                translate("数量上限", language) + " " + goal_text)
             else:
                 run_summary = translate(
-                    f"{source_mode} · 已选 {len(targets)} 类目标 · 候选规模 {int(sample_count):,}"
+                    f"{summary_source} · 已选 {len(targets)} 类目标 · 候选规模 {int(sample_count):,}"
                     f" · 并发 {int(concurrency)} · 每批 {int(batch_size)}", language)
             if "sft" in targets:
                 run_summary += f" · SFT {style_summary}"
@@ -2004,10 +2020,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         html.escape(translate(name.strip() or "未命名任务", language)) +
                         '</strong><span>' + html.escape(run_summary) + '</span></div>')
                 st.caption("启动只打开工作窗口；在窗口中提交设计后才调用模型，可反复生成、查看与回流修正。" if human_enabled else
+                           "独立生成模板算术题，再按配置评审并导出。" if arithmetic_only else
                            "先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
             with action_col:
                 source_missing = (not brief.strip() if source_mode == "开放需求"
-                                  else not (selected or uploaded)) and not human_source_compatible
+                                  else not (selected or uploaded)) and not human_source_compatible and not arithmetic_only
                 human_needs_real_source = human_ready and bool(set(targets) - HUMAN_QA_TARGETS) and not (selected or uploaded)
                 source_missing = source_missing or human_needs_real_source
                 source_suffixes = {Path(path).suffix.lower() for path in selected}
@@ -2032,7 +2049,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       or agent_unavailable or web_unavailable
                                       or bool(generation_invalid) or trim_invalid or prompts_invalid or director_invalid
                                       or parser_unavailable or cpt_vision_blocked
-                                      or bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")),
+                                      or (not arithmetic_only and bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}"))),
                                       key=f"workflow-create:{ws}", width="stretch")
                 if draft_application is not None:
                     if st.button("保存为独立草稿", key=f"workflow-save-draft:{ws}", width="stretch",
@@ -2061,9 +2078,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         path.write_bytes(upload.getvalue())
                         evaluation_sources.append(path)
                         evaluation_source_names[str(path.resolve())] = upload.name
-                    if source_mode != "开放需求" and not sources and not human_source_compatible:
+                    if source_mode != "开放需求" and not sources and not human_source_compatible and not arithmetic_only:
                         raise ValueError(f"请先上传或选择{source_mode}来源。")
-                    if source_mode == "开放需求" and not brief.strip() and not human_source_compatible:
+                    if source_mode == "开放需求" and not brief.strip() and not human_source_compatible and not arithmetic_only:
                         raise ValueError("请描述开放性需求。")
                     create = human_application.create_session if human_enabled and human_application is not None else application.create_run
                     if human_enabled and human_application is None:
@@ -2088,7 +2105,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         web_research=web_research,
                                         document_parser=document_parser,
                                         knowledge_retrieval=(st.session_state.get(f"knowledge-result:{ws}", (None, None))[1]
-                                                             if source_mode == "知识库检索" else None),
+                                                             if source_mode == "知识库检索" and not arithmetic_only else None),
                                         source_names=source_names,
                                         evaluation_sources=evaluation_sources,
                                         evaluation_source_names=evaluation_source_names)

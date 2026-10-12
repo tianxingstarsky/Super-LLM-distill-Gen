@@ -134,8 +134,18 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
             key: production[key] for key in ("max_attempts", "max_rounds", "round_size",
                 "min_acceptance_rate", "low_acceptance_rounds", "item_retries") if key in production}
         values[f"workflow-count:{workspace}"] = max(production["goals"].values(), default=values[f"workflow-count:{workspace}"])
-    values[f"workflow-open-brief:{workspace}" if mode == "开放需求" else
-           f"workflow-source-brief:{workspace}:{mode}"] = recipe.get("brief", "")
+    math_only = recipe.get("targets") == ["gsm8k"]
+    independent_math = math_only and recipe.get("arithmetic_seed_protocol_version") == 1
+    if math_only:
+        theme = recipe.get("brief", "")
+        if not independent_math and not theme and _file_sources(recipe):
+            # Earlier generators used the first source name as the story theme.
+            # Copy that theme without removing the original source selection.
+            theme = _file_sources(recipe)[0].get("name", "")
+        values[f"workflow-math-theme:{workspace}"] = theme
+    if not independent_math:
+        values[f"workflow-open-brief:{workspace}" if mode == "开放需求" else
+               f"workflow-source-brief:{workspace}:{mode}"] = recipe.get("brief", "")
     style = recipe.get("sft_output_style")
     if style is None:
         preferences = recipe.get("generation_preferences") or {}
@@ -225,7 +235,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")),
                                      qa_director=director, package_review=package_review,
                                      recipe_version=max(18 if review_repair else 16, recipe.get("version", 16)),
-                                     source_cleaning=recipe.get("source_cleaning", False), review_repair=review_repair)
+                                     source_cleaning=recipe.get("source_cleaning", False), review_repair=review_repair,
+                                     arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
     for node in prompt_nodes:
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
                                                 package_review=package_review, review_repair=review_repair,

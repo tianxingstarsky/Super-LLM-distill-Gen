@@ -117,6 +117,25 @@ def test_saved_source_mode_overrides_legacy_extension_inference(tmp_path):
     assert inventory.task_runs(output)[0]["source_mode"] == "document"
 
 
+def test_independent_arithmetic_without_source_or_brief_is_readable_and_counts_real_stages(tmp_path):
+    output = tmp_path / "out"
+    rid = create_run(output, brief="Arithmetic", targets=["gsm8k"])
+    recipe_path = run_path(output, rid) / "recipe.json"
+    recipe = read_json(recipe_path)
+    atomic_json(recipe_path, {**recipe, "brief": "", "arithmetic_seed_protocol_version": 1})
+    summary = inventory.task_runs(output)[0]
+    assert summary["source_mode"] == "arithmetic"
+    assert summary["source_names"] == [] and summary["source_brief"] == ""
+    assert summary["recipe_readable"] is True
+    assert summary["arithmetic_seed_protocol_version"] == 1
+    assert summary["scheduled_stages"] == ["gsm8k", "package"]
+
+    atomic_json(recipe_path, {**recipe, "arithmetic_seed_protocol_version": 0})
+    historical = inventory.task_runs(output)[0]
+    assert historical["source_mode"] == "brief"
+    assert historical["scheduled_stages"] == ["ingest", "gsm8k", "package"]
+
+
 @pytest.mark.parametrize("recipe", [[], {}, {"sources": "invalid", "targets": ["cpt"]},
                                    {"sources": [1], "targets": ["cpt"]},
                                    {"sources": [], "brief": 1, "targets": ["cpt"]}])

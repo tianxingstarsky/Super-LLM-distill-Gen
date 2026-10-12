@@ -9,6 +9,14 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "模板算术题": "Template arithmetic",
+    "模板算术题（GSM8K 格式）": "Template arithmetic (GSM8K format)",
+    "独立生成模板算术题，不读取上传文档；按主题与数量生成后进入评分或打包。": "Generate template arithmetic independently, without reading uploaded documents. Use the selected theme and count, then send results for review or export.",
+    "题目主题（可选）": "Problem theme (optional)",
+    "未填写时使用默认主题。此分支不读取或解析上传资料。": "Leave blank to use the default theme. This branch does not read or parse uploaded sources.",
+    "模板算术题独立生成，不使用解析后的正文。文档中的数学问题请使用 SFT / CoT。": "Template arithmetic is generated independently of parsed text. Use SFT / CoT for math problems from documents.",
+    "独立生成模板算术题，再按配置评审并导出。": "Generate template arithmetic independently, then review and export it with your settings.",
+    "按固定模板和可选主题独立生成算术题，程序核对计算步骤与答案；不读取上传文档，不处理通用数学证明，此节点不调用模型。": "Generate arithmetic problems from fixed templates and an optional theme. Code checks each calculation and answer. This node does not read uploaded documents, handle general math proofs, or call a model.",
     "评分通过": "Review passed",
     "原始对话未通过评审，已保留供返工": "The recorded conversation failed review. Its content is kept for rework.",
     "CPT 语料处理": "CPT corpus processing",

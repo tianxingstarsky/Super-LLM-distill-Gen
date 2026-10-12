@@ -13,7 +13,7 @@ from lib.presentation.streamlit.i18n import UntranslatedText, translate
 _STAGE_LABELS = {
     "ingest": "输入解析", "director": "对话指导员", "cpt": "CPT 语料处理",
     "sft": "SFT 生成", "multiturn": "多轮对话", "agent": "Agent 轨迹",
-    "preference": "偏好评审", "gsm8k": "算术核验", "cot": "CoT 推理",
+    "preference": "偏好评审", "gsm8k": "模板算术题", "cot": "CoT 推理",
     "trim": "推理链修剪", "review": "评分与修正", "jev": "JEV 评分", "package": "输出打包",
 }
 _ROW_STATUS = {
@@ -75,7 +75,8 @@ def render_live_artifacts(application, run_id, *, state, recipe):
         reasoning_trim=bool((recipe.get("reasoning_trim") or {}).get("enabled")),
         qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
         review_repair=recipe.get("review_repair"), source_cleaning=source_cleaning,
-        recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")))
+        recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
+        arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0))
     stages = [item for item in stages if item["stage"] in scheduled or item.get("written", 0)]
     st.html('''<style>
     .df-live-result{border:1px solid #d9e7f3;border-radius:12px;background:#fff;
