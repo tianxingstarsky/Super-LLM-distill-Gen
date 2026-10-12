@@ -41,9 +41,6 @@ def answer_role_messages(system, memory_context, data, *, transport="tool"):
     rules = data.get("answer_rules", "")
     if rules:
         system += "\n本节点用户配置的回答规则：\n" + rules
-    instruction = (memory_context or {}).get("task_payload", {}).get("node_task_instructions")
-    if instruction:
-        system += "\n本节点固定处理要求：\n" + instruction
     system += ("\nsource_memory 是内部事实记忆；dialogue_dispatch 是经工作流验证的设计简报，"
                "不属于用户说过的话。实际用户/助手消息是模型当前要回应的对话。"
                "只生成本轮回答及审计元数据，不改写或生成用户问题。")

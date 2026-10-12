@@ -229,8 +229,10 @@ def test_closed_book_exports_only_question_while_teacher_and_reviewer_get_eviden
         body = json.dumps([message for message in messages if message["role"] in {"user", "tool"}], ensure_ascii=False)
         assert "结束后记录检查结果。" not in body
         assert "办公室盆栽每周浇水一次。" not in body
-    assert "QUESTION_RULE_SENTINEL" in json.dumps(request_data(writer.calls[1]), ensure_ascii=False)
-    assert "ANSWER_RULE_SENTINEL" in json.dumps(request_data(reviewer.calls[-1]), ensure_ascii=False)
+    assert "QUESTION_RULE_SENTINEL" in writer.calls[1][0]["content"]
+    assert "ANSWER_RULE_SENTINEL" in reviewer.calls[-1][0]["content"]
+    assert "question_rules" not in request_data(writer.calls[1])
+    assert "answer_rules" not in request_data(reviewer.calls[-1])
     row = engine.read_json(path / "artifacts/sft.records.json")[0]
     assert row["qa_contract_check"]["keep"] and row["family_id"]
     assert state["stages"]["director"]["done"] == 1

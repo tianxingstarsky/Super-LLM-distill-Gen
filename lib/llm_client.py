@@ -18,7 +18,8 @@ from lib.domain.backend_config import (validate_backend_url, validate_credential
                                        validate_token_prices)
 from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request,
                                  anthropic_text, response_text, responses_input,
-                                 validate_api_format)
+                                 reasoning_request, validate_api_format)
+from lib.domain.model_reasoning import validate_reasoning
 from lib.model_streaming import StreamCallback, consume_stream
 from lib.model_request_reliability import (
     ModelJSONError, ModelRequestError, SERVICE_COOLDOWNS, classify_request_error,
@@ -97,7 +98,7 @@ def chat_json(
     messages: List[Dict[str, Any]],
     temperature: float = 0.2,
     retries: int = 3,
-    thinking: bool = False,
+    thinking: bool | None = None,
     max_tokens: int | None = None,
     on_stream: StreamCallback | None = None,
     allow_reasoning_fallback: bool = True,
@@ -336,12 +337,17 @@ class ChatClient:
         additional_budget: BudgetGuard | None = None,
         scheduler=None,
         cancel_check=None,
+        reasoning: dict | None = None,
+        model_info: dict | None = None,
     ):
         # 本地端点绕代理（spike 报告 F2）：httpx 在 OpenAI 客户端构造时快照代理
         # 环境变量，必须在构造前设置；构造后再 setdefault 对本客户端无效。
         os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)
         os.environ.setdefault("no_proxy", DEFAULT_NO_PROXY)
         self.api_format = validate_api_format(api_format)
+        self.base_url = base_url
+        self.reasoning = validate_reasoning(reasoning)
+        self.model_info = model_info or {}
         if context_window_tokens is not None and (type(context_window_tokens) is not int or context_window_tokens <= 0):
             raise ValueError("context_window_tokens must be a positive integer")
         self.context_window_tokens = context_window_tokens
@@ -448,18 +454,35 @@ class ChatClient:
             raise first_error
 
     def _request(self, messages: List[Dict[str, Any]], *, max_tokens: int | None,
-                 temperature: float, thinking: bool, json_mode: bool,
+                 temperature: float, thinking: bool | None, json_mode: bool,
                  on_stream: StreamCallback | None = None,
                  allow_reasoning_fallback: bool = True) -> tuple[str, int, int]:
+        choice = getattr(self, "reasoning", {"mode": "auto"})
+        explicit_reasoning = choice.get("mode", "auto") != "auto"
+        # Preserve the old per-call opt-out, but its absence must never turn
+        # thinking off. Node choices take priority over legacy call defaults.
+        legacy_disable = not explicit_reasoning and thinking is False and self.api_format == "chat"
+        reasoning_kwargs = reasoning_request(choice, api_format=self.api_format,
+            base_url=getattr(self, "base_url", ""), model_info=getattr(self, "model_info", {}),
+            max_tokens=max_tokens or (ANTHROPIC_DEFAULT_MAX_TOKENS if self.api_format == "anthropic" else None))
+        def check_reasoning_rejection(error):
+            if explicit_reasoning and any(_is_parameter_unsupported(error, parameter) for parameter in
+                    ("thinking", "reasoning_effort", "reasoning.effort", "output_config", "budget_tokens")):
+                raise ValueError("model_reasoning_parameter_unsupported") from None
         if self.api_format == "anthropic":
             kwargs = anthropic_request(messages, json_mode=json_mode)
             kwargs.update(model=self.model, temperature=temperature,
                           max_tokens=max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS)
+            kwargs.update(reasoning_kwargs)
+            if choice.get("mode") == "enabled":
+                # Anthropic thinking APIs require their own sampling default.
+                kwargs.pop("temperature", None)
             if on_stream and getattr(self, "stream_supported", None) is not False:
                 kwargs["stream"] = True
             try:
                 response = self._create(self.client.messages.create, kwargs)
             except Exception as error:
+                check_reasoning_rejection(error)
                 if not _is_temperature_unsupported(error):
                     raise
                 kwargs.pop("temperature")
@@ -473,6 +496,7 @@ class ChatClient:
         if self.api_format == "responses":
             kwargs: Dict[str, Any] = {"model": self.model, "input": responses_input(messages),
                                       "temperature": temperature, "store": False}
+            kwargs.update(reasoning_kwargs)
             if max_tokens is not None:
                 kwargs["max_output_tokens"] = max_tokens
             if json_mode and self.json_supported is not False:
@@ -482,6 +506,7 @@ class ChatClient:
             try:
                 response = self._create(self.client.responses.create, kwargs)
             except Exception as error:
+                check_reasoning_rejection(error)
                 if not _is_temperature_unsupported(error):
                     raise
                 kwargs.pop("temperature")
@@ -497,11 +522,12 @@ class ChatClient:
         from lib.model_protocols import _paired_tools
         _paired_tools(messages)
         kwargs = {"model": self.model, "messages": messages, "temperature": temperature}
+        kwargs.update(reasoning_kwargs)
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         if json_mode and self.json_supported is not False:
             kwargs["response_format"] = {"type": "json_object"}
-        if not thinking:
+        if legacy_disable:
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         if on_stream and getattr(self, "stream_supported", None) is not False:
             kwargs.update(stream=True, stream_options={"include_usage": True})
@@ -510,11 +536,12 @@ class ChatClient:
                 response = self._create(self.client.chat.completions.create, kwargs)
                 break
             except Exception as error:
+                check_reasoning_rejection(error)
                 if "max_tokens" in kwargs and _is_parameter_unsupported(error, "max_tokens"):
                     kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
                 elif "temperature" in kwargs and _is_temperature_unsupported(error):
                     kwargs.pop("temperature")
-                elif "extra_body" in kwargs and _is_parameter_unsupported(error, "thinking"):
+                elif legacy_disable and "extra_body" in kwargs and _is_parameter_unsupported(error, "thinking"):
                     kwargs.pop("extra_body")
                 elif "stream_options" in kwargs and _is_parameter_unsupported(error, "stream_options"):
                     kwargs.pop("stream_options")
@@ -570,7 +597,7 @@ class ChatClient:
         max_tokens: int | None = 1024,
         temperature: float = 0.7,
         retries: int = 3,
-        thinking: bool = True,
+        thinking: bool | None = None,
         json_mode: bool = False,
         on_stream: StreamCallback | None = None,
         allow_reasoning_fallback: bool = True,
@@ -827,6 +854,7 @@ def load_backend(
     context_window_tokens: int | None = None,
     expected_endpoint_pin: dict | None = None,
     additional_budget: BudgetGuard | None = None,
+    reasoning: dict | None = None,
 ) -> tuple[ChatClient, str]:
     """按 backends.local.yaml（覆盖）→ backends.yaml 顺序加载后端配置。
 
@@ -881,12 +909,21 @@ def load_backend(
     configured_key_env = b.get("api_key_env") if "api_key_env" in b else default_key_env
     api_key = b.get("api_key") or os.environ.get(configured_key_env or "", "")
 
+    reasoning = validate_reasoning(reasoning)
+    model_info = {}
+    if (reasoning["mode"] != "auto" and not base_url
+            and not (allow_global_endpoint_override and os.environ.get("LLM_BASE_URL"))):
+        from lib.bootstrap.backends import backend_application
+        # Reads the credential-bound discovery cache only; no model request.
+        model_info = backend_application(root).get_model_info(name, model)
     client = ChatClient(
         base_url=b.get("base_url", ""),
         api_key=api_key,
         model=model,
         api_format=api_format,
         context_window_tokens=context_window_tokens,
+        reasoning=reasoning,
+        model_info=model_info,
         price_input_per_1m=float(prices.get("input_per_1m_usd", 0.0)),
         price_output_per_1m=float(prices.get("output_per_1m_usd", 0.0)),
         # Keep the legacy argument callable for old integrations, but product

@@ -68,6 +68,7 @@ def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = N
 
 
 def validate_node_models(value: dict | None) -> dict:
+    from lib.domain.model_reasoning import validate_reasoning
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -81,7 +82,7 @@ def validate_node_models(value: dict | None) -> dict:
             if role not in NODE_ROLES[stage] or not isinstance(binding, dict):
                 raise ValueError("invalid_node_models")
             if not {"backend", "model"} <= set(binding) or set(binding) - {
-                    "backend", "model", "context_window_tokens", "max_output_tokens"}:
+                    "backend", "model", "context_window_tokens", "max_output_tokens", "reasoning"}:
                 raise ValueError("invalid_node_models")
             for item in (binding["backend"], binding["model"]):
                 if not isinstance(item, str) or not item.strip() or len(item) > 200 or any(ord(c) < 32 for c in item):
@@ -93,6 +94,8 @@ def validate_node_models(value: dict | None) -> dict:
                 raise ValueError("invalid_node_model_token_limits")
             result[stage][role] = {"backend": binding["backend"].strip(), "model": binding["model"].strip(),
                                    "context_window_tokens": context, "max_output_tokens": output}
+            if "reasoning" in binding:
+                result[stage][role]["reasoning"] = validate_reasoning(binding["reasoning"], max_output_tokens=output)
     return result
 
 

@@ -2,6 +2,7 @@
 from pathlib import Path
 from itertools import combinations
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -128,6 +129,7 @@ spec = canvas.canvas_spec(['sft'], {{'sft': {{'status': 'configuration_required'
                          st.session_state['workflow-node-bindings:fixture'], live={live!r})
 def component(**kwargs):
     st.session_state['captured-spec'] = deepcopy(kwargs['spec'])
+    st.session_state['captured-component-key'] = kwargs['key']
     return st.session_state.get('event')
 with patch.object(canvas, '_canvas', component):
     canvas.render_canvas(spec, 'selected-node', key='fixture-canvas',
@@ -141,6 +143,78 @@ with patch.object(canvas, '_canvas', component):
 def _assert_node_drafts_preserved(ui):
     assert ui.session_state['workflow-node-bindings:fixture'] == {'sft': {}}
     assert ui.session_state['workflow-form-draft:fixture'] == {'prompt': 'Keep my unsaved prompt'}
+
+
+def test_canvas_asset_revision_caches_reads_but_uses_content_for_identity(tmp_path, monkeypatch):
+    from lib.presentation.streamlit import workflow_canvas as canvas
+
+    asset = tmp_path / 'index.html'
+    asset.write_bytes(b'first frontend')
+    monkeypatch.setattr(canvas, '_CANVAS_ASSET', asset)
+    original_read = Path.read_bytes
+    reads = []
+
+    def read_bytes(path):
+        if path == asset:
+            reads.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', read_bytes)
+    first = canvas._canvas_asset_revision()
+    assert canvas._canvas_asset_revision() == first
+    assert len(reads) == 1, 'timed refreshes must not reread unchanged frontend assets'
+
+    metadata = asset.stat()
+    os.utime(asset, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000))
+    assert canvas._canvas_asset_revision() == first, 'touching unchanged bytes must not remount the iframe'
+    assert len(reads) == 2
+
+    asset.write_bytes(b'other frontend')
+    os.utime(asset, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 2_000_000))
+    assert canvas._canvas_asset_revision() != first, 'same-sized frontend edits must invalidate the cached revision'
+    assert len(reads) == 3
+
+
+def test_canvas_asset_changes_remount_only_the_iframe_and_preserve_logical_state(tmp_path, monkeypatch):
+    from lib.presentation.streamlit import workflow_canvas as canvas
+
+    asset = tmp_path / 'index.html'
+    asset.write_bytes(b'first frontend')
+    monkeypatch.setattr(canvas, '_CANVAS_ASSET', asset)
+    ui = _inspector_app(live=True)
+    first = ui.session_state['captured-component-key']
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['captured-component-key'] == first
+
+    # A changed selection/panel spec is a normal update, not an asset reload.
+    ui.session_state['selected-node'] = 'sft'
+    ui.session_state['canvas-open:fixture-canvas'] = True
+    ui.session_state['canvas-wide:fixture-canvas'] = True
+    ui.session_state['workflow-follow:fixture'] = False
+    ui.session_state['canvas-event:fixture-canvas'] = 'already-consumed'
+    ui.session_state['fixture-reveal'] = {'node': 'sft', 'serial': 7}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['captured-component-key'] == first
+
+    asset.write_bytes(b'updated frontend code')
+    ui.run()
+    assert not ui.exception
+    updated = ui.session_state['captured-component-key']
+    assert updated != first
+    assert ui.session_state['selected-node'] == 'sft'
+    assert ui.session_state['canvas-open:fixture-canvas'] is True
+    assert ui.session_state['canvas-wide:fixture-canvas'] is True
+    assert ui.session_state['workflow-follow:fixture'] is False
+    assert ui.session_state['canvas-event:fixture-canvas'] == 'already-consumed'
+    assert ui.session_state['fixture-reveal'] == {'node': 'sft', 'serial': 7}
+    assert ui.session_state['captured-spec']['inspector'] == {
+        'key': 'fixture-inspector', 'open': True, 'wide': True}
+    _assert_node_drafts_preserved(ui)
+
+    ui.run()
+    assert not ui.exception and ui.session_state['captured-component-key'] == updated
 
 
 @pytest.mark.parametrize('expanded', [False, True])

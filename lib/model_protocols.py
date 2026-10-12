@@ -9,10 +9,64 @@ from __future__ import annotations
 import re
 import json
 from typing import Any
+from urllib.parse import urlsplit
+
+from lib.domain.model_reasoning import validate_reasoning
 
 
 API_FORMATS = ("chat", "responses", "anthropic")
 ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
+
+
+def reasoning_request(reasoning, *, api_format: str, base_url: str = "", model_info=None,
+                      max_tokens=None) -> dict[str, Any]:
+    """Serialize an explicit selection without silently weakening its intent."""
+    choice = validate_reasoning(reasoning, max_output_tokens=max_tokens)
+    mode = choice["mode"]
+    if mode == "auto":
+        return {}
+    info = model_info or {}
+    effort = choice.get("effort")
+    supported = info.get("reasoning_efforts")
+    if effort is not None and isinstance(supported, list) and effort not in supported:
+        raise ValueError("model_reasoning_effort_unsupported")
+    if mode == "disabled" and info.get("reasoning_disabled") is False:
+        raise ValueError("model_reasoning_disable_unsupported")
+    scheme = info.get("reasoning_format")
+    # A known service is a protocol fact, not a guess based on a model name.
+    if urlsplit(base_url).hostname == "api.deepseek.com":
+        scheme = "deepseek"
+    if "budget_tokens" in choice and (api_format != "anthropic" or scheme == "deepseek"):
+        raise ValueError("model_reasoning_budget_unsupported")
+    if api_format == "responses":
+        if mode == "enabled" and effort is None:
+            raise ValueError("model_reasoning_effort_required")
+        return {"reasoning": {"effort": "none" if mode == "disabled" else effort}}
+    if api_format == "chat":
+        if scheme == "deepseek":
+            result = {"extra_body": {"thinking": {"type": mode}}}
+            if effort is not None:
+                result["reasoning_effort"] = effort
+            return result
+        if mode == "enabled" and effort is None:
+            raise ValueError("model_reasoning_effort_required")
+        return {"reasoning_effort": "none" if mode == "disabled" else effort}
+    if api_format != "anthropic":
+        raise ValueError("invalid_api_format")
+    if mode == "disabled":
+        return {"thinking": {"type": "disabled"}}
+    if "budget_tokens" in choice:
+        if scheme == "anthropic_adaptive":
+            raise ValueError("model_reasoning_budget_unsupported")
+        return {"thinking": {"type": "enabled", "budget_tokens": choice["budget_tokens"]}}
+    if scheme not in {"deepseek", "anthropic_adaptive"}:
+        raise ValueError("model_reasoning_format_unknown")
+    result = {"thinking": {"type": "enabled" if scheme == "deepseek" else "adaptive"}}
+    if effort is not None:
+        # extra_body works on older Anthropic SDKs as well as newer ones; the
+        # field still lives at the top level of the actual HTTP request.
+        result["extra_body"] = {"output_config": {"effort": effort}}
+    return result
 
 
 def validate_api_format(value: str) -> str:

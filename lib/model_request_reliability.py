@@ -33,6 +33,11 @@ FATAL_VALIDATION_CODES = frozenset({
     "document_model_vision_not_confirmed", "invalid_api_format", "invalid_model_request_attempts",
     "invalid_model_scheduling", "invalid_model_max_concurrency", "invalid_model_queue_timeout",
     "invalid_model_scheduler_identity", "invalid_model_scheduler_state",
+    "invalid_model_reasoning", "invalid_model_reasoning_effort", "invalid_model_reasoning_budget",
+    "model_reasoning_budget_exceeds_output", "model_reasoning_effort_unsupported",
+    "model_reasoning_disable_unsupported", "model_reasoning_budget_unsupported",
+    "model_reasoning_effort_required", "model_reasoning_format_unknown",
+    "model_reasoning_parameter_unsupported",
 })
 
 

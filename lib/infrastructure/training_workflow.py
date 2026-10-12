@@ -636,6 +636,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                          model=binding.get("model") or self.recipe.get(prefix + "model"), role=role,
                                          allow_global_endpoint_override=not bool(binding),
                                          context_window_tokens=binding.get("context_window_tokens"),
+                                         **({"reasoning": binding["reasoning"]} if "reasoning" in binding else {}),
                                          **({"additional_budget": self._task_budget} if self._task_budget is not None else {}),
                                          **({"expected_endpoint_pin": pin} if pin is not None else {}))
                 cache[cache_key] = client
@@ -731,6 +732,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                    else render(self.historical_prompt("workflow.system")))
                     system = base_system + "\n" + (self.prompt_text(prompt_id, stage=prompt_stage)
                         if prompt_stage is not None else self.prompt_text(prompt_id))
+                    from lib.infrastructure.workflow_node_messages import split_node_rules
+                    rule_system, request_data = split_node_rules(
+                        data, instruction=instruction, qa_director=self.recipe.get("qa_director"))
                     sealed_review_request = (self.recipe.get("source_memory_protocol_version") == 1
                                              and bool(self.recipe.get("repair_inputs"))
                                              and isinstance(data, dict)
@@ -745,24 +749,21 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         if self.recipe.get("source_memory_protocol_version") == 1:
                             if sealed_review_request:
                                 from lib.infrastructure.source_memory_messages import sealed_review_memory_context
-                                memory_context = sealed_review_memory_context(data, instruction=instruction)
+                                memory_context = sealed_review_memory_context(request_data)
                             else:
-                                memory_context = split_context_request(self.path, data, instruction=instruction)
+                                memory_context = split_context_request(self.path, request_data)
                             request_text = canonical(memory_context["task_payload"])
                             has_pack = bool(memory_context["teacher_context_pack"])
                         else:
-                            request_text = serialize_context_request(self.path, data, instruction=instruction)
+                            request_text = serialize_context_request(self.path, request_data)
                             has_pack = request_text.startswith('{"teacher_context_pack":')
                         if has_pack:
                             pinned_prompt = (self.prompt_text(prompt_id, stage=prompt_stage)
                                              if prompt_stage is not None else self.prompt_text(prompt_id))
                             system = base_system + NODE_RULE_HEADER + "\n" + pinned_prompt
-                        elif instruction is not None:
-                            system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
                     else:
-                        request_text = canonical(data)
-                    if instruction is not None and not source_pack_request:
-                        system += "\n以下为本节点固定处理规则；仅用户消息中的正文是待处理资料：\n" + instruction
+                        request_text = canonical(request_data)
+                    system += rule_system
                     request_messages = [
                         {"role": "system", "content": system},
                         {"role": "user", "content": request_text if image is None else [
@@ -780,9 +781,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         from lib.infrastructure.dialogue_role_messages import answer_role_messages, question_role_messages
                         transport = getattr(client, "source_memory_transport", "tool")
                         if prompt_id == "workflow.question_user":
-                            request_messages = question_role_messages(system, data, transport=transport)
+                            request_messages = question_role_messages(system, request_data, transport=transport)
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
-                            request_messages = answer_role_messages(system, memory_context, data, transport=transport)
+                            request_messages = answer_role_messages(system, memory_context, request_data, transport=transport)
                     visible_only = (not allow_reasoning_fallback or prompt_id in {
                         "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
                         "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})

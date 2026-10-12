@@ -85,10 +85,10 @@ def _discover_models_on_click(application, backend: str, key: str) -> None:
         st.toast(_DISCOVERY_MESSAGES["truncated" if truncated else status])
 
 
-def render_model_discovery(application, backend: str, endpoint: dict, *, key: str) -> dict:
+def render_model_discovery(application, backend: str, endpoint: dict, *, key: str, label="获取模型") -> dict:
     if application is None or not hasattr(application, "discover_models"):
         return endpoint
-    st.button("获取模型", key=key, width="stretch",
+    st.button(label, key=key, width="stretch",
               on_click=_discover_models_on_click, args=(application, backend, key),
               help="从当前服务获取可用模型。保留已选模型与当前节点参数。")
     feedback = st.session_state.pop(key + ":feedback", {})

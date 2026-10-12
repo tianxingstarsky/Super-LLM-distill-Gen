@@ -1,5 +1,7 @@
 """Clickable, keyboard-accessible DAG shared by setup and live execution."""
 from copy import deepcopy
+from functools import lru_cache
+import hashlib
 from pathlib import Path
 
 import streamlit as st
@@ -10,7 +12,19 @@ from lib.domain.workflow_scale import node_roles
 from lib.presentation.streamlit.i18n import translate_label
 from lib.presentation.streamlit.workflow_preference_details import preference_stage_label, preference_route
 
-_canvas = components.declare_component("workflow_canvas", path=str(Path(__file__).with_name("workflow_canvas_frontend")))
+_CANVAS_ASSET = Path(__file__).with_name("workflow_canvas_frontend") / "index.html"
+_canvas = components.declare_component("workflow_canvas", path=str(_CANVAS_ASSET.parent))
+
+
+@lru_cache(maxsize=4)
+def _cached_canvas_asset_revision(path: Path, mtime_ns: int, size: int) -> str:
+    # Metadata invalidates the cached read; the bytes determine component identity.
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _canvas_asset_revision() -> str:
+    metadata = _CANVAS_ASSET.stat()
+    return _cached_canvas_asset_revision(_CANVAS_ASSET, metadata.st_mtime_ns, metadata.st_size)
 
 
 def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None, targets=None):
@@ -348,7 +362,9 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
         # even if its component cancellation event was superseded by a click.
         st.session_state.pop(reveal_key, None)
         reveal = None
-    event = _canvas(spec=spec, key=key, default=None)
+    # Streamlit keeps keyed iframes mounted across reruns. Reload changed frontend
+    # code once, while selection, form and navigation state keep their logical key.
+    event = _canvas(spec=spec, key=f"{key}:assets:{_canvas_asset_revision()}", default=None)
     # The bridge owns this UI-only receipt. Keep a request through extra reruns
     # until it explicitly completes or the user interrupts it. A stale receipt
     # cannot consume a newer click on the same unresolved configuration issue.

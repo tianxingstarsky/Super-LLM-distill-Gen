@@ -82,10 +82,16 @@ class WorkflowSourceLibrary:
         if mode == "model" and available <= 0:
             raise ValueError("model_context_window_exceeded")
         parser_chunk_chars = min(MODEL_PARSE_CHARS, max(1, available // 4))
+        model = {key: binding[key] for key in ("backend", "model", "context_window_tokens",
+                                              "max_output_tokens") if key in binding}
+        # Auto leaves the wire request unchanged, including for older recipes
+        # that predate this setting. Only explicit overrides split the cache.
+        reasoning = binding.get("reasoning") or {}
+        if reasoning.get("mode", "auto") != "auto":
+            model["reasoning"] = reasoning
         return {"mode": mode, "parser_version": SOURCE_LIBRARY_VERSION,
                 "source_processing_version": self.recipe.get("source_processing_version", 1),
-                "model": {key: binding[key] for key in ("backend", "model", "context_window_tokens",
-                                                        "max_output_tokens") if key in binding},
+                "model": model,
                 "endpoint": endpoint,
                 "prompt_sha256": _digest([self.recipe.get("node_prompt_system"), prompt]),
                 **({"parser_chunk_chars": parser_chunk_chars} if mode == "model" else {})}

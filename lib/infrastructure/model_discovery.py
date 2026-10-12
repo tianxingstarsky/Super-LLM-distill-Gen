@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from filelock import FileLock
 
 from lib.domain.model_capabilities import merge_model_info, normalize_model_info
-from lib.domain.model_capabilities import INFO_FIELDS
+from lib.domain.model_capabilities import CAPACITY_FIELDS, FEATURE_FIELDS
 from lib.domain.backend_config import validate_backend_url
 from lib.model_protocols import validate_api_format
 
@@ -209,7 +209,7 @@ def discover_models(backend: dict, cache_dir: Path) -> dict:
         close = getattr(client, "close", None)
         if callable(close):
             close()
-    needs_catalog = any(any(info[field] is None for field in INFO_FIELDS)
+    needs_catalog = any(any(info[field] is None for field in CAPACITY_FIELDS + FEATURE_FIELDS)
                         for info in service_info.values())
     providers, catalog_status = load_catalog(cache_dir) if needs_catalog else ({}, "not_needed")
     provider = match_provider(backend, providers)

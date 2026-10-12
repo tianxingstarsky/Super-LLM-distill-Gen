@@ -30,6 +30,7 @@ from lib.domain.workflow_quality import text_issue
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS
 from lib.domain.human_round_projection import project_feedback_branch
 from lib.presentation.streamlit.model_scheduling_controls import render_run_scheduling
+from lib.presentation.streamlit.workflow_reasoning_controls import REASONING_ERRORS, reasoning_summary
 from lib.domain.workflow_production import MAX_PRODUCTION_GOAL
 from lib.presentation.streamlit.workflow_production_settings import render_delivery_goal, review_coverage_hint, render_delivery_progress
 from lib.domain.web_research import MAX_QUERIES, validate_web_research
@@ -151,6 +152,8 @@ def _save_sft_output_style(workspace: str) -> None:
 
 
 def _workflow_error(error) -> str:
+    if str(error) in REASONING_ERRORS:
+        return REASONING_ERRORS[str(error)]
     if type(error).__name__ == "BudgetExceeded":
         error = "BudgetExceeded"
     if str(error).startswith("latex_") and str(error) not in {"latex_external_dependencies", "latex_unsupported_syntax"}:
@@ -365,6 +368,8 @@ def _stage_configuration(key, recipe, state):
         binding = recipe.get("node_models", {}).get(key, {}).get("generation")
         if binding:
             details["生成模型"] = UntranslatedText(binding["backend"] + " / " + binding["model"])
+            details["生成思考模式"] = UntranslatedText(reasoning_summary(binding,
+                language=st.session_state.get("ui_language", "zh")))
             if "context_window_tokens" in binding and "max_output_tokens" in binding:
                 details["生成上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details["生成单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
@@ -388,6 +393,9 @@ def _stage_configuration(key, recipe, state):
                 limit_label = "提问" if role == "question" else "指导员" if key == "director" and role == "generation" else "生成" if role == "generation" else "评审"
                 details[limit_label + "上下文窗口"] = f"{binding['context_window_tokens']:,} tokens"
                 details[limit_label + "单次输出上限"] = f"{binding['max_output_tokens']:,} tokens"
+            reasoning_label = "提问" if role == "question" else "指导员" if key == "director" and role == "generation" else "生成" if role == "generation" else "评审"
+            details[reasoning_label + "思考模式"] = UntranslatedText(reasoning_summary(binding,
+                language=st.session_state.get("ui_language", "zh")))
         if roles:
             details.update({"流水线并发": recipe.get("concurrency", 1), "每批候选数": recipe.get("batch_size", 100)})
         if key == "director":

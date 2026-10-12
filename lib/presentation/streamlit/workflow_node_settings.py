@@ -18,6 +18,8 @@ from lib.presentation.streamlit.model_scheduling_controls import render_model_sc
 from lib.presentation.streamlit.workflow_model_capabilities import (
     discovered_choices, model_info, render_model_capabilities,
     suggested_tokens)
+from lib.presentation.streamlit.workflow_reasoning_controls import (
+    REASONING_ERRORS, render_reasoning_controls, selected_reasoning, set_reasoning_widgets)
 
 
 _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
@@ -91,6 +93,10 @@ def _persist_draft_value(workspace: str, key: str, value) -> None:
 def _persist_bindings(workspace: str, bindings: dict) -> None:
     draft_key = f"workflow-node-bindings:{workspace}"
     safe = validate_node_models(bindings)
+    for node, roles in safe.items():
+        for role, binding in roles.items():
+            identity = f"node-model:{workspace}:{node}:{role}:saved-binding:{binding['backend']}:{binding['model']}"
+            st.session_state[identity] = deepcopy(binding)
     confirmation_key = f"workflow-node-model-confirmations:{workspace}"
     confirmations = _model_confirmations(workspace)
     previous = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(draft_key, {})
@@ -189,6 +195,7 @@ def _set_binding_widgets(workspace: str, node: str, role: str, binding: dict) ->
     st.session_state[prefix + ":model:" + backend] = model
     st.session_state[prefix + ":context:" + backend + ":" + model] = binding["context_window_tokens"]
     st.session_state[prefix + ":output:" + backend + ":" + model] = binding["max_output_tokens"]
+    set_reasoning_widgets(prefix, binding)
 
 
 def _save_model_selection(workspace: str, node: str, role: str, application=None) -> None:
@@ -202,20 +209,35 @@ def _save_model_selection(workspace: str, node: str, role: str, application=None
         model = model.strip()
     if backend and model:
         same_model = previous.get("backend") == backend and previous.get("model") == model
-        suggested_context, suggested_output = suggested_tokens(model_info(application, backend, model))
+        remembered = (previous if same_model else st.session_state.get(
+            prefix + ":saved-binding:" + backend + ":" + model, {}))
+        info = model_info(application, backend, model)
+        suggested_context, suggested_output = suggested_tokens(info)
         binding = {"backend": backend, "model": model,
                    "context_window_tokens": st.session_state.get(
                        prefix + ":context:" + backend + ":" + model,
-                       previous.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
-                       if same_model else suggested_context),
+                       remembered.get("context_window_tokens", suggested_context)),
                    "max_output_tokens": st.session_state.get(
                        prefix + ":output:" + backend + ":" + model,
-                       previous.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
-                       if same_model else suggested_output)}
+                       remembered.get("max_output_tokens", suggested_output))}
         try:
+            reasoning = selected_reasoning(prefix, backend, model, info, binding["max_output_tokens"],
+                                            saved=remembered.get("reasoning"))
+            if reasoning is not None:
+                binding["reasoning"] = reasoning
             binding = validate_node_models({node: {role: binding}})[node][role]
-        except ValueError:
-            draft.setdefault(node, {}).pop(role, None)
+        except ValueError as error:
+            if str(error) in REASONING_ERRORS and remembered:
+                try:
+                    restored = validate_node_models({node: {role: remembered}})[node][role]
+                except ValueError:
+                    draft.setdefault(node, {}).pop(role, None)
+                else:
+                    draft.setdefault(node, {})[role] = restored
+                    _set_binding_widgets(workspace, node, role, restored)
+                st.toast(REASONING_ERRORS[str(error)])
+            else:
+                draft.setdefault(node, {}).pop(role, None)
         else:
             draft.setdefault(node, {})[role] = binding
     else:
@@ -257,7 +279,8 @@ def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) ->
     current = bindings.get(node, {}).get(role, {})
     seen = {(current.get("backend"), current.get("model"),
              current.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS),
-             current.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS))}
+             current.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS),
+             json.dumps(current.get("reasoning"), sort_keys=True))}
     choices = []
     for source, roles in bindings.items():
         if source == node:
@@ -268,7 +291,8 @@ def _reusable_bindings(node: str, role: str, bindings: dict, endpoints: dict) ->
             continue
         signature = (backend, binding["model"],
                      binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS),
-                     binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS))
+                     binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS),
+                     json.dumps(binding.get("reasoning"), sort_keys=True))
         if signature in seen:
             continue
         seen.add(signature)
@@ -601,6 +625,18 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                 "context_window_tokens": int(context_tokens),
                 "max_output_tokens": int(output_tokens),
             }
+            try:
+                reasoning = render_reasoning_controls(prefix, backend, model, info, int(output_tokens),
+                    saved=binding.get("reasoning") if same_model else None,
+                    api_format=endpoints[backend].get("api_format", "chat"),
+                    on_change=_save_model_selection, args=(workspace, node, role, backend_application),
+                    application=backend_application, endpoint=endpoints[backend])
+            except ValueError as error:
+                st.warning(REASONING_ERRORS.get(str(error), REASONING_ERRORS["invalid_model_reasoning"]))
+                bindings[node].pop(role, None)
+                continue
+            if reasoning is not None:
+                bindings[node][role]["reasoning"] = reasoning
             render_model_scheduling(backend_application, backend, model, prefix=prefix)
             render_model_capabilities(backend_application, backend, model, info, prefix=prefix,
                                       endpoint=endpoints[backend],
