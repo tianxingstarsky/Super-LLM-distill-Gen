@@ -117,7 +117,7 @@ def preferred_training_record(target, row, preferences=None, *, reward_model=Fal
     record = rlaif_reward_model_record(row) if reward_model else training_record(target, row)
     style = (sft_output_style if sft_output_style is not None else
              preferences["values"]["cot_style"] if preferences else None)
-    if target != "sft":
+    if target not in {"sft", "multiturn"}:
         return record
     from lib.domain.reasoning_fields import sft_training_messages
     return {**record, "messages": sft_training_messages(record["messages"], drop=style == "drop")}
@@ -467,6 +467,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"source_cleaning": True, "source_context_pack_version": 1,
                   "source_line_protocol_version": 1, "source_context_capacity_version": 2} if source_cleaning else {}),
               "source_memory_protocol_version": 1,
+              "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
               "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
@@ -696,7 +697,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         return render(self.historical_prompt(prompt_id))
 
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
-            allow_reasoning_fallback=True, model_stage=None, prompt_stage=None):
+            allow_reasoning_fallback=True, model_stage=None, prompt_stage=None,
+            capture_response_details=False):
+        capture = (capture_response_details
+                   and self.recipe.get("provider_reasoning_capture_version") == 1)
         if (self.recipe.get("review_repair") is not None and role == "jev"
                 and (model_stage or self.stage) in {"sft", "multiturn", "preference", "cot", "trim"}):
             # Generation-side contract/turn checks use that node's own model.
@@ -784,12 +788,22 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             request_messages = question_role_messages(system, request_data, transport=transport)
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
                             request_messages = answer_role_messages(system, memory_context, request_data, transport=transport)
-                    visible_only = (not allow_reasoning_fallback or prompt_id in {
+                    visible_only = (capture or not allow_reasoning_fallback or prompt_id in {
                         "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
                         "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
-                    return chat_json(client, request_messages,
+                    response_details = {}
+                    value = chat_json(client, request_messages,
                         max_tokens=binding.get("max_output_tokens"), **streaming,
+                        **({"response_details": response_details} if capture and isinstance(client, ChatClient) else {}),
                         **({"allow_reasoning_fallback": False} if visible_only else {}))
+                    if capture:
+                        # The envelope is created by the worker, outside the model's
+                        # JSON. It is committed atomically with this exact answer.
+                        response_details["checkpoint"] = {"stage": self.stage,
+                            "sha256": digest(["call", key])}
+                        return {"model_json_response_version": 1, "data": value,
+                                "response_details": response_details}
+                    return value
                 finally:
                     after = getattr(client, "usage", {})
                     with self._lock:
@@ -811,6 +825,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 journal.completed()
             except (OSError, ValueError):
                 pass  # The trusted checkpoint is already durable and reusable.
+        if capture:
+            from lib.model_response_details import ModelJSONResult
+            if (not isinstance(value, dict) or value.get("model_json_response_version") != 1
+                    or set(value) != {"model_json_response_version", "data", "response_details"}
+                    or not isinstance(value["response_details"], dict)):
+                raise ValueError("checkpoint_integrity_error")
+            return (ModelJSONResult(value["data"], value["response_details"])
+                    if isinstance(value["data"], dict) else value["data"])
         return value
 
     def stage_items(self, stage, items, action, *, stream_sources=False, finalize=True):
@@ -1443,6 +1465,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                for message in unit.get("messages", [])):
             return [self.rejected(unit, "observed_tool_error_not_sft")]
         from lib.domain.reasoning_fields import sft_reasoning_issue, sft_training_messages
+        from lib.domain.provider_reasoning import select_candidate_reasoning, reasoning_provenance
         if issue := sft_reasoning_issue(unit.get("messages", [])):
             return [self.rejected(unit, issue)]
         history = sft_training_messages(unit.get("messages", []))
@@ -1466,9 +1489,17 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 key = [unit["id"], "sft_styled" if style is not None else "sft", attempt]
                 candidate = self.ask(key, "generation", "workflow.sft_styled" if style is not None else "workflow.sft",
                     {**context, "feedback": feedback},
+                    capture_response_details=style is None,
                     **({"instruction": "生成风格要求：\n" + style["instruction"]} if style is not None else {}))
-                if not isinstance(candidate, dict) or any(text_issue(candidate.get(k)) for k in ("question", "answer", "reasoning")):
+                required = (("question", "answer", "reasoning") if style is not None
+                    or self.recipe.get("provider_reasoning_capture_version") != 1 else ("question", "answer"))
+                if not isinstance(candidate, dict) or any(text_issue(candidate.get(k)) for k in required):
                     feedback = "回答结构不合格或存在敏感数据"
+                    continue
+                try:
+                    selected_reasoning = select_candidate_reasoning(candidate, styled=style is not None)
+                except ValueError:
+                    feedback = "推理字段结构无效"
                     continue
                 quotes = candidate.get("quotes", [])
                 if unit["kind"] == "document":
@@ -1508,7 +1539,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     prefix = [{"role": "user", "content": prompt}]
                 else:
                     prefix = history[:-1] if history else [{"role": "user", "content": candidate["question"]}]
-                messages = [*prefix, {"role": "assistant", "content": candidate["answer"], "reasoning_content": candidate["reasoning"]}]
+                messages = [*prefix, {"role": "assistant", "content": candidate["answer"],
+                    **({"reasoning_content": selected_reasoning["content"]} if selected_reasoning["content"] else {})}]
             issue = conversation_issue(messages)
             if issue:
                 feedback = issue
@@ -1521,8 +1553,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                          "source_context": unit, "generation_check": "structure_and_source_quotes",
                          **({"quote_spans": evidence_spans} if evidence_spans is not None else {}),
                          **({"generation_style": style} if style is not None else {}),
-                         "repair_attempts": attempt, "reasoning_origin": ("prompt_styled_generation" if style is not None
-                            else "source" if messages is history else "synthetic_explanation"),
+                         "repair_attempts": attempt,
+                         **({"reasoning_origin": "source"} if messages is history else reasoning_provenance(selected_reasoning)),
                          "evidence_level": ("recorded_context_model_assessed" if messages is history else
                             "model_assessed_synthetic" if unit["kind"] == "brief" else document_evidence_level(unit, assessed=True))}]
             # Recorded answers need no generation call. Key their verdict to
@@ -1543,8 +1575,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                          **({"human_augmentation_status": "recorded_conversation_preserved"}
                             if unit["kind"] == "conversation" and
                             self.recipe.get("qa_director", {}).get("human_augmentation", {}).get("enabled") else {}),
-                         "repair_attempts": attempt, "reasoning_origin": ("prompt_styled_generation" if style is not None
-                            else "source" if messages is history else "synthetic_explanation"),
+                         "repair_attempts": attempt,
+                         **({"reasoning_origin": "source"} if messages is history else reasoning_provenance(selected_reasoning)),
                          "evidence_level": ("recorded_context_model_assessed" if messages is history else
                                             "model_assessed_synthetic" if unit["kind"] == "brief"
                                             else document_evidence_level(unit, assessed=True))}]
@@ -1661,7 +1693,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         user_data = {"message": contract["question"]}
                     elif adaptive_dialogue:
                         try:
-                            planned_step = self.next_dialogue_step(unit, messages, dialogue_state,
+                            planned_step = self.next_dialogue_step(unit, self.without_source_reasoning(messages), dialogue_state,
                                 attempt=attempt, feedback=feedback)
                         except DialoguePlanError:
                             feedback = "invalid_dialogue_step"
@@ -1683,7 +1715,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         user_data = self.ask([unit["id"], "multiturn_user", turn_index, attempt],
                             "generation", "workflow.multiturn_user",
                             {**source_context, "turn": turn_index + 1, "total_turns": self.recipe.get("conversation_turns", 3),
-                             "previous_messages": messages, "feedback": feedback},
+                             "previous_messages": self.without_source_reasoning(messages), "feedback": feedback},
                             **({"instruction": "遵循问答指导契约和提问规则。隐藏的教师资料不得自动成为用户可见线索；"
                                 "无线索题的后续问题必须自包含，不引用读者不可见的来源。"} if contract is not None else {}))
                     user_text = user_data.get("message") if isinstance(user_data, dict) else None
@@ -1710,10 +1742,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         "contract": contract, "step": planned_step})] if separated_step_route and turn_index else [])
                     response = self.ask([unit["id"], "multiturn_answer", turn_index, attempt, *turn_identity],
                         "generation", "workflow.multiturn_assistant",
-                        {**source_context, "messages": [*messages, user_message], "feedback": feedback,
-                         **({"learner_messages": [*messages, user_message]} if self.separated_questions() else {}),
+                        {**source_context, "messages": [*self.without_source_reasoning(messages), user_message], "feedback": feedback,
+                         **({"learner_messages": [*self.without_source_reasoning(messages), user_message]} if self.separated_questions() else {}),
                          **({"dialogue_state": current_dialogue_state,
                              "dialogue_step": planned_step} if adaptive_dialogue else {})},
+                        capture_response_details=True,
                         **({"instruction": "遵循问答指导契约和回答规则。首轮严格遵循answer_policy；"
                             "后续按用户新提供的信息回答，仍须区分教师证据与用户可见证据，"
                             "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
@@ -1744,7 +1777,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     if unit["kind"] == "brief" and quotes:
                         feedback = "开放需求没有可核对的外部来源，不应编造引文"
                         continue
-                    assistant_message = {"role": "assistant", "content": answer}
+                    from lib.domain.provider_reasoning import select_candidate_reasoning, reasoning_provenance
+                    try:
+                        selected_reasoning = select_candidate_reasoning(response)
+                    except ValueError:
+                        feedback = "推理字段结构无效"
+                        continue
+                    assistant_message = {"role": "assistant", "content": answer,
+                        **({"reasoning_content": selected_reasoning["content"]} if selected_reasoning["content"] else {})}
                     candidate = [*messages, user_message, assistant_message]
                     issue = conversation_issue(candidate)
                     if issue:
@@ -1772,6 +1812,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     raw_user_messages.append(user_data["message"])
                     reviews.append({"turn": turn_index + 1, "end_message_index": len(messages) - 1,
                                     "judge": check, "repair_attempts": attempt,
+                                    **reasoning_provenance(selected_reasoning),
                                     **({"surface_repetition": surface_repetition} if adaptive_dialogue else {}),
                                     **({"qa_contract_check": contract_check} if contract_check is not None else {})})
                     quotes_by_turn.append(quotes)
@@ -1980,14 +2021,19 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         messages = sample["messages"]
         if not messages or messages[-1].get("role") != "assistant":
             return [self.rejected(sample, "cot_missing_final_answer")]
-        reasoning = messages[-1].get("reasoning_content", "").strip()
-        answer = messages[-1].get("content", "").strip()
-        if not reasoning or not answer:
+        reasoning = messages[-1].get("reasoning_content", "")
+        answer = messages[-1].get("content", "")
+        if sample.get("reasoning_origin") != "provider_reasoning":
+            reasoning = reasoning.strip()
+            answer = answer.strip()
+        if not reasoning.strip() or not answer.strip():
             return [self.rejected(sample, "cot_missing_reasoning_or_answer")]
         if self.recipe.get("review_repair") is not None:
             return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                      "question": messages[:-1], "reasoning": [reasoning], "answer": answer,
                      "source_context": deepcopy(sample.get("source_context")), "quotes": sample.get("quotes", []),
+                     **{name: deepcopy(sample[name]) for name in ("reasoning_origin", "reasoning_summary",
+                         "reasoning_api_format", "reasoning_call") if name in sample},
                      "evidence_level": sample["evidence_level"], **self.qa_metadata(sample)}]
         task = {"prompt": messages[:-1], "reasoning": reasoning, "answer": answer,
                 "source": sample.get("source_context"), "quotes": sample.get("quotes", [])}
@@ -2004,10 +2050,13 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
             return [{**self.rejected(sample, "cot_qa_contract_rejected"),
                      **self.qa_metadata(sample, contract_check)}]
-        steps = [part.strip() for part in re.split(r"(?<=[。.!?])\s*", reasoning) if part.strip()]
+        steps = ([reasoning] if sample.get("reasoning_origin") == "provider_reasoning" else
+                 [part.strip() for part in re.split(r"(?<=[。.!?])\s*", reasoning) if part.strip()])
         return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                  "question": messages[:-1], "reasoning": steps or [reasoning], "answer": answer,
                  "judge": check, "evidence_level": sample["evidence_level"],
+                 **{name: deepcopy(sample[name]) for name in ("reasoning_origin", "reasoning_summary",
+                     "reasoning_api_format", "reasoning_call") if name in sample},
                  **self.qa_metadata(sample, contract_check)}]
 
     def styled_cot(self, sample, style):
@@ -2174,6 +2223,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         row["reasoning_trim"] = {"version": 1, "template": config["template"],
                                   "status": "applied" if fields else "not_applicable",
                                   "instruction_sha256": digest(instruction), "fields": receipts}
+        if receipts:
+            from lib.infrastructure.workflow_review_repair import preserve_provider_reasoning
+            preserve_provider_reasoning(target, sample, row, origin="prompt_trim")
         return [{**row, "trim_target": target}]
 
     def apply_reasoning_trim(self, collections, *, targets=None):

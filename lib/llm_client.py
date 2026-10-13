@@ -21,6 +21,7 @@ from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request
                                  reasoning_request, validate_api_format)
 from lib.domain.model_reasoning import validate_reasoning
 from lib.model_streaming import StreamCallback, consume_stream
+from lib.model_response_details import commit_response_details, extract_response_details
 from lib.model_request_reliability import (
     ModelJSONError, ModelRequestError, SERVICE_COOLDOWNS, classify_request_error,
     rejected_before_generation, retry_delay,
@@ -102,19 +103,27 @@ def chat_json(
     max_tokens: int | None = None,
     on_stream: StreamCallback | None = None,
     allow_reasoning_fallback: bool = True,
+    response_details: dict | None = None,
 ) -> Dict[str, Any]:
     """严格 JSON 调用：response_format 解码层强制 + 容错解析 + 降温度重试。"""
+    if response_details is not None:
+        response_details.clear()
+        allow_reasoning_fallback = False
     if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
         raise ValueError("max_tokens must be a positive integer")
     last_err: Exception | None = None
     for attempt in range(retries):
+        attempt_details = {}
         temp = temperature if attempt == 0 else min(temperature, 0.3)
         out = client.chat(messages, max_tokens=max_tokens, temperature=temp,
                           thinking=thinking, json_mode=True,
                           **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
+                          **({"response_details": attempt_details} if response_details is not None else {}),
                           **({"on_stream": on_stream} if on_stream else {}))
         try:
-            return parse_json_robust(out)
+            result = parse_json_robust(out)
+            commit_response_details(response_details, attempt_details)
+            return result
         except Exception as e:  # noqa: BLE001
             last_err = e
     raise ModelJSONError(retries) from None
@@ -456,7 +465,25 @@ class ChatClient:
     def _request(self, messages: List[Dict[str, Any]], *, max_tokens: int | None,
                  temperature: float, thinking: bool | None, json_mode: bool,
                  on_stream: StreamCallback | None = None,
-                 allow_reasoning_fallback: bool = True) -> tuple[str, int, int]:
+                 allow_reasoning_fallback: bool = True,
+                 response_details: dict | None = None) -> tuple[str, int, int]:
+        if response_details is not None:
+            response_details.clear()
+            allow_reasoning_fallback = False
+        def stream_result(response):
+            request_details = {}
+            result = consume_stream(response, self.api_format, on_stream,
+                allow_reasoning_fallback=allow_reasoning_fallback,
+                **({"response_details": request_details} if response_details is not None else {}))
+            commit_response_details(response_details, request_details)
+            return result
+        def full_result(response, result, stop_reason, allowed):
+            details = (extract_response_details(response, self.api_format)
+                       if response_details is not None else {})
+            result = self._full_result(result, on_stream, stop_reason, allowed,
+                                      verify_complete=response_details is not None, details=details)
+            commit_response_details(response_details, details)
+            return result
         choice = getattr(self, "reasoning", {"mode": "auto"})
         explicit_reasoning = choice.get("mode", "auto") != "auto"
         # Preserve the old per-call opt-out, but its absence must never turn
@@ -488,11 +515,11 @@ class ChatClient:
                 kwargs.pop("temperature")
                 response = self._create(self.client.messages.create, kwargs)
             if on_stream and kwargs.get("stream"):
-                return consume_stream(response, self.api_format, on_stream, allow_reasoning_fallback=allow_reasoning_fallback)
+                return stream_result(response)
             usage = getattr(response, "usage", None)
-            return self._full_result((anthropic_text(response), getattr(usage, "input_tokens", 0) or 0,
-                                      getattr(usage, "output_tokens", 0) or 0), on_stream,
-                                     getattr(response, "stop_reason", None), {"end_turn", "stop_sequence"})
+            return full_result(response, (anthropic_text(response), getattr(usage, "input_tokens", 0) or 0,
+                                          getattr(usage, "output_tokens", 0) or 0),
+                               getattr(response, "stop_reason", None), {"end_turn", "stop_sequence"})
         if self.api_format == "responses":
             kwargs: Dict[str, Any] = {"model": self.model, "input": responses_input(messages),
                                       "temperature": temperature, "store": False}
@@ -514,11 +541,11 @@ class ChatClient:
             if json_mode and self.json_supported is None:
                 self.json_supported = True
             if on_stream and kwargs.get("stream"):
-                return consume_stream(response, self.api_format, on_stream, allow_reasoning_fallback=allow_reasoning_fallback)
+                return stream_result(response)
             usage = getattr(response, "usage", None)
-            return self._full_result((response_text(response), getattr(usage, "input_tokens", 0) or 0,
-                                      getattr(usage, "output_tokens", 0) or 0), on_stream,
-                                     getattr(response, "status", None), {"completed"})
+            return full_result(response, (response_text(response), getattr(usage, "input_tokens", 0) or 0,
+                                          getattr(usage, "output_tokens", 0) or 0),
+                               getattr(response, "status", None), {"completed"})
         from lib.model_protocols import _paired_tools
         _paired_tools(messages)
         kwargs = {"model": self.model, "messages": messages, "temperature": temperature}
@@ -552,7 +579,7 @@ class ChatClient:
         if json_mode and self.json_supported is None:
             self.json_supported = True
         if on_stream and kwargs.get("stream"):
-            return consume_stream(response, self.api_format, on_stream, allow_reasoning_fallback=allow_reasoning_fallback)
+            return stream_result(response)
         usage = getattr(response, "usage", None)
         message = response.choices[0].message
         content = (message.content or "").strip()
@@ -560,9 +587,9 @@ class ChatClient:
             reasoning = getattr(message, "reasoning_content", None)
             if isinstance(reasoning, str):
                 content = reasoning.strip()
-        return self._full_result((content, getattr(usage, "prompt_tokens", 0) or 0,
-                                  getattr(usage, "completion_tokens", 0) or 0), on_stream,
-                                 getattr(response.choices[0], "finish_reason", None), {"stop"})
+        return full_result(response, (content, getattr(usage, "prompt_tokens", 0) or 0,
+                                      getattr(usage, "completion_tokens", 0) or 0),
+                           getattr(response.choices[0], "finish_reason", None), {"stop"})
 
     def _create(self, create, kwargs):
         """Negotiate only an explicit pre-stream capability rejection."""
@@ -580,11 +607,15 @@ class ChatClient:
             raise
 
     @staticmethod
-    def _full_result(result, on_stream, stop_reason, allowed):
-        if on_stream:
+    def _full_result(result, on_stream, stop_reason, allowed, *, verify_complete=False, details=None):
+        if on_stream or verify_complete:
             from lib.model_streaming import ModelStreamError
             if stop_reason not in allowed:
                 raise ModelStreamError("model_stream_incomplete")
+        if on_stream:
+            for field in ("reasoning_content", "reasoning_summary"):
+                if (details or {}).get(field):
+                    on_stream({"type": "delta", "channel": "reasoning", "text": details[field]})
             if result[0]:
                 on_stream({"type": "delta", "channel": "text", "text": result[0]})
             on_stream({"type": "response_completed", "prompt_tokens": result[1],
@@ -601,8 +632,12 @@ class ChatClient:
         json_mode: bool = False,
         on_stream: StreamCallback | None = None,
         allow_reasoning_fallback: bool = True,
+        response_details: dict | None = None,
     ) -> str:
         """Return text through the selected protocol and count its usage."""
+        if response_details is not None:
+            response_details.clear()
+            allow_reasoning_fallback = False
         if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
             raise ValueError("max_tokens must be a positive integer")
         if type(retries) is not int or not 1 <= retries <= 10:
@@ -628,6 +663,7 @@ class ChatClient:
                 raise
         attempts = 0
         while attempts < retries:
+            attempt_details = {}
             reservations = []
             admission = ExitStack()
             request_started = False
@@ -655,6 +691,7 @@ class ChatClient:
                     messages, max_tokens=request_max_tokens, temperature=temperature,
                     thinking=thinking, json_mode=json_mode,
                     **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
+                    **({"response_details": attempt_details} if response_details is not None else {}),
                     **({"on_stream": notify} if on_stream else {}))
                 self.usage["calls"] += 1
                 self.usage["prompt_tokens"] += prompt_tokens
@@ -677,6 +714,7 @@ class ChatClient:
                         if first_error is not None:
                             raise first_error
                 if content:
+                    commit_response_details(response_details, attempt_details)
                     return content
                 if not allow_reasoning_fallback:
                     raise ValueError("model_visible_output_missing")

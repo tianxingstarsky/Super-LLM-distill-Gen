@@ -7,6 +7,7 @@ streaming, cancellation and request checkpoints remain the ordinary ones.
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 
 from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
 from lib.domain.workflow_quality import accepted, canonical, conversation_issue, text_issue, verdict
@@ -34,6 +35,112 @@ _AUTHORED_REPAIR_RULES = (
     "reasoning_trace 或 generation_trace 仅记录输入候选的论证声明，不能证明修改后正文有效；"
     "依据实际任务和来源修正正文，保留用户指定风格，不机械复制审计字段。"
 )
+
+
+def preserve_provider_reasoning(target, original, updated, *, origin):
+    """Retire native evidence when its task, answer, or reasoning is revised.
+
+    A score alone does not change provenance. Revisions keep exact native text
+    and its original answer in history, with a digest/reference to the old task.
+    An unchanged native rationale is not carried onto a changed answer or user
+    turn; a newly authored replacement can remain as revision text. Other
+    unmodified turns keep their original provider provenance.
+    Legacy rows without provider reasoning/summary retain their existing schema.
+    """
+    turn_reviews = original.get("turn_reviews", [])
+    turn_reviews = turn_reviews if isinstance(turn_reviews, list) else []
+    provider_turns = [review for review in turn_reviews if isinstance(review, dict) and (
+        review.get("reasoning_origin") == "provider_reasoning" or review.get("reasoning_summary"))]
+    if (original.get("reasoning_origin") != "provider_reasoning"
+            and not original.get("reasoning_summary") and not provider_turns):
+        return updated
+    fields = TRAINING_FIELDS.get(target, ())
+    before = {field: original[field] for field in fields if field in original}
+    after = {field: updated[field] for field in fields if field in updated}
+    before_body = canonical(before)
+    if before_body == canonical(after):
+        return updated
+    before_hash = hashlib.sha256(before_body.encode("utf-8")).hexdigest()
+    old_messages, new_messages = original.get("messages", []), updated.get("messages", [])
+    entries = []
+    metadata_fields = ("reasoning_origin", "reasoning_summary", "reasoning_api_format", "reasoning_call")
+
+    def text_reasoning(value):
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list) and all(isinstance(part, str) for part in value):
+            return "\n".join(value)
+        return ""
+
+    def message_reasoning(message):
+        return next((message[field] for field in ("reasoning_content", "reasoning", "thinking")
+                     if isinstance(message.get(field), str) and message[field]), "")
+
+    def retire(metadata, answer, native, prompt, *, message_index=None):
+        entry = {"version": 1, "scope": "historical_provider_response_only", "superseded_by": origin,
+                 "target": target, "answer": deepcopy(answer),
+                 "content_sha256": before_hash,
+                 "prompt_sha256": hashlib.sha256(canonical(prompt).encode("utf-8")).hexdigest(),
+                 **{field: deepcopy(metadata[field]) for field in metadata_fields if field in metadata}}
+        if native:
+            entry["reasoning_content"] = native
+        if original.get("source_id") is not None:
+            entry["source_id"] = original["source_id"]
+        if message_index is not None:
+            entry["end_message_index"] = message_index
+        entries.append(entry)
+
+    def mark_revision(metadata):
+        metadata["reasoning_origin"] = origin
+        for field in metadata_fields[1:]:
+            metadata.pop(field, None)
+
+    def remove_unchanged_native(message, native):
+        if native and isinstance(message, dict) and message.get("role") == "assistant":
+            for field in ("reasoning_content", "reasoning", "thinking"):
+                if message.get(field) == native:
+                    message.pop(field, None)
+
+    if original.get("reasoning_origin") == "provider_reasoning" or original.get("reasoning_summary"):
+        if target == "cot":
+            native = (text_reasoning(original.get("reasoning"))
+                      if original.get("reasoning_origin") == "provider_reasoning" else "")
+            retire(original, original.get("answer", ""), native, original.get("question"))
+            if native and text_reasoning(updated.get("reasoning")) == native:
+                updated["reasoning"] = []
+            if new_messages:
+                remove_unchanged_native(new_messages[-1], native)
+        else:
+            index = next((index for index in range(len(old_messages) - 1, -1, -1)
+                          if old_messages[index].get("role") == "assistant"), None)
+            message = old_messages[index] if index is not None else {}
+            native = message_reasoning(message) if original.get("reasoning_origin") == "provider_reasoning" else ""
+            retire(original, message.get("content", ""), native,
+                   old_messages[:index] if index is not None else [], message_index=index)
+            if index is not None and index < len(new_messages):
+                remove_unchanged_native(new_messages[index], native)
+        mark_revision(updated)
+
+    for review in provider_turns:
+        index = review.get("end_message_index")
+        if type(index) is not int or not 0 <= index < len(old_messages):
+            continue
+        old = old_messages[index]
+        new = new_messages[index] if index < len(new_messages) else {}
+        old_user = next((message for message in reversed(old_messages[:index]) if message.get("role") == "user"), None)
+        new_user = next((message for message in reversed(new_messages[:index]) if message.get("role") == "user"), None)
+        if canonical([old_user, old]) == canonical([new_user, new]):
+            continue
+        native = message_reasoning(old) if review.get("reasoning_origin") == "provider_reasoning" else ""
+        retire(review, old.get("content", ""), native, old_user, message_index=index)
+        remove_unchanged_native(new, native)
+        for current in updated.get("turn_reviews", []):
+            if isinstance(current, dict) and current.get("end_message_index") == index:
+                mark_revision(current)
+    if entries:
+        history = updated.get("provider_reasoning_history", [])
+        updated["provider_reasoning_history"] = [*deepcopy(history if isinstance(history, list) else []), *entries]
+    return updated
 
 
 def _authored_cot(target, row):
@@ -148,7 +255,9 @@ def _manual_patch(target, record, item):
             {field: row.get(field) for field in TRAINING_FIELDS[target]}) != canonical(
             {field: record.get(field) for field in TRAINING_FIELDS[target]}):
         row["reasoning_trace_status"] = "superseded_by_human_edit"
-    return _sync_cot_messages(row) if target == "cot" else row
+    if target == "cot":
+        _sync_cot_messages(row)
+    return preserve_provider_reasoning(target, record, row, origin="human_revision")
 
 
 def _immutable_tool_facts(row):
@@ -320,6 +429,7 @@ class WorkflowReviewRepair:
             _sync_cot_messages(updated)
         if canonical(_immutable_tool_facts(updated)) != canonical(_immutable_tool_facts(row)):
             return row, "review_repair_tool_facts_changed"
+        preserve_provider_reasoning(target, row, updated, origin="prompt_revision")
         if issue := _payload_issue(target, updated):
             return row, issue
         if evidence["source_kind"] == "document":

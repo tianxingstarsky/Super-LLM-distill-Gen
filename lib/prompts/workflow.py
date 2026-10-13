@@ -410,3 +410,30 @@ SFT_ANSWER = spec("sft_answer", "只回应真实用户消息的独立回答者",
     'reasoning提供必要的可核查解释，风格化时按generation_style。quotes提供内部来源的逐字证据用于审计，'
     '引用不跨所选知识块，不将内部工具、行号、来源标识或审计内容写进训练回答。'
     '仅返回 {"answer":"助手回答","reasoning":"必要解释","quotes":["逐字证据"]}。')
+
+# New runs capture provider reasoning alongside the exact completed answer.
+# Keep older snapshots registered; ordinary distillation need not spend more
+# output tokens writing a second explanation into the visible JSON.
+SFT_V1_2, SFT_DIRECTED_V1_3, SFT_ANSWER_V1 = SFT, SFT_DIRECTED, SFT_ANSWER
+SFT = _reasoning_spec_replace(SFT, version="1.3.0", template=SFT.template.replace(
+    'reasoning 是简洁、可检查的解题解释，不是恢复隐藏思维。',
+    '普通蒸馏只输出问题、答案和证据，不额外撰写reasoning字段。原生思考由API实际返回的推理通道单独处理。'
+).replace('"reasoning":"解释", ', ''))
+SFT_DIRECTED = _reasoning_spec_replace(SFT_DIRECTED, version="1.4.0", template=SFT_DIRECTED.template.replace(
+    'reasoning 是可检查的解题解释，不是恢复模型隐藏推理。',
+    '普通蒸馏不额外撰写reasoning字段，原生思考由API推理通道单独处理。'
+    '如有generation_style，必须另加非空reasoning字段，按配置新撰写显式推导文本。'
+).replace('"reasoning":"解释或指定风格推导",', ''))
+SFT_ANSWER = _reasoning_spec_replace(SFT_ANSWER, version="1.1.0", template=SFT_ANSWER.template.replace(
+    'reasoning提供必要的可核查解释，风格化时按generation_style。',
+    '普通蒸馏不额外撰写reasoning字段，原生思考由API推理通道单独处理。'
+    '如有generation_style，必须另加非空reasoning字段，按配置新撰写显式推导文本。'
+).replace('"reasoning":"必要解释",', ''))
+JEV_SCORE_V1_1, REVIEW_SCORE_V1_1 = JEV_SCORE, REVIEW_SCORE
+_OPTIONAL_SFT_REASONING_REVIEW = (
+    "普通SFT或多轮对话允许只有答案，不因缺少reasoning_content而扣分或拒绝。"
+    "此时依据问题、实际回答和来源检查逻辑与正确性，不能声称看过未返回的推理。"
+    "若提供了推理，则独立检查该推理与对应答案是否一致；CoT目标仍必须具有有效推理。"
+)
+JEV_SCORE = context_version(JEV_SCORE, version="1.2.0", body=_OPTIONAL_SFT_REASONING_REVIEW)
+REVIEW_SCORE = context_version(REVIEW_SCORE, version="1.2.0", body=_OPTIONAL_SFT_REASONING_REVIEW)

@@ -24,6 +24,7 @@ from lib.domain.workflow_qa_director import (
     validate_question_brief, ANSWER_POLICIES,
 )
 from lib.domain.workflow_quality import accepted, canonical, conversation_issue, text_issue
+from lib.domain.provider_reasoning import reasoning_provenance, select_candidate_reasoning
 from lib.domain.workflow_scale import DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS
 from lib.domain.human_augmentation import (
     human_design, human_messages_identity, validate_human_check,
@@ -459,6 +460,7 @@ class WorkflowQADirector:
             "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading") else
             "source_and_model_assessed"))
         style = self.generation_style("sft", unit["id"])
+        native_capture = style is None and self.recipe.get("provider_reasoning_capture_version") == 1
         context = {"source_context": {key: value for key, value in unit.items()
                                       if key not in {"qa_contract", "family_id", "parent_id", "director_batch"}},
                    "qa_contract": contract,
@@ -484,14 +486,32 @@ class WorkflowQADirector:
             candidate = self.ask([unit["id"], "sft_directed", attempt], "generation",
                 "workflow.sft_answer" if separated else "workflow.sft_directed", {**context, "feedback": feedback},
                 **({"instruction": "\n".join(instructions)} if instructions else {}),
-                **({"allow_reasoning_fallback": False} if style is not None else {}))
+                **({"allow_reasoning_fallback": False} if style is not None else {}),
+                **({"capture_response_details": True} if native_capture else {}))
             failure_kind = "invalid_output"
+            required_fields = (("answer", "reasoning") if style is not None or not native_capture else ("answer",))
+            if not separated:
+                required_fields = ("question", *required_fields)
+            separated_schema_invalid = False
+            if separated and isinstance(candidate, dict):
+                if style is not None or not native_capture:
+                    separated_schema_invalid = set(candidate) != {"answer", "reasoning", "quotes"}
+                else:
+                    separated_schema_invalid = (not {"answer", "quotes"}.issubset(candidate) or
+                        not set(candidate).issubset({"answer", "reasoning", "quotes"}))
             if (not isinstance(candidate, dict)
-                    or (separated and set(candidate) != {"answer", "reasoning", "quotes"})
-                    or any(text_issue(candidate.get(key)) for key in (("answer", "reasoning") if separated else ("question", "answer", "reasoning")))
+                    or separated_schema_invalid
+                    or any(text_issue(candidate.get(key)) for key in required_fields)
                     or (not separated and candidate["question"].strip() != contract["question"])):
-                feedback = ("只返回answer、reasoning、quotes，不新增或改写用户问题。" if separated
-                            else "保持指导员分配的问题原文，返回完整问题、答案和推理字段。")
+                feedback = (("只返回answer、reasoning、quotes，不新增或改写用户问题。" if style is not None or not native_capture else
+                             "只返回answer、quotes，可附带文本reasoning，不新增或改写用户问题。") if separated else
+                            "保持指导员分配的问题原文，返回完整问题和答案；推理字段须为文本。")
+                continue
+            try:
+                reasoning = select_candidate_reasoning(candidate if native_capture else dict(candidate),
+                                                       styled=style is not None)
+            except ValueError:
+                feedback = "推理字段必须是文本；不能把结构化对象当作推理。"
                 continue
             quotes = candidate.get("quotes")
             evidence_text = unit.get("text", "")
@@ -507,9 +527,10 @@ class WorkflowQADirector:
                         and not quotes)):
                 feedback = "证据必须是教师来源中的逐字片段；不能把历史答案当作事实依据。"
                 continue
-            messages = [{"role": "user", "content": learner_prompt(contract)},
-                        {"role": "assistant", "content": candidate["answer"],
-                         "reasoning_content": candidate["reasoning"]}]
+            assistant_message = {"role": "assistant", "content": candidate["answer"]}
+            if reasoning["content"]:
+                assistant_message["reasoning_content"] = reasoning["content"]
+            messages = [{"role": "user", "content": learner_prompt(contract)}, assistant_message]
             issue = conversation_issue(messages)
             if issue:
                 feedback = issue
@@ -520,7 +541,7 @@ class WorkflowQADirector:
                          "status": "eligible", "messages": messages, "tools": [], "quotes": quotes,
                          "source_context": unit, "qa_contract": contract, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "generation_check": "structure_and_source_quotes",
-                         "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
+                         "repair_attempts": attempt, **reasoning_provenance(reasoning),
                          "evidence_level": evidence_level,
                          **({"generation_style": style} if style else {})}]
             check = self.judge_answer([unit["id"], "sft_directed_judge", attempt],
@@ -538,7 +559,7 @@ class WorkflowQADirector:
                          "source_context": unit, "qa_contract": contract,
                          "qa_contract_check": contract_check, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "repair_attempts": attempt,
-                         "reasoning_origin": "prompt_styled_generation" if style else "synthetic_explanation",
+                         **reasoning_provenance(reasoning),
                          "evidence_level": evidence_level,
                          **({"generation_style": style, "style_check": style_check} if style else {})}]
             feedback = {"quality": check["reason"], "contract": contract_check["reason"],

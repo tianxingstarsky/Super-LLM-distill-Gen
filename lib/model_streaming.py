@@ -4,6 +4,9 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import Callable
 
+from lib.model_response_details import (build_response_details, commit_response_details,
+                                        extract_response_details)
+
 
 StreamCallback = Callable[[dict], None]
 
@@ -17,13 +20,18 @@ def _get(value, name, default=None):
 
 
 def consume_stream(stream, api_format: str, emit: StreamCallback, *,
-                   allow_reasoning_fallback: bool = True) -> tuple[str, int, int]:
+                   allow_reasoning_fallback: bool = True,
+                   response_details: dict | None = None) -> tuple[str, int, int]:
     """Consume SDK-decoded SSE events, closing the HTTP response on every exit.
 
     A balanced JSON prefix is insufficient evidence of a completed response.
     Callback failures (including worker cancellation) propagate unchanged.
     """
-    text, reasoning = [], []
+    if response_details is not None:
+        response_details.clear()
+        allow_reasoning_fallback = False
+    text, reasoning, summary = [], [], []
+    completed_details = {}
     prompt_tokens = completion_tokens = 0
     terminal = False
     stopped = False
@@ -38,7 +46,7 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                 raise ModelStreamError("model_stream_interrupted") from None
             kind = _get(event, "type", "")
             was_terminal = terminal
-            delta_text = delta_reasoning = ""
+            delta_text = delta_reasoning = delta_summary = ""
             if api_format == "chat":
                 usage = _get(event, "usage")
                 if usage is not None:
@@ -58,8 +66,10 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
             elif api_format == "responses":
                 if kind == "response.output_text.delta":
                     delta_text = _get(event, "delta", "")
-                elif kind in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
+                elif kind == "response.reasoning_text.delta":
                     delta_reasoning = _get(event, "delta", "")
+                elif kind == "response.reasoning_summary_text.delta":
+                    delta_summary = _get(event, "delta", "")
                 elif kind == "response.completed":
                     response = _get(event, "response")
                     if _get(response, "status", "completed") != "completed":
@@ -67,6 +77,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                     usage = _get(response, "usage")
                     prompt_tokens = _get(usage, "input_tokens", 0) or 0
                     completion_tokens = _get(usage, "output_tokens", 0) or 0
+                    if response_details is not None:
+                        completed_details = extract_response_details(response, api_format)
                     terminal = True
                 elif kind in {"response.incomplete", "response.failed", "error"}:
                     raise ModelStreamError("model_stream_incomplete")
@@ -78,6 +90,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                     block = _get(event, "content_block")
                     if _get(block, "type") == "text":
                         delta_text = _get(block, "text", "")
+                    elif _get(block, "type") == "thinking":
+                        delta_reasoning = _get(block, "thinking", "")
                 elif kind == "content_block_delta":
                     delta = _get(event, "delta")
                     if _get(delta, "type") == "text_delta":
@@ -96,7 +110,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                 elif kind == "error":
                     raise ModelStreamError("model_stream_incomplete")
             for channel, delta, parts in (("text", delta_text, text),
-                                           ("reasoning", delta_reasoning, reasoning)):
+                                           ("reasoning", delta_reasoning, reasoning),
+                                           ("reasoning", delta_summary, summary)):
                 if not isinstance(delta, str):
                     raise ModelStreamError("model_stream_invalid_event")
                 if delta:
@@ -111,6 +126,9 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
         content = "".join(text).strip()
         if not content and api_format == "chat" and allow_reasoning_fallback:
             content = "".join(reasoning).strip()
+        commit_response_details(response_details, build_response_details(api_format,
+            reasoning_content="".join(reasoning) or completed_details.get("reasoning_content", ""),
+            reasoning_summary="".join(summary) or completed_details.get("reasoning_summary", "")))
         return content, prompt_tokens, completion_tokens
     finally:
         with suppress(Exception):
