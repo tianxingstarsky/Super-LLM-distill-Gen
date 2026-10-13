@@ -569,3 +569,13 @@ REVIEW_REPAIR = context_version(REVIEW_REPAIR, version="1.4.0", body=(
     "修正后的reasoning与answer直接解释当前任务的事实和推导，不叙述旧稿、返工、删除句子或遵守评语；"
     "风险核对可以保留，但核对对象是业务条件和结论，不是隐藏旧答案或制作过程。"
 ))
+
+_USER_EPISTEMIC_BOUNDARY = (
+    "用户提出的候选解释、猜测或评估请求，不等于已经断言该解释正确。"
+    "保留其语言中的不确定性；不能仅因用户描述两种现象同时发生，就断言用户相信某个机制。"
+    "需要比较这些候选时直接解释成立条件和区分信号；只有实际话语明确包含错误前提时才归因并纠正，"
+    "否则用条件分析或必要澄清，不虚构用户的观点、经历或意图。"
+)
+COT_GENERATE_V1_6, REVIEW_REPAIR_V1_4 = COT_GENERATE, REVIEW_REPAIR
+COT_GENERATE = context_version(COT_GENERATE, version="1.7.0", body=_USER_EPISTEMIC_BOUNDARY)
+REVIEW_REPAIR = context_version(REVIEW_REPAIR, version="1.5.0", body=_USER_EPISTEMIC_BOUNDARY)
