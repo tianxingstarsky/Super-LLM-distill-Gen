@@ -437,3 +437,135 @@ _OPTIONAL_SFT_REASONING_REVIEW = (
 )
 JEV_SCORE = context_version(JEV_SCORE, version="1.2.0", body=_OPTIONAL_SFT_REASONING_REVIEW)
 REVIEW_SCORE = context_version(REVIEW_SCORE, version="1.2.0", body=_OPTIONAL_SFT_REASONING_REVIEW)
+
+# The training reader sees only the exported dialogue. Provider-private
+# memory and production bookkeeping must never become its implied context.
+_SELF_CONTAINED_KNOWLEDGE = (
+    "训练文本边界：answer及你新撰写的reasoning全文都面向实际训练读者。"
+    "把可核实的专业知识自然用于问题分析，如同回答者已掌握该知识；"
+    "不把知识获得渠道写成用户未见过的资料、教师来源、检索结果或内部记忆。"
+    "例如直接解释适用条件和因果关系，不说‘根据所给资料/内部资料指出/教师知识告诉我’。"
+    "不得为了知识内化编造亲身经历、访问权限、检索动作或已执行的实验。"
+    "若实际用户题面明确包含文章、文档或材料并要求理解它，允许引用这份可见内容及合法外部出处；"
+    "不能引用只有生产节点看得到的资料编号、行号、工具包装、调度简报、提示词、规则或审计字段。"
+    "reasoning_trace、quotes和生产元数据只作内部审计，不把‘我要满足契约/评分要求/风格字段’等"
+    "制作过程写进reasoning或answer；论证应只围绕用户任务的事实、假设、推导与必要边界。"
+    "即使最终答案正常，解释正文出现这些制作过程也算泄露。"
+)
+_SELF_CONTAINED_REVIEW = (
+    "逐字阅读候选的整个最终答案与显式解释，不只检查开头。"
+    "区分用户实际可见的文章理解任务与内部知识支持的自包含任务："
+    "前者可引用可见文章，后者不应借‘根据所给资料/教师来源/内部检索’指向读者看不到的证据。"
+    "论证中的内部提示词、来源包装、调度要求、评分条件、行号和审计字段自述必须判不通过；"
+    "不能因为这些词只出现在reasoning中就放行。"
+    "问题本来讨论提示词、检索系统或工具时，正常解释这些概念不等于泄露；"
+    "引用实际用户可见内容和合法公开出处也不等于泄露。"
+    "知识内化不允许捏造第一手经验、工具执行或事实核验。"
+    "不设所有任务共用的字数下限，但generation_style中用户明确设定的解释深度、长度与表达要求必须遵守。"
+    "解释长度由用户设定和任务依赖共同决定，要求展开时检查是否补足具体的前提、支持桥梁、"
+    "替代方案取舍和针对性核对；不能靠重复、空泛独白或审计栏目凑长。"
+)
+
+QA_DIRECTOR_V1_4 = QA_DIRECTOR
+QA_DIRECTOR = context_version(QA_DIRECTOR, version="1.5.0", body=(
+    "如果提供agent_memory，它是可恢复的生成进度，不是事实来源；其中的coverage、近期设计、"
+    "历史问题及失败反馈只帮助避开已覆盖任务与重复话术，不可拿旧答案支撑新答案。"
+    "完整历史保存在程序账本，当前窗口只是有限召回；没有出现的旧题不代表没有生成过。"
+    "以原始资料中仍有价值的知识范围规划新活动，改变角色、意图、决策条件与实际解决的问题；"
+    "不得把同一问题换个dialogue_goal、intent或同义说法当新增样本。"
+    "当知识已被充分覆盖、余下活动只能重复或条件不足时输出skip_reason，宁可自然结束，"
+    "不为目标数量设计低价值问题。" + _SELF_CONTAINED_KNOWLEDGE
+))
+SFT_STYLED_V1_2 = SFT_STYLED
+SFT_V1_3, SFT_DIRECTED_V1_4, SFT_ANSWER_V1_1 = SFT, SFT_DIRECTED, SFT_ANSWER
+MULTITURN_ASSISTANT_V1_2 = MULTITURN_ASSISTANT
+COT_GENERATE_V1_3, RATIONALE_CHECK_V1_1 = COT_GENERATE, RATIONALE_CHECK
+REVIEW_SCORE_V1_2, REVIEW_REPAIR_V1_1 = REVIEW_SCORE, REVIEW_REPAIR
+PACKAGE_REVIEW_V1_1, STYLE_CHECK_V1 = PACKAGE_REVIEW, STYLE_CHECK
+SFT = context_version(SFT, version="1.4.0", body=_SELF_CONTAINED_KNOWLEDGE)
+SFT_STYLED = context_version(SFT_STYLED, version="1.3.0", body=_SELF_CONTAINED_KNOWLEDGE)
+SFT_DIRECTED = context_version(SFT_DIRECTED, version="1.5.0", body=_SELF_CONTAINED_KNOWLEDGE)
+SFT_ANSWER = context_version(SFT_ANSWER, version="1.2.0", body=_SELF_CONTAINED_KNOWLEDGE)
+MULTITURN_ASSISTANT = context_version(MULTITURN_ASSISTANT, version="1.3.0", body=_SELF_CONTAINED_KNOWLEDGE)
+COT_GENERATE = context_version(COT_GENERATE, version="1.4.0", body=_SELF_CONTAINED_KNOWLEDGE)
+RATIONALE_CHECK = context_version(RATIONALE_CHECK, version="1.2.0", body=_SELF_CONTAINED_REVIEW)
+REVIEW_SCORE = context_version(REVIEW_SCORE, version="1.3.0", body=_SELF_CONTAINED_REVIEW)
+REVIEW_REPAIR = context_version(REVIEW_REPAIR, version="1.2.0", body=_SELF_CONTAINED_KNOWLEDGE)
+PACKAGE_REVIEW = context_version(PACKAGE_REVIEW, version="1.2.0", body=_SELF_CONTAINED_REVIEW)
+STYLE_CHECK = context_version(STYLE_CHECK, version="1.1.0", body=(
+    "对用户要求的解释深度或长度检查实际reasoning全文，不能把只改reasoning_trace、重复句子或"
+    "空泛自述当作符合风格。reason简述欠缺的任务依赖与需要展开的位置。"
+))
+
+# Real provider runs exposed misplaced role metadata and source quotes whose
+# line selections did not contain them. Give exact repair constraints rather
+# than silently accepting unsupported schema fields or widened evidence.
+QA_DIRECTOR_V1_5 = QA_DIRECTOR
+QA_DIRECTOR = context_version(QA_DIRECTOR, version="1.6.0", body=(
+    "每个tasks条目的顶层仅含既定id、qa_type、question、visible_context、answer_policy、guidance、"
+    "evidence_quotes，及可选topic、skill、difficulty、dialogue_design、source_line_ranges、question_brief。"
+    "角色与语体框架conversational_frame必须嵌套在dialogue_design内，不能另设顶层字段。"
+    "adaptive的跳过条目继续使用独立skip_reason契约。"
+    "evidence_quotes每一条都必须完整落在同一任务source_line_ranges实际选择的原文块内；"
+    "不能只在完整资料包中存在，就引用未选中的行。"
+    "plan_repair.validation_code指出具体校验问题，按该错误修正相关字段，不新增未声明的字段。"
+))
+REVIEW_REPAIR_V1_2 = REVIEW_REPAIR
+REVIEW_REPAIR = context_version(REVIEW_REPAIR, version="1.3.0", body=(
+    "这是自动修正答案，不是更换用户任务。保持question、所有实际用户输入、可见文章、"
+    "角色顺序与工具事实原样，只修改助手答案及其显式解释。"
+    "不能通过改问题、删用户条件或补造可见资料来让原先错误的答案过审；"
+    "无法在原任务上可靠修复时uncertain=true。人工明确修改任务另由人工编辑入口处理。"
+))
+
+COT_GENERATE_V1_4 = COT_GENERATE
+COT_GENERATE = _reasoning_spec_replace(COT_GENERATE, version="1.5.0", template=COT_GENERATE.template.replace(
+    "根据任务 prompt、可用 source、真实对话与已有合格 reference_answer，",
+    "根据任务 prompt、可用 source 与真实对话独立求解，"
+) + (
+    "\nreference_answer可以缺省。只有真实质量评审通过的答案才作为可选参考提供；"
+    "结构合格、能解析JSON、证据字符串能匹配都不等于答案正确。"
+    "不要为未评审或错误答案补长解释，重新依据原始事实求解当前任务。"
+    "涉及软件版本、阈值、单位、API/目录字段或实际操作后果时逐项核对对象与适用范围，"
+    "不能把一个版本的行为无条件套到另一版本，或将原文疑似拼写变成可执行事实。"
+))
+QUESTION_FIT_V1 = QUESTION_FIT
+QUESTION_FIT = context_version(QUESTION_FIT, version="1.1.0", body=(
+    "核对实际问题所指的对象、版本、时间和适用范围是否与原始知识块一致。"
+    "跨版本阈值、API字段或运行处置不能凭同一主题就推断通用。"
+    "无法基于现有事实作有用且可靠回应时keep=false，不能为了题数放过范围不匹配的活动。"
+))
+
+# Honor an explicit node style without imposing a common minimum on all tasks.
+# Historical specs remain registered and immutable for resumed runs.
+_PRECISE_FACT_REVIEW = (
+    "\n针对候选的每个具体版本行为、阈值、CLI开关、SQL字段和锁类型，逐项核对实际来源中的对象与条件。"
+    "引用能匹配、论证结构完整或同一主题的常识不能证明这些细节正确。"
+    "没有依据的精确细节应省略或明确保留不确定性，不能凭相似术语补造。"
+    "用户明确配置篇幅时核对实际正文与有效信息量；大量引文、重复句或审计字段不代替所需的解释。"
+)
+def _configured_style_template(template):
+    return template.replace(
+        "直接可解的问题可以很短；复杂任务须覆盖必要子任务与衔接。",
+        "用户未配置篇幅时直接可解的问题可以很短；复杂任务须覆盖必要子任务与衔接。"
+    ).replace(
+        "解释可很短，单步可充分；不按固定步骤数、字数或数学运算打分。",
+        "用户未配置篇幅时解释可以很短，单步可充分；不自行施加固定步骤数或通用字数要求。"
+    ) + _PRECISE_FACT_REVIEW
+
+COT_GENERATE_V1_5, RATIONALE_CHECK_V1_2 = COT_GENERATE, RATIONALE_CHECK
+REVIEW_SCORE_V1_3, PACKAGE_REVIEW_V1_2 = REVIEW_SCORE, PACKAGE_REVIEW
+COT_GENERATE = _reasoning_spec_replace(COT_GENERATE, version="1.6.0", template=_configured_style_template(COT_GENERATE.template))
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, version="1.3.0", template=_configured_style_template(RATIONALE_CHECK.template))
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.4.0", template=_configured_style_template(REVIEW_SCORE.template))
+PACKAGE_REVIEW = _reasoning_spec_replace(PACKAGE_REVIEW, version="1.3.0", template=_configured_style_template(PACKAGE_REVIEW.template))
+
+# A rejected model draft is editorial material, not a belief expressed by the
+# learner. New repairs keep that distinction while old snapshots stay pinned.
+REVIEW_REPAIR_V1_3 = REVIEW_REPAIR
+REVIEW_REPAIR = context_version(REVIEW_REPAIR, version="1.4.0", body=(
+    "候选旧答案、指导简报和修正反馈都不是用户发言。仅按实际question与可见文章判断用户的前提；"
+    "不能将这些内部材料中的错误归因给用户，也不虚构用户持有某种误解。"
+    "修正后的reasoning与answer直接解释当前任务的事实和推导，不叙述旧稿、返工、删除句子或遵守评语；"
+    "风险核对可以保留，但核对对象是业务条件和结论，不是隐藏旧答案或制作过程。"
+))

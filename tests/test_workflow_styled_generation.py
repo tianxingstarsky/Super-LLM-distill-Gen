@@ -22,7 +22,20 @@ def mock_llm_server():
 
 
 def model_task_data(messages):
-    return json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
+    # New authored requests have real learner utterances at the end. Read
+    # production metadata from its completed dispatch receipt, never parse
+    # that actual utterance as the old serialized workflow envelope.
+    for index, message in enumerate(messages):
+        if ((message.get("role") == "tool" and message.get("name") == "dialogue_dispatch")
+                or (message.get("type") == "function_call_output"
+                    and message.get("call_id", "").startswith("dispatch_"))):
+            dispatch = json.loads(message.get("content", message.get("output")))
+            return {**dispatch, "prompt": deepcopy(messages[index + 1:])}
+        content = message.get("content", "")
+        if isinstance(content, str) and content.startswith("<internal_dialogue_dispatch>\n"):
+            dispatch = json.loads(content.split("\n", 1)[1].rsplit("\n</internal_dialogue_dispatch>", 1)[0])
+            return {**dispatch, "prompt": deepcopy(messages[index + 1:])}
+    return json.loads(next(message["content"] for message in reversed(messages) if message.get("role") == "user"))
 
 
 def maintenance_reasoning_trace(*, fault=False):
@@ -71,7 +84,8 @@ class Generator:
             if self.malformed_trim and sum("只生成 replacement reasoning" in call[0]["content"] for call in self.calls) == 1:
                 return json.dumps({"reasoning": "有效推导", "answer": "试图修改答案"})
             return json.dumps({"reasoning": "维护需要先断电，随后检查线路，最后记录维护结果。"})
-        if "已有合格 reference_answer" in instruction:
+        if ("新撰写指定 generation_style 的教学解释" in instruction
+                or "新撰写指定 generation_style 的推理文本" in instruction):
             return json.dumps({"reasoning": "新撰写的分步推导：先确认断电前提，再检查线路，最后记录。", "answer": ANSWER,
                                "reasoning_trace": maintenance_reasoning_trace()})
         return json.dumps({"question": "设备应如何维护？", "answer": ANSWER,
@@ -138,6 +152,7 @@ def test_style_generation_authors_new_cot_and_never_supplies_source_chain(tmp_pa
     cot_input = model_task_data(generator.calls[-1])
     assert cot_input["reference_answer"] == ANSWER
     assert "reasoning_content" not in json.dumps(cot_input, ensure_ascii=False)
+    assert generator.calls[-1][-1] == {"role": "user", "content": "设备应如何维护？"}
     cot = records(path, "cot")[0]
     assert cot["reasoning_origin"] == "prompt_styled_generation"
     assert cot["generation_style"]["preset"] == "structured"
@@ -145,6 +160,35 @@ def test_style_generation_authors_new_cot_and_never_supplies_source_chain(tmp_pa
     training = json.loads((path / "artifacts/cot.jsonl").read_text(encoding="utf-8"))
     assert set(training) == {"question", "reasoning", "answer"}
     assert training["reasoning"] == ["新撰写的分步推导：先确认断电前提，再检查线路，最后记录。"]
+
+
+@pytest.mark.parametrize("upstream_judge", [None, {}, score(False)])
+def test_unassessed_sft_answer_cannot_anchor_cot_or_its_trim_request(tmp_path, upstream_judge):
+    output, rid, _ = run(tmp_path, targets=["cot"], node_generation={"cot": {"style": "structured"}},
+                         reasoning_trim={"enabled": True, "template": "leakage"})
+    generator, reviewer = Generator(), Reviewer()
+    workflow = engine.Workflow(output, rid, tmp_path, generator=generator, jev=reviewer)
+    workflow.stage = "cot"
+    sentinel = "UNASSESSED_ANSWER_MUST_NOT_ANCHOR_THE_DERIVATION"
+    sample = {"id": "unassessed", "source_id": "source-1", "status": "eligible",
+              "evidence_level": "document_quote", "quotes": [TEXT],
+              "source_context": {"kind": "document", "text": TEXT},
+              "messages": [{"role": "user", "content": "设备应如何维护？"},
+                           {"role": "assistant", "content": sentinel, "reasoning_content": SOURCE_REASONING}],
+              **({"judge": upstream_judge} if upstream_judge is not None else {})}
+    generated = workflow.styled_cot(sample, workflow.generation_style("cot", sample["id"]))[0]
+    assert generated["status"] == "eligible" and generated["answer"] == ANSWER
+    workflow.stage = "trim"
+    trimmed = workflow.trim_reasoning({"target": "cot", "sample": generated})[0]
+    assert trimmed["status"] == "eligible" and trimmed["answer"] == ANSWER
+    assert len(generator.calls) == 2
+    request_body = json.dumps(generator.calls, ensure_ascii=False)
+    assert sentinel not in request_body and SOURCE_REASONING not in request_body
+    assert TEXT in request_body
+    assert "独立依据真实问题和原始知识" in generator.calls[0][0]["content"]
+    assert "reference_answer" not in model_task_data(generator.calls[0])
+    for messages in generator.calls:
+        assert messages[-1] == {"role": "user", "content": "设备应如何维护？"}
 
 
 def test_disabled_styles_keep_ordinary_distillation_and_enabled_default_is_reviewed(tmp_path):
@@ -197,6 +241,75 @@ def test_cot_style_rejection_is_separate_from_correctness_and_repairs_once(tmp_p
     assert row["reason"] == "cot_generation_failed_after_repair"
     assert row["judge"]["keep"] is True and row["style_check"]["keep"] is False
     assert row["feedback"] == {"correctness": None, "style": "需要按步骤组织推导。"}
+
+
+class MissingTraceGenerator(Generator):
+    def chat(self, messages, **kwargs):
+        value = json.loads(super().chat(messages, **kwargs))
+        value.pop("reasoning_trace", None)
+        return json.dumps(value, ensure_ascii=False)
+
+
+def test_failed_authored_cot_retains_exact_retry_input_and_complete_source_reference(tmp_path):
+    from lib.domain.source_line_ranges import number_source_material
+    from lib.infrastructure.workflow_source_context import _save_pack, load_context_pack
+
+    output, rid, path = run(tmp_path, targets=["cot"], node_generation={"cot": {"style": "structured"}})
+    generator, reviewer = MissingTraceGenerator(), Reviewer()
+    workflow = engine.Workflow(output, rid, tmp_path, generator=generator, jev=reviewer)
+    workflow.stage = "cot"
+    # Long cleaned evidence and a final unique fact must survive a failed call
+    # without being clipped to a history or preview limit.
+    text = (TEXT + "\r\n") * 2000 + "TAIL_FACT：完成检查后，记录编号为 MX-2049。"
+    directory = path / "source-context"
+    (directory / "packs").mkdir(parents=True, exist_ok=True)
+    material = number_source_material({"unit_id": "retry-source", "source_id": "source-1",
+        "text": text, "cleaning_status": "accepted", "cleaned_text_sha256": engine.digest(text)})
+    reference = _save_pack(directory, [material])
+    source = {"kind": "document", "text": text, "cleaned_text_sha256": engine.digest(text),
+              "source_context_pack": reference}
+    prompt = [{"role": "user", "content": "设备应如何维护？保留字面量\\n和真实换行\n说明记录编号。"}]
+    unchecked_answer = "UNCHECKED_FINAL_ANSWER_MUST_NOT_BE_RETAINED"
+    sample = {"id": "failed-cot", "source_id": "source-1", "status": "eligible",
+        "evidence_level": "source_text", "source_context": source,
+        "messages": [*deepcopy(prompt), {"role": "assistant", "content": unchecked_answer,
+                                        "reasoning_content": SOURCE_REASONING}]}
+    original = deepcopy(sample)
+    row = workflow.styled_cot(sample, workflow.generation_style("cot", sample["id"]))[0]
+
+    assert len(generator.calls) == 2 and reviewer.calls == []
+    assert row["status"] == "quarantined" and row["reason"] == "cot_generation_failed_after_repair"
+    assert row["feedback"]["reasoning_protocol"] == "authored_reasoning_missing_trace"
+    assert row["question"] == prompt and row["source_context"] == source
+    assert row["input_digest"] == engine.digest({"question": prompt, "source_context": source})
+    assert row["sft_parent_id"] == sample["id"] and row["generation_style"]["preset"] == "structured"
+    recovered = load_context_pack(path, row["source_context"]["source_context_pack"])
+    assert recovered["materials"][0]["text"].encode("utf-8") == text.encode("utf-8")
+    assert recovered["materials"][0]["cleaned_text_sha256"] == engine.digest(text)
+    assert all(key not in row for key in ("answer", "reasoning", "messages", "reasoning_trace"))
+    assert unchecked_answer not in json.dumps(row, ensure_ascii=False)
+    assert SOURCE_REASONING not in json.dumps(row, ensure_ascii=False)
+    assert unchecked_answer not in json.dumps(generator.calls, ensure_ascii=False)
+    assert SOURCE_REASONING not in json.dumps(generator.calls, ensure_ascii=False)
+    assert sample == original
+
+
+def test_missing_trace_twice_is_quarantined_and_never_published_as_cot_or_sft(tmp_path):
+    output, rid, path = run(tmp_path, node_generation={"cot": {"style": "structured"}})
+    generator, reviewer = MissingTraceGenerator(), Reviewer()
+    state = engine.Workflow(output, rid, tmp_path, generator=generator, jev=reviewer).execute()
+    assert state["status"] == "needs_attention" and len(generator.calls) == 3
+    cot = records(path, "cot")[0]
+    with (path / "stage-results" / "sft.jsonl").open(encoding="utf-8") as handle:
+        original_sft = json.loads(next(handle))
+    assert cot["question"] == engine.Workflow.without_source_reasoning(original_sft["messages"][:-1])
+    assert cot["source_context"] and cot["input_digest"] == engine.digest({
+        "question": cot["question"], "source_context": cot["source_context"]})
+    assert all(key not in cot for key in ("answer", "reasoning", "messages", "reasoning_trace"))
+    for target in ("cot", "sft"):
+        assert records(path, target)[0]["status"] == "quarantined"
+        assert (path / "artifacts" / f"{target}.jsonl").read_text(encoding="utf-8") == ""
+    assert engine.read_json(path / "artifacts" / "manifest.json")["counts"] == {"sft": 0, "cot": 0}
 
 
 def test_trim_invalid_rules_score_can_resume_without_regenerating(tmp_path):
@@ -329,6 +442,7 @@ def test_trim_rejects_unsupported_export_targets_before_creating_run(tmp_path):
 def test_native_only_json_cannot_become_styled_content_but_ordinary_fallback_is_retained(streaming, allow_fallback):
     from types import SimpleNamespace as Obj
     from lib.llm_client import ChatClient, chat_json
+    from lib.model_request_reliability import ModelJSONError
 
     client = ChatClient("http://127.0.0.1:1/v1", "test", "offline-native-reasoner")
     native = '{"answer":"native-channel-only"}'
@@ -352,10 +466,11 @@ def test_native_only_json_cannot_become_styled_content_but_ordinary_fallback_is_
             assert chat_json(client, [{"role": "user", "content": "JSON"}],
                              allow_reasoning_fallback=True, **kwargs) == {"answer": "native-channel-only"}
         else:
-            with pytest.raises(ValueError, match="^model_visible_output_missing$"):
+            with pytest.raises(ModelJSONError, match="model_json_invalid"):
                 chat_json(client, [{"role": "user", "content": "JSON"}],
-                          allow_reasoning_fallback=False, **kwargs)
-        assert len(calls) == 1
-        assert client.usage == {"calls": 1, "prompt_tokens": 17, "completion_tokens": 8}
+                          retries=2, allow_reasoning_fallback=False, **kwargs)
+        count = 1 if allow_fallback else 2
+        assert len(calls) == count
+        assert client.usage == {"calls": count, "prompt_tokens": 17 * count, "completion_tokens": 8 * count}
     finally:
         client.client.close()

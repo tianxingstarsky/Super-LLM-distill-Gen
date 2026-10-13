@@ -48,7 +48,10 @@ def cot_with_sft_context(sample: dict, result: dict) -> dict:
 
 def finalized_cot_sft_row(row: dict) -> dict:
     """Project final CoT evidence into SFT without exposing an earlier answer."""
-    result = deepcopy(row)
+    # Failed trim/review checkpoints can contain only a rejection receipt.
+    # The dependency still exists: losing its route would score the derived
+    # SFT again and misalign the ordered canonical CoT iterator.
+    result = {**deepcopy(row), "reasoning_route": "sft_via_cot"}
     if result.get("status") == "eligible":
         messages = result.get("messages")
         if not messages or messages[-1].get("role") != "assistant":
@@ -70,7 +73,7 @@ def finalized_sft_rows(originals, finalized_cot):
     derived = iter(finalized_cot)
     try:
         for original in originals:
-            if original.get("status") != "eligible":
+            if original.get("status") != "eligible" and original.get("reasoning_route") != "sft_via_cot":
                 yield original
                 continue
             final = next(derived, None)

@@ -16,7 +16,7 @@ from filelock import FileLock, Timeout
 
 from lib.bootstrap.workflows import workflow_application
 from lib.domain.document_parser import validate_document_parser
-from lib.domain.human_augmentation import HUMAN_QA_TARGETS, validate_human_augmentation
+from lib.domain.human_augmentation import HUMAN_QA_TARGETS, validate_human_augmentation, candidate_identifier
 from lib.domain.human_session import (MAX_REVISION_DEPTH, MAX_SESSION_ROUNDS,
     MAX_ISSUE_BATCH, MAX_ISSUE_BATCH_CHARS, bounded_text, identifier, request_identifier,
     validate_draft, validate_feedback, validate_issue_selection)
@@ -674,8 +674,7 @@ class FilesystemHumanSessionDriver:
         return result
 
     def _lookup(self, row, target, candidate_id):
-        if not isinstance(candidate_id, str) or not candidate_id or len(candidate_id) > 500:
-            raise ValueError("invalid_human_session_candidate_id")
+        candidate_id = candidate_identifier(candidate_id)
         records = self._records(row["run_id"], target, strict=True)
         try:
             for record in records:

@@ -42,6 +42,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                 event = next(iterator)
             except StopIteration:
                 break
+            except ModelStreamError:
+                raise
             except Exception:
                 raise ModelStreamError("model_stream_interrupted") from None
             kind = _get(event, "type", "")

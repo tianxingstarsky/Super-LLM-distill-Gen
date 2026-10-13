@@ -1,6 +1,7 @@
 """Strict, deterministic contracts shared by automatic workflow stages."""
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 
@@ -109,6 +110,18 @@ def verdict(value):
     """Invalid judge output is an execution failure, never an implicit low score."""
     if not isinstance(value, dict):
         raise ValueError("invalid_judge_schema")
+    dimensions = {"correctness", "reasoning", "grounding", "instruction", "safety"}
+    # These two exact service shapes preserve every supplied score. Keep the
+    # original response untouched so durable raw checkpoints remain evidence.
+    reason_alias = {"keep", "grounded", "reasoning_valid", "correctness", "scores", "reasoning"}
+    flattened = {"keep", "grounded", "reasoning_valid", "reason", *dimensions}
+    if set(value) == reason_alias and isinstance(value["reasoning"], str):
+        value = deepcopy(value)
+        value["reason"] = value.pop("reasoning")
+    elif set(value) == flattened:
+        value = {"keep": value["keep"], "grounded": value["grounded"],
+                 "reasoning_valid": value["reasoning_valid"], "correctness": value["correctness"],
+                 "reason": value["reason"], "scores": {name: value[name] for name in dimensions}}
     if any(type(value.get(key)) is not bool for key in ("keep", "grounded", "reasoning_valid")):
         raise ValueError("invalid_judge_boolean")
     if type(value.get("correctness")) is not int or not 1 <= value["correctness"] <= 5:
@@ -116,7 +129,7 @@ def verdict(value):
     if not isinstance(value.get("reason"), str) or not value["reason"].strip():
         raise ValueError("missing_judge_reason")
     scores = value.get("scores")
-    required = {"correctness", "reasoning", "grounding", "instruction", "safety"}
+    required = dimensions
     if not isinstance(scores, dict) or set(scores) != required or any(type(scores[k]) is not int or not 1 <= scores[k] <= 5 for k in required):
         raise ValueError("invalid_jev_dimensions")
     return value

@@ -428,22 +428,35 @@ def test_manual_cpt_service_imports_and_reviews_corpus_without_a_qa_design(tmp_p
         def chat(self, *args, **kwargs):
             pytest.fail("Human corpus review must not call a model")
     initial = engine.Workflow(output, run_id, tmp_path, generator=NeverCalled()).execute()
-    assert initial["status"] == "needs_attention", initial.get("error")
+    # Fresh CPT tasks deliver the cleaner's result without waiting for a
+    # second sample review. A later explicit human correction still reviews.
+    assert initial["status"] == "completed", initial.get("error")
+    parent_recipe = engine.read_json(engine.run_path(output, run_id) / "recipe.json")
+    assert parent_recipe["cpt_review_policy_version"] == 1 and not parent_recipe.get("review_repair")
+    parent_file = engine.run_path(output, run_id) / "artifacts/cpt.records.json"
+    original = parent_file.read_bytes()
     app = human_augmentation_application(tmp_path, output)
     sid = app.create_session(from_run_id=run_id)
     session = app.session(sid)
     assert session["review_only"] and session["blueprint"]["targets"] == ["cpt"]
     candidate = app.results(sid, target="cpt")["rows"][0]
     projection = app.branch_projection(sid, target="cpt", result=candidate)
-    assert projection["selected_result"]["route"] == "waiting_manual_review"
+    assert projection["selected_result"]["route"] == "accepted"
     assert projection["actionable"]
+    corrected = "检查设备前必须先切断电源。检查结束后，应记录检查结果。"
     row = app.submit_manual_review(sid, session["rounds"][0]["id"], "cpt", candidate["candidate_id"],
-        request_id="corpus-review", score=90, decision="approve", corrected_record={"text": A},
+        request_id="corpus-review", score=90, decision="approve", corrected_record={"text": corrected},
         expected_version=session["version"])
+    child_recipe = engine.read_json(engine.run_path(output, row["run_id"]) / "recipe.json")
+    assert child_recipe["repair_inputs"] and child_recipe["review_repair"]["mode"] == "human"
+    assert "cpt_review_policy_version" not in child_recipe
     state = engine.Workflow(output, row["run_id"], tmp_path, generator=NeverCalled()).execute()
     assert state["status"] == "completed", state.get("error")
-    assert app.results(sid, target="cpt")["rows"][0]["record"]["status"] == "eligible"
+    result = app.results(sid, target="cpt")["rows"][0]["record"]
+    assert result["status"] == "eligible" and result["text"] == corrected
+    assert result["review_repair"]["status"] == "accepted" and result["review_repair"]["score"] == .9
     assert state["stages"]["cpt"]["status"] == "skipped"
+    assert not state["usage"] and parent_file.read_bytes() == original
 
 
 def test_manual_review_does_not_depend_on_unused_model_endpoint_configuration(tmp_path, monkeypatch):

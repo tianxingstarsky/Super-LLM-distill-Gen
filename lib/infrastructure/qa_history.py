@@ -98,6 +98,26 @@ def contract_identity(question, visible_context="", answer_policy="answer", qa_t
     return _identity(_question(question), visible_context, answer_policy, qa_type, dialogue_design)
 
 
+def learner_task_identity(question, visible_context="") -> str:
+    """Exact learner input, independent of hidden editorial labels or policy.
+
+    Preserve literal case, mathematics and complete evidence. This is not a
+    semantic paraphrase detector and is not suitable for a multi-turn opening
+    whose actual later dialogue has not yet been generated.
+    """
+    payload = [_exact_text(_question(question), strip=True), _exact_text(visible_context)]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False,
+                                    separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _actual_input_hash(value):
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
+        raise ValueError("qa_history_actual_input_hash_invalid")
+    return value
+
+
 def _terms(question: str) -> tuple[str, ...]:
     """Deterministically sample word and Chinese shingles across the question."""
     normalised = _normalise(question)
@@ -186,6 +206,30 @@ class QAHistory:
                 total INTEGER NOT NULL,
                 PRIMARY KEY(namespace, qa_type)
             ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS qa_history_core (
+                namespace TEXT NOT NULL,
+                core_identity TEXT NOT NULL,
+                row_id INTEGER NOT NULL REFERENCES qa_history(row_id),
+                PRIMARY KEY(namespace, core_identity)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS qa_history_dimensions (
+                namespace TEXT NOT NULL,
+                dimension TEXT NOT NULL,
+                value TEXT NOT NULL,
+                total INTEGER NOT NULL,
+                PRIMARY KEY(namespace, dimension, value)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS qa_history_actual (
+                namespace TEXT NOT NULL,
+                actual_input_sha256 TEXT NOT NULL,
+                row_id INTEGER NOT NULL REFERENCES qa_history(row_id),
+                PRIMARY KEY(namespace, actual_input_sha256),
+                UNIQUE(namespace, row_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS qa_history_question
+                ON qa_history(namespace, question);
+            CREATE INDEX IF NOT EXISTS qa_history_dimensions_rank
+                ON qa_history_dimensions(namespace, dimension, total DESC, value);
         """)
         # Old exact identities remain byte-for-byte valid. Only new adaptive
         # contracts opt in to a goal/intent dimension; no history rewrite is
@@ -227,7 +271,7 @@ class QAHistory:
                                         "user_intent": row["dialogue_intent"]}}
                    if row["dialogue_goal"] else {})}
 
-    def add(self, row: dict, *, namespace="default") -> bool:
+    def add(self, row: dict, *, namespace="default", learner_task_dedup=False) -> bool:
         status = row.get("status")
         if status not in ACCEPTED_STATUSES and not (status is None and row.get("accepted") is True):
             return False
@@ -239,27 +283,65 @@ class QAHistory:
         design = row.get("dialogue_design")
         dimensions = _design_dimensions(design)
         identity = _identity(question, visible_context, answer_policy, qa_type, design)
+        core_identity = learner_task_identity(question, visible_context)
+        actual_identity = _actual_input_hash(row.get("actual_input_sha256"))
+        actual_revision = row.get("actual_input_revision", False)
+        if type(actual_revision) is not bool or (actual_revision and actual_identity is None):
+            raise ValueError("qa_history_actual_input_revision_invalid")
+        actual_only = row.get("actual_input_only_identity", False)
+        if type(actual_only) is not bool or (actual_only and actual_identity is None):
+            raise ValueError("qa_history_actual_input_only_invalid")
+        if actual_only:
+            identity = hashlib.sha256(json.dumps(["actual_training_input_v1", actual_identity], separators=(",", ":")).encode()).hexdigest()
+        elif actual_revision:
+            identity = hashlib.sha256(json.dumps([identity, actual_identity], separators=(",", ":")).encode()).hexdigest()
+        display_question = _question(row.get("actual_question", question)) if actual_revision else question
         sample_id = _text(row.get("id"))
         if not sample_id or len(sample_id) > 512:
             raise ValueError("qa_history_sample_id_required")
-        fields = (namespace, sample_id, identity, question,
+        fields = (namespace, sample_id, identity, display_question,
                   _snippet(row.get("answer", ""), MAX_ANSWER_SNIPPET), qa_type,
                   _snippet(visible_context, MAX_CONTEXT_SNIPPET), answer_policy,
                   *(_snippet(row.get(key, ""), 256) for key in
                     ("family_id", "parent_id", "source_id", "source_name", "run_id")),
                   *(_snippet(value, limit) for value, limit in zip(dimensions or ("", ""), (1024, 512))))
-        terms = _terms(question)
+        terms = _terms(display_question)
         with self._lock:
             self.connection.execute("BEGIN IMMEDIATE")
             try:
                 existing = self.connection.execute(
-                    "SELECT identity FROM qa_history WHERE namespace=? AND sample_id=?",
+                    "SELECT row_id,identity FROM qa_history WHERE namespace=? AND sample_id=?",
                     (namespace, sample_id)).fetchone()
                 if existing:
                     if existing["identity"] != identity:
-                        raise ValueError("qa_history_sample_id_conflict")
+                        saved_actual = self.connection.execute(
+                            "SELECT actual_input_sha256 FROM qa_history_actual WHERE namespace=? AND row_id=?",
+                            (namespace, existing["row_id"])).fetchone()
+                        # Existing version-1 multi-turn runs may have a legacy
+                        # contract identity but already pinned the exact input.
+                        # An identical replay remains safe without rewriting it.
+                        if not (actual_only and saved_actual is not None and saved_actual[0] == actual_identity):
+                            raise ValueError("qa_history_sample_id_conflict")
+                    if actual_identity:
+                        prior_actual = self.connection.execute(
+                            "SELECT actual_input_sha256 FROM qa_history_actual WHERE namespace=? AND row_id=?",
+                            (namespace, existing["row_id"])).fetchone()
+                        if prior_actual is not None and prior_actual[0] != actual_identity:
+                            raise ValueError("qa_history_sample_input_conflict")
+                        duplicate = self._actual_duplicate(actual_identity, namespace)
+                        if duplicate is not None and duplicate["row_id"] != existing["row_id"]:
+                            self.connection.execute("COMMIT")
+                            return False
+                        self.connection.execute("INSERT OR IGNORE INTO qa_history_actual VALUES (?,?,?)",
+                                                (namespace, actual_identity, existing["row_id"]))
                     self.connection.execute("COMMIT")
                     return True
+                if learner_task_dedup and not (actual_revision or actual_only) and self._core_duplicate(question, visible_context, namespace, core_identity):
+                    self.connection.execute("COMMIT")
+                    return False
+                if actual_identity and self._actual_duplicate(actual_identity, namespace) is not None:
+                    self.connection.execute("COMMIT")
+                    return False
                 inserted = self.connection.execute(
                     "INSERT OR IGNORE INTO qa_history (namespace,sample_id,identity,question,answer,"
                     "qa_type,visible_context,answer_policy,family_id,parent_id,source_id,source_name,run_id,dialogue_goal,dialogue_intent) "
@@ -268,6 +350,12 @@ class QAHistory:
                     self.connection.execute("COMMIT")
                     return False
                 row_id = inserted.lastrowid
+                if not (actual_revision or actual_only):
+                    self.connection.execute("INSERT OR IGNORE INTO qa_history_core VALUES (?,?,?)",
+                                            (namespace, core_identity, row_id))
+                if actual_identity:
+                    self.connection.execute("INSERT INTO qa_history_actual VALUES (?,?,?)",
+                                            (namespace, actual_identity, row_id))
                 self.connection.executemany("INSERT INTO qa_history_terms VALUES (?,?,?)",
                                            ((namespace, term, row_id) for term in terms))
                 self.connection.executemany(
@@ -278,22 +366,66 @@ class QAHistory:
                     "INSERT INTO qa_history_coverage VALUES (?,?,1) "
                     "ON CONFLICT(namespace,qa_type) DO UPDATE SET total=total+1",
                     (namespace, qa_type))
+                dimensions = {name: _snippet(row.get(name, ""), 256) for name in ("source_id", "topic", "skill")}
+                for name, value in dimensions.items():
+                    if value:
+                        self.connection.execute(
+                            "INSERT INTO qa_history_dimensions VALUES (?,?,?,1) "
+                            "ON CONFLICT(namespace,dimension,value) DO UPDATE SET total=total+1",
+                            (namespace, name, value))
                 self.connection.execute("COMMIT")
                 return True
             except Exception:
                 self.connection.execute("ROLLBACK")
                 raise
 
-    def duplicate(self, question, *, visible_context="", answer_policy="answer",
-                  qa_type="closed_book", namespace="default", exclude_id=None, dialogue_design=None) -> dict | None:
-        identity = _identity(_question(question), visible_context, answer_policy, qa_type, dialogue_design)
+    def _core_duplicate(self, question, visible_context, namespace, identity):
+        row = self.connection.execute(
+            "SELECT h.* FROM qa_history_core c JOIN qa_history h ON h.row_id=c.row_id "
+            "WHERE c.namespace=? AND c.core_identity=?", (namespace, identity)).fetchone()
+        if row is not None:
+            return row
+        # Earlier versions stored full questions but only context snippets.
+        # Recover exact short contexts through the question index; never infer
+        # a complete long evidence identity from a truncated legacy summary.
+        text = _exact_text(visible_context)
+        if len(text) >= MAX_CONTEXT_SNIPPET:
+            return None
+        return self.connection.execute(
+            "SELECT * FROM qa_history WHERE namespace=? AND question=? AND visible_context=? "
+            "AND length(visible_context)<? ORDER BY row_id LIMIT 1",
+            (namespace, _exact_text(question, strip=True), text, MAX_CONTEXT_SNIPPET)).fetchone()
+
+    def _actual_duplicate(self, identity, namespace):
+        return self.connection.execute(
+            "SELECT h.* FROM qa_history_actual a JOIN qa_history h ON h.row_id=a.row_id "
+            "WHERE a.namespace=? AND a.actual_input_sha256=?", (namespace, identity)).fetchone()
+
+    def duplicate_actual(self, identity, *, namespace="default", exclude_id=None):
+        """Exact delivered input; old rows without its hash are not guessed."""
+        identity = _actual_input_hash(identity)
+        if identity is None:
+            return None
         with self._lock:
-            row = self.connection.execute(
-                "SELECT * FROM qa_history WHERE namespace=? AND identity=?",
-                (_dimension(namespace, "default"), identity)).fetchone()
+            row = self._actual_duplicate(identity, _dimension(namespace, "default"))
         if row is None or (exclude_id is not None and row["sample_id"] == str(exclude_id)):
             return None
-        return {**self._summary(row), "match_kind": "exact_contract", "score": 1.0}
+        return {**self._summary(row), "match_kind": "exact_actual_input", "score": 1.0,
+                "actual_input_sha256": identity}
+
+    def duplicate(self, question, *, visible_context="", answer_policy="answer",
+                  qa_type="closed_book", namespace="default", exclude_id=None, dialogue_design=None,
+                  learner_task_dedup=False) -> dict | None:
+        identity = _identity(_question(question), visible_context, answer_policy, qa_type, dialogue_design)
+        with self._lock:
+            row = (self._core_duplicate(question, visible_context, _dimension(namespace, "default"),
+                                        learner_task_identity(question, visible_context))
+                   if learner_task_dedup else self.connection.execute(
+                "SELECT * FROM qa_history WHERE namespace=? AND identity=?",
+                (_dimension(namespace, "default"), identity)).fetchone())
+        if row is None or (exclude_id is not None and row["sample_id"] == str(exclude_id)):
+            return None
+        return {**self._summary(row), "match_kind": "exact_learner_task" if learner_task_dedup else "exact_contract", "score": 1.0}
 
     def recent(self, *, limit=10, namespace="default") -> list[dict]:
         limit = _limit(limit)
@@ -311,6 +443,16 @@ class QAHistory:
                 "SELECT qa_type,total FROM qa_history_coverage WHERE namespace=? ORDER BY qa_type",
                 (_dimension(namespace, "default"),)).fetchall()
         return {row["qa_type"]: row["total"] for row in rows}
+
+    def dimension_coverage(self, *, namespace="default", limit=12) -> dict[str, list[dict]]:
+        """Bounded aggregates of accepted work, without reloading old answers."""
+        namespace, limit = _dimension(namespace, "default"), _limit(limit)
+        with self._lock:
+            return {dimension: [{"value": row["value"], "accepted": row["total"]} for row in
+                    self.connection.execute(
+                        "SELECT value,total FROM qa_history_dimensions WHERE namespace=? AND dimension=? "
+                        "ORDER BY total DESC,value LIMIT ?", (namespace, dimension, limit)).fetchall()]
+                    for dimension in ("source_id", "topic", "skill")}
 
     def similar(self, question, *, limit=10, namespace="default") -> list[dict]:
         question = _question(question)

@@ -20,6 +20,7 @@ from lib.domain.workflow_reasoning_route import cot_updates_sft, finalized_cot_s
 from lib.infrastructure.workflow_rows import RowSpool, WorkflowRows, write_json_array
 from lib.infrastructure.human_revision import verified_revision_parent, verified_revision_batch, revision_evidence
 from lib.domain.authored_reasoning import AUTHORED_REASONING_VERSION
+from lib.domain.training_surface import training_surface_issue
 from lib.prompts.workflow_reasoning import RATIONALE_CHECK_BODY
 
 
@@ -34,6 +35,13 @@ _AUTHORED_REPAIR_RULES = (
     "简单任务可以短而单步，对话/澄清可用语言推理，不规定步骤数或最少字数。"
     "reasoning_trace 或 generation_trace 仅记录输入候选的论证声明，不能证明修改后正文有效；"
     "依据实际任务和来源修正正文，保留用户指定风格，不机械复制审计字段。"
+)
+_COT_DELTA_REPAIR_RULES = (
+    "本次 CoT 修正使用增量输出：record 必须且仅包含 reasoning 和 answer 两个字段。"
+    "reasoning 按现有文本或文本数组格式给出完整修正解释，answer 给出修正答案；"
+    "quotes 和 uncertain 仍保留在顶层。不要返回 question、messages、tools 或任何额外 record 字段。"
+    "原 question 和完整可见文章由程序原样保留，你只读取它们，不复制、不改写、不转换其中的换行或转义。"
+    "保持原任务条件和用户指定风格，不能通过换题或删条件来让答案通过。"
 )
 
 
@@ -171,6 +179,51 @@ def _authored_review_audit(target, row):
     return audit
 
 
+def _row_training_surface_issue(target, row, recipe=None):
+    """Check visible answers; only authored rationale joins the training surface.
+
+    Provider reasoning remains exact private evidence, including earlier native
+    turns. Its visible answer does not inherit a blanket leakage exemption.
+    """
+    if target not in {"sft", "multiturn", "agent", "cot"}:
+        return None
+    authored_origins = {"prompt_styled_generation", "prompt_revision", "human_revision", "prompt_trim"}
+    if (row.get("training_surface_protocol_version") != 1
+            and (recipe or {}).get("training_surface_protocol_version") != 1):
+        return None
+    origin = row.get("reasoning_origin")
+    authored = (origin in authored_origins or row.get("training_surface_protocol_version") == 1)
+    authored = authored and origin != "provider_reasoning"
+    contract = row.get("qa_contract")
+    if target == "cot":
+        question = row.get("question")
+        visible = question if isinstance(question, list) else [{"role": "user", "content": question}]
+        return training_surface_issue(row.get("reasoning") if authored else "", row.get("answer"),
+                                      visible_messages=visible, contract=contract)
+    if target in {"sft", "multiturn", "agent"}:
+        messages = row.get("messages", [])
+        if not isinstance(messages, list):
+            return None
+        reviews = row.get("turn_reviews", [])
+        reviews = reviews if isinstance(reviews, list) else []
+        native_turns = {review.get("end_message_index") for review in reviews
+                        if isinstance(review, dict) and review.get("reasoning_origin") == "provider_reasoning"}
+        # CoT rewrites the final response while its imported turn audit can
+        # still describe the historical provider response that it replaced.
+        final_index = next((index for index in range(len(messages) - 1, -1, -1)
+                            if isinstance(messages[index], dict) and messages[index].get("role") == "assistant"), None)
+        native_turns.discard(final_index)
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            reasoning = (next((message.get(field) for field in ("reasoning_content", "reasoning", "thinking")
+                               if message.get(field)), "") if authored and index not in native_turns else "")
+            if issue := training_surface_issue(reasoning, message.get("content"),
+                                                visible_messages=messages[:index], contract=contract):
+                return issue
+    return None
+
+
 def _payload_issue(target, row):
     if target == "gsm8k" and not validate_math_candidate(row):
         return "gsm8k_arithmetic_verification_failed"
@@ -187,7 +240,7 @@ def _payload_issue(target, row):
     except (KeyError, TypeError, ValueError):
         return "review_repair_content_unavailable"
     if target in {"sft", "multiturn", "agent"}:
-        return conversation_issue(payload["messages"])
+        return conversation_issue(payload["messages"]) or _row_training_surface_issue(target, row)
     if target == "cot":
         question = row.get("question")
         if not isinstance(question, (str, list)) or not question:
@@ -197,7 +250,7 @@ def _payload_issue(target, row):
         reasoning = row.get("reasoning")
         if isinstance(reasoning, list):
             reasoning = "\n".join(reasoning) if all(isinstance(part, str) for part in reasoning) else None
-        return text_issue(row.get("answer")) or text_issue(reasoning)
+        return text_issue(row.get("answer")) or text_issue(reasoning) or _row_training_surface_issue(target, row)
     return next((text_issue(payload[field]) for field in TRAINING_FIELDS[target] if text_issue(payload[field])), None)
 
 
@@ -265,6 +318,24 @@ def _immutable_tool_facts(row):
         if message.get("role") in {"system", "tool"} or message.get("tool_calls") or message.get("toolCalls")]
         for field in ("messages", "prompt", "chosen", "rejected", "question")
         if isinstance(row.get(field, []), list)}}
+
+
+def _automatic_repair_task(target, row):
+    """The delivered user task is fixed during an automatic answer repair.
+
+    Human edits run through _manual_patch before this comparison and remain
+    explicit task revisions. Assistant answers may change; actual user turns,
+    message roles and teacher-independent input may not silently change.
+    """
+    if target == "cot":
+        return row.get("question")
+    if target in PREFERENCE_TARGETS:
+        return row.get("prompt")
+    if target in {"sft", "multiturn"}:
+        messages = row.get("messages", [])
+        return {"roles": [message.get("role") for message in messages],
+                "input_messages": [message for message in messages if message.get("role") != "assistant"]}
+    return None
 
 
 def _selected_review_request(data, evidence):
@@ -345,6 +416,10 @@ class WorkflowReviewRepair:
     def _review_score(self, target, row, evidence, key, instruction):
         self.state["stages"]["review"]["phase"] = "scoring"
         self.save(force=False)
+        if issue := _row_training_surface_issue(target, row, self.recipe):
+            return {"keep": False, "grounded": False, "reasoning_valid": False, "correctness": 1,
+                    "scores": {name: 1 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
+                    "reason": issue}
         role = "jev" if self.recipe.get("package_review", {}).get("enabled") else "generation"
         data = {"target": target, "candidate": self._review_payload(target, row),
                 "source_evidence": evidence, "instruction": instruction,
@@ -409,6 +484,9 @@ class WorkflowReviewRepair:
         from lib.infrastructure.training_workflow import digest
         payload = self._review_payload(target, row)
         rules = {"instruction": _AUTHORED_REPAIR_RULES} if _authored_cot(target, row) else {}
+        cot_delta = self.recipe.get("qa_agent_memory_version") == 1 and target == "cot"
+        if cot_delta:
+            rules["instruction"] = (rules.get("instruction", "") + "\n" + _COT_DELTA_REPAIR_RULES).lstrip()
         data = _selected_review_request(
             {"target": target, "candidate": payload, "source_evidence": evidence,
              "review_feedback": check, "instruction": instruction,
@@ -422,6 +500,10 @@ class WorkflowReviewRepair:
                 or value.get("uncertain") or not isinstance(value.get("record"), dict)):
             return row, "review_repair_content_unavailable"
         candidate = value["record"]
+        if cot_delta and set(candidate) == {"reasoning", "answer"}:
+            # The model edits only its answer. The program owns the immutable
+            # question, article and tools, including exact literal escapes.
+            candidate = {**deepcopy(payload), **deepcopy(candidate)}
         if set(candidate) != set(payload):
             return row, "review_repair_invalid_schema"
         updated = {**deepcopy(row), **deepcopy(candidate)}
@@ -429,8 +511,11 @@ class WorkflowReviewRepair:
             _sync_cot_messages(updated)
         if canonical(_immutable_tool_facts(updated)) != canonical(_immutable_tool_facts(row)):
             return row, "review_repair_tool_facts_changed"
+        if (self.recipe.get("qa_agent_memory_version") == 1
+                and canonical(_automatic_repair_task(target, updated)) != canonical(_automatic_repair_task(target, row))):
+            return row, "review_repair_learner_task_changed"
         preserve_provider_reasoning(target, row, updated, origin="prompt_revision")
-        if issue := _payload_issue(target, updated):
+        if issue := (_payload_issue(target, updated) or _row_training_surface_issue(target, updated, self.recipe)):
             return row, issue
         if evidence["source_kind"] == "document":
             spans = _evidence_quote_spans(evidence, value.get("quotes", []))
@@ -465,6 +550,15 @@ class WorkflowReviewRepair:
         # missing facts by changing the text. These require new verified input.
         blocked = any(token in original.get("reason", "") for token in (
             "source_snapshot", "tool_error", "simulated_tool", "unverified", "trajectory", "orphan_tool", "missing_tool"))
+        if (issue in {"training_surface_hidden_source_reference", "training_surface_internal_process_reference"}
+                and config["mode"] == "auto" and config["max_rounds"] > 0
+                and item.get("revision_context") and getattr(self, "_authenticated_repair_branch", False)
+                and evidence is not None and not blocked):
+            # This selected parent has already been authenticated as an
+            # explicit correction. A leaked old body is editable input, not
+            # an approval: repair and final surface checks must still pass.
+            receipt["initial_surface_issue"] = issue
+            issue = None
         if issue or blocked or evidence is None:
             receipt.update(status="rejected", reason=issue or "review_repair_source_evidence_unavailable")
             row.update(status="quarantined", reason=receipt["reason"])
@@ -604,8 +698,15 @@ class WorkflowReviewRepair:
                     if derived:
                         row = finalized_cot_sft_row(row)
                         receipt = deepcopy(row.get("review_repair", {}))
+                        try:
+                            candidate_hash = digest(self._review_payload("sft", row))
+                        except (KeyError, TypeError, ValueError):
+                            # A failed canonical row may intentionally have no
+                            # trainable content. Keep the failure and lineage;
+                            # never reconstruct the earlier accepted SFT body.
+                            candidate_hash = None
                         receipt.update(derived_from={"target": "cot", "candidate_id": row["id"]},
-                                       candidate_sha256=digest(self._review_payload("sft", row)))
+                                       candidate_sha256=candidate_hash)
                         row["review_repair"] = receipt
                     spool.append(row)
                 if next(canonical, None) is not None or next(unlinked, None) is not None:
@@ -662,7 +763,13 @@ class WorkflowReviewRepair:
             "targets": list(self.recipe["targets"])}
         write_json_array(self.path / "input_records.json", [{"id": item["record"]["id"], "status": "ready",
             "source_id": item["revision_context"]["source_id"], "kind": "repair_candidate"} for item in inputs])
-        rows = self.stage_items("review", inputs, self._review_repair_item)
+        # Only authenticated explicit inputs can repair an initially leaked
+        # body. Ordinary review and arbitrary revision metadata cannot opt in.
+        self._authenticated_repair_branch = True
+        try:
+            rows = self.stage_items("review", inputs, self._review_repair_item)
+        finally:
+            self._authenticated_repair_branch = False
         collections = self._split_review_rows(rows)
         self.stage = "package"
         self.state["stages"]["package"].update(status="running", done=0, total=1)

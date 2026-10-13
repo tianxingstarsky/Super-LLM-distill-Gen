@@ -13,6 +13,7 @@ import pytest
 from lib.llm_client import chat_json
 from lib.model_response_details import ModelJSONResult
 from lib.model_streaming import ModelStreamError
+from lib.model_request_reliability import ModelJSONError
 
 
 _spec = importlib.util.spec_from_file_location(
@@ -220,10 +221,11 @@ def test_json_in_reasoning_is_never_treated_as_visible_output(api, streaming):
     client = sdk_client(api, lambda request: response(api, streaming, text="", trace='{"answer":"not visible"}'))
     details = {"reasoning_content": "stale"}
     try:
-        with pytest.raises(ValueError, match="model_visible_output_missing"):
-            chat_json(client, MESSAGES, response_details=details,
+        with pytest.raises(ModelJSONError, match="model_json_invalid"):
+            chat_json(client, MESSAGES, retries=2, response_details=details,
                 **({"on_stream": lambda event: None} if streaming else {}))
         assert details == {}
+        assert client.usage["calls"] == 2
     finally:
         client.client.close()
 

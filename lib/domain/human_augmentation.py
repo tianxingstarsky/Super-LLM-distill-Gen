@@ -5,6 +5,7 @@ from copy import deepcopy
 import hashlib
 import json
 import re
+import unicodedata
 
 from lib.domain.workflow_quality import canonical, text_issue
 from lib.domain.workflow_scale import MAX_CONTEXT_WINDOW_TOKENS
@@ -41,6 +42,19 @@ HUMAN_REVISION_INSTRUCTION = (
 )
 
 
+def candidate_identifier(value, *, error="invalid_human_session_candidate_id"):
+    """Validate an opaque record identity without treating it as training text.
+
+    Content-derived hashes can resemble phone numbers. Preserve their exact
+    spelling, including legitimate Unicode/file-style IDs, for parent matching.
+    Invisible controls and surrogate code points cannot identify a record.
+    """
+    if (not isinstance(value, str) or not 1 <= len(value) <= 500 or not value.strip()
+            or any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in value)):
+        raise ValueError(error)
+    return value
+
+
 def validate_revision_context(value, *, review=False):
     fields = {"session_id", "round_id", "parent_run_id", "target", "candidate_id", "content_sha256",
               "messages", "instruction", "depth", "ancestors", "source_id", "source_kind", "teacher_evidence"}
@@ -58,7 +72,7 @@ def validate_revision_context(value, *, review=False):
     if type(value["depth"]) is not int or not 1 <= value["depth"] <= 10:
         raise ValueError("invalid_human_revision_context")
     result = deepcopy(value)
-    result["candidate_id"] = _text(value["candidate_id"], limit=500, required=True)
+    result["candidate_id"] = candidate_identifier(value["candidate_id"], error="invalid_human_revision_context")
     result["instruction"] = _text(value["instruction"], limit=6000)
     if "evidence_pack_sha256" in value and (not isinstance(value["evidence_pack_sha256"], str)
             or not re.fullmatch(r"[a-f0-9]{64}", value["evidence_pack_sha256"])):
@@ -100,9 +114,9 @@ def validate_revision_context(value, *, review=False):
         raise ValueError("invalid_human_revision_context")
     for ancestor in ancestors:
         if (not isinstance(ancestor, dict) or set(ancestor) != {"run_id", "candidate_id"}
-                or not isinstance(ancestor["run_id"], str) or not re.fullmatch(r"[a-f0-9]{32}", ancestor["run_id"])
-                or not isinstance(ancestor["candidate_id"], str) or not 1 <= len(ancestor["candidate_id"]) <= 500):
+                or not isinstance(ancestor["run_id"], str) or not re.fullmatch(r"[a-f0-9]{32}", ancestor["run_id"])):
             raise ValueError("invalid_human_revision_context")
+        candidate_identifier(ancestor["candidate_id"], error="invalid_human_revision_context")
     if ancestors[-1] != {"run_id": value["parent_run_id"], "candidate_id": value["candidate_id"]}:
         raise ValueError("invalid_human_revision_context")
     return result

@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 
-from lib.domain.human_augmentation import MAX_HUMAN_SEEDS, MAX_HUMAN_DESIGN_CHARS
+from lib.domain.human_augmentation import MAX_HUMAN_SEEDS, MAX_HUMAN_DESIGN_CHARS, candidate_identifier
 from lib.domain.workflow_quality import canonical, text_issue
 
 MAX_SESSION_ROUNDS = 200
@@ -80,7 +80,7 @@ def validate_issue_selection(selections, *, instruction=""):
                 or item["target"] not in TARGETS):
             raise ValueError("invalid_human_session_issue_selection")
         round_id = identifier(item["round_id"], "invalid_human_session_round_id")
-        candidate_id = bounded_text(item["candidate_id"], limit=500, required=True)
+        candidate_id = candidate_identifier(item["candidate_id"])
         own_instruction = bounded_text(item.get("instruction", ""))
         combined = bounded_text("\n".join(dict.fromkeys(value for value in (own_instruction, instruction) if value)))
         identity = (round_id, item["target"], candidate_id)

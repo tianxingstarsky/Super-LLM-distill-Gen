@@ -14,7 +14,7 @@ from lib.domain.workflow_node_prompts import (
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.infrastructure import training_workflow as engine
 from tests.test_workflow_production import model_request_data
-from tests.test_workflow_qa_director_engine import source_materials, candidate_material
+from tests.test_workflow_qa_director_engine import source_materials, candidate_material, request_data
 
 
 ANSWER = "检查设备前必须先断电。检查结束后记录结果。"
@@ -40,7 +40,7 @@ def director(**changes):
 
 def human_request_data(messages):
     """The offline teacher reads real task and separately transported evidence."""
-    data = model_request_data(messages)
+    data = request_data(messages)
     materials = source_materials(messages)
     for candidate in data.get("candidates", []):
         material = candidate_material(candidate, materials)

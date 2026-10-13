@@ -111,15 +111,39 @@ def chat_json(
         allow_reasoning_fallback = False
     if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
         raise ValueError("max_tokens must be a positive integer")
+    if type(retries) is not int or not 1 <= retries <= 10:
+        raise ValueError("invalid_model_json_attempts")
     last_err: Exception | None = None
     for attempt in range(retries):
         attempt_details = {}
         temp = temperature if attempt == 0 else min(temperature, 0.3)
-        out = client.chat(messages, max_tokens=max_tokens, temperature=temp,
-                          thinking=thinking, json_mode=True,
-                          **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
-                          **({"response_details": attempt_details} if response_details is not None else {}),
-                          **({"on_stream": on_stream} if on_stream else {}))
+        callback_error = None
+        def forward_stream(event):
+            nonlocal callback_error
+            try:
+                on_stream(event)
+            except BaseException as error:
+                callback_error = error
+                raise
+        try:
+            out = client.chat(messages, max_tokens=max_tokens, temperature=temp,
+                              thinking=thinking, json_mode=True,
+                              **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
+                              **({"response_details": attempt_details} if response_details is not None else {}),
+                              **({"on_stream": forward_stream} if on_stream else {}))
+        except (ValueError, ModelRequestError) as error:
+            if error is callback_error:
+                raise
+            missing_visible = (type(error) is ValueError and str(error) == "model_visible_output_missing")
+            if isinstance(error, ModelRequestError):
+                missing_visible = error.code == "model_visible_output_missing" and error.kind == "invalid"
+            if not missing_visible:
+                raise
+            # A completed reasoning-only answer cannot fulfill the JSON task.
+            # Retry only this safe code; never retry auth/network/cancellation
+            # here or copy the hidden reasoning into the visible JSON body.
+            last_err = error
+            continue
         try:
             result = parse_json_robust(out)
             commit_response_details(response_details, attempt_details)
@@ -470,14 +494,51 @@ class ChatClient:
         if response_details is not None:
             response_details.clear()
             allow_reasoning_fallback = False
+        replayed_tools = any(message.get("role") == "tool" for message in messages)
+        def get_field(value, name, default=None):
+            return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
+        def reject_tool_action(response, *, event=False):
+            unexpected = False
+            if self.api_format == "chat":
+                for choice in get_field(response, "choices", []) or []:
+                    body = get_field(choice, "delta" if event else "message")
+                    unexpected = unexpected or bool(get_field(body, "tool_calls") or get_field(body, "function_call"))
+            elif self.api_format == "responses":
+                kind = get_field(response, "type", "")
+                item = get_field(response, "item")
+                if event:
+                    unexpected = ("function_call_arguments" in kind
+                                  or get_field(item, "type", "").endswith("_call"))
+                    response = get_field(response, "response")
+                unexpected = unexpected or any(get_field(item, "type", "").endswith("_call")
+                    for item in get_field(response, "output", []) or [])
+            elif self.api_format == "anthropic":
+                unexpected = (get_field(get_field(response, "content_block"), "type") == "tool_use"
+                              if event else any(get_field(block, "type") == "tool_use"
+                                                for block in get_field(response, "content", []) or []))
+            if unexpected:
+                from lib.model_streaming import ModelStreamError
+                raise ModelStreamError("model_unexpected_tool_call")
         def stream_result(response):
+            stream = response
+            if replayed_tools:
+                class TextOnlyReplayStream:
+                    def __iter__(self):
+                        for event in response:
+                            reject_tool_action(event, event=True)
+                            yield event
+                    def close(self):
+                        response.close()
+                stream = TextOnlyReplayStream()
             request_details = {}
-            result = consume_stream(response, self.api_format, on_stream,
+            result = consume_stream(stream, self.api_format, on_stream,
                 allow_reasoning_fallback=allow_reasoning_fallback,
                 **({"response_details": request_details} if response_details is not None else {}))
             commit_response_details(response_details, request_details)
             return result
         def full_result(response, result, stop_reason, allowed):
+            if replayed_tools:
+                reject_tool_action(response)
             details = (extract_response_details(response, self.api_format)
                        if response_details is not None else {})
             result = self._full_result(result, on_stream, stop_reason, allowed,
@@ -524,6 +585,8 @@ class ChatClient:
             kwargs: Dict[str, Any] = {"model": self.model, "input": responses_input(messages),
                                       "temperature": temperature, "store": False}
             kwargs.update(reasoning_kwargs)
+            if replayed_tools:
+                kwargs["tool_choice"] = "none"
             if max_tokens is not None:
                 kwargs["max_output_tokens"] = max_tokens
             if json_mode and self.json_supported is not False:
@@ -550,6 +613,8 @@ class ChatClient:
         _paired_tools(messages)
         kwargs = {"model": self.model, "messages": messages, "temperature": temperature}
         kwargs.update(reasoning_kwargs)
+        if replayed_tools:
+            kwargs["tool_choice"] = "none"
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         if json_mode and self.json_supported is not False:

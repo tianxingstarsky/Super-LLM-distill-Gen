@@ -12,6 +12,7 @@ from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.human_revision import revision_evidence, verified_revision_batch, verified_revision_parent
 from lib.infrastructure.workflow_source_context import load_context_pack
 from test_human_sessions import Writer as LegacyRepairWriter, Reviewer as LegacyReviewer
+from tests.test_workflow_qa_director_engine import request_data
 
 
 PREPARATION = ("巡检准备阶段先确认设备已停机，核查维护记录和工单，佩戴防护用具。"
@@ -65,7 +66,7 @@ class ParentWriter:
     usage = {}
 
     def chat(self, messages, **kwargs):
-        data = json.loads(task_messages(messages)[1]["content"])
+        data = request_data(messages)
         if "candidates" in data:
             materials = memory_materials(messages)
             ranges = [{"material_id": material["material_id"], "start_line": 1,

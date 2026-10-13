@@ -244,3 +244,96 @@ def test_many_units_use_disk_assignments_and_do_not_duplicate_pack_bodies(tmp_pa
         assert database.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == count
         assert database.execute("SELECT MAX(LENGTH(reference)) FROM assignments").fetchone()[0] < 600
     assert sum(1 for _ in prepared) == count
+
+
+def test_small_selected_corpus_shares_every_accepted_fact_in_one_sorted_prefix(tmp_path):
+    units = [cleaned(0, "Remote status blue indicates that the inlet is locked.", source="z-guide"),
+             cleaned(1, "A second complete chapter states that the reset lasts twelve seconds.", source="z-guide"),
+             cleaned(0, "Version two uses amber for a blocked inlet; blue means standby.", source="a-official")]
+    worker = workflow(tmp_path)
+    worker.recipe.update(source_context_scope_version=1, source_line_protocol_version=1,
+                         source_context_capacity_version=2)
+    prepared = list(prepare_source_context_packs(worker, rows(tmp_path, units)))
+    assert len({unit["source_context_pack"]["id"] for unit in prepared}) == 1
+    pack = load_context_pack(tmp_path, prepared[0]["source_context_pack"])
+    assert [material["source_id"] for material in pack["materials"]] == ["a-official", "z-guide", "z-guide"]
+    assert [material["text"] for material in pack["materials"]] == [units[2]["text"], units[0]["text"], units[1]["text"]]
+    assert "Version two" in pack_evidence_text(prepared[0], tmp_path)
+    assert prepared[0]["source_context_pack"]["input_bytes"] <= context_capacity(worker.recipe)
+    manifest = json.loads((tmp_path / "source-context/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["pack_count"] == 1 and manifest["material_scope"] == "all_accepted_sources"
+
+
+def test_shared_prefix_order_is_independent_of_document_group_arrival_order(tmp_path):
+    first_path, second_path = tmp_path / "first", tmp_path / "second"
+    first_path.mkdir()
+    second_path.mkdir()
+    a = [cleaned(index, f"Official chapter {index}: immutable version rules.", source="a") for index in range(2)]
+    z = [cleaned(index, f"Guide chapter {index}: immutable operating rules.", source="z") for index in range(2)]
+    left, right = workflow(first_path), workflow(second_path)
+    left.recipe["source_context_scope_version"] = right.recipe["source_context_scope_version"] = 1
+    first = list(prepare_source_context_packs(left, rows(first_path, [*z, *a])))
+    second = list(prepare_source_context_packs(right, rows(second_path, [*a, *z])))
+    assert first[0]["source_context_pack"] == second[0]["source_context_pack"]
+    assert load_context_pack(first_path, first[0]["source_context_pack"]) == load_context_pack(second_path, second[0]["source_context_pack"])
+
+
+def test_global_scope_never_adds_rejected_or_raw_reading_material(tmp_path):
+    valid = cleaned(0, "The accepted official deadline is thirty days.", source="official")
+    rejected = cleaned(0, "SECRET REJECTED DEADLINE IS NINETY DAYS", source="rejected", status="quarantined")
+    worker = workflow(tmp_path)
+    worker.recipe["source_context_scope_version"] = 1
+    prepared = list(prepare_source_context_packs(worker, rows(tmp_path, [valid, rejected])))
+    pack = load_context_pack(tmp_path, prepared[0]["source_context_pack"])
+    assert len(pack["materials"]) == 1 and pack["materials"][0]["text"] == valid["text"]
+    assert "SECRET REJECTED" not in canonical(pack) and "RAW UNREVIEWED" not in canonical(pack)
+
+
+def test_tight_capacity_keeps_complete_document_windows_instead_of_clipping_all_sources(tmp_path):
+    units = [cleaned(0, word * 310, source=name) for name, word in (
+        ("a", "alpha interface "), ("b", "bravo reset "), ("c", "charlie switch "))]
+    worker = workflow(tmp_path, context=24000, output=4096)
+    worker.recipe.update(source_context_scope_version=1, source_line_protocol_version=1,
+                         source_context_capacity_version=2)
+    prepared = list(prepare_source_context_packs(worker, rows(tmp_path, units)))
+    manifest = json.loads((tmp_path / "source-context/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["material_scope"] == "document_windows" and len({u["source_context_pack"]["id"] for u in prepared}) > 1
+    for unit in prepared:
+        pack = load_context_pack(tmp_path, unit["source_context_pack"])
+        assert unit["text"] in [material["text"] for material in pack["materials"]]
+        assert unit["source_context_pack"]["input_bytes"] <= manifest["capacity_bytes"]
+        assert all(material["text"] in {original["text"] for original in units} for material in pack["materials"])
+
+
+def test_material_count_limit_falls_back_without_dropping_accepted_sources(tmp_path, monkeypatch):
+    from lib.infrastructure import workflow_source_context as context_module
+    monkeypatch.setattr(context_module, "MAX_MATERIALS", 2)
+    units = [cleaned(0, f"Unrelated chapter {index} has a complete unique fact.", source=f"source-{index}") for index in range(3)]
+    worker = workflow(tmp_path)
+    worker.recipe["source_context_scope_version"] = 1
+    prepared = list(prepare_source_context_packs(worker, rows(tmp_path, units)))
+    assert len(prepared) == 3
+    for unit in prepared:
+        materials = load_context_pack(tmp_path, unit["source_context_pack"])["materials"]
+        assert len(materials) <= 2 and unit["text"] in [material["text"] for material in materials]
+    manifest = json.loads((tmp_path / "source-context/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["material_scope"] == "document_windows"
+
+
+def test_scope_version_invalidates_old_index_but_legacy_resume_is_exact(tmp_path):
+    units = [cleaned(0, "A star emits visible light during fusion.", source="astronomy"),
+             cleaned(0, "A valve seal must be inspected before restart.", source="maintenance")]
+    worker = workflow(tmp_path)
+    source_rows = rows(tmp_path, units)
+    legacy = list(prepare_source_context_packs(worker, source_rows))
+    manifest_path = tmp_path / "source-context/manifest.json"
+    index_path = tmp_path / "source-context/index.sqlite3"
+    legacy_manifest, legacy_stamp = manifest_path.read_bytes(), index_path.stat().st_mtime_ns
+    assert list(prepare_source_context_packs(worker, source_rows)) == legacy
+    assert manifest_path.read_bytes() == legacy_manifest and index_path.stat().st_mtime_ns == legacy_stamp
+    worker.recipe["source_context_scope_version"] = 1
+    updated = list(prepare_source_context_packs(worker, source_rows))
+    new_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert new_manifest["source_sha256"] != json.loads(legacy_manifest)["source_sha256"]
+    assert len({unit["source_context_pack"]["id"] for unit in updated}) == 1
+    assert updated[0]["source_context_pack"]["id"] != legacy[0]["source_context_pack"]["id"]

@@ -73,3 +73,40 @@ def test_legacy_module_compat():
     assert legacy.SUMMARIZER_TEXT_PROMPT == get("distill.summarizer").template
     assert "默认风格" in legacy.GENERATOR_TEXT_PROMPT  # v1.2.0 style_guide 已预填充
     assert legacy.MAGPIE_QUERY_SYSTEM_PROMPT == get("magpie.query").template
+
+
+def test_configured_explanation_length_does_not_conflict_with_short_default():
+    from lib.prompts import workflow
+    current = get("workflow.cot_generate")
+    assert current.version == "1.6.0"
+    assert "用户未配置篇幅时直接可解的问题可以很短" in current.template
+    assert "用户明确配置篇幅时核对实际正文与有效信息量" in current.template
+    assert "具体版本行为、阈值、CLI开关、SQL字段和锁类型" in current.template
+    historical = get("workflow.cot_generate", version="1.5.0")
+    assert historical == workflow.COT_GENERATE_V1_5
+    assert "用户未配置篇幅时直接可解的问题可以很短" not in historical.template
+    assert "只返回" in render(historical) or "仅返回" in render(historical)
+
+
+def test_precise_fact_review_preserves_old_prompt_snapshots():
+    for name, current_version, old_version in (
+        ("rationale_check", "1.3.0", "1.2.0"),
+        ("review_score", "1.4.0", "1.3.0"),
+        ("package_review", "1.3.0", "1.2.0"),
+    ):
+        current = get("workflow." + name)
+        old = get("workflow." + name, version=old_version)
+        assert current.version == current_version and old.version == old_version
+        assert "没有依据的精确细节应省略或明确保留不确定性" in render(current)
+        assert "没有依据的精确细节应省略或明确保留不确定性" not in render(old)
+
+
+def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_stays_pinned():
+    from lib.prompts import workflow
+    current = get("workflow.review_repair")
+    old = get("workflow.review_repair", version="1.3.0")
+    assert current.version == "1.4.0" and old == workflow.REVIEW_REPAIR_V1_3
+    assert "仅按实际question与可见文章判断用户的前提" in render(current)
+    assert "不能将这些内部材料中的错误归因给用户" in render(current)
+    assert "不叙述旧稿、返工、删除句子或遵守评语" in render(current)
+    assert "仅按实际question与可见文章判断用户的前提" not in render(old)

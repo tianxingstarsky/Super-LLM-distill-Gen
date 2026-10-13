@@ -246,8 +246,10 @@ def prepare_source_context_packs(workflow, rows):
     pending.unlink(missing_ok=True)
     capacity = context_capacity(workflow.recipe)
     numbered = workflow.recipe.get("source_line_protocol_version") == SOURCE_LINE_PROTOCOL_VERSION
+    corpus_scope = workflow.recipe.get("source_context_scope_version") == 1
     source_hash = hashlib.sha256()
     source_hash.update(canonical({"version": VERSION, "capacity": capacity,
+                                 **({"source_context_scope_version": 1} if corpus_scope else {}),
                                  **({"source_line_protocol_version": SOURCE_LINE_PROTOCOL_VERSION} if numbered else {})}).encode())
     with closing(sqlite3.connect(pending)) as database:
         database.execute("PRAGMA cache_size=-2048")
@@ -339,21 +341,45 @@ def prepare_source_context_packs(workflow, rows):
                 database.execute("INSERT INTO assignments VALUES(?,?)", (row[1], canonical(reference)))
             pack_count += 1
 
-        for source, total, count in database.execute("SELECT source,SUM(size),COUNT(*) FROM units GROUP BY source ORDER BY source"):
-            block, block_size = [], 0
-            whole_document = total <= material_bytes and count <= MAX_MATERIALS
-            base_capacity = material_bytes if whole_document else max(1, int(material_bytes * 0.7))
-            for row in database.execute("SELECT * FROM units WHERE source=? ORDER BY seq", (source,)):
+        total_size, total_count = database.execute("SELECT COALESCE(SUM(size),0),COUNT(*) FROM units").fetchone()
+        shared_corpus = corpus_scope and 0 < total_count <= MAX_MATERIALS and total_size <= material_bytes
+        if shared_corpus:
+            # The selected input group is small enough to retain every accepted
+            # fact. Fixed source order and original within-document order make
+            # all its anchors share one prefix, including unrelated chapters
+            # whose facts would not be found by lexical similarity alone.
+            complete = list(database.execute("SELECT * FROM units ORDER BY source,seq"))
+            materials = []
+            for row in complete:
                 workflow.check_cancel()
-                if block and (block_size + row[4] > base_capacity or len(block) >= MAX_MATERIALS):
-                    persist_window(block)
-                    block, block_size = [], 0
-                block.append(row)
-                block_size += row[4]
-            persist_window(block)
+                materials.append(json.loads(row[3]))
+            reference = _save_pack(directory, materials)
+            if reference["input_bytes"] > capacity:
+                raise ValueError("source_context_model_capacity_too_small")
+            database.executemany("INSERT INTO assignments VALUES(?,?)",
+                                 ((row[1], canonical(reference)) for row in complete))
+            pack_count = 1
+        else:
+            # Larger input groups keep the existing complete-window/retrieval
+            # policy. Do not clip source bodies to force a global pack to fit.
+            for source, total, count in database.execute("SELECT source,SUM(size),COUNT(*) FROM units GROUP BY source ORDER BY source"):
+                block, block_size = [], 0
+                whole_document = total <= material_bytes and count <= MAX_MATERIALS
+                base_capacity = material_bytes if whole_document else max(1, int(material_bytes * 0.7))
+                for row in database.execute("SELECT * FROM units WHERE source=? ORDER BY seq", (source,)):
+                    workflow.check_cancel()
+                    if block and (block_size + row[4] > base_capacity or len(block) >= MAX_MATERIALS):
+                        persist_window(block)
+                        block, block_size = [], 0
+                    block.append(row)
+                    block_size += row[4]
+                persist_window(block)
         database.commit()
         manifest = {"version": VERSION, "source_sha256": signature, "capacity_bytes": capacity,
-                    "pack_count": pack_count, "document_units": database.execute("SELECT COUNT(*) FROM units").fetchone()[0]}
+                    "pack_count": pack_count, "document_units": total_count,
+                    **({"source_context_scope_version": 1,
+                        "material_scope": "all_accepted_sources" if shared_corpus else "document_windows"}
+                       if corpus_scope else {})}
     pending.replace(index_path)
     temporary_manifest = directory / "manifest.pending.json"
     temporary_manifest.write_text(canonical(manifest), encoding="utf-8")

@@ -50,6 +50,9 @@ QUALITY_STYLE = """<style>
 </style>"""
 
 REASON_LABELS = {
+    "training_surface_hidden_source_reference": "回答引用了用户看不到的资料",
+    "training_surface_internal_process_reference": "回答泄露了内部生成过程",
+    "review_repair_learner_task_changed": "自动修正改变了用户题面，已拒绝",
     "document_docx_parse_failed": "DOCX 文件结构损坏，已隔离",
     "document_docx_expansion_limit": "DOCX 展开体积超限，已隔离",
     "sft_invalid_reasoning_fields": "推理字段格式不正确",

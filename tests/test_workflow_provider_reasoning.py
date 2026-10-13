@@ -16,6 +16,7 @@ from lib.infrastructure import training_workflow as engine
 from lib.io_utils import atomic_json
 from lib.llm_client import ChatClient
 from tests.test_workflow_qa_director_engine import Writer as DirectorFixture, config as director_config
+from tests.test_workflow_styled_generation import model_task_data
 
 
 SOURCE = "检查设备前必须先断电。\n结束后记录检查结果。\n办公室盆栽每周浇水一次。"
@@ -72,13 +73,14 @@ class SDKProvider:
 
     def _body(self, payload):
         messages = payload.get("messages", payload.get("input"))
-        data = json.loads(next(message["content"] for message in reversed(messages)
-                               if message["role"] == "user"))
+        data = model_task_data(messages)
         system = messages[0]["content"]
         if "candidates" in data:
             return json.loads(self.director.chat(messages)), ""
         if "original_reasoning" in data:
             self.trim_requests.append(deepcopy(data))
+            assert messages[-1].get("role") == "user"
+            assert "original_reasoning" not in messages[-1]["content"]
             return {"reasoning": "先断电，再进行检查。"}, "修剪模型自己的推理不应覆盖修剪结果。"
         if self.multiturn and "自然且可回答的用户提问" in system:
             return {"message": "检查前需要做什么？" if data["turn"] == 1 else "结束后要如何处理？"}, ""
@@ -88,7 +90,7 @@ class SDKProvider:
         answer = ANSWER if not multiturn_answer or turn == 1 else "结束后记录检查结果。"
         body = {"answer": answer, "quotes": [QUOTE if not multiturn_answer or turn == 1 else "结束后记录检查结果。"]}
         if not multiturn_answer:
-            body["question"] = data.get("qa_contract", {}).get("question", "检查前需要做什么？")
+            body["question"] = data.get("fixed_question", data.get("qa_contract", {}).get("question", "检查前需要做什么？"))
         if self.explanation is not None:
             body["reasoning"] = self.explanation
         if self.forged:

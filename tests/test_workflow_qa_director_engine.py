@@ -23,7 +23,33 @@ def mock_llm_server():
 
 
 def request_data(messages):
-    """Read the actual dynamic task, after any completed source-tool history."""
+    """Read test metadata from dispatch, retaining the actual user role.
+
+    New answer requests end in a real learner utterance, not a JSON envelope.
+    Reconstruct only the fields that these offline models need; this helper
+    never changes the request or puts dispatch metadata back into a user turn.
+    """
+    dispatch, index = None, None
+    for position, message in enumerate(messages):
+        if message.get("role") == "tool" and message.get("name") == "dialogue_dispatch":
+            dispatch, index = json.loads(message["content"]), position
+        elif (message.get("role") == "system"
+              and message.get("content", "").startswith("<internal_dialogue_dispatch>\n")):
+            dispatch = json.loads(message["content"].removeprefix("<internal_dialogue_dispatch>\n")
+                                  .removesuffix("\n</internal_dialogue_dispatch>"))
+            index = position
+    if dispatch is not None:
+        actual = deepcopy([message for message in messages[index + 1:]
+                           if message.get("role") in {"user", "assistant"} and not message.get("tool_calls")])
+        data = {**deepcopy(dispatch), "learner_messages": actual}
+        if "fixed_question" in dispatch:
+            data["qa_contract"] = {key: deepcopy(dispatch[key]) for key in (
+                "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design") if key in dispatch}
+            data["qa_contract"].update(question=dispatch["fixed_question"])
+            data["source_context"] = {}  # Private evidence is read through source_materials(), not copied here.
+        else:
+            data["messages"] = actual
+        return data
     return json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
 
 
@@ -31,8 +57,12 @@ def source_materials(messages):
     """The fake reads evidence from real tool results, or a pinned old request."""
     packs = []
     for message in messages:
-        if message["role"] == "tool":
+        if message["role"] == "tool" and message.get("name") == "source_memory":
             packs.extend(json.loads(message["content"])["teacher_context_pack"])
+        elif (message.get("role") == "system"
+              and message.get("content", "").startswith("<untrusted_source_memory>\n")):
+            body = message["content"].removeprefix("<untrusted_source_memory>\n").removesuffix("\n</untrusted_source_memory>")
+            packs.extend(json.loads(body)["teacher_context_pack"])
     if not packs:
         packs = request_data(messages).get("teacher_context_pack", [])
     materials = []
@@ -230,6 +260,9 @@ def test_closed_book_exports_only_question_while_teacher_and_reviewer_get_eviden
         assert "结束后记录检查结果。" not in body
         assert "办公室盆栽每周浇水一次。" not in body
     assert "QUESTION_RULE_SENTINEL" in writer.calls[1][0]["content"]
+    assert writer.calls[1][-1] == {"role": "user", "content": record["messages"][0]["content"]}
+    dispatch = next(message for message in writer.calls[1] if message.get("name") == "dialogue_dispatch")
+    assert json.loads(dispatch["content"])["fixed_question"] == record["messages"][0]["content"]
     assert "ANSWER_RULE_SENTINEL" in reviewer.calls[-1][0]["content"]
     assert "question_rules" not in request_data(writer.calls[1])
     assert "answer_rules" not in request_data(reviewer.calls[-1])

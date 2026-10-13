@@ -9,6 +9,9 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "回答引用了用户看不到的资料": "The answer refers to sources the user cannot see",
+    "回答泄露了内部生成过程": "The answer exposes the internal generation process",
+    "自动修正改变了用户题面，已拒绝": "Automatic repair changed the user's task and was rejected",
     "模型思考": "Model reasoning",
     "自动（服务默认）": "Automatic (service default)",
     "开启思考": "Enable reasoning",

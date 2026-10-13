@@ -209,7 +209,11 @@ def test_workflow_ask_injects_selected_tool_memory_and_preserves_actual_learner_
     data = request()
     data["learner_messages"] = [{"role": "user", "content": "How should the MX pump be prepared?"}]
     assert worker.ask(["unit-a", "test"], "generation", "workflow.sft_directed", data) == {"ok": True}
-    assert [m["role"] for m in generator.calls[0]] == ["system", "user", "assistant", "tool", "user"]
+    messages = generator.calls[0]
+    assert [m["role"] for m in messages[:4]] == ["system", "user", "assistant", "tool"]
+    assert messages[3]["name"] == "source_memory"
+    assert any(m.get("name") == "dialogue_dispatch" for m in messages[4:])
+    assert messages[-1] == data["learner_messages"][-1]
     assert "OUTSIDE" not in canonical(generator.calls[0])
     assert worker.state["source_memory_transports"]["sft.generation"] == "tool"
 
@@ -244,7 +248,8 @@ def test_cot_contract_repairs_missing_trace_before_review_node_shortcut(tmp_path
     assert rows[0]["status"] == "eligible" and rows[0]["repair_attempts"] == 1
     assert rows[0]["reasoning_protocol_version"] == 1 and rows[0]["reasoning_trace"] == trace()
     assert len(generator.calls) == 2
-    assert "authored_reasoning_missing_trace" in canonical(generator.calls[1][-1])
+    assert "authored_reasoning_missing_trace" in canonical(generator.calls[1][:-1])
+    assert generator.calls[1][-1] == sample["messages"][0]
     assert "NATIVE_HIDDEN_SENTINEL" not in canonical(generator.calls)
     assert "OUTSIDE" not in canonical(generator.calls)
 

@@ -36,6 +36,48 @@ def test_actual_user_is_not_a_serialized_workflow_envelope():
     assert BRIEF["communication_goal"] not in ordinary
 
 
+def test_nonseparated_answer_has_an_exact_fixed_question_without_creating_a_fake_user():
+    data = answer_data()
+    data["qa_contract"]["question"] = "设备检查前应采取哪些准备措施？"
+    data["question_rules"] = "QUESTION_SYSTEM_RULE"
+    messages = answer_role_messages("Return JSON with question and answer.", CONTEXT, data, include_question=True)
+    dispatch = json.loads(next(message["content"] for message in messages
+                              if message["role"] == "tool" and message.get("name") == "dialogue_dispatch"))
+    assert dispatch["fixed_question"] == data["qa_contract"]["question"]
+    assert messages[-1] == data["learner_messages"][-1]
+    assert "原样复制" in messages[0]["content"] and "不改写或生成用户问题" not in messages[0]["content"]
+    assert "QUESTION_SYSTEM_RULE" in messages[0]["content"] and "ANSWER_RULE_SENTINEL" in messages[0]["content"]
+    assert data["qa_contract"]["question"] not in "\n".join(m["content"] for m in messages if m["role"] == "user")
+
+
+def test_human_reference_answer_is_design_data_and_never_a_source_fact_or_fake_user_message():
+    data = answer_data()
+    data["qa_contract"]["human_design"] = {"question": "检查前准备什么？", "reference_answer": "HUMAN_CANDIDATE_SENTINEL"}
+    messages = answer_role_messages("system", CONTEXT, data, include_question=True)
+    source = json.loads(next(message["content"] for message in messages
+                            if message["role"] == "tool" and message.get("name") == "source_memory"))
+    dispatch = json.loads(next(message["content"] for message in messages
+                              if message["role"] == "tool" and message.get("name") == "dialogue_dispatch"))
+    assert dispatch["human_design"] == data["qa_contract"]["human_design"]
+    assert "HUMAN_CANDIDATE_SENTINEL" not in json.dumps(source)
+    assert "HUMAN_CANDIDATE_SENTINEL" not in "\n".join(m["content"] for m in messages if m["role"] == "user")
+    assert "不能当作已评分通过" in messages[0]["content"] and messages[-1] == data["learner_messages"][-1]
+
+
+def test_separated_answer_default_does_not_echo_or_create_a_question():
+    messages = answer_role_messages("system", CONTEXT, answer_data())
+    dispatch = json.loads(next(message["content"] for message in messages
+                              if message["role"] == "tool" and message.get("name") == "dialogue_dispatch"))
+    assert "fixed_question" not in dispatch and "不改写或生成用户问题" in messages[0]["content"]
+
+
+def test_question_echo_requires_a_prevalidated_nonempty_contract_question():
+    data = answer_data()
+    data["qa_contract"].pop("question")
+    with pytest.raises(ValueError, match="missing_fixed_dialogue_question"):
+        answer_role_messages("system", CONTEXT, data, include_question=True)
+
+
 def test_actual_multiturn_roles_are_preserved_without_private_native_reasoning():
     data = answer_data()
     data["learner_messages"] = [{"role": "user", "content": "如何准备检查？"},

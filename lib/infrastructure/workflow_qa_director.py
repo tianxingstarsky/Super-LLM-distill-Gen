@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import re
+import sqlite3
+import uuid
 from itertools import islice
 from filelock import FileLock, Timeout
 
@@ -30,9 +32,29 @@ from lib.domain.human_augmentation import (
     human_design, human_messages_identity, validate_human_check,
     HUMAN_DIRECTOR_INSTRUCTION, HUMAN_REVISION_INSTRUCTION, human_generation_instruction, HUMAN_QA_TARGETS,
 )
-from lib.infrastructure.qa_history import QAHistory, contract_identity
+from lib.infrastructure.qa_history import QAHistory, contract_identity, learner_task_identity, MAX_QUESTION_CHARS
 from lib.infrastructure.workflow_rows import WorkflowRows
 from lib.model_request_reliability import ModelJSONError
+
+
+_PLAN_VALIDATION_CODES = frozenset({
+    "invalid_qa_director_batch", "qa_director_batch_id_mismatch", "qa_director_dialogue_design_required",
+    "invalid_qa_director_task", "qa_director_type_mismatch", "qa_director_id_mismatch",
+    "invalid_qa_director_answer_policy", "qa_director_closed_book_contract",
+    "qa_director_visible_evidence_required", "invalid_qa_director_evidence",
+    "qa_director_evidence_not_in_source", "qa_director_visible_context_not_in_source",
+    "qa_director_evidence_not_in_source_line_ranges", "qa_director_multiple_evidence_required",
+    "qa_director_evidence_not_visible", "invalid_question_brief", "question_brief_contains_private_source",
+    "source_line_ranges_required", "source_line_materials_required", "invalid_source_line_ranges",
+    "source_line_material_not_found", "source_line_range_out_of_bounds", "source_line_range_empty",
+    "invalid_qa_director_skip",
+})
+
+
+def _plan_validation_code(error):
+    """Known contract codes only; never echo model text or private source values."""
+    code = str(error)
+    return code if code in _PLAN_VALIDATION_CODES else "qa_director_contract_validation_failed"
 
 
 def _digest(value):
@@ -50,6 +72,43 @@ def learner_prompt(contract):
         label = "用户消息：" if contract.get("dialogue_design") else "问题："
         return "资料：\n" + contract["visible_context"] + "\n\n" + label + "\n" + question
     return question
+
+
+def actual_qa_input_messages(row, target=None):
+    """Project exactly the public training input, with private reasoning removed.
+
+    Single-turn SFT and its CoT projection produce the same list. Multi-turn
+    input retains all actual preceding answers and user constraints; an opening
+    question alone cannot identify that complete task.
+    """
+    if target == "cot" or (target is None and row.get("question") is not None
+                           and row.get("answer") is not None and row.get("reasoning") is not None):
+        question = row.get("question")
+        messages = question if isinstance(question, list) else [{"role": "user", "content": question}]
+    elif target in {"dpo", "orpo", "rlaif"} or (target is None and isinstance(row.get("prompt"), list)):
+        messages = row.get("prompt")
+    else:
+        original = row.get("messages")
+        messages = original[:-1] if isinstance(original, list) and original else None
+    if (not isinstance(messages, list) or not messages
+            or any(not isinstance(message, dict) for message in messages)
+            or not any(message.get("role") == "user" for message in messages)):
+        return None
+    private = {"reasoning_content", "reasoning", "thinking", "reasoning_summary", "reasoning_details", "thinking_blocks"}
+    return [{name: value for name, value in message.items() if name not in private} for message in messages]
+
+
+def actual_qa_input_identity(row, target=None):
+    messages = actual_qa_input_messages(row, target)
+    return _digest(messages) if messages is not None else None
+
+
+def _actual_question_summary(question):
+    if len(question) <= MAX_QUESTION_CHARS:
+        return question
+    note = "\n[History excerpt only; complete input is identified by actual_input_sha256.]\n"
+    size = (MAX_QUESTION_CHARS - len(note)) // 2
+    return question[:size] + note + question[-size:]
 
 
 class DirectorPlanError(ValueError):
@@ -247,6 +306,14 @@ class WorkflowQADirector:
         return (contract.get("dialogue_design")
                 if self.recipe.get("qa_director", {}).get("planning_mode") == "adaptive" else None)
 
+    def qa_core_dedup(self, namespace):
+        # A multi-turn opening may lead to genuinely different later user
+        # constraints. Its complete dialogue is deduplicated after generation.
+        return self.recipe.get("qa_agent_memory_version") == 1 and namespace != "multiturn"
+
+    def qa_actual_only(self, namespace):
+        return self.recipe.get("qa_agent_memory_version") == 1 and namespace == "multiturn"
+
     def _invalidate_director_call(self, key, *, stage=None):
         stage = stage or self.stage
         invalidate = getattr(self, "invalidate_checkpoint", None)
@@ -279,18 +346,73 @@ class WorkflowQADirector:
                 continue
         try:
             with QAHistory(self.path.parent.parent / "qa-history.sqlite3") as history:
-                yield history
+                pending_path = None
+                pending = None
+                if self.recipe.get("qa_agent_memory_version") == 1:
+                    directory = self.path / "stage-results"
+                    directory.mkdir(parents=True, exist_ok=True)
+                    pending_path = directory / (".qa-publication-" + uuid.uuid4().hex + ".sqlite3")
+                    pending = sqlite3.connect(pending_path)
+                    pending.execute("PRAGMA cache_size=-2048")
+                    pending.execute("CREATE TABLE actual_inputs (namespace TEXT, identity TEXT, sample_id TEXT, "
+                                    "PRIMARY KEY(namespace,identity), UNIQUE(namespace,sample_id)) WITHOUT ROWID")
+                self._qa_publication_actuals = pending
+                try:
+                    yield history
+                finally:
+                    self._qa_publication_actuals = None
+                    if pending is not None:
+                        pending.close()
+                    if pending_path is not None:
+                        pending_path.unlink(missing_ok=True)
         finally:
             lock.release()
+
+    def register_final_qa_input(self, row, target):
+        """Reserve a fully accepted pending input, not a published QA record."""
+        pending = getattr(self, "_qa_publication_actuals", None)
+        if pending is None or not row.get("qa_contract"):
+            return
+        identity = actual_qa_input_identity(row, target)
+        if identity is None:
+            raise ValueError("qa_publication_actual_input_missing")
+        namespace = "multiturn" if target == "multiturn" else "sft"
+        sample_id = self.state["id"] + ":" + row["id"]
+        previous = pending.execute("SELECT identity FROM actual_inputs WHERE namespace=? AND sample_id=?",
+                                   (namespace, sample_id)).fetchone()
+        if previous is not None and previous[0] != identity:
+            raise ValueError("qa_publication_sample_input_conflict")
+        inserted = pending.execute("INSERT OR IGNORE INTO actual_inputs VALUES (?,?,?)", (namespace, identity, sample_id))
+        if not inserted.rowcount:
+            owner = pending.execute("SELECT sample_id FROM actual_inputs WHERE namespace=? AND identity=?",
+                                    (namespace, identity)).fetchone()
+            if owner is None or owner[0] != sample_id:
+                raise ValueError("qa_publication_actual_input_conflict")
 
     def final_qa_duplicate(self, row, target, history):
         if history is None or row.get("status") != "eligible" or not row.get("qa_contract"):
             return None
         c = row["qa_contract"]
+        namespace = "multiturn" if target == "multiturn" else "sft"
+        if self.recipe.get("qa_agent_memory_version") == 1:
+            actual = actual_qa_input_identity(row, target)
+            pending = getattr(self, "_qa_publication_actuals", None)
+            if pending is not None and actual is not None:
+                prior = pending.execute("SELECT sample_id FROM actual_inputs WHERE namespace=? AND identity=?",
+                                        (namespace, actual)).fetchone()
+                if prior is not None and prior[0] != self.state["id"] + ":" + row["id"]:
+                    return {"id": prior[0], "run_id": self.state["id"], "match_kind": "exact_actual_input",
+                            "duplicate_scope": "current_publication"}
+            duplicate = history.duplicate_actual(actual, namespace=namespace)
+            if (duplicate and duplicate.get("id") != self.state["id"] + ":" + row["id"]
+                    and not self.human_revision_duplicate_allowed(c, duplicate)):
+                return duplicate
+            if self.qa_actual_only(namespace):
+                return None
         duplicate = history.duplicate(c["question"], visible_context=c["visible_context"],
             answer_policy=c["answer_policy"], qa_type=c["qa_type"],
             dialogue_design=self.qa_identity_design(c),
-            namespace="multiturn" if target == "multiturn" else "sft")
+            namespace=namespace, learner_task_dedup=self.qa_core_dedup(namespace))
         return (duplicate if duplicate and duplicate.get("run_id") != self.state["id"]
                 and not self.human_revision_duplicate_allowed(c, duplicate) else None)
 
@@ -311,7 +433,7 @@ class WorkflowQADirector:
         verified_revision_parent(self.path.parent.parent, self.state["id"], revision)
         return True
 
-    def qa_history_row(self, row):
+    def qa_history_row(self, row, target=None):
         contract = row.get("qa_contract")
         messages = row.get("messages", [])
         if not contract or row.get("status") != "eligible":
@@ -322,12 +444,24 @@ class WorkflowQADirector:
                   if messages else row.get("answer"))
         if not isinstance(answer, str) or not answer.strip():
             return None
+        actual_metadata = {}
+        if self.recipe.get("qa_agent_memory_version") == 1:
+            inputs = actual_qa_input_messages(row, target)
+            if inputs is not None:
+                actual_metadata["actual_input_sha256"] = _digest(inputs)
+                if self.qa_actual_only(target):
+                    actual_metadata["actual_input_only_identity"] = True
+                user = next((message.get("content") for message in inputs if message.get("role") == "user"), None)
+                if isinstance(user, str) and user != learner_prompt(contract):
+                    actual_metadata.update(actual_input_revision=True, actual_question=_actual_question_summary(user))
         return {"id": self.state["id"] + ":" + row["id"],
                 "run_id": self.state["id"], "family_id": row["family_id"],
-                "source_id": row.get("source_id"), "status": "eligible",
+                "source_id": row.get("source_id"), "source_name": row.get("source_name"), "status": "eligible",
                 "question": contract["question"], "answer": answer,
                 "qa_type": contract["qa_type"], "visible_context": contract["visible_context"],
                 "answer_policy": contract["answer_policy"],
+                **actual_metadata,
+                **{name: contract[name] for name in ("topic", "skill") if contract.get(name)},
                 **({"dialogue_design": self.qa_identity_design(contract)}
                    if self.qa_identity_design(contract) is not None else {})}
 
@@ -400,6 +534,7 @@ class WorkflowQADirector:
             "dialogue_design": unit["qa_contract"].get("dialogue_design", {}),
             "dialogue_messages": messages, "previous_dialogue_state": previous_state,
             "teacher_evidence": (unit.get("text", "") if unit.get("source_context_pack")
+                                 or self.recipe.get("qa_agent_memory_version") == 1
                                  else unit.get("text", "")[:20_000]),
             **({"source_context_pack": unit["source_context_pack"]} if unit.get("source_context_pack") else {}),
             **({"source_line_material_id": unit["source_line_material_id"]}
@@ -617,6 +752,7 @@ class WorkflowQADirector:
             data = {"candidates": [
                         {"id": unit["id"], "source_id": unit["source_id"], "kind": unit["kind"],
                          "teacher_evidence": (unit.get("text", "") if unit.get("source_context_pack")
+                                              or self.recipe.get("qa_agent_memory_version") == 1
                                               else unit.get("text", "")[:text_limit]),
                          **({"source_context_pack": deepcopy(unit["source_context_pack"])}
                             if unit.get("source_context_pack") else {}),
@@ -640,6 +776,10 @@ class WorkflowQADirector:
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
                     "targets": list(stages)}
+            if self.recipe.get("qa_agent_memory_version") == 1:
+                from lib.infrastructure.qa_agent_memory import build_agent_memory
+                data["agent_memory"] = build_agent_memory(local_history, published_history, stages,
+                    history=history, feedback=data["feedback"], candidates=data["candidates"])
             if self.recipe.get("source_line_protocol_version") == 1:
                 data["source_line_protocol_version"] = 1
             if self.separated_questions():
@@ -684,7 +824,22 @@ class WorkflowQADirector:
                         return len(serialize_context_request(self.path, data, instruction=instruction).encode("utf-8"))
                 while data["history"] and request_size() > available:
                     data["history"].pop()
+                if data.get("agent_memory"):
+                    from lib.infrastructure.qa_agent_memory import compact_agent_memory
+                    while request_size() > available and compact_agent_memory(data["agent_memory"]):
+                        pass
                 if request_size() > available:
+                    if len(batch) > 1:
+                        raise DirectorBatchTooLarge("qa_director_batch_context_too_large")
+                    raise ValueError("qa_director_context_too_small")
+                return data
+            if self.recipe.get("qa_agent_memory_version") == 1:
+                from lib.infrastructure.qa_agent_memory import compact_agent_memory
+                while data["history"] and len(canonical(data).encode("utf-8")) > available:
+                    data["history"].pop()
+                while len(canonical(data).encode("utf-8")) > available and compact_agent_memory(data["agent_memory"]):
+                    pass
+                if len(canonical(data).encode("utf-8")) > available:
                     if len(batch) > 1:
                         raise DirectorBatchTooLarge("qa_director_batch_context_too_large")
                     raise ValueError("qa_director_context_too_small")
@@ -763,7 +918,7 @@ class WorkflowQADirector:
                         if candidate.get("human_design"):
                             contracts[candidate["id"]]["human_design"] = deepcopy(candidate["human_design"])
                     return contracts
-                except ValueError:
+                except ValueError as error:
                     self._invalidate_director_call(call_key)
                     if not production:
                         raise
@@ -777,6 +932,8 @@ class WorkflowQADirector:
                             " teacher_evidence；无线索题的 visible_context 必须为空。不得新增资料或引用历史为事实。",
                         "attempt": attempt + 1,
                     }
+                    if self.recipe.get("qa_agent_memory_version") == 1:
+                        repair_feedback["validation_code"] = _plan_validation_code(error)
                     if self.recipe.get("source_line_protocol_version") == 1:
                         repair_feedback["instruction"] += (
                             "编号资料的 source_line_ranges 只能引用该包 material_id 和实际1-based行号；"
@@ -785,6 +942,8 @@ class WorkflowQADirector:
                         repair_feedback["instruction"] += (
                             "closed_book须提供question_brief宽泛主题与交往目标，不含原文、摘要、参考问答或标识。")
                     self.event("director_plan_repair", attempt=attempt + 1,
+                        **({"validation_code": repair_feedback["validation_code"]}
+                           if "validation_code" in repair_feedback else {}),
                                reason="qa_director_contract_validation_failed")
             raise DirectorPlanError()
         try:
@@ -867,11 +1026,12 @@ class WorkflowQADirector:
         action = getattr(self, stage)
         registered, duplicates = {}, {}
         for index, unit in enumerate(batch):
-            if not unit.get("qa_contract"):
+            if not unit.get("qa_contract") or self.qa_actual_only(stage):
                 continue
             c = unit["qa_contract"]
-            identity = contract_identity(c["question"], c["visible_context"], c["answer_policy"], c["qa_type"],
-                                         dialogue_design=self.qa_identity_design(c))
+            identity = (learner_task_identity(c["question"], c["visible_context"]) if self.qa_core_dedup(stage)
+                        else contract_identity(c["question"], c["visible_context"], c["answer_policy"], c["qa_type"],
+                                               dialogue_design=self.qa_identity_design(c)))
             if identity in registered:
                 duplicates[index] = registered[identity]
             else:
@@ -890,7 +1050,7 @@ class WorkflowQADirector:
                 if unit.get("director_skip_reason"):
                     return [{**self.rejected(unit, unit["director_skip_reason"]),
                              "director_skip_guidance": unit.get("director_skip_guidance", "")}]
-                if unit.get("qa_contract"):
+                if unit.get("qa_contract") and not self.qa_actual_only(stage):
                     c = unit["qa_contract"]
                     def dispatch():
                         if index - offset in duplicates:
@@ -898,12 +1058,14 @@ class WorkflowQADirector:
                         duplicate = local_history.duplicate(c["question"], visible_context=c["visible_context"],
                             answer_policy=c["answer_policy"], qa_type=c["qa_type"], namespace=stage,
                             dialogue_design=self.qa_identity_design(c),
+                            learner_task_dedup=self.qa_core_dedup(stage),
                             exclude_id=self.state["id"] + ":" + unit["id"])
                         if duplicate:
                             return {"reason": "duplicate_qa_contract", "duplicate_of": duplicate["id"]}
                         duplicate = published_history.duplicate(c["question"], visible_context=c["visible_context"],
                             answer_policy=c["answer_policy"], qa_type=c["qa_type"], namespace=stage,
-                            dialogue_design=self.qa_identity_design(c))
+                            dialogue_design=self.qa_identity_design(c),
+                            learner_task_dedup=self.qa_core_dedup(stage))
                         if (duplicate and duplicate.get("run_id") != self.state["id"]
                                 and not self.human_revision_duplicate_allowed(c, duplicate)):
                             return {"reason": "duplicate_qa_contract", "duplicate_of": duplicate["id"]}
@@ -931,8 +1093,9 @@ class WorkflowQADirector:
             rows, cached = ordered[index]
             metrics["cached"] += int(cached)
             for row in rows:
-                historical = self.qa_history_row(row)
-                if historical is not None and not local_history.add(historical, namespace=stage):
+                historical = self.qa_history_row(row, stage)
+                if historical is not None and not local_history.add(historical, namespace=stage,
+                                                                  learner_task_dedup=self.qa_core_dedup(stage)):
                     row = {**self.rejected(unit, "duplicate_qa_contract"),
                            "qa_contract": unit["qa_contract"], "family_id": unit["family_id"]}
                 metrics["outputs"] += 1
@@ -988,6 +1151,9 @@ class WorkflowQADirector:
             "teacher_evidence_export": "only_explicit_visible_context",
             "acceptance_basis": "generation_quality_and_contract_checks",
             "publication_basis": "final_package_eligible",
+            **({"agent_memory": "bounded_deterministic_ledger_projection",
+                "deduplication": "exact_learner_task_for_sft_contract_for_multiturn"}
+               if self.recipe.get("qa_agent_memory_version") == 1 else {}),
             **({"evidence_source": "qualified_cleaning"} if self.shared_source_cleaning() else {}),
             **({"question_separation": True,
                 "question_dispatch": "source_free_questioner_for_closed_book_otherwise_director",
@@ -1091,6 +1257,16 @@ class WorkflowQADirector:
                 from lib.infrastructure.json_stream import iter_json_records
                 for row in iter_json_records(path):
                     self.check_cancel()
-                    record = self.qa_history_row(row)
+                    record = self.qa_history_row(row, target)
                     if record is not None:
-                        history.add(record, namespace="multiturn" if target == "multiturn" else "sft")
+                        namespace = "multiturn" if target == "multiturn" else "sft"
+                        inserted = history.add(record, namespace=namespace, learner_task_dedup=self.qa_core_dedup(namespace))
+                        if not inserted:
+                            duplicate = history.duplicate_actual(record.get("actual_input_sha256"), namespace=namespace)
+                            if duplicate is None:
+                                contract = row["qa_contract"]
+                                duplicate = history.duplicate(contract["question"], visible_context=contract["visible_context"],
+                                    answer_policy=contract["answer_policy"], qa_type=contract["qa_type"], namespace=namespace,
+                                    dialogue_design=self.qa_identity_design(contract), learner_task_dedup=self.qa_core_dedup(namespace))
+                            if not (duplicate and self.human_revision_duplicate_allowed(row["qa_contract"], duplicate)):
+                                raise ValueError("qa_publication_history_conflict")

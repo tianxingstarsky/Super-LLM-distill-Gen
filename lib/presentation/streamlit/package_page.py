@@ -289,6 +289,9 @@ def _render_quality(quality: dict, manifest: dict) -> None:
         total = int(summary.get("total", eligible))
         reasons = summary.get("reasons", {})
         reason_labels = {"package_ai_review_rejected": "AI 打包评审未通过",
+                         "training_surface_hidden_source_reference": "回答引用了用户看不到的资料",
+                         "training_surface_internal_process_reference": "回答泄露了内部生成过程",
+                         "review_repair_learner_task_changed": "自动修正改变了用户题面，已拒绝",
                          "duplicate_qa_contract": "问题与可见条件重复",
                          "duplicate_qa_contract_in_batch": "同批问答任务重复",
                          "released_qa_contract_duplicate": "与历史合格问答重复",

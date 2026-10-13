@@ -13,9 +13,9 @@ from lib.infrastructure.workflow_production import WorkflowProduction
 from lib.infrastructure.workflow_rows import WorkflowRows, write_jsonl
 from lib.io_utils import atomic_json
 from tests.test_workflow_styled_generation import (
-    ANSWER, Generator, Reviewer, maintenance_reasoning_trace, records, run,
+    ANSWER, Generator, Reviewer, maintenance_reasoning_trace, records, run, model_task_data,
 )
-from tests.test_workflow_production import Generator as ProductionWriter, TEXT, model_request_data
+from tests.test_workflow_production import Generator as ProductionWriter, TEXT
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -30,7 +30,8 @@ NEW_ANSWER = "先切断设备电源，再检查线路，完成维护后记录结
 class RewritingGenerator(Generator):
     def chat(self, messages, **kwargs):
         result = json.loads(super().chat(messages, **kwargs))
-        if "已有合格 reference_answer" in messages[0]["content"]:
+        if ("新撰写指定 generation_style 的教学解释" in messages[0]["content"]
+                or "新撰写指定 generation_style 的推理文本" in messages[0]["content"]):
             result["answer"] = NEW_ANSWER
             result["reasoning_trace"] = maintenance_reasoning_trace()
         return json.dumps(result, ensure_ascii=False)
@@ -45,7 +46,8 @@ def set_version(path, version):
     for prompt_id in ("workflow.cot_generate", "workflow.rationale_check"):
         recipe["node_prompt_templates"]["cot"][prompt_id] = render(get(prompt_id, version="1.0.0"))
     for field in ("authored_reasoning_protocol_version", "source_line_protocol_version",
-                  "source_memory_protocol_version", "source_context_pack_version"):
+                  "source_memory_protocol_version", "source_context_pack_version",
+                  "training_surface_protocol_version", "qa_agent_memory_version"):
         recipe.pop(field, None)
     atomic_json(path / "recipe.json", recipe)
     saved = engine.read_json(path / "state.json")
@@ -250,7 +252,8 @@ def test_ordered_merge_retains_upstream_rejections_and_fails_closed_on_missing_o
     good = sample_record()
     rejected = {"id": "rejected", "status": "quarantined", "reason": "sft_quality_failed_after_repair"}
     cot_failed = {"id": good["id"], "status": "quarantined", "reason": "cot_reasoning_rejected"}
-    assert list(finalized_sft_rows(iter([rejected, good]), iter([cot_failed]))) == [rejected, cot_failed]
+    assert list(finalized_sft_rows(iter([rejected, good]), iter([cot_failed]))) == [
+        rejected, {**cot_failed, "reasoning_route": "sft_via_cot"}]
     with pytest.raises(ValueError, match="cot_sft_lineage_mismatch"):
         list(finalized_sft_rows([good], []))
     with pytest.raises(ValueError, match="cot_sft_lineage_mismatch"):
@@ -259,14 +262,26 @@ def test_ordered_merge_retains_upstream_rejections_and_fails_closed_on_missing_o
         list(finalized_sft_rows([good], [{**cot_failed, "id": "wrong"}]))
 
 
+def test_failed_trim_projection_keeps_cot_dependency_and_is_replayable():
+    good = sample_record()
+    failed = {"id": good["id"], "source_id": good["source_id"], "status": "quarantined",
+              "reason": "reasoning_trim_failed_after_repair"}
+    projected = list(finalized_sft_rows([good], [failed]))
+    assert projected[0]["reasoning_route"] == "sft_via_cot"
+    assert projected[0]["status"] == "quarantined"
+    assert "messages" not in projected[0], "Never fall back to the previously accepted SFT answer."
+    assert list(finalized_sft_rows(projected, [failed])) == projected
+
+
 class ProductionCoTWriter(ProductionWriter):
     def __init__(self):
         super().__init__()
         self.cot_calls = 0
 
     def chat(self, messages, **kwargs):
-        if "已有合格 reference_answer" in messages[0]["content"]:
-            data = model_request_data(messages)
+        if ("新撰写指定 generation_style 的教学解释" in messages[0]["content"]
+                or "新撰写指定 generation_style 的推理文本" in messages[0]["content"]):
+            data = model_task_data(messages)
             self.calls.append(data)
             self.usage["calls"] += 1
             self.cot_calls += 1
