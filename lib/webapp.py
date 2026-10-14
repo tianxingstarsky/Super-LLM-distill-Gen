@@ -555,8 +555,13 @@ def page_task_manager():
     from lib.presentation.streamlit.work_drafts import render_work_drafts
     from lib.presentation.streamlit.task_management_styles import task_management_styles
 
-    page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。",
-                art_kind="hero")
+    workspace = st.session_state["ws"]
+    selected_run = st.session_state.get(f"task-center-run:{workspace}")
+    report_open = (st.session_state.get(f"task-view:{workspace}", "数据工作流") == "数据工作流"
+                   and st.session_state.get(f"workflow-result-view:{selected_run}") == "样本报告")
+    if not report_open:
+        page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。",
+                    art_kind="hero")
     st.html(task_management_styles())
     draft_application = creation_draft_application(_ws_out())
     with st.container(key="task-manager-navigation"):

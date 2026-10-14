@@ -374,8 +374,11 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
         _render_task_summary(application, workspace_id)
     focus_column, create_column = toolbar[1], toolbar[-1]
     with focus_column:
-        focus = st.toggle("放大工作流视图", value=False, key=focus_key,
-                          help="展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
+        selected = st.session_state.get(f"task-center-run:{workspace_id}")
+        report_open = st.session_state.get(f"workflow-result-view:{selected}") == "样本报告"
+        focus = st.toggle("放大报告视图" if report_open else "放大工作流视图", value=False, key=focus_key,
+                          help="展开报告阅读区域；任务列表可从“选择任务”打开。" if report_open
+                          else "展开工作流画布与节点配置；任务列表可从“选择任务”打开。")
     if show_quick_switch:
         language = st.session_state.get("ui_language", "zh")
         shortcuts = {str(run["id"]): run for run in [*attention[0], *active[0]]}

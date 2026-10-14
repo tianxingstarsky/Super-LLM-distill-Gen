@@ -205,6 +205,7 @@ def trace():
 def test_workflow_ask_injects_selected_tool_memory_and_preserves_actual_learner_task(tmp_path):
     generator = CapturingGenerator()
     worker = workflow(tmp_path, generator)
+    worker.recipe["source_memory_protocol_version"] = 1
     worker.stage = "sft"
     data = request()
     data["learner_messages"] = [{"role": "user", "content": "How should the MX pump be prepared?"}]
@@ -221,6 +222,7 @@ def test_workflow_ask_injects_selected_tool_memory_and_preserves_actual_learner_
 def test_review_only_ask_uses_authenticated_receipt_without_resolving_parent_pack_under_child(tmp_path):
     generator = CapturingGenerator()
     worker = workflow(tmp_path, generator)
+    worker.recipe["source_memory_protocol_version"] = 1
     worker.recipe["repair_inputs"] = [{"record_id": "sample-a"}]
     worker.recipe.pop("source_context_pack_version", None)
     worker.stage = "review"

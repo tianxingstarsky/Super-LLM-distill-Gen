@@ -644,7 +644,7 @@ class WorkflowQADirector:
             context["generation_style"] = style
         from lib.infrastructure.source_memory_messages import directed_source_request, directed_evidence_text, directed_evidence_blocks
         context = directed_source_request(self.recipe, context, unit, contract)
-        if self.recipe.get("source_memory_protocol_version") == 1:
+        if self.recipe.get("source_memory_protocol_version") in {1, 2}:
             context["learner_messages"] = [{"role": "user", "content": learner_prompt(contract)}]
         selected_blocks = (directed_evidence_blocks(self.path, unit, contract)
                            if context.get("source_line_scope") == "selected" else None)
@@ -850,7 +850,7 @@ class WorkflowQADirector:
                 if human.get("enabled"):
                     instruction = HUMAN_DIRECTOR_INSTRUCTION + (
                         HUMAN_REVISION_INSTRUCTION if any("revision_context" in seed for seed in human["seeds"]) else "")
-                if self.recipe.get("source_memory_protocol_version") == 1:
+                if self.recipe.get("source_memory_protocol_version") in {1, 2}:
                     from lib.infrastructure.source_memory_messages import source_memory_messages
                     # Match ask() and ChatClient's real text preflight. Tool
                     # receipts, arguments and the source-memory header all
@@ -860,7 +860,8 @@ class WorkflowQADirector:
                     available = context_limit - output_limit - 2048 - 512
                     def request_size():
                         messages = source_memory_messages(memory_system,
-                            split_context_request(self.path, data, instruction=instruction))
+                            split_context_request(self.path, data, instruction=instruction,
+                                protocol_version=self.recipe["source_memory_protocol_version"]))
                         size = sum(len(message.get("content", "").encode("utf-8")) for message in messages)
                         size += sum(len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
                                     for message in messages if message.get("tool_calls"))

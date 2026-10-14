@@ -11,6 +11,8 @@ from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.human_revision import record_messages, revision_evidence
 from lib.io_utils import atomic_json
 from tests.test_workflow_production import model_request_data
+from tests.test_workflow_qa_director_engine import source_materials
+from source_memory_fixtures import memory_protocol_versions
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -154,9 +156,7 @@ def test_repair_child_never_reenters_sft_and_preserves_origin(tmp_path, monkeypa
     assert repaired["revision_context"]["parent_run_id"] == parent_id
     assert repaired["source_id"] == record["source_id"]
     assert repaired["messages"][-1]["content"] == RIGHT
-    materials = [material for message in client.message_history[0] if message["role"] == "tool"
-                 for pack in json.loads(message["content"])["teacher_context_pack"]
-                 for material in pack["materials"]]
+    materials = source_materials(client.message_history[0])
     assert [material["text"] for material in materials] == [SOURCE]
     assert all(SOURCE not in message["content"] for history in client.message_history
                for message in history if message["role"] == "user")
@@ -285,8 +285,17 @@ def test_agent_unified_review_and_legacy_task_keep_candidate_separate_from_tool_
     assert "task" not in record["source_context"]
     assert record["source_context"]["tools"] == tools
     assert "verification_status" in record["source_context"]
-    evidence = scoring.calls[0]["source_evidence"]
-    proof = json.loads(evidence["teacher_evidence"])
+    wire_evidence = scoring.calls[0]["source_evidence"]
+    evidence = workflow._review_evidence(record)
+    if workflow.recipe["source_memory_protocol_version"] == 2:
+        assert "teacher_evidence" not in wire_evidence
+        assert wire_evidence == {key: value for key, value in evidence.items() if key != "teacher_evidence"}
+        actual_text = "\n\n".join(material["text"] for material in source_materials(scoring.message_history[0]))
+        assert actual_text == evidence["teacher_evidence"]
+        proof = json.loads(actual_text)
+    else:
+        assert wire_evidence == evidence
+        proof = json.loads(evidence["teacher_evidence"])
     assert evidence["source_kind"] == "human_provided"
     assert proof["tools"] == tools
     assert proof["messages"][-1] == messages[-2]

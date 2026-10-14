@@ -20,8 +20,9 @@ from lib.domain.agent_experience import validate_agent_experience
 class WorkflowApplication:
     """Use cases consumed by the console and command-line presentation layers."""
 
-    def __init__(self, driver: WorkflowDriver):
+    def __init__(self, driver: WorkflowDriver, *, reports=None):
         self._driver = driver
+        self.reports = reports
 
     def create_run(self, **recipe: Any) -> str:
         fields = {key: recipe[key] for key in (

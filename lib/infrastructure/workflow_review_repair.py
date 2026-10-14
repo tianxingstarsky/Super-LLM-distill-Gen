@@ -417,12 +417,13 @@ class WorkflowReviewRepair:
         return append_repair_reference_sources(self, self._original_review_evidence(row))
 
     def _original_review_evidence(self, row):
+        source_ids = self.recipe.get("source_memory_protocol_version") == 2
         selected = (self.recipe.get("source_line_protocol_version") == 1
                     and (row.get("qa_contract") or {}).get("source_line_ranges") is not None)
         context = row.get("revision_context")
         if context:
             if context.get("evidence_pack_sha256") is not None:
-                return revision_evidence(row, self.recipe, self.path, with_blocks=True)
+                return revision_evidence(row, self.recipe, self.path, with_blocks=True, include_source_ids=source_ids)
             if selected:
                 raise ValueError("human_session_source_evidence_unavailable")
             return {key: context[key] for key in ("teacher_evidence", "source_id", "source_kind")}
@@ -432,13 +433,13 @@ class WorkflowReviewRepair:
             # The authentic pack verifies provenance; a director selection
             # limits both judges and repairs to the same original blocks.
             # A missing/changed pack must never fall back to a small anchor.
-            evidence = revision_evidence(row, self.recipe, self.path, with_blocks=True)
+            evidence = revision_evidence(row, self.recipe, self.path, with_blocks=True, include_source_ids=source_ids)
             return {**evidence, "source_context_pack": deepcopy(reference),
                     "teacher_evidence_is_pack": True}
         if selected:
             # Selected evidence has no raw-anchor fallback. Missing pack
             # provenance is a dependency error even if cached text exists.
-            return revision_evidence(row, self.recipe, self.path, with_blocks=True)
+            return revision_evidence(row, self.recipe, self.path, with_blocks=True, include_source_ids=source_ids)
         try:
             return revision_evidence(row, self.recipe)
         except ValueError:

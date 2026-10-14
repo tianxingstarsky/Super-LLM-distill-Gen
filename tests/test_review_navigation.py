@@ -8,7 +8,7 @@ from lib.presentation.streamlit import review_navigation as navigation
 
 
 def test_fragment_navigation_is_consumed_at_run_entry_and_requests_full_app(monkeypatch):
-    from lib.presentation.streamlit.workflow_page import render_run
+    from lib.presentation.streamlit.workflow_page import _render_run_progress
 
     values = {"ws": "fixture"}
     calls = []
@@ -26,7 +26,7 @@ def test_fragment_navigation_is_consumed_at_run_entry_and_requests_full_app(monk
     assert values["workflow-app-navigation-pending"] == {"workspace": "fixture", "run_id": "chosen-run"}
     assert calls == []  # The callback must never call st.rerun itself.
     with pytest.raises(AppRerunRequested):
-        render_run.__wrapped__(None, "chosen-run", lambda args: None)
+        _render_run_progress.__wrapped__(None, "chosen-run", lambda args: None)
     assert calls == [{"scope": "app"}]
     navigation.consume_app_navigation("chosen-run")
     assert calls == [{"scope": "app"}]  # A full rerun cannot repeat the handoff.

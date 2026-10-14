@@ -8,11 +8,13 @@ import pytest
 
 from lib.domain.source_line_ranges import resolve_source_line_ranges
 from lib.domain.source_quote import quote_spans
+from lib.domain.workflow_quality import canonical
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.human_revision import record_messages, revision_evidence
 from lib.infrastructure.workflow_rows import WorkflowRows, write_jsonl
 from lib.infrastructure.workflow_source_context import load_context_pack, prepare_source_context_packs
 from lib.io_utils import atomic_json
+from source_memory_fixtures import memory_protocol_versions
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,9 +45,15 @@ def request_data(messages):
     return json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
 
 
-def tool_packs(messages):
-    return [pack for message in messages if message["role"] == "tool"
-            for pack in json.loads(message["content"])["teacher_context_pack"]]
+def memory_packs(messages):
+    result = []
+    for message in messages:
+        if message["role"] == "tool":
+            result.extend(json.loads(message["content"])["teacher_context_pack"])
+        elif message["role"] == "system" and message["content"].startswith("<untrusted_source_memory>\n"):
+            body = message["content"].removeprefix("<untrusted_source_memory>\n").removesuffix("\n</untrusted_source_memory>")
+            result.extend(json.loads(body)["teacher_context_pack"])
+    return result
 
 
 class ReviewClient:
@@ -61,6 +69,11 @@ class ReviewClient:
         self.calls.append(deepcopy(data))
         self.message_history.append(deepcopy(messages))
         self.usage["calls"] += 1
+        if data.get("learner_context_only"):
+            assert "source_evidence" not in data
+            assert [message["role"] for message in data["learner_messages"]] == ["user", "assistant"]
+            return json.dumps({"keep": True, "context_complete": True, "leakage_free": True,
+                "reason": "The delivered inspection question is self-contained and names no hidden source."})
         assert "source_evidence" in data
         if "review_feedback" in data:
             payload = deepcopy(data["candidate"])
@@ -69,7 +82,7 @@ class ReviewClient:
         return json.dumps(verdict(self.accept_repaired and data["candidate"]["messages"][-1]["content"] == RIGHT))
 
 
-def review_fixture(tmp_path, *, selections=((2, 3),), numbered=True, quotes=None):
+def review_fixture(tmp_path, *, selections=((2, 3),), numbered=True, quotes=None, memory_version=None):
     source = tmp_path / "manual.txt"
     with source.open("w", encoding="utf-8", newline="") as handle:
         handle.write(SOURCE)
@@ -78,6 +91,8 @@ def review_fixture(tmp_path, *, selections=((2, 3),), numbered=True, quotes=None
                                review_repair={"mode": "auto", "max_rounds": 1})
     client = ReviewClient([POWER_RULE] if quotes is None else quotes)
     workflow = engine.Workflow(output, run_id, ROOT, generator=client, judge=client)
+    if memory_version is not None:
+        workflow.recipe["source_memory_protocol_version"] = memory_version
     if not numbered:
         workflow.recipe.pop("source_line_protocol_version", None)
         workflow.recipe.pop("source_memory_protocol_version", None)
@@ -102,8 +117,8 @@ def review_fixture(tmp_path, *, selections=((2, 3),), numbered=True, quotes=None
     return workflow, row, pack, blocks, client
 
 
-def assert_selected_tool(messages, ranges, blocks):
-    packs = tool_packs(messages)
+def assert_selected_memory(messages, ranges, blocks):
+    packs = memory_packs(messages)
     assert len(packs) == 1
     assert packs[0]["source_line_scope"] == "selected"
     materials = packs[0]["materials"]
@@ -111,9 +126,13 @@ def assert_selected_tool(messages, ranges, blocks):
     assert [{key: material[key] for key in ("material_id", "start_line", "end_line")}
             for material in materials] == ranges
     assert all("numbered_text" not in material for material in materials)
-    tool_call = next(message["tool_calls"][0] for message in messages if message.get("tool_calls"))
-    arguments = json.loads(tool_call["function"]["arguments"])
-    assert arguments["scope"] == "selected" and arguments["ranges"] == ranges
+    if any(message.get("tool_calls") for message in messages):
+        tool_call = next(message["tool_calls"][0] for message in messages if message.get("tool_calls"))
+        arguments = json.loads(tool_call["function"]["arguments"])
+        assert arguments["scope"] == "selected" and arguments["ranges"] == ranges
+    else:
+        assert [message["role"] for message in messages] == ["system", "system", "user"]
+        assert "Load the workflow" not in canonical(messages)
     body = json.dumps(packs, ensure_ascii=False)
     assert OUTSIDE_BEFORE not in body and OUTSIDE_AFTER not in body
     task = request_data(messages)
@@ -143,8 +162,9 @@ def test_revision_evidence_slices_verified_raw_lines_and_preserves_context_schem
     assert "FORGED_CACHED" not in json.dumps(detailed)
 
 
-def test_same_run_score_and_repair_only_receive_selected_raw_blocks_as_tool_results(tmp_path):
-    workflow, row, _, blocks, client = review_fixture(tmp_path)
+@pytest.mark.parametrize("memory_version", [1, 2])
+def test_same_run_score_and_repair_only_receive_selected_raw_blocks_as_private_memory(tmp_path, memory_version):
+    workflow, row, _, blocks, client = review_fixture(tmp_path, memory_version=memory_version)
     evidence = workflow._review_evidence(row)
     assert evidence["teacher_evidence_blocks"] == blocks
     check = workflow._review_score("sft", row, evidence, [row["id"], "review"], "Correct the unsafe prerequisite.")
@@ -153,7 +173,7 @@ def test_same_run_score_and_repair_only_receive_selected_raw_blocks_as_tool_resu
     assert row["messages"][-1]["content"] == WRONG
     assert len(client.message_history) == 2
     for messages in client.message_history:
-        assert_selected_tool(messages, row["qa_contract"]["source_line_ranges"], blocks)
+        assert_selected_memory(messages, row["qa_contract"]["source_line_ranges"], blocks)
     span = updated["quote_spans"][0]
     assert span["source_quote"] == POWER_RULE
     assert span["source_block_index"] == 0 and span["offset_scope"] == "selected_source_block"
@@ -167,7 +187,7 @@ def test_repair_cannot_quote_an_authentic_line_outside_the_director_selection(tm
     updated, issue = workflow._repair_content("sft", row, evidence, [row["id"], "out-of-scope"], verdict(), "Correct it.")
     assert issue == "review_repair_source_quotes_missing"
     assert updated == row and updated["messages"][-1]["content"] == WRONG
-    assert_selected_tool(client.message_history[0], row["qa_contract"]["source_line_ranges"], blocks)
+    assert_selected_memory(client.message_history[0], row["qa_contract"]["source_line_ranges"], blocks)
 
 
 def test_repair_rejects_a_quote_spanning_the_separator_between_disjoint_blocks(tmp_path):
@@ -179,8 +199,8 @@ def test_repair_rejects_a_quote_spanning_the_separator_between_disjoint_blocks(t
     client.quotes = [seam]
     updated, issue = workflow._repair_content("sft", row, evidence, [row["id"], "disjoint-seam"], verdict(), "Correct it.")
     assert issue == "review_repair_source_quotes_missing" and updated == row
-    assert_selected_tool(client.message_history[0], row["qa_contract"]["source_line_ranges"], blocks)
-    assert RESTART_RULE not in json.dumps(tool_packs(client.message_history[0]))
+    assert_selected_memory(client.message_history[0], row["qa_contract"]["source_line_ranges"], blocks)
+    assert RESTART_RULE not in json.dumps(memory_packs(client.message_history[0]))
 
 
 def test_legacy_recipe_keeps_the_full_accepted_pack_and_old_quote_offsets(tmp_path):
@@ -191,7 +211,7 @@ def test_legacy_recipe_keeps_the_full_accepted_pack_and_old_quote_offsets(tmp_pa
     evidence = workflow._review_evidence(row)
     updated, issue = workflow._repair_content("sft", row, evidence, [row["id"], "legacy-full"], verdict(), "Correct it.")
     assert issue is None
-    assert tool_packs(client.message_history[0]) == []
+    assert memory_packs(client.message_history[0]) == []
     request = client.calls[0]
     assert "source_line_scope" not in request
     assert request["teacher_context_pack"] == [pack]
@@ -313,9 +333,9 @@ def test_child_and_next_revision_reauthenticate_parent_selection_without_expandi
     assert detailed["teacher_evidence_blocks"] == expected["teacher_evidence_blocks"]
     assert detailed["source_line_ranges"] == expected["source_line_ranges"]
     for messages in first_client.message_history:
-        if tool_packs(messages):
-            assert_selected_tool(messages, expected["source_line_ranges"], expected["teacher_evidence_blocks"])
-    assert any(tool_packs(messages) for messages in first_client.message_history)
+        if memory_packs(messages):
+            assert_selected_memory(messages, expected["source_line_ranges"], expected["teacher_evidence_blocks"])
+    assert any(memory_packs(messages) for messages in first_client.message_history)
 
     next_id, next_context = registered_child(output, child_id, repaired)
     assert next_context["depth"] == 2 and len(next_context["ancestors"]) == 2
@@ -328,7 +348,8 @@ def test_child_and_next_revision_reauthenticate_parent_selection_without_expandi
     assert rejected["review_repair"]["history"][0]["repair_issue"] == "review_repair_source_quotes_missing"
     assert rejected["qa_contract"]["source_line_ranges"] == expected["source_line_ranges"]
     for messages in next_client.message_history:
-        assert_selected_tool(messages, expected["source_line_ranges"], expected["teacher_evidence_blocks"])
+        if memory_packs(messages):
+            assert_selected_memory(messages, expected["source_line_ranges"], expected["teacher_evidence_blocks"])
     # A local cached field or broadened current contract never supersedes the
     # selected ranges in the authenticated original parent.
     forged = deepcopy(rejected)

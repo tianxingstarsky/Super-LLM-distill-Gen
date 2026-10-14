@@ -12,7 +12,8 @@ from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.human_revision import revision_evidence, verified_revision_batch, verified_revision_parent
 from lib.infrastructure.workflow_source_context import load_context_pack
 from test_human_sessions import Writer as LegacyRepairWriter, Reviewer as LegacyReviewer
-from tests.test_workflow_qa_director_engine import request_data
+from tests.test_workflow_qa_director_engine import request_data, source_materials
+from source_memory_fixtures import memory_protocol_versions
 
 
 PREPARATION = ("巡检准备阶段先确认设备已停机，核查维护记录和工单，佩戴防护用具。"
@@ -36,10 +37,7 @@ def task_messages(messages):
 
 
 def memory_materials(messages):
-    return [material for message in messages
-            if message["role"] == "tool" and message.get("name") == "source_memory"
-            for pack in json.loads(message["content"])["teacher_context_pack"]
-            for material in pack["materials"]]
+    return source_materials(messages)
 
 
 class RepairWriter(LegacyRepairWriter):

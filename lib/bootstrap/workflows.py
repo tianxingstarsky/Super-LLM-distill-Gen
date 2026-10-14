@@ -2,11 +2,13 @@
 from pathlib import Path
 
 from lib.application.workflow_service import WorkflowApplication
+from lib.bootstrap.workflow_reports import workflow_report_application
 from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
 
 
 def workflow_application(root: Path, output: Path) -> WorkflowApplication:
-    return WorkflowApplication(FilesystemWorkflowDriver(root, output))
+    return WorkflowApplication(FilesystemWorkflowDriver(root, output),
+                               reports=workflow_report_application(root, output))
 
 
 def human_augmentation_application(root: Path, output: Path):

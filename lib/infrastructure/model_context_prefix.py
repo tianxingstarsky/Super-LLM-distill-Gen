@@ -53,7 +53,7 @@ def selected_context_packs(packs, ranges):
     return [{**content, "id": identity, "prefix_sha256": identity}]
 
 
-def split_context_request(run_path, data, *, instruction=None, pack_loader=None):
+def split_context_request(run_path, data, *, instruction=None, pack_loader=None, protocol_version=1):
     """Separate private teacher results from the dynamic user task payload.
 
     A selected scope is an explicit capability: only verified addressed blocks
@@ -63,8 +63,11 @@ def split_context_request(run_path, data, *, instruction=None, pack_loader=None)
     """
     from lib.domain.source_line_ranges import SOURCE_LINE_PROTOCOL_VERSION
     from lib.infrastructure.workflow_source_context import teacher_context_pack
+    from lib.infrastructure.source_memory_messages import _memory_version
+    _memory_version(protocol_version)
+    metadata = {"source_memory_protocol_version": 2} if protocol_version == 2 else {}
     if not isinstance(data, dict) or data.get("learner_context_only"):
-        return {"teacher_context_pack": [], "task_payload": data}
+        return {"teacher_context_pack": [], "task_payload": data, **metadata}
     references = {}
     selections = []
 
@@ -88,7 +91,7 @@ def split_context_request(run_path, data, *, instruction=None, pack_loader=None)
     if not references:
         if selected:
             raise ValueError("source_line_materials_required")
-        return {"teacher_context_pack": [], "task_payload": data}
+        return {"teacher_context_pack": [], "task_payload": data, **metadata}
     if pack_loader is None:
         from lib.infrastructure.workflow_source_context import load_context_pack
         pack_loader = load_context_pack
@@ -137,7 +140,7 @@ def split_context_request(run_path, data, *, instruction=None, pack_loader=None)
     payload = project(data)
     if instruction is not None:
         payload["node_task_instructions"] = instruction
-    return {"teacher_context_pack": teacher_packs, "task_payload": payload}
+    return {"teacher_context_pack": teacher_packs, "task_payload": payload, **metadata}
 
 
 def serialize_context_request(run_path, data, *, instruction=None, pack_loader=None):

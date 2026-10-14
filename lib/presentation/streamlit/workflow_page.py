@@ -818,8 +818,21 @@ def _open_human_correction(application, run_id):
         st.error(_workflow_error(error))
 
 
-@st.fragment(run_every=2)
 def render_run(application, run_id, begin, *, embedded=False, draft_application=None, backend_application=None, human_application=None):
+    """Keep finished reports stable while execution progress refreshes live."""
+    from lib.presentation.streamlit.review_navigation import consume_app_navigation
+    from lib.presentation.streamlit.workflow_report_panel import render_run_report_choice, render_workflow_report
+    consume_app_navigation(run_id)
+    if render_run_report_choice(application, run_id, embedded=embedded):
+        render_workflow_report(application, run_id, embedded=embedded)
+    else:
+        _render_run_progress(application, run_id, begin, embedded=embedded,
+                             draft_application=draft_application, backend_application=backend_application,
+                             human_application=human_application)
+
+
+@st.fragment(run_every=2)
+def _render_run_progress(application, run_id, begin, *, embedded=False, draft_application=None, backend_application=None, human_application=None):
     from lib.presentation.streamlit.review_navigation import consume_app_navigation
     consume_app_navigation(run_id)
     st.html(workflow_run_styles())

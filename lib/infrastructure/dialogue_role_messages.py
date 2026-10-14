@@ -36,7 +36,8 @@ def visible_dialogue(messages):
     return result
 
 
-def answer_role_messages(system, memory_context, data, *, transport="tool", include_question=False):
+def answer_role_messages(system, memory_context, data, *, transport="tool", include_question=False,
+                         source_memory_protocol_version=None):
     """The final user is the learner's real utterance, never a task envelope."""
     rules = data.get("answer_rules", "")
     if rules:
@@ -67,7 +68,8 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
             identity = hashlib.sha256(canonical(content).encode("utf-8")).hexdigest()
             context = {"teacher_context_pack": [{**content, "id": identity, "prefix_sha256": identity}],
                        "task_payload": {}}
-    prefix = source_memory_messages(system, {**context, "task_payload": {}}, transport=transport)[:-1]
+    prefix = source_memory_messages(system, {**context, "task_payload": {}}, transport=transport,
+                                    protocol_version=source_memory_protocol_version)[:-1]
     contract = data.get("qa_contract", {})
     dispatch = {key: deepcopy(contract[key]) for key in (
         "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design", "expression_design") if key in contract}
@@ -227,7 +229,7 @@ def _reference_dialogue_v3(source, actual, *, phase, reference_answer_status=Non
 
 
 def authored_role_messages(system, memory_context, data, *, transport="tool",
-                           role_projection_version=1, phase="combined"):
+                           role_projection_version=1, phase="combined", source_memory_protocol_version=None):
     """Separate authored-rationale editing from the actual learner conversation.
 
     Missing/invalid real dialogue returns ``None`` so the caller can retain its
@@ -303,7 +305,8 @@ def authored_role_messages(system, memory_context, data, *, transport="tool",
                        "verification": "application_source_only_not_independent_fact_verification"}
             identity = hashlib.sha256(canonical(content).encode("utf-8")).hexdigest()
             context["teacher_context_pack"] = [{**content, "id": identity, "prefix_sha256": identity}]
-    prefix = source_memory_messages(system, {**context, "task_payload": {}}, transport=transport)[:-1]
+    prefix = source_memory_messages(system, {**context, "task_payload": {}}, transport=transport,
+                                    protocol_version=source_memory_protocol_version)[:-1]
     if role_projection_version >= 2:
         # These are application-executed private reads, not learner requests.
         # Their tool calls/results remain paired; only the setup user added

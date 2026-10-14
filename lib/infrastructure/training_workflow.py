@@ -476,7 +476,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"source_cleaning": True, "source_context_pack_version": 1,
                   "source_line_protocol_version": 1, "source_context_capacity_version": 2,
                   "source_context_scope_version": 1} if source_cleaning else {}),
-              "source_memory_protocol_version": 1,
+              "source_memory_protocol_version": 2,
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
               "authored_role_projection_version": 3,
@@ -769,8 +769,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     from lib.infrastructure.workflow_node_messages import split_node_rules
                     rule_system, request_data = split_node_rules(
                         data, instruction=instruction, qa_director=self.recipe.get("qa_director"))
-                    sealed_review_request = (self.recipe.get("source_memory_protocol_version") == 1
-                                             and bool(self.recipe.get("repair_inputs"))
+                    memory_version = self.recipe.get("source_memory_protocol_version")
+                    sealed_review_request = (memory_version in {1, 2}
+                                             and (memory_version == 2 or bool(self.recipe.get("repair_inputs")))
                                              and isinstance(data, dict)
                                              and isinstance(data.get("source_evidence"), dict)
                                              and not data.get("learner_context_only"))
@@ -780,12 +781,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                     memory_context = None
                     if source_pack_request:
                         from lib.infrastructure.model_context_prefix import serialize_context_request, split_context_request, NODE_RULE_HEADER
-                        if self.recipe.get("source_memory_protocol_version") == 1:
+                        if memory_version in {1, 2}:
                             if sealed_review_request:
                                 from lib.infrastructure.source_memory_messages import sealed_review_memory_context
-                                memory_context = sealed_review_memory_context(request_data)
+                                memory_context = sealed_review_memory_context(request_data, protocol_version=memory_version)
                             else:
-                                memory_context = split_context_request(self.path, request_data)
+                                memory_context = split_context_request(self.path, request_data, protocol_version=memory_version)
                             request_text = canonical(memory_context["task_payload"])
                             has_pack = bool(memory_context["teacher_context_pack"])
                         else:
@@ -806,9 +807,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         {"role": "user", "content": request_text if image is None else [
                             {"type": "text", "text": request_text},
                             {"type": "image_url", "image_url": {"url": image}}]}]
-                    if source_pack_request and self.recipe.get("source_memory_protocol_version") == 1:
+                    if source_pack_request and memory_version in {1, 2}:
                         from lib.infrastructure.source_memory_messages import source_memory_messages
-                        transport = ("system" if prompt_id == "workflow.cot_native_answer" else
+                        transport = ("system" if memory_version == 2 or prompt_id == "workflow.cot_native_answer" else
                                      getattr(client, "source_memory_transport", "tool"))
                         request_messages = source_memory_messages(system, memory_context, transport=transport)
                         if memory_context["teacher_context_pack"]:
@@ -817,7 +818,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                     f"{model_stage or self.stage}.{role}"] = transport
                     if self.recipe.get("qa_director", {}).get("question_separation"):
                         from lib.infrastructure.dialogue_role_messages import answer_role_messages, question_role_messages
-                        transport = ("system" if prompt_id == "workflow.cot_native_answer" else
+                        transport = ("system" if memory_version == 2 or prompt_id == "workflow.cot_native_answer" else
                                      getattr(client, "source_memory_transport", "tool"))
                         if prompt_id == "workflow.question_user":
                             from lib.domain.learner_context import prompt_at_least
@@ -826,25 +827,28 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             request_messages = question_role_messages(system, request_data, transport=transport,
                                 first_turn_policy_version=first_turn_version)
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
-                            request_messages = answer_role_messages(system, memory_context, request_data, transport=transport)
+                            request_messages = answer_role_messages(system, memory_context, request_data, transport=transport,
+                                source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
                     if (self.recipe.get("training_surface_protocol_version") == 1
                             and prompt_id == "workflow.sft_directed"
                             and isinstance(request_data, dict) and request_data.get("learner_messages")):
                         from lib.infrastructure.dialogue_role_messages import answer_role_messages
                         request_messages = answer_role_messages(system, memory_context, request_data,
-                            transport=getattr(client, "source_memory_transport", "tool"), include_question=True)
+                            transport="system" if memory_version == 2 else getattr(client, "source_memory_transport", "tool"),
+                            include_question=True, source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
                     if (self.recipe.get("training_surface_protocol_version") == 1
                             and prompt_id in {"workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.trim"}):
                         from lib.infrastructure.dialogue_role_messages import authored_role_messages
                         # DeepSeek beta disallows function-call history with
                         # prefix. Use its explicit private-memory transport;
                         # never erase or reclassify real learner tool turns.
-                        transport = ("system" if prompt_id == "workflow.cot_native_answer" else
+                        transport = ("system" if memory_version == 2 or prompt_id == "workflow.cot_native_answer" else
                                      getattr(client, "source_memory_transport", "tool"))
                         authored_messages = authored_role_messages(system, memory_context, request_data, transport=transport,
                             role_projection_version=self.recipe.get("authored_role_projection_version", 1),
                             phase={"workflow.cot_rationale": "rationale", "workflow.cot_native_answer": "native_answer",
-                                   "workflow.trim": "trim"}.get(prompt_id, "combined"))
+                                   "workflow.trim": "trim"}.get(prompt_id, "combined"),
+                            source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
                         if authored_messages is not None:
                             request_messages = authored_messages
                         if prompt_id == "workflow.cot_native_answer":
@@ -1737,7 +1741,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 source_context.pop("task", None)
                 pack_evidence = directed_evidence_text(self.path, unit, contract)
                 selected_evidence_blocks = directed_evidence_blocks(self.path, unit, contract)
-        if self.recipe.get("source_memory_protocol_version") == 1 and source_context.get("source_context_pack"):
+        if self.recipe.get("source_memory_protocol_version") in {1, 2} and source_context.get("source_context_pack"):
             source_context.pop("task", None)
         evidence_level = (unit.get("revision_source_level") or ("human_provided_and_model_assessed" if unit.get("human_provided") else
                           document_evidence_level(unit, assessed=True) if unit.get("document_reading")

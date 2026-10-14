@@ -68,8 +68,10 @@ def setup_workflow(tmp_path, monkeypatch, *, legacy_json=False):
     return workflow, sample, client, reviewer, sent, failures
 
 
-def test_native_workflow_prefix_is_exact_and_not_dialogue_text(tmp_path, monkeypatch):
+@pytest.mark.parametrize("memory_version", [1, 2])
+def test_native_workflow_prefix_is_exact_and_not_dialogue_text(tmp_path, monkeypatch, memory_version):
     workflow, sample, client, reviewer, sent, _ = setup_workflow(tmp_path, monkeypatch)
+    workflow.recipe["source_memory_protocol_version"] = memory_version
     assert workflow.recipe["version"] == 21
     result = workflow.styled_cot(sample, workflow.generation_style("cot", sample["id"]))[0]
     assert result["status"] == "eligible"
@@ -81,7 +83,12 @@ def test_native_workflow_prefix_is_exact_and_not_dialogue_text(tmp_path, monkeyp
     assert SOURCE_REASONING not in json.dumps(sent, ensure_ascii=False)
     assert PREFIX not in json.dumps(sent[-1]["messages"][:-1], ensure_ascii=False)
     assert not any(m.get("role") == "tool" or "tool_calls" in m for m in sent[-1]["messages"])
-    assert any(m.get("role") == "tool" for m in sent[0]["messages"])
+    if memory_version == 1:
+        assert any(m.get("role") == "tool" for m in sent[0]["messages"])
+    else:
+        assert not any(m.get("role") == "tool" or "tool_calls" in m for m in sent[0]["messages"])
+        assert any(m.get("role") == "system" and m.get("content", "").startswith("<untrusted_source_memory>")
+                   for m in sent[0]["messages"])
     assert result["question"] == sample["messages"][:-1]
     assert client.base_url == "https://api.deepseek.com/v1" and client.model == "deepseek-flash"
     client.client.close()

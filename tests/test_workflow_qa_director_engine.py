@@ -11,6 +11,7 @@ import pytest
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.qa_history import QAHistory
 from lib.domain.workflow_quality import canonical
+from source_memory_fixtures import memory_protocol_versions
 
 
 SOURCE = "检查设备前必须先断电。\n结束后记录检查结果。\n办公室盆栽每周浇水一次。"
@@ -261,8 +262,14 @@ def test_closed_book_exports_only_question_while_teacher_and_reviewer_get_eviden
         assert "办公室盆栽每周浇水一次。" not in body
     assert "QUESTION_RULE_SENTINEL" in writer.calls[1][0]["content"]
     assert writer.calls[1][-1] == {"role": "user", "content": record["messages"][0]["content"]}
-    dispatch = next(message for message in writer.calls[1] if message.get("name") == "dialogue_dispatch")
-    assert json.loads(dispatch["content"])["fixed_question"] == record["messages"][0]["content"]
+    if engine.read_json(path / "recipe.json")["source_memory_protocol_version"] == 1:
+        dispatch = next(message for message in writer.calls[1] if message.get("name") == "dialogue_dispatch")
+        body = dispatch["content"]
+    else:
+        dispatch = next(message for message in writer.calls[1]
+                        if message["role"] == "system" and message["content"].startswith("<internal_dialogue_dispatch>"))
+        body = dispatch["content"].removeprefix("<internal_dialogue_dispatch>\n").removesuffix("\n</internal_dialogue_dispatch>")
+    assert json.loads(body)["fixed_question"] == record["messages"][0]["content"]
     assert "ANSWER_RULE_SENTINEL" in reviewer.calls[-1][0]["content"]
     assert "question_rules" not in request_data(writer.calls[1])
     assert "answer_rules" not in request_data(reviewer.calls[-1])
@@ -509,9 +516,15 @@ def test_director_reserves_output_and_rule_bytes_before_sending_large_chinese_ba
                        for message in messages if message.get("tool_calls")) + 1024
     assert input_bytes + 32768 <= 131072
     assert all(candidate["source_context_pack"] for candidate in data["candidates"])
-    # The whole numbered bundle is a separate tool result; dynamic anchors
+    # The whole numbered bundle is separate system memory; dynamic anchors
     # point to its real materials without copying their bodies into user.
     materials = source_materials(messages)
-    assert materials and any(message["role"] == "tool" for message in messages)
+    assert materials
+    if engine.read_json(engine.run_path(output, run_id) / "recipe.json")["source_memory_protocol_version"] == 1:
+        assert any(message["role"] == "tool" for message in messages)
+    else:
+        assert any(message["role"] == "system" and message["content"].startswith("<untrusted_source_memory>")
+                   for message in messages)
+        assert not any(message["role"] == "tool" or message.get("tool_calls") for message in messages)
     assert all(candidate_material(candidate, materials) is not None for candidate in data["candidates"])
     assert all("teacher_evidence" not in candidate for candidate in data["candidates"])

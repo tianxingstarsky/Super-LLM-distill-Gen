@@ -35,7 +35,13 @@ def append_repair_reference_sources(workflow, evidence):
     result = deepcopy(evidence)
     original = result.get("teacher_evidence_blocks") or [result["teacher_evidence"]]
     result["teacher_evidence_blocks"] = [*original, *references]
-    result["teacher_evidence_source_ids"] = [*([evidence.get("source_id")] * len(original)),
+    original_source_ids = [evidence.get("source_id")] * len(original)
+    if workflow.recipe.get("source_memory_protocol_version") == 2:
+        original_source_ids = evidence.get("teacher_evidence_source_ids", original_source_ids)
+        if (not isinstance(original_source_ids, list) or len(original_source_ids) != len(original)
+                or any(not isinstance(value, str) or not value.strip() for value in original_source_ids)):
+            raise ValueError("human_session_source_evidence_unavailable")
+    result["teacher_evidence_source_ids"] = [*original_source_ids,
                                              *(source["sha256"] for source in workflow.recipe["sources"])]
     if result.get("source_line_scope") == "selected":
         if len(result.get("source_line_ranges", [])) != len(original):

@@ -6,6 +6,7 @@ import pytest
 
 from lib.infrastructure import training_workflow as engine
 from lib.model_request_reliability import ModelRequestError
+from source_memory_fixtures import memory_protocol_versions
 
 
 SOURCE = "检查设备前必须先断电。\n结束后记录检查结果。\n办公室盆栽每周浇水一次。"
@@ -25,8 +26,16 @@ def mock_llm_server():
 
 
 def tool_payload(messages, name):
-    return next((json.loads(message["content"]) for message in messages
-                 if message["role"] == "tool" and message.get("name") == name), None)
+    legacy = next((json.loads(message["content"]) for message in messages
+                   if message["role"] == "tool" and message.get("name") == name), None)
+    if legacy is not None:
+        return legacy
+    tag = "untrusted_source_memory" if name == "source_memory" else "internal_dialogue_dispatch"
+    bodies = [json.loads(message["content"].removeprefix(f"<{tag}>\n").removesuffix(f"\n</{tag}>"))
+              for message in messages if message["role"] == "system" and message["content"].startswith(f"<{tag}>\n")]
+    if name == "source_memory" and bodies:
+        return {"teacher_context_pack": [pack for body in bodies for pack in body["teacher_context_pack"]]}
+    return bodies[0] if bodies else None
 
 
 def public_messages(messages):
@@ -312,13 +321,20 @@ def test_grounded_user_comes_from_director_without_blind_questioner_call(tmp_pat
 
 
 def test_source_and_dispatch_are_distinct_completed_tools_not_user_envelopes(tmp_path):
-    state, _, writer, questioner, _ = run(tmp_path)
+    state, path, writer, questioner, _ = run(tmp_path)
     assert state["status"] == "completed", state.get("error")
     messages = writer.answers[0]
     tools = {message["name"]: message for message in messages if message["role"] == "tool"}
-    assert set(tools) == {"source_memory", "dialogue_dispatch"}
-    source = tools["source_memory"]
-    dispatch = tools["dialogue_dispatch"]
+    if engine.read_json(path / "recipe.json")["source_memory_protocol_version"] == 1:
+        assert set(tools) == {"source_memory", "dialogue_dispatch"}
+        source = tools["source_memory"]
+        dispatch = tools["dialogue_dispatch"]
+    else:
+        assert not tools and not any(message.get("tool_calls") for message in messages)
+        source = next(message for message in messages if message["role"] == "system"
+                      and message["content"].startswith("<untrusted_source_memory>"))
+        dispatch = next(message for message in messages if message["role"] == "system"
+                        and message["content"].startswith("<internal_dialogue_dispatch>"))
     assert QUOTE in source["content"] and "盆栽" not in source["content"]
     assert "qa_type" in dispatch["content"] and QUOTE not in dispatch["content"]
     for result in tools.values():

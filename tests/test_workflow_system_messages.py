@@ -9,6 +9,7 @@ from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.workflow_node_messages import split_node_rules
 from lib.infrastructure.workflow_source_context import _pack_payload
 from lib.llm_client import ChatClient
+from source_memory_fixtures import memory_protocol_versions
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -70,7 +71,7 @@ def test_workflow_rules_remain_system_in_real_sdk_payloads(tmp_path, api_format,
     source = tmp_path / "source.txt"
     source.write_text(SOURCE, encoding="utf-8")
     output = tmp_path / "output"
-    prompt_id = "workflow.sft_answer" if path == "separated" else "workflow.sft_directed"
+    prompt_id = "workflow.sft_answer" if path == "separated" else "workflow.sft"
     run_id = engine.create_run(output, sources=[source], targets=["sft"],
         qa_director={"enabled": True, "question_rules": QUESTION, "answer_rules": ANSWER,
                      "question_separation": path == "separated"},
@@ -108,7 +109,11 @@ def test_workflow_rules_remain_system_in_real_sdk_payloads(tmp_path, api_format,
         assert payload["max_output_tokens" if api_format == "responses" else "max_tokens"] == 4096
     for rule in (NODE, FIXED, QUESTION, ANSWER):
         assert rule in system and rule not in ordinary
-    assert SOURCE not in system and "ACTUAL_USER_QUESTION" not in system
-    assert SOURCE in ordinary and "ACTUAL_USER_QUESTION" in ordinary
+    assert "ACTUAL_USER_QUESTION" not in system and "ACTUAL_USER_QUESTION" in ordinary
+    if path in {"pack", "sealed", "separated"} and worker.recipe.get("source_memory_protocol_version") == 2:
+        rules, memory = system.split("<untrusted_source_memory>", 1)
+        assert SOURCE not in rules and SOURCE in memory and SOURCE not in ordinary
+    else:
+        assert SOURCE not in system and SOURCE in ordinary
     if path == "separated" and api_format != "anthropic":
         assert messages[-1] == before["learner_messages"][-1]

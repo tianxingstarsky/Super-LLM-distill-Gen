@@ -89,7 +89,7 @@ def _recorded_conversation_evidence(context):
         "messages": prefix, "tools": deepcopy(context.get("tools", []))})
 
 
-def revision_evidence(record, recipe, run_path=None, *, with_blocks=False):
+def revision_evidence(record, recipe, run_path=None, *, with_blocks=False, include_source_ids=False):
     """Project authenticated source evidence from a selected sealed result.
 
     Callers derive run_path from their verified parent run identity. A packed
@@ -120,12 +120,14 @@ def revision_evidence(record, recipe, run_path=None, *, with_blocks=False):
             parent = verified_revision_parent(current_path.parent.parent, current_path.name, prior)
             parent_path = workflow_path(current_path.parent.parent, prior["parent_run_id"])
             original = revision_evidence(parent, read_json(parent_path / "recipe.json"), parent_path,
-                                         with_blocks=True)
+                                         with_blocks=True, include_source_ids=include_source_ids)
             if any(original[key] != prior[key] for key in (
                     "teacher_evidence", "source_id", "source_kind", "evidence_pack_sha256")):
                 raise ValueError("human_session_result_changed")
             selection = {key: original[key] for key in (
                 "source_line_scope", "source_line_ranges", "teacher_evidence_blocks") if key in original}
+            if include_source_ids and "teacher_evidence_source_ids" in original:
+                selection["teacher_evidence_source_ids"] = original["teacher_evidence_source_ids"]
     elif recipe.get("source_context_pack_version") == 1 and reference is not None:
         if run_path is None:
             raise ValueError("human_session_source_evidence_unavailable")
@@ -140,8 +142,18 @@ def revision_evidence(record, recipe, run_path=None, *, with_blocks=False):
                 selection = {"source_line_scope": "selected", "teacher_evidence_blocks": blocks,
                     "source_line_ranges": [{key: block[key] for key in (
                         "material_id", "start_line", "end_line")} for block in resolved]}
+                if include_source_ids:
+                    by_material = {material["material_id"]: material for material in pack["materials"]}
+                    selection["teacher_evidence_source_ids"] = [by_material[block["material_id"]].get("source_id")
+                                                               for block in resolved]
         else:
             text = "\n\n".join(material["text"] for material in pack["materials"])
+            if with_blocks and include_source_ids:
+                selection = {"teacher_evidence_blocks": [material["text"] for material in pack["materials"]],
+                             "teacher_evidence_source_ids": [material.get("source_id") for material in pack["materials"]]}
+        if include_source_ids and with_blocks and any(not isinstance(value, str) or not value.strip()
+                                                      for value in selection["teacher_evidence_source_ids"]):
+            raise ValueError("human_session_source_evidence_unavailable")
         pack_identity = pack["prefix_sha256"]
     elif recipe.get("source_line_protocol_version") == 1 and ranges is not None:
         raise ValueError("human_session_source_evidence_unavailable")
