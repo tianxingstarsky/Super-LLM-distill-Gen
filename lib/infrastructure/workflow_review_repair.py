@@ -506,17 +506,33 @@ class WorkflowReviewRepair:
                 and prompt_at_least(self.recipe, "workflow.review_score", (1, 1, 0))):
             messages = learner_messages(target, data["candidate"])
             if messages:
-                context_check = assessed([*key, "learner_context"], {
-                    "target": "sft", "candidate": {"messages": messages},
-                    "learner_messages": messages, "source_evidence": None,
-                    "qa_contract": learner_contract(row["qa_contract"]),
-                    "assessment": "learner_context_only", "learner_context_only": True,
-                })
-                row["learner_context_check"] = {**context_check, "scope": "actual_training_messages_only"}
-                if not accepted(context_check):
-                    check = {**check, "keep": False, "reason": context_check["reason"],
-                             "scores": {name: min(score, context_check["scores"][name])
-                                        for name, score in check["scores"].items()}}
+                if self.recipe.get("learner_context_review_version") == 1:
+                    from lib.domain.learner_context_review import learner_context_verdict
+                    context_key = [*key, "learner_context"]
+                    value = self.ask(context_key, role, "workflow.learner_context_check", {
+                        "learner_messages": messages, "qa_contract": learner_contract(row["qa_contract"]),
+                        "learner_context_only": True}, allow_reasoning_fallback=False, prompt_stage="review")
+                    try:
+                        context_check = learner_context_verdict(value)
+                    except ValueError:
+                        self.invalidate_checkpoint(["call", context_key])
+                        raise
+                    row["learner_context_check"] = {**context_check,
+                        "scope": "actual_training_messages_only", "version": 1}
+                    if not context_check["keep"]:
+                        check = {**check, "keep": False, "reason": context_check["reason"]}
+                else:
+                    context_check = assessed([*key, "learner_context"], {
+                        "target": "sft", "candidate": {"messages": messages},
+                        "learner_messages": messages, "source_evidence": None,
+                        "qa_contract": learner_contract(row["qa_contract"]),
+                        "assessment": "learner_context_only", "learner_context_only": True,
+                    })
+                    row["learner_context_check"] = {**context_check, "scope": "actual_training_messages_only"}
+                    if not accepted(context_check):
+                        check = {**check, "keep": False, "reason": context_check["reason"],
+                                 "scores": {name: min(score, context_check["scores"][name])
+                                            for name, score in check["scores"].items()}}
         return check
 
     def _repair_content(self, target, row, evidence, key, check, instruction):

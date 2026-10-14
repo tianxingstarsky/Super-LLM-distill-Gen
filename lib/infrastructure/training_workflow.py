@@ -348,7 +348,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             or any(prompt_id in {"workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check"}
                    for templates in node_prompts.values() for prompt_id in templates)):
         recipe_version = 21
-    node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version)
+    node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version, learner_context_review_version=1)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -455,7 +455,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if not repair_inputs and not source_cleaning and uses_shared_source_cleaning(targets, snapshots):
         source_cleaning = True
         recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
-        node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version)
+        node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version, learner_context_review_version=1)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -481,6 +481,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "authored_reasoning_protocol_version": 1,
               "authored_role_projection_version": 3,
               "review_context_protocol_version": 1,
+              "learner_context_review_version": 1,
               **({"native_regeneration_version": 1} if (review_repair or {}).get("native_regeneration") else {}),
               **({"repair_reference_sources_version": 1} if (review_repair or {}).get("reference_sources") else {}),
               **({"multiturn_stop_protocol_version": 1} if "multiturn" in targets else {}),
@@ -3149,7 +3150,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 if self.recipe["version"] >= 9:
                     validate_node_prompt_snapshot(self.recipe.get("node_prompt_templates"),
                                                   self.recipe.get("node_prompt_system"),
-                                                  recipe_version=self.recipe["version"])
+                                                  recipe_version=self.recipe["version"],
+                                                  learner_context_review_version=self.recipe.get("learner_context_review_version"))
                 else:
                     if not isinstance(self.recipe.get("prompts"), dict):
                         raise ValueError("prompts_changed_create_new_run")

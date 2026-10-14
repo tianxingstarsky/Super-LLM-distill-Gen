@@ -39,6 +39,9 @@ class Writer:
         data = human_request_data(messages)
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
+        if "你是实际对话上下文与角色边界审查员" in messages[0]["content"]:
+            return json.dumps({"keep": True, "context_complete": True, "leakage_free": True,
+                               "reason": "实际对话自包含，未引用隐藏前文。"})
         if "candidate" in data and "source_evidence" in data:
             if "review_feedback" not in data:
                 return json.dumps(review_verdict(data))
@@ -126,6 +129,9 @@ class Reviewer:
         data, prompt = human_request_data(messages), messages[0]["content"]
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
+        if "你是实际对话上下文与角色边界审查员" in prompt:
+            return json.dumps({"keep": True, "context_complete": True, "leakage_free": True,
+                               "reason": "实际对话自包含，未引用隐藏前文。"})
         if "candidate" in data and "source_evidence" in data:
             return json.dumps(review_verdict(data), ensure_ascii=False)
         if '"question_intent_preserved"' in prompt:
@@ -214,7 +220,9 @@ def test_actual_generation_feedback_and_same_question_revision_preserve_the_pare
     assert child["qa_director"].get("human_augmentation", {"enabled": False}) == {"enabled": False}
     assert state["stages"]["sft"]["status"] == "skipped"
     assert state["stages"]["review"]["status"] == "completed"
-    assert all("candidate" in call and "source_evidence" in call for call in writer.calls)
+    assert all(("learner_messages" in call and "source_evidence" not in call)
+               if call.get("learner_context_only") else ("candidate" in call and "source_evidence" in call)
+               for call in writer.calls)
     assert first["run_id"] != second["run_id"] and len(app.list_sessions()) == 1
 
 
@@ -274,8 +282,8 @@ def test_multiturn_revision_receives_full_selected_dialogue_and_final_feedback_c
              and not call.get("learner_context_only")]
     assert len(final) == 1 and final[0]["candidate"]["messages"] == current["messages"]
     blind = [call for call in writer.calls if call.get("learner_context_only")]
-    assert len(blind) == 1 and blind[0]["candidate"]["messages"] == current["messages"]
-    assert blind[0]["source_evidence"] is None
+    assert len(blind) == 1 and blind[0]["learner_messages"] == current["messages"]
+    assert "candidate" not in blind[0] and "source_evidence" not in blind[0]
 
 
 def test_ending_multiturn_early_cannot_bypass_feedback_on_a_later_turn(tmp_path):

@@ -87,6 +87,9 @@ class Judge:
         data = model_request_data(wire)
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
+        if "你是实际对话上下文与角色边界审查员" in wire[0]["content"]:
+            return json.dumps({"keep": True, "context_complete": True, "leakage_free": True,
+                               "reason": "实际对话完整，不涉及隐藏前文。"})
         visible = data["candidate"].get("messages", [])
         bad_answer = any(message.get("role") == "assistant" and message.get("content") in {
             "带电检查。", "继续带电操作。"} for message in visible)

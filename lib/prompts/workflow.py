@@ -708,3 +708,7 @@ from lib.prompts.workflow_repair import REVIEW_REPAIR_V1_7
 REVIEW_REPAIR_V1_6 = REVIEW_REPAIR
 REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.7.0", template=spec(
     "review_repair", "保留真实用户与工具的助手局部修正", REVIEW_REPAIR_V1_7).template)
+
+from lib.prompts.workflow_learner_context import LEARNER_CONTEXT_CHECK_V1
+LEARNER_CONTEXT_CHECK = spec("learner_context_check", "核验实际上下文与角色边界", LEARNER_CONTEXT_CHECK_V1,
+    source="本项目独立上下文审查：实际learner消息决定前文；事实由独立来源评审负责")

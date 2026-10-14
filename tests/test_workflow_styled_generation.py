@@ -108,6 +108,9 @@ class Reviewer:
         self.kwargs_calls.append(dict(kwargs))
         self.usage["calls"] += 1
         instruction = messages[0]["content"]
+        if "你是实际对话上下文与角色边界审查员" in instruction:
+            return json.dumps({"keep": True, "context_complete": True, "leakage_free": True,
+                               "reason": "实际问题与回复自包含。"})
         if "adherence 是" in instruction or "你是风格与表达审校员" in instruction:
             if self.invalid_style:
                 return json.dumps({"keep": True, "adherence": True, "reason": "不合法的分数"})

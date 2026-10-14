@@ -232,7 +232,7 @@ class FilesystemHumanSessionDriver:
         blueprint["agent_experience"] = validate_agent_experience(blueprint.get("agent_experience"))
         blueprint["document_parser"] = validate_document_parser(blueprint.get("document_parser"))
         blueprint["node_prompts"] = snapshot_node_prompts(blueprint.get("node_prompts"),
-            recipe_version=21)
+            recipe_version=21, learner_context_review_version=1)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):

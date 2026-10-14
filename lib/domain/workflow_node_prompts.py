@@ -39,8 +39,10 @@ VERSION_19_NODE_PROMPT_IDS = {**VERSION_17_NODE_PROMPT_IDS, "review": ("workflow
 VERSION_20_NODE_PROMPT_IDS = {**VERSION_19_NODE_PROMPT_IDS,
                   "director": ("workflow.qa_director", "workflow.question_brief_check", "workflow.question_user", "workflow.question_fit"),
                   "sft": (*VERSION_19_NODE_PROMPT_IDS["sft"], "workflow.sft_answer")}
-NODE_PROMPT_IDS = {**VERSION_20_NODE_PROMPT_IDS,
+VERSION_21_NODE_PROMPT_IDS = {**VERSION_20_NODE_PROMPT_IDS,
                   "cot": (*VERSION_20_NODE_PROMPT_IDS["cot"], "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check")}
+NODE_PROMPT_IDS = {**VERSION_21_NODE_PROMPT_IDS,
+                  "review": (*VERSION_21_NODE_PROMPT_IDS["review"], "workflow.learner_context_check")}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -121,29 +123,32 @@ def validate_node_prompts(value: dict | None) -> dict:
     return result
 
 
-def _prompt_catalog(recipe_version: int) -> dict:
-    return (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
+def _prompt_catalog(recipe_version: int, learner_context_review_version=None) -> dict:
+    catalog = (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
             VERSION_10_NODE_PROMPT_IDS if recipe_version == 10 else
             VERSION_13_NODE_PROMPT_IDS if recipe_version <= 13 else
             VERSION_15_NODE_PROMPT_IDS if recipe_version <= 15 else
             VERSION_16_NODE_PROMPT_IDS if recipe_version <= 16 else
             VERSION_17_NODE_PROMPT_IDS if recipe_version <= 17 else
             VERSION_19_NODE_PROMPT_IDS if recipe_version <= 19 else
-            VERSION_20_NODE_PROMPT_IDS if recipe_version <= 20 else NODE_PROMPT_IDS)
+            VERSION_20_NODE_PROMPT_IDS if recipe_version <= 20 else VERSION_21_NODE_PROMPT_IDS)
+    if learner_context_review_version == 1 and "review" in catalog:
+        return {**catalog, "review": (*catalog["review"], "workflow.learner_context_check")}
+    return catalog
 
 
-def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11) -> dict:
+def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learner_context_review_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
     return {stage: {prompt_id: overrides.get(stage, {}).get(prompt_id, builtin_node_prompt(prompt_id))
                     for prompt_id in prompt_ids}
-            for stage, prompt_ids in _prompt_catalog(recipe_version).items()}
+            for stage, prompt_ids in _prompt_catalog(recipe_version, learner_context_review_version).items()}
 
 
-def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11) -> dict:
+def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11, learner_context_review_version=None) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
     templates = validate_node_prompts(value)
-    catalog = _prompt_catalog(recipe_version)
+    catalog = _prompt_catalog(recipe_version, learner_context_review_version)
     if (set(templates) != set(catalog)
             or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):
