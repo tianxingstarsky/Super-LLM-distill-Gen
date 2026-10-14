@@ -13,6 +13,7 @@ from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS, MAX_NODE_PROMPT_CH
 from lib.domain.workflow_package_review import MAX_PACKAGE_REVIEW_SAMPLES, MIN_PACKAGE_REVIEW_PERCENT
 from lib.domain.human_augmentation import MAX_HUMAN_SEEDS, MAX_HUMAN_DESIGN_CHARS
 from lib.domain.workflow_quality import SECRET, canonical
+from lib.domain.agent_experience import default_experience_text
 
 NUMBER_FIELDS = {
     'workflow-count': (1, MAX_PRODUCTION_GOAL), 'workflow-max-units': (1, MAX_PRODUCTION_GOAL),
@@ -40,7 +41,8 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-mat
                'workflow-director-answer-rules': 12000,
                'workflow-human-question-requirements': 6000,
                'workflow-human-answer-requirements': 6000,
-               'workflow-node-prompt': MAX_NODE_PROMPT_CHARS}
+               'workflow-node-prompt': MAX_NODE_PROMPT_CHARS,
+               'workflow-agent-experience-text': 32768}
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
@@ -58,7 +60,7 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
                   'workflow-human-enabled',
-                  'workflow-production-enabled'}
+                  'workflow-production-enabled', 'workflow-agent-experience-enabled'}
 NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
                           'workflow-generation-instruction', 'workflow-generation-answer-mode'}
 HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
@@ -127,6 +129,13 @@ def validate_creation_draft(values):
             if (len(parts) != 4 or not parts[1] or parts[2] not in NODE_PROMPT_IDS
                     or parts[3] not in NODE_PROMPT_IDS[parts[2]]):
                 raise ValueError('invalid_creation_draft')
+        if field in {'workflow-agent-experience-text', 'workflow-agent-experience-enabled'}:
+            if len(parts) != 3:
+                raise ValueError('invalid_creation_draft')
+            try:
+                default_experience_text(parts[2])
+            except ValueError as error:
+                raise ValueError('invalid_creation_draft') from error
         if field == 'workflow-director-weight':
             parts = key.split(':')
             if (len(parts) != 3 or not parts[1] or parts[2] not in
@@ -146,6 +155,11 @@ def validate_creation_draft(values):
                      and (field != 'workflow-node-prompt' or '\x00' not in value))
             if field in HUMAN_FIELDS:
                 valid = _human_text(value, TEXT_FIELDS[field])
+            if field == 'workflow-agent-experience-text':
+                try:
+                    valid = valid and '\x00' not in value and len(value.encode('utf-8')) <= 32768
+                except (UnicodeError, AttributeError):
+                    valid = False
         elif field in ENUM_FIELDS:
             valid = isinstance(value, str) and value in ENUM_FIELDS[field]
         elif field == 'workflow-targets':

@@ -14,6 +14,7 @@ from lib.domain.workflow_package_review import validate_package_review
 from lib.domain.workflow_qa_director import validate_qa_director
 from lib.domain.workflow_production import validate_production
 from lib.domain.cpt_processing import validate_cpt_processing
+from lib.domain.agent_experience import validate_agent_experience
 
 
 class WorkflowApplication:
@@ -28,7 +29,7 @@ class WorkflowApplication:
             "batch_size", "node_models", "conversation_turns", "brief",
             "agent_replay_mode", "evaluation_sources", "web_research", "sources",
             "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director", "production",
-            "cpt_processing", "review_repair", "repair_inputs") if key in recipe}
+            "cpt_processing", "review_repair", "repair_inputs", "agent_experience") if key in recipe}
         targets, node_models = validate_creation(**fields)
         validate_generation_review(targets, recipe.get("review_repair"), recipe.get("repair_inputs"))
         research = validate_web_research(recipe.get("web_research"), brief=recipe.get("brief", ""),
@@ -37,6 +38,7 @@ class WorkflowApplication:
                                       "web_research": research,
                                       "node_generation": validate_node_generation(recipe.get("node_generation")),
                                       "node_prompts": validate_node_prompts(recipe.get("node_prompts")),
+                                      "agent_experience": validate_agent_experience(recipe.get("agent_experience")),
                                       "package_review": validate_package_review(recipe.get("package_review")),
                                       "qa_director": validate_qa_director(recipe.get("qa_director")),
                                       "production": validate_production(recipe.get("production"), targets),

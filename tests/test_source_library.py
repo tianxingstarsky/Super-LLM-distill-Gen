@@ -603,3 +603,154 @@ def test_failed_parse_progress_remains_failed_without_publishing_successful_cach
     assert notes[-1]["parts"] == 1 and notes[-1]["usable_parts"] == 1
     assert not any(note["status"] == "complete" for note in notes)
     assert library.list_parses(source["id"]) == []
+
+
+@pytest.mark.parametrize("mode", ["model", "vision"])
+def test_parse_cache_tracks_only_the_actual_enabled_cpt_experience_and_keeps_literal_text(tmp_path, mode):
+    if mode == "vision":
+        vision_config(tmp_path)
+        source, reader, parser = image(tmp_path), Vision(), vision_parser()
+    else:
+        configure(tmp_path)
+        source, reader, parser = text_pdf(tmp_path, pages=(PAGE_ONE,)), Reader(), model_parser()
+    output = tmp_path / "output"
+    literal = '  Preserve {question}, {{literal}}, ${name}, and "quotes".\n保持完整条件。  '
+    def current(cpt, other=None):
+        experience = {"cpt": cpt, **(other or {})}
+        identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                    document_parser=parser, agent_experience=experience)
+        run = engine.Workflow(output, identity, tmp_path, generator=reader)
+        return run, parse(run)
+    first, _ = current({"enabled": True, "text": literal})
+    reused, _ = current({"enabled": True, "text": literal}, {
+        "answer": {"enabled": True, "text": "Different answer method."},
+        "director": {"enabled": False, "text": "A changed design method."}})
+    assert len(reader.calls) == 1 and reused.state["source_library"]["hits"] == 1
+    assert literal in reader.calls[0][0][0]["content"]
+    changed, _ = current({"enabled": True, "text": literal + "\nNew reading method."})
+    assert len(reader.calls) == 2 and changed.state["source_library"]["misses"] == 1
+    disabled, _ = current({"enabled": False, "text": literal + "\nNew reading method."})
+    assert len(reader.calls) == 3 and disabled.state["source_library"]["misses"] == 1
+    assert literal not in reader.calls[-1][0][0]["content"]
+    enabled_again, _ = current({"enabled": True, "text": literal + "\nNew reading method."})
+    assert len(reader.calls) == 3 and enabled_again.state["source_library"]["hits"] == 1
+    assert first._source_library_signature(mode) != changed._source_library_signature(mode)
+
+
+@pytest.mark.parametrize("mode", ["model", "vision"])
+def test_same_cpt_role_bytes_reuse_parse_across_experience_catalog_versions(tmp_path, mode):
+    from lib.domain.agent_experience import snapshot_agent_experience
+    if mode == "vision":
+        vision_config(tmp_path)
+        source, reader, parser = image(tmp_path), Vision(), vision_parser()
+    else:
+        configure(tmp_path)
+        source, reader, parser = text_pdf(tmp_path, pages=(PAGE_ONE,)), Reader(), model_parser()
+    output = tmp_path / "output"
+    signatures = []
+    for version in (1, 2, 3):
+        identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                    document_parser=parser)
+        path = engine.run_path(output, identity)
+        recipe = engine.read_json(path / "recipe.json")
+        recipe["agent_experience"] = snapshot_agent_experience(version=version)
+        engine.atomic_json(path / "recipe.json", recipe)
+        state = engine.read_json(path / "state.json")
+        state["recipe_hash"] = engine.digest(recipe)
+        engine.atomic_json(path / "state.json", state)
+        run = engine.Workflow(output, identity, tmp_path, generator=reader)
+        signatures.append(run._source_library_signature(mode))
+        assert parse(run)[0]["status"] == "ready"
+        if version > 1:
+            assert run.state["source_library"]["hits"] == 1
+    assert signatures == [signatures[0]] * 3 and len(reader.calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["model", "vision"])
+def test_absent_and_disabled_experience_keep_the_exact_historical_signature(mode):
+    from lib.domain.agent_experience import snapshot_agent_experience
+    run = object.__new__(engine.Workflow)
+    role = "vision" if mode == "vision" else "generation"
+    prompt_id = "workflow.document_vision" if mode == "vision" else "workflow.document_parse"
+    run.recipe = {"version": 21, "node_prompt_system": "PINNED_SYSTEM", "source_processing_version": 1,
+        "node_prompt_templates": {"ingest": {prompt_id: "PINNED_PARSE_PROMPT"}},
+        "document_parser": {"mode": mode, "binding": {"backend": "offline", "model": "reader",
+            "context_window_tokens": 131072, "max_output_tokens": 32768}},
+        "endpoint_pins": {"ingest": {role: {"api_format": "chat", "base_url_sha256": "public-url-hash"}}}}
+    golden = {"mode": mode, "parser_version": 1, "source_processing_version": 1,
+        "model": {"backend": "offline", "model": "reader", "context_window_tokens": 131072,
+                  "max_output_tokens": 32768},
+        "endpoint": {"api_format": "chat", "base_url_sha256": "public-url-hash"},
+        "prompt_sha256": "d7348efeca1f1fb0dda719d36bd047a34d15c68fd3d962f2ed067320003e614c",
+        **({"parser_chunk_chars": 8000} if mode == "model" else {})}
+    assert run._source_library_signature(mode) == golden
+    run.recipe.update(agent_experience_version=1,
+        agent_experience=snapshot_agent_experience({"cpt": {"enabled": False, "text": "disabled edited body"}}))
+    assert run._source_library_signature(mode) == golden
+
+
+def test_native_reading_cache_is_not_invalidated_by_any_experience_change(tmp_path, monkeypatch):
+    source = tmp_path / "plain.txt"
+    source.write_text(PAGE_ONE, encoding="utf-8")
+    output = tmp_path / "output"
+    first_id = engine.create_run(output, sources=[source], targets=["cpt"],
+        agent_experience={"cpt": {"text": "First reading method."}})
+    first = engine.Workflow(output, first_id, tmp_path)
+    assert parse(first)[0]["text"] == PAGE_ONE
+    monkeypatch.setattr(engine, "import_text", lambda *_args, **_kwargs: pytest.fail("Native extraction must be reused"))
+    second_id = engine.create_run(output, sources=[source], targets=["cpt"],
+        agent_experience={"cpt": {"enabled": False, "text": "Second method."},
+                          "answer": {"text": "Different answer method."}})
+    second = engine.Workflow(output, second_id, tmp_path)
+    assert parse(second)[0]["text"] == PAGE_ONE and second.state["source_library"]["hits"] == 1
+
+
+@pytest.mark.parametrize("mode", ["model", "vision"])
+def test_cpt_experience_is_budgeted_before_a_short_context_parser_can_spend(tmp_path, mode):
+    if mode == "vision":
+        vision_config(tmp_path)
+        source, reader, parser = image(tmp_path), Vision(), vision_parser()
+    else:
+        configure(tmp_path)
+        source, reader, parser = text_pdf(tmp_path, pages=(PAGE_ONE,)), Reader(), model_parser()
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+        document_parser=parser, agent_experience={"cpt": {"text": "中" * 2000}})
+    run = engine.Workflow(output, identity, tmp_path, generator=reader)
+    prompt_id = "workflow.document_vision" if mode == "vision" else "workflow.document_parse"
+    old_prefix = run.recipe["node_prompt_system"] + "\n" + run.prompt_text(prompt_id, stage="ingest")
+    binding = run.recipe["document_parser"]["binding"]
+    # The historical estimate leaves 1024 bytes, but real CPT guidance alone
+    # consumes over 6000. Refuse before rendering/calling the model.
+    binding["context_window_tokens"] = binding["max_output_tokens"] + len(old_prefix.encode("utf-8")) + 512 + 1024
+    with pytest.raises(ValueError, match="model_context_window_exceeded"):
+        parse(run)
+    assert not reader.calls
+
+
+def test_model_parser_segments_using_full_cpt_experience_bytes_without_clipping_original(tmp_path):
+    from lib.infrastructure.workflow_agent_experience import experience_system
+    configure(tmp_path)
+    source = tmp_path / "long.txt"
+    source.write_text("".join(f"Section {index}: " + PAGE_ONE + "\n" for index in range(40)), encoding="utf-8")
+    output = tmp_path / "output"
+    identity = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+        document_parser=model_parser(), agent_experience={"cpt": {"text": "中" * 1000}})
+    reader = Reader()
+    run = engine.Workflow(output, identity, tmp_path, generator=reader)
+    prompt_id = "workflow.document_parse"
+    prefix = run.recipe["node_prompt_system"] + "\n" + run.prompt_text(prompt_id, stage="ingest")
+    binding = run.recipe["document_parser"]["binding"]
+    binding["context_window_tokens"] = binding["max_output_tokens"] + len(prefix.encode("utf-8")) + 512 + 4096
+    run.recipe["node_models"]["ingest"]["generation"]["context_window_tokens"] = binding["context_window_tokens"]
+    expected_chars = (4096 - len(experience_system(run.recipe, prompt_id).encode("utf-8"))) // 4
+    assert 0 < expected_chars < 1024
+    assert run._source_library_signature("model")["parser_chunk_chars"] == expected_chars
+    assert parse(run) and len(reader.calls) > 1
+    original = source.read_text("utf-8")
+    copied = "".join(call[2]["text"] for call in reader.calls)
+    assert "".join(original.split()) == "".join(copied.split())
+    for messages, _options, data in reader.calls:
+        assert len(data["text"]) <= expected_chars
+        assert sum(len(message["content"].encode("utf-8")) for message in messages) <= (
+            binding["context_window_tokens"] - binding["max_output_tokens"])

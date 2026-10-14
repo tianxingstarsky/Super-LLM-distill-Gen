@@ -97,7 +97,7 @@ def test_configured_explanation_length_does_not_conflict_with_short_default():
 
 def test_precise_fact_review_preserves_old_prompt_snapshots():
     for name, current_version, old_version in (
-        ("rationale_check", "1.5.0", "1.2.0"),
+        ("rationale_check", "1.6.0", "1.2.0"),
         ("review_score", "1.5.0", "1.3.0"),
         ("package_review", "1.4.0", "1.2.0"),
     ):

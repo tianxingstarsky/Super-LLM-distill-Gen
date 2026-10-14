@@ -5,7 +5,31 @@ turns. They cannot establish the truth of an answer or a recorded tool result.
 """
 from __future__ import annotations
 
-from lib.domain.workflow_quality import conversation_issue
+from lib.domain.workflow_quality import conversation_issue, text_issue
+
+
+def user_actor_action(value):
+    """Decode one untrusted actor action, never convert a stop into a turn.
+
+    A missing optional end flag preserves existing message-only templates.
+    Semantic completion is still checked independently on the actual dialogue.
+    """
+    if not isinstance(value, dict) or set(value) - {"message", "end", "stop", "reason"}:
+        raise ValueError("invalid_multiturn_user_action")
+    flags = set(value).intersection({"end", "stop"})
+    if len(flags) > 1:
+        raise ValueError("invalid_multiturn_user_action")
+    end = value[next(iter(flags))] if flags else False
+    if type(end) is not bool:
+        raise ValueError("invalid_multiturn_user_action")
+    if end:
+        reason = value.get("reason")
+        if "message" in value or text_issue(reason) or len(reason) > 3000:
+            raise ValueError("invalid_multiturn_stop")
+        return {"end": True, "reason": reason}
+    if "reason" in value or text_issue(value.get("message")):
+        raise ValueError("invalid_multiturn_user_action")
+    return {"end": False, "message": value["message"]}
 
 
 def completed_turn_ends(messages: list[dict], minimum_turns: int = 2) -> tuple[list[int], str | None]:

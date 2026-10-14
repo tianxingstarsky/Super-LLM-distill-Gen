@@ -289,7 +289,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
-               review_repair=None, repair_inputs=None):
+               review_repair=None, repair_inputs=None, agent_experience=None):
     arithmetic_only = (targets == ["gsm8k"] or targets == ("gsm8k",) or targets == {"gsm8k"}) and not repair_inputs
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
@@ -300,7 +300,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         reasoning_trim=reasoning_trim, node_prompts=node_prompts,
         package_review=package_review, qa_director=qa_director, production=production,
         cpt_processing=None if arithmetic_only else cpt_processing,
-        review_repair=review_repair, repair_inputs=repair_inputs)
+        review_repair=review_repair, repair_inputs=repair_inputs, agent_experience=agent_experience)
     review_repair = validate_review_repair(review_repair)
     repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
     validate_generation_review(targets, review_repair, repair_inputs)
@@ -315,6 +315,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     cpt_processing_supplied = cpt_processing is not None
     cpt_processing = validate_cpt_processing(cpt_processing)
     node_prompts = validate_node_prompts(node_prompts)
+    from lib.domain.agent_experience import snapshot_agent_experience
+    experience_snapshot = snapshot_agent_experience(agent_experience)
     if cpt_only:
         # CPT owns its source-preserving cleaning checks. Saved sample-review
         # choices are inactive here, including bindings to removed services.
@@ -474,6 +476,14 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "source_memory_protocol_version": 1,
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
+              "authored_role_projection_version": 3,
+              **({"multiturn_stop_protocol_version": 1} if "multiturn" in targets else {}),
+              **({"native_answer_retry_version": 1}
+                 if node_generation.get("cot", {}).get("answer_mode") == "native_prefill" else {}),
+              **({"independent_cot_input_version": 1} if targets == ["cot"]
+                 and node_generation.get("cot", {}).get("enabled") is True else {}),
+              "agent_experience_version": 1,
+              "agent_experience": experience_snapshot,
               "qa_agent_memory_version": 1,
               "qa_expression_version": 1,
               "reasoning_shape_version": 1,
@@ -707,7 +717,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
 
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
             allow_reasoning_fallback=True, model_stage=None, prompt_stage=None,
-            capture_response_details=False, reasoning_prefix=None):
+            capture_response_details=False, reasoning_prefix=None, native_request_attempts=None):
+        if native_request_attempts is not None and (
+                prompt_id != "workflow.cot_native_answer" or type(native_request_attempts) is not int
+                or not 1 <= native_request_attempts <= 10):
+            raise ValueError("invalid_model_request_attempts")
         capture = (capture_response_details
                    and self.recipe.get("provider_reasoning_capture_version") == 1)
         if (self.recipe.get("review_repair") is not None and role == "jev"
@@ -776,7 +790,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             system = base_system + NODE_RULE_HEADER + "\n" + pinned_prompt
                     else:
                         request_text = canonical(request_data)
-                    system += rule_system
+                    # Procedural experience belongs to the fixed system prefix,
+                    # never to source facts, a user turn, or a generated answer.
+                    from lib.infrastructure.workflow_agent_experience import experience_system
+                    system += experience_system(self.recipe, prompt_id) + rule_system
                     request_messages = [
                         {"role": "system", "content": system},
                         {"role": "user", "content": request_text if image is None else [
@@ -796,7 +813,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         transport = ("system" if prompt_id == "workflow.cot_native_answer" else
                                      getattr(client, "source_memory_transport", "tool"))
                         if prompt_id == "workflow.question_user":
-                            request_messages = question_role_messages(system, request_data, transport=transport)
+                            from lib.domain.learner_context import prompt_at_least
+                            first_turn_version = (2 if self.recipe.get("authored_role_projection_version", 1) >= 3
+                                and prompt_at_least(self.recipe, prompt_id, (1, 2, 0)) else 1)
+                            request_messages = question_role_messages(system, request_data, transport=transport,
+                                first_turn_policy_version=first_turn_version)
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
                             request_messages = answer_role_messages(system, memory_context, request_data, transport=transport)
                     if (self.recipe.get("training_surface_protocol_version") == 1
@@ -813,7 +834,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         # never erase or reclassify real learner tool turns.
                         transport = ("system" if prompt_id == "workflow.cot_native_answer" else
                                      getattr(client, "source_memory_transport", "tool"))
-                        authored_messages = authored_role_messages(system, memory_context, request_data, transport=transport)
+                        authored_messages = authored_role_messages(system, memory_context, request_data, transport=transport,
+                            role_projection_version=self.recipe.get("authored_role_projection_version", 1),
+                            phase={"workflow.cot_rationale": "rationale", "workflow.cot_native_answer": "native_answer",
+                                   "workflow.trim": "trim"}.get(prompt_id, "combined"))
                         if authored_messages is not None:
                             request_messages = authored_messages
                         if prompt_id == "workflow.cot_native_answer":
@@ -831,7 +855,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         # or decoded from native reasoning to fill an answer.
                         visible = client.chat(request_messages, max_tokens=binding.get("max_output_tokens"),
                             reasoning_prefix=reasoning_prefix, allow_reasoning_fallback=False,
-                            response_details=response_details, **streaming)
+                            response_details=response_details, **streaming,
+                            **({"retries": native_request_attempts} if native_request_attempts is not None else {}))
                         # Early beta recipes explicitly requested this exact
                         # one-field JSON schema. Decode their actual field,
                         # rather than double-wrap JSON as user-visible text.
@@ -1527,6 +1552,22 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         if issue := sft_reasoning_issue(unit.get("messages", [])):
             return [self.rejected(unit, issue)]
         history = sft_training_messages(unit.get("messages", []))
+        if (self.recipe.get("independent_cot_input_version") == 1
+                and self.recipe.get("targets") == ["cot"]
+                and self.generation_style("cot", unit["id"]) is not None
+                and unit["kind"] == "conversation" and history
+                and self.generation_style("sft", unit["id"]) is None):
+            # This is input preparation, not publication or factual acceptance.
+            # Independently authored CoT must be checked on its new response,
+            # rather than pay to grade a draft it is forbidden to consume.
+            if issue := conversation_issue(history):
+                return [self.rejected(unit, issue)]
+            return [{"id": unit["id"], "source_id": unit["source_id"], "status": "eligible",
+                     "messages": self.without_source_reasoning(history), "tools": unit.get("tools", []),
+                     "quotes": [], "source_context": deepcopy(unit),
+                     "generation_check": "learner_structure_only_for_independent_cot",
+                     "reasoning_origin": "unassessed_input_not_training_output",
+                     "evidence_level": "recorded_context_unassessed"}]
         context = {"source": {**unit, "messages": [
                        {**m, "content": "[来源内容隐藏]" if m.get("role") == "assistant" else m.get("content", "")}
                        for m in unit.get("messages", [])]},
@@ -1714,6 +1755,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             and self.recipe.get("qa_director", {}).get("planning_mode") == "adaptive")
         separated_step_route = contract is not None and self.separated_questions() and not legacy_adaptive_route
         adaptive_dialogue = legacy_adaptive_route or separated_step_route
+        ordinary_stop_mode = (not adaptive_dialogue and unit["kind"] != "conversation"
+            and self.recipe.get("version", 0) >= 9
+            and self.recipe.get("multiturn_stop_protocol_version") == 1)
+        ordinary_stop_audit = {}
         dialogue_steps = []
         dialogue_state = ({"user_intent": dialogue_design.get("user_intent", ""),
             "progress": "", "shared_understanding": [], "open_issues": [],
@@ -1776,6 +1821,27 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                              "previous_messages": self.without_source_reasoning(messages), "feedback": feedback},
                             **({"instruction": "遵循问答指导契约和提问规则。隐藏的教师资料不得自动成为用户可见线索；"
                                 "无线索题的后续问题必须自包含，不引用读者不可见的来源。"} if contract is not None else {}))
+                    if ordinary_stop_mode:
+                        from lib.domain.multiturn import user_actor_action
+                        try:
+                            action = user_actor_action(user_data)
+                        except ValueError as error:
+                            feedback = str(error)
+                            continue
+                        if action["end"]:
+                            if not messages:
+                                feedback = "multiturn_stop_before_first_turn"
+                                continue
+                            # A termination suggestion is private metadata,
+                            # never a user turn or a factual approval. No next
+                            # answer/turn score is purchased after this point.
+                            ordinary_stop_audit = {"dialogue_end_reason": "natural_completion",
+                                "dialogue_end_after_turn": turn_index,
+                                "dialogue_end_guidance": action["reason"],
+                                "dialogue_end_scope": "user_actor_suggestion_not_message_or_evidence"}
+                            finished_dialogue = True
+                            break
+                        user_data = {"message": action["message"]}
                     user_text = user_data.get("message") if isinstance(user_data, dict) else None
                     if text_issue(user_text) or len(user_text) > (12000 if contract is not None and turn_index == 0 else 6000):
                         feedback = "用户消息为空、含敏感信息或过长"
@@ -1883,29 +1949,42 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                 "reason": "initial_design", "dialogue_state": dialogue_state})})
                     break
                 else:
-                    return [{**self.rejected(unit, "multiturn_turn_failed_after_repair"),
+                    reason = (feedback if ordinary_stop_mode and feedback in {
+                        "invalid_multiturn_user_action", "invalid_multiturn_stop", "multiturn_stop_before_first_turn"}
+                        else "multiturn_turn_failed_after_repair")
+                    return [{**self.rejected(unit, reason),
                              "failed_turn": turn_index + 1, "feedback": feedback,
                              "turn_reviews": reviews, "evidence_level": evidence_level}]
                 if finished_dialogue:
                     break
             ends, issue = completed_turn_ends(messages)
             if issue:
-                return [self.rejected(unit, issue)]
+                if ordinary_stop_audit and issue == "insufficient_completed_turns":
+                    issue = "multiturn_natural_end_insufficient_turns"
+                return [{**self.rejected(unit, issue),
+                    **({"messages": messages, "turn_reviews": reviews,
+                        "completed_turns": len(reviews), **ordinary_stop_audit}
+                       if ordinary_stop_audit else {})}]
+        completion_check = {}
+        if ordinary_stop_audit:
+            from lib.prompts.workflow_multiturn import NATURAL_COMPLETION_REVIEW
+            completion_check["instruction"] = NATURAL_COMPLETION_REVIEW
         consistency = self.judge_answer([unit["id"], "multiturn_consistency"],
             {**source_context, "evidence_level": evidence_level, "turn_reviews": reviews,
              "source_text": unit.get("text"), "whole_dialogue": True,
+             **ordinary_stop_audit,
              **({"dialogue_state": dialogue_state, "dialogue_steps": dialogue_steps,
                  "dialogue_end_reason": dialogue_end_reason,
                  "dialogue_state_after_turn": dialogue_state_after_turn,
                  "dialogue_state_scope": "final_summary" if dialogue_end_reason == "natural_completion" else "before_last_turn",
                  "dialogue_end_guidance": dialogue_end_guidance} if adaptive_dialogue else {})},
-            messages, prompt_id="workflow.multiturn_consistency")
+            messages, prompt_id="workflow.multiturn_consistency", **completion_check)
         if not accepted(consistency):
             return [{**self.rejected(unit, "multiturn_consistency_rejected"),
                      **({"messages": messages, "source_context": deepcopy(unit)}
                         if self.recipe.get("review_repair") is not None else {}),
                      "turn_reviews": reviews, "consistency": consistency,
-                     "evidence_level": evidence_level}]
+                     "evidence_level": evidence_level, **ordinary_stop_audit}]
         if (contract is not None and contract.get("human_design", {}).get("seed", {}).get("revision_context")):
             contract_check = self.qa_contract_check([unit["id"], "multiturn_revision_complete"], unit, messages,
                 prompt_id="workflow.multiturn_directed_check", review_scope="complete",
@@ -1927,6 +2006,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                      else "not_applicable"),
                  "turn_count": len(ends), "turn_reviews": reviews, "consistency": consistency,
                  "quotes_by_turn": quotes_by_turn,
+                 **({"multiturn_stop_protocol_version": 1,
+                     "dialogue_end_reason": "turn_limit", **ordinary_stop_audit} if ordinary_stop_mode else {}),
                  **({"dialogue_design": dialogue_design, "dialogue_steps": dialogue_steps,
                      "dialogue_state": dialogue_state, "dialogue_end_reason": dialogue_end_reason,
                      "dialogue_state_after_turn": dialogue_state_after_turn,
@@ -2171,6 +2252,18 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 value, prefill_audit = self.native_styled_answer(sample, task, style, feedback, attempt)
                 if value is None:
                     feedback = prefill_audit
+                    if (self.recipe.get("native_answer_retry_version") == 1
+                            and isinstance(prefill_audit.get("native_answer_terminal"), dict)):
+                        # One completed-but-empty answer is a sample failure,
+                        # not a reason to re-author its verified rationale or
+                        # stop other independent rows in the batch.
+                        return [{**self.rejected(sample, "native_answer_missing_after_retry"),
+                            "question": deepcopy(task["prompt"]), "source_context": deepcopy(source),
+                            "input_digest": digest({"question": task["prompt"], "source_context": source}),
+                            "sft_parent_id": sample["id"], "generation_style": style,
+                            "feedback": prefill_audit, "native_answer_terminal": deepcopy(
+                                prefill_audit["native_answer_terminal"]),
+                            "repair_attempts": attempt, **self.qa_metadata(sample)}]
                     continue
             else:
                 value = self.ask([sample["id"], "cot_generate_v1", attempt], "generation",
@@ -2225,6 +2318,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                          "judge": check, "style_check": style_check, "generation_style": style,
                          "repair_attempts": attempt, "reasoning_origin": "prompt_styled_generation",
                          "evidence_level": sample["evidence_level"],
+                         **self.independent_cot_assessment(sample),
                          **reasoning_audit, **self.qa_metadata(sample, contract_check)}]
             feedback = {"correctness": check["reason"] if not accepted(check) else None,
                         "style": style_check["reason"] if not (style_check["keep"] and
@@ -2268,13 +2362,59 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
         # The dispatch/schema/audit trace never enter the reasoning channel.
         answer_task = {key: value for key, value in rationale_task.items()
                        if key not in {"generation_style", "reference_answer_status", "quotes"}}
-        answer = self.ask([sample["id"], "cot_native_answer_v1", attempt], "generation",
-            "workflow.cot_native_answer", answer_task, allow_reasoning_fallback=False,
-            reasoning_prefix=rationale["reasoning"], capture_response_details=True)
+        from lib.model_request_reliability import ModelRequestError
+        prefix_sha = hashlib.sha256(rationale["reasoning"].encode("utf-8")).hexdigest()
+        retry_enabled = self.recipe.get("native_answer_retry_version") == 1
+        answer_attempts = 2 if retry_enabled else 1
+        empty_receipts = []
+        answer = None
+        base_key = [sample["id"], "cot_native_answer_v1", attempt]
+        for answer_attempt in range(answer_attempts):
+            key = base_key if not answer_attempt else [*base_key, "visible_retry_v1", answer_attempt]
+            empty_key = ["native_answer_empty_v1", sample["id"], attempt, answer_attempt, prefix_sha]
+            if retry_enabled and self.checkpoint_has(empty_key):
+                # A later upstream failure or process exit must not purchase
+                # the already-recorded empty response again on resume.
+                saved = self.checkpoint(empty_key, lambda: None)
+                expected = {"version": 1, "status": "empty_visible_output", "eligible": False,
+                    "code": "model_visible_output_missing", "answer_attempt": answer_attempt + 1,
+                    "prefix_sha256": prefix_sha, "answer_checkpoint_sha256": digest(["call", key])}
+                if saved != expected:
+                    raise ValueError("checkpoint_integrity_error")
+                empty_receipts.append(deepcopy(saved))
+                continue
+            try:
+                answer = self.ask(key, "generation", "workflow.cot_native_answer", answer_task,
+                    allow_reasoning_fallback=False, reasoning_prefix=rationale["reasoning"],
+                    capture_response_details=True,
+                    # Only the supplemental visible-answer request has no
+                    # nested network loop. The first request retains the
+                    # existing transport retry policy.
+                    **({"native_request_attempts": 1} if answer_attempt else {}))
+                break
+            except (ValueError, ModelRequestError) as error:
+                empty_visible = (type(error) is ValueError and str(error) == "model_visible_output_missing")
+                if isinstance(error, ModelRequestError):
+                    empty_visible = error.kind == "invalid" and error.code == "model_visible_output_missing"
+                if not retry_enabled or not empty_visible:
+                    raise
+                receipt = {"version": 1, "status": "empty_visible_output", "eligible": False,
+                    "code": "model_visible_output_missing", "answer_attempt": answer_attempt + 1,
+                    "prefix_sha256": prefix_sha, "answer_checkpoint_sha256": digest(["call", key])}
+                self.checkpoint(empty_key, lambda: receipt)
+                empty_receipts.append(deepcopy(receipt))
+                self.event("native_answer_empty", role="generation", **receipt)
+        if answer is None:
+            terminal = {"version": 1, "code": "model_visible_output_missing", "answer_attempts": answer_attempts,
+                "prefix_sha256": prefix_sha, "empty_response_receipts": empty_receipts,
+                "rationale_checkpoint": {"stage": self.stage,
+                    "sha256": digest(["call", [sample["id"], "cot_rationale_v1", attempt]])},
+                "prefix_review_checkpoint": {"stage": self.stage,
+                    "sha256": digest(["call", [sample["id"], "cot_prefix_check_v1", attempt]])}}
+            return None, {"native_answer_terminal": terminal}
         if not isinstance(answer, dict) or set(answer) != {"answer"} or text_issue(answer.get("answer")):
             raise ValueError("native_prefill_invalid_answer")
         details = getattr(answer, "response_details", {})
-        prefix_sha = hashlib.sha256(rationale["reasoning"].encode("utf-8")).hexdigest()
         receipt = details.get("reasoning_prefill", {})
         if receipt.get("prefix_sha256") != prefix_sha or receipt.get("transport") != "deepseek_chat_beta":
             raise ValueError("native_prefill_receipt_missing")
@@ -2282,6 +2422,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             "reasoning_origin": "authored_prefix_native_answer",
             "reasoning_prefill": deepcopy(receipt), "prefix_review": checked,
             "answer_response_details": deepcopy(details),
+            **({"native_answer_retry": {"version": 1, "answer_attempts": len(empty_receipts) + 1,
+                "empty_response_receipts": empty_receipts}} if retry_enabled else {}),
             "reasoning_scope": "authored_prefix_not_complete_provider_internal_reasoning"}
 
     def trim_reasoning(self, item):
@@ -2714,6 +2856,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                      "custom": prompt_id in self.recipe.get("node_prompts", {}).get(stage, {})}
                         for prompt_id, text in templates.items()}
                 for stage, templates in self.recipe["node_prompt_templates"].items()}
+        if self.recipe.get("agent_experience_version") == 1:
+            experience = self.recipe["agent_experience"]
+            report["agent_experience"] = {"version": experience["version"], "sha256": experience["sha256"],
+                "kind": experience["kind"], "scopes": {scope: {key: guidance[key]
+                    for key in ("enabled", "text_sha256", "origin")}
+                    for scope, guidance in experience["scopes"].items()}}
         if self.recipe.get("qa_director", {}).get("enabled"):
             report["qa_director"] = deepcopy(self.state.get("qa_director", {}))
             report["qa_director"].update(
@@ -3003,6 +3151,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         raise ValueError("prompts_changed_create_new_run")
                     for key in self.recipe["prompts"]:
                         self.historical_prompt(key)
+                if self.recipe.get("agent_experience_version") == 1:
+                    from lib.domain.agent_experience import validate_agent_experience_snapshot
+                    validate_agent_experience_snapshot(self.recipe.get("agent_experience"))
                 for source in self.recipe["sources"]:
                     if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
                         raise ValueError("source_snapshot_changed")

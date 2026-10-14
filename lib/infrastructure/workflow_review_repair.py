@@ -46,6 +46,16 @@ _COT_DELTA_REPAIR_RULES = (
 )
 
 
+def _authored_review_rules(recipe):
+    """Keep old reviews literal; new runs distinguish editorial method from facts."""
+    from lib.domain.learner_context import prompt_at_least
+    if (recipe.get("authored_role_projection_version", 1) >= 3
+            and prompt_at_least(recipe, "workflow.rationale_check", (1, 6, 0))):
+        from lib.prompts.workflow_agent_contracts import RATIONALE_CHECK_V1_6
+        return RATIONALE_CHECK_V1_6.rpartition("仅返回JSON：")[0]
+    return _AUTHORED_REVIEW_RULES
+
+
 def preserve_provider_reasoning(target, original, updated, *, origin):
     """Retire native evidence when its task, answer, or reasoning is revised.
 
@@ -368,6 +378,20 @@ def _evidence_quote_spans(evidence, quotes):
 
 
 class WorkflowReviewRepair:
+    def independent_cot_assessment(self, row, *, human=False):
+        """Describe a final assessment without promoting recorded source facts.
+
+        Only the new independent-CoT preparation marker creates this level.
+        Call this after an accepted final content assessment, never after its
+        structural input check or the rationale-prefix-only check.
+        """
+        if (self.recipe.get("independent_cot_input_version") == 1
+                and row.get("evidence_level") == "recorded_context_unassessed"):
+            return {"evidence_level": ("recorded_context_human_assessed" if human
+                                       else "recorded_context_model_assessed"),
+                    "source_verification": "recorded_not_independently_verified"}
+        return {}
+
     def _review_payload(self, target, row):
         from lib.infrastructure.training_workflow import preferred_training_record
         if target == "rlaif":
@@ -430,7 +454,7 @@ class WorkflowReviewRepair:
         data.update(_authored_review_audit(target, row))
         data = _selected_review_request(data, evidence)
         def assessed(call_key, call_data):
-            rules = ({"instruction": _AUTHORED_REVIEW_RULES}
+            rules = ({"instruction": _authored_review_rules(self.recipe)}
                      if _authored_cot(target, row) and not call_data.get("learner_context_only") else {})
             value = self.ask(call_key, role, "workflow.review_score", call_data,
                              allow_reasoning_fallback=False, **rules)
@@ -636,6 +660,8 @@ class WorkflowReviewRepair:
             else:
                 receipt["status"] = "rejected"
                 row.update(status="quarantined", reason="review_repair_exhausted")
+        if target == "cot" and receipt["status"] == "accepted" and row["status"] == "eligible":
+            row.update(self.independent_cot_assessment(row, human=config["mode"] == "human"))
         # Binding the receipt to exactly the content that was assessed prevents
         # cached/manual approval from being reused after another content edit.
         try:

@@ -77,9 +77,11 @@ class WorkflowSourceLibrary:
         endpoint = {key: pin[key] for key in ("base_url_sha256", "api_format") if key in pin}
         prompt = self.prompt_text(prompt_id, stage="ingest")
         system = self.recipe.get("node_prompt_system", "")
+        from lib.infrastructure.workflow_agent_experience import experience_system
+        experience = experience_system(self.recipe, prompt_id)
         available = binding.get("context_window_tokens", 131072) - binding.get("max_output_tokens", 32768)
-        available -= len((system + "\n" + prompt).encode("utf-8")) + 512
-        if mode == "model" and available <= 0:
+        available -= len((system + "\n" + prompt + experience).encode("utf-8")) + 512
+        if mode in {"model", "vision"} and available <= 0:
             raise ValueError("model_context_window_exceeded")
         parser_chunk_chars = min(MODEL_PARSE_CHARS, max(1, available // 4))
         model = {key: binding[key] for key in ("backend", "model", "context_window_tokens",
@@ -89,11 +91,17 @@ class WorkflowSourceLibrary:
         reasoning = binding.get("reasoning") or {}
         if reasoning.get("mode", "auto") != "auto":
             model["reasoning"] = reasoning
+        # Hash only the guidance actually sent by this parsing role. Keep the
+        # historical two-member fingerprint when experience is absent/off;
+        # catalog versions or unrelated roles must not trigger a paid reread.
+        prompt_components = [self.recipe.get("node_prompt_system"), prompt]
+        if experience:
+            prompt_components.append(experience)
         return {"mode": mode, "parser_version": SOURCE_LIBRARY_VERSION,
                 "source_processing_version": self.recipe.get("source_processing_version", 1),
                 "model": model,
                 "endpoint": endpoint,
-                "prompt_sha256": _digest([self.recipe.get("node_prompt_system"), prompt]),
+                "prompt_sha256": _digest(prompt_components),
                 **({"parser_chunk_chars": parser_chunk_chars} if mode == "model" else {})}
 
     def _iter_library_source_units(self, source):

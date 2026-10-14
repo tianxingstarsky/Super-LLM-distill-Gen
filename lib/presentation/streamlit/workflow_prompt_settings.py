@@ -176,6 +176,8 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
         if error := st.session_state.get(f"workflow-node-prompt-upload-error:{workspace}:{node}:{prompt_id}"):
             st.error(error)
         st.caption("已自定义 · 仅当前步骤" if custom else "使用内置提示词 · 可直接编辑")
+        from lib.presentation.streamlit.workflow_experience_controls import render_experience
+        render_experience(workspace, prompt_id, save_field=save_field, prompt_library=prompt_library)
 
 
 def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
@@ -201,3 +203,5 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
                                 recipe.get("version", 0) >= 19 and recipe.get("source_cleaning") is True))
     st.text_area("提示词正文", value=prompts[prompt_id], height=164, disabled=True,
                  key=f"workflow-run-prompt-body:{run_id}:{node}:{prompt_id}")
+    from lib.presentation.streamlit.workflow_experience_controls import render_pinned_experience
+    render_pinned_experience(recipe, prompt_id, run_id)

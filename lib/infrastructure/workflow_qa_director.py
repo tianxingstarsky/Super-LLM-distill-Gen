@@ -817,7 +817,9 @@ class WorkflowQADirector:
             binding = self.recipe.get("node_models", {}).get("director", {}).get("generation", {})
             context_limit = binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
             output_limit = binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
-            system = self.recipe["node_prompt_system"] + "\n" + self.prompt_text("workflow.qa_director")
+            from lib.infrastructure.workflow_agent_experience import experience_system
+            experience = experience_system(self.recipe, "workflow.qa_director")
+            system = self.recipe["node_prompt_system"] + "\n" + self.prompt_text("workflow.qa_director") + experience
             available = context_limit - output_limit - len(system.encode("utf-8")) - 512
             if self.recipe.get("source_context_pack_version") == 1 and any(
                     candidate.get("source_context_pack") for candidate in data["candidates"]):
@@ -834,7 +836,7 @@ class WorkflowQADirector:
                     # receipts, arguments and the source-memory header all
                     # consume context; a JSON-pack estimate omits those bytes.
                     memory_system = (self.recipe["node_prompt_system"] + NODE_RULE_HEADER
-                                     + "\n" + self.prompt_text("workflow.qa_director"))
+                                     + "\n" + self.prompt_text("workflow.qa_director") + experience)
                     available = context_limit - output_limit - 2048 - 512
                     def request_size():
                         messages = source_memory_messages(memory_system,
@@ -1153,7 +1155,9 @@ class WorkflowQADirector:
         config = validate_qa_director(self.recipe.get("qa_director"))
         if human := config.get("human_augmentation"):
             binding = self.recipe.get("node_models", {}).get("director", {}).get("generation", {})
-            system = self.recipe["node_prompt_system"] + "\n" + self.prompt_text("workflow.qa_director", stage="director")
+            from lib.infrastructure.workflow_agent_experience import experience_system
+            system = (self.recipe["node_prompt_system"] + "\n" + self.prompt_text("workflow.qa_director", stage="director")
+                      + experience_system(self.recipe, "workflow.qa_director"))
             available = (binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
                          - binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
                          - len(system.encode("utf-8")) - len(HUMAN_DIRECTOR_INSTRUCTION.encode("utf-8")) - 4096)

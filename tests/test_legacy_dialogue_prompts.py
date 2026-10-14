@@ -68,7 +68,8 @@ def historical_run(tmp_path):
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = 8
-    for key in ("node_prompts", "node_prompt_templates", "node_prompt_system"):
+    for key in ("node_prompts", "node_prompt_templates", "node_prompt_system",
+                "agent_experience_version", "agent_experience", "authored_role_projection_version"):
         recipe.pop(key)
     recipe["prompts"] = {prompt_id: {"version": "1.0.0", "sha256": engine.digest(get(prompt_id, version="1.0.0").template)}
                          for prompt_id in IDS}
@@ -88,7 +89,7 @@ def test_unfinished_legacy_plan_and_multiturn_calls_resume_with_original_assets(
     resumed = engine.resume(output, run_id, tmp_path, generator=writer, jev=reviewer)
     assert resumed["status"] == "completed", resumed.get("error")
     assert get("workflow.plan").version == "1.2.0"  # the current default differs
-    assert get("workflow.multiturn_user").version == "1.3.0"
+    assert get("workflow.multiturn_user").version == "1.4.0"
     assert len([call for call in writer.calls if call[0] == "workflow.plan"]) == (2 if failed_prompt == "workflow.plan" else 1)
     assert engine.read_json(path / "artifacts/multiturn.records.json")[0]["turn_count"] == 2
 

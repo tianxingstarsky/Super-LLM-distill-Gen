@@ -14,6 +14,7 @@ from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS
 from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
 from lib.domain.workflow_graph import SOURCE_QA_TARGETS, uses_shared_source_cleaning
+from lib.domain.agent_experience import validate_agent_experience
 
 
 def validate_generation_review(targets, review_repair, repair_inputs):
@@ -32,7 +33,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       agent_replay_mode="configured", evaluation_sources=(),
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
                       node_prompts=None, package_review=None, qa_director=None, production=None,
-                      cpt_processing=None, review_repair=None, repair_inputs=None):
+                      cpt_processing=None, review_repair=None, repair_inputs=None, agent_experience=None):
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)
@@ -64,6 +65,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
         raise ValueError("review_repair_target_mismatch")
     validate_node_generation(node_generation)
     validate_node_prompts(node_prompts)
+    validate_agent_experience(agent_experience)
     validate_package_review(package_review)
     cpt = validate_cpt_processing(cpt_processing)
     # JSON containers may hold plain document text or recorded conversations.

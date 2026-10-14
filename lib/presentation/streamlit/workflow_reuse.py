@@ -22,6 +22,7 @@ from lib.domain.workflow_node_prompts import validate_node_prompts, active_node_
 from lib.domain.workflow_graph import execution_graph
 from lib.domain.workflow_production import validate_production
 from lib.domain.review_repair import validate_review_repair
+from lib.domain.agent_experience import validate_agent_experience_snapshot
 
 
 _DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".tex", ".latex", ".png", ".jpg", ".jpeg", ".webp"})
@@ -228,6 +229,11 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
             values[f"workflow-director-weight:{workspace}:{name}"] = weight
     prompt_mode = ("多模态文档" if parser["mode"] == "vision" else "模型辅助文档" if parser["mode"] == "model" else mode)
     copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")))
+    if recipe.get("agent_experience_version") == 1:
+        experience = validate_agent_experience_snapshot(recipe.get("agent_experience"))
+        for scope, guidance in experience["scopes"].items():
+            values[f"workflow-agent-experience-text:{workspace}:{scope}"] = guidance["text"]
+            values[f"workflow-agent-experience-enabled:{workspace}:{scope}"] = guidance["enabled"]
     old_review_prompt = copied_prompts.get("package", {}).get("workflow.package_review")
     if old_review_prompt is not None:
         copied_prompts.setdefault("jev", {}).setdefault("workflow.package_review", old_review_prompt)

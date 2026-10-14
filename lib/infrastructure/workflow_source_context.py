@@ -113,7 +113,9 @@ def _director_request_reserve(recipe, template):
             "ledgers": {label: {stage: {"accepted_by_type": {}, "accepted_dimensions": {}}
                                for stage in targets} for label in ("current_run", "published")},
             "recent_designs": [], "generation_feedback": {}, "immutable_source_windows": []}
-    system = recipe.get("node_prompt_system", "") + NODE_RULE_HEADER + "\n" + template
+    from lib.infrastructure.workflow_agent_experience import experience_system
+    system = (recipe.get("node_prompt_system", "") + NODE_RULE_HEADER + "\n" + template
+              + experience_system(recipe, "workflow.qa_director"))
     messages = source_memory_messages(system, {"teacher_context_pack": [pack], "task_payload": task})
     wire_bytes = sum(len(message.get("content", "").encode("utf-8")) for message in messages)
     wire_bytes += sum(len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
@@ -157,7 +159,9 @@ def context_capacity(recipe):
         if not prompts:
             continue
         overhead = len(recipe.get("node_prompt_system", "").encode("utf-8"))
-        overhead += max(len(text.encode("utf-8")) for text in prompts.values())
+        from lib.infrastructure.workflow_agent_experience import experience_system
+        overhead += max(len((text + experience_system(recipe, prompt_id)).encode("utf-8"))
+                        for prompt_id, text in prompts.items())
         bindings = recipe.get("node_models", {}).get(stage, {}) or {"generation": {}}
         for role, binding in bindings.items():
             # The separate questioner receives only a public brief/history.

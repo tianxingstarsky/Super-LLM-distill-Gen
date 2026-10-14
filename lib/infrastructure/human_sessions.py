@@ -206,6 +206,11 @@ class FilesystemHumanSessionDriver:
             inherited["source_names"] = {str(parent_path / "inputs" / source["file"]): source["name"]
                 for source in parent["sources"] if source.get("kind") != "human_design"}
             inherited["node_prompts"] = parent.get("node_prompt_templates", inherited.get("node_prompts"))
+            if parent.get("agent_experience_version") == 1:
+                from lib.domain.agent_experience import validate_agent_experience_snapshot
+                experience = validate_agent_experience_snapshot(parent.get("agent_experience"))
+                inherited["agent_experience"] = {scope: {key: record[key] for key in ("enabled", "text")}
+                    for scope, record in experience["scopes"].items()}
             node_models = inherited.get("node_models", {})
             if not node_models.get("director", {}).get("generation"):
                 binding = node_models.get("sft", {}).get("generation") or node_models.get("multiturn", {}).get("generation")
@@ -223,9 +228,11 @@ class FilesystemHumanSessionDriver:
         fields = set(inspect.signature(validate_creation).parameters)
         targets, node_models = validate_creation(**{key: value for key, value in blueprint.items() if key in fields})
         blueprint["targets"], blueprint["node_models"] = targets, node_models
+        from lib.domain.agent_experience import validate_agent_experience
+        blueprint["agent_experience"] = validate_agent_experience(blueprint.get("agent_experience"))
         blueprint["document_parser"] = validate_document_parser(blueprint.get("document_parser"))
         blueprint["node_prompts"] = snapshot_node_prompts(blueprint.get("node_prompts"),
-            recipe_version=18 if blueprint.get("review_repair") else 17)
+            recipe_version=21)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):

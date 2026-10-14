@@ -353,6 +353,8 @@ def _workflow_error(error) -> str:
         "invalid_node_prompt_id": "节点提示词与处理步骤不匹配，请重新选择或恢复内置提示词。",
         "invalid_node_prompt_text": "节点提示词正文无效，请填写有效文本或恢复内置提示词。",
         "invalid_node_prompt_snapshot": "本次任务的提示词快照无效，请复制配置后新建任务。",
+        "invalid_agent_experience_snapshot": "本次任务的长期经验快照校验失败，请复制配置后检查节点经验。",
+        "invalid_agent_experience": "长期经验内容无效，请打开节点提示词检查或恢复默认。",
     }.get(str(error), str(error))
 
 
@@ -496,6 +498,7 @@ EVENT_LABELS = {"stage_started": "节点开始运行", "stage_completed": "节�
                 "item_retry": "当前记录正在重试", "production_round_completed": "本轮合格结果已保存",
                 "production_plan_committed": "有效场景规划已保存",
                 "model_started": "模型请求开始", "model_finished": "模型请求完成",
+                "native_answer_empty": "模型没有返回答案 · 已保存空响应回执",
                 "web_search_started": "开始查找公开资料", "web_search_completed": "公开资料检索完成",
                 "run_finished": "工作流运行结束", "run_failed": "工作流运行失败",
                 "run_cancelled": "工作流已停止"}
@@ -1798,6 +1801,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                        qa_director=qa_director) if targets else {}
     prompts_invalid = node_prompt_has_issue(node_prompts)
+    from lib.presentation.streamlit.workflow_experience_controls import experience_configuration, experience_has_issue
+    agent_experience = experience_configuration(ws)
+    experience_invalid = experience_has_issue(agent_experience)
+    prompts_invalid = prompts_invalid or experience_invalid
     # Pair source input with either its preview or the common run settings.
     # Node forms have no influence on the height of these normal-flow columns.
     preview_in_input = bool(targets and selected_node == "ingest" and source_mode == "文档资料"
@@ -2039,6 +2046,23 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                     "指导员配置尚未完成，点击检查指导方式与指令"),
                                     kind="director", tab=director_tab)
             if prompts_invalid:
+                if experience_invalid:
+                    from lib.domain.agent_experience import experience_scope
+                    from lib.presentation.streamlit.workflow_experience_controls import (
+                        LABELS as EXPERIENCE_LABELS, invalid_experience_scopes, render_inactive_experience_issue)
+
+                    for scope in invalid_experience_scopes(agent_experience):
+                        routes = [(node, prompt_id) for node, prompts in node_prompts.items()
+                                  for prompt_id in prompts if experience_scope(prompt_id) == scope]
+                        route = next((pair for pair in routes if pair[0] == selected_node),
+                                     routes[0] if routes else None)
+                        if route is None:
+                            render_inactive_experience_issue(ws, scope, save_field=_save_draft_value)
+                        else:
+                            st.caption(EXPERIENCE_LABELS[scope])
+                            node, prompt_id = route
+                            _render_setup_issue(ws, node, "长期经验内容无效，点击编辑或恢复默认",
+                                                kind=f"experience:{scope}", tab="prompts", prompt_id=prompt_id)
                 for node, prompts in node_prompts.items():
                     invalid_prompt = next((prompt_id for prompt_id, body in prompts.items()
                                            if node_prompt_has_issue({node: {prompt_id: body}})), None)
@@ -2170,6 +2194,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         package_review={"enabled": False} if cpt_only else package_review,
                                         cpt_processing=cpt_processing, review_repair=None if cpt_only else review_repair,
                                         node_prompts=node_prompts,
+                                        agent_experience=agent_experience,
                                         reasoning_trim=reasoning_trim,
                                         web_research=web_research,
                                         document_parser=document_parser,

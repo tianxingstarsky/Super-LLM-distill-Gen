@@ -108,7 +108,7 @@ class Reviewer:
         self.kwargs_calls.append(dict(kwargs))
         self.usage["calls"] += 1
         instruction = messages[0]["content"]
-        if "adherence 是" in instruction:
+        if "adherence 是" in instruction or "你是风格与表达审校员" in instruction:
             if self.invalid_style:
                 return json.dumps({"keep": True, "adherence": True, "reason": "不合法的分数"})
             reject = self.reject_style > 0

@@ -7,6 +7,7 @@ from lib.domain.reasoning_trim import validate_reasoning_trim
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS, validate_node_prompts
 from lib.domain.workflow_qa_director import validate_qa_director
+from lib.domain.agent_experience import validate_agent_experience, default_experience_text
 
 
 MAX_TEMPLATE_NAME_CHARS = 80
@@ -37,6 +38,12 @@ def validate_prompt_scope(scope: str) -> str:
         raise ValueError("prompt_library_invalid_scope")
     if scope in {"director.rules", "trim.rules", "generation:sft", "generation:cot"}:
         return scope
+    if scope.startswith("experience:"):
+        try:
+            default_experience_text(scope.removeprefix("experience:"))
+        except ValueError as error:
+            raise ValueError("prompt_library_invalid_scope") from error
+        return scope
     if scope.startswith("node:"):
         parts = scope.split(":")
         if len(parts) == 3 and parts[2] in NODE_PROMPT_IDS.get(parts[1], ()):
@@ -50,7 +57,11 @@ def validate_prompt_payload(scope: str, payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("prompt_library_invalid_payload")
     try:
-        if scope.startswith("node:"):
+        if scope.startswith("experience:"):
+            if set(payload) != {"enabled", "text"}:
+                raise ValueError("invalid_fields")
+            validate_agent_experience({scope.removeprefix("experience:"): payload})
+        elif scope.startswith("node:"):
             _, stage, prompt_id = scope.split(":")
             if set(payload) != {"text"}:
                 raise ValueError("invalid_fields")

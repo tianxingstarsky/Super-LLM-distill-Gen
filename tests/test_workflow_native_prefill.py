@@ -52,7 +52,8 @@ def setup_workflow(tmp_path, monkeypatch, *, legacy_json=False):
     def review(messages, **kwargs):
         if "此阶段不生成" in messages[0]["content"]:
             raise AssertionError("wrong review prompt")
-        if "把作者推理作为原生通道前缀" in messages[0]["content"]:
+        if ("把作者推理作为原生通道前缀" in messages[0]["content"]
+                or "独立核验待作为原生API推理前缀" in messages[0]["content"]):
             reviewer.calls.append(deepcopy(messages))
             reviewer.usage["calls"] += 1
             return json.dumps({"keep": True, "adherence": 5, "reason": "断电前提充分。"})
@@ -95,7 +96,9 @@ def test_failed_answer_reuses_verified_prefix_and_exact_roles(tmp_path, monkeypa
     assert second["status"] == "eligible"
     assert len(sent) == 3
     assert sent[1]["messages"] == sent[2]["messages"]
-    assert sum("把作者推理作为原生通道前缀" in request[0]["content"] for request in reviewer.calls) == 1
+    assert sum(("把作者推理作为原生通道前缀" in request[0]["content"]
+                or "独立核验待作为原生API推理前缀" in request[0]["content"])
+               for request in reviewer.calls) == 1
     client.client.close()
 
 
@@ -116,3 +119,36 @@ def test_saved_beta_json_contract_decodes_only_its_real_answer_field(tmp_path, m
     assert json.loads(raw) == {"answer": ANSWER}
     assert raw != result["answer"]
     client.client.close()
+
+
+def test_independent_cot_prepares_real_input_without_grading_or_consuming_old_answer(tmp_path, monkeypatch):
+    workflow, _, client, reviewer, sent, _ = setup_workflow(tmp_path, monkeypatch)
+    assert workflow.recipe["independent_cot_input_version"] == 1
+    unit = {"id": "original-case", "source_id": "s1", "kind": "conversation", "status": "ready",
+            "messages": [{"role": "user", "content": "设备应如何维护？"},
+                         {"role": "assistant", "content": "UNASSESSED_WRONG_TAIL：带电检查。"}]}
+    workflow.stage = "sft"
+    prepared = workflow.sft(unit)[0]
+    assert not sent and not reviewer.calls
+    assert prepared["generation_check"] == "learner_structure_only_for_independent_cot"
+    assert "judge" not in prepared
+    workflow.stage = "cot"
+    row = workflow.styled_cot(prepared, workflow.generation_style("cot", prepared["id"]))[0]
+    assert row["status"] == "eligible" and row["judge"]["keep"] is True
+    assert row["prefix_review"]["keep"] and row["style_check"]["keep"]
+    assert all("UNASSESSED_WRONG_TAIL" not in json.dumps(call, ensure_ascii=False) for call in sent)
+    assert row["question"] == unit["messages"][:-1]
+    client.client.close()
+
+
+def test_plain_cot_and_direct_sft_imports_still_grade_recorded_answers(tmp_path):
+    output, rid, _ = run(tmp_path, conversation=True, targets=["sft"])
+    reviewer = Reviewer()
+    workflow = engine.Workflow(output, rid, tmp_path, jev=reviewer)
+    workflow.stage = "sft"
+    unit = {"id": "record", "source_id": "s1", "kind": "conversation", "status": "ready",
+            "messages": [{"role": "user", "content": "设备应如何维护？"},
+                         {"role": "assistant", "content": ANSWER}]}
+    result = workflow.sft(unit)[0]
+    assert reviewer.calls and result["judge"]["keep"]
+    assert "independent_cot_input_version" not in workflow.recipe

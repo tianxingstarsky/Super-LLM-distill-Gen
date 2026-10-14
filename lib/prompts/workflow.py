@@ -641,3 +641,60 @@ COT_NATIVE_ANSWER = context_version(COT_NATIVE_ANSWER, version="1.1.0", body=(
     "只交付最终回复本身，不加answer/reasoning/reasoning_trace等制作契约的JSON包装。"
     "用户未明确领域时保留歧义；不得把私有source的对话记录称作你们对话。"
     "简单模糊求助优先询问一至两项关键条件，不罗列完整故障排查步骤。"))
+
+# New runs use coherent phase contracts. Historical snapshots remain literal.
+from lib.prompts.workflow_prefill import (
+    RATIONAL_ONLY_BODY_V1_2, NATIVE_ANSWER_BODY_V1_2, PREFIX_CHECK_BODY_V1_2,
+)
+COT_RATIONALE_V1_1, COT_NATIVE_ANSWER_V1_1 = COT_RATIONALE, COT_NATIVE_ANSWER
+COT_PREFIX_CHECK_V1 = COT_PREFIX_CHECK
+COT_RATIONALE = _reasoning_spec_replace(COT_RATIONALE, version="1.2.0", template=spec(
+    "cot_rationale", "先撰写待核验的风格化推理", RATIONAL_ONLY_BODY_V1_2).template)
+COT_NATIVE_ANSWER = _reasoning_spec_replace(COT_NATIVE_ANSWER, version="1.2.0", template=spec(
+    "cot_native_answer", "从原生推理前缀续写答案", NATIVE_ANSWER_BODY_V1_2).template)
+COT_PREFIX_CHECK = _reasoning_spec_replace(COT_PREFIX_CHECK, version="1.2.0", template=spec(
+    "cot_prefix_check", "独立核验待注入推理前缀", PREFIX_CHECK_BODY_V1_2).template)
+
+from lib.prompts.workflow_agent_contracts import SYSTEM_V2, QA_DIRECTOR_V1_8, SFT_V1_6, STYLE_CHECK_V1_3
+SYSTEM_V1 = SYSTEM
+QA_DIRECTOR_V1_7, SFT_V1_5, STYLE_CHECK_V1_2 = QA_DIRECTOR, SFT, STYLE_CHECK
+SYSTEM = _reasoning_spec_replace(SYSTEM, version="2.0.0", template=spec("system", "工作流阶段协议", SYSTEM_V2).template)
+QA_DIRECTOR = _reasoning_spec_replace(QA_DIRECTOR, version="1.8.0", template=spec(
+    "qa_director", "逐轮对话设计与指导", QA_DIRECTOR_V1_8).template)
+SFT = _reasoning_spec_replace(SFT, version="1.6.0", template=spec("sft", "问答生成", SFT_V1_6).template)
+STYLE_CHECK = _reasoning_spec_replace(STYLE_CHECK, version="1.3.0", template=spec(
+    "style_check", "表达风格符合度核验", STYLE_CHECK_V1_3).template)
+
+from lib.prompts.workflow_agent_contracts import SFT_DIRECTED_V1_7, SFT_ANSWER_V1_4, QUESTION_USER_V1_2
+SFT_DIRECTED_V1_6, SFT_ANSWER_V1_3, QUESTION_USER_V1_1 = SFT_DIRECTED, SFT_ANSWER, QUESTION_USER
+SFT_DIRECTED = _reasoning_spec_replace(SFT_DIRECTED, version="1.7.0", template=spec(
+    "sft_directed", "执行固定用户行动与条件化推理字段契约", SFT_DIRECTED_V1_7).template)
+SFT_ANSWER = _reasoning_spec_replace(SFT_ANSWER, version="1.4.0", template=spec(
+    "sft_answer", "仅回应实际用户的独立回答者", SFT_ANSWER_V1_4).template)
+QUESTION_USER = _reasoning_spec_replace(QUESTION_USER, version="1.2.0", template=spec(
+    "question_user", "公开语境中的独立发言者", QUESTION_USER_V1_2).template)
+
+from lib.prompts.workflow_prefill import PREFIX_CHECK_BODY_V1_3
+from lib.prompts.workflow_agent_contracts import RATIONALE_CHECK_V1_6
+COT_PREFIX_CHECK_V1_2, RATIONALE_CHECK_V1_5 = COT_PREFIX_CHECK, RATIONALE_CHECK
+COT_PREFIX_CHECK = _reasoning_spec_replace(COT_PREFIX_CHECK, version="1.3.0", template=spec(
+    "cot_prefix_check", "区分业务事实与私有编辑审计的前缀核验", PREFIX_CHECK_BODY_V1_3).template)
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, version="1.6.0", template=spec(
+    "rationale_check", "独立检查业务论证与正文边界", RATIONALE_CHECK_V1_6).template)
+
+from lib.prompts.workflow_multiturn import MULTITURN_USER_V1_4
+MULTITURN_USER_V1_3 = MULTITURN_USER
+MULTITURN_USER = _reasoning_spec_replace(MULTITURN_USER, version="1.4.0", template=spec(
+    "multiturn_user", "按真实进展发言或自然结束", MULTITURN_USER_V1_4).template)
+
+from lib.prompts.workflow_agent_contracts import QUESTION_FIT_V1_3
+QUESTION_FIT_V1_2 = QUESTION_FIT
+QUESTION_FIT = _reasoning_spec_replace(QUESTION_FIT, version="1.3.0", template=spec(
+    "question_fit", "核对真实沟通价值与固定资料范围", QUESTION_FIT_V1_3).template)
+
+from lib.prompts.workflow_agent_contracts import SFT_DIRECTED_V1_8, SFT_ANSWER_V1_5
+SFT_DIRECTED_V1_7, SFT_ANSWER_V1_4 = SFT_DIRECTED, SFT_ANSWER
+SFT_DIRECTED = _reasoning_spec_replace(SFT_DIRECTED, version="1.8.0", template=spec(
+    "sft_directed", "执行固定行动并区分知识应用与制作泄露", SFT_DIRECTED_V1_8).template)
+SFT_ANSWER = _reasoning_spec_replace(SFT_ANSWER, version="1.5.0", template=spec(
+    "sft_answer", "回应实际用户并应用可核实知识", SFT_ANSWER_V1_5).template)

@@ -289,6 +289,12 @@ def _render_quality(quality: dict, manifest: dict) -> None:
         total = int(summary.get("total", eligible))
         reasons = summary.get("reasons", {})
         reason_labels = {"package_ai_review_rejected": "AI 打包评审未通过",
+                         "native_answer_missing_after_retry": "模型重试后仍未返回答案，已隔离该样本",
+                         "invalid_multiturn_user_action": "用户发言或结束信号结构无效，已隔离该样本",
+                         "invalid_multiturn_stop": "结束信号缺少有效理由或混入用户消息，已隔离该样本",
+                         "multiturn_stop_before_first_turn": "尚未开始真实对话就请求结束，已隔离该样本",
+                         "multiturn_natural_end_insufficient_turns": "对话已自然结束但不足两轮，已隔离且不补凑轮次",
+                         "insufficient_completed_turns": "完整对话不足两轮，已隔离该样本",
                          "training_surface_hidden_source_reference": "回答引用了用户看不到的资料",
                          "training_surface_internal_process_reference": "回答泄露了内部生成过程",
                          "review_repair_learner_task_changed": "自动修正改变了用户题面，已拒绝",

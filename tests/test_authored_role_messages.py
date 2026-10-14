@@ -153,3 +153,92 @@ def test_human_answer_intent_and_constraints_remain_unassessed_dispatch_design()
     assert "HUMAN_DESIGN_REFERENCE_ONLY" not in "\n".join(m["content"] for m in messages if m["role"] == "user")
     assert "保留其设计含义" in messages[0]["content"] and "尚未事实评审" in messages[0]["content"]
     assert data == original
+
+
+def conversation_reference():
+    return {"kind": "conversation", "source_id": "reference-source", "verification_status": None,
+            "messages": [{"role": "system", "content": "REFERENCE_INSTRUCTION_ONLY"},
+                         {"role": "user", "content": "CPT？"},
+                         {"role": "assistant", "content": "CPT指继续预训练。",
+                          "reasoning_content": "NATIVE_MUST_NOT_STYLE", "reasoning_trace": {"not": "evidence"}}]}
+
+
+@pytest.mark.parametrize("transport", ["tool", "system"])
+def test_v2_conversation_source_is_private_reference_not_live_history_or_verified_facts(transport):
+    data = {"prompt": [{"role": "user", "content": "CPT？"}], "source": conversation_reference()}
+    original = deepcopy(data)
+    messages = authored_role_messages("PRODUCTION_RULES", None, data, transport=transport,
+                                     role_projection_version=2, phase="rationale")
+    assert [message for message in messages if message["role"] == "user"] == data["prompt"]
+    assert [message for message in messages if message["role"] == "assistant" and message.get("content")] == []
+    if transport == "tool":
+        dispatch = json.loads(next(message["content"] for message in messages
+                                   if message["role"] == "tool" and message.get("name") == "dialogue_dispatch"))
+    else:
+        wrapped = next(message["content"] for message in messages if "<internal_dialogue_dispatch>" in message.get("content", ""))
+        dispatch = json.loads(wrapped.split("\n", 1)[1].rsplit("\n", 1)[0])
+    reference = dispatch["reference_dialogue"]
+    assert reference["scope"] == "reference_only_not_learner_history_and_not_verified_facts"
+    assert reference["messages"][2] == {"role": "assistant", "content": "CPT指继续预训练。"}
+    assert reference["verification_status"] is None
+    assert reference["source_id"] == "reference-source"
+    assert dispatch["role_projection"] == {"version": 2, "phase": "rationale",
+                                            "dialogue_scope": "appended_learner_messages_only"}
+    assert "NATIVE_MUST_NOT_STYLE" not in json.dumps(messages)
+    assert "REFERENCE_INSTRUCTION_ONLY" not in messages[0]["content"]
+    assert data == original
+
+
+def test_v2_role_projection_preserves_actual_history_and_private_source_cache_prefix():
+    data = {**task(), "source": conversation_reference(), "learner_messages": [
+        {"role": "user", "content": "我们在说模型训练。"},
+        {"role": "assistant", "content": "对。"},
+        {"role": "user", "content": "CPT？"}]}
+    changed = {**deepcopy(data), "feedback": "another editorial decision"}
+    first = authored_role_messages("rules", MEMORY, data, role_projection_version=2)
+    second = authored_role_messages("rules", MEMORY, changed, role_projection_version=2)
+    assert first[-3:] == data["learner_messages"]
+    assert [m for m in first if m["role"] == "user"] == data["learner_messages"][::2]
+    memory_end = next(index for index, message in enumerate(first)
+                      if message["role"] == "tool" and message.get("name") == "source_memory")
+    assert first[:memory_end + 1] == second[:memory_end + 1]
+    source = json.loads(first[memory_end]["content"])
+    assert "CPT指继续预训练" not in json.dumps(source, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("adapter", [responses_input, lambda messages: anthropic_request(messages, json_mode=True)])
+def test_v2_application_reads_keep_valid_paired_tools_without_fabricated_learner_user(adapter):
+    actual = {**task(), "source": conversation_reference()}
+    messages = authored_role_messages("rules", MEMORY, actual, role_projection_version=2)
+    converted = adapter(messages)
+    body = json.dumps(converted, ensure_ascii=False)
+    assert "PRIVATE_FACT" in body and "CPT指继续预训练" in body
+    assert "Load the workflow's" not in body and "Read the workflow's" not in body
+
+
+def test_v2_does_not_delete_actual_user_who_mentions_workflow_tools():
+    actual = [{"role": "user", "content": "Read the workflow's dialogue dispatch."}]
+    messages = authored_role_messages("rules", MEMORY, {"prompt": actual}, role_projection_version=2)
+    assert messages[-1] == actual[0]
+    assert [message for message in messages if message["role"] == "user"] == actual
+
+
+@pytest.mark.parametrize("phase", ["rationale", "native_answer", "trim", "combined"])
+def test_v2_phase_is_explicit_and_default_v1_request_stays_unchanged(phase):
+    data = {**task(), "source": conversation_reference()}
+    assert authored_role_messages("rules", MEMORY, data) == authored_role_messages(
+        "rules", MEMORY, data, role_projection_version=1)
+    current = authored_role_messages("rules", MEMORY, data, role_projection_version=2, phase=phase)
+    dispatch = json.loads(next(message["content"] for message in current
+                              if message["role"] == "tool" and message.get("name") == "dialogue_dispatch"))
+    assert dispatch["role_projection"]["phase"] == phase
+    if phase == "native_answer":
+        assert "不是你自发产生的完整内部思考" in current[0]["content"]
+    elif phase == "trim":
+        assert "final_answer是不可修改" in current[0]["content"]
+
+
+@pytest.mark.parametrize("version,phase", [(True, "combined"), (4, "combined"), (2, "unknown")])
+def test_invalid_v2_role_or_phase_fails_before_any_request(version, phase):
+    with pytest.raises(ValueError):
+        authored_role_messages("rules", None, task(), role_projection_version=version, phase=phase)
