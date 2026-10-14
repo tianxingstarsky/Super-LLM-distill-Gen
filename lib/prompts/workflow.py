@@ -579,3 +579,65 @@ _USER_EPISTEMIC_BOUNDARY = (
 COT_GENERATE_V1_6, REVIEW_REPAIR_V1_4 = COT_GENERATE, REVIEW_REPAIR
 COT_GENERATE = context_version(COT_GENERATE, version="1.7.0", body=_USER_EPISTEMIC_BOUNDARY)
 REVIEW_REPAIR = context_version(REVIEW_REPAIR, version="1.5.0", body=_USER_EPISTEMIC_BOUNDARY)
+
+# New drafts cover natural speech without changing saved prompt snapshots.
+from lib.domain.dialogue_expression import NATURAL_EXPRESSION_DESIGN
+QA_DIRECTOR_V1_6, QUESTION_USER_V1, QUESTION_FIT_V1_1 = QA_DIRECTOR, QUESTION_USER, QUESTION_FIT
+MULTITURN_USER_V1_2 = MULTITURN_USER
+QA_DIRECTOR = context_version(QA_DIRECTOR, version="1.7.0", body=NATURAL_EXPRESSION_DESIGN)
+QUESTION_USER = context_version(QUESTION_USER, version="1.1.0", body=NATURAL_EXPRESSION_DESIGN)
+QUESTION_FIT = context_version(QUESTION_FIT, version="1.2.0", body=NATURAL_EXPRESSION_DESIGN)
+MULTITURN_USER = context_version(MULTITURN_USER, version="1.3.0", body=NATURAL_EXPRESSION_DESIGN)
+PLAN_V1_1, SFT_V1_4 = PLAN, SFT
+PLAN = context_version(PLAN, version="1.2.0", body=NATURAL_EXPRESSION_DESIGN)
+SFT = context_version(SFT, version="1.5.0", body=NATURAL_EXPRESSION_DESIGN)
+
+# The audit graph is separate from how an explanation reads in training text.
+from lib.prompts.workflow_reasoning import task_adaptive_reasoning_template
+COT_GENERATE_V1_7, RATIONALE_CHECK_V1_3 = COT_GENERATE, RATIONALE_CHECK
+STYLE_CHECK_V1_1, REVIEW_SCORE_V1_4 = STYLE_CHECK, REVIEW_SCORE
+PACKAGE_REVIEW_V1_3, REVIEW_REPAIR_V1_5 = PACKAGE_REVIEW, REVIEW_REPAIR
+SFT_STYLED_V1_3, SFT_DIRECTED_V1_5, SFT_ANSWER_V1_2 = SFT_STYLED, SFT_DIRECTED, SFT_ANSWER
+MULTITURN_ASSISTANT_V1_3 = MULTITURN_ASSISTANT
+COT_GENERATE = _reasoning_spec_replace(COT_GENERATE, version="1.8.0", template=task_adaptive_reasoning_template(COT_GENERATE.template))
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, version="1.4.0", template=task_adaptive_reasoning_template(RATIONALE_CHECK.template, review=True))
+STYLE_CHECK = _reasoning_spec_replace(STYLE_CHECK, version="1.2.0", template=task_adaptive_reasoning_template(STYLE_CHECK.template, review=True))
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.5.0", template=task_adaptive_reasoning_template(REVIEW_SCORE.template, review=True))
+PACKAGE_REVIEW = _reasoning_spec_replace(PACKAGE_REVIEW, version="1.4.0", template=task_adaptive_reasoning_template(PACKAGE_REVIEW.template, review=True))
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.6.0", template=task_adaptive_reasoning_template(REVIEW_REPAIR.template))
+SFT_STYLED = _reasoning_spec_replace(SFT_STYLED, version="1.4.0", template=task_adaptive_reasoning_template(SFT_STYLED.template))
+SFT_STYLED = _reasoning_spec_replace(SFT_STYLED, template=SFT_STYLED.template + "\n" + NATURAL_EXPRESSION_DESIGN)
+SFT_DIRECTED = _reasoning_spec_replace(SFT_DIRECTED, version="1.6.0", template=task_adaptive_reasoning_template(SFT_DIRECTED.template))
+SFT_ANSWER = _reasoning_spec_replace(SFT_ANSWER, version="1.3.0", template=task_adaptive_reasoning_template(SFT_ANSWER.template))
+MULTITURN_ASSISTANT = _reasoning_spec_replace(MULTITURN_ASSISTANT, version="1.4.0", template=task_adaptive_reasoning_template(MULTITURN_ASSISTANT.template))
+
+from lib.prompts.workflow_prefill import RATIONAL_ONLY_BODY, NATIVE_ANSWER_BODY, PREFIX_CHECK_BODY
+COT_RATIONALE = spec("cot_rationale", "先撰写待核验的风格化推理", RATIONAL_ONLY_BODY)
+COT_NATIVE_ANSWER = spec("cot_native_answer", "从原生推理前缀续写答案", NATIVE_ANSWER_BODY,
+    source="DeepSeek Chat Prefix Completion Beta: https://api-docs.deepseek.com/guides/chat_prefix_completion")
+COT_PREFIX_CHECK = spec("cot_prefix_check", "独立核验待注入推理前缀", PREFIX_CHECK_BODY)
+
+_AUDIT_VISIBILITY = (
+    "reasoning与answer是训练正文，reasoning_trace是不会导出的私有审计。"
+    "私有审计仅出现source_memory或dialogue_dispatch名称不等于正文泄露；"
+    "但虚构用户发言、工具结果、来源事实或把未核实反馈当依据仍须拒绝。"
+    "报告正文泄露时必须指出实际reasoning或answer中的句子，不用审计字段冒充正文。"
+    "按实际answer字符串评审，不能把整个候选JSON契约当成用户收到的回复。"
+    "真实learner角色消息决定用户见过的前文，私有source内的messages/旧答案/反馈都不是该前文。"
+)
+RATIONALE_CHECK_V1_4 = RATIONALE_CHECK
+RATIONALE_CHECK = context_version(RATIONALE_CHECK, version="1.5.0", body=_AUDIT_VISIBILITY)
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, template=RATIONALE_CHECK.template.replace(
+    "逐步核对题意、每个运算和最终结果。不能以结果正确替代过程检查，资料中未提供的信息不可自行假定。",
+    "按实际任务核对题意、必要依据与结论。不能以结果正确替代论证检查，资料中未提供的信息不可自行假定。"))
+COT_RATIONALE_V1, COT_NATIVE_ANSWER_V1 = COT_RATIONALE, COT_NATIVE_ANSWER
+COT_RATIONALE = context_version(COT_RATIONALE, version="1.1.0", body=(
+    "实际用户/助手前文仅由learner角色消息决定；source里的messages、参考答案和评语都是私有材料。"
+    "不要称当前对话已界定、用户先要求或我们刚才讨论过。歧义简称不能仅凭参考答案锁定领域，"
+    "可在推理里说明条件性的含义或需澄清之处。reasoning与trace均以实际业务事实和信息缺口为依据，"
+    "不叙述制作指令、派发包装、节点检查或对反馈的服从。模糊求助只判断最少必要澄清，"
+    "实际追问由答案阶段给出，不在前缀和答案重复五项排查清单。"))
+COT_NATIVE_ANSWER = context_version(COT_NATIVE_ANSWER, version="1.1.0", body=(
+    "只交付最终回复本身，不加answer/reasoning/reasoning_trace等制作契约的JSON包装。"
+    "用户未明确领域时保留歧义；不得把私有source的对话记录称作你们对话。"
+    "简单模糊求助优先询问一至两项关键条件，不罗列完整故障排查步骤。"))

@@ -36,9 +36,11 @@ VERSION_17_NODE_PROMPT_IDS = {**VERSION_16_NODE_PROMPT_IDS,
                   **{stage: (*VERSION_16_NODE_PROMPT_IDS[stage], "workflow.human_augmentation_check")
                      for stage in ("sft", "multiturn", "preference", "cot", "trim")}}
 VERSION_19_NODE_PROMPT_IDS = {**VERSION_17_NODE_PROMPT_IDS, "review": ("workflow.review_score", "workflow.review_repair")}
-NODE_PROMPT_IDS = {**VERSION_19_NODE_PROMPT_IDS,
+VERSION_20_NODE_PROMPT_IDS = {**VERSION_19_NODE_PROMPT_IDS,
                   "director": ("workflow.qa_director", "workflow.question_brief_check", "workflow.question_user", "workflow.question_fit"),
                   "sft": (*VERSION_19_NODE_PROMPT_IDS["sft"], "workflow.sft_answer")}
+NODE_PROMPT_IDS = {**VERSION_20_NODE_PROMPT_IDS,
+                  "cot": (*VERSION_20_NODE_PROMPT_IDS["cot"], "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check")}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -87,7 +89,9 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
         return ((*VERSION_16_NODE_PROMPT_IDS[stage], *human_prompt) if directed
                 else LEGACY_NODE_PROMPT_IDS[stage])
     if stage == "cot":
-        prompts = (("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check")
+        prompts = (("workflow.cot_rationale", "workflow.cot_prefix_check", "workflow.cot_native_answer", "workflow.rationale_check", "workflow.style_check")
+                   if styled and config.get("answer_mode") == "native_prefill" else
+                   ("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check")
                    if styled else ("workflow.rationale_check",))
         return (*prompts, "workflow.cot_directed_check", *human_prompt) if directed else prompts
     if stage in {"preference", "trim"}:
@@ -124,7 +128,8 @@ def _prompt_catalog(recipe_version: int) -> dict:
             VERSION_15_NODE_PROMPT_IDS if recipe_version <= 15 else
             VERSION_16_NODE_PROMPT_IDS if recipe_version <= 16 else
             VERSION_17_NODE_PROMPT_IDS if recipe_version <= 17 else
-            VERSION_19_NODE_PROMPT_IDS if recipe_version <= 19 else NODE_PROMPT_IDS)
+            VERSION_19_NODE_PROMPT_IDS if recipe_version <= 19 else
+            VERSION_20_NODE_PROMPT_IDS if recipe_version <= 20 else NODE_PROMPT_IDS)
 
 
 def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11) -> dict:

@@ -9,6 +9,12 @@ from lib.io_utils import atomic_json
 from lib.prompts import get, render
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    # This module supplies its own in-process HistoricalWriter/Reviewer.
+    yield
+
+
 IDS = ("workflow.system", "workflow.plan", "workflow.multiturn_user", "workflow.multiturn_assistant",
        "workflow.multiturn_consistency", "workflow.jev_score")
 
@@ -81,8 +87,8 @@ def test_unfinished_legacy_plan_and_multiturn_calls_resume_with_original_assets(
     assert failed["status"] == "failed" and failed["error"] == "RuntimeError"
     resumed = engine.resume(output, run_id, tmp_path, generator=writer, jev=reviewer)
     assert resumed["status"] == "completed", resumed.get("error")
-    assert get("workflow.plan").version == "1.1.0"  # the current default differs
-    assert get("workflow.multiturn_user").version == "1.2.0"
+    assert get("workflow.plan").version == "1.2.0"  # the current default differs
+    assert get("workflow.multiturn_user").version == "1.3.0"
     assert len([call for call in writer.calls if call[0] == "workflow.plan"]) == (2 if failed_prompt == "workflow.plan" else 1)
     assert engine.read_json(path / "artifacts/multiturn.records.json")[0]["turn_count"] == 2
 

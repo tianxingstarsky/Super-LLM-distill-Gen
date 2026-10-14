@@ -58,3 +58,57 @@ RATIONALE_CHECK_BODY = (
     '"scores":{"correctness":1到5,"reasoning":1到5,"grounding":1到5,"instruction":1到5,"safety":1到5},'
     '"reason":"具体判断依据与需修复位置"}。'
 )
+
+
+# These additions belong to new prompt versions. The bodies above were used
+# to assemble historical snapshots and must remain byte-for-byte unchanged.
+# A task's proof dependencies and its narrative layout are different things;
+# varying the latter must never rearrange the former.
+TASK_ADAPTIVE_REASONING_BODY = (
+    "任务适配的推理组织：先依据实际任务决定需要解释什么，不默认套用固定阶段。"
+    "不把所有解释写成‘第一步—第二步—检查—边界—总结’，也不让每条样本依次套用同一组栏目。"
+    "表达可以自然成段、直接说明关键关系、并列比较、保留条件分支或提出必要澄清；"
+    "这些只是可选表达方式，不是必须轮换的模板、行为配额或新步骤清单。"
+    "只解释当前问题真正依赖的关系；短问不必长答，信息不足时可用很短的解释支持澄清。"
+    "没有实际比较需要就不虚构替代方案，没有额外局限就不添加边界段，没有错误前提就不制造纠错。"
+    "定义、改写、反馈、社交回应和确认不必伪装成多步证明；复杂问题则保留足够的实际论证。"
+    "数学推导、算法、时间关系、操作前置条件与多轮对话确有依赖顺序时必须保持，"
+    "不能为了多样化随机打乱真实依赖，不能把假设比较写成已证实的因果链。"
+    "用户明确指定编号、结构、推导方法或篇幅时遵守其要求；用户指定格式也不允许编造步骤或凑长。"
+    "仅当当前契约提供reasoning_trace时，它是独立审计记录，不增加契约未要求的字段；其premises、steps、checks、limitations不是正文栏目，"
+    "也不是宣称模型真实内在思考顺序；正文不需要逐项照抄它们或与数组顺序机械对应。"
+    "正文与审计中的事实、支持关系和结论必须一致；必要的检查可以记录在内部审计，"
+    "没有表达需要时不必在正文另设‘核对’段。"
+)
+
+TASK_ADAPTIVE_REASONING_REVIEW_BODY = (
+    "任务适配的推理审查：按实际任务的依据、依赖和沟通目的判断解释是否充分。"
+    "premises、steps、checks和limitations是内部审计维度，不是正文必须按序出现的栏目。"
+    "不得因正文没有编号、固定步骤、‘核对’段或‘边界’段而扣分；单句有效解释、并列比较、"
+    "条件分支和必要澄清都可以合格，不能要求每条样本展示同一种论证流程。"
+    "用户未规定篇幅时不设置统一长度或步骤数下限，也不按看起来复杂、篇幅长或栏目齐全加分。"
+    "没有必要的替代方案、额外局限或错误前提时，不能要求候选虚构这些内容。"
+    "真正的计算、算法、操作前置条件、时间关系与实际对话依赖必须保持；"
+    "随机调换依赖、错误因果或漏掉必要前提仍须拒绝，不能以自然或多样化表达为理由放行。"
+    "用户明确指定格式或篇幅时检查实际遵循和有效内容；编号本身不违规，机械凑步或重复不算有效内容。"
+)
+
+
+def task_adaptive_reasoning_template(template: str, *, review: bool = False) -> str:
+    """Prepare a new spec without mutating any historical prompt body.
+
+    This transforms only our exact inherited generic ordering instruction.
+    It does not rewrite user instructions or reorder generated reasoning.
+    The caller must assign a new PromptSpec version and retain the old spec.
+    """
+    instruction = (TASK_ADAPTIVE_REASONING_REVIEW_BODY if review
+                   else TASK_ADAPTIVE_REASONING_BODY)
+    escaped = instruction.replace("{", "{{").replace("}", "}}")
+    if escaped in template:
+        return template
+    if not review:
+        template = template.replace(
+            "先识别需要的子任务再按依赖解决，检查是否遗漏关键前提或跨步；",
+            "按当前任务的真实依赖保留必要支持关系，检查是否遗漏关键前提或跨步；",
+        )
+    return template + "\n" + escaped

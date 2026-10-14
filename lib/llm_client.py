@@ -22,6 +22,7 @@ from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request
 from lib.domain.model_reasoning import validate_reasoning
 from lib.model_streaming import StreamCallback, consume_stream
 from lib.model_response_details import commit_response_details, extract_response_details
+from lib.model_reasoning_prefill import DEEPSEEK_PREFILL_BASE_URL, prepare_reasoning_prefill
 from lib.model_request_reliability import (
     ModelJSONError, ModelRequestError, SERVICE_COOLDOWNS, classify_request_error,
     rejected_before_generation, retry_delay,
@@ -104,10 +105,13 @@ def chat_json(
     on_stream: StreamCallback | None = None,
     allow_reasoning_fallback: bool = True,
     response_details: dict | None = None,
+    reasoning_prefix: str | None = None,
 ) -> Dict[str, Any]:
     """严格 JSON 调用：response_format 解码层强制 + 容错解析 + 降温度重试。"""
     if response_details is not None:
         response_details.clear()
+        allow_reasoning_fallback = False
+    if reasoning_prefix is not None:
         allow_reasoning_fallback = False
     if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
         raise ValueError("max_tokens must be a positive integer")
@@ -130,6 +134,7 @@ def chat_json(
                               thinking=thinking, json_mode=True,
                               **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
                               **({"response_details": attempt_details} if response_details is not None else {}),
+                              **({"reasoning_prefix": reasoning_prefix} if reasoning_prefix is not None else {}),
                               **({"on_stream": forward_stream} if on_stream else {}))
         except (ValueError, ModelRequestError) as error:
             if error is callback_error:
@@ -435,6 +440,8 @@ class ChatClient:
                                   if isinstance(part, dict) and isinstance(part.get("text"), str))
             if message.get("tool_calls"):
                 text_parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+            if message.get("prefix") is True:
+                text_parts.append(message["reasoning_content"])
         tool_overhead = 1024 if any(message.get("role") == "tool" for message in messages) else 0
         if sum(len(part.encode("utf-8")) for part in text_parts) + tool_overhead + output > context_limit:
             raise ValueError("model_context_window_exceeded")
@@ -490,9 +497,16 @@ class ChatClient:
                  temperature: float, thinking: bool | None, json_mode: bool,
                  on_stream: StreamCallback | None = None,
                  allow_reasoning_fallback: bool = True,
-                 response_details: dict | None = None) -> tuple[str, int, int]:
+                 response_details: dict | None = None,
+                 reasoning_prefix: str | None = None) -> tuple[str, int, int]:
         if response_details is not None:
             response_details.clear()
+            allow_reasoning_fallback = False
+        messages, prefill_metadata = prepare_reasoning_prefill(messages, reasoning_prefix,
+            api_format=self.api_format, base_url=getattr(self, "base_url", ""),
+            reasoning=getattr(self, "reasoning", None), thinking=thinking)
+        capture_details = response_details is not None or reasoning_prefix is not None
+        if reasoning_prefix is not None:
             allow_reasoning_fallback = False
         replayed_tools = any(message.get("role") == "tool" for message in messages)
         def get_field(value, name, default=None):
@@ -533,17 +547,17 @@ class ChatClient:
             request_details = {}
             result = consume_stream(stream, self.api_format, on_stream,
                 allow_reasoning_fallback=allow_reasoning_fallback,
-                **({"response_details": request_details} if response_details is not None else {}))
-            commit_response_details(response_details, request_details)
+                **({"response_details": request_details} if capture_details else {}))
+            commit_response_details(response_details, {**request_details, **prefill_metadata})
             return result
         def full_result(response, result, stop_reason, allowed):
             if replayed_tools:
                 reject_tool_action(response)
             details = (extract_response_details(response, self.api_format)
-                       if response_details is not None else {})
+                       if capture_details else {})
             result = self._full_result(result, on_stream, stop_reason, allowed,
-                                      verify_complete=response_details is not None, details=details)
-            commit_response_details(response_details, details)
+                                      verify_complete=capture_details, details=details)
+            commit_response_details(response_details, {**details, **prefill_metadata})
             return result
         choice = getattr(self, "reasoning", {"mode": "auto"})
         explicit_reasoning = choice.get("mode", "auto") != "auto"
@@ -613,11 +627,25 @@ class ChatClient:
         _paired_tools(messages)
         kwargs = {"model": self.model, "messages": messages, "temperature": temperature}
         kwargs.update(reasoning_kwargs)
+        create_completion = self.client.chat.completions.create
+        if reasoning_prefix is not None:
+            # The SDK copy shares the configured credentials and HTTP pool.
+            # Keep the original URL, model identity and scheduling pool intact.
+            try:
+                create_completion = self.client.with_options(
+                    base_url=DEEPSEEK_PREFILL_BASE_URL).chat.completions.create
+            except (AttributeError, TypeError):
+                raise ValueError("model_reasoning_prefill_transport_unsupported") from None
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}),
+                                    "thinking": {"type": "enabled"}}
         if replayed_tools:
             kwargs["tool_choice"] = "none"
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        if json_mode and self.json_supported is not False:
+        # DeepSeek beta rejects JSON response_format combined with prefix.
+        # Keep the caller's JSON contract/parser without weakening the prefix;
+        # this special request says nothing about ordinary JSON capability.
+        if json_mode and reasoning_prefix is None and self.json_supported is not False:
             kwargs["response_format"] = {"type": "json_object"}
         if legacy_disable:
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
@@ -625,9 +653,13 @@ class ChatClient:
             kwargs.update(stream=True, stream_options={"include_usage": True})
         for _ in range(5):
             try:
-                response = self._create(self.client.chat.completions.create, kwargs)
+                response = self._create(create_completion, kwargs)
                 break
             except Exception as error:
+                if reasoning_prefix is not None and getattr(error, "status_code", None) in {400, 404, 405, 422}:
+                    # A rejected beta request must not lose its prefix or be
+                    # retried as an ordinary dialogue/JSON fallback.
+                    raise ValueError("model_reasoning_prefill_rejected") from None
                 check_reasoning_rejection(error)
                 if "max_tokens" in kwargs and _is_parameter_unsupported(error, "max_tokens"):
                     kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
@@ -641,7 +673,7 @@ class ChatClient:
                     raise
         else:
             raise RuntimeError("chat parameter negotiation failed")
-        if json_mode and self.json_supported is None:
+        if json_mode and reasoning_prefix is None and self.json_supported is None:
             self.json_supported = True
         if on_stream and kwargs.get("stream"):
             return stream_result(response)
@@ -698,16 +730,22 @@ class ChatClient:
         on_stream: StreamCallback | None = None,
         allow_reasoning_fallback: bool = True,
         response_details: dict | None = None,
+        reasoning_prefix: str | None = None,
     ) -> str:
         """Return text through the selected protocol and count its usage."""
         if response_details is not None:
             response_details.clear()
             allow_reasoning_fallback = False
+        if reasoning_prefix is not None:
+            allow_reasoning_fallback = False
         if max_tokens is not None and (type(max_tokens) is not int or max_tokens <= 0):
             raise ValueError("max_tokens must be a positive integer")
         if type(retries) is not int or not 1 <= retries <= 10:
             raise ValueError("invalid_model_request_attempts")
-        request_max_tokens, reservation_usd = self._budget_request_bound(messages, max_tokens)
+        context_messages, _ = prepare_reasoning_prefill(messages, reasoning_prefix,
+            api_format=self.api_format, base_url=getattr(self, "base_url", ""),
+            reasoning=getattr(self, "reasoning", None), thinking=thinking)
+        request_max_tokens, reservation_usd = self._budget_request_bound(context_messages, max_tokens)
         last_err: Exception | None = None
         callback_error = None
         cancel_error = None
@@ -757,6 +795,7 @@ class ChatClient:
                     thinking=thinking, json_mode=json_mode,
                     **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
                     **({"response_details": attempt_details} if response_details is not None else {}),
+                    **({"reasoning_prefix": reasoning_prefix} if reasoning_prefix is not None else {}),
                     **({"on_stream": notify} if on_stream else {}))
                 self.usage["calls"] += 1
                 self.usage["prompt_tokens"] += prompt_tokens
@@ -797,7 +836,7 @@ class ChatClient:
                 definite_rejection = rejected_before_generation(e)
                 # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
                 # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
-                if (self.api_format != "anthropic" and json_mode
+                if (reasoning_prefix is None and self.api_format != "anthropic" and json_mode
                         and self.json_supported is not False and _is_format_unsupported(e)):
                     self.json_supported = False
                     continue

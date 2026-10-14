@@ -46,8 +46,10 @@ def generation_snapshot(workspace: str, nodes) -> dict:
     return {node: {
         "enabled": _field(workspace, f"workflow-generation-enabled:{workspace}:{node}", False),
         "style": _field(workspace, f"workflow-generation-style:{workspace}:{node}",
-                        "structured" if node == "cot" else "default"),
+                        "default"),
         "instruction": _field(workspace, f"workflow-generation-instruction:{workspace}:{node}", ""),
+        **({"answer_mode": _field(workspace, f"workflow-generation-answer-mode:{workspace}:{node}", "joint")}
+           if node == "cot" and _field(workspace, f"workflow-generation-enabled:{workspace}:{node}", False) else {}),
     } for node in nodes if node in {"sft", "cot"}}
 
 
@@ -78,7 +80,7 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
     style_key = f"workflow-generation-style:{prefix}"
     instruction_key = f"workflow-generation-instruction:{prefix}"
     _restore_field(workspace, enabled_key, False)
-    _restore_field(workspace, style_key, "structured" if node == "cot" else "default")
+    _restore_field(workspace, style_key, "default")
     _restore_field(workspace, instruction_key, "")
     language = st.session_state.get("ui_language", "zh")
     with st.container(key=f"workbench-generation:{node}"):
@@ -86,7 +88,7 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
             st.caption("教师复用清洗资料包，按节点上下文容量安排相关资料；容纳不下时提示调整 token 上限。最终训练输入另行组织：知识内化样本独立作答，带资料样本写入必要上下文。")
         render_prompt_library(prompt_library, workspace, f"generation:{node}", save_field=save_field,
                               fields={"style": style_key, "instruction": instruction_key},
-                              defaults={"style": "structured" if node == "cot" else "default", "instruction": ""},
+                              defaults={"style": "default", "instruction": ""},
                               apply_extras={enabled_key: True}, restore_extras={enabled_key: False},
                               label="我的风格模板", save_label="保存风格")
         enabled = st.toggle("启用风格化生成", key=enabled_key,
@@ -96,6 +98,16 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
         style = st.selectbox("生成风格", GENERATION_STYLES, key=style_key, disabled=not enabled,
                              format_func=lambda value: translate_label(STYLE_LABELS[value], language),
                              on_change=save_field, args=(workspace, style_key))
+        if node == "cot" and enabled:
+            mode_key = f"workflow-generation-answer-mode:{prefix}"
+            _restore_field(workspace, mode_key, "joint")
+            mode = st.selectbox("答案生成方式", ("joint", "native_prefill"), key=mode_key,
+                format_func=lambda value: translate_label(
+                    "同次生成推理与答案" if value == "joint" else "原生推理前缀续写", language),
+                on_change=save_field, args=(workspace, mode_key),
+                help="原生方式先生成并核验推理，再通过 DeepSeek Chat Beta 的推理通道续写答案；使用本节点模型，增加独立请求。接口不支持时明确报错。")
+            if mode == "native_prefill":
+                st.caption("修饰前缀、上游原生续写和答案分别保存；不宣称修饰文字是模型自发的内部思考。")
         if enabled:
             st.file_uploader("导入风格要求", type=["txt", "md"], max_upload_size=1,
                              key=f"workflow-generation-upload:{prefix}",
@@ -105,7 +117,7 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                 st.error(error)
         st.text_area("风格要求", key=instruction_key, height=95, disabled=not enabled,
                      max_chars=MAX_GENERATION_INSTRUCTION_CHARS,
-                     placeholder="例如：先核对条件，再给出简短推导；使用自然中文，避免机械编号。",
+                     placeholder="例如：使用自然中文；按当前问题组织解释，不套固定编号和思考流程。",
                      help="只控制表达要求；生成与核验指令在节点提示词中编辑。自定义风格开启时必须填写。",
                      on_change=save_field, args=(workspace, instruction_key))
         description = (STYLE_PRESETS.get(style) or (
@@ -119,7 +131,7 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                 '</strong><span>' + html.escape(translate(STYLE_LABELS[style], language)) + '</span></div>'
                 '<p>' + html.escape(translate(description if enabled else inactive_description, language)) + '</p></div>')
         if enabled:
-            st.caption("显式解释包含具体前提、支持桥梁和针对性检查；步骤按任务调整，推理规范可在节点提示词编辑。" if node == "cot" else
+            st.caption("正文按任务自然组织，不套固定步骤；必要依据与核对另存审计记录。推理规范可在节点提示词编辑。" if node == "cot" else
                        "教师根据提示词生成显式推理与答案，正确性与风格分别检查。")
 
 

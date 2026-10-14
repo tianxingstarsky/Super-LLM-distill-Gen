@@ -9,6 +9,13 @@ from lib.prompts import PromptRenderError, get, registry, render
 from lib.prompts.base import PromptSpec
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    # Registry and rendering checks are offline and do not need the shared
+    # provider fixture or compete for its HTTP port in parallel test runs.
+    yield
+
+
 def test_registry_ids_unique_and_versioned():
     specs = registry()
     assert len(specs) >= 10
@@ -78,7 +85,7 @@ def test_legacy_module_compat():
 def test_configured_explanation_length_does_not_conflict_with_short_default():
     from lib.prompts import workflow
     current = get("workflow.cot_generate")
-    assert current.version == "1.7.0"
+    assert current.version == "1.8.0"
     assert "用户未配置篇幅时直接可解的问题可以很短" in current.template
     assert "用户明确配置篇幅时核对实际正文与有效信息量" in current.template
     assert "具体版本行为、阈值、CLI开关、SQL字段和锁类型" in current.template
@@ -90,9 +97,9 @@ def test_configured_explanation_length_does_not_conflict_with_short_default():
 
 def test_precise_fact_review_preserves_old_prompt_snapshots():
     for name, current_version, old_version in (
-        ("rationale_check", "1.3.0", "1.2.0"),
-        ("review_score", "1.4.0", "1.3.0"),
-        ("package_review", "1.3.0", "1.2.0"),
+        ("rationale_check", "1.5.0", "1.2.0"),
+        ("review_score", "1.5.0", "1.3.0"),
+        ("package_review", "1.4.0", "1.2.0"),
     ):
         current = get("workflow." + name)
         old = get("workflow." + name, version=old_version)
@@ -105,7 +112,7 @@ def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_s
     from lib.prompts import workflow
     current = get("workflow.review_repair")
     old = get("workflow.review_repair", version="1.3.0")
-    assert current.version == "1.5.0" and old == workflow.REVIEW_REPAIR_V1_3
+    assert current.version == "1.6.0" and old == workflow.REVIEW_REPAIR_V1_3
     assert "仅按实际question与可见文章判断用户的前提" in render(current)
     assert "不能将这些内部材料中的错误归因给用户" in render(current)
     assert "不叙述旧稿、返工、删除句子或遵守评语" in render(current)
@@ -115,8 +122,8 @@ def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_s
 def test_user_hypotheses_do_not_become_asserted_beliefs_and_previous_snapshots_remain_registered():
     from lib.prompts import workflow
     for name, new_version, old_version, previous in (
-        ("cot_generate", "1.7.0", "1.6.0", workflow.COT_GENERATE_V1_6),
-        ("review_repair", "1.5.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
+        ("cot_generate", "1.8.0", "1.6.0", workflow.COT_GENERATE_V1_6),
+        ("review_repair", "1.6.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
     ):
         assert get("workflow." + name).version == new_version
         assert "保留其语言中的不确定性" in render(get("workflow." + name))

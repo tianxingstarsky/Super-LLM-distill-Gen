@@ -66,6 +66,62 @@ def _terms(text, *, limit=24):
     return [term for term, _ in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:limit]]
 
 
+def _director_request_reserve(recipe, template):
+    """Count a minimal one-candidate wire envelope, with no invented evidence.
+
+    Packs consume the remaining capacity. Optional history/memory examples are
+    not reserved here: actual director preflight sheds them, then splits the
+    batch. The small placeholder below estimates only IDs and message wrappers;
+    it is never persisted as source material or transmitted to a provider.
+    """
+    from lib.domain.dialogue_expression import natural_expression_guide
+    from lib.domain.workflow_qa_director import QA_TYPES
+    from lib.infrastructure.model_context_prefix import NODE_RULE_HEADER
+    from lib.infrastructure.source_memory_messages import source_memory_messages
+
+    identifier = "0" * 64
+    pack = {"version": 1, "id": identifier, "prefix_sha256": identifier, "materials": []}
+    director = recipe.get("qa_director", {})
+    targets = [stage for stage in ("sft", "multiturn") if stage in recipe.get("targets", ("sft",))]
+    if not targets:
+        targets = ["sft"]
+    # These are the non-optional fields in a batch snapshot. No body, design,
+    # question, answer, or hypothetical user experience is used for budgeting.
+    task = {"candidates": [{"id": identifier, "source_id": identifier, "kind": "document",
+                "source_context_pack": {key: pack[key] for key in ("version", "id", "prefix_sha256")},
+                "source_line_material_id": identifier, "source_line_anchor": {
+                    "material_id": identifier, "start_line": 1, "end_line": 1},
+                "source_is_synthetic": False, "assigned_type": "closed_book"}],
+            "assigned_types": ["closed_book"], "offset": 0,
+            "coverage": {qa_type: dict.fromkeys(("planned", "assigned", "accepted", "rejected"), 0)
+                         for qa_type in QA_TYPES},
+            "feedback": {}, "history": [], "history_is_not_evidence": True,
+            "question_rules": director.get("question_rules", ""),
+            "answer_rules": director.get("answer_rules", ""), "requirement": recipe.get("brief", ""),
+            "targets": targets, "natural_expression_guidance": natural_expression_guide()}
+    if recipe.get("source_line_protocol_version") == 1:
+        task["source_line_protocol_version"] = 1
+    if director.get("question_separation") is True:
+        task["question_separation"] = True
+    if director.get("planning_mode") == "adaptive":
+        task.update(request_phase="batch_design", planning_mode="adaptive",
+                    evidence_modes=list(director.get("type_weights", {})), type_weights_are_not_quotas=True)
+    if recipe.get("qa_agent_memory_version") == 1:
+        task["agent_memory"] = {"version": 1, "summary_kind": "deterministic_ledger_projection",
+            "history_is_not_evidence": True, "deduplication": "indexed_exact_learner_task",
+            "semantic_paraphrases_are_not_proven_unique": True,
+            "ledgers": {label: {stage: {"accepted_by_type": {}, "accepted_dimensions": {}}
+                               for stage in targets} for label in ("current_run", "published")},
+            "recent_designs": [], "generation_feedback": {}, "immutable_source_windows": []}
+    system = recipe.get("node_prompt_system", "") + NODE_RULE_HEADER + "\n" + template
+    messages = source_memory_messages(system, {"teacher_context_pack": [pack], "task_payload": task})
+    wire_bytes = sum(len(message.get("content", "").encode("utf-8")) for message in messages)
+    wire_bytes += sum(len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
+                      for message in messages if message.get("tool_calls")) + 1024
+    # The source pack's own envelope is included by the actual pack byte count.
+    return wire_bytes - _bytes(pack)
+
+
 def context_capacity(recipe):
     """Use the same UTF-8 upper bound as the request preflight, not chars/4.
 
@@ -112,7 +168,16 @@ def context_capacity(recipe):
                 continue
             context = binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
             output = binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
-            capacities.append(context - output - overhead - extra_rules - style_bytes - 8192 - 1024)
+            if (stage == "director" and recipe.get("qa_expression_version") == 1
+                    and recipe.get("source_memory_protocol_version") == 1):
+                template = prompts.get("workflow.qa_director", max(prompts.values(), key=lambda text: len(text.encode("utf-8"))))
+                reserve = _director_request_reserve(recipe, template)
+                # Keep the same transport/preflight margin as the director.
+                # Runtime counts every actual field and will split candidates
+                # before a request; accepted source text is never trimmed.
+                capacities.append(context - output - reserve - style_bytes - 2048 - 512)
+            else:
+                capacities.append(context - output - overhead - extra_rules - style_bytes - 8192 - 1024)
     capacity = min(capacities, default=DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_MAX_OUTPUT_TOKENS - 12288)
     if capacity < 1024:
         raise ValueError("source_context_model_capacity_too_small")

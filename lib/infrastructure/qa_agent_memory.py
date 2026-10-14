@@ -17,15 +17,19 @@ MAX_DESIGNS = 6
 MAX_FEEDBACK = 16
 
 
-def build_agent_memory(local_history, published_history, stages, *, history, feedback, candidates):
+def build_agent_memory(local_history, published_history, stages, *, history, feedback, candidates,
+                       include_expression=False):
     """Snapshot bounded memory; its caller checkpoints it before requesting."""
     ledgers = {}
     for label, store in (("current_run", local_history), ("published", published_history)):
         ledgers[label] = {stage: {"accepted_by_type": store.coverage(namespace=stage),
-            "accepted_dimensions": store.dimension_coverage(namespace=stage, limit=8)}
+            "accepted_dimensions": store.dimension_coverage(namespace=stage, limit=8,
+                **({"include_expression": True} if include_expression else {}))}
             for stage in stages}
     designs = [{"question": row["question"][:240], "qa_type": row["qa_type"],
-                **({"dialogue_design": deepcopy(row["dialogue_design"])} if row.get("dialogue_design") else {})}
+                **({"dialogue_design": deepcopy(row["dialogue_design"])} if row.get("dialogue_design") else {}),
+                **({"expression_design": deepcopy(row["expression_design"])}
+                   if include_expression and row.get("expression_design") else {})}
                for row in history[:MAX_DESIGNS]]
     result = {"version": VERSION, "summary_kind": "deterministic_ledger_projection",
               "history_is_not_evidence": True, "deduplication": "indexed_exact_learner_task",

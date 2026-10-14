@@ -17,6 +17,7 @@ import sqlite3
 from threading import RLock
 import unicodedata
 
+from lib.domain.dialogue_expression import EXPRESSION_FIELDS, validate_expression_design
 
 MAX_HISTORY_ITEMS = 20
 MAX_QUESTION_CHARS = 32768
@@ -237,7 +238,7 @@ class QAHistory:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             columns = {row[1] for row in self.connection.execute("PRAGMA table_info(qa_history)")}
-            for name in ("dialogue_goal", "dialogue_intent"):
+            for name in ("dialogue_goal", "dialogue_intent", "expression_design"):
                 if name not in columns:
                     self.connection.execute(f"ALTER TABLE qa_history ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
             self.connection.execute("COMMIT")
@@ -258,7 +259,7 @@ class QAHistory:
                 self._closed = True
 
     @staticmethod
-    def _summary(row) -> dict:
+    def _summary(row, *, include_expression=False) -> dict:
         return {"id": row["sample_id"], "identity": row["identity"],
                 "question": _snippet(row["question"], MAX_QUESTION_SNIPPET),
                 "answer": row["answer"], "qa_type": row["qa_type"],
@@ -267,6 +268,8 @@ class QAHistory:
                 "family_id": row["family_id"], "parent_id": row["parent_id"],
                 "source_id": row["source_id"], "source_name": row["source_name"],
                 "run_id": row["run_id"], "namespace": row["namespace"],
+                **({"expression_design": json.loads(row["expression_design"])}
+                   if include_expression and row["expression_design"] else {}),
                 **({"dialogue_design": {"interaction_goal": row["dialogue_goal"],
                                         "user_intent": row["dialogue_intent"]}}
                    if row["dialogue_goal"] else {})}
@@ -282,6 +285,8 @@ class QAHistory:
         visible_context = row.get("visible_context", "")
         design = row.get("dialogue_design")
         dimensions = _design_dimensions(design)
+        expression = (validate_expression_design(row["expression_design"])
+                      if "expression_design" in row else None)
         identity = _identity(question, visible_context, answer_policy, qa_type, design)
         core_identity = learner_task_identity(question, visible_context)
         actual_identity = _actual_input_hash(row.get("actual_input_sha256"))
@@ -304,7 +309,9 @@ class QAHistory:
                   _snippet(visible_context, MAX_CONTEXT_SNIPPET), answer_policy,
                   *(_snippet(row.get(key, ""), 256) for key in
                     ("family_id", "parent_id", "source_id", "source_name", "run_id")),
-                  *(_snippet(value, limit) for value, limit in zip(dimensions or ("", ""), (1024, 512))))
+                  *(_snippet(value, limit) for value, limit in zip(dimensions or ("", ""), (1024, 512))),
+                  json.dumps(expression, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                  if expression else "")
         terms = _terms(display_question)
         with self._lock:
             self.connection.execute("BEGIN IMMEDIATE")
@@ -344,8 +351,8 @@ class QAHistory:
                     return False
                 inserted = self.connection.execute(
                     "INSERT OR IGNORE INTO qa_history (namespace,sample_id,identity,question,answer,"
-                    "qa_type,visible_context,answer_policy,family_id,parent_id,source_id,source_name,run_id,dialogue_goal,dialogue_intent) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", fields)
+                    "qa_type,visible_context,answer_policy,family_id,parent_id,source_id,source_name,run_id,dialogue_goal,dialogue_intent,expression_design) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", fields)
                 if not inserted.rowcount:
                     self.connection.execute("COMMIT")
                     return False
@@ -367,6 +374,7 @@ class QAHistory:
                     "ON CONFLICT(namespace,qa_type) DO UPDATE SET total=total+1",
                     (namespace, qa_type))
                 dimensions = {name: _snippet(row.get(name, ""), 256) for name in ("source_id", "topic", "skill")}
+                dimensions.update({"expression_" + name: value for name, value in (expression or {}).items()})
                 for name, value in dimensions.items():
                     if value:
                         self.connection.execute(
@@ -427,7 +435,7 @@ class QAHistory:
             return None
         return {**self._summary(row), "match_kind": "exact_learner_task" if learner_task_dedup else "exact_contract", "score": 1.0}
 
-    def recent(self, *, limit=10, namespace="default") -> list[dict]:
+    def recent(self, *, limit=10, namespace="default", include_expression=False) -> list[dict]:
         limit = _limit(limit)
         if not limit:
             return []
@@ -435,7 +443,7 @@ class QAHistory:
             rows = self.connection.execute(
                 "SELECT * FROM qa_history WHERE namespace=? ORDER BY row_id DESC LIMIT ?",
                 (_dimension(namespace, "default"), limit)).fetchall()
-        return [self._summary(row) for row in rows]
+        return [self._summary(row, include_expression=include_expression) for row in rows]
 
     def coverage(self, *, namespace="default") -> dict[str, int]:
         with self._lock:
@@ -444,7 +452,7 @@ class QAHistory:
                 (_dimension(namespace, "default"),)).fetchall()
         return {row["qa_type"]: row["total"] for row in rows}
 
-    def dimension_coverage(self, *, namespace="default", limit=12) -> dict[str, list[dict]]:
+    def dimension_coverage(self, *, namespace="default", limit=12, include_expression=False) -> dict[str, list[dict]]:
         """Bounded aggregates of accepted work, without reloading old answers."""
         namespace, limit = _dimension(namespace, "default"), _limit(limit)
         with self._lock:
@@ -452,9 +460,10 @@ class QAHistory:
                     self.connection.execute(
                         "SELECT value,total FROM qa_history_dimensions WHERE namespace=? AND dimension=? "
                         "ORDER BY total DESC,value LIMIT ?", (namespace, dimension, limit)).fetchall()]
-                    for dimension in ("source_id", "topic", "skill")}
+                    for dimension in ("source_id", "topic", "skill", *(
+                        ("expression_" + name for name in EXPRESSION_FIELDS) if include_expression else ()))}
 
-    def similar(self, question, *, limit=10, namespace="default") -> list[dict]:
+    def similar(self, question, *, limit=10, namespace="default", include_expression=False) -> list[dict]:
         question = _question(question)
         limit = _limit(limit)
         query_terms = _terms(question)
@@ -488,7 +497,7 @@ class QAHistory:
             if not overlap:
                 continue
             score = 2 * overlap / (len(query_set) + len(candidate_terms))
-            ranked.append({**self._summary(row), "match_kind": "lexical", "score": round(score, 6),
+            ranked.append({**self._summary(row, include_expression=include_expression), "match_kind": "lexical", "score": round(score, 6),
                            "same_numbers": numbers == _NUMBERS.findall(_normalise(row["question"]))})
         ranked.sort(key=lambda row: (-row["score"], row["id"]))
         return ranked[:limit]

@@ -244,10 +244,10 @@ def test_new_dialogue_assets_keep_original_version_lookups_and_render_safely():
         prompt_id = "workflow." + name
         current = get(prompt_id)
         old = get(prompt_id, version="1.0.0")
-        expected_version = ("1.1.0" if name in {"plan", "multiturn_consistency"} else
-                            "1.6.0" if name == "qa_director" else
-                            "1.5.0" if name == "sft_directed" else
-                            "1.3.0" if name == "multiturn_assistant" else "1.2.0")
+        expected_version = ("1.2.0" if name == "plan" else "1.1.0" if name == "multiturn_consistency" else
+                            "1.7.0" if name == "qa_director" else
+                            "1.6.0" if name == "sft_directed" else
+                            "1.4.0" if name == "multiturn_assistant" else "1.2.0")
         assert current.version == expected_version and old.version == "1.0.0"
         assert render(current) != render(old)
     assert "request_phase=next_turn" in render(get("workflow.qa_director"))

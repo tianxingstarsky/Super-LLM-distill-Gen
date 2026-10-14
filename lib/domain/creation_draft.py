@@ -44,6 +44,7 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-mat
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
+               'workflow-generation-answer-mode': frozenset({'joint', 'native_prefill'}),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'}),
                'workflow-review-repair-mode': frozenset({'auto', 'human'})}
@@ -59,7 +60,7 @@ BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
                   'workflow-human-enabled',
                   'workflow-production-enabled'}
 NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
-                          'workflow-generation-instruction'}
+                          'workflow-generation-instruction', 'workflow-generation-answer-mode'}
 HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
                 'workflow-human-question-requirements', 'workflow-human-answer-requirements'}
 _MODEL_INITIALIZATION_MARKERS = frozenset(
@@ -118,6 +119,8 @@ def validate_creation_draft(values):
         if field in NODE_GENERATION_FIELDS:
             parts = key.split(':')
             if len(parts) != 3 or not parts[1] or parts[2] not in {'sft', 'cot'}:
+                raise ValueError('invalid_creation_draft')
+            if field == 'workflow-generation-answer-mode' and parts[2] != 'cot':
                 raise ValueError('invalid_creation_draft')
         if field == 'workflow-node-prompt':
             parts = key.split(':')

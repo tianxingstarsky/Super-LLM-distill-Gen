@@ -38,6 +38,12 @@ FATAL_VALIDATION_CODES = frozenset({
     "model_reasoning_disable_unsupported", "model_reasoning_budget_unsupported",
     "model_reasoning_effort_required", "model_reasoning_format_unknown",
     "model_reasoning_parameter_unsupported",
+    "model_reasoning_prefill_unsupported", "model_reasoning_prefill_thinking_disabled",
+    "model_reasoning_prefill_explicit_required", "model_reasoning_prefill_transport_unsupported",
+    "model_reasoning_prefill_rejected", "invalid_model_reasoning_prefix",
+    "invalid_model_reasoning_prefill_messages", "native_prefill_invalid_answer",
+    "native_prefill_receipt_missing",
+    "model_reasoning_prefill_tools_unsupported",
 })
 
 

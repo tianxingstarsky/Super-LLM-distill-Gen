@@ -17,6 +17,12 @@ from lib.infrastructure.qa_history import (
 )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_llm_server():
+    """Ledger tests use SQLite only and do not bind the shared model port."""
+    yield
+
+
 def accepted(sample_id="sample-1", question="如何设置模型上下文长度？", **changes):
     return {"id": sample_id, "status": "eligible", "question": question,
             "answer": "在生成节点中设置上下文长度。", "qa_type": "closed_book",

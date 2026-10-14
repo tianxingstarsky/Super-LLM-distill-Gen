@@ -29,6 +29,11 @@ def tool_payload(messages, name):
                  if message["role"] == "tool" and message.get("name") == name), None)
 
 
+def public_messages(messages):
+    """Native reasoning is private metadata, never a blind actor's history."""
+    return [{"role": message["role"], "content": message["content"]} for message in messages]
+
+
 def task_payload(messages):
     last_user = next(message["content"] for message in reversed(messages) if message["role"] == "user")
     try:
@@ -438,10 +443,10 @@ def test_multiturn_closed_followup_comes_from_blind_questioner_actual_visible_hi
     initial = tool_payload(questioner.calls[0], "dialogue_dispatch")
     followup = tool_payload(questioner.calls[1], "dialogue_dispatch")
     assert "visible_dialogue" not in initial
-    assert followup["visible_dialogue"] == row["messages"][:2]
+    assert followup["visible_dialogue"] == public_messages(row["messages"][:2])
     assert all(tool_payload(call, "source_memory") is None for call in questioner.calls)
     assert all("盆栽" not in json.dumps(call, ensure_ascii=False) for call in questioner.calls)
-    assert writer.answers[1][-3:] == row["messages"][:3]
+    assert writer.answers[1][-3:] == public_messages(row["messages"][:3])
     assert writer.answers[1][-1]["content"] == FOLLOWUP_QUESTION
     assert "内部续轮占位" not in json.dumps(row["messages"], ensure_ascii=False)
 
@@ -469,7 +474,7 @@ def test_balanced_multiturn_without_design_keeps_blind_questioner_for_every_turn
     assert row["dialogue_end_reason"] == "natural_completion"
     assert len(questioner.calls) == len(writer.fits) == len(writer.answers) == 2
     assert all(tool_payload(call, "source_memory") is None for call in questioner.calls)
-    assert tool_payload(questioner.calls[1], "dialogue_dispatch")["visible_dialogue"] == row["messages"][:2]
+    assert tool_payload(questioner.calls[1], "dialogue_dispatch")["visible_dialogue"] == public_messages(row["messages"][:2])
     assert all("盆栽" not in json.dumps(call, ensure_ascii=False) for call in questioner.calls)
 
 
@@ -544,7 +549,7 @@ def test_followup_brief_may_reference_public_fact_but_never_hidden_reasoning(tmp
     assert QUOTE in row["messages"][1]["content"]
     followup = tool_payload(questioner.calls[1], "dialogue_dispatch")
     assert followup["question_brief"]["topic"] == QUOTE
-    assert followup["visible_dialogue"] == row["messages"][:2]
+    assert followup["visible_dialogue"] == public_messages(row["messages"][:2])
     assert all(set(message) == {"role", "content"} for message in followup["visible_dialogue"])
     assert HIDDEN_REASONING not in json.dumps(questioner.calls, ensure_ascii=False)
     assert "reasoning_content" not in json.dumps(questioner.calls, ensure_ascii=False)

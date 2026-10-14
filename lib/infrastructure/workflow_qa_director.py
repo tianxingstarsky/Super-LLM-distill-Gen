@@ -48,6 +48,7 @@ _PLAN_VALIDATION_CODES = frozenset({
     "source_line_ranges_required", "source_line_materials_required", "invalid_source_line_ranges",
     "source_line_material_not_found", "source_line_range_out_of_bounds", "source_line_range_empty",
     "invalid_qa_director_skip",
+    "invalid_expression_design",
 })
 
 
@@ -133,6 +134,16 @@ class DirectorBatchTooLarge(ValueError):
 
 
 class WorkflowQADirector:
+    def natural_expressions(self):
+        """New snapshots opt in; older request/checkpoint hashes stay valid."""
+        return self.recipe.get("qa_expression_version") == 1
+
+    def _natural_expression_guidance(self):
+        if not self.natural_expressions():
+            return {}
+        from lib.domain.dialogue_expression import natural_expression_guide
+        return {"natural_expression_guidance": natural_expression_guide()}
+
     def separated_questions(self):
         return self.recipe.get("qa_director", {}).get("question_separation") is True
 
@@ -197,7 +208,8 @@ class WorkflowQADirector:
         self._assess_question_brief(unit, contract, brief, visible_messages, key=key)
         retry_code = None
         for attempt in range(2):
-            data = {"question_brief": brief, "question_rules": self.recipe["qa_director"]["question_rules"]}
+            data = {"question_brief": brief, "question_rules": self.recipe["qa_director"]["question_rules"],
+                    **self._natural_expression_guidance()}
             if visible_messages:
                 data["visible_dialogue"] = visible_messages
             if retry_code:
@@ -232,7 +244,9 @@ class WorkflowQADirector:
                 self.event("question_dispatched", role="question", qa_type="closed_book",
                            visible_turns=len(visible_messages or []) // 2)
                 return {**contract, "question": question, "answer_policy": fit["answer_policy"],
-                        "question_brief": brief}
+                        "question_brief": brief,
+                        **({"expression_design": deepcopy(brief["expression_design"])}
+                           if self.natural_expressions() and brief.get("expression_design") else {})}
             # Never send a source-aware judge's free text to the questioner.
             retry_code = "question_not_suitable"
         raise ValueError(retry_code or "invalid_question_output")
@@ -461,6 +475,8 @@ class WorkflowQADirector:
                 "qa_type": contract["qa_type"], "visible_context": contract["visible_context"],
                 "answer_policy": contract["answer_policy"],
                 **actual_metadata,
+                **({"expression_design": deepcopy(contract["expression_design"])}
+                   if self.natural_expressions() and contract.get("expression_design") else {}),
                 **{name: contract[name] for name in ("topic", "skill") if contract.get(name)},
                 **({"dialogue_design": self.qa_identity_design(contract)}
                    if self.qa_identity_design(contract) is not None else {})}
@@ -544,6 +560,7 @@ class WorkflowQADirector:
             "maximum_turns": self.recipe.get("conversation_turns", 3),
             "question_rules": self.recipe["qa_director"]["question_rules"],
             "answer_rules": self.recipe["qa_director"]["answer_rules"], "feedback": feedback,
+            **self._natural_expression_guidance(),
         }
         if self.separated_questions():
             from lib.infrastructure.source_memory_messages import directed_source_request
@@ -732,13 +749,15 @@ class WorkflowQADirector:
                 def history_candidates():
                     for store in (local_history, published_history):
                         for stage in stages:
-                            yield from store.similar(query, limit=limit, namespace=stage)
+                            yield from store.similar(query, limit=limit, namespace=stage,
+                                **({"include_expression": True} if self.natural_expressions() else {}))
                     # Source wording can differ from the actual dialogue's
                     # language, register or goal. Empty lexical recall must
                     # not erase the immediately preceding accepted work.
                     for store in (local_history, published_history):
                         for stage in stages:
-                            yield from store.recent(limit=limit, namespace=stage)
+                            yield from store.recent(limit=limit, namespace=stage,
+                                **({"include_expression": True} if self.natural_expressions() else {}))
                 seen, examples = set(), []
                 for example in history_candidates():
                     identity = (example["id"], example.get("run_id"))
@@ -775,11 +794,18 @@ class WorkflowQADirector:
                     "history": history, "history_is_not_evidence": True,
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
-                    "targets": list(stages)}
+                    "targets": list(stages), **self._natural_expression_guidance()}
             if self.recipe.get("qa_agent_memory_version") == 1:
                 from lib.infrastructure.qa_agent_memory import build_agent_memory
                 data["agent_memory"] = build_agent_memory(local_history, published_history, stages,
-                    history=history, feedback=data["feedback"], candidates=data["candidates"])
+                    history=history, feedback=data["feedback"], candidates=data["candidates"],
+                    include_expression=self.natural_expressions())
+            elif self.natural_expressions():
+                # Explicit opt-in without agent memory still uses indexed,
+                # bounded accepted coverage rather than scanning old bodies.
+                data["expression_coverage"] = {label: {stage: store.dimension_coverage(
+                    namespace=stage, limit=8, include_expression=True) for stage in stages}
+                    for label, store in (("current_run", local_history), ("published", published_history))}
             if self.recipe.get("source_line_protocol_version") == 1:
                 data["source_line_protocol_version"] = 1
             if self.separated_questions():
@@ -828,6 +854,10 @@ class WorkflowQADirector:
                     from lib.infrastructure.qa_agent_memory import compact_agent_memory
                     while request_size() > available and compact_agent_memory(data["agent_memory"]):
                         pass
+                if self.natural_expressions() and data.get("natural_expression_guidance"):
+                    from lib.domain.dialogue_expression import compact_expression_guide
+                    while request_size() > available and compact_expression_guide(data["natural_expression_guidance"]):
+                        pass
                 if request_size() > available:
                     if len(batch) > 1:
                         raise DirectorBatchTooLarge("qa_director_batch_context_too_large")
@@ -839,6 +869,11 @@ class WorkflowQADirector:
                     data["history"].pop()
                 while len(canonical(data).encode("utf-8")) > available and compact_agent_memory(data["agent_memory"]):
                     pass
+                if self.natural_expressions() and data.get("natural_expression_guidance"):
+                    from lib.domain.dialogue_expression import compact_expression_guide
+                    while (len(canonical(data).encode("utf-8")) > available
+                           and compact_expression_guide(data["natural_expression_guidance"])):
+                        pass
                 if len(canonical(data).encode("utf-8")) > available:
                     if len(batch) > 1:
                         raise DirectorBatchTooLarge("qa_director_batch_context_too_large")

@@ -70,7 +70,7 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
     prefix = source_memory_messages(system, {**context, "task_payload": {}}, transport=transport)[:-1]
     contract = data.get("qa_contract", {})
     dispatch = {key: deepcopy(contract[key]) for key in (
-        "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design") if key in contract}
+        "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design", "expression_design") if key in contract}
     if include_question:
         question = contract.get("question")
         if not isinstance(question, str) or not question.strip():
@@ -91,8 +91,16 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
 def question_role_messages(system, data, *, transport="tool"):
     """Only a validated brief and public turns can cross to the questioner."""
     from lib.domain.workflow_qa_director import validate_question_brief
-    if set(data) - {"question_brief", "visible_dialogue", "question_rules", "retry_code"}:
+    if set(data) - {"question_brief", "visible_dialogue", "question_rules", "retry_code", "natural_expression_guidance"}:
         raise ValueError("private_context_in_question_request")
+    if "natural_expression_guidance" in data:
+        from lib.domain.dialogue_expression import natural_expression_guide
+        # A new arbitrary field must not smuggle source facts to the blind
+        # actor. Only the repository's source-free design guide can cross.
+        guide = natural_expression_guide()
+        if data["natural_expression_guidance"] != guide:
+            raise ValueError("private_context_in_question_request")
+        system += "\n自然表达的设计参考（无固定比例，用户规则可选择或扩展）：\n" + canonical(guide)
     brief = validate_question_brief(data["question_brief"])
     payload = {"question_brief": brief}
     if data.get("visible_dialogue"):
@@ -149,6 +157,8 @@ def authored_role_messages(system, memory_context, data, *, transport="tool"):
         "reference_answer/candidate_reasoning 仅为待核对、待修饰的参考，不能当作已经证实的事实；"
         "若与原始事实或实际问题冲突，以可核验事实和实际问题为准。"
         "这些参考和反馈不属于用户发言，不能把其中的错误或假设归因给用户；用户的前提只来自实际可见对话。"
+        "source内部即使包含messages或旧assistant答案，也只是私有待加工材料，不是本轮实际前文；"
+        "只有末尾真实learner角色消息决定用户见过什么。不能因此说当前对话已有界定、用户先要求或我们刚才讨论过。"
         "original_reasoning 是待修剪的既有正文，final_answer 是不可修改的既有最终答案。"
         "human_design 是人类提供的设计意图、要求与约束，其中的参考答案尚未事实评审；"
         "保留其设计含义，但任何事实性内容仍须按 source_memory 核验，不视为已评分通过。"
@@ -186,7 +196,7 @@ def authored_role_messages(system, memory_context, data, *, transport="tool"):
     contract = data.get("qa_contract")
     if isinstance(contract, dict):
         dispatch["task_design"] = {key: deepcopy(contract[key]) for key in (
-            "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design") if key in contract}
+            "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design", "expression_design") if key in contract}
         if contract.get("human_design") is not None:
             dispatch["human_design_scope"] = "design_intent_constraints_and_unassessed_reference_not_verified_facts"
     dispatch["reference_scope"] = "editable_candidates_not_verified_facts"

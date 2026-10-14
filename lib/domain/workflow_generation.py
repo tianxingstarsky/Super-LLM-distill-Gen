@@ -27,7 +27,7 @@ def validate_node_generation(value: dict | None) -> dict:
     normalized = {}
     for stage, config in value.items():
         if (stage not in {"sft", "cot"} or not isinstance(config, dict)
-                or set(config) - {"enabled", "style", "instruction"}):
+                or set(config) - {"enabled", "style", "instruction", "answer_mode"}):
             raise ValueError("invalid_node_generation")
         enabled = config.get("enabled", True)
         style = config.get("style", "default")
@@ -39,6 +39,12 @@ def validate_node_generation(value: dict | None) -> dict:
                 or (enabled and style == "custom" and not instruction.strip())):
             raise ValueError("invalid_node_generation")
         normalized[stage] = {"enabled": enabled, "style": style, "instruction": instruction.strip()}
+        if "answer_mode" in config:
+            mode = config["answer_mode"]
+            if (stage != "cot" or not isinstance(mode, str) or mode not in {"joint", "native_prefill"}
+                    or (mode == "native_prefill" and not enabled)):
+                raise ValueError("invalid_cot_answer_mode")
+            normalized[stage]["answer_mode"] = mode
     return normalized
 
 
@@ -46,7 +52,12 @@ def style_for_sample(config: dict | None, sample_id: str) -> dict:
     """Select one stable style independent of concurrency, batching, and retries."""
     if not isinstance(sample_id, str):
         raise ValueError("invalid_generation_sample_id")
-    node = validate_node_generation({"sft": {} if config is None else config})["sft"]
+    # Answer transport belongs to the CoT stage, not the text style itself.
+    # Creation validates its scope; neutral style selection can serve either node.
+    style_config = ({} if config is None else
+                    {key: value for key, value in config.items() if key != "answer_mode"}
+                    if isinstance(config, dict) else config)
+    node = validate_node_generation({"sft": style_config})["sft"]
     style = node["style"]
     if style == "mixed":
         index = int.from_bytes(hashlib.sha256(sample_id.encode("utf-8")).digest(), "big")

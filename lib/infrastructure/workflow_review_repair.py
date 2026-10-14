@@ -19,6 +19,7 @@ from lib.domain.corpus_quality import inspect_corpus
 from lib.domain.workflow_reasoning_route import cot_updates_sft, finalized_cot_sft_row
 from lib.infrastructure.workflow_rows import RowSpool, WorkflowRows, write_json_array
 from lib.infrastructure.human_revision import verified_revision_parent, verified_revision_batch, revision_evidence
+from lib.infrastructure.reasoning_prefill_history import retire_reasoning_prefill
 from lib.domain.authored_reasoning import AUTHORED_REASONING_VERSION
 from lib.domain.training_surface import training_surface_issue
 from lib.prompts.workflow_reasoning import RATIONALE_CHECK_BODY
@@ -55,6 +56,7 @@ def preserve_provider_reasoning(target, original, updated, *, origin):
     unmodified turns keep their original provider provenance.
     Legacy rows without provider reasoning/summary retain their existing schema.
     """
+    retire_reasoning_prefill(target, original, updated, origin=origin)
     turn_reviews = original.get("turn_reviews", [])
     turn_reviews = turn_reviews if isinstance(turn_reviews, list) else []
     provider_turns = [review for review in turn_reviews if isinstance(review, dict) and (

@@ -96,7 +96,7 @@ def _text_list(value, *, allow_empty=False):
             and all(_concrete_text(item) for item in value))
 
 
-def authored_reasoning_issue(candidate) -> str | None:
+def authored_reasoning_issue(candidate, *, answer_required=True) -> str | None:
     """Return a safe structural issue code, without claiming semantic proof.
 
     Call on the raw authored candidate, before projecting its text to training
@@ -108,7 +108,7 @@ def authored_reasoning_issue(candidate) -> str | None:
         return "authored_reasoning_invalid_candidate"
     if not _concrete_text(candidate.get("reasoning")):
         return "authored_reasoning_invalid_text"
-    if not isinstance(candidate.get("answer"), str) or not candidate["answer"].strip():
+    if answer_required and (not isinstance(candidate.get("answer"), str) or not candidate["answer"].strip()):
         return "authored_reasoning_invalid_answer"
     trace = candidate.get("reasoning_trace")
     if not isinstance(trace, dict):
@@ -154,6 +154,13 @@ def authored_reasoning_issue(candidate) -> str | None:
         return "authored_reasoning_invalid_limitations"
     # A clear statement that a factual conclusion cannot be determined must
     # retain its boundary; subtler omissions require semantic review.
-    if not trace["limitations"] and _UNCERTAINTY.search(candidate["answer"]):
+    if answer_required and not trace["limitations"] and _UNCERTAINTY.search(candidate["answer"]):
         return "authored_reasoning_missing_limitation"
     return None
+
+
+def authored_rationale_issue(candidate) -> str | None:
+    """Validate the reasoning-only phase without fabricating a final answer."""
+    if not isinstance(candidate, dict) or set(candidate) != {"reasoning", "reasoning_trace"}:
+        return "authored_rationale_invalid_fields"
+    return authored_reasoning_issue(candidate, answer_required=False)

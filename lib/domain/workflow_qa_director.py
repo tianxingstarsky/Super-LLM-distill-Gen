@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from lib.domain.human_augmentation import validate_human_augmentation
+from lib.domain.dialogue_expression import validate_expression_design
 from lib.domain.source_line_ranges import normalize_source_line_ranges, resolve_source_line_ranges
 
 
@@ -118,7 +119,7 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
                            expected_id: str | None = None, source_materials: list | None = None) -> dict:
     """Enforce the contract even when the editable director prompt is replaced."""
     required = {"id", "qa_type", "question", "visible_context", "answer_policy", "guidance", "evidence_quotes"}
-    optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges", "question_brief"}
+    optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges", "question_brief", "expression_design"}
     if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
         raise ValueError("invalid_qa_director_task")
     if value["qa_type"] not in QA_TYPES or (expected_type is not None and value["qa_type"] != expected_type):
@@ -181,7 +182,9 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
             **({"dialogue_design": validate_dialogue_design(value["dialogue_design"])}
                if "dialogue_design" in value else {}),
             **({"question_brief": validate_question_brief(value["question_brief"])}
-               if "question_brief" in value else {})}
+               if "question_brief" in value else {}),
+            **({"expression_design": validate_expression_design(value["expression_design"])}
+               if "expression_design" in value else {})}
 
 
 def validate_question_brief(value):
@@ -189,7 +192,7 @@ def validate_question_brief(value):
     strings = {"topic": 200, "communication_goal": 1200, "speaker_role": 400,
                "listener_role": 400, "relationship": 600, "register": 400}
     if (not isinstance(value, dict) or not {"topic", "communication_goal"} <= set(value)
-            or set(value) - set(strings) - {"behaviors"}):
+            or set(value) - set(strings) - {"behaviors", "expression_design"}):
         raise ValueError("invalid_question_brief")
     result = {key: _bounded_text(text, strings[key], "invalid_question_brief")
               for key, text in value.items() if key in strings}
@@ -198,6 +201,8 @@ def validate_question_brief(value):
             or any(not isinstance(item, str) or len(item) > 100 or not item.strip() for item in behaviors)):
         raise ValueError("invalid_question_brief")
     result["behaviors"] = list(dict.fromkeys(behaviors))
+    if "expression_design" in value:
+        result["expression_design"] = validate_expression_design(value["expression_design"])
     return result
 
 

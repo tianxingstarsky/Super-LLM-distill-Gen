@@ -3927,3 +3927,23 @@ def install_streamlit_localization() -> None:
                 return localized
 
             setattr(target, name, make_wrapper(name, original, target is DeltaGenerator))
+
+ZH_EN.update({
+    "答案生成方式": "Answer generation",
+    "风格化推理前缀生成": "Authored reasoning prefix",
+    "原生推理续写答案": "Answer from native reasoning continuation",
+    "推理前缀核验": "Reasoning prefix check",
+    "同次生成推理与答案": "Generate reasoning and answer together",
+    "原生推理前缀续写": "Continue from a native reasoning prefix",
+    "原生方式先生成并核验推理，再通过 DeepSeek Chat Beta 的推理通道续写答案；使用本节点模型，增加独立请求。接口不支持时明确报错。": "Write and check the reasoning first. Continue the answer through DeepSeek Chat Beta using this node's model. This adds separate requests. Unsupported APIs return an error.",
+    "修饰前缀、上游原生续写和答案分别保存；不宣称修饰文字是模型自发的内部思考。": "Save the authored prefix, provider continuation, and answer separately. The authored text is not claimed to be the model's spontaneous internal thought.",
+    "例如：使用自然中文；按当前问题组织解释，不套固定编号和思考流程。": "Use natural language. Shape the explanation around the task, without fixed numbering or a fixed reasoning sequence.",
+    "正文按任务自然组织，不套固定步骤；必要依据与核对另存审计记录。推理规范可在节点提示词编辑。": "Organize the explanation around the task. Keep evidence and checks in a separate audit record. Edit the rules in this node's prompts.",
+    "原生推理续写需要官方 DeepSeek Chat 接口。请打开 CoT 节点检查连接或答案生成方式。": "Native reasoning continuation requires the official DeepSeek Chat API. Open the CoT node to check the connection or answer mode.",
+    "原生推理续写需要开启模型思考。请打开 CoT 节点调整模型思考设置。": "Native continuation requires thinking to be enabled. Open the CoT node to change the model's thinking settings.",
+    "上游拒绝了原生推理前缀。已保存已完成的推理，请在 CoT 节点检查模型与接口支持。": "The provider rejected the reasoning prefix. Completed reasoning is saved. Check model and API support in the CoT node.",
+    "当前模型客户端不支持原生推理续写。请检查 CoT 节点的模型连接。": "This model client does not support native reasoning continuation. Check the connection in the CoT node.",
+    "原生续写未返回完整答案。推理前缀已保存，可从当前任务重试。": "Native continuation returned no complete answer. The reasoning prefix is saved. Retry the current task.",
+    "原生续写回执校验失败，候选未发布。请打开 CoT 节点查看失败详情。": "Native continuation verification failed. The candidate was not published. Open the CoT node for details.",
+    "DeepSeek 前缀接口不支持实际工具对话。请在 CoT 节点选择同次生成，保留原工具记录。": "DeepSeek's prefix API does not support tool conversations. Select joint generation in the CoT node to preserve the original tool records.",
+})

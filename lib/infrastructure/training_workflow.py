@@ -94,7 +94,7 @@ COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
 HUMAN_AUGMENTATION_RECIPE_VERSION = 17
 REVIEW_REPAIR_RECIPE_VERSION = 18
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -342,6 +342,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                       or new_prompt_override else
                       SOFT_PRODUCTION_RECIPE_VERSION if production and production["version"] == 2
                       else PRODUCTION_RECIPE_VERSION if production is not None else RECIPE_VERSION)
+    if (node_generation.get("cot", {}).get("answer_mode") == "native_prefill"
+            or any(prompt_id in {"workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check"}
+                   for templates in node_prompts.values() for prompt_id in templates)):
+        recipe_version = 21
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
@@ -445,7 +449,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     # as PDF/Markdown; actual conversation-only containers keep their path.
     if not repair_inputs and not source_cleaning and uses_shared_source_cleaning(targets, snapshots):
         source_cleaning = True
-        recipe_version = 20 if recipe_version == 20 else SOURCE_CLEANING_RECIPE_VERSION
+        recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
@@ -471,6 +475,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
               "qa_agent_memory_version": 1,
+              "qa_expression_version": 1,
+              "reasoning_shape_version": 1,
               "training_surface_protocol_version": 1,
               "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
@@ -701,7 +707,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
 
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
             allow_reasoning_fallback=True, model_stage=None, prompt_stage=None,
-            capture_response_details=False):
+            capture_response_details=False, reasoning_prefix=None):
         capture = (capture_response_details
                    and self.recipe.get("provider_reasoning_capture_version") == 1)
         if (self.recipe.get("review_repair") is not None and role == "jev"
@@ -778,7 +784,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                             {"type": "image_url", "image_url": {"url": image}}]}]
                     if source_pack_request and self.recipe.get("source_memory_protocol_version") == 1:
                         from lib.infrastructure.source_memory_messages import source_memory_messages
-                        transport = getattr(client, "source_memory_transport", "tool")
+                        transport = ("system" if prompt_id == "workflow.cot_native_answer" else
+                                     getattr(client, "source_memory_transport", "tool"))
                         request_messages = source_memory_messages(system, memory_context, transport=transport)
                         if memory_context["teacher_context_pack"]:
                             with self._lock:
@@ -786,7 +793,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                                     f"{model_stage or self.stage}.{role}"] = transport
                     if self.recipe.get("qa_director", {}).get("question_separation"):
                         from lib.infrastructure.dialogue_role_messages import answer_role_messages, question_role_messages
-                        transport = getattr(client, "source_memory_transport", "tool")
+                        transport = ("system" if prompt_id == "workflow.cot_native_answer" else
+                                     getattr(client, "source_memory_transport", "tool"))
                         if prompt_id == "workflow.question_user":
                             request_messages = question_role_messages(system, request_data, transport=transport)
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
@@ -798,20 +806,54 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                         request_messages = answer_role_messages(system, memory_context, request_data,
                             transport=getattr(client, "source_memory_transport", "tool"), include_question=True)
                     if (self.recipe.get("training_surface_protocol_version") == 1
-                            and prompt_id in {"workflow.cot_generate", "workflow.trim"}):
+                            and prompt_id in {"workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.trim"}):
                         from lib.infrastructure.dialogue_role_messages import authored_role_messages
-                        transport = getattr(client, "source_memory_transport", "tool")
+                        # DeepSeek beta disallows function-call history with
+                        # prefix. Use its explicit private-memory transport;
+                        # never erase or reclassify real learner tool turns.
+                        transport = ("system" if prompt_id == "workflow.cot_native_answer" else
+                                     getattr(client, "source_memory_transport", "tool"))
                         authored_messages = authored_role_messages(system, memory_context, request_data, transport=transport)
                         if authored_messages is not None:
                             request_messages = authored_messages
+                        if prompt_id == "workflow.cot_native_answer":
+                            with self._lock:
+                                self.state.setdefault("source_memory_transports", {})[
+                                    f"{model_stage or self.stage}.{role}.native_answer"] = transport
                     visible_only = (capture or not allow_reasoning_fallback or prompt_id in {
                         "workflow.sft_styled", "workflow.cot_generate", "workflow.style_check",
+                        "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check",
                         "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
                     response_details = {}
-                    value = chat_json(client, request_messages,
-                        max_tokens=binding.get("max_output_tokens"), **streaming,
-                        **({"response_details": response_details} if capture and isinstance(client, ChatClient) else {}),
-                        **({"allow_reasoning_fallback": False} if visible_only else {}))
+                    if prompt_id == "workflow.cot_native_answer":
+                        # Prefix completion returns the real visible answer,
+                        # not a model-owned JSON envelope. No text is invented
+                        # or decoded from native reasoning to fill an answer.
+                        visible = client.chat(request_messages, max_tokens=binding.get("max_output_tokens"),
+                            reasoning_prefix=reasoning_prefix, allow_reasoning_fallback=False,
+                            response_details=response_details, **streaming)
+                        # Early beta recipes explicitly requested this exact
+                        # one-field JSON schema. Decode their actual field,
+                        # rather than double-wrap JSON as user-visible text.
+                        # Current plain-text recipes retain the raw answer.
+                        if '仅返回JSON：{"answer"' in self.prompt_text(prompt_id, stage=prompt_stage):
+                            from lib.llm_client import parse_json_robust
+                            try:
+                                decoded = parse_json_robust(visible)
+                            except ValueError:
+                                decoded = None
+                            if isinstance(decoded, dict) and set(decoded) == {"answer"} and isinstance(decoded["answer"], str):
+                                response_details["visible_response_envelope"] = visible
+                                visible = decoded["answer"]
+                        if text_issue(visible):
+                            raise ValueError("native_prefill_invalid_answer")
+                        value = {"answer": visible}
+                    else:
+                        value = chat_json(client, request_messages,
+                            max_tokens=binding.get("max_output_tokens"), **streaming,
+                            **({"response_details": response_details} if capture and isinstance(client, ChatClient) else {}),
+                            **({"reasoning_prefix": reasoning_prefix} if reasoning_prefix is not None else {}),
+                            **({"allow_reasoning_fallback": False} if visible_only else {}))
                     if capture:
                         # The envelope is created by the worker, outside the model's
                         # JSON. It is committed atomically with this exact answer.
@@ -2103,15 +2145,35 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             from lib.infrastructure.source_memory_messages import directed_source_request
             task = directed_source_request(self.recipe, task, source, sample.get("qa_contract"))
         protocol = self.recipe.get("authored_reasoning_protocol_version") == 1
+        native_prefill = self.recipe.get("node_generation", {}).get("cot", {}).get("answer_mode") == "native_prefill"
+        if native_prefill:
+            # Capability checks happen before spending on the rationale phase.
+            from lib.model_reasoning_prefill import validate_prefill_client
+            validate_prefill_client(self.client("generation"))
+            if any(message.get("role") == "tool" or message.get("tool_calls") or message.get("function_call")
+                   for message in task["prompt"]):
+                raise ValueError("model_reasoning_prefill_tools_unsupported")
         instruction = "生成风格要求：\n" + style["instruction"]
         if task.get("reference_answer_status") == "unassessed_not_supplied":
             instruction += "\n上游只有结构合格，尚未事实评审，本次不提供其答案。独立依据真实问题和原始知识生成答案与解释，不推测上游答案，不把未评审结果当事实。资料不足时如实保留边界，不以换题或添造事实补救。"
-        if protocol:
+        if protocol and not native_prefill:
             from lib.domain.authored_reasoning import AUTHORED_REASONING_PROTOCOL_INSTRUCTION, authored_reasoning_issue
-            instruction += "\n" + AUTHORED_REASONING_PROTOCOL_INSTRUCTION
+            protocol_instruction = AUTHORED_REASONING_PROTOCOL_INSTRUCTION
+            if self.recipe.get("reasoning_shape_version") == 1:
+                from lib.prompts.workflow_reasoning import task_adaptive_reasoning_template
+                protocol_instruction = task_adaptive_reasoning_template(protocol_instruction)
+            instruction += "\n" + protocol_instruction
+        from lib.domain.authored_reasoning import authored_reasoning_issue
         feedback, check, style_check, contract_check = None, None, None, None
         for attempt in range(2):
-            value = self.ask([sample["id"], "cot_generate_v1", attempt], "generation",
+            prefill_audit = {}
+            if native_prefill:
+                value, prefill_audit = self.native_styled_answer(sample, task, style, feedback, attempt)
+                if value is None:
+                    feedback = prefill_audit
+                    continue
+            else:
+                value = self.ask([sample["id"], "cot_generate_v1", attempt], "generation",
                              "workflow.cot_generate", {**task, "feedback": feedback},
                              instruction=instruction)
             if not isinstance(value, dict) or any(text_issue(value.get(key)) for key in ("reasoning", "answer")):
@@ -2136,6 +2198,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                 if protocol else {})
             if surface_protocol:
                 reasoning_audit["training_surface_protocol_version"] = 1
+            if native_prefill:
+                reasoning_audit.update(prefill_audit)
             if self.recipe.get("review_repair") is not None:
                 return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                          "question": task["prompt"], "reasoning": [value["reasoning"]], "answer": value["answer"],
@@ -2178,6 +2242,47 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
                  "generation_style": style, "judge": check, "style_check": style_check,
                  "feedback": feedback, "repair_attempts": 1,
                  "reasoning_origin": "prompt_styled_generation", **self.qa_metadata(sample, contract_check)}]
+
+    def native_styled_answer(self, sample, task, style, feedback, attempt):
+        """Reuse a verified authored prefix; answer via provider-native continuation."""
+        from lib.domain.authored_reasoning import authored_rationale_issue
+        from lib.domain.training_surface import training_surface_issue
+
+        # No previous answer is supplied to this reasoning-only phase.
+        rationale_task = {key: value for key, value in task.items() if key != "reference_answer"}
+        rationale = self.ask([sample["id"], "cot_rationale_v1", attempt], "generation",
+            "workflow.cot_rationale", {**rationale_task, "feedback": feedback},
+            instruction="生成风格要求：\n" + style["instruction"], allow_reasoning_fallback=False)
+        if issue := authored_rationale_issue(rationale):
+            return None, {"reasoning_protocol": issue}
+        issue = training_surface_issue(rationale["reasoning"], "",
+            visible_messages=task["prompt"], contract=sample.get("qa_contract"))
+        if issue:
+            return None, {"training_surface": issue}
+        checked = self.adherence_check([sample["id"], "cot_prefix_check_v1", attempt],
+            "workflow.cot_prefix_check", {"prompt": task["prompt"], "source": task["source"],
+                "reasoning": rationale["reasoning"], "reasoning_trace": rationale["reasoning_trace"],
+                **({"source_context_pack": task["source_context_pack"]} if "source_context_pack" in task else {})})
+        if not checked["keep"] or checked["adherence"] < 4:
+            return None, {"prefix_review": checked["reason"]}
+        # The dispatch/schema/audit trace never enter the reasoning channel.
+        answer_task = {key: value for key, value in rationale_task.items()
+                       if key not in {"generation_style", "reference_answer_status", "quotes"}}
+        answer = self.ask([sample["id"], "cot_native_answer_v1", attempt], "generation",
+            "workflow.cot_native_answer", answer_task, allow_reasoning_fallback=False,
+            reasoning_prefix=rationale["reasoning"], capture_response_details=True)
+        if not isinstance(answer, dict) or set(answer) != {"answer"} or text_issue(answer.get("answer")):
+            raise ValueError("native_prefill_invalid_answer")
+        details = getattr(answer, "response_details", {})
+        prefix_sha = hashlib.sha256(rationale["reasoning"].encode("utf-8")).hexdigest()
+        receipt = details.get("reasoning_prefill", {})
+        if receipt.get("prefix_sha256") != prefix_sha or receipt.get("transport") != "deepseek_chat_beta":
+            raise ValueError("native_prefill_receipt_missing")
+        return {**rationale, "answer": answer["answer"]}, {
+            "reasoning_origin": "authored_prefix_native_answer",
+            "reasoning_prefill": deepcopy(receipt), "prefix_review": checked,
+            "answer_response_details": deepcopy(details),
+            "reasoning_scope": "authored_prefix_not_complete_provider_internal_reasoning"}
 
     def trim_reasoning(self, item):
         """Transform only explicit SFT/CoT reasoning, retaining immutable answers."""
