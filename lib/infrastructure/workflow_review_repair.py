@@ -22,6 +22,7 @@ from lib.infrastructure.human_revision import verified_revision_parent, verified
 from lib.infrastructure.reasoning_prefill_history import retire_reasoning_prefill
 from lib.domain.authored_reasoning import AUTHORED_REASONING_VERSION
 from lib.domain.training_surface import training_surface_issue
+from lib.domain.review_context import project_review_request
 from lib.prompts.workflow_reasoning import RATIONALE_CHECK_BODY
 
 
@@ -469,7 +470,8 @@ class WorkflowReviewRepair:
         def assessed(call_key, call_data):
             rules = ({"instruction": _authored_review_rules(self.recipe)}
                      if _authored_cot(target, row) and not call_data.get("learner_context_only") else {})
-            value = self.ask(call_key, role, "workflow.review_score", call_data,
+            value = self.ask(call_key, role, "workflow.review_score",
+                             project_review_request(self.recipe, call_data, phase="review"),
                              allow_reasoning_fallback=False, **rules)
             try:
                 return verdict(value)
@@ -536,7 +538,8 @@ class WorkflowReviewRepair:
              "generation_style": row.get("generation_style"),
              **_authored_review_audit(target, row)}, evidence)
         value = self.ask([*key, "repair"], "generation", "workflow.review_repair",
-                         data, allow_reasoning_fallback=False, **rules)
+                         project_review_request(self.recipe, data, phase="repair"),
+                         allow_reasoning_fallback=False, **rules)
         if multiturn_delta and (not isinstance(value, dict) or set(value) != {"record", "quotes", "uncertain"}
                 or not isinstance(value.get("quotes"), list) or len(value["quotes"]) > 32
                 or any(not isinstance(quote, str) or not quote.strip() or len(quote) > 20_000

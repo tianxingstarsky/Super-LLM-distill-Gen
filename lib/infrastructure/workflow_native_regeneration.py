@@ -11,11 +11,13 @@ from lib.domain.review_repair import validate_review_repair
 from lib.domain.training_surface import training_surface_issue
 from lib.domain.workflow_quality import accepted, conversation_issue, text_issue
 from lib.domain.style_judge import style_verdict
+from lib.domain.review_context import project_review_request
 from lib.model_request_reliability import ModelRequestError
 
 
 def _adherence(workflow, key, prompt_id, data):
-    value = workflow.ask(key, "jev", prompt_id, data, model_stage="review", prompt_stage="cot",
+    value = workflow.ask(key, "jev", prompt_id, project_review_request(workflow.recipe, data, phase="review"),
+                         model_stage="review", prompt_stage="cot",
                          allow_reasoning_fallback=False)
     try:
         return style_verdict(value, maximum_reason_length=4000, inspect_reason=True)
