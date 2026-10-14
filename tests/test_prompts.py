@@ -112,7 +112,7 @@ def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_s
     from lib.prompts import workflow
     current = get("workflow.review_repair")
     old = get("workflow.review_repair", version="1.3.0")
-    assert current.version == "1.6.0" and old == workflow.REVIEW_REPAIR_V1_3
+    assert current.version == "1.7.0" and old == workflow.REVIEW_REPAIR_V1_3
     assert "仅按实际question与可见文章判断用户的前提" in render(current)
     assert "不能将这些内部材料中的错误归因给用户" in render(current)
     assert "不叙述旧稿、返工、删除句子或遵守评语" in render(current)
@@ -123,7 +123,7 @@ def test_user_hypotheses_do_not_become_asserted_beliefs_and_previous_snapshots_r
     from lib.prompts import workflow
     for name, new_version, old_version, previous in (
         ("cot_generate", "1.8.0", "1.6.0", workflow.COT_GENERATE_V1_6),
-        ("review_repair", "1.6.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
+        ("review_repair", "1.7.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
     ):
         assert get("workflow." + name).version == new_version
         assert "保留其语言中的不确定性" in render(get("workflow." + name))

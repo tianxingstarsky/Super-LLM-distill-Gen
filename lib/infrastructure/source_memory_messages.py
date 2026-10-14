@@ -31,10 +31,14 @@ def sealed_review_memory_context(data, *, instruction=None):
             or any(not isinstance(block, str) or not block.strip() for block in blocks)):
         raise ValueError("human_session_source_evidence_unavailable")
     ranges = evidence.get("source_line_ranges", [])
+    source_ids = evidence.get("teacher_evidence_source_ids")
+    if source_ids is not None and (not isinstance(source_ids, list) or len(source_ids) != len(blocks)
+            or any(not isinstance(value, str) or not value.strip() for value in source_ids)):
+        raise ValueError("human_session_source_evidence_unavailable")
     selected = evidence.get("source_line_scope") == "selected"
     if selected and len(ranges) != len(blocks):
         raise ValueError("invalid_source_line_ranges")
-    materials = [{"source_id": evidence.get("source_id"), "source_kind": evidence.get("source_kind"),
+    materials = [{"source_id": source_ids[index] if source_ids is not None else evidence.get("source_id"), "source_kind": evidence.get("source_kind"),
                   "text": block, **(ranges[index] if selected else {"block_index": index})}
                  for index, block in enumerate(blocks)]
     content = {"version": 1, "materials": materials,
@@ -43,7 +47,7 @@ def sealed_review_memory_context(data, *, instruction=None):
     pack = {**content, "id": identity, "prefix_sha256": identity}
     task = deepcopy(data)
     task["source_evidence"] = {key: value for key, value in evidence.items()
-                               if key not in {"teacher_evidence", "teacher_evidence_blocks"}}
+                               if key not in {"teacher_evidence", "teacher_evidence_blocks", "teacher_evidence_source_ids"}}
     if instruction is not None:
         task["node_task_instructions"] = instruction
     return {"teacher_context_pack": [pack], "task_payload": task}

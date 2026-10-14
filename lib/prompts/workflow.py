@@ -703,3 +703,8 @@ from lib.prompts.workflow_agent_contracts import QA_DIRECTOR_V1_9
 QA_DIRECTOR_V1_8 = QA_DIRECTOR
 QA_DIRECTOR = _reasoning_spec_replace(QA_DIRECTOR, version="1.9.0", template=spec(
     "qa_director", "明确字段类型的批次设计与逐轮指导", QA_DIRECTOR_V1_9).template)
+
+from lib.prompts.workflow_repair import REVIEW_REPAIR_V1_7
+REVIEW_REPAIR_V1_6 = REVIEW_REPAIR
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.7.0", template=spec(
+    "review_repair", "保留真实用户与工具的助手局部修正", REVIEW_REPAIR_V1_7).template)

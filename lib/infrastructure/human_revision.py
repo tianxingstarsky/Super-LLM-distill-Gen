@@ -198,6 +198,11 @@ def verified_revision_parent(output, run_id, supplied):
             if batch is not None:
                 batch["children"][child_key] = cached_child
         child, session_identity, recipe_identity, sidecar_identity = cached_child
+        if context.get("native_regeneration"):
+            native_recipe = read_json(recipe_file)
+            if (native_recipe.get("native_regeneration_version") != 1
+                    or not (native_recipe.get("review_repair") or {}).get("native_regeneration")):
+                raise ValueError("human_session_revision_not_authorized")
         if _identity(session_file) != session_identity:
             # Other reviews may save issues during execution. Recheck this
             # child's authorization instead of rejecting an unrelated update.
@@ -257,7 +262,10 @@ def verified_revision_parent(output, run_id, supplied):
         prior = record.get("revision_context") or record.get("qa_contract", {}).get("human_design", {}).get("seed", {}).get("revision_context", {})
         ancestry = [*prior.get("ancestors", []), {"run_id": context["parent_run_id"], "candidate_id": context["candidate_id"]}]
         evidence = revision_evidence(record, parent_recipe, parent_path)
-        if (digest(record) != context["content_sha256"] or canonical(record_messages(record)) != canonical(context["messages"])
+        actual_messages = (record.get("question") if context.get("native_regeneration") else record_messages(record))
+        if context.get("native_regeneration") and isinstance(actual_messages, str):
+            actual_messages = [{"role": "user", "content": actual_messages}]
+        if (digest(record) != context["content_sha256"] or canonical(actual_messages) != canonical(context["messages"])
                 or ancestry != context["ancestors"] or context["depth"] != prior.get("depth", 0) + 1
                 or context.get("evidence_pack_sha256") != evidence.get("evidence_pack_sha256")
                 or any(context[key] != value for key, value in evidence.items())):

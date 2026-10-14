@@ -363,14 +363,23 @@ def _evidence_quote_spans(evidence, quotes):
         return quote_spans(evidence["teacher_evidence"], quotes)
     if not isinstance(quotes, list) or not quotes:
         return None
+    selected = evidence.get("source_line_scope") == "selected"
+    ranges = evidence.get("source_line_ranges", [])
+    source_ids = evidence.get("teacher_evidence_source_ids")
+    if selected and len(ranges) != len(blocks):
+        raise ValueError("invalid_source_line_ranges")
+    if source_ids is not None and (not isinstance(source_ids, list) or len(source_ids) != len(blocks)):
+        raise ValueError("human_session_source_evidence_unavailable")
     spans = []
     for index, quote in enumerate(quotes):
         for block_index, block in enumerate(blocks):
             matched = quote_spans(block, [quote])
             if matched is not None:
                 spans.append({**matched[0], "quote_index": index,
-                    "source_block_index": block_index, "offset_scope": "selected_source_block",
-                    **evidence["source_line_ranges"][block_index]})
+                    "source_block_index": block_index,
+                    "offset_scope": "selected_source_block" if selected else "verified_source_block",
+                    **(ranges[block_index] if selected else {"source_id": (
+                        source_ids[block_index] if source_ids is not None else evidence.get("source_id"))})})
                 break
         else:
             return None
@@ -403,6 +412,10 @@ class WorkflowReviewRepair:
                                          sft_output_style=self.recipe.get("sft_output_style"))
 
     def _review_evidence(self, row):
+        from lib.infrastructure.workflow_repair_references import append_repair_reference_sources
+        return append_repair_reference_sources(self, self._original_review_evidence(row))
+
+    def _original_review_evidence(self, row):
         selected = (self.recipe.get("source_line_protocol_version") == 1
                     and (row.get("qa_contract") or {}).get("source_line_ranges") is not None)
         context = row.get("revision_context")
@@ -511,6 +524,8 @@ class WorkflowReviewRepair:
         payload = self._review_payload(target, row)
         rules = {"instruction": _AUTHORED_REPAIR_RULES} if _authored_cot(target, row) else {}
         cot_delta = self.recipe.get("qa_agent_memory_version") == 1 and target == "cot"
+        from lib.domain.learner_context import prompt_at_least
+        multiturn_delta = target == "multiturn" and prompt_at_least(self.recipe, "workflow.review_repair", (1, 7, 0))
         if cot_delta:
             rules["instruction"] = (rules.get("instruction", "") + "\n" + _COT_DELTA_REPAIR_RULES).lstrip()
         data = _selected_review_request(
@@ -522,10 +537,24 @@ class WorkflowReviewRepair:
              **_authored_review_audit(target, row)}, evidence)
         value = self.ask([*key, "repair"], "generation", "workflow.review_repair",
                          data, allow_reasoning_fallback=False, **rules)
+        if multiturn_delta and (not isinstance(value, dict) or set(value) != {"record", "quotes", "uncertain"}
+                or not isinstance(value.get("quotes"), list) or len(value["quotes"]) > 32
+                or any(not isinstance(quote, str) or not quote.strip() or len(quote) > 20_000
+                       or "\x00" in quote for quote in value["quotes"])):
+            return row, "review_repair_invalid_schema"
         if (not isinstance(value, dict) or type(value.get("uncertain", False)) is not bool
                 or value.get("uncertain") or not isinstance(value.get("record"), dict)):
             return row, "review_repair_content_unavailable"
         candidate = value["record"]
+        if multiturn_delta:
+            from lib.domain.assistant_message_delta import apply_assistant_message_delta
+            try:
+                # Index the unmodified original list; the model never copies
+                # user articles, role metadata or tool facts into its output.
+                messages = apply_assistant_message_delta(row.get("messages"), candidate)
+            except ValueError as error:
+                return row, str(error)
+            candidate = {**deepcopy(payload), "messages": messages}
         if cot_delta and set(candidate) == {"reasoning", "answer"}:
             # The model edits only its answer. The program owns the immutable
             # question, article and tools, including exact literal escapes.
@@ -557,6 +586,9 @@ class WorkflowReviewRepair:
         from lib.infrastructure.training_workflow import digest
         target, original = item["target"], item["record"]
         config = validate_review_repair(self.recipe["review_repair"])
+        if target == "cot" and config.get("native_regeneration") is True:
+            from lib.infrastructure.workflow_native_regeneration import regenerate_native_cot_item
+            return regenerate_native_cot_item(self, item)
         row = _manual_patch(target, original, item)
         if item.get("revision_context"):
             row["revision_context"] = deepcopy(item["revision_context"])
@@ -688,6 +720,17 @@ class WorkflowReviewRepair:
         linked = bool(cot_updates_sft(self.recipe) and len(collections.get("cot", []))
                       and not self.recipe.get("repair_inputs")
                       and not getattr(self, "_production_finalizing", False))
+        # Native repair already authenticated and reviewed these inputs before
+        # packaging. A terminal rejection intentionally has no training body
+        # to hash; bind its negative receipt to that saved selection instead.
+        native_terminals = {}
+        if config.get("native_regeneration") is True and self.recipe.get("native_regeneration_version") == 1:
+            for supplied in self.recipe.get("repair_inputs") or []:
+                context = supplied.get("revision_context") or {}
+                original = supplied.get("record") or {}
+                if supplied.get("target") == "cot" and context.get("native_regeneration") is True:
+                    native_terminals[digest([self.state["id"], "cot", context.get("candidate_id")])] = (
+                        digest(context), digest(original.get("question")), original.get("source_id"))
         skipped_sft = (sum(row.get("reasoning_route") == "sft_via_cot" for row in collections.get("sft", []))
                        if linked else 0)
         class Items:
@@ -703,13 +746,23 @@ class WorkflowReviewRepair:
                         yield {"target": target, "record": record}
 
         def process(item):
-            receipt = item["record"].get("review_repair", {})
+            record = item["record"]
+            receipt = record.get("review_repair", {})
             try:
                 valid = (receipt.get("status") in {"accepted", "rejected", "waiting_manual_review"}
                     and receipt.get("config_sha256") == digest(config)
                     and receipt.get("candidate_sha256") == digest(workflow._review_payload(item["target"], item["record"])))
             except (KeyError, TypeError, ValueError):
                 valid = False
+            if not valid and item["target"] == "cot" and record.get("id") in native_terminals:
+                valid = (record.get("status") == "quarantined"
+                    and record.get("reason") in {"native_regeneration_failed_after_prefix_review", "native_answer_missing_after_retry"}
+                    and receipt.get("status") == "rejected" and receipt.get("native_regeneration") is True
+                    and receipt.get("config_sha256") == digest(config) and receipt.get("candidate_sha256") is None
+                    and not any(record.get(field) for field in ("answer", "reasoning", "messages", "reasoning_prefill"))
+                    and (record.get("revision_context") or {}).get("native_regeneration") is True
+                    and native_terminals[record["id"]] == (digest(record["revision_context"]),
+                        digest(record.get("question")), record.get("source_id")))
             return [{**item["record"], "_review_target": item["target"]}] if valid else workflow._review_repair_item(item)
         reviewed = self.stage_items("review", Items(), process)
         result = self._split_review_rows(reviewed, collections, targets=review_targets)

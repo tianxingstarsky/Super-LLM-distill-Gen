@@ -12,14 +12,22 @@ from lib.domain.workflow_targets import TARGETS, TRAINING_FIELDS
 def validate_review_repair(value):
     if value is None:
         return None
-    if (not isinstance(value, dict) or set(value) - {"mode", "max_rounds", "score_threshold"}
+    if (not isinstance(value, dict) or set(value) - {"mode", "max_rounds", "score_threshold", "native_regeneration", "reference_sources"}
             or value.get("mode", "auto") not in {"auto", "human"}):
         raise ValueError("invalid_review_repair")
+    if (type(value.get("native_regeneration", False)) is not bool
+            or value.get("native_regeneration") and value.get("mode", "auto") != "auto"):
+        raise ValueError("invalid_native_regeneration")
+    if type(value.get("reference_sources", False)) is not bool:
+        raise ValueError("invalid_review_reference_sources")
     rounds, threshold = value.get("max_rounds", 2), value.get("score_threshold", .8)
     if (type(rounds) is not int or not 0 <= rounds <= 5 or type(threshold) not in {int, float}
             or not isfinite(threshold) or not 0 <= threshold <= 1):
         raise ValueError("invalid_review_repair")
-    return {"mode": value.get("mode", "auto"), "max_rounds": rounds, "score_threshold": float(threshold)}
+    if value.get("native_regeneration") and rounds == 0:
+        raise ValueError("native_regeneration_requires_review_round")
+    return {"mode": value.get("mode", "auto"), "max_rounds": rounds, "score_threshold": float(threshold),
+            **({name: value[name] for name in ("native_regeneration", "reference_sources") if name in value})}
 
 
 def validate_repair_inputs(value, config=None):
@@ -35,6 +43,9 @@ def validate_repair_inputs(value, config=None):
             raise ValueError("invalid_review_repair_inputs")
         row = deepcopy(item)
         row["revision_context"] = validate_revision_context(row["revision_context"], review=True)
+        if (config.get("native_regeneration", False) != row["revision_context"].get("native_regeneration", False)
+                or config.get("native_regeneration") and row["target"] != "cot"):
+            raise ValueError("invalid_native_regeneration_input")
         if row["target"] != row["revision_context"]["target"]:
             raise ValueError("invalid_review_repair_inputs")
         identity = (row["revision_context"]["parent_run_id"], row["target"], row["revision_context"]["candidate_id"])

@@ -419,8 +419,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         # parsing, generation, cleaning or replay nodes. Inherited bindings for
         # those nodes must not load clients or require still-active services.
         active_roles = ({"generation", "jev"} if package_review["enabled"] else {"generation"}) if review_repair["mode"] == "auto" else set()
+        native_bindings = (dict(node_models.get("cot", {})) if review_repair.get("native_regeneration") else {})
         bindings = {role: binding for role, binding in node_models.get("review", {}).items() if role in active_roles}
         node_models = {"review": bindings} if bindings else {}
+        if native_bindings:
+            node_models["cot"] = native_bindings
     elif arithmetic_only:
         node_models = {stage: roles for stage, roles in node_models.items()
                        if stage in {"review", "jev", "package"}}
@@ -477,6 +480,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
               "authored_role_projection_version": 3,
+              **({"native_regeneration_version": 1} if (review_repair or {}).get("native_regeneration") else {}),
+              **({"repair_reference_sources_version": 1} if (review_repair or {}).get("reference_sources") else {}),
               **({"multiturn_stop_protocol_version": 1} if "multiturn" in targets else {}),
               **({"native_answer_retry_version": 1}
                  if node_generation.get("cot", {}).get("answer_mode") == "native_prefill" else {}),
@@ -1498,16 +1503,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, Wo
             "generation_style": style, "reasoning": reasoning, "answer": answer})
 
     def adherence_check(self, key, prompt_id, data, *, instruction=None):
+        from lib.domain.style_judge import style_verdict
         value = self.ask(key, "jev", prompt_id, data,
                          **({"instruction": instruction} if instruction is not None else {}))
-        if (not isinstance(value, dict) or set(value) != {"keep", "adherence", "reason"}
-                or type(value.get("keep")) is not bool
-                or type(value.get("adherence")) is not int
-                or not 1 <= value["adherence"] <= 5
-                or not isinstance(value.get("reason"), str) or not value["reason"].strip()):
+        try:
+            return style_verdict(value)
+        except ValueError:
             self.invalidate_checkpoint(["call", key])
-            raise ValueError("invalid_style_judge_schema")
-        return value
+            raise
 
     def cpt(self, unit):
         if unit["kind"] == "conversation":

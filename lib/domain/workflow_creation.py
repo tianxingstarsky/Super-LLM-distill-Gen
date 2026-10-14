@@ -20,6 +20,9 @@ from lib.domain.agent_experience import validate_agent_experience
 def validate_generation_review(targets, review_repair, repair_inputs):
     """Check actual starts after creation validation, not imported review blueprints."""
     review_config = validate_review_repair(review_repair)
+    if review_config and review_config.get("native_regeneration"):
+        if not repair_inputs or set(targets) != {"cot"}:
+            raise ValueError("native_regeneration_requires_authenticated_cot_repair")
     if ("rlaif" in targets and not repair_inputs
             and review_config is not None and review_config["mode"] == "human"):
         # New preference candidates have no AI evidence until automatic review.
@@ -61,9 +64,17 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     node_models = validate_node_models(node_models)
     review_config = validate_review_repair(review_repair)
     repair_rows = validate_repair_inputs(repair_inputs, review_config)
+    if (review_config or {}).get("reference_sources"):
+        if not repair_rows or not sources or any(PurePath(str(source)).suffix.lower() not in {".txt", ".md"} for source in sources):
+            raise ValueError("review_reference_sources_require_repair_and_parsed_text")
     if repair_rows and set(row["target"] for row in repair_rows) - set(targets):
         raise ValueError("review_repair_target_mismatch")
-    validate_node_generation(node_generation)
+    generation = validate_node_generation(node_generation)
+    if review_config and review_config.get("native_regeneration"):
+        validate_generation_review(targets, review_config, repair_rows)
+        cot = generation.get("cot", {})
+        if not cot.get("enabled") or cot.get("answer_mode") != "native_prefill":
+            raise ValueError("native_regeneration_requires_native_cot_style")
     validate_node_prompts(node_prompts)
     validate_agent_experience(agent_experience)
     validate_package_review(package_review)

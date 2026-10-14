@@ -58,7 +58,10 @@ def candidate_identifier(value, *, error="invalid_human_session_candidate_id"):
 def validate_revision_context(value, *, review=False):
     fields = {"session_id", "round_id", "parent_run_id", "target", "candidate_id", "content_sha256",
               "messages", "instruction", "depth", "ancestors", "source_id", "source_kind", "teacher_evidence"}
-    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {"design_requirements", "evidence_pack_sha256"}:
+    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - {"design_requirements", "evidence_pack_sha256", "native_regeneration"}:
+        raise ValueError("invalid_human_revision_context")
+    native = value.get("native_regeneration", False)
+    if (type(native) is not bool or native and (not review or value["target"] != "cot")):
         raise ValueError("invalid_human_revision_context")
     for field in ("session_id", "round_id", "parent_run_id"):
         if not isinstance(value[field], str) or not re.fullmatch(r"[a-f0-9]{32}", value[field]):
@@ -87,7 +90,7 @@ def validate_revision_context(value, *, review=False):
             raise ValueError("invalid_human_revision_context")
         result["design_requirements"] = {key: _text(text, limit=6000) for key, text in requirements.items()}
     messages = value["messages"]
-    if not isinstance(messages, list) or not 2 <= len(messages) <= (1000 if review else 17):
+    if not isinstance(messages, list) or not (1 if native else 2) <= len(messages) <= (1000 if review else 17):
         raise ValueError("invalid_human_revision_context")
     if review and len(canonical(messages)) > 200_000:
         raise ValueError("invalid_human_revision_context")
@@ -107,7 +110,9 @@ def validate_revision_context(value, *, review=False):
         if "reasoning_content" in message:
             _text(message["reasoning_content"], limit=40_000)
     if (not any(m["role"] == "user" for m in messages)
-            or not any(m["role"] == "assistant" for m in messages)):
+            or not native and not any(m["role"] == "assistant" for m in messages)):
+        raise ValueError("invalid_human_revision_context")
+    if native and messages[-1]["role"] != "user":
         raise ValueError("invalid_human_revision_context")
     ancestors = value["ancestors"]
     if not isinstance(ancestors, list) or len(ancestors) != value["depth"]:

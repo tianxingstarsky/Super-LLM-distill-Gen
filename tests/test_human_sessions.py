@@ -53,6 +53,16 @@ class Writer:
                     answers[requested - 1]["content"] = "安全提醒：" + answers[requested - 1]["content"]
                 elif "answer" in payload:
                     payload["answer"] = "安全提醒：" + payload["answer"]
+            if (data.get("target") == "multiturn" and "assistant_updates" in messages[0]["content"]
+                    and len(payload["messages"]) == len(data["candidate"]["messages"])):
+                # New repairs do not copy user turns; deliberately truncated
+                # full-message replies below remain invalid adversarial cases.
+                indices = [index for index, message in enumerate(payload["messages"])
+                           if message["role"] == "assistant"]
+                selected = indices[min(requested, len(indices)) - 1]
+                message = payload["messages"][selected]
+                payload = {"assistant_updates": [{"message_index": selected, "content": message["content"],
+                    **({"reasoning_content": message["reasoning_content"]} if message.get("reasoning_content") else {})}]}
             return json.dumps({"record": payload, "uncertain": False,
                                "quotes": [data["source_evidence"]["teacher_evidence"]]}, ensure_ascii=False)
         if data.get("request_phase") == "next_turn":
