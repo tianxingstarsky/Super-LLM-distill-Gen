@@ -356,3 +356,53 @@ SFT_DIRECTED_V1_8 = SFT_DIRECTED_V1_7.replace(
     "closed_book不附教师原文，但可自然应用参考资料支持的知识。", _DIRECTED_KNOWLEDGE_SCOPE_V2)
 SFT_ANSWER_V1_5 = SFT_ANSWER_V1_4.replace(
     "closed_book不附教师原文，但可自然应用参考资料支持的知识。", _DIRECTED_KNOWLEDGE_SCOPE_V2)
+
+
+# A complete, executable example for the new batch contract. The historical
+# 1.8 body stays literal; its ambiguous list description caused real batches
+# to emit turn_guidance as text and fail before any answer could be generated.
+_BATCH_TASK_SCHEMA_V1_9 = {
+    "tasks": [{
+        "id": "示例候选id",
+        "qa_type": "grounded",
+        "question": "把这条安全要求改成一张操作提示卡。",
+        "visible_context": "检查设备前必须先断电。",
+        "answer_policy": "answer",
+        "guidance": "帮助用户制作操作提示卡，保留安全操作的真实依赖。",
+        "evidence_quotes": ["检查设备前必须先断电。"],
+        "dialogue_design": {
+            "interaction_goal": "将安全要求转成可用的操作提示卡。",
+            "user_intent": "改写当前可见的要求。",
+            "context_links": ["用户要求转换表达形式，未增加设备条件。"],
+            "success_criteria": ["操作提示保留检查之前必须断电的条件。"],
+            "turn_guidance": ["若用户反馈措辞或用途，按实际反馈调整提示卡。"],
+            "stop_when": "用户所需的提示卡已经完成且没有新的有用行动。",
+            "conversational_frame": {"speaker_role": "当前请求者", "listener_role": "协助改写的助手"},
+        },
+        "source_line_ranges": [{"material_id": "示例资料id", "start_line": 1, "end_line": 1}],
+        "expression_design": {"form": "改写请求", "roleplay_basis": "无角色扮演要求"},
+    }],
+}
+
+_DIALOGUE_DESIGN_CONTRACT_V1_9 = (
+    "其中interaction_goal必填，是非空字符串，最多4000字符；user_intent与stop_when可选，"
+    "各为非空字符串，最多2000字符。context_links、success_criteria、turn_guidance是三个可选的"
+    "字符串数组字段，每个数组最多12项，每项为非空字符串且最多1000字符；没有相关内容时可省略"
+    "或使用空数组，不能写成一个字符串、对象或null。尤其turn_guidance须为[\"可调整的发展方向\"]，"
+    "不能写成\"可调整的发展方向\"。这些字段记录实际目标、意图、联系、成功表现、可调整方向和"
+    "自然结束依据，不是要求照顺序执行的脚本，也不强迫覆盖所有语言行为。"
+)
+
+QA_DIRECTOR_V1_9 = QA_DIRECTOR_V1_8.replace(
+    "每个有效任务按下列JSON输出；", "每个有效任务按下列JSON字段契约输出；"
+).replace(
+    json.dumps(_BATCH_TASK_SCHEMA, ensure_ascii=False),
+    "以下完整合法示例只说明字段和类型：假定示例候选id对应示例资料id，资料第1行恰为"
+    "‘检查设备前必须先断电。’。实际任务必须使用当前candidates的原始id、真实material_id和"
+    "实际资料，不能照抄示例事实、问题、角色或操作顺序。balanced任务可以不带dialogue_design；"
+    "adaptive有效任务必须带该对象。\n" + json.dumps(_BATCH_TASK_SCHEMA_V1_9, ensure_ascii=False)
+).replace(
+    "其中interaction_goal为必填；user_intent、context_links、success_criteria、turn_guidance、stop_when"
+    "记录实际目标、联系、成功表现、可调整方向和自然结束依据；列表字段使用字符串数组。",
+    _DIALOGUE_DESIGN_CONTRACT_V1_9,
+)

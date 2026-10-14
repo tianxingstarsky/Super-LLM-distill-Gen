@@ -698,3 +698,8 @@ SFT_DIRECTED = _reasoning_spec_replace(SFT_DIRECTED, version="1.8.0", template=s
     "sft_directed", "执行固定行动并区分知识应用与制作泄露", SFT_DIRECTED_V1_8).template)
 SFT_ANSWER = _reasoning_spec_replace(SFT_ANSWER, version="1.5.0", template=spec(
     "sft_answer", "回应实际用户并应用可核实知识", SFT_ANSWER_V1_5).template)
+
+from lib.prompts.workflow_agent_contracts import QA_DIRECTOR_V1_9
+QA_DIRECTOR_V1_8 = QA_DIRECTOR
+QA_DIRECTOR = _reasoning_spec_replace(QA_DIRECTOR, version="1.9.0", template=spec(
+    "qa_director", "明确字段类型的批次设计与逐轮指导", QA_DIRECTOR_V1_9).template)

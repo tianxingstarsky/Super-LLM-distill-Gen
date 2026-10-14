@@ -1,0 +1,132 @@
+{
+  "provenance": "Literal first-task design excerpts from six failed DeepSeek-V4.1-Flash batches on 2026-10-14. Teacher sources: public PostgreSQL 18 routine-vacuuming and continuous-archiving documentation. No model reasoning, credentials, source text or private documents are included.",
+  "excerpts": [
+    {
+      "run": "cot",
+      "stream": "director.a72d8ceb292d4e8abd924c3e91ea4fc9.deltas.jsonl",
+      "response_sha256": "e97cd78e98fee671d656c4da16c283dd7945a363acbf38190444f85d40fb6e99",
+      "task_count": 7,
+      "dialogue_design": {
+        "interaction_goal": "弄清标准 VACUUM 与 VACUUM FULL 在空间回收和锁代价上的差别，判断是否值得改用 VACUUM FULL",
+        "user_intent": "解决频繁更新的表磁盘占用不下降的疑问",
+        "context_links": [
+          "用户自述表更新频繁、定期执行 VACUUM",
+          "用户已把 VACUUM FULL 当作备选方案提出"
+        ],
+        "success_criteria": [
+          "说明标准 VACUUM 通常不把空间归还操作系统",
+          "说明 VACUUM FULL 的锁与磁盘空间代价",
+          "给出对频繁更新表更合适的维护取向"
+        ],
+        "turn_guidance": "若用户补充具体的增长曲线或可接受的维护窗口，可进一步讨论是否值得安排一次 VACUUM FULL",
+        "stop_when": "用户已理解两者差别并确定继续定期标准 VACUUM，或明确决定在维护窗口做一次 VACUUM FULL"
+      }
+    },
+    {
+      "run": "cot",
+      "stream": "director.bf24fd24445e4e308719364ef0bf3c0c.deltas.jsonl",
+      "response_sha256": "417a7468bf17143fa6e0885077cc891366d1b7b45a0573d3fa4662d8af663bb8",
+      "task_count": 7,
+      "dialogue_design": {
+        "interaction_goal": "让助手围绕例行清理的目的与清理方式选择给出可操作的回答",
+        "user_intent": "想搞清定期清理到底解决哪些问题，以及日常该优先用哪种清理方式",
+        "context_links": [],
+        "success_criteria": [
+          "说明定期清理要覆盖的几类目标",
+          "给出标准清理与更彻底清理之间的取舍理由"
+        ],
+        "turn_guidance": "用户若继续追问某一类目标或某个场景下的取舍，可在同一主题下补充适用条件与代价",
+        "stop_when": "目的与取舍说明清楚且用户没有新的场景条件"
+      }
+    },
+    {
+      "run": "cot",
+      "stream": "director.f91ba0fbc41e470c9f41b10f747e9f3c.deltas.jsonl",
+      "response_sha256": "295808231fe5ddead28dac2814734cbf272c037ab973dce8353bcc8f2875fe1c",
+      "task_count": 7,
+      "dialogue_design": {
+        "interaction_goal": "让使用者拿到普通 VACUUM 与 VACUUM FULL 在空间归还、锁和代价上的判断依据，能自行决定这次要不要 FULL",
+        "user_intent": "为刚做过大批量删除的表决定接下来的维护动作",
+        "context_links": [
+          "本条消息自带对象：日志表、批量删除、磁盘空间"
+        ],
+        "success_criteria": [
+          "区分“标记为可复用”与“归还给操作系统”",
+          "说清 FULL 的锁与额外空间代价",
+          "给出何时才用 FULL 的条件"
+        ],
+        "turn_guidance": "如果使用者接着给出锁窗口或表是否还会增长，可以继续比较 FULL、CLUSTER 与表重写方案的适用条件",
+        "stop_when": "使用者已能判断本次是否需要 FULL，或已转向其他回收手段"
+      }
+    },
+    {
+      "run": "multiturn",
+      "stream": "director.031e8987942d4a79ae528737aed63737.deltas.jsonl",
+      "response_sha256": "62cc3fbe56b0636b6328b0af595328a1bb1aca109c2ff7763717a3f903bfefcd",
+      "task_count": 3,
+      "dialogue_design": {
+        "interaction_goal": "让使用者明白在频繁更新的表上应优先用标准 VACUUM 维持稳态空间占用，并理解 VACUUM FULL 的代价与真正适用时机。",
+        "user_intent": "在标准 VACUUM 与 VACUUM FULL 之间选出一个长期可行的空间回收策略，避免表持续膨胀。",
+        "context_links": [
+          "用户提到订单表更新频繁、磁盘占用持续增长",
+          "用户转述了两种常见做法并希望判断该选哪一种"
+        ],
+        "success_criteria": [
+          "说明标准 VACUUM 只把空间标记为可复用、通常不归还操作系统",
+          "指出 VACUUM FULL 需要 ACCESS EXCLUSIVE 锁，耗时更长并临时占用额外磁盘空间",
+          "给出以较频繁标准 VACUUM 为主、仅在死元组大量堆积等情况下才做整表重写的判断"
+        ],
+        "turn_guidance": "如果助手只给结论，可以追问为什么自动清理从不使用 VACUUM FULL，以及出现什么信号才值得做一次 VACUUM FULL。",
+        "stop_when": "使用者已能判断自己的表应采用哪种方式，并知道何时才升级到 VACUUM FULL 时结束。",
+        "conversational_frame": {
+          "speaker_role": "负责日常维护数据库的使用者",
+          "listener_role": "助手",
+          "register": "直接的技术讨论"
+        }
+      }
+    },
+    {
+      "run": "multiturn",
+      "stream": "director.0d44f951b7fb46eca5832c0891398ebd.deltas.jsonl",
+      "response_sha256": "f2de207c0cc818550c68f14bafe363a0dc292aa9cd2d03da142c54243df0555a",
+      "task_count": 3,
+      "dialogue_design": {
+        "interaction_goal": "让使用者弄清例行 VACUUM 覆盖的几类问题、频率与范围差异的来源，以及两种变体在速度与锁上的取舍",
+        "user_intent": "建立对例行 VACUUM 目的与代价的整体理解，用来决定自己的维护方式",
+        "context_links": [],
+        "success_criteria": [
+          "说出四类目的：空间回收、规划器统计、可见性映射、防止 XID/MXID 回卷",
+          "指出这些目的要求的执行频率与范围不同",
+          "给出两种变体的速度与锁差异并给出一般取舍建议"
+        ],
+        "turn_guidance": "若回答只讲空间回收或只讲 VACUUM FULL 收得更多，下一轮追问漏掉的目的或锁的影响；若四类目的和取舍都已说清，可自然结束",
+        "stop_when": "四类目的与两种变体的代价均已说明，且使用者没有新的疑问",
+        "conversational_frame": {
+          "speaker_role": "PostgreSQL 使用者",
+          "listener_role": "回答者",
+          "register": "直接的技术提问，无称呼"
+        }
+      }
+    },
+    {
+      "run": "multiturn",
+      "stream": "director.cc2187ab4e4746619bb51976da9ac3f7.deltas.jsonl",
+      "response_sha256": "e39e211cf90bcb9c17cacde8e6e6ca581617da7c2a7eb7068a0dd8cd04cc82b7",
+      "task_count": 3,
+      "dialogue_design": {
+        "interaction_goal": "帮用户确定日常维护该用哪种 VACUUM 形式，并在用户补充某张表空间降不下来的具体情况后，判断是否真的需要重写表。",
+        "user_intent": "用户想在高频更新表上减少维护窗口压力，弄清标准 VACUUM 与 VACUUM FULL 的取舍。",
+        "context_links": [
+          "首轮提到的更新频繁的表、每周一次 VACUUM FULL 的现状与维护窗口紧张"
+        ],
+        "success_criteria": [
+          "区分标准 VACUUM 与 VACUUM FULL 的空间回收效果与锁行为",
+          "给出以标准 VACUUM 为主、必要时才重写表的日常安排",
+          "说明标准 VACUUM 通常不把空间还给操作系统，以及重写表的额外磁盘与锁代价"
+        ],
+        "turn_guidance": "第二轮用户在已有结论上补充新情况：某张表经历一次大批量删除后体积没有回落，追问是否必须 VACUUM FULL，以及重写期间对业务的影响与额外磁盘需求。回应应依据 ACCESS EXCLUSIVE 锁、临时额外空间与标准 VACUUM 不归还空间的限制给出条件性判断，不虚构可释放的具体空间量。",
+        "stop_when": "用户已能自行判断日常以标准 VACUUM 为主，并明确只有在出现大量死行版本且确实需要压缩时才考虑重写表。"
+      }
+    }
+  ]
+}

@@ -5,7 +5,7 @@ import pytest
 
 from lib.prompts import get, render
 from lib.prompts.workflow_agent_contracts import (
-    SYSTEM_V2, QA_DIRECTOR_V1_8, SFT_V1_6, STYLE_CHECK_V1_3,
+    SYSTEM_V2, QA_DIRECTOR_V1_8, QA_DIRECTOR_V1_9, SFT_V1_6, STYLE_CHECK_V1_3,
     _BATCH_TASK_SCHEMA, _NEXT_TURN_SCHEMA,
 )
 from lib.domain.workflow_qa_director import (
@@ -20,7 +20,7 @@ def mock_llm_server():
 
 @pytest.mark.parametrize("prompt_id,version,body", [
     ("workflow.system", "2.0.0", SYSTEM_V2),
-    ("workflow.qa_director", "1.8.0", QA_DIRECTOR_V1_8),
+    ("workflow.qa_director", "1.9.0", QA_DIRECTOR_V1_9),
     ("workflow.sft", "1.6.0", SFT_V1_6),
     ("workflow.style_check", "1.3.0", STYLE_CHECK_V1_3),
 ])
@@ -33,6 +33,7 @@ def test_registered_stage_is_exact_complete_body_not_an_inherited_conflicting_ta
 @pytest.mark.parametrize("prompt_id,version,expected_sha", [
     ("workflow.system", "1.0.0", "490a33085b54ce66313ee23ab1d547adfc79488e3bb88c9ad9a6313c56b50144"),
     ("workflow.qa_director", "1.7.0", "cec4bd8b2e119c62f60bd35c64761da80cee004f9f971a8c08e9be62da161f47"),
+    ("workflow.qa_director", "1.8.0", "c222f1607a394a3a7e56599cb93efb43e56f66665291d93997380430cca0f669"),
     ("workflow.sft", "1.5.0", "7b546275b6cac4801c36e1e9b5fbc8a06557ef763b05bb7d2b86356c657e3d3b"),
     ("workflow.style_check", "1.2.0", "b3cbb8612ea130fbc1c72f55f1f3478d0c3ee231f555ac05827dd8b8053b4173"),
 ])

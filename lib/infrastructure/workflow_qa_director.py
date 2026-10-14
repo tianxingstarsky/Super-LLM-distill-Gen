@@ -48,7 +48,7 @@ _PLAN_VALIDATION_CODES = frozenset({
     "source_line_ranges_required", "source_line_materials_required", "invalid_source_line_ranges",
     "source_line_material_not_found", "source_line_range_out_of_bounds", "source_line_range_empty",
     "invalid_qa_director_skip",
-    "invalid_expression_design",
+    "invalid_expression_design", "invalid_dialogue_design",
 })
 
 
@@ -56,6 +56,26 @@ def _plan_validation_code(error):
     """Known contract codes only; never echo model text or private source values."""
     code = str(error)
     return code if code in _PLAN_VALIDATION_CODES else "qa_director_contract_validation_failed"
+
+
+def _typed_director_repair(recipe):
+    """New contracts opt in; historical repair requests remain byte identical."""
+    prompts = recipe.get("prompts")
+    pinned = prompts.get("workflow.qa_director") if isinstance(prompts, dict) else None
+    version = pinned.get("version") if isinstance(pinned, dict) else None
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version) if isinstance(version, str) else None
+    return bool(match and tuple(map(int, match.groups())) >= (1, 9, 0))
+
+
+_DIALOGUE_DESIGN_REPAIR = (
+    "dialogue_design必须是对象，仅允许interaction_goal、user_intent、context_links、"
+    "success_criteria、turn_guidance、stop_when及conversational_frame。interaction_goal是必填非空字符串"
+    "且最多4000字符；user_intent和stop_when如提供须是非空字符串且各最多2000字符。"
+    "context_links、success_criteria、turn_guidance如提供必须是字符串数组，每个数组最多12项，"
+    "每项非空且最多1000字符；尤其turn_guidance应为[\"可调整方向\"]，不能是单个字符串。"
+    "conversational_frame如提供须是对象，只允许speaker_role、listener_role、relationship、setting、register"
+    "字符串字段，分别最多800、800、1200、2000、800字符。不新增事实或放宽逐字证据与选区校验。"
+)
 
 
 def _digest(value):
@@ -970,7 +990,14 @@ class WorkflowQADirector:
                         "attempt": attempt + 1,
                     }
                     if self.recipe.get("qa_agent_memory_version") == 1:
-                        repair_feedback["validation_code"] = _plan_validation_code(error)
+                        validation_code = _plan_validation_code(error)
+                        # Older templates did not identify this code. Keep
+                        # their immutable repair/checkpoint input unchanged.
+                        if validation_code == "invalid_dialogue_design" and not _typed_director_repair(self.recipe):
+                            validation_code = "qa_director_contract_validation_failed"
+                        repair_feedback["validation_code"] = validation_code
+                    if str(error) == "invalid_dialogue_design" and _typed_director_repair(self.recipe):
+                        repair_feedback["instruction"] += _DIALOGUE_DESIGN_REPAIR
                     if self.recipe.get("source_line_protocol_version") == 1:
                         repair_feedback["instruction"] += (
                             "编号资料的 source_line_ranges 只能引用该包 material_id 和实际1-based行号；"
