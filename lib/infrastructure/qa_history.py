@@ -17,7 +17,7 @@ import sqlite3
 from threading import RLock
 import unicodedata
 
-from lib.domain.dialogue_expression import EXPRESSION_FIELDS, validate_expression_design
+from lib.domain.dialogue_expression import EXPRESSION_FIELDS, EXPRESSION_FIELDS_V2, validate_expression_design
 
 MAX_HISTORY_ITEMS = 20
 MAX_QUESTION_CHARS = 32768
@@ -467,7 +467,8 @@ class QAHistory:
                 (_dimension(namespace, "default"),)).fetchall()
         return {row["qa_type"]: row["total"] for row in rows}
 
-    def dimension_coverage(self, *, namespace="default", limit=12, include_expression=False) -> dict[str, list[dict]]:
+    def dimension_coverage(self, *, namespace="default", limit=12, include_expression=False,
+                           expression_version=1) -> dict[str, list[dict]]:
         """Bounded aggregates of accepted work, without reloading old answers."""
         namespace, limit = _dimension(namespace, "default"), _limit(limit)
         with self._lock:
@@ -476,7 +477,9 @@ class QAHistory:
                         "SELECT value,total FROM qa_history_dimensions WHERE namespace=? AND dimension=? "
                         "ORDER BY total DESC,value LIMIT ?", (namespace, dimension, limit)).fetchall()]
                     for dimension in ("source_id", "topic", "skill", *(
-                        ("expression_" + name for name in EXPRESSION_FIELDS) if include_expression else ()))}
+                        ("expression_" + name for name in (
+                            EXPRESSION_FIELDS_V2 if expression_version == 2 else EXPRESSION_FIELDS))
+                        if include_expression else ()))}
 
     def similar(self, question, *, limit=10, namespace="default", include_expression=False) -> list[dict]:
         question = _question(question)

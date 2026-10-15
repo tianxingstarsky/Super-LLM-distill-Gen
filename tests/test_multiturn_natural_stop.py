@@ -194,7 +194,7 @@ def test_user_actor_action_preserves_literals_and_only_treats_boolean_stop_as_co
 
 def test_new_user_contract_has_one_schema_and_does_not_force_new_conditions_or_turns():
     current = render(get("workflow.multiturn_user"))
-    assert get("workflow.multiturn_user").version == "1.4.0"
+    assert get("workflow.multiturn_user").version == "1.5.0"
     assert "轮数上限" in current and "不必每轮加新条件" in current
     assert "不等于必须补全全部信息或排除真实歧义" in current
     assert "只完成一个轮次可合理停下" in current

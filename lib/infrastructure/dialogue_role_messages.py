@@ -90,7 +90,8 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
             *visible_dialogue(data["learner_messages"])]
 
 
-def question_role_messages(system, data, *, transport="tool", first_turn_policy_version=1):
+def question_role_messages(system, data, *, transport="tool", first_turn_policy_version=1,
+                           expression_guide_version=1):
     """Only a validated brief and public turns can cross to the questioner."""
     from lib.domain.workflow_qa_director import validate_question_brief
     if set(data) - {"question_brief", "visible_dialogue", "question_rules", "retry_code", "natural_expression_guidance"}:
@@ -99,7 +100,7 @@ def question_role_messages(system, data, *, transport="tool", first_turn_policy_
         from lib.domain.dialogue_expression import natural_expression_guide
         # A new arbitrary field must not smuggle source facts to the blind
         # actor. Only the repository's source-free design guide can cross.
-        guide = natural_expression_guide()
+        guide = natural_expression_guide(expression_guide_version)
         if data["natural_expression_guidance"] != guide:
             raise ValueError("private_context_in_question_request")
         system += "\n自然表达的设计参考（无固定比例，用户规则可选择或扩展）：\n" + canonical(guide)

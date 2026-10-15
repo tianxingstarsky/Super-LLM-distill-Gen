@@ -18,13 +18,14 @@ MAX_FEEDBACK = 16
 
 
 def build_agent_memory(local_history, published_history, stages, *, history, feedback, candidates,
-                       include_expression=False):
+                       include_expression=False, expression_version=1):
     """Snapshot bounded memory; its caller checkpoints it before requesting."""
     ledgers = {}
     for label, store in (("current_run", local_history), ("published", published_history)):
         ledgers[label] = {stage: {"accepted_by_type": store.coverage(namespace=stage),
             "accepted_dimensions": store.dimension_coverage(namespace=stage, limit=8,
-                **({"include_expression": True} if include_expression else {}))}
+                **({"include_expression": True} if include_expression else {}),
+                **({"expression_version": 2} if expression_version == 2 else {}))}
             for stage in stages}
     designs = [{"question": row["question"][:240], "qa_type": row["qa_type"],
                 **({"dialogue_design": deepcopy(row["dialogue_design"])} if row.get("dialogue_design") else {}),

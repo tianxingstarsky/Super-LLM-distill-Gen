@@ -499,7 +499,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "agent_experience_version": 1,
               "agent_experience": experience_snapshot,
               "qa_agent_memory_version": 1,
-              "qa_expression_version": 1,
+              "qa_expression_version": 2,
               "reasoning_shape_version": 1,
               "training_surface_protocol_version": 1,
               "cpt_reference_releases": references,
@@ -832,7 +832,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                             first_turn_version = (2 if self.recipe.get("authored_role_projection_version", 1) >= 3
                                 and prompt_at_least(self.recipe, prompt_id, (1, 2, 0)) else 1)
                             request_messages = question_role_messages(system, request_data, transport=transport,
-                                first_turn_policy_version=first_turn_version)
+                                first_turn_policy_version=first_turn_version,
+                                **({"expression_guide_version": 2} if self.recipe.get("qa_expression_version") == 2 else {}))
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
                             request_messages = answer_role_messages(system, memory_context, request_data, transport=transport,
                                 source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
@@ -1780,7 +1781,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
             "progress": "", "shared_understanding": [], "open_issues": [],
             "active_constraints": [], "context_links": [],
             **({"conversational_frame": deepcopy(dialogue_design["conversational_frame"])}
-               if "conversational_frame" in dialogue_design else {})} if adaptive_dialogue else None)
+               if "conversational_frame" in dialogue_design else {}),
+            **({"expression_design": deepcopy(contract["expression_design"])}
+               if self.recipe.get("qa_expression_version") == 2 and contract.get("expression_design") else {})}
+            if adaptive_dialogue else None)
         dialogue_end_reason = "turn_limit"
         dialogue_end_guidance = ""
         dialogue_state_after_turn = 0
@@ -1975,12 +1979,19 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     break
             ends, issue = completed_turn_ends(messages)
             if issue:
-                if ordinary_stop_audit and issue == "insufficient_completed_turns":
+                participant_stop = (self.recipe.get("qa_expression_version") == 2
+                                    and adaptive_dialogue and dialogue_end_reason == "natural_completion")
+                if (ordinary_stop_audit or participant_stop) and issue == "insufficient_completed_turns":
                     issue = "multiturn_natural_end_insufficient_turns"
                 return [{**self.rejected(unit, issue),
                     **({"messages": messages, "turn_reviews": reviews,
                         "completed_turns": len(reviews), **ordinary_stop_audit}
-                       if ordinary_stop_audit else {})}]
+                       if ordinary_stop_audit else {}),
+                    **({"messages": messages, "turn_reviews": reviews, "dialogue_steps": dialogue_steps,
+                        "completed_turns": len(reviews), "dialogue_state": dialogue_state,
+                        "dialogue_end_reason": dialogue_end_reason, "dialogue_end_guidance": dialogue_end_guidance,
+                        "dialogue_end_scope": "director_suggestion_not_message_or_evidence"}
+                       if participant_stop else {})}]
         completion_check = {}
         if ordinary_stop_audit:
             from lib.prompts.workflow_multiturn import NATURAL_COMPLETION_REVIEW

@@ -245,9 +245,10 @@ def test_new_dialogue_assets_keep_original_version_lookups_and_render_safely():
         current = get(prompt_id)
         old = get(prompt_id, version="1.0.0")
         expected_version = ("1.2.0" if name == "plan" else "1.1.0" if name == "multiturn_consistency" else
-                            "1.9.0" if name == "qa_director" else
+                            "1.10.0" if name == "qa_director" else
                             "1.8.0" if name == "sft_directed" else
-                            "1.4.0" if name == "multiturn_user" else
+                            "1.5.0" if name == "multiturn_user" else
+                            "1.3.0" if name in {"sft_directed_check", "multiturn_directed_check"} else
                             "1.4.0" if name == "multiturn_assistant" else "1.2.0")
         assert current.version == expected_version and old.version == "1.0.0"
         assert render(current) != render(old)
@@ -391,13 +392,19 @@ def test_repeated_words_without_actual_revision_are_quarantined_by_progress_revi
     assert not (path / "artifacts/multiturn.jsonl").read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("options", [{"invalid_step": True}, {"stop_early": True}])
-def test_invalid_or_single_turn_director_stop_is_bounded_and_not_silently_replaced(tmp_path, monkeypatch, options):
+@pytest.mark.parametrize("options,planning_calls,reason", [
+    ({"invalid_step": True}, 3, "multiturn_turn_failed_after_repair"),
+    ({"stop_early": True}, 2, "multiturn_natural_end_insufficient_turns"),
+])
+def test_invalid_or_single_turn_director_stop_is_bounded_and_not_silently_replaced(tmp_path, monkeypatch, options, planning_calls, reason):
     state, path, expert, worker, _, _ = execute(tmp_path, monkeypatch, Expert(**options))
     assert state["status"] == "needs_attention", state.get("error")
-    assert len(expert.calls) == 3 and len(worker.calls) == 1
+    assert len(expert.calls) == planning_calls and len(worker.calls) == 1
     row = engine.read_json(path / "artifacts/multiturn.records.json")[0]
-    assert row["reason"] == "multiturn_turn_failed_after_repair"
+    assert row["reason"] == reason and row["status"] == "quarantined"
+    assert not (path / "artifacts/multiturn.jsonl").read_text(encoding="utf-8")
+    if options.get("stop_early"):
+        assert row["completed_turns"] == 1 and row["dialogue_end_reason"] == "natural_completion"
 
 
 def test_resume_keeps_completed_answer_and_replans_from_identical_actual_history(tmp_path, monkeypatch):

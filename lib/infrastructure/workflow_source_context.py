@@ -98,7 +98,8 @@ def _director_request_reserve(recipe, template):
             "feedback": {}, "history": [], "history_is_not_evidence": True,
             "question_rules": director.get("question_rules", ""),
             "answer_rules": director.get("answer_rules", ""), "requirement": recipe.get("brief", ""),
-            "targets": targets, "natural_expression_guidance": natural_expression_guide()}
+            "targets": targets, "natural_expression_guidance": natural_expression_guide(
+                2 if recipe.get("qa_expression_version") == 2 else 1)}
     if recipe.get("source_line_protocol_version") == 1:
         task["source_line_protocol_version"] = 1
     if director.get("question_separation") is True:
@@ -175,7 +176,7 @@ def context_capacity(recipe):
                 continue
             context = binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
             output = binding.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
-            if (stage == "director" and recipe.get("qa_expression_version") == 1
+            if (stage == "director" and recipe.get("qa_expression_version") in {1, 2}
                     and recipe.get("source_memory_protocol_version") in {1, 2}):
                 template = prompts.get("workflow.qa_director", max(prompts.values(), key=lambda text: len(text.encode("utf-8"))))
                 reserve = _director_request_reserve(recipe, template)

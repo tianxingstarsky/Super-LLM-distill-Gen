@@ -92,8 +92,8 @@ def test_natural_expression_evolution_keeps_every_prior_role_snapshot(prompt_id,
 
 
 @pytest.mark.parametrize("prompt_id,version,old_version", [
-    ("workflow.multiturn_user", "1.4.0", "1.3.0"),
-    ("workflow.question_fit", "1.3.0", "1.2.0"),
+    ("workflow.multiturn_user", "1.5.0", "1.4.0"),
+    ("workflow.question_fit", "1.4.0", "1.3.0"),
 ])
 def test_new_natural_expression_versions_are_latest_and_do_not_alias_old_body(prompt_id, version, old_version):
     current = get(prompt_id)

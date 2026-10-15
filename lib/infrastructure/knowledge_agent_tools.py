@@ -72,10 +72,15 @@ class KnowledgeAgentTools:
     filter history by the current knowledge identity, and coverage must count
     only accepted final work, never reservations or draft statuses. The
     model cannot change a namespace, source scope, database, or callback.
+    ``include_expression`` projects validated editorial designs only; the bound
+    history callback opts into retrieving them, keeping its query/limit contract.
     Invalid requests/results fail with display-safe ValueError codes.
     """
 
-    def __init__(self, materials, history_search=None, coverage=None):
+    def __init__(self, materials, history_search=None, coverage=None, *, include_expression=False):
+        if type(include_expression) is not bool:
+            raise ValueError("knowledge_agent_invalid_expression_option")
+        self._include_expression = include_expression
         if (not isinstance(materials, list) or not materials or len(materials) > MAX_MATERIALS
                 or any(not isinstance(item, dict) for item in materials)):
             raise ValueError("knowledge_agent_invalid_materials")
@@ -286,12 +291,30 @@ class KnowledgeAgentTools:
                 if type(row["same_numbers"]) is not bool:
                     raise ValueError("knowledge_agent_invalid_result")
                 hit["same_numbers"] = row["same_numbers"]
+            if self._include_expression and "expression_design" in row:
+                from lib.domain.dialogue_expression import validate_expression_design
+                try:
+                    hit["expression_design"] = validate_expression_design(row["expression_design"])
+                    _utf8(canonical(hit["expression_design"]))
+                except (ValueError, TypeError, UnicodeError):
+                    raise ValueError("knowledge_agent_invalid_result") from None
             hits.append(hit)
-        return self._result("history_search", query=query, hits=hits,
-            results_limited=len(rows) > limit, history_is_not_evidence=True,
-            history_status_is_not_publication=True, semantic_uniqueness_proven=False,
-            similarity_score_is_not_probability=True,
-            scope_binding="caller_filtered_current_knowledge")
+        limited = len(rows) > limit
+        while True:
+            try:
+                return self._result("history_search", query=query, hits=hits,
+                    results_limited=limited, history_is_not_evidence=True,
+                    history_status_is_not_publication=True, semantic_uniqueness_proven=False,
+                    similarity_score_is_not_probability=True,
+                    scope_binding="caller_filtered_current_knowledge")
+            except ValueError as error:
+                if (not self._include_expression or str(error) != "knowledge_agent_result_limit_exceeded"
+                        or len(hits) <= 1):
+                    raise
+                # Keep each real expression design complete. A smaller window
+                # is useful scheduling context; invalid-request retries are not.
+                hits.pop()
+                limited = True
 
     def _history_coverage(self):
         if self._coverage is None:

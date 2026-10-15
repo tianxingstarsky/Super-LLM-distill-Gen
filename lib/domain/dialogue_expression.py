@@ -11,6 +11,9 @@ from copy import deepcopy
 
 EXPRESSION_GUIDE_VERSION = 1
 EXPRESSION_FIELDS = ("form", "clarity", "context_dependency", "addressing", "roleplay_basis")
+EXPRESSION_FIELDS_V2 = (*EXPRESSION_FIELDS, "participant_voice", "register", "verbosity",
+                        "syntax", "noise", "interaction_style")
+STABLE_EXPRESSION_FIELDS = ("participant_voice", "register", "addressing", "roleplay_basis", "syntax", "noise")
 
 _PROFILES = (
     {"id": "ultra_short", "use": "对象明确时使用几个字的自然提问或请求，不补成完整场景。",
@@ -48,9 +51,9 @@ NATURAL_EXPRESSION_DESIGN = (
 )
 
 
-def natural_expression_guide():
+def natural_expression_guide(version=1):
     """Return an independent bounded supplement without changing old guides."""
-    return {
+    guide = {
         "version": EXPRESSION_GUIDE_VERSION,
         "fixed_quotas": False,
         "labels_are_optional": True,
@@ -61,6 +64,25 @@ def natural_expression_guide():
         "scheduling": "参考当前批次、已接受历史及自然表达覆盖，优先有实际新价值的未充分覆盖活动；不填固定比例。",
         "ambiguous_tasks": "问题缺少必要条件时保留缺口并澄清，不能用隐藏记忆虚构用户的意图或经历。",
     }
+    if type(version) is not int or version not in {1, 2}:
+        raise ValueError("invalid_expression_guide_version")
+    if version == 2:
+        guide.update(version=2,
+            participant_voice="生成新互动时，user就是正在表达目标的当事人，assistant就是其受话者。可以省略人称代词，不要求每句出现我/I。不要让旁白代替实际用户发言。",
+            source_scope="资料事实决定知识依据，不等于用户已经做过论文实验或见过私有资料。可以设定一致的合成目标、条件和偏好；已有真实记录与固定原题保持原样。",
+            language_axes=[
+                {"field": "participant_voice", "use": "当前说话者直接做什么，不写‘某用户提出如下问题’或角色标签。第三方可以是被讨论的真实对象。"},
+                {"field": "register", "use": "口语、书面语、专业术语或日常说法由活动决定；不按职业、年龄等标签刻板分配口吻。"},
+                {"field": "verbosity", "use": "几个字、简短请求、必要的完整描述都可用；真实多轮中可从短句逐渐补条件，也可收缩表达。"},
+                {"field": "syntax", "use": "完整句、片段、省略、回指、补充和自我修正都可合理出现，不把用户统一整理成试题或条目说明。"},
+                {"field": "noise", "use": "可无噪声，也可有自然停顿、重复、标点不齐、少量错字或术语不准；不强行污染每条，不改变教师原文事实。"},
+                {"field": "interaction_style", "use": "直接委托、追问、试探、反馈、纠正或改变约束由实际回应触发，不照固定话术顺序轮换。"}],
+            profile_scope="expression_design是可选、可编辑的私有表达建议，不是事实、身份认证或可见前文；不能复制到用户正文，也不规定答方跟着含糊或带错字。",
+            speaker_continuity="同一对话沿用相容的语体、称呼和习惯；本轮清晰度、长度与行动可随实际回应变化。不同独立样本可有不同表达，不强制换人名或填比例。",
+            numbering="不要因为批次位置或元数据给用户话语加序号、标题、角色标签。用户确有多约束清单、原文编号、代码或引用时按需求保留；不机械删编号。",
+            ambiguous_tasks="未知条件和省略须按实际可见语境处理。若缺口影响下一行动，先最少澄清或有条件说明；可安全解释的部分直接回应，不能擅猜缺失对象，也不把每条都变成猜谜。",
+            scheduling="结合实际历史问题和编辑标注，选择有价值的新活动及相容表达；同义改写、人称/噪声变化不单独算新任务，资料用尽时停止。无固定语言配额。")
+    return guide
 
 
 def compact_expression_guide(guide):
@@ -79,7 +101,7 @@ def compact_expression_guide(guide):
 
 def validate_expression_design(value):
     """Validate open editorial text only; do not infer an utterance's meaning."""
-    if not isinstance(value, dict) or not value or set(value) - set(EXPRESSION_FIELDS):
+    if not isinstance(value, dict) or not value or set(value) - set(EXPRESSION_FIELDS_V2):
         raise ValueError("invalid_expression_design")
     result = {}
     for field, text in value.items():
@@ -87,3 +109,11 @@ def validate_expression_design(value):
             raise ValueError("invalid_expression_design")
         result[field] = text.strip()
     return result
+
+
+def carry_expression_design(previous, current=None, *, first_turn=False):
+    """Carry compatible speaker habits, not a forced next-turn length or act."""
+    old = validate_expression_design(previous) if previous else {}
+    new = validate_expression_design(current) if current else {}
+    inherited = old if first_turn else {key: value for key, value in old.items() if key in STABLE_EXPRESSION_FIELDS}
+    return {**inherited, **new}

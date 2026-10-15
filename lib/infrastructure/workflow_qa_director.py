@@ -156,13 +156,16 @@ class DirectorBatchTooLarge(ValueError):
 class WorkflowQADirector:
     def natural_expressions(self):
         """New snapshots opt in; older request/checkpoint hashes stay valid."""
-        return self.recipe.get("qa_expression_version") == 1
+        return self.recipe.get("qa_expression_version") in {1, 2}
+
+    def participant_utterances(self):
+        return self.recipe.get("qa_expression_version") == 2
 
     def _natural_expression_guidance(self):
         if not self.natural_expressions():
             return {}
         from lib.domain.dialogue_expression import natural_expression_guide
-        return {"natural_expression_guidance": natural_expression_guide()}
+        return {"natural_expression_guidance": natural_expression_guide(self.recipe["qa_expression_version"])}
 
     def separated_questions(self):
         return self.recipe.get("qa_director", {}).get("question_separation") is True
@@ -218,13 +221,20 @@ class WorkflowQADirector:
             return
         raise ValueError("invalid_question_brief_assessment")
 
-    def _closed_book_question(self, unit, contract, *, key, visible_messages=None, brief=None):
+    def _closed_book_question(self, unit, contract, *, key, visible_messages=None, brief=None, expression_design=None):
         """Separate authorship, then verify the real question against evidence."""
         from lib.infrastructure.dialogue_role_messages import visible_dialogue
         visible_messages = (visible_dialogue([*visible_messages, {"role": "user", "content": "next turn"}])[:-1]
                             if visible_messages else [])
-        brief = self._question_brief_boundary(unit, contract,
-            contract.get("question_brief") if brief is None else brief, visible_messages)
+        brief = contract.get("question_brief") if brief is None else brief
+        if self.participant_utterances() and isinstance(brief, dict):
+            from lib.domain.dialogue_expression import carry_expression_design
+            inherited = contract.get("expression_design") if expression_design is None else expression_design
+            design = carry_expression_design(inherited, brief.get("expression_design"),
+                first_turn=not visible_messages or expression_design is not None)
+            if design:
+                brief = {**brief, "expression_design": design}
+        brief = self._question_brief_boundary(unit, contract, brief, visible_messages)
         self._assess_question_brief(unit, contract, brief, visible_messages, key=key)
         retry_code = None
         for attempt in range(2):
@@ -593,13 +603,24 @@ class WorkflowQADirector:
         except ModelJSONError as error:
             raise DialoguePlanError() from error
         try:
-            step = validate_dialogue_step(value, completed_turns=len(messages) // 2)
+            step = validate_dialogue_step(value, completed_turns=len(messages) // 2,
+                                          natural_utterance=self.participant_utterances())
+            if self.participant_utterances():
+                from lib.domain.dialogue_expression import carry_expression_design
+                inherited = (previous_state or {}).get("expression_design", unit["qa_contract"].get("expression_design"))
+                design = carry_expression_design(inherited, step["dialogue_state"].get("expression_design"))
+                if design:
+                    step["dialogue_state"]["expression_design"] = design
             if (self.separated_questions() and unit["qa_contract"]["qa_type"] == "closed_book"
                     and step["continue"]):
                 dispatched = self._closed_book_question(unit, unit["qa_contract"],
-                    key=[*key, "followup"], visible_messages=messages, brief=step.get("question_brief"))
+                    key=[*key, "followup"], visible_messages=messages, brief=step.get("question_brief"),
+                    **({"expression_design": step["dialogue_state"].get("expression_design", {})}
+                       if self.participant_utterances() else {}))
                 step["user_message"] = dispatched["question"]
                 step["response_policy"] = dispatched["answer_policy"]
+                if self.participant_utterances() and dispatched.get("expression_design"):
+                    step["dialogue_state"]["expression_design"] = deepcopy(dispatched["expression_design"])
             # An omitted update retains the last accepted role/register frame.
             # Explicit updates remain untrusted and are checked with real turns.
             if ("conversational_frame" not in step["dialogue_state"]
@@ -768,7 +789,7 @@ class WorkflowQADirector:
             history = []
             query = " ".join(unit.get("text", "")[:1000] for unit in guided[:4])
             if limit and runtime:
-                history = self.knowledge_store().search(runtime[1]["knowledge_id"], query=query[:4000], limit=limit)
+                history = self._knowledge_search(runtime[1]["knowledge_id"], query=query[:4000], limit=limit)
             elif limit:
                 def history_candidates():
                     for store in (local_history, published_history):
@@ -820,17 +841,19 @@ class WorkflowQADirector:
                     "requirement": self.recipe.get("brief", ""),
                     "targets": list(stages), **self._natural_expression_guidance()}
             if runtime:
-                data["knowledge_agent_memory"] = self.knowledge_store().coverage(runtime[1]["knowledge_id"])
+                data["knowledge_agent_memory"] = self._knowledge_memory(runtime[1]["knowledge_id"])
             elif self.recipe.get("qa_agent_memory_version") == 1:
                 from lib.infrastructure.qa_agent_memory import build_agent_memory
                 data["agent_memory"] = build_agent_memory(local_history, published_history, stages,
                     history=history, feedback=data["feedback"], candidates=data["candidates"],
-                    include_expression=self.natural_expressions())
+                    include_expression=self.natural_expressions(),
+                    **({"expression_version": 2} if self.participant_utterances() else {}))
             elif self.natural_expressions():
                 # Explicit opt-in without agent memory still uses indexed,
                 # bounded accepted coverage rather than scanning old bodies.
                 data["expression_coverage"] = {label: {stage: store.dimension_coverage(
-                    namespace=stage, limit=8, include_expression=True) for stage in stages}
+                    namespace=stage, limit=8, include_expression=True,
+                    **({"expression_version": 2} if self.participant_utterances() else {})) for stage in stages}
                     for label, store in (("current_run", local_history), ("published", published_history))}
             if self.recipe.get("source_line_protocol_version") == 1:
                 data["source_line_protocol_version"] = 1

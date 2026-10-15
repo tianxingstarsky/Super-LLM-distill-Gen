@@ -8,6 +8,7 @@ from lib.prompts.workflow_agent_contracts import (
     SYSTEM_V2, QA_DIRECTOR_V1_8, QA_DIRECTOR_V1_9, SFT_V1_6, STYLE_CHECK_V1_3,
     _BATCH_TASK_SCHEMA, _NEXT_TURN_SCHEMA,
 )
+from lib.prompts.workflow_utterance import QA_DIRECTOR_V1_10, SFT_V1_7
 from lib.domain.workflow_qa_director import (
     validate_director_task, validate_director_skip, validate_dialogue_step,
 )
@@ -20,8 +21,8 @@ def mock_llm_server():
 
 @pytest.mark.parametrize("prompt_id,version,body", [
     ("workflow.system", "2.0.0", SYSTEM_V2),
-    ("workflow.qa_director", "1.9.0", QA_DIRECTOR_V1_9),
-    ("workflow.sft", "1.6.0", SFT_V1_6),
+    ("workflow.qa_director", "1.10.0", QA_DIRECTOR_V1_10),
+    ("workflow.sft", "1.7.0", SFT_V1_7),
     ("workflow.style_check", "1.3.0", STYLE_CHECK_V1_3),
 ])
 def test_registered_stage_is_exact_complete_body_not_an_inherited_conflicting_tail(prompt_id, version, body):

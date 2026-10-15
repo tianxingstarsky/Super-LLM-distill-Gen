@@ -293,6 +293,7 @@ def test_normal_workflow_uses_tools_and_reuses_the_agent_between_batches(tmp_pat
             value = json.loads(super().chat(messages))
             for task in value["tasks"]:
                 task["question"] += "（请求 " + task["id"][:6] + "）"
+                task["expression_design"] = {"register": "日常直接交流", "participant_voice": "当前用户亲自提出请求"}
             return final(value)
 
     director = ToolDirector()
@@ -309,6 +310,13 @@ def test_normal_workflow_uses_tools_and_reuses_the_agent_between_batches(tmp_pat
     scope = state["qa_director"]["knowledge_context"]["knowledge_id"]
     assert worker.knowledge_store().coverage(scope)["counts"] == [
         {"qa_type": "grounded", "status": "final_eligible", "count": 2}]
+    assert worker.knowledge_store().coverage(scope, include_expression=True)["accepted_dimensions"]["expression_register"] == [
+        {"value": "日常直接交流", "accepted": 2}]
+    # Batch two's actual history observation includes the first task's
+    # editorial voice, without copying its answer into scheduling evidence.
+    recalled = json.loads(director.tool_requests[3][-1]["content"])["hits"]
+    assert recalled and recalled[0]["expression_design"]["register"] == "日常直接交流"
+    assert "answer" not in recalled[0]
     calls_before = len(director.tool_requests)
     worker.execute(resume_run=True)
     assert len(director.tool_requests) == calls_before

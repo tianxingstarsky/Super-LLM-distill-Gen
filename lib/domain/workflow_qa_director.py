@@ -24,6 +24,10 @@ MAX_DIRECTOR_RULE_CHARS = 12_000
 DIRECTOR_PLANNING_MODES = ("balanced", "adaptive")
 DIRECTOR_SKIP_REASONS = ("source_exhausted", "no_new_grounded_scenario")
 DEFAULT_QUESTION_RULES = (
+    "生成新互动时，用户就是直接向助手表达需求的说话者，可以省略我/你，不把发言写成第三人称场景题。"
+    "不要按批次给发言加序号、角色标签或旁白；真实清单、引用和原文编号按实际任务保留。"
+    "语言随用户与情境变化，允许口语、短句、省略、歧义、自我修正或少量自然噪声，也允许清楚详细的请求；"
+    "不强造错字或所有人都含混。同一对话保持相容习惯，依据真实回应改变当前行动与详略。"
     "根据用户语言、已有上下文与资料能支持的内容设计有用的互动，帮助完成实际目标。"
     "互动可以是请求、陈述、共同分析、修改、讨论或澄清，不必都是提问；不强制每段覆盖所有行为。"
     "联系应有上下文支持，合理推测须保留为假设，不得编造用户经历。"
@@ -269,21 +273,23 @@ def validate_director_skip(value, expected_id):
                if "guidance" in value else {})}
 
 
-def validate_dialogue_step(value, *, completed_turns):
+def validate_dialogue_step(value, *, completed_turns, natural_utterance=False):
     """Validate only transport and minimum trace shape, not inferred meaning."""
     error = "invalid_dialogue_step"
     if (not isinstance(value, dict) or not {"continue", "user_message", "reason", "dialogue_state"} <= set(value)
             or set(value) - {"continue", "user_message", "reason", "dialogue_state", "question_brief"}
             or type(value["continue"]) is not bool):
         raise ValueError(error)
-    if not value["continue"] and completed_turns < 2:
+    if not value["continue"] and completed_turns < (1 if natural_utterance else 2):
         raise ValueError("dialogue_step_stopped_before_multiturn")
     state = value["dialogue_state"]
     strings = {"user_intent": 2000, "progress": 2000}
     notes = {"shared_understanding", "open_issues", "active_constraints", "context_links"}
-    if not isinstance(state, dict) or set(state) - set(strings) - notes - {"conversational_frame"}:
+    optional = {"conversational_frame", *({"expression_design"} if natural_utterance else set())}
+    if not isinstance(state, dict) or set(state) - set(strings) - notes - optional:
         raise ValueError(error)
-    normalized = {key: validate_conversational_frame(text, error=error) if key == "conversational_frame"
+    normalized = {key: validate_expression_design(text) if key == "expression_design"
+                  else validate_conversational_frame(text, error=error) if key == "conversational_frame"
                   else _bounded_text(text, strings[key], error, empty=True)
                   if key in strings else _bounded_notes(text, error) for key, text in state.items()}
     return {"continue": value["continue"],

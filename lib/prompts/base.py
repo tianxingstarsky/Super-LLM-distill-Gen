@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, Tuple
+import re
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,14 @@ def render(spec: PromptSpec, **kwargs) -> str:
 
 def registry() -> Dict[str, PromptSpec]:
     """全量提示词注册表（id → 最新版 spec）。"""
-    return {pid: versions[sorted(versions)[-1]] for pid, versions in registry_versions().items()}
+    return {pid: versions[max(versions, key=_version_key)] for pid, versions in registry_versions().items()}
+
+
+def _version_key(version):
+    """Numeric release components keep 1.10 newer than 1.9; pins stay exact."""
+    if re.fullmatch(r"\d+(?:\.\d+)*", version):
+        return (1, tuple(int(part) for part in version.split(".")), version)
+    return (0, (), version)
 
 
 def registry_versions() -> Dict[str, Dict[str, PromptSpec]]:
@@ -70,4 +78,4 @@ def get(prompt_id: str, version: str | None = None) -> PromptSpec:
         if version not in versions:
             raise KeyError(f"提示词 {prompt_id} 无版本 {version}；可用: {sorted(versions)}")
         return versions[version]
-    return versions[sorted(versions)[-1]]
+    return versions[max(versions, key=_version_key)]

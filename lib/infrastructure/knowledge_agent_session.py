@@ -15,6 +15,36 @@ from lib.domain.workflow_quality import canonical
 from lib.infrastructure.qa_history import _terms
 
 
+MAX_EXPRESSION_BYTES = 32768
+MAX_EXPRESSION_DIMENSIONS = 32
+EXPRESSION_COVERAGE_LIMIT = 12
+
+
+def _expression(value):
+    from lib.domain.dialogue_expression import validate_expression_design
+    result = validate_expression_design(value)
+    try:
+        if len(canonical(result).encode("utf-8")) > MAX_EXPRESSION_BYTES:
+            raise ValueError("invalid_expression_design")
+    except UnicodeError:
+        raise ValueError("invalid_expression_design") from None
+    return result
+
+
+def _stored_expression(payload):
+    try:
+        if not isinstance(payload, str) or len(payload.encode("utf-8")) > MAX_EXPRESSION_BYTES:
+            raise ValueError
+        return _expression(json.loads(payload))
+    except (ValueError, TypeError, UnicodeError):
+        raise ValueError("knowledge_agent_expression_integrity_error") from None
+
+
+def _expression_option(value):
+    if type(value) is not bool:
+        raise ValueError("knowledge_agent_invalid_expression_option")
+
+
 def digest(value):
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
@@ -54,11 +84,24 @@ class KnowledgeAgentSession:
                     identity TEXT NOT NULL, run_id TEXT NOT NULL, sample_id TEXT NOT NULL,
                     question TEXT NOT NULL, qa_type TEXT NOT NULL, topic TEXT NOT NULL,
                     stage TEXT NOT NULL, status TEXT NOT NULL, reason TEXT NOT NULL,
+                    expression_design TEXT NOT NULL DEFAULT '',
                     UNIQUE(knowledge, identity));
                 CREATE INDEX IF NOT EXISTS agent_tasks_recent ON agent_tasks(knowledge, row_id DESC);
                 CREATE VIRTUAL TABLE IF NOT EXISTS agent_task_search USING fts5(
                     question_terms, content='');
             """)
+            # Serialise schema inspection and ALTER across processes opening an
+            # old store together. Old rows have no inferred expression labels.
+            db.execute("BEGIN IMMEDIATE")
+            if "expression_design" not in {row["name"] for row in db.execute("PRAGMA table_info(agent_tasks)")}:
+                db.execute("ALTER TABLE agent_tasks ADD COLUMN expression_design TEXT NOT NULL DEFAULT ''")
+            db.execute("CREATE TABLE IF NOT EXISTS agent_task_dimensions ("
+                "task_row_id INTEGER NOT NULL,dimension TEXT NOT NULL,value TEXT NOT NULL,"
+                "PRIMARY KEY(task_row_id,dimension))")
+            db.execute("CREATE INDEX IF NOT EXISTS agent_task_dimension_values "
+                "ON agent_task_dimensions(dimension,value,task_row_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS agent_tasks_knowledge_status "
+                "ON agent_tasks(knowledge,status,row_id)")
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=30)
@@ -110,25 +153,46 @@ class KnowledgeAgentSession:
                 used += size
         return [deepcopy(message) for turn in reversed(selected) for message in turn]
 
-    def claim(self, knowledge, identity, *, run_id, sample_id, question, qa_type, topic=""):
-        """Atomic exact-task reservation across concurrent jobs and restarts."""
+    def claim(self, knowledge, identity, *, run_id, sample_id, question, qa_type, topic="", expression_design=None):
+        """Reserve one task, with optional validated editorial expression notes.
+
+        An owner's replay can fill old missing notes but cannot rewrite existing
+        notes; omitting the option never erases previously recorded metadata.
+        """
         if not isinstance(question, str) or not question.strip() or len(question) > 40000:
             raise ValueError("knowledge_agent_invalid_question")
+        expression = _expression(expression_design) if expression_design is not None else None
+        payload = canonical(expression) if expression is not None else ""
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT * FROM agent_tasks WHERE knowledge=? AND identity=?",
                              (knowledge, identity)).fetchone()
             if old is not None:
                 if old["run_id"] == run_id and old["sample_id"] == sample_id:
+                    if expression is not None:
+                        if old["expression_design"]:
+                            if _stored_expression(old["expression_design"]) != expression:
+                                raise ValueError("knowledge_agent_expression_changed")
+                        else:
+                            db.execute("UPDATE agent_tasks SET expression_design=? WHERE row_id=?", (payload, old["row_id"]))
+                            self._save_expression_dimensions(db, old["row_id"], expression)
                     return None
                 return {"id": old["sample_id"], "run_id": old["run_id"], "status": old["status"]}
             cursor = db.execute("INSERT INTO agent_tasks(knowledge,identity,run_id,sample_id,question,qa_type,"
-                "topic,stage,status,reason) VALUES(?,?,?,?,?,?,?,'director','reserved','')",
-                (knowledge, identity, run_id, sample_id, question, qa_type, topic[:2000]))
+                "topic,stage,status,reason,expression_design) VALUES(?,?,?,?,?,?,?,'director','reserved','',?)",
+                (knowledge, identity, run_id, sample_id, question, qa_type, topic[:2000], payload))
+            if expression is not None:
+                self._save_expression_dimensions(db, cursor.lastrowid, expression)
             # A bounded shingle index recalls related wording in Chinese/English.
             terms = " ".join(hashlib.sha256(term.encode()).hexdigest() for term in _terms(question + " " + topic))
             db.execute("INSERT INTO agent_task_search(rowid,question_terms) VALUES(?,?)", (cursor.lastrowid, terms))
         return None
+
+    @staticmethod
+    def _save_expression_dimensions(db, row_id, expression):
+        db.execute("DELETE FROM agent_task_dimensions WHERE task_row_id=?", (row_id,))
+        db.executemany("INSERT INTO agent_task_dimensions(task_row_id,dimension,value) VALUES(?,?,?)",
+            ((row_id, "expression_" + name, value) for name, value in expression.items()))
 
     def outcome(self, knowledge, identity, *, run_id, sample_id, stage, status, reason=""):
         with closing(self._connect()) as db, db:
@@ -136,7 +200,9 @@ class KnowledgeAgentSession:
                        "WHERE knowledge=? AND identity=? AND run_id=? AND sample_id=?",
                        (stage, status, str(reason)[:500], knowledge, identity, run_id, sample_id))
 
-    def search(self, knowledge, *, query, limit=8):
+    def search(self, knowledge, *, query, limit=8, include_expression=False):
+        """Recall this knowledge scope's questions, optionally with design notes."""
+        _expression_option(include_expression)
         limit = max(0, min(int(limit), 20))
         if not isinstance(query, str) or len(query) > 4000:
             raise ValueError("knowledge_agent_invalid_search")
@@ -155,12 +221,53 @@ class KnowledgeAgentSession:
         return [{"id": row["sample_id"], "run_id": row["run_id"], "question": row["question"],
                  "qa_type": row["qa_type"], "topic": row["topic"], "status": row["status"],
                  "stage": row["stage"], "reason": row["reason"], "similarity_kind": "lexical_recall_not_semantic_proof",
-                 "score": float(-row["rank"])} for row in rows]
+                 "score": float(-row["rank"]),
+                 **({"expression_design": _stored_expression(row["expression_design"]),
+                     "expression_design_scope": "same_knowledge_task_editorial_annotation"}
+                    if include_expression and row["expression_design"] else {})} for row in rows]
 
-    def coverage(self, knowledge):
+    def coverage(self, knowledge, *, include_expression=False):
+        """Count ledger states; optional design dimensions use final rows only.
+
+        These indexed annotations describe recorded editorial choices, not
+        independently classified language or guaranteed semantic coverage.
+        """
+        _expression_option(include_expression)
         with closing(self._connect()) as db:
             rows = db.execute("SELECT qa_type,status,COUNT(*) AS count FROM agent_tasks "
                               "WHERE knowledge=? GROUP BY qa_type,status", (knowledge,)).fetchall()
-        return {"scope": "same_accepted_knowledge", "history_is_not_evidence": True,
+            dimensions = {}
+            if include_expression:
+                names = db.execute("SELECT DISTINCT d.dimension FROM agent_tasks t "
+                    "JOIN agent_task_dimensions d ON d.task_row_id=t.row_id "
+                    "WHERE t.knowledge=? AND t.status='final_eligible' ORDER BY d.dimension LIMIT ?",
+                    (knowledge, MAX_EXPRESSION_DIMENSIONS + 1)).fetchall()
+                if len(names) > MAX_EXPRESSION_DIMENSIONS:
+                    raise ValueError("knowledge_agent_expression_integrity_error")
+                for row in names:
+                    name = row["dimension"]
+                    if not isinstance(name, str) or not name.startswith("expression_"):
+                        raise ValueError("knowledge_agent_expression_integrity_error")
+                    values = db.execute("SELECT d.value,COUNT(*) AS accepted FROM agent_tasks t "
+                        "JOIN agent_task_dimensions d ON d.task_row_id=t.row_id "
+                        "WHERE t.knowledge=? AND t.status='final_eligible' AND d.dimension=? "
+                        "GROUP BY d.value ORDER BY accepted DESC,d.value LIMIT ?",
+                        (knowledge, name, EXPRESSION_COVERAGE_LIMIT)).fetchall()
+                    entries = []
+                    for value in values:
+                        # The same domain whitelist validates both persisted
+                        # designs and the bounded, indexed editorial aggregate.
+                        try:
+                            _expression({name[len("expression_"):]: value["value"]})
+                        except ValueError:
+                            raise ValueError("knowledge_agent_expression_integrity_error") from None
+                        entries.append({"value": value["value"], "accepted": value["accepted"]})
+                    dimensions[name] = entries
+        result = {"scope": "same_accepted_knowledge", "history_is_not_evidence": True,
                 "semantic_uniqueness_guaranteed": False,
                 "counts": [{"qa_type": row["qa_type"], "status": row["status"], "count": row["count"]} for row in rows]}
+        if include_expression:
+            result.update(accepted_dimensions=dimensions,
+                expression_coverage_scope="same_knowledge_final_eligible_editorial_designs",
+                expression_coverage_is_annotation=True)
+        return result

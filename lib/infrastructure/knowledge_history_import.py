@@ -58,7 +58,7 @@ def _pack_receipts(record, run, expected):
     return sorted(set(receipts)) if receipts else None
 
 
-def _question(record, target):
+def _question(record, target, *, include_expression=False):
     from lib.domain.workflow_qa_director import QA_TYPES, validate_dialogue_design
     from lib.infrastructure.knowledge_agent_session import knowledge_task_identity
     from lib.infrastructure.workflow_qa_director import actual_qa_input_messages, learner_prompt
@@ -77,6 +77,13 @@ def _question(record, target):
     except (KeyError, TypeError, ValueError):
         return None
     result = {"question": question, "visible_context": visible, "qa_type": qa_type}
+    if include_expression and "expression_design" in contract:
+        from lib.domain.dialogue_expression import validate_expression_design
+        try:
+            result["expression_design"] = validate_expression_design(contract["expression_design"])
+            canonical(result["expression_design"]).encode("utf-8")
+        except (ValueError, TypeError, UnicodeError):
+            return None
     if "dialogue_design" in contract:
         try:
             validate_dialogue_design(contract["dialogue_design"])
@@ -93,16 +100,19 @@ def _question(record, target):
     return result
 
 
-def verified_knowledge_history(output: Path, examples: list, knowledge_id: str) -> list:
+def verified_knowledge_history(output: Path, examples: list, knowledge_id: str, *, include_expression=False) -> list:
     """Authenticate at most the first twenty summary references, in that order.
 
     Missing/incomplete legacy runs and records without accepted source packs
     are not migrated. Existing corrupt complete artifacts or altered pack
     receipts fail closed. Shared SFT/CoT projections count once; conflicting
     eligible records with the same ID are ambiguous and are not imported.
+    Expression notes are validated from the sealed contract only when requested;
+    they do not participate in native learner-task identity.
     """
     from lib.infrastructure.training_workflow import run_path, verify_artifacts
-    if not isinstance(examples, list) or not isinstance(knowledge_id, str) or not re.fullmatch(r"[a-f0-9]{64}", knowledge_id):
+    if (type(include_expression) is not bool or not isinstance(examples, list)
+            or not isinstance(knowledge_id, str) or not re.fullmatch(r"[a-f0-9]{64}", knowledge_id)):
         raise ValueError("knowledge_history_invalid_request")
     selected, groups, seen = [], defaultdict(set), set()
     for example in examples[:MAX_IMPORT_ROWS]:
@@ -165,7 +175,7 @@ def verified_knowledge_history(output: Path, examples: list, knowledge_id: str) 
                     occurrences.add(candidate_id)
                     if record.get("status") != "eligible":
                         continue
-                    question = _question(record, target)
+                    question = _question(record, target, include_expression=include_expression)
                     packs = _pack_receipts(record, run, knowledge_id)
                     if not question or not packs:
                         ambiguous.add(key)
@@ -179,8 +189,9 @@ def verified_knowledge_history(output: Path, examples: list, knowledge_id: str) 
                             "record_artifact": filename, "record_artifact_sha256": manifest["sha256"][filename],
                             "record_sha256": _sha(canonical(record)), "source_pack_ids": packs}}
                     old = candidates.get(key)
-                    if old is not None and any(old.get(field) != candidate.get(field) for field in (
-                            "question", "visible_context", "qa_type", "dialogue_design", "task_identity")):
+                    comparison = ("question", "visible_context", "qa_type", "dialogue_design", "task_identity",
+                                  *(("expression_design",) if include_expression else ()))
+                    if old is not None and any(old.get(field) != candidate.get(field) for field in comparison):
                         ambiguous.add(key)
                     else:
                         candidates.setdefault(key, candidate)

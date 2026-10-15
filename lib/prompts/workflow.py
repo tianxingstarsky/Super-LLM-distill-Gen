@@ -722,3 +722,27 @@ REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.6.0", template=s
     "review_score", "核对完整训练正文的事实、证据范围与行为归属", REVIEW_SCORE_V1_6).template)
 LEARNER_CONTEXT_CHECK = _reasoning_spec_replace(LEARNER_CONTEXT_CHECK, version="1.1.0", template=spec(
     "learner_context_check", "区分实际对话、来源作者与用户经历", LEARNER_CONTEXT_CHECK_V1_1).template)
+
+# Shared participant expression contracts affect new saved snapshots only.
+from lib.prompts.workflow_utterance import (
+    QA_DIRECTOR_V1_10, QUESTION_USER_V1_3, MULTITURN_USER_V1_5, SFT_V1_7,
+    QUESTION_FIT_V1_4, SFT_DIRECTED_CHECK_V1_3, MULTITURN_DIRECTED_CHECK_V1_3,
+)
+QA_DIRECTOR_V1_9, QUESTION_USER_V1_2 = QA_DIRECTOR, QUESTION_USER
+MULTITURN_USER_V1_4, SFT_V1_6 = MULTITURN_USER, SFT
+QUESTION_FIT_V1_3 = QUESTION_FIT
+SFT_DIRECTED_CHECK_V1_2, MULTITURN_DIRECTED_CHECK_V1_2 = SFT_DIRECTED_CHECK, MULTITURN_DIRECTED_CHECK
+QA_DIRECTOR = _reasoning_spec_replace(QA_DIRECTOR, version="1.10.0", template=spec(
+    "qa_director", "设计直接参与者的真实语言行动", QA_DIRECTOR_V1_10).template)
+QUESTION_USER = _reasoning_spec_replace(QUESTION_USER, version="1.3.0", template=spec(
+    "question_user", "仅产出权限内的真实参与者发言", QUESTION_USER_V1_3).template)
+MULTITURN_USER = _reasoning_spec_replace(MULTITURN_USER, version="1.5.0", template=spec(
+    "multiturn_user", "自然承接公开对话并判断结束", MULTITURN_USER_V1_5).template)
+SFT = _reasoning_spec_replace(SFT, version="1.7.0", template=spec(
+    "sft", "保留固定原题并自然创建新互动", SFT_V1_7).template)
+QUESTION_FIT = _reasoning_spec_replace(QUESTION_FIT, version="1.4.0", template=spec(
+    "question_fit", "核对参与者表达与实际沟通适配", QUESTION_FIT_V1_4).template)
+SFT_DIRECTED_CHECK = _reasoning_spec_replace(SFT_DIRECTED_CHECK, version="1.3.0", template=spec(
+    "sft_directed_check", "核对真实用户行动与回答契约", SFT_DIRECTED_CHECK_V1_3).template)
+MULTITURN_DIRECTED_CHECK = _reasoning_spec_replace(MULTITURN_DIRECTED_CHECK, version="1.3.0", template=spec(
+    "multiturn_directed_check", "核对自然多轮行动与信息权限", MULTITURN_DIRECTED_CHECK_V1_3).template)

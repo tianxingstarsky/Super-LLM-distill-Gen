@@ -21,6 +21,9 @@ class WorkflowKnowledgeAgent:
     def knowledge_agent_enabled(self):
         return self.recipe.get("knowledge_agent_context_version") == 1
 
+    def knowledge_expressions(self):
+        return self.recipe.get("qa_expression_version") == 2
+
     def knowledge_store(self):
         with self._lock:
             if not hasattr(self, "_knowledge_store"):
@@ -77,6 +80,8 @@ class WorkflowKnowledgeAgent:
                           self.recipe.get("qa_director", {}).get("tools_mode", "auto")]
         if self.recipe.get("knowledge_agent_session_rules_version") == 1:
             session_scope.extend([self.recipe.get("node_prompt_system"), rules])
+        if self.knowledge_expressions():
+            session_scope.append(["expression_guide", 2])
         session = digest(session_scope)
         descriptor = {"version": 1, "knowledge_id": knowledge, "session_id": session}
         store = self.knowledge_store()
@@ -89,11 +94,13 @@ class WorkflowKnowledgeAgent:
             import_key = (knowledge, stage, digest([(old["id"], old["run_id"]) for old in examples]))
             if import_key in self._knowledge_imported:
                 continue
-            for old in verified_knowledge_history(self.path.parent.parent, examples, knowledge):
+            for old in verified_knowledge_history(self.path.parent.parent, examples, knowledge,
+                    **({"include_expression": True} if self.knowledge_expressions() else {})):
                 identity = old["task_identity"]
                 candidate_id = old["candidate_id"]
                 duplicate = store.claim(knowledge, identity, run_id=old["run_id"], sample_id=candidate_id,
-                    question=old["question"], qa_type=old["qa_type"], topic="")
+                    question=old["question"], qa_type=old["qa_type"], topic="",
+                    **({"expression_design": old["expression_design"]} if old.get("expression_design") else {}))
                 if duplicate is None:
                     store.outcome(knowledge, identity, run_id=old["run_id"], sample_id=candidate_id,
                                   stage="published_history", status="final_eligible")
@@ -106,13 +113,34 @@ class WorkflowKnowledgeAgent:
         return values, descriptor
 
     def _knowledge_coverage(self, knowledge):
-        values = self.knowledge_store().coverage(knowledge)["counts"]
+        snapshot = self._knowledge_memory(knowledge)
+        values = snapshot["counts"]
         accepted = Counter()
         for row in values:
             if row["status"] == "final_eligible":
                 accepted[row["qa_type"]] += row["count"]
         return {"ledgers": [{"scope": "same_knowledge_final_results", "namespace": "logical_tasks",
-                             "accepted_by_type": dict(accepted), "accepted_dimensions": {}}]}
+                             "accepted_by_type": dict(accepted),
+                             "accepted_dimensions": snapshot.get("accepted_dimensions", {})}]}
+
+    def _knowledge_memory(self, knowledge):
+        memory = self.knowledge_store().coverage(knowledge,
+            **({"include_expression": True} if self.knowledge_expressions() else {}))
+        if self.knowledge_expressions():
+            # Open labels may be verbose. Keep a bounded editorial window;
+            # complete task records and indexed dimensions stay on disk.
+            dimensions = memory.get("accepted_dimensions", {})
+            while len(canonical(memory).encode()) > 8192:
+                populated = [rows for rows in dimensions.values() if rows]
+                if not populated:
+                    break
+                max(populated, key=lambda rows: len(canonical(rows).encode())).pop()
+                memory["expression_coverage_limited"] = True
+        return memory
+
+    def _knowledge_search(self, knowledge, **arguments):
+        return self.knowledge_store().search(knowledge, **arguments,
+            **({"include_expression": True} if self.knowledge_expressions() else {}))
 
     def knowledge_agent_plan(self, key, data, runtime, *, instruction=None):
         from lib.infrastructure.model_context_prefix import split_context_request, NODE_RULE_HEADER
@@ -124,8 +152,9 @@ class WorkflowKnowledgeAgent:
         knowledge, session = descriptor["knowledge_id"], descriptor["session_id"]
         operation = digest([self.state["id"], key])
         tools = KnowledgeAgentTools(materials,
-            history_search=lambda **arguments: store.search(knowledge, **arguments),
-            coverage=lambda: self._knowledge_coverage(knowledge))
+            history_search=lambda **arguments: self._knowledge_search(knowledge, **arguments),
+            coverage=lambda: self._knowledge_coverage(knowledge),
+            **({"include_expression": True} if self.knowledge_expressions() else {}))
         client = self.client("generation", stage="director")
         use_tools = (self.recipe["qa_director"].get("tools_mode", "auto") == "auto"
                      and getattr(client, "model_info", {}).get("tools") is not False)
@@ -137,7 +166,7 @@ class WorkflowKnowledgeAgent:
         def request_snapshot():
             rules, task = split_node_rules(data, instruction=instruction, qa_director=self.recipe.get("qa_director"))
             task = deepcopy(task)
-            task["knowledge_agent_memory"] = store.coverage(knowledge)
+            task["knowledge_agent_memory"] = self._knowledge_memory(knowledge)
             system = (self.recipe["node_prompt_system"] + NODE_RULE_HEADER + "\n"
                 + self.prompt_text("workflow.qa_director") + experience_system(self.recipe, "workflow.qa_director")
                 + rules + "\n" + self.recipe["knowledge_agent_instruction"])
@@ -287,7 +316,9 @@ class WorkflowKnowledgeAgent:
         return self.knowledge_store().claim(descriptor["knowledge_id"],
             self._knowledge_task_identity(contract, stage),
             run_id=self.state["id"], sample_id=unit["id"], question=contract["question"], qa_type=contract["qa_type"],
-            topic=(contract.get("dialogue_design") or {}).get("interaction_goal", ""))
+            topic=(contract.get("dialogue_design") or {}).get("interaction_goal", ""),
+            **({"expression_design": contract["expression_design"]}
+               if self.knowledge_expressions() and contract.get("expression_design") else {}))
 
     def record_knowledge_outcome(self, unit, row, stage, *, final=False):
         descriptor = unit.get("knowledge_agent_context")

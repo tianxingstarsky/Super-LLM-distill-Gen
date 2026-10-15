@@ -131,7 +131,8 @@ def test_same_run_review_and_repair_get_full_verified_neighbor_context(tmp_path)
 def test_director_default_designs_roles_common_ground_and_progress_without_quotas():
     current = get("workflow.qa_director")
     assert "conversational_frame" in render(current)
-    assert "真实messages" in render(current) and "只换人称" in render(current)
+    assert "已发生的真实回应" in render(current)
+    assert "只换人名、语气、同义词不是新增价值" in render(current)
     assert "不是固定类别" in render(current)
     assert "https://aclanthology.org/2022.emnlp-main.714/" in current.source
     assert "conversational_frame" not in render(get("workflow.qa_director", version="1.1.0"))

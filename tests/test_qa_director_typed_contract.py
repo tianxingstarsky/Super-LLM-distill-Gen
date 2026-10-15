@@ -30,7 +30,7 @@ def test_complete_new_prompt_example_passes_actual_source_line_and_design_valida
     assert validated["visible_context"] == material["text"]
     assert task["source_line_ranges"] == [{"material_id": "示例资料id", "start_line": 1, "end_line": 1}]
     body = render(get("workflow.qa_director"))
-    assert get("workflow.qa_director").version == "1.9.0"
+    assert get("workflow.qa_director").version == "1.10.0"
     assert json.dumps(_BATCH_TASK_SCHEMA_V1_9, ensure_ascii=False) in body
     assert "context_links、success_criteria、turn_guidance是三个可选的字符串数组字段" in body
 

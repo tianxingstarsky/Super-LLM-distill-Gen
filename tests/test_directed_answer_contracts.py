@@ -11,6 +11,7 @@ from lib.prompts import get, render
 from lib.prompts.workflow_agent_contracts import (
     SFT_DIRECTED_V1_8, SFT_ANSWER_V1_5, QUESTION_USER_V1_2, QUESTION_FIT_V1_3,
 )
+from lib.prompts.workflow_utterance import QUESTION_USER_V1_3, QUESTION_FIT_V1_4
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -19,6 +20,19 @@ def mock_llm_server():
 
 
 TEXT = "设备维护前必须断电。"
+
+
+def question_dispatch(messages):
+    """Read the literal saved v1 tool or current v2 system dispatch."""
+    for message in messages:
+        if message.get("name") == "dialogue_dispatch":
+            return json.loads(message["content"])
+        if message.get("role") == "system" and message.get("content", "").startswith("<internal_dialogue_dispatch>\n"):
+            content = message["content"]
+            assert content.endswith("\n</internal_dialogue_dispatch>")
+            return json.loads(content.removeprefix("<internal_dialogue_dispatch>\n")
+                              .removesuffix("\n</internal_dialogue_dispatch>"))
+    raise AssertionError("question dispatch missing")
 
 
 class Writer:
@@ -133,7 +147,7 @@ def test_clarify_preserves_ambiguous_fixed_question_and_has_no_fact_quotes_requi
 @pytest.mark.parametrize("prompt_id,version,body", [
     ("workflow.sft_directed", "1.8.0", SFT_DIRECTED_V1_8),
     ("workflow.sft_answer", "1.5.0", SFT_ANSWER_V1_5),
-    ("workflow.question_user", "1.2.0", QUESTION_USER_V1_2),
+    ("workflow.question_user", "1.3.0", QUESTION_USER_V1_3),
 ])
 def test_registered_answer_contract_is_complete(prompt_id, version, body):
     assert get(prompt_id).version == version
@@ -164,10 +178,10 @@ def test_blind_question_role_definition_is_opt_in_and_does_not_receive_hidden_po
     system = writer.calls[0][0]["content"]
     assert ("首轮不依赖隐藏上文，真实困惑可保留未知对象等待澄清" in system) is new_policy
     assert ("没有历史时生成自包含的首条消息" in system) is not new_policy
-    dispatch = next(message for message in writer.calls[0] if message.get("name") == "dialogue_dispatch")
-    assert json.loads(dispatch["content"]) == {"question_brief": {**data["question_brief"], "behaviors": []}}
+    dispatch = question_dispatch(writer.calls[0])
+    assert dispatch == {"question_brief": {**data["question_brief"], "behaviors": []}}
     assert not any(message.get("name") == "source_memory" for message in writer.calls[0])
-    assert "answer_policy" not in dispatch["content"]
+    assert "answer_policy" not in dispatch
 
 
 def test_question_helper_legacy_default_still_uses_exact_old_surface_instruction():
@@ -195,7 +209,7 @@ class SourceAwareFit(Writer):
             assert messages[-1] == {"role": "user", "content": "又不行了"}
             return json.dumps({"answer": "你说的是哪件事？", "quotes": []}, ensure_ascii=False)
         if "question" in data:
-            assert QUESTION_FIT_V1_3 in messages[0]["content"]
+            assert QUESTION_FIT_V1_4 in messages[0]["content"]
             self.fit_requests.append(deepcopy(data))
             result = {"keep": self.accepted, "answer_policy": "clarify" if self.accepted else "insufficient",
                       "reason": "目标是了解真实未知所指，不依据资料猜领域。" if self.accepted else
@@ -272,12 +286,11 @@ def test_actual_separated_fit_rejection_cannot_expand_source_or_send_private_fee
     blind = json.dumps(questioner.calls, ensure_ascii=False)
     assert "PRIVATE_FIT_FEEDBACK" not in blind and "UNSELECTED_PRIVATE_V2" not in blind
     assert "source_line_ranges" not in blind and "answer_policy" not in blind
-    retry = next(message for message in questioner.calls[1] if message.get("name") == "dialogue_dispatch")
-    assert json.loads(retry["content"])["retry_code"] == "question_not_suitable"
+    assert question_dispatch(questioner.calls[1])["retry_code"] == "question_not_suitable"
 
 
 def test_new_fit_full_body_is_registered_without_changing_prior_snapshot():
-    assert get("workflow.question_fit").version == "1.3.0"
-    assert render(get("workflow.question_fit")) == QUESTION_FIT_V1_3
+    assert get("workflow.question_fit").version == "1.4.0"
+    assert render(get("workflow.question_fit")) == QUESTION_FIT_V1_4
     assert sha256(get("workflow.question_fit", version="1.2.0").template.encode()).hexdigest() == (
         "7a9c3b8fa0a2743b807fb477010f52a61c8a9f38e2b145ca9cce84440cdda06b")

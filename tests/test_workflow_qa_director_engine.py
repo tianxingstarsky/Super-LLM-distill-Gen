@@ -502,7 +502,13 @@ def test_director_reserves_output_and_rule_bytes_before_sending_large_chinese_ba
     source = tmp_path / "long.txt"
     source.write_text(SOURCE * 2000, encoding="utf-8")
     output = tmp_path / "out"
+    # The expanded participant contract needs enough room for one unchanged
+    # clean chunk even with 60KB of user rules. The remaining batch must still
+    # be split by the actual wire preflight rather than clipping evidence.
+    context_limit = 150_000
     run_id = engine.create_run(output, sources=[source], targets=["sft"], sample_count=20,
+        node_models={"director": {"generation": {"backend": "openai", "model": "gpt-4o-mini",
+            "context_window_tokens": context_limit, "max_output_tokens": 32768}}},
         qa_director=config(batch_size=20, question_rules="问题规则。" * 2000, answer_rules="回答规则。" * 2000))
     writer = Writer(fail_batch=0)
     state = engine.Workflow(output, run_id, tmp_path, generator=writer, jev=Reviewer()).execute()
@@ -514,7 +520,7 @@ def test_director_reserves_output_and_rule_bytes_before_sending_large_chinese_ba
     input_bytes = sum(len(message.get("content", "").encode("utf-8")) for message in messages)
     input_bytes += sum(len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
                        for message in messages if message.get("tool_calls")) + 1024
-    assert input_bytes + 32768 <= 131072
+    assert input_bytes + 32768 <= context_limit
     assert all(candidate["source_context_pack"] for candidate in data["candidates"])
     # The whole numbered bundle is separate system memory; dynamic anchors
     # point to its real materials without copying their bodies into user.
