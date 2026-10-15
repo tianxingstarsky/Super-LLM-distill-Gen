@@ -56,7 +56,9 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-agent-mode': frozenset({'local', 'isolated'}),
                     'workflow-production-policy': frozenset({'quality_first', 'bounded_replenishment'}),
                     'workflow-creation-mode': frozenset({'自动生成', '人工问答增强', '人工制作图文'}),
-                    'workflow-director-mode': frozenset({'adaptive', 'balanced'})})
+                    'workflow-director-mode': frozenset({'adaptive', 'balanced'}),
+                    'workflow-director-context-mode': frozenset({'persistent', 'batch'}),
+                    'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
                   'workflow-human-enabled',

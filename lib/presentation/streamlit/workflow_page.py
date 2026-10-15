@@ -61,6 +61,11 @@ from lib.presentation.streamlit.workflow_prompt_settings import (
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
           "cancelled": "已停止", "needs_attention": "待处理", "skipped": "未选择"}
+KNOWLEDGE_AGENT_ERRORS = frozenset({
+    "duplicate_knowledge_agent_task", "knowledge_agent_tool_limit", "knowledge_context_result_too_large",
+    "knowledge_agent_planning_timeout", "knowledge_agent_invalid_assistant", "knowledge_agent_invalid_tool_call",
+    "knowledge_agent_context_exhausted",
+})
 TARGET_LABELS = {"cpt": "CPT 预训练语料", "sft": "SFT 指令对话", "agent": "Agent 验证轨迹",
                  "multiturn": "多轮对话 SFT",
                  "dpo": "DPO 偏好对", "rlaif": "RLAIF AI 反馈", "gsm8k": "模板算术题（GSM8K 格式）",
@@ -231,6 +236,13 @@ def _workflow_error(error) -> str:
         "production_round_integrity_error": "生产断点校验失败，请保留任务文件并检查存储。",
         "invalid_package_review": "AI 评审配置无效，请检查评审节点的范围与参数。",
         "invalid_qa_director": "对话指导员配置无效，请检查指导方式与指令。",
+        "duplicate_knowledge_agent_task": "此指导任务与同一知识集合中已登记的任务重复，已隔离。请检查资料或调整指导员节点的设计要求。",
+        "knowledge_agent_tool_limit": "指导员工具调用达到本轮上限，或当前模式不允许工具。请检查节点的上下文、工具设置与资料范围。",
+        "knowledge_context_result_too_large": "资料或历史工具返回的内容超出指导员上下文容量。请缩小资料范围，或调整节点的上下文与工具设置。",
+        "knowledge_agent_planning_timeout": "等待同一指导员会话的规划超时。请检查并行任务，或在指导员节点改用按批独立上下文。",
+        "knowledge_agent_invalid_assistant": "指导员未返回有效的助手消息。请检查节点模型接口与工具支持后重试。",
+        "knowledge_agent_invalid_tool_call": "指导员返回的工具调用格式无效。请检查节点模型的工具支持与提示词后重试。",
+        "knowledge_agent_context_exhausted": "移出旧完整轮次后，本轮思考与工具记录仍占满指导员上下文，已在下次请求前停止。请扩大节点上下文，或减少每批任务数、单次输出上限。",
         "invalid_qa_director_planning_mode": "指导方式无效，请在指导员节点重新选择。",
         "invalid_dialogue_design": "对话设计缺少有效目标或字段，请检查指导员提示词。",
         "invalid_qa_director_skip": "指导员返回了无效的跳过说明，请检查节点提示词。",
@@ -286,6 +298,7 @@ def _workflow_error(error) -> str:
         "web_search_no_safe_results": "没有找到可用的公开检索结果。可重试，或复制配置后调整检索词。",
         "web_search_connection_invalid": "本机检索连接无法读取。请检查本机存储后重新保存连接。",
         "model_stream_interrupted": "模型输出连接中断。可重试当前样本，已完成样本保留断点。",
+        "model_stream_idle_timeout": "模型长时间没有返回文字或推理，已中断等待。请检查上游服务后从断点重试，已完成结果保留。",
         "model_stream_incomplete": "模型输出未完整结束。可重试，或复制配置后检查节点输出上限。",
         "model_stream_invalid_event": "模型返回的流式内容无效。请检查模型服务后重试。",
         "model_stream_storage_invalid": "实时输出缓存无法安全读写。请检查本机存储后重试。",
@@ -893,6 +906,8 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
             failure_stage = "gsm8k"
         elif error_code == "source_context_model_capacity_too_small":
             failure_stage = "director" if "director" in stage_keys else "sft" if "sft" in stage_keys else failure_stage
+        elif error_code in KNOWLEDGE_AGENT_ERRORS and "director" in stage_keys:
+            failure_stage = "director"
         elif error_code in {"qa_director_clean_source_required", "source_context_pack_missing",
                             "source_context_pack_invalid", "source_context_pack_changed",
                             "source_context_requires_accepted_clean_text"} and "cpt" in stage_keys:

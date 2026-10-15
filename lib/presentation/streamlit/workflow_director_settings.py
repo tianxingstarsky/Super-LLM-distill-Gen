@@ -51,10 +51,14 @@ def director_snapshot(workspace: str, *, eligible=True) -> dict:
     if not eligible or not _field(workspace, f"workflow-director-enabled:{workspace}", True):
         return {"enabled": False}
     mode = _field(workspace, f"workflow-director-mode:{workspace}", "adaptive")
+    context_mode = _field(workspace, f"workflow-director-context-mode:{workspace}", "persistent")
     return {
         "enabled": True,
         "question_separation": True,
         "planning_mode": mode,
+        "context_mode": context_mode,
+        "tools_mode": (_field(workspace, f"workflow-director-tools-mode:{workspace}", "auto")
+                       if context_mode == "persistent" else "disabled"),
         "batch_size": _field(workspace, f"workflow-director-batch:{workspace}", 20),
         "history_limit": _field(workspace, f"workflow-director-history:{workspace}", 10),
         "type_weights": ({name: _field(workspace, f"workflow-director-weight:{workspace}:{name}", default)
@@ -87,11 +91,40 @@ def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
 def render_director_settings(workspace: str, *, save_field) -> None:
     if st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning"):
         st.caption("资料解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
-    st.caption("指导员按行号选完整知识块，生成模型通过资料记忆工具收到所选原文。训练输入按线索类型组织。")
+    st.caption("指导员按行号选完整知识块，生成模型通过系统资料记忆收到所选原文。训练输入按线索类型组织。")
     st.caption("有线索提问由指导员发出；无线索提问交给没有资料上下文的独立模型。SFT / 多轮模型收到问题和资料记忆后只负责回答。")
+    language = st.session_state.get("ui_language", "zh")
+    context_labels = {"persistent": translate_label("同知识连续上下文", language),
+                      "batch": translate_label("按批独立", language)}
+    tool_labels = {"auto": translate_label("按需调用资料与历史工具", language),
+                   "disabled": translate_label("关闭工具", language)}
+    context, tools = st.columns(2, gap="small")
+    with context:
+        key = f"workflow-director-context-mode:{workspace}"
+        st.session_state[key] = _field(workspace, key, "persistent")
+        context_mode = st.selectbox("上下文方式", tuple(context_labels), key=key,
+            format_func=context_labels.__getitem__, on_change=save_field, args=(workspace, key),
+            help="知识集合和节点配置匹配时续接指导员会话；按批独立不继承会话。历史只帮助去重和调度，不作为事实依据。")
+    with tools:
+        if context_mode == "batch":
+            # Do not overwrite the draft's tool preference when the tool
+            # widget is temporarily unavailable in independent batch mode.
+            st.selectbox("资料与历史工具", ("disabled",),
+                key=f"director-tools-effective-disabled:{workspace}",
+                format_func=tool_labels.__getitem__, disabled=True,
+                help="按批独立时工具关闭；切回连续上下文会恢复工具选择。")
+        else:
+            key = f"workflow-director-tools-mode:{workspace}"
+            st.session_state[key] = _field(workspace, key, "auto")
+            st.selectbox("资料与历史工具", tuple(tool_labels), key=key,
+                format_func=tool_labels.__getitem__, on_change=save_field, args=(workspace, key),
+                help="模型支持工具时，按需检索清洗资料与同知识历史；关闭后仅使用已提供的上下文。")
+    if context_mode == "batch":
+        st.caption("按批独立时工具关闭；切回连续上下文会恢复工具选择。")
+    else:
+        st.caption("连续上下文保存在本机；历史用于去重与调度，不作为事实依据。")
     key = f"workflow-director-mode:{workspace}"
     st.session_state[key] = _field(workspace, key, "adaptive")
-    language = st.session_state.get("ui_language", "zh")
     mode_labels = {"adaptive": translate_label("语言专家自适应", language),
                    "balanced": translate_label("按线索比例安排", language)}
     human = st.session_state.get(f"workflow-creation-mode:{workspace}") == "人工问答增强"

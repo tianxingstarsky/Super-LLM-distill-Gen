@@ -712,3 +712,13 @@ REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.7.0", template
 from lib.prompts.workflow_learner_context import LEARNER_CONTEXT_CHECK_V1
 LEARNER_CONTEXT_CHECK = spec("learner_context_check", "核验实际上下文与角色边界", LEARNER_CONTEXT_CHECK_V1,
     source="本项目独立上下文审查：实际learner消息决定前文；事实由独立来源评审负责")
+
+# New review contracts; old submitted snapshots and registry versions stay literal.
+from lib.prompts.workflow_fact_review import REVIEW_SCORE_V1_6
+from lib.prompts.workflow_learner_context import LEARNER_CONTEXT_CHECK_V1_1
+REVIEW_SCORE_V1_5 = REVIEW_SCORE
+LEARNER_CONTEXT_CHECK_V1_0 = LEARNER_CONTEXT_CHECK
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.6.0", template=spec(
+    "review_score", "核对完整训练正文的事实、证据范围与行为归属", REVIEW_SCORE_V1_6).template)
+LEARNER_CONTEXT_CHECK = _reasoning_spec_replace(LEARNER_CONTEXT_CHECK, version="1.1.0", template=spec(
+    "learner_context_check", "区分实际对话、来源作者与用户经历", LEARNER_CONTEXT_CHECK_V1_1).template)

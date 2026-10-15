@@ -46,7 +46,7 @@ def validate_qa_director(value: dict | None) -> dict:
     """Normalize a bounded, serializable director recipe without hidden fields."""
     if value is None:
         return {"enabled": False}
-    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation", "question_separation"}
+    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation", "question_separation", "context_mode", "tools_mode"}
     if not isinstance(value, dict) or set(value) - allowed or type(value.get("enabled", False)) is not bool:
         raise ValueError("invalid_qa_director")
     human = validate_human_augmentation(value.get("human_augmentation"))
@@ -86,6 +86,15 @@ def validate_qa_director(value: dict | None) -> dict:
         result["planning_mode"] = planning_mode
     if "question_separation" in value:
         result["question_separation"] = value["question_separation"]
+    if "context_mode" in value or "tools_mode" in value:
+        context_mode = value.get("context_mode", "persistent")
+        tools_mode = value.get("tools_mode", "auto")
+        if (not isinstance(context_mode, str) or context_mode not in {"persistent", "batch"}
+                or not isinstance(tools_mode, str) or tools_mode not in {"auto", "disabled"}):
+            raise ValueError("invalid_qa_director_context_mode")
+        if context_mode == "batch" and tools_mode != "disabled":
+            raise ValueError("qa_director_tools_require_persistent_context")
+        result.update(context_mode=context_mode, tools_mode=tools_mode)
     if human["enabled"]:
         result["human_augmentation"] = human
         # Human intent is the design brief, never a rigid evidence-type quota.

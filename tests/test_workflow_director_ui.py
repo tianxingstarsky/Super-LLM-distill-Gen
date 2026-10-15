@@ -80,7 +80,8 @@ def test_all_zero_type_weights_prevent_start_and_cpt_does_not_activate_director(
     assert not ui.exception
 
 
-def test_submission_pins_dispatch_rules_and_node_prompts(tmp_path):
+@pytest.mark.parametrize("context_mode", ["persistent", "batch"])
+def test_submission_pins_dispatch_rules_and_node_prompts(tmp_path, context_mode):
     source = tmp_path / "fixture.txt"
     source.write_text("A real source for the submitted workflow.", encoding="utf-8")
     code = SCRIPT.replace("    def task_runs(self): return []", """    def create_run(self, **kwargs):
@@ -93,12 +94,16 @@ def test_submission_pins_dispatch_rules_and_node_prompts(tmp_path):
     _director(ui)
     ui.text_area(key="workflow-director-answer-rules:fixture").set_value("Clarify missing conditions.").run()
     ui.text_area(key="workflow-node-prompt:fixture:director:workflow.qa_director").set_value("My planner prompt.").run()
+    if context_mode == "batch":
+        ui.selectbox(key="workflow-director-context-mode:fixture").set_value("batch").run()
     ui.button(key="workflow-create:fixture").click().run()
     assert not ui.exception
     recipe = ui.session_state["fixture-submitted"]
     assert recipe["qa_director"]["enabled"] is True
     assert recipe["qa_director"]["question_separation"] is True
     assert recipe["qa_director"]["planning_mode"] == "adaptive"
+    assert recipe["qa_director"]["context_mode"] == context_mode
+    assert recipe["qa_director"]["tools_mode"] == ("auto" if context_mode == "persistent" else "disabled")
     assert recipe["qa_director"]["answer_rules"] == "Clarify missing conditions."
     assert recipe["node_prompts"]["director"]["workflow.qa_director"] == "My planner prompt."
     assert recipe["node_models"]["director"]["generation"]["max_output_tokens"] == 32768
@@ -106,6 +111,8 @@ def test_submission_pins_dispatch_rules_and_node_prompts(tmp_path):
     copied = recipe_to_draft({**recipe, "sources": []}, "Copy", "fixture", [])["values"]
     assert copied["workflow-director-enabled:fixture"] is True
     assert copied["workflow-director-mode:fixture"] == "adaptive"
+    assert copied["workflow-director-context-mode:fixture"] == context_mode
+    assert copied["workflow-director-tools-mode:fixture"] == ("auto" if context_mode == "persistent" else "disabled")
     assert copied["workflow-director-answer-rules:fixture"] == "Clarify missing conditions."
     assert copied["workflow-node-prompt:fixture:director:workflow.qa_director"] == "My planner prompt."
 
@@ -156,10 +163,115 @@ st.session_state['ui_language'] = 'en' """, 1)
     ui = AppTest.from_string(code).run()
     _director(ui)
     assert ui.toggle(key="workflow-director-enabled:fixture").label == "Add a dialogue director"
+    assert ui.selectbox(key="workflow-director-context-mode:fixture").label == "Conversation context"
+    assert ui.selectbox(key="workflow-director-context-mode:fixture").options == [
+        "Continue with the same knowledge", "Independent batches"]
+    assert ui.selectbox(key="workflow-director-tools-mode:fixture").options == [
+        "Use tools as needed", "Disable tools"]
+    ui.selectbox(key="workflow-director-context-mode:fixture").set_value("batch").run()
+    assert ui.selectbox(key="director-tools-effective-disabled:fixture").disabled
+    assert ui.selectbox(key="director-tools-effective-disabled:fixture").options == ["Disable tools"]
     for element in (*ui.number_input, *ui.text_area, *ui.caption, *ui.warning, *ui.info, *ui.selectbox):
         text = element.label if hasattr(element, "label") else element.value
         assert not re.search(r"[\u4e00-\u9fff]", text), text
     assert not ui.exception
+
+
+def test_context_modes_stay_on_node_preserve_tool_preference_and_survive_disk_draft_restore(tmp_path):
+    from lib.bootstrap.creation_drafts import creation_draft_application
+
+    script = SCRIPT + """
+from lib.presentation.streamlit.workflow_director_settings import director_snapshot
+st.session_state['fixture-current-director'] = director_snapshot('fixture')
+"""
+    ui = AppTest.from_string(script).run()
+    _director(ui)
+    context_key = "workflow-director-context-mode:fixture"
+    tools_key = "workflow-director-tools-mode:fixture"
+    assert ui.selectbox(key=context_key).value == "persistent"
+    assert ui.selectbox(key=tools_key).value == "auto"
+    ui.selectbox(key=tools_key).set_value("disabled").run()
+    ui.selectbox(key=context_key).set_value("batch").run()
+    assert ui.session_state["fixture-current-director"]["tools_mode"] == "disabled"
+    assert ui.selectbox(key="director-tools-effective-disabled:fixture").disabled
+    ui.selectbox(key=context_key).set_value("persistent").run()
+    assert ui.selectbox(key=tools_key).value == "disabled"
+
+    ui.selectbox(key=tools_key).set_value("auto").run()
+    ui.selectbox(key=context_key).set_value("batch").run()
+    ui.button(key="fixture-node:sft").click().run()
+    ui.button(key="fixture-node:director").click().run()
+    assert ui.selectbox(key=context_key).value == "batch"
+    assert ui.session_state["fixture-current-director"]["tools_mode"] == "disabled"
+    saved = dict(ui.session_state["workflow-form-draft:fixture"])
+    assert saved[tools_key] == "auto"  # Preference, not the temporary forced mode.
+    assert not any(key.startswith("director-tools-effective-disabled:") for key in saved)
+    drafts = creation_draft_application(tmp_path)
+    drafts.replace(saved)
+    identifier = drafts.save_snapshot("Director choices")
+    restored = creation_draft_application(tmp_path).restore_snapshot(identifier)
+    assert restored == saved
+
+    reopened = AppTest.from_string(script)
+    reopened.session_state["workflow-form-draft:fixture"] = restored
+    reopened.session_state["workflow-setup-node:fixture"] = "director"
+    reopened.run()
+    assert not reopened.exception
+    assert reopened.selectbox(key=context_key).value == "batch"
+    assert reopened.session_state["fixture-current-director"]["tools_mode"] == "disabled"
+    reopened.selectbox(key=context_key).set_value("persistent").run()
+    assert reopened.selectbox(key=tools_key).value == "auto"
+    assert reopened.session_state["fixture-current-director"]["tools_mode"] == "auto"
+    assert not reopened.exception
+
+
+@pytest.mark.parametrize("modes,expected", [
+    ({}, ("batch", "disabled")),
+    ({"context_mode": "persistent", "tools_mode": "auto"}, ("persistent", "auto")),
+    ({"context_mode": "persistent", "tools_mode": "disabled"}, ("persistent", "disabled")),
+    ({"context_mode": "batch", "tools_mode": "disabled"}, ("batch", "disabled")),
+])
+def test_copy_run_restores_explicit_modes_and_preserves_legacy_batch_execution(modes, expected):
+    from copy import deepcopy
+    from test_workflow_reuse import recipe
+
+    original = recipe(qa_director={"enabled": True, **modes})
+    before = deepcopy(original)
+    values = recipe_to_draft(original, "Saved task", "fixture", [])["values"]
+    assert values["workflow-director-context-mode:fixture"] == expected[0]
+    assert values["workflow-director-tools-mode:fixture"] == expected[1]
+    assert original == before
+
+
+def test_new_snapshot_defaults_and_effective_batch_tools_do_not_mutate_saved_preferences(monkeypatch):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from lib.presentation.streamlit import workflow_director_settings as settings
+    from lib.domain.workflow_qa_director import validate_qa_director
+
+    values = {"workflow-director-enabled:fixture": True}
+    state = {"workflow-form-draft:fixture": values}
+    monkeypatch.setattr(settings, "st", SimpleNamespace(session_state=state))
+    before = deepcopy(state)
+    snapshot = settings.director_snapshot("fixture")
+    assert snapshot["context_mode"] == "persistent" and snapshot["tools_mode"] == "auto"
+    assert validate_qa_director(snapshot)["tools_mode"] == "auto" and state == before
+    values.update({"workflow-director-context-mode:fixture": "batch",
+                   "workflow-director-tools-mode:fixture": "auto"})
+    before = deepcopy(state)
+    snapshot = settings.director_snapshot("fixture")
+    assert snapshot["context_mode"] == "batch" and snapshot["tools_mode"] == "disabled"
+    assert validate_qa_director(snapshot)["tools_mode"] == "disabled" and state == before
+
+
+@pytest.mark.parametrize("key,bad", [
+    ("workflow-director-context-mode:fixture", "unknown"),
+    ("workflow-director-tools-mode:fixture", "execute_arbitrary_tools"),
+])
+def test_context_draft_fields_only_accept_known_modes(key, bad):
+    from lib.domain.creation_draft import validate_creation_draft
+    with pytest.raises(ValueError, match="invalid_creation_draft"):
+        validate_creation_draft({key: bad})
 
 
 def test_invalid_director_outputs_have_actionable_localized_errors():
@@ -181,6 +293,9 @@ def test_invalid_director_outputs_have_actionable_localized_errors():
         "invalid_question_separation", "invalid_question_brief", "invalid_question_brief_assessment", "question_brief_contains_private_source",
         "private_context_in_question_request", "invalid_visible_dialogue", "invalid_question_output",
         "invalid_question_assessment", "question_not_suitable",
+        "duplicate_knowledge_agent_task", "knowledge_agent_tool_limit", "knowledge_context_result_too_large",
+        "knowledge_agent_planning_timeout", "knowledge_agent_invalid_assistant", "knowledge_agent_invalid_tool_call",
+        "knowledge_agent_context_exhausted",
     ):
         chinese = _workflow_error(ValueError(code))
         assert chinese != code and re.search(r"[\u4e00-\u9fff]", chinese)
@@ -330,7 +445,7 @@ def test_director_explains_clean_source_route_and_visible_context_without_new_co
     ui = AppTest.from_string(SCRIPT).run()
     _director(ui)
     assert any("CPT 语料处理 → 对话指导员" in row.value for row in ui.caption)
-    assert any("指导员按行号选完整知识块" in row.value and "资料记忆工具收到所选原文" in row.value
+    assert any("指导员按行号选完整知识块" in row.value and "系统资料记忆收到所选原文" in row.value
                for row in ui.caption)
     rules = ui.text_area(key="workflow-director-answer-rules:fixture").value
     ui.segmented_control(key="workflow-source-mode:fixture").set_value("开放需求").run()

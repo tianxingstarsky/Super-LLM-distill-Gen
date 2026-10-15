@@ -114,6 +114,8 @@ def classify_request_error(error: Exception) -> dict[str, str]:
                 "WriteError", "RemoteProtocolError", "ProxyError"}:
         return {"kind": "transient", "code": "service_connection_failed"}
     if names & {"ModelStreamError"}:
+        if str(error) == "model_stream_idle_timeout":
+            return {"kind": "transient", "code": "model_stream_idle_timeout"}
         return {"kind": "invalid", "code": "model_stream_invalid"}
     if isinstance(error, ValueError):
         message = str(error)

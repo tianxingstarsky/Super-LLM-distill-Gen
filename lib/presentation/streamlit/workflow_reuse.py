@@ -221,6 +221,10 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-director-enabled:{workspace}"] = director["enabled"]
     if director.get("enabled"):
         values[f"workflow-director-mode:{workspace}"] = director.get("planning_mode", "balanced")
+        # Copying a legacy run preserves its independent-batch behavior. A
+        # genuinely new draft uses today's persistent-context preset instead.
+        values[f"workflow-director-context-mode:{workspace}"] = director.get("context_mode", "batch")
+        values[f"workflow-director-tools-mode:{workspace}"] = director.get("tools_mode", "disabled")
         values[f"workflow-director-batch:{workspace}"] = director["batch_size"]
         values[f"workflow-director-history:{workspace}"] = director["history_limit"]
         values[f"workflow-director-question-rules:{workspace}"] = director["question_rules"]

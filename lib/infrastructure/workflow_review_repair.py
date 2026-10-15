@@ -454,6 +454,52 @@ class WorkflowReviewRepair:
             return {"teacher_evidence": text, "source_id": row.get("source_id"),
                     "source_kind": "document" if source.get("kind") == "document" else "synthetic"}
 
+    def _review_learner_context(self, row, messages, key, role):
+        from lib.domain.learner_context import learner_contract
+        from lib.domain.learner_context_review import learner_context_verdict, learner_context_format_feedback
+        payload = {"learner_messages": messages, "qa_contract": learner_contract(row["qa_contract"]),
+                   "learner_context_only": True}
+        if self.recipe.get("learner_context_retry_version") != 1:
+            # Preserve historical keys, payload and failure/invalidation policy.
+            value = self.ask(key, role, "workflow.learner_context_check", payload,
+                             allow_reasoning_fallback=False, prompt_stage="review")
+            try:
+                return learner_context_verdict(value)
+            except ValueError:
+                self.invalidate_checkpoint(["call", key])
+                raise
+
+        # Only schema failures get one new assessment. Provider/network errors
+        # still propagate through ask's existing policy, without another loop.
+        # Keep invalid raw JSON checkpoints: resume can reuse both attempts,
+        # while every retrieval must still pass the strict domain validator.
+        row.pop("learner_context_check", None)
+        failures = []
+        feedback = None
+        for attempt in (1, 2):
+            call_key = key if attempt == 1 else [*key, "format_repair", 1]
+            request = payload if feedback is None else {**payload, "format_repair": feedback}
+            value = self.ask(call_key, role, "workflow.learner_context_check", request,
+                             allow_reasoning_fallback=False, prompt_stage="review")
+            try:
+                result = learner_context_verdict(value)
+            except ValueError:
+                feedback = learner_context_format_feedback(value)
+                failures.append({"attempt": attempt, "code": feedback["code"],
+                    "checkpoint": {"stage": self.stage, "sha256": hashlib.sha256(
+                        canonical(["call", call_key]).encode("utf-8")).hexdigest()},
+                    "response_sha256": hashlib.sha256(canonical(value).encode("utf-8")).hexdigest(),
+                    "format_feedback": feedback})
+                row["learner_context_retry"] = {"version": 1, "attempts": attempt,
+                    "status": "invalid_after_retry" if attempt == 2 else "format_retry_pending",
+                    "schema_failures": deepcopy(failures)}
+                if attempt == 2:
+                    raise
+            else:
+                row["learner_context_retry"] = {"version": 1, "attempts": attempt,
+                    "status": "schema_valid", "schema_failures": deepcopy(failures)}
+                return result
+
     def _review_score(self, target, row, evidence, key, instruction):
         self.state["stages"]["review"]["phase"] = "scoring"
         self.save(force=False)
@@ -508,16 +554,8 @@ class WorkflowReviewRepair:
             messages = learner_messages(target, data["candidate"])
             if messages:
                 if self.recipe.get("learner_context_review_version") == 1:
-                    from lib.domain.learner_context_review import learner_context_verdict
                     context_key = [*key, "learner_context"]
-                    value = self.ask(context_key, role, "workflow.learner_context_check", {
-                        "learner_messages": messages, "qa_contract": learner_contract(row["qa_contract"]),
-                        "learner_context_only": True}, allow_reasoning_fallback=False, prompt_stage="review")
-                    try:
-                        context_check = learner_context_verdict(value)
-                    except ValueError:
-                        self.invalidate_checkpoint(["call", context_key])
-                        raise
+                    context_check = self._review_learner_context(row, messages, context_key, role)
                     row["learner_context_check"] = {**context_check,
                         "scope": "actual_training_messages_only", "version": 1}
                     if not context_check["keep"]:

@@ -67,6 +67,8 @@ from lib.infrastructure.production_checkpoints import ProductionCheckpoints
 from lib.infrastructure.production_review_quality import package_review_escalation
 from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DialoguePlanError
+from lib.infrastructure.workflow_knowledge_agent import WorkflowKnowledgeAgent
+from lib.domain.knowledge_agent import KNOWLEDGE_AGENT_INSTRUCTION
 from lib.infrastructure.workflow_cpt_processing import WorkflowCPTProcessing
 from lib.infrastructure.workflow_review_repair import WorkflowReviewRepair
 from lib.infrastructure.workflow_source_library import WorkflowSourceLibrary
@@ -482,6 +484,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "authored_role_projection_version": 3,
               "review_context_protocol_version": 1,
               "learner_context_review_version": 1,
+              "learner_context_retry_version": 1,
+              **({"knowledge_agent_context_version": 1,
+                  "knowledge_agent_session_rules_version": 1,
+                  "knowledge_agent_instruction": KNOWLEDGE_AGENT_INSTRUCTION}
+                 if qa_director.get("context_mode") == "persistent" else {}),
               **({"native_regeneration_version": 1} if (review_repair or {}).get("native_regeneration") else {}),
               **({"repair_reference_sources_version": 1} if (review_repair or {}).get("reference_sources") else {}),
               **({"multiturn_stop_protocol_version": 1} if "multiturn" in targets else {}),
@@ -545,7 +552,7 @@ class Cancelled(Exception):
     pass
 
 
-class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowCPTProcessing, WorkflowReviewRepair, WorkflowSourceLibrary):
+class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, WorkflowCPTProcessing, WorkflowReviewRepair, WorkflowSourceLibrary):
     def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None, questioner=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)

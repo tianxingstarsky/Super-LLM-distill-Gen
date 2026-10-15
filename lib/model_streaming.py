@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 from contextlib import suppress
+import math
+import socket
+import threading
+from time import monotonic
 from typing import Callable
 
 from lib.model_response_details import (build_response_details, commit_response_details,
@@ -15,18 +19,103 @@ class ModelStreamError(ValueError):
     """A static, safe failure code: partial text must never become a sample."""
 
 
+class _StreamWatchdog:
+    """One bounded observer; heartbeats cannot extend meaningful-output idle."""
+
+    def __init__(self, stream, idle_seconds, cancel_check):
+        self.stream, self.idle_seconds, self.cancel_check = stream, idle_seconds, cancel_check
+        self.last_output = monotonic()
+        self.error = None
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._watch, name="model-stream-watchdog", daemon=True)
+        # HTTP/1.x owns its active connection. Never shut down a shared HTTP/2
+        # socket; the SDK's response close remains responsible for that stream.
+        self.sock = None
+        response = self.response = getattr(stream, "response", None)
+        if response is not None and getattr(response, "http_version", "") in {"HTTP/1.0", "HTTP/1.1"}:
+            with suppress(Exception):
+                network = response.extensions.get("network_stream")
+                self.sock = network.get_extra_info("socket") if network is not None else None
+
+    def start(self):
+        self.thread.start()
+
+    def progress(self):
+        with self.lock:
+            self.last_output = monotonic()
+
+    def raise_if_interrupted(self):
+        with self.lock:
+            error = self.error
+        if error is not None:
+            raise error from None
+
+    def seal(self):
+        # Freeze the watchdog before publishing a successfully exhausted stream.
+        with self.lock:
+            self.stop.set()
+            error = self.error
+        if error is not None:
+            raise error from None
+
+    def _watch(self):
+        try:
+            while not self.stop.is_set():
+                error = None
+                if self.cancel_check is not None:
+                    try:
+                        self.cancel_check()
+                    except BaseException as cancelled:
+                        error = cancelled
+                with self.lock:
+                    if self.stop.is_set():
+                        break
+                    if error is None and monotonic() - self.last_output >= self.idle_seconds:
+                        error = ModelStreamError("model_stream_idle_timeout")
+                    if error is not None:
+                        self.error = error
+                if error is not None:
+                    if self.sock is not None and not getattr(self.response, "is_closed", False):
+                        with suppress(Exception):
+                            self.sock.shutdown(socket.SHUT_RDWR)
+                    break
+                if self.stop.wait(min(0.25, self.idle_seconds)):
+                    break
+        finally:
+            # SDK close can itself block. Keep it on this one daemon, never
+            # create replacement closers, and never wait without a bound.
+            with suppress(Exception):
+                self.stream.close()
+
+    def finish(self):
+        with self.lock:
+            self.stop.set()
+        self.thread.join(timeout=0.5)
+
+
 def _get(value, name, default=None):
     return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
 
 
 def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                    allow_reasoning_fallback: bool = True,
-                   response_details: dict | None = None) -> tuple[str, int, int]:
+                   response_details: dict | None = None,
+                   cancel_check: Callable[[], None] | None = None,
+                   idle_timeout_seconds: float | None = None) -> tuple[str, int, int]:
     """Consume SDK-decoded SSE events, closing the HTTP response on every exit.
 
     A balanced JSON prefix is insufficient evidence of a completed response.
     Callback failures (including worker cancellation) propagate unchanged.
+    SDK/SSE heartbeats do not reset the output idle clock. The existing read
+    idle limit remains the transport backstop; continuous output has no deadline.
     """
+    if idle_timeout_seconds is None:
+        from lib.llm_client import MODEL_READ_IDLE_TIMEOUT_SECONDS
+        idle_timeout_seconds = MODEL_READ_IDLE_TIMEOUT_SECONDS
+    if (type(idle_timeout_seconds) not in (int, float)
+            or not math.isfinite(idle_timeout_seconds) or idle_timeout_seconds <= 0):
+        raise ValueError("invalid_model_stream_idle_timeout")
     if response_details is not None:
         response_details.clear()
         allow_reasoning_fallback = False
@@ -35,17 +124,24 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
     prompt_tokens = completion_tokens = 0
     terminal = False
     stopped = False
-    iterator = iter(stream)
+    watchdog = _StreamWatchdog(stream, idle_timeout_seconds, cancel_check)
+    watchdog.start()
     try:
+        iterator = iter(stream)
         while True:
+            watchdog.raise_if_interrupted()
             try:
                 event = next(iterator)
             except StopIteration:
+                watchdog.raise_if_interrupted()
                 break
             except ModelStreamError:
+                watchdog.raise_if_interrupted()
                 raise
             except Exception:
+                watchdog.raise_if_interrupted()
                 raise ModelStreamError("model_stream_interrupted") from None
+            watchdog.raise_if_interrupted()
             kind = _get(event, "type", "")
             was_terminal = terminal
             delta_text = delta_reasoning = delta_summary = ""
@@ -120,9 +216,12 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                     if was_terminal:
                         raise ModelStreamError("model_stream_invalid_event")
                     parts.append(delta)
+                    watchdog.progress()
                     emit({"type": "delta", "channel": channel, "text": delta})
+        watchdog.raise_if_interrupted()
         if not terminal:
             raise ModelStreamError("model_stream_incomplete")
+        watchdog.seal()
         emit({"type": "response_completed", "prompt_tokens": prompt_tokens,
               "completion_tokens": completion_tokens})
         content = "".join(text).strip()
@@ -133,5 +232,4 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
             reasoning_summary="".join(summary) or completed_details.get("reasoning_summary", "")))
         return content, prompt_tokens, completion_tokens
     finally:
-        with suppress(Exception):
-            stream.close()
+        watchdog.finish()

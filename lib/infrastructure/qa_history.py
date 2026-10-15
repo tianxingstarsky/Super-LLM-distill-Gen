@@ -189,6 +189,8 @@ class QAHistory:
             );
             CREATE INDEX IF NOT EXISTS qa_history_recent
                 ON qa_history(namespace, row_id DESC);
+            CREATE INDEX IF NOT EXISTS qa_history_source_recent
+                ON qa_history(namespace, source_id, row_id DESC);
             CREATE TABLE IF NOT EXISTS qa_history_terms (
                 namespace TEXT NOT NULL,
                 term TEXT NOT NULL,
@@ -273,6 +275,19 @@ class QAHistory:
                 **({"dialogue_design": {"interaction_goal": row["dialogue_goal"],
                                         "user_intent": row["dialogue_intent"]}}
                    if row["dialogue_goal"] else {})}
+
+    def source_recent(self, source_ids, *, limit=20, namespace="default"):
+        """Bounded migration of prior accepted tasks from this source scope."""
+        sources = tuple(sorted(set(source_ids)))
+        if not sources or len(sources) > 2048:
+            return []
+        limit = _limit(limit)
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT * FROM qa_history WHERE namespace=? AND source_id IN ("
+                + ",".join("?" for _ in sources) + ") ORDER BY row_id DESC LIMIT ?",
+                (namespace, *sources, limit)).fetchall()
+        return [self._summary(row, include_expression=True) for row in rows]
 
     def add(self, row: dict, *, namespace="default", learner_task_dedup=False) -> bool:
         status = row.get("status")

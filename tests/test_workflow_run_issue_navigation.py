@@ -275,6 +275,53 @@ def test_clean_source_capacity_error_opens_sft_when_there_is_no_director():
     assert 'fixture-begin-calls' not in ui.session_state
 
 
+@pytest.mark.parametrize('error', [
+    'duplicate_knowledge_agent_task', 'knowledge_agent_tool_limit', 'knowledge_context_result_too_large',
+    'knowledge_agent_planning_timeout', 'knowledge_agent_invalid_assistant', 'knowledge_agent_invalid_tool_call',
+    'knowledge_agent_context_exhausted',
+])
+@pytest.mark.parametrize('language', ['zh', 'en'])
+def test_knowledge_agent_errors_open_director_without_execution_or_mutating_saved_state(error, language):
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['ui_language'] = language
+    ui.run()
+    state = deepcopy(ui.session_state['fixture-state'])
+    state['error'] = error
+    state['stages']['sft']['error'] = error
+    state['stages']['director'] = {'label': '对话指导员', 'status': 'completed', 'done': 2, 'total': 2}
+    ui.session_state['fixture-state'] = state
+    recipe = {**ui.session_state['fixture-recipe'], 'version': 19, 'qa_director': {'enabled': True}}
+    ui.session_state['fixture-recipe'] = recipe
+    before_draft = deepcopy(ui.session_state['workflow-form-draft:fixture'])
+    ui.run()
+    action = ui.button(key='workflow-run-failure:fixture')
+    assert error not in action.label
+    assert ('指导员' if language == 'zh' else 'director') in action.label
+    if language == 'en':
+        assert not re.search(r'[\u3400-\u9fff]', action.label)
+    action.click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-selected'] == 'director'
+    assert ui.session_state['fixture-stream-stage'] == 'director'
+    assert ui.session_state['fixture-state'] == state
+    assert ui.session_state['fixture-recipe'] == recipe
+    assert ui.session_state['workflow-form-draft:fixture'] == before_draft
+    assert 'fixture-begin-calls' not in ui.session_state
+
+
+def test_knowledge_agent_error_without_director_keeps_actual_failed_node():
+    ui = AppTest.from_string(SCRIPT).run()
+    state = deepcopy(ui.session_state['fixture-state'])
+    state['error'] = 'knowledge_agent_invalid_assistant'
+    state['stages']['sft']['error'] = state['error']
+    ui.session_state['fixture-state'] = state
+    ui.run()
+    ui.button(key='workflow-run-failure:fixture').click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-selected'] == 'sft'
+    assert 'fixture-begin-calls' not in ui.session_state
+
+
 @pytest.mark.parametrize('language', ['zh', 'en'])
 def test_legacy_document_run_explains_new_cleaning_route_without_migrating_or_executing(language):
     script = SCRIPT.replace("render_run(Application(), 'fixture', begin)",

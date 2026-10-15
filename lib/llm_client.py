@@ -20,7 +20,7 @@ from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request
                                  anthropic_text, response_text, responses_input,
                                  reasoning_request, validate_api_format)
 from lib.domain.model_reasoning import validate_reasoning
-from lib.model_streaming import StreamCallback, consume_stream
+from lib.model_streaming import ModelStreamError, StreamCallback, consume_stream
 from lib.model_response_details import commit_response_details, extract_response_details
 from lib.model_reasoning_prefill import DEEPSEEK_PREFILL_BASE_URL, prepare_reasoning_prefill
 from lib.model_request_reliability import (
@@ -498,7 +498,8 @@ class ChatClient:
                  on_stream: StreamCallback | None = None,
                  allow_reasoning_fallback: bool = True,
                  response_details: dict | None = None,
-                 reasoning_prefix: str | None = None) -> tuple[str, int, int]:
+                 reasoning_prefix: str | None = None,
+                 cancel_check=None) -> tuple[str, int, int]:
         if response_details is not None:
             response_details.clear()
             allow_reasoning_fallback = False
@@ -537,6 +538,9 @@ class ChatClient:
             stream = response
             if replayed_tools:
                 class TextOnlyReplayStream:
+                    @property
+                    def response(self):
+                        return getattr(response, "response", None)
                     def __iter__(self):
                         for event in response:
                             reject_tool_action(event, event=True)
@@ -547,6 +551,7 @@ class ChatClient:
             request_details = {}
             result = consume_stream(stream, self.api_format, on_stream,
                 allow_reasoning_fallback=allow_reasoning_fallback,
+                cancel_check=cancel_check if cancel_check is not None else self.cancel_check,
                 **({"response_details": request_details} if capture_details else {}))
             commit_response_details(response_details, {**request_details, **prefill_metadata})
             return result
@@ -719,6 +724,14 @@ class ChatClient:
                        "completion_tokens": result[2]})
         return result
 
+    def tool_turn(self, messages, tools, *, max_tokens=1024, temperature=0.7, retries=3,
+                  response_details=None, on_stream=None):
+        """One admitted function-calling turn; callers execute and record tools."""
+        from lib.model_tool_calls import tool_turn
+        return tool_turn(self, messages, tools, max_tokens=max_tokens,
+                         temperature=temperature, retries=retries,
+                         response_details=response_details, on_stream=on_stream)
+
     def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -796,7 +809,8 @@ class ChatClient:
                     **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
                     **({"response_details": attempt_details} if response_details is not None else {}),
                     **({"reasoning_prefix": reasoning_prefix} if reasoning_prefix is not None else {}),
-                    **({"on_stream": notify} if on_stream else {}))
+                    **({"on_stream": notify} if on_stream else {}),
+                    **({"cancel_check": check_cancel} if self.cancel_check else {}))
                 self.usage["calls"] += 1
                 self.usage["prompt_tokens"] += prompt_tokens
                 self.usage["completion_tokens"] += completion_tokens
@@ -825,8 +839,15 @@ class ChatClient:
                 last_err = ValueError("empty completion")
             except BudgetExceeded:
                 raise
-            except ValueError:
-                raise
+            except ValueError as error:
+                if (error is callback_error or error is cancel_error or not isinstance(error, ModelStreamError)
+                        or str(error) != "model_stream_idle_timeout"):
+                    raise
+                # Unlike malformed/incomplete output, an idle provider stream
+                # is transient. Preserve admission/budget bounds on its retry.
+                last_err = error
+                failure = classify_request_error(error)
+                delay = retry_delay(error, attempts)
             except Exception as e:  # noqa: BLE001
                 if e is callback_error or e is cancel_error:
                     raise

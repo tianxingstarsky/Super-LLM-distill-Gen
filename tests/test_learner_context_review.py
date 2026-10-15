@@ -143,5 +143,5 @@ def test_context_keep_requires_both_checks_and_has_no_fact_score_fields():
     raw = context(False)
     assert learner_context_verdict(raw) is raw
     body = render(get("workflow.learner_context_check"))
-    assert "本阶段不再评 correctness、grounded、reasoning_valid" in body
-    assert "不要求每个术语、数字、规则或结论都已出现在用户文章里" in body
+    assert "本阶段不再评correctness、grounded、reasoning_valid" in body
+    assert "不要求其每个术语或数字先出现在用户文章中" in body

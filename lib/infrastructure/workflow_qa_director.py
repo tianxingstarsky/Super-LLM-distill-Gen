@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
@@ -754,6 +754,8 @@ class WorkflowQADirector:
             return batch
         for unit in guided:
             self._require_clean_director_evidence(unit)
+        runtime = (self.prepare_knowledge_agent(guided, published_history, stages)
+                   if self.recipe.get("knowledge_agent_context_version") == 1 else None)
         key = ["director_batch", offset, _digest(guided)]
         adaptive = config.get("planning_mode", "balanced") == "adaptive"
         human = config.get("human_augmentation", {})
@@ -765,7 +767,9 @@ class WorkflowQADirector:
             limit = config["history_limit"]
             history = []
             query = " ".join(unit.get("text", "")[:1000] for unit in guided[:4])
-            if limit:
+            if limit and runtime:
+                history = self.knowledge_store().search(runtime[1]["knowledge_id"], query=query[:4000], limit=limit)
+            elif limit:
                 def history_candidates():
                     for store in (local_history, published_history):
                         for stage in stages:
@@ -815,7 +819,9 @@ class WorkflowQADirector:
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
                     "targets": list(stages), **self._natural_expression_guidance()}
-            if self.recipe.get("qa_agent_memory_version") == 1:
+            if runtime:
+                data["knowledge_agent_memory"] = self.knowledge_store().coverage(runtime[1]["knowledge_id"])
+            elif self.recipe.get("qa_agent_memory_version") == 1:
                 from lib.infrastructure.qa_agent_memory import build_agent_memory
                 data["agent_memory"] = build_agent_memory(local_history, published_history, stages,
                     history=history, feedback=data["feedback"], candidates=data["candidates"],
@@ -921,7 +927,7 @@ class WorkflowQADirector:
                     raise ValueError("qa_director_context_too_small")
                 longest["teacher_evidence"] = longest["teacher_evidence"][:len(longest["teacher_evidence"]) // 2]
             return data
-        inputs = self.checkpoint([*key, "inputs"], snapshot)
+        inputs = None
         def plan():
             production = adaptive or (self.recipe.get("version", 0) >= 12 and self.recipe.get("production") is not None)
             repair_feedback = None
@@ -929,11 +935,12 @@ class WorkflowQADirector:
                 call_key = [*key, "plan"] if attempt == 0 else [*key, "plan", attempt]
                 data = inputs if repair_feedback is None else {**inputs, "plan_repair": repair_feedback}
                 try:
-                    response = self.ask(call_key, "generation", "workflow.qa_director", data,
-                                        allow_reasoning_fallback=False,
-                                        **({"instruction": HUMAN_DIRECTOR_INSTRUCTION +
-                                            (HUMAN_REVISION_INSTRUCTION if any("revision_context" in seed for seed in human["seeds"]) else "")}
-                                           if human.get("enabled") else {}))
+                    options = ({"instruction": HUMAN_DIRECTOR_INSTRUCTION +
+                               (HUMAN_REVISION_INSTRUCTION if any("revision_context" in seed for seed in human["seeds"]) else "")}
+                               if human.get("enabled") else {})
+                    response = (self.knowledge_agent_plan(call_key, data, runtime, **options) if runtime else
+                                self.ask(call_key, "generation", "workflow.qa_director", data,
+                                         allow_reasoning_fallback=False, **options))
                 except ModelJSONError:
                     if not production:
                         raise
@@ -975,6 +982,8 @@ class WorkflowQADirector:
                             self._question_brief_boundary(candidate, contracts[candidate["id"]], task.get("question_brief"))
                         if candidate.get("human_design"):
                             contracts[candidate["id"]]["human_design"] = deepcopy(candidate["human_design"])
+                    if runtime:
+                        self.commit_knowledge_plan(call_key)
                     return contracts
                 except ValueError as error:
                     self._invalidate_director_call(call_key)
@@ -1012,7 +1021,12 @@ class WorkflowQADirector:
                                reason="qa_director_contract_validation_failed")
             raise DirectorPlanError()
         try:
-            contracts = self.checkpoint([*key, "contracts"], plan)
+            # A second job on the same knowledge must observe the first
+            # completed turn before freezing its request. Other agents remain
+            # independent and model admission still controls actual API calls.
+            with self.knowledge_planning_lock(runtime) if runtime else nullcontext():
+                inputs = self.checkpoint([*key, "inputs"], snapshot)
+                contracts = self.checkpoint([*key, "contracts"], plan)
         except DirectorPlanError:
             # Preserve unrelated batches and recorded conversations. No worker
             # may silently fall back to unguided generation for this batch.
@@ -1115,6 +1129,12 @@ class WorkflowQADirector:
                 if unit.get("director_skip_reason"):
                     return [{**self.rejected(unit, unit["director_skip_reason"]),
                              "director_skip_guidance": unit.get("director_skip_guidance", "")}]
+                if self.recipe.get("knowledge_agent_context_version") == 1:
+                    duplicate = self.checkpoint(["knowledge_agent_claim", stage, index, _digest(unit)],
+                                               lambda: self.claim_knowledge_task(unit, stage))
+                    if duplicate:
+                        return [{**self.rejected(unit, "duplicate_knowledge_agent_task"),
+                                 "qa_contract": unit["qa_contract"], "duplicate_of": duplicate["id"]}]
                 if unit.get("qa_contract") and not self.qa_actual_only(stage):
                     c = unit["qa_contract"]
                     def dispatch():
@@ -1173,6 +1193,8 @@ class WorkflowQADirector:
                     if row.get("reason"):
                         feedback = self.state["qa_director"]["feedback"]
                         feedback[row["reason"]] = feedback.get(row["reason"], 0) + 1
+                if self.recipe.get("knowledge_agent_context_version") == 1:
+                    self.record_knowledge_outcome(unit, row, stage)
                 handle.write(canonical(row) + "\n")
             metrics["done"] += 1
         handle.flush()
@@ -1324,6 +1346,8 @@ class WorkflowQADirector:
                 from lib.infrastructure.json_stream import iter_json_records
                 for row in iter_json_records(path):
                     self.check_cancel()
+                    if self.recipe.get("knowledge_agent_context_version") == 1:
+                        self.record_knowledge_outcome(row, row, target, final=True)
                     record = self.qa_history_row(row, target)
                     if record is not None:
                         namespace = "multiturn" if target == "multiturn" else "sft"

@@ -116,13 +116,15 @@ def _director_request_reserve(recipe, template):
     from lib.infrastructure.workflow_agent_experience import experience_system
     system = (recipe.get("node_prompt_system", "") + NODE_RULE_HEADER + "\n" + template
               + experience_system(recipe, "workflow.qa_director"))
+    if recipe.get("knowledge_agent_context_version") == 1:
+        system += "\n" + recipe["knowledge_agent_instruction"]
     messages = source_memory_messages(system, {"teacher_context_pack": [pack], "task_payload": task},
         protocol_version=recipe.get("source_memory_protocol_version", 1))
     wire_bytes = sum(len(message.get("content", "").encode("utf-8")) for message in messages)
     wire_bytes += sum(len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
                       for message in messages if message.get("tool_calls")) + 1024
     # The source pack's own envelope is included by the actual pack byte count.
-    return wire_bytes - _bytes(pack)
+    return wire_bytes - _bytes(pack) + (8192 if recipe.get("knowledge_agent_context_version") == 1 else 0)
 
 
 def context_capacity(recipe):
