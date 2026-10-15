@@ -58,10 +58,16 @@ def _build_merged() -> dict[str, dict[str, Any]]:
 
 def save_endpoint(name: str, base_url: str, models: list[str],
                   api_key: str = "", api_key_env: str = "", prices: dict[str, float] | None = None,
-                  explicit_replace: bool = False, api_format: str = "chat") -> str:
+                  explicit_replace: bool = False, api_format: str = "chat",
+                  network_route: str = "system") -> str:
     """Add or replace one backend in gitignored backends.local.yaml."""
     return _application().save_endpoint(name, base_url, models, api_key, api_key_env,
-                                        prices, explicit_replace, api_format)
+                                        prices, explicit_replace, api_format, network_route)
+
+
+def save_network_route(backend: str, network_route: str) -> str:
+    """Persist an explicit per-service route without replacing model settings."""
+    return _application().save_network_route(backend, network_route)
 
 
 def set_role(role: str, backend: str, model: str) -> None:

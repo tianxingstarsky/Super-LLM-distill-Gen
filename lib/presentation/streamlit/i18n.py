@@ -3951,6 +3951,17 @@ def install_streamlit_localization() -> None:
             setattr(target, name, make_wrapper(name, original, target is DeltaGenerator))
 
 ZH_EN.update({
+    "系统网络（使用本机代理设置）": "System network (use local proxy settings)",
+    "直连（绕过本机代理）": "Direct (bypass the local proxy)",
+    "网络路由": "Network route",
+    "服务网络设置": "Service network settings",
+    "直连绕过本机代理，TLS 证书校验保持开启；系统网络沿用本机代理设置。不会自动切换。": "Direct bypasses the local proxy. TLS certificate checks stay on. System network uses local proxy settings. The route never changes automatically.",
+    "已保存：直连": "Saved: Direct",
+    "已保存：系统网络": "Saved: System network",
+    "同一服务的所有节点共用此设置。保存后对后续请求生效，进行中的请求不变。": "All nodes using this service share this setting. Saving applies it to future requests. Active requests keep their route.",
+    "保存网络设置": "Save network settings",
+    "网络设置未保存，请检查本机配置后重试。": "Network settings were not saved. Check the local configuration and retry.",
+    "网络设置已保存；后续请求使用此路由。": "Network settings saved. Future requests will use this route.",
     "答案生成方式": "Answer generation",
     "任务视图": "Task view",
     "运行过程": "Run progress",

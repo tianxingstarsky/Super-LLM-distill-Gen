@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from lib.model_protocols import validate_api_format
+from lib.domain.model_network import validate_network_route
 
 
 VALID_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -86,6 +87,7 @@ def merged_backends(base: dict, local: dict) -> dict[str, dict[str, Any]]:
         merged[name] = {**merged.get(name, {}), **value}
     for backend in merged.values():
         backend["api_format"] = validate_api_format(backend.get("api_format", "chat"))
+        backend["network_route"] = validate_network_route(backend.get("network_route", "system"))
     return merged
 
 

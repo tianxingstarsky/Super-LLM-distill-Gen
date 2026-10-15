@@ -189,6 +189,71 @@ def test_inline_anthropic_connection_uses_its_own_protocol_and_default_key_name(
     assert 'api_key' not in saved
 
 
+def test_new_connection_saves_explicit_direct_route():
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.selectbox(key='node-service-connect:demo:sft:route:0').set_value('direct')
+    _submit(ui)
+    assert ui.session_state['fixture-local']['backends']['writer']['network_route'] == 'direct'
+
+
+def test_connection_discovery_uses_selected_route_without_saving_it():
+    script = SCRIPT.replace('    def write_local(self, value):', '''    def discover_models(self, name, endpoint):
+        st.session_state['fixture-discovery'] = dict(endpoint)
+        return {'models': ['discovered-model']}
+    def write_local(self, value):''')
+    ui = AppTest.from_string(script).run()
+    _field(ui, '服务 API 地址').set_value('https://models.example.test/v1')
+    ui.selectbox(key='node-service-connect:demo:sft:route:0').set_value('direct')
+    next(button for button in ui.button if button.label == '获取模型').click().run()
+    assert not ui.exception
+    assert ui.session_state['fixture-discovery']['network_route'] == 'direct'
+    assert 'fixture-local' not in ui.session_state
+    assert next(box for box in ui.selectbox if box.label == '获取到的模型').options == ['discovered-model']
+
+
+def test_saved_service_route_requires_submit_and_keeps_models_and_credentials():
+    ui = _confirmation_ui()
+    original = deepcopy(ui.session_state['workflow-node-bindings:demo'])
+    ui.button(key='node-model-confirm:demo:sft').click().run()
+    confirmation = deepcopy(ui.session_state['workflow-node-model-confirmations:demo'])
+    route_key = 'node-service-network:demo:sft:network-route:writer'
+    # One control for a shared service, even when writer and reviewer reuse it.
+    assert sum(box.key == route_key for box in ui.selectbox) == 1
+    before = deepcopy(ui.session_state['fixture-local'])
+    ui.selectbox(key=route_key).set_value('direct').run()
+    assert ui.session_state['fixture-local'] == before
+    next(button for button in ui.button if button.label == '保存网络设置').click().run()
+    assert not ui.exception
+    expected = deepcopy(before)
+    expected['backends']['writer']['network_route'] = 'direct'
+    assert ui.session_state['fixture-local'] == expected
+    assert ui.session_state['workflow-node-bindings:demo'] == original
+    assert ui.session_state['workflow-node-model-confirmations:demo'] == confirmation
+    assert any(item.value == '已保存：直连' for item in ui.caption)
+
+
+def test_network_controls_are_english_including_option_labels():
+    import re
+    script = SCRIPT.replace('application = BackendApplication(Port())',
+        "from lib.presentation.streamlit.i18n import install_streamlit_localization\n"
+        "st.session_state['ui_language'] = 'en'\n"
+        "install_streamlit_localization()\napplication = BackendApplication(Port())")
+    ui = AppTest.from_string(script)
+    ui.session_state['fixture-local'] = {'backends': {'writer': {
+        'base_url': 'https://models.example.test/v1', 'models': ['alpha'], 'network_route': 'direct'}}}
+    ui.session_state['workflow-node-bindings:demo'] = {'sft': {'generation': {
+        'backend': 'writer', 'model': 'alpha', **TOKEN_LIMITS}}}
+    ui.run()
+    assert not ui.exception
+    routes = [box for box in ui.selectbox if box.label == 'Network route']
+    assert len(routes) == 2
+    for box in routes:
+        assert box.options == ['System network (use local proxy settings)', 'Direct (bypass the local proxy)']
+        assert not re.search(r'[\u4e00-\u9fff]', box.proto.help)
+    assert any(button.label == 'Save network settings' for button in ui.button)
+    assert any(item.value == 'Saved: Direct' for item in ui.caption)
+
+
 def test_node_token_limits_are_role_specific_and_saved_with_binding():
     ui = AppTest.from_string(SCRIPT)
     ui.session_state['fixture-local'] = {'backends': {

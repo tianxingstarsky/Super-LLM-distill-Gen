@@ -91,6 +91,8 @@ def _make_client(backend: dict, api_format: str) -> Any:
     api_key = backend.get("api_key") or os.environ.get(env_name, "") or "sk-local"
     options = {"base_url": backend["base_url"], "api_key": api_key,
                "timeout": PROBE_TIMEOUT_SECONDS, "max_retries": 0}
+    from lib.model_network import sdk_network_options
+    options.update(sdk_network_options(backend.get("network_route", "system"), api_format=api_format))
     if api_format == "anthropic":
         from anthropic import Anthropic
 

@@ -151,8 +151,10 @@ def discover_models(backend: dict, cache_dir: Path) -> dict:
     else:
         from openai import OpenAI
         factory = OpenAI
+    from lib.model_network import sdk_network_options
     client = factory(base_url=backend["base_url"], api_key=resolved_credential(backend),
-                     timeout=12.0, max_retries=0)
+                     timeout=12.0, max_retries=0,
+                     **sdk_network_options(backend.get("network_route", "system"), api_format=protocol))
     service_info, truncated = {}, False
     started = time.monotonic()
     next_query = {}

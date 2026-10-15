@@ -13,6 +13,7 @@ from lib.domain.model_capabilities import (INFO_FIELDS, connection_signature, em
                                           merge_model_info, normalize_model_info,
                                           validate_manual_capabilities)
 from lib.domain.model_scheduling import validate_model_scheduling
+from lib.domain.model_network import validate_network_route
 
 _UNSET = object()
 
@@ -83,6 +84,7 @@ class BackendApplication:
             raise ValueError("缺少 base_url")
         validate_backend_url(endpoint["base_url"])
         endpoint["api_format"] = validate_api_format(endpoint.get("api_format", "chat"))
+        endpoint["network_route"] = validate_network_route(endpoint.get("network_route", "system"))
         return endpoint
 
     def _model_info(self, model: str, endpoint: dict, cache: dict) -> dict:
@@ -142,7 +144,8 @@ class BackendApplication:
                          "discovered_models": discovered,
                          "model_info": {model: self._model_info(model, backend, cache) for model in names},
                          "discovery_checked_at": cache.get("checked_at"),
-                         "api_format": backend["api_format"], "api_key": self.key_display(backend),
+                         "api_format": backend["api_format"], "network_route": backend["network_route"],
+                         "api_key": self.key_display(backend),
                          "roles": users, "is_default": name == default,
                          "model_capabilities": backend.get("model_capabilities") or {},
                          "prices": backend.get("prices") or {}})
@@ -279,8 +282,10 @@ class BackendApplication:
 
     def save_endpoint(self, name: str, base_url: str, models: list[str],
                       api_key: str = "", api_key_env: str = "", prices: dict[str, float] | None = None,
-                      explicit_replace: bool = False, api_format: str = "chat") -> str:
+                      explicit_replace: bool = False, api_format: str = "chat",
+                      network_route: str = "system") -> str:
         validate_endpoint(name, base_url, models, api_format)
+        network_route = validate_network_route(network_route)
         if api_key and api_key_env:
             raise ValueError("api_key 与 api_key_env 二选一；推荐环境变量方式")
         validate_credential_reference(api_key_env)
@@ -291,7 +296,8 @@ class BackendApplication:
         if name in backends and not explicit_replace:
             raise FileExistsError(f"后端 {name} 已存在（explicit_replace=True 才覆盖；或换名字）")
         entry: dict[str, Any] = {"base_url": base_url, "models": list(models),
-                                 "api_format": api_format, "model_capabilities": {}}
+                                 "api_format": api_format, "network_route": network_route,
+                                 "model_capabilities": {}}
         if api_key:
             entry["api_key"] = api_key
         else:
@@ -302,6 +308,15 @@ class BackendApplication:
         local["backends"] = backends
         self._port.write_local(local)
         return name
+
+    def save_network_route(self, backend: str, network_route: str) -> str:
+        """Change only a saved service's runtime route, retaining its identity."""
+        network_route = validate_network_route(network_route)
+        self._endpoint(backend)
+        local = self.read_config("backends.local.yaml")
+        local.setdefault("backends", {}).setdefault(backend, {})["network_route"] = network_route
+        self._port.write_local(local)
+        return network_route
 
     def set_role(self, role: str, backend: str, model: str) -> None:
         validate_role(role)

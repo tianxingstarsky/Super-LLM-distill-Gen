@@ -24,7 +24,7 @@ from lib.model_streaming import ModelStreamError, StreamCallback, consume_stream
 from lib.model_response_details import commit_response_details, extract_response_details
 from lib.model_reasoning_prefill import DEEPSEEK_PREFILL_BASE_URL, prepare_reasoning_prefill
 from lib.model_request_reliability import (
-    ModelJSONError, ModelRequestError, SERVICE_COOLDOWNS, classify_request_error,
+    ModelJSONError, ModelRequestError, RequestDiagnostics, SERVICE_COOLDOWNS, classify_request_error,
     rejected_before_generation, retry_delay,
 )
 
@@ -377,11 +377,16 @@ class ChatClient:
         cancel_check=None,
         reasoning: dict | None = None,
         model_info: dict | None = None,
+        network_route: str = "system",
     ):
         # 本地端点绕代理（spike 报告 F2）：httpx 在 OpenAI 客户端构造时快照代理
         # 环境变量，必须在构造前设置；构造后再 setdefault 对本客户端无效。
-        os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)
-        os.environ.setdefault("no_proxy", DEFAULT_NO_PROXY)
+        from lib.domain.model_network import validate_network_route
+        from lib.model_network import sdk_network_options
+        self.network_route = validate_network_route(network_route)
+        if self.network_route == "system":
+            os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)
+            os.environ.setdefault("no_proxy", DEFAULT_NO_PROXY)
         self.api_format = validate_api_format(api_format)
         self.base_url = base_url
         self.reasoning = validate_reasoning(reasoning)
@@ -395,14 +400,16 @@ class ChatClient:
             self.client = Anthropic(base_url=base_url, api_key=api_key, max_retries=0,
                                     timeout=Timeout(MODEL_READ_IDLE_TIMEOUT_SECONDS,
                                         connect=MODEL_CONNECT_TIMEOUT_SECONDS,
-                                        write=MODEL_WRITE_TIMEOUT_SECONDS, pool=MODEL_POOL_TIMEOUT_SECONDS))
+                                        write=MODEL_WRITE_TIMEOUT_SECONDS, pool=MODEL_POOL_TIMEOUT_SECONDS),
+                                    **sdk_network_options(self.network_route, api_format=self.api_format))
         else:
             from openai import OpenAI, Timeout  # delayed import keeps offline domain tests lightweight
 
             self.client = OpenAI(base_url=base_url, api_key=api_key, max_retries=0,
                                  timeout=Timeout(MODEL_READ_IDLE_TIMEOUT_SECONDS,
                                      connect=MODEL_CONNECT_TIMEOUT_SECONDS,
-                                     write=MODEL_WRITE_TIMEOUT_SECONDS, pool=MODEL_POOL_TIMEOUT_SECONDS))
+                                     write=MODEL_WRITE_TIMEOUT_SECONDS, pool=MODEL_POOL_TIMEOUT_SECONDS),
+                                 **sdk_network_options(self.network_route, api_format=self.api_format))
         self.model = model
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
         self.price_input = price_input_per_1m
@@ -507,6 +514,16 @@ class ChatClient:
             api_format=self.api_format, base_url=getattr(self, "base_url", ""),
             reasoning=getattr(self, "reasoning", None), thinking=thinking)
         capture_details = response_details is not None or reasoning_prefix is not None
+        transport_diagnostics = RequestDiagnostics()
+        def create_request(create, kwargs):
+            transport_diagnostics.start()
+            try:
+                response = self._create(create, kwargs)
+            except Exception as error:
+                transport_diagnostics.failure(error, "headers")
+                raise
+            transport_diagnostics.received(response, streaming=bool(kwargs.get("stream")))
+            return response
         if reasoning_prefix is not None:
             allow_reasoning_fallback = False
         replayed_tools = any(message.get("role") == "tool" for message in messages)
@@ -549,10 +566,17 @@ class ChatClient:
                         response.close()
                 stream = TextOnlyReplayStream()
             request_details = {}
-            result = consume_stream(stream, self.api_format, on_stream,
-                allow_reasoning_fallback=allow_reasoning_fallback,
-                cancel_check=cancel_check if cancel_check is not None else self.cancel_check,
-                **({"response_details": request_details} if capture_details else {}))
+            def emit(event):
+                transport_diagnostics.output(event)
+                on_stream(event)
+            try:
+                result = consume_stream(stream, self.api_format, emit,
+                    allow_reasoning_fallback=allow_reasoning_fallback,
+                    cancel_check=cancel_check if cancel_check is not None else self.cancel_check,
+                    **({"response_details": request_details} if capture_details else {}))
+            except Exception as error:
+                transport_diagnostics.failure(error, "stream")
+                raise
             commit_response_details(response_details, {**request_details, **prefill_metadata})
             return result
         def full_result(response, result, stop_reason, allowed):
@@ -587,13 +611,13 @@ class ChatClient:
             if on_stream and getattr(self, "stream_supported", None) is not False:
                 kwargs["stream"] = True
             try:
-                response = self._create(self.client.messages.create, kwargs)
+                response = create_request(self.client.messages.create, kwargs)
             except Exception as error:
                 check_reasoning_rejection(error)
                 if not _is_temperature_unsupported(error):
                     raise
                 kwargs.pop("temperature")
-                response = self._create(self.client.messages.create, kwargs)
+                response = create_request(self.client.messages.create, kwargs)
             if on_stream and kwargs.get("stream"):
                 return stream_result(response)
             usage = getattr(response, "usage", None)
@@ -613,13 +637,13 @@ class ChatClient:
             if on_stream and getattr(self, "stream_supported", None) is not False:
                 kwargs["stream"] = True
             try:
-                response = self._create(self.client.responses.create, kwargs)
+                response = create_request(self.client.responses.create, kwargs)
             except Exception as error:
                 check_reasoning_rejection(error)
                 if not _is_temperature_unsupported(error):
                     raise
                 kwargs.pop("temperature")
-                response = self._create(self.client.responses.create, kwargs)
+                response = create_request(self.client.responses.create, kwargs)
             if json_mode and self.json_supported is None:
                 self.json_supported = True
             if on_stream and kwargs.get("stream"):
@@ -658,7 +682,7 @@ class ChatClient:
             kwargs.update(stream=True, stream_options={"include_usage": True})
         for _ in range(5):
             try:
-                response = self._create(create_completion, kwargs)
+                response = create_request(create_completion, kwargs)
                 break
             except Exception as error:
                 if reasoning_prefix is not None and getattr(error, "status_code", None) in {400, 404, 405, 422}:
@@ -842,10 +866,11 @@ class ChatClient:
                 raise
             except ValueError as error:
                 if (error is callback_error or error is cancel_error or not isinstance(error, ModelStreamError)
-                        or str(error) != "model_stream_idle_timeout"):
+                        or str(error) not in {"model_stream_idle_timeout", "model_stream_interrupted"}):
                     raise
-                # Unlike malformed/incomplete output, an idle provider stream
-                # is transient. Preserve admission/budget bounds on its retry.
+                # A transport read interruption/idle timeout is not a bad
+                # training sample. Unlike malformed/incomplete output, retry
+                # it within the existing admission/budget/attempt bounds.
                 last_err = error
                 failure = classify_request_error(error)
                 delay = retry_delay(error, attempts)
@@ -896,7 +921,8 @@ class ChatClient:
                 else:
                     time.sleep(delay)
         # Provider error messages may echo credentials or source material.
-        raise ModelRequestError(failure["code"], failure["kind"], attempts) from None
+        raise ModelRequestError(failure["code"], failure["kind"], attempts,
+            diagnostics=getattr(last_err, "request_diagnostics", None)) from None
 
 
 def _is_format_unsupported(err: Exception) -> bool:
@@ -1088,6 +1114,7 @@ def load_backend(
         context_window_tokens=context_window_tokens,
         reasoning=reasoning,
         model_info=model_info,
+        network_route=b.get("network_route", "system"),
         price_input_per_1m=float(prices.get("input_per_1m_usd", 0.0)),
         price_output_per_1m=float(prices.get("output_per_1m_usd", 0.0)),
         # Keep the legacy argument callable for old integrations, but product

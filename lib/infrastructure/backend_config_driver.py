@@ -66,17 +66,24 @@ class FilesystemBackendConfigDriver:
 
     def probe(self, name: str, backend: dict[str, Any]) -> dict[str, Any]:
         api_format = validate_api_format(backend.get("api_format", "chat"))
+        from lib.model_network import sdk_network_options
+        network = sdk_network_options(backend.get("network_route", "system"), api_format=api_format)
         default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
         configured_env = backend.get("api_key_env")
         env_name = default_env if configured_env is None else str(configured_env)
         api_key = backend.get("api_key") or os.environ.get(env_name, "") or "sk-local"
         if api_format == "anthropic":
             from anthropic import Anthropic
-            client = Anthropic(base_url=backend["base_url"], api_key=api_key)
+            client = Anthropic(base_url=backend["base_url"], api_key=api_key, **network)
         else:
             from openai import OpenAI
-            client = OpenAI(base_url=backend["base_url"], api_key=api_key)
-        models = client.models.list().data
+            client = OpenAI(base_url=backend["base_url"], api_key=api_key, **network)
+        try:
+            models = client.models.list().data
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
         return {"backend": name, "base_url": backend["base_url"],
                 "api_format": api_format, "models": sorted(model.id for model in models)}
 

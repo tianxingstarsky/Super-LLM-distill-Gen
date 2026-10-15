@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from lib.llm_client import BudgetGuard, ChatClient, chat_json
+from lib.model_request_reliability import ModelRequestError
 from lib.model_streaming import ModelStreamError, consume_stream
 
 import importlib.util
@@ -76,8 +77,9 @@ def test_disconnect_keeps_visible_prefix_closes_transport_and_books_budget(api, 
     client.price_input = client.price_output = 1.0
     client.budget = BudgetGuard(tmp_path, 1, hard_stop=True)
     try:
-        with pytest.raises(ModelStreamError, match="^model_stream_interrupted$"):
-            chat_json(client, MESSAGES, max_tokens=32768, on_stream=events.append)
+        with pytest.raises(ModelRequestError, match="model_stream_interrupted") as error:
+            client.chat(MESSAGES, max_tokens=32768, retries=1, json_mode=True, on_stream=events.append)
+        assert error.value.kind == "transient" and error.value.attempts == 1
         assert body.closed
         booked = json.loads((tmp_path / "data/output/budget.json").read_text(encoding="utf-8"))
         assert booked["spent_usd"] == pytest.approx((131072 + 32768) / 1e6)

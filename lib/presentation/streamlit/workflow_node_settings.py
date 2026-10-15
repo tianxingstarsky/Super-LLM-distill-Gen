@@ -24,6 +24,8 @@ from lib.presentation.streamlit.workflow_reasoning_controls import (
 
 _API_FORMAT_LABELS = {"chat": "Chat Completions", "responses": "OpenAI Responses",
                       "anthropic": "Anthropic Messages"}
+_NETWORK_ROUTE_LABELS = {"system": "系统网络（使用本机代理设置）", "direct": "直连（绕过本机代理）"}
+_NETWORK_ROUTE_HELP = "直连绕过本机代理，TLS 证书校验保持开启；系统网络沿用本机代理设置。不会自动切换。"
 _PROCESS_REVIEW_DESCRIPTIONS = {
     "sft": "另发模型请求，核对回答是否符合来源与任务要求；可沿用生成模型。",
     "multiturn": "另发模型请求，核对每轮回答与整段对话的一致性；可沿用生成模型。",
@@ -391,6 +393,9 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
                                       format_func=lambda value: _API_FORMAT_LABELS[value],
                                       help="选择服务实际支持的调用协议。")
             base_url = st.text_input("服务 API 地址", placeholder="如 https://api.openai.com/v1 或 https://api.anthropic.com")
+            network_route = st.selectbox("网络路由", ("system", "direct"),
+                key=f"{form_prefix}:route:{epoch}", format_func=_NETWORK_ROUTE_LABELS.__getitem__,
+                help=_NETWORK_ROUTE_HELP)
             model = st.text_input("模型名称", placeholder="填写服务提供的模型名")
             credential_mode = st.radio("凭据来源", ("环境变量（推荐）", "直接填写密钥"),
                                        horizontal=True,
@@ -401,7 +406,7 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
                                    else "环境变量留空时使用 OPENAI_API_KEY")
             discovered_key = form_prefix + ":discovered"
             discovered = st.session_state.get(discovered_key) or {}
-            current_connection = (base_url.strip(), api_format, credential_mode, secret)
+            current_connection = (base_url.strip(), api_format, credential_mode, secret, network_route)
             # A connection fingerprint excludes the secret itself from cached
             # results while invalidating choices when form credentials change.
             connection_key = hashlib.sha256(repr(current_connection).encode()).hexdigest()
@@ -421,7 +426,8 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
             if credential_mode == "直接填写密钥" and not secret:
                 st.error("请填写密钥，或改用环境变量。")
                 return
-            overrides = {"base_url": base_url.strip(), "api_format": api_format, "models": []}
+            overrides = {"base_url": base_url.strip(), "api_format": api_format, "models": [],
+                         "network_route": network_route}
             if credential_mode == "直接填写密钥":
                 overrides["api_key"] = secret
             else:
@@ -457,12 +463,14 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
             if credential_mode == "直接填写密钥":
                 application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
                                           api_key=secret, prices=prices,
-                                          explicit_replace=replace, api_format=api_format)
+                                          explicit_replace=replace, api_format=api_format,
+                                          network_route=network_route)
             else:
                 application.save_endpoint(name.strip(), base_url.strip(), [model.strip()],
                                           api_key_env=secret.strip() or default_env,
                                           prices=prices,
-                                          explicit_replace=replace, api_format=api_format)
+                                          explicit_replace=replace, api_format=api_format,
+                                          network_route=network_route)
         except FileExistsError:
             st.error("服务名称已存在。如需更新，请勾选覆盖同名连接。")
             return
@@ -494,6 +502,34 @@ def _connect_service(node: str, workspace: str, roles: tuple[str, ...], bindings
         st.session_state[form_prefix + ":epoch"] = epoch + 1
         st.toast("连接已保存，并已用于当前节点。" if target_role else "连接已保存；可在当前节点选择使用。")
         st.rerun()
+
+
+def _render_service_network(backend: str, endpoint: dict, application, *, prefix: str) -> None:
+    """An explicit service edit, separate from node model/token autosave."""
+    if application is None or not callable(getattr(application, "save_network_route", None)):
+        return
+    current = endpoint.get("network_route", "system")
+    if current not in _NETWORK_ROUTE_LABELS:
+        current = "system"
+    with st.popover("服务网络设置", width="stretch"):
+        st.caption(UntranslatedText(backend))
+        st.caption("已保存：直连" if current == "direct" else "已保存：系统网络")
+        with st.form(prefix + ":network:" + backend):
+            route = st.selectbox("网络路由", ("system", "direct"), index=(1 if current == "direct" else 0),
+                key=prefix + ":network-route:" + backend, format_func=_NETWORK_ROUTE_LABELS.__getitem__,
+                help=_NETWORK_ROUTE_HELP)
+            st.caption("同一服务的所有节点共用此设置。保存后对后续请求生效，进行中的请求不变。")
+            submitted = st.form_submit_button("保存网络设置", width="stretch")
+        if submitted:
+            # Read and validate through the application on submit. No callback
+            # reads a widget after its node/role has disappeared.
+            try:
+                application.save_network_route(backend, route)
+            except (OSError, ValueError, RuntimeError):
+                st.error("网络设置未保存，请检查本机配置后重试。")
+            else:
+                st.toast("网络设置已保存；后续请求使用此路由。")
+                st.rerun()
 
 
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
@@ -532,6 +568,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         return
     _render_model_confirmation(node, roles, workspace, bindings, endpoints, backend_application,
                                confirmation_action=confirmation_action, confirmation_args=confirmation_args)
+    network_services = set()
     for role in roles:
         writer_label = ("对话指导员模型" if node == "director" else ("修正模型" if (package_review or {}).get("enabled") else "评分与修正模型") if node == "review" else "清洗模型" if node == "cpt" and source_mode != "开放需求" else
                         "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
@@ -588,6 +625,10 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                                  accept_new_options=True, key=model_key,
                                  on_change=_save_model_selection, args=(workspace, node, role, backend_application),
                                  placeholder="选择或输入模型名")
+        if backend not in network_services:
+            _render_service_network(backend, endpoints[backend], backend_application,
+                                    prefix=f"node-service-network:{workspace}:{node}")
+            network_services.add(backend)
         if model:
             if (len(model) > 200 or not model.strip() or any(ord(character) < 32 for character in model)):
                 st.warning("模型名称无效，请填写不超过 200 个字符的模型名。")

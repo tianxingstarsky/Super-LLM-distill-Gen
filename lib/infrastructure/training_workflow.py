@@ -3165,6 +3165,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
             self.state["attempt"] += 1
             self.state["status"] = "running"
             self.state.pop("error", None)
+            self.state.pop("request_failure", None)
             self.save()
             try:
                 # Read under the run lock: construction may precede execution.
@@ -3339,10 +3340,15 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
             except Exception as error:
                 # Never persist raw provider exceptions: they can contain credentials or source text.
                 code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else type(error).__name__
-                from lib.model_request_reliability import ModelRequestError, classify_request_error
+                from lib.model_request_reliability import (ModelRequestError, classify_request_error,
+                                                           filter_request_diagnostic)
                 failure = classify_request_error(error)
+                request_failure = None
                 if isinstance(error, ModelRequestError):
                     code = failure["code"]
+                    request_failure = filter_request_diagnostic(getattr(error, "diagnostics", None))
+                    if request_failure is not None:
+                        self.state["request_failure"] = request_failure
                 if self.production_enabled():
                     code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else failure["code"]
                     if "production" in self.state:
@@ -3353,7 +3359,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                             self._production_partial_export("paused", code)
                 self.state.update(status="failed", error=code)
                 self.state["stages"][self.stage].update(status="failed", error=code)
-                self.event("run_failed", error=code)
+                self.event("run_failed", error=code,
+                           **({"request_failure": request_failure} if request_failure is not None else {}))
             return self.state
 
 
