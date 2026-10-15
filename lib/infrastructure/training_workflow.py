@@ -352,6 +352,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                    for templates in node_prompts.values() for prompt_id in templates)):
         recipe_version = 21
     multi_style = node_generation.get("multiturn", node_generation.get("sft")) or {}
+    authored_language_review = any(config.get("enabled") is True and config.get("reasoning_language") == "zh_en"
+        for stage, config in (("sft", node_generation.get("sft", {})), ("multiturn", multi_style))
+        if stage in targets)
     if ("multiturn" in targets and multi_style.get("enabled", bool(multi_style))
             or "workflow.style_check" in node_prompts.get("multiturn", {})):
         recipe_version = 22
@@ -492,6 +495,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "reasoning_revision_protocol_version": 1,
               "multiturn_terminal_review_version": 1,
               "multiturn_generation_style_version": 1,
+              **({"authored_reasoning_language_review_version": 1} if authored_language_review else {}),
               **({"reasoning_required": True} if reasoning_required else {}),
               "learner_context_review_version": 1,
               "learner_context_retry_version": 1,

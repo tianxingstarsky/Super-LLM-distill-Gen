@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import re
 
 from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
 from lib.domain.workflow_quality import accepted, canonical, conversation_issue, text_issue, verdict
@@ -166,6 +167,61 @@ def preserve_provider_reasoning(target, original, updated, *, origin):
 
 def _authored_cot(target, row):
     return target == "cot" and row.get("reasoning_protocol_version") == AUTHORED_REASONING_VERSION
+
+
+def _authored_reasoning_language_requirements(recipe, target, row):
+    """Use only a new task's finite, trusted node choice and authored origins.
+
+    CoT-derived SFT has its own final rationale node, rather than this SFT
+    node's style. Provider-native, imported and human-written text is never
+    reclassified as authored output by an untrusted row generation_style.
+    """
+    if (recipe.get("authored_reasoning_language_review_version") != 1
+            or target not in {"sft", "multiturn"} or row.get("reasoning_route") == "sft_via_cot"):
+        return []
+    configs = recipe.get("node_generation", {})
+    config = configs.get(target, configs.get("sft", {}) if target == "multiturn" else {})
+    if config.get("enabled") is not True or config.get("reasoning_language") != "zh_en":
+        return []
+    origins = {review["end_message_index"]: review.get("reasoning_origin")
+               for review in row.get("turn_reviews", []) if isinstance(review, dict)
+               and type(review.get("end_message_index")) is int and review.get("reasoning_origin")}
+    authored = {"prompt_styled_generation", "prompt_revision", "prompt_trim"}
+    return [{"message_index": index, "reasoning_language": "zh_en"}
+            for index, message in enumerate(row.get("messages", []))
+            if isinstance(message, dict) and message.get("role") == "assistant"
+            and not (message.get("tool_calls") or message.get("toolCalls"))
+            and origins.get(index, row.get("reasoning_origin")) in authored]
+
+
+def _authored_reasoning_language_issue(row, requirements):
+    """Detect an absent script/word signal, never certify natural bilinguality.
+
+    A Latin word-shaped token is only a necessary signal, not proof of English
+    semantics. Terms, code, quotations and unrelated multilingual text still
+    require the ordinary semantic review of the actual complete reasoning.
+    """
+    from lib.domain.turn_review import reasoning_text
+    for requirement in requirements:
+        index = requirement["message_index"]
+        text = reasoning_text(row["messages"][index])
+        if not re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\U00020000-\U0002ebef]", text):
+            return f"review_repair_reasoning_language_missing_zh:assistant[{index}]"
+        if not re.search(r"(?<![A-Za-z0-9_])[A-Za-z]{2,}(?:['’-][A-Za-z]+)*(?![A-Za-z0-9_])", text):
+            return f"review_repair_reasoning_language_missing_en:assistant[{index}]"
+    return None
+
+
+def _authored_reasoning_language_review_rules(requirements):
+    if not requirements:
+        return ""
+    indices = ", ".join(f"assistant[{item['message_index']}]" for item in requirements)
+    return (f"冻结节点配置给出的待审语言标准：{indices} 的新撰写显式推理要求 zh_en。"
+            "逐条核对真实推理是否自然结合中文与 English，让两种语言承载具体依据、推导或核对；"
+            "出现字符、英文标题、几个术语或重复翻译不证明满足该要求，不能只看存在性给语言风格满分。"
+            "不要求固定比例、字数或步骤，不因必要引文、代码或专名本来的语言而扣分。"
+            "未满足时该轮 instruction 不通过并说明具体问题，不能由其它轮或答案正确抵消。"
+            "本标准不改变最终答案跟随真实用户语言的要求，不改写原生推理或人工输入，也不约束评审回执的语言。")
 
 
 def _authored_review_audit(target, row):
@@ -517,7 +573,9 @@ class WorkflowReviewRepair:
                    and not (message.get("tool_calls") or message.get("toolCalls")) and not reasoning_text(message)
                    for message in row.get("messages", [])):
                 required_issue = "review_repair_reasoning_missing"
-        if issue := required_issue or _row_training_surface_issue(target, row, self.recipe):
+        language_requirements = _authored_reasoning_language_requirements(self.recipe, target, row)
+        if issue := (required_issue or _authored_reasoning_language_issue(row, language_requirements)
+                     or _row_training_surface_issue(target, row, self.recipe)):
             return {"keep": False, "grounded": False, "reasoning_valid": False, "correctness": 1,
                     "scores": {name: 1 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
                     "reason": issue}
@@ -536,6 +594,9 @@ class WorkflowReviewRepair:
         def assessed(call_key, call_data):
             rules = ({"instruction": _authored_review_rules(self.recipe)}
                      if _authored_cot(target, row) and not call_data.get("learner_context_only") else {})
+            if not call_data.get("learner_context_only") and language_requirements:
+                rules["instruction"] = "\n".join(filter(None, (
+                    rules.get("instruction"), _authored_reasoning_language_review_rules(language_requirements))))
             if call_data.get("supervised_assistant_turns") is not None:
                 from lib.domain.turn_review import turn_review_verdict
                 failures = []
@@ -723,11 +784,13 @@ class WorkflowReviewRepair:
         config = validate_review_repair(self.recipe["review_repair"])
         if (self.recipe.get("multiturn_terminal_review_version") == 1 and target == "multiturn"
                 and original.get("status") == "quarantined"
-                and original.get("reason") == "multiturn_natural_end_insufficient_turns"):
-            # A naturally completed single turn cannot become a multi-turn
-            # training item by editing assistant text. Preserve its actual
-            # terminal cause and all evidence without requesting a repair or
-            # presenting the absence of a review as a model quality verdict.
+                and (original.get("reason") == "multiturn_natural_end_insufficient_turns"
+                     or (original.get("reason") == "multiturn_turn_failed_after_repair"
+                         and (original.get("messages") is None or original.get("messages") == [])))):
+            # A terminal single turn or failed generation without a dialogue
+            # cannot become a multi-turn item by editing assistant text.
+            # Preserve the actual cause and any partial-turn diagnostics;
+            # missing input is not an API/parse failure or a quality verdict.
             row = deepcopy(original)
             try:
                 candidate_hash = digest(self._review_payload(target, row))

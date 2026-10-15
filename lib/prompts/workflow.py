@@ -1,5 +1,5 @@
 """Versioned prompts for the automatic training workflow."""
-from lib.prompts.base import PromptSpec
+from lib.prompts.base import PromptSpec, render
 
 
 def spec(name, purpose, body, source=None, *, version="1.0.0"):
@@ -765,3 +765,17 @@ REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.8.0", template=s
     "review_score", "逐轮核验结果归属与观察依据", REVIEW_SCORE_V1_8).template)
 REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.9.0", template=spec(
     "review_repair", "保留推理并修正结果与角色归属", REVIEW_REPAIR_V1_9).template)
+
+# A styled dialogue needs its authored reasoning and private evidence in the
+# same response. Keep the prior two-field contract for frozen old workflows.
+from lib.prompts.workflow_multiturn import multiturn_assistant_v1_5
+MULTITURN_ASSISTANT_V1_4 = MULTITURN_ASSISTANT
+MULTITURN_ASSISTANT = _reasoning_spec_replace(MULTITURN_ASSISTANT, version="1.5.0", template=spec(
+    "multiturn_assistant", "逐轮输出完整推理与独立私有证据", multiturn_assistant_v1_5(render(MULTITURN_ASSISTANT))).template)
+
+# Quantities and inference strength are independently checked in the same
+# bound review call; historical snapshots retain their exact prior bodies.
+from lib.prompts.workflow_fact_review import REVIEW_SCORE_V1_9
+REVIEW_SCORE_V1_8 = REVIEW_SCORE
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.9.0", template=spec(
+    "review_score", "逐轮独立核验数量口径与推断依据", REVIEW_SCORE_V1_9).template)
