@@ -64,7 +64,7 @@ LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "c
 KNOWLEDGE_AGENT_ERRORS = frozenset({
     "duplicate_knowledge_agent_task", "knowledge_agent_tool_limit", "knowledge_context_result_too_large",
     "knowledge_agent_planning_timeout", "knowledge_agent_invalid_assistant", "knowledge_agent_invalid_tool_call",
-    "knowledge_agent_context_exhausted",
+    "knowledge_agent_context_exhausted", "knowledge_agent_observation_limit_reached",
 })
 TARGET_LABELS = {"cpt": "CPT 预训练语料", "sft": "SFT 指令对话", "agent": "Agent 验证轨迹",
                  "multiturn": "多轮对话 SFT",
@@ -238,6 +238,7 @@ def _workflow_error(error) -> str:
         "invalid_qa_director": "对话指导员配置无效，请检查指导方式与指令。",
         "duplicate_knowledge_agent_task": "此指导任务与同一知识集合中已登记的任务重复，已隔离。请检查资料或调整指导员节点的设计要求。",
         "knowledge_agent_tool_limit": "指导员工具调用达到本轮上限，或当前模式不允许工具。请检查节点的上下文、工具设置与资料范围。",
+        "knowledge_agent_observation_limit_reached": "指导员完成本轮资料读取后仍需更多依据，已保留读取记录。请检查指导员节点的资料范围与要求，再从断点重试；这不代表资料已耗尽。",
         "knowledge_context_result_too_large": "资料或历史工具返回的内容超出指导员上下文容量。请缩小资料范围，或调整节点的上下文与工具设置。",
         "knowledge_agent_planning_timeout": "等待同一指导员会话的规划超时。请检查并行任务，或在指导员节点改用按批独立上下文。",
         "knowledge_agent_invalid_assistant": "指导员未返回有效的助手消息。请检查节点模型接口与工具支持后重试。",

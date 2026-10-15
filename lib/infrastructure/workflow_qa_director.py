@@ -595,12 +595,73 @@ class WorkflowQADirector:
         if self.separated_questions():
             from lib.infrastructure.source_memory_messages import directed_source_request
             data = directed_source_request(self.recipe, {**data, "question_separation": True}, unit, unit["qa_contract"])
+        runtime = self._dialogue_knowledge_runtime(unit)
+        if runtime:
+            from lib.infrastructure.source_memory_messages import directed_source_request
+            data = directed_source_request(self.recipe, data, unit, unit["qa_contract"])
+            data["dialogue_source_tools_scope"] = runtime[1]["dialogue_source_tools_scope"]
+        with self.knowledge_planning_lock(runtime) if runtime else nullcontext():
+            return self._next_dialogue_plan(key, data, runtime, unit, messages, previous_state)
+
+    def _dialogue_knowledge_runtime(self, unit):
+        """Read only the first turn's authenticated evidence, never a new range.
+
+        Continuations share answer-free coverage with the original knowledge
+        ledger. Their conversation window is separate from batch planning,
+        whose earlier turns may contain evidence outside this task's range.
+        Whole-document expansion needs a new evidence/worker contract and is
+        deliberately unavailable in this protocol.
+        """
+        descriptor = unit.get("knowledge_agent_context")
+        if (self.recipe.get("qa_dialogue_agent_version") != 1
+                or self.recipe.get("knowledge_agent_context_version") != 1
+                or unit.get("kind") != "document" or not descriptor):
+            return None
+        from lib.domain.source_line_ranges import number_source_material, resolve_source_line_ranges
+        materials = self._director_evidence_materials(unit)
+        if not materials:
+            return None
+        ranges = unit["qa_contract"].get("source_line_ranges")
+        if ranges is None:
+            ranges = [{"material_id": item["material_id"], "start_line": 1,
+                       "end_line": item["line_count"]} for item in materials]
+        selected = resolve_source_line_ranges(materials, ranges)
+        originals = {item["material_id"]: item for item in materials}
+        narrowed, addresses = [], []
+        for block in selected:
+            original = originals[block["material_id"]]
+            identity = "dialogue-scope-" + _digest([block["material_id"],
+                block["start_line"], block["end_line"], original["cleaned_text_sha256"]])
+            # A derived material uses local tool addresses. The exact original
+            # range stays attached as a receipt, never as additional text.
+            narrowed.append(number_source_material({"unit_id": identity,
+                "source_id": original["source_id"], "source_name": original.get("source_name", ""),
+                "source_location": original.get("source_location", {}), "text": block["text"],
+                "cleaning_status": "accepted", "cleaned_text_sha256": _digest(block["text"])}))
+            addresses.append({"material_id": identity, "start_line": 1,
+                "end_line": narrowed[-1]["line_count"],
+                "original_range": {name: block[name] for name in ("material_id", "start_line", "end_line")}})
+        scope = {"mode": "first_turn_selected_evidence_only", "materials": addresses,
+                 "source_expansion_available": False, "history_is_not_evidence": True}
+        context = {"version": 1, "knowledge_id": descriptor["knowledge_id"],
+            "session_id": _digest(["dialogue_agent_v1", descriptor["session_id"],
+                                   [(item["material_id"], item["cleaned_text_sha256"]) for item in narrowed]]),
+            "dialogue_source_tools_scope": scope}
+        self.state.setdefault("qa_director", {}).setdefault("knowledge_context", {
+            **descriptor, "tool_calls": 0, "history_is_not_evidence": True})
+        return narrowed, context
+
+    def _next_dialogue_plan(self, key, data, runtime, unit, messages, previous_state):
+        """Validate the actual step and blind actor before durable Agent commit."""
+        options = ({"instruction": HUMAN_DIRECTOR_INSTRUCTION + human_generation_instruction(unit["qa_contract"])}
+                   if unit["qa_contract"].get("human_design") else {})
         try:
-            value = self.ask(key, "generation", "workflow.qa_director", data,
-                allow_reasoning_fallback=False, model_stage="director", prompt_stage="director",
-                **({"instruction": HUMAN_DIRECTOR_INSTRUCTION + human_generation_instruction(unit["qa_contract"])}
-                   if unit["qa_contract"].get("human_design") else {}))
+            value = (self.knowledge_agent_plan(key, data, runtime, prompt_stage="director", **options) if runtime else
+                self.ask(key, "generation", "workflow.qa_director", data,
+                    allow_reasoning_fallback=False, model_stage="director", prompt_stage="director", **options))
         except ModelJSONError as error:
+            if runtime:
+                self.invalidate_knowledge_plan(key)
             raise DialoguePlanError() from error
         try:
             step = validate_dialogue_step(value, completed_turns=len(messages) // 2,
@@ -613,8 +674,13 @@ class WorkflowQADirector:
                     step["dialogue_state"]["expression_design"] = design
             if (self.separated_questions() and unit["qa_contract"]["qa_type"] == "closed_book"
                     and step["continue"]):
+                # A replacement Agent plan may change the brief under the
+                # same operation key. Never reuse an actor reply purchased
+                # for a rejected plan; historical recipes keep their old key.
+                followup_key = ([*key, "followup", "knowledge_plan", _digest(step)]
+                                if runtime else [*key, "followup"])
                 dispatched = self._closed_book_question(unit, unit["qa_contract"],
-                    key=[*key, "followup"], visible_messages=messages, brief=step.get("question_brief"),
+                    key=followup_key, visible_messages=messages, brief=step.get("question_brief"),
                     **({"expression_design": step["dialogue_state"].get("expression_design", {})}
                        if self.participant_utterances() else {}))
                 step["user_message"] = dispatched["question"]
@@ -626,9 +692,14 @@ class WorkflowQADirector:
             if ("conversational_frame" not in step["dialogue_state"]
                     and isinstance(previous_state, dict) and "conversational_frame" in previous_state):
                 step["dialogue_state"]["conversational_frame"] = deepcopy(previous_state["conversational_frame"])
+            if runtime:
+                self.commit_knowledge_plan(key)
             return step
         except ValueError as error:
-            self._invalidate_director_call(key)
+            if runtime:
+                self.invalidate_knowledge_plan(key)
+            else:
+                self._invalidate_director_call(key)
             raise DialoguePlanError() from error
 
     @staticmethod
@@ -1009,7 +1080,11 @@ class WorkflowQADirector:
                         self.commit_knowledge_plan(call_key)
                     return contracts
                 except ValueError as error:
-                    self._invalidate_director_call(call_key)
+                    if runtime and (self.recipe.get("knowledge_agent_finalization_version") == 1
+                                    or self.recipe.get("qa_dialogue_agent_version") == 1):
+                        self.invalidate_knowledge_plan(call_key)
+                    else:
+                        self._invalidate_director_call(call_key)
                     if not production:
                         raise
                     # Fixed feedback explains the contract without echoing the

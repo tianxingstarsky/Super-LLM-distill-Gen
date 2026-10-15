@@ -487,6 +487,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "learner_context_retry_version": 1,
               **({"knowledge_agent_context_version": 1,
                   "knowledge_agent_session_rules_version": 1,
+                  "knowledge_agent_finalization_version": 1,
+                  "qa_dialogue_agent_version": 1,
                   "knowledge_agent_instruction": KNOWLEDGE_AGENT_INSTRUCTION}
                  if qa_director.get("context_mode") == "persistent" else {}),
               **({"native_regeneration_version": 1} if (review_repair or {}).get("native_regeneration") else {}),

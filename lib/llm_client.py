@@ -725,12 +725,13 @@ class ChatClient:
         return result
 
     def tool_turn(self, messages, tools, *, max_tokens=1024, temperature=0.7, retries=3,
-                  response_details=None, on_stream=None):
+                  response_details=None, on_stream=None, tool_choice="auto"):
         """One admitted function-calling turn; callers execute and record tools."""
         from lib.model_tool_calls import tool_turn
         return tool_turn(self, messages, tools, max_tokens=max_tokens,
                          temperature=temperature, retries=retries,
-                         response_details=response_details, on_stream=on_stream)
+                         response_details=response_details, on_stream=on_stream,
+                         tool_choice=tool_choice)
 
     def chat(
         self,

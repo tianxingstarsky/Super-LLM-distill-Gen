@@ -295,7 +295,7 @@ def test_invalid_director_outputs_have_actionable_localized_errors():
         "invalid_question_assessment", "question_not_suitable",
         "duplicate_knowledge_agent_task", "knowledge_agent_tool_limit", "knowledge_context_result_too_large",
         "knowledge_agent_planning_timeout", "knowledge_agent_invalid_assistant", "knowledge_agent_invalid_tool_call",
-        "knowledge_agent_context_exhausted",
+        "knowledge_agent_context_exhausted", "knowledge_agent_observation_limit_reached",
     ):
         chinese = _workflow_error(ValueError(code))
         assert chinese != code and re.search(r"[\u4e00-\u9fff]", chinese)

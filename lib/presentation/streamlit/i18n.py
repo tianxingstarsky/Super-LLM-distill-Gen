@@ -737,6 +737,7 @@ ZH_EN: dict[str, str] = {
     "指导员上下文不足，请减小每批任务数或精简规则和提示词。": "The director context is too small. Use fewer tasks per batch or shorten its rules and prompts.",
     "此指导任务与同一知识集合中已登记的任务重复，已隔离。请检查资料或调整指导员节点的设计要求。": "This planned task matches a registered task in the same knowledge collection and was quarantined. Check the sources or adjust the design instructions in the director node.",
     "指导员工具调用达到本轮上限，或当前模式不允许工具。请检查节点的上下文、工具设置与资料范围。": "The director reached the tool-call limit, or tools are disabled in this mode. Check its context, tool settings, and source scope.",
+    "指导员完成本轮资料读取后仍需更多依据，已保留读取记录。请检查指导员节点的资料范围与要求，再从断点重试；这不代表资料已耗尽。": "The director needs more evidence after this round of source reads. Read records are saved. Check the director's source scope and instructions, then resume. This does not mean the source is exhausted.",
     "资料或历史工具返回的内容超出指导员上下文容量。请缩小资料范围，或调整节点的上下文与工具设置。": "A source or history tool returned more than the director context can fit. Narrow the source scope or adjust its context and tool settings.",
     "等待同一指导员会话的规划超时。请检查并行任务，或在指导员节点改用按批独立上下文。": "The wait for planning in the same director session timed out. Check parallel runs or select independent batches in the director node.",
     "指导员未返回有效的助手消息。请检查节点模型接口与工具支持后重试。": "The director returned an invalid assistant message. Check its model endpoint and tool support, then retry.",

@@ -15,6 +15,24 @@ from lib.infrastructure.knowledge_agent_tools import KnowledgeAgentTools
 
 MAX_TOOL_ROUNDS = 4
 MAX_CALLS_PER_ROUND = 6
+_FINALIZE_WITH_OBSERVATIONS = (
+    "This request concludes the current bounded knowledge-agent operation. Tools are now disabled. "
+    "Use only the authenticated source and observations already available. Return the JSON plan "
+    "required by the current node, without requesting another tool or inventing an observation. "
+    "Reaching this tool limit is not evidence of source exhaustion or lack of valuable scenarios. "
+    "If the existing observations cannot support a valid plan, return exactly "
+    "{\"agent_pause\": {\"reason\": \"a short explanation of the missing observation\"}} instead. "
+    "Do not claim source_exhausted or no_new_grounded_scenario solely because tools are disabled."
+)
+
+
+class KnowledgeAgentObservationLimit(ValueError):
+    """The current bounded operation needs more observations, not more samples."""
+
+    code = "knowledge_agent_observation_limit_reached"
+
+    def __init__(self):
+        super().__init__(self.code)
 
 
 class WorkflowKnowledgeAgent:
@@ -82,6 +100,8 @@ class WorkflowKnowledgeAgent:
             session_scope.extend([self.recipe.get("node_prompt_system"), rules])
         if self.knowledge_expressions():
             session_scope.append(["expression_guide", 2])
+        if self.recipe.get("knowledge_agent_finalization_version") == 1:
+            session_scope.append(["tool_finalization", 1])
         session = digest(session_scope)
         descriptor = {"version": 1, "knowledge_id": knowledge, "session_id": session}
         store = self.knowledge_store()
@@ -142,7 +162,7 @@ class WorkflowKnowledgeAgent:
         return self.knowledge_store().search(knowledge, **arguments,
             **({"include_expression": True} if self.knowledge_expressions() else {}))
 
-    def knowledge_agent_plan(self, key, data, runtime, *, instruction=None):
+    def knowledge_agent_plan(self, key, data, runtime, *, instruction=None, prompt_stage=None):
         from lib.infrastructure.model_context_prefix import split_context_request, NODE_RULE_HEADER
         from lib.infrastructure.source_memory_messages import source_memory_messages
         from lib.infrastructure.workflow_node_messages import split_node_rules
@@ -167,8 +187,10 @@ class WorkflowKnowledgeAgent:
             rules, task = split_node_rules(data, instruction=instruction, qa_director=self.recipe.get("qa_director"))
             task = deepcopy(task)
             task["knowledge_agent_memory"] = self._knowledge_memory(knowledge)
+            template = (self.prompt_text("workflow.qa_director", stage=prompt_stage)
+                        if prompt_stage is not None else self.prompt_text("workflow.qa_director"))
             system = (self.recipe["node_prompt_system"] + NODE_RULE_HEADER + "\n"
-                + self.prompt_text("workflow.qa_director") + experience_system(self.recipe, "workflow.qa_director")
+                + template + experience_system(self.recipe, "workflow.qa_director")
                 + rules + "\n" + self.recipe["knowledge_agent_instruction"])
             messages = source_memory_messages(system,
                 split_context_request(self.path, task, protocol_version=self.recipe.get("source_memory_protocol_version", 2)))
@@ -187,12 +209,13 @@ class WorkflowKnowledgeAgent:
         history_start = next((index for index, message in enumerate(messages[:start])
                               if message.get("role") == "user"), start)
 
-        def trim_to_fit(extra=()):
+        def trim_to_fit(extra=(), *, active_schemas=None):
             """Evict whole prior turns; keep the current tool chain unchanged."""
             nonlocal start
             from lib.model_tool_calls import tool_context_input_bytes
             def fits():
-                return tool_context_input_bytes([*messages, *extra], schemas) + output <= context
+                return tool_context_input_bytes([*messages, *extra],
+                    schemas if active_schemas is None else active_schemas) + output <= context
             while not fits() and history_start < start:
                 end = history_start + 1
                 while end < start and messages[end].get("role") != "user":
@@ -204,21 +227,54 @@ class WorkflowKnowledgeAgent:
 
         for round_number in range(MAX_TOOL_ROUNDS + 1):
             self.check_cancel()
-            if not trim_to_fit():
+            finalizing = (self.recipe.get("knowledge_agent_finalization_version") == 1
+                          and use_tools and round_number == MAX_TOOL_ROUNDS)
+            turn_schemas = schemas
+            closing = {"role": "system", "content": _FINALIZE_WITH_OBSERVATIONS} if finalizing else None
+            if not trim_to_fit([closing] if closing else (), active_schemas=turn_schemas):
                 raise ValueError("knowledge_agent_context_exhausted")
-            call_key = ["knowledge_agent_turn", key, round_number, digest(messages), digest(schemas)]
-            assistant = self._knowledge_model_turn(call_key, messages, schemas, binding)
+            # Keep the temporary closing instruction out of the remembered
+            # dialogue: it must not disable tools for the next operation.
+            request_messages = messages
+            if closing:
+                prefix = next((index for index, message in enumerate(messages)
+                               if message.get("role") != "system"), len(messages))
+                request_messages = [*messages[:prefix], closing, *messages[prefix:]]
+            call_key = ["knowledge_agent_turn", key, round_number, digest(request_messages), digest(turn_schemas)]
+            assistant = self._knowledge_model_turn(call_key, request_messages, turn_schemas, binding,
+                **({"tool_choice": "none"} if finalizing else {}))
             if not isinstance(assistant, dict) or assistant.get("role") != "assistant":
                 raise ValueError("knowledge_agent_invalid_assistant")
             messages.append(assistant)
             calls = assistant.get("tool_calls") or []
             if not calls:
+                if not hasattr(self, "_knowledge_final_calls"):
+                    self._knowledge_final_calls = {}
+                self._knowledge_final_calls[digest(key)] = call_key
                 from lib.llm_client import parse_json_robust
                 try:
                     value = parse_json_robust(assistant.get("content", ""))
                 except ValueError:
+                    if finalizing:
+                        self.invalidate_knowledge_plan(key)
                     from lib.model_request_reliability import ModelJSONError
                     raise ModelJSONError(1) from None
+                if finalizing and isinstance(value, dict) and "agent_pause" in value:
+                    pause = value["agent_pause"]
+                    if (set(value) != {"agent_pause"} or not isinstance(pause, dict)
+                            or set(pause) != {"reason"} or not isinstance(pause["reason"], str)
+                            or not pause["reason"].strip() or len(pause["reason"]) > 2000):
+                        self.invalidate_knowledge_plan(key)
+                        from lib.model_request_reliability import ModelJSONError
+                        raise ModelJSONError(1) from None
+                    # Save the observation trail, never publish an incomplete
+                    # plan or turn a scheduling limit into source exhaustion.
+                    self.checkpoint(["knowledge_agent_pause", key], lambda: {
+                        "code": KnowledgeAgentObservationLimit.code,
+                        "reason": pause["reason"].strip(), "operation": operation,
+                        "observations": deepcopy(messages[start:-1])})
+                    self.invalidate_knowledge_plan(key)
+                    raise KnowledgeAgentObservationLimit()
                 if not hasattr(self, "_knowledge_pending"):
                     self._knowledge_pending = {}
                 self._knowledge_pending[digest(key)] = (session, operation, deepcopy(messages[start:]))
@@ -265,8 +321,10 @@ class WorkflowKnowledgeAgent:
                     self.save(force=False)
         raise ValueError("knowledge_agent_tool_limit")
 
-    def _knowledge_model_turn(self, key, messages, schemas, binding):
+    def _knowledge_model_turn(self, key, messages, schemas, binding, *, tool_choice="auto"):
+        journal = None
         def invoke():
+            nonlocal journal
             from lib.llm_client import ChatClient
             from lib.infrastructure.workflow_stream_journal import StreamJournal
             client = self.client("generation", stage="director")
@@ -280,16 +338,13 @@ class WorkflowKnowledgeAgent:
                     streaming = {"on_stream": journal} if journal is not None else {}
                     if schemas:
                         return client.tool_turn(deepcopy(messages), schemas,
-                            max_tokens=binding.get("max_output_tokens", 32768), **streaming)
+                            max_tokens=binding.get("max_output_tokens", 32768), **streaming,
+                            **({"tool_choice": tool_choice} if tool_choice != "auto" else {}))
                     details = {}
                     text = client.chat(deepcopy(messages), json_mode=True, allow_reasoning_fallback=False,
                         response_details=details, max_tokens=binding.get("max_output_tokens", 32768), **streaming)
                     return {"role": "assistant", "content": text,
                             **({"reasoning_content": details["reasoning_content"]} if details.get("reasoning_content") else {})}
-                except BaseException:
-                    if journal is not None:
-                        journal.interrupted()
-                    raise
                 finally:
                     after = getattr(client, "usage", {})
                     with self._lock:
@@ -297,12 +352,40 @@ class WorkflowKnowledgeAgent:
                         for metric in ("calls", "prompt_tokens", "completion_tokens"):
                             usage[metric] = usage.get(metric, 0) + max(0, after.get(metric, 0) - before.get(metric, 0))
                     self.event("model_finished", role="generation")
-        return self.checkpoint(key, invoke)
+        try:
+            value = self.checkpoint(key, invoke)
+        except BaseException:
+            if journal is not None:
+                try:
+                    journal.interrupted()
+                except (OSError, ValueError):
+                    pass  # Preserve the model/storage failure, not preview I/O.
+            raise
+        if journal is not None:
+            try:
+                journal.completed()
+            except (OSError, ValueError):
+                pass  # The model response is already durable and reusable.
+        return value
 
     def commit_knowledge_plan(self, key):
         pending = getattr(self, "_knowledge_pending", {}).pop(digest(key), None)
         if pending is not None:
             self.knowledge_store().remember_turn(*pending)
+        getattr(self, "_knowledge_final_calls", {}).pop(digest(key), None)
+
+    def invalidate_knowledge_plan(self, key):
+        """Retry a rejected final plan without repurchasing valid tool reads.
+
+        The caller must validate before committing. Inputs, tool observations
+        and their integrity checkpoints remain immutable on disk.
+        """
+        identity = digest(key)
+        getattr(self, "_knowledge_pending", {}).pop(identity, None)
+        call_key = getattr(self, "_knowledge_final_calls", {}).pop(identity, None)
+        invalidate = getattr(self, "invalidate_checkpoint", None)
+        if call_key is not None and callable(invalidate):
+            invalidate(call_key)
 
     @staticmethod
     def _knowledge_task_identity(contract, stage):

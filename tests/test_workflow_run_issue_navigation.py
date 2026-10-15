@@ -278,7 +278,7 @@ def test_clean_source_capacity_error_opens_sft_when_there_is_no_director():
 @pytest.mark.parametrize('error', [
     'duplicate_knowledge_agent_task', 'knowledge_agent_tool_limit', 'knowledge_context_result_too_large',
     'knowledge_agent_planning_timeout', 'knowledge_agent_invalid_assistant', 'knowledge_agent_invalid_tool_call',
-    'knowledge_agent_context_exhausted',
+    'knowledge_agent_context_exhausted', 'knowledge_agent_observation_limit_reached',
 ])
 @pytest.mark.parametrize('language', ['zh', 'en'])
 def test_knowledge_agent_errors_open_director_without_execution_or_mutating_saved_state(error, language):

@@ -248,25 +248,25 @@ def _wire_messages(messages, api):
     return request
 
 
-def _request_kwargs(client, messages, tools, max_tokens, temperature):
+def _request_kwargs(client, messages, tools, max_tokens, temperature, *, tool_choice="auto"):
     api = client.api_format
     kwargs = {"model": client.model, **_wire_messages(messages, api), "temperature": temperature}
     kwargs.update(reasoning_request(client.reasoning, api_format=api, base_url=client.base_url,
                                    model_info=client.model_info, max_tokens=max_tokens))
     if api == "chat":
-        kwargs.update(tools=tools, tool_choice="auto")
+        kwargs.update(tools=tools, tool_choice=tool_choice)
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
     elif api == "responses":
         kwargs.update(tools=[{"type": "function", "strict": False, **deepcopy(tool["function"])} for tool in tools],
-                      tool_choice="auto")
+                      tool_choice=tool_choice)
         if max_tokens is not None:
             kwargs["max_output_tokens"] = max_tokens
     else:
         kwargs.update(tools=[{"name": tool["function"]["name"],
             "input_schema": deepcopy(tool["function"]["parameters"]),
             **{key: tool["function"][key] for key in ("description", "strict")
-               if key in tool["function"]}} for tool in tools], tool_choice={"type": "auto"},
+               if key in tool["function"]}} for tool in tools], tool_choice={"type": tool_choice},
             max_tokens=max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS)
         if client.reasoning.get("mode") == "enabled":
             kwargs.pop("temperature", None)
@@ -343,7 +343,7 @@ def _assistant(response, api, names):
 
 
 def tool_turn(client, messages, tools, *, max_tokens=1024, temperature=0.7, retries=3,
-              response_details=None, on_stream=None):
+              response_details=None, on_stream=None, tool_choice="auto"):
     """Return a complete assistant/tool decision; never execute a function.
 
     SDK requests are nonstreaming. After the entire response arrives, the
@@ -360,6 +360,8 @@ def tool_turn(client, messages, tools, *, max_tokens=1024, temperature=0.7, retr
         raise ValueError("invalid_model_request_attempts")
     if type(temperature) not in (int, float) or not math.isfinite(temperature):
         raise ValueError("invalid_model_temperature")
+    if not isinstance(tool_choice, str) or tool_choice not in {"auto", "none"}:
+        raise ValueError("invalid_model_tool_choice")
     tools = _tools(tools)
     messages = _history(messages, client.api_format)
     if client.model_info.get("tools") is False:
@@ -371,7 +373,7 @@ def tool_turn(client, messages, tools, *, max_tokens=1024, temperature=0.7, retr
     # encrypted item and complete tool schema. Overcount duplicates conservatively.
     accounting = tool_context_accounting(messages, tools)
     request_max, reservation_usd = client._budget_request_bound(accounting, max_tokens)
-    kwargs = _request_kwargs(client, messages, tools, request_max, temperature)
+    kwargs = _request_kwargs(client, messages, tools, request_max, temperature, tool_choice=tool_choice)
     names = {tool["function"]["name"] for tool in tools}
     callback_error = cancel_error = None
 
@@ -440,6 +442,8 @@ def tool_turn(client, messages, tools, *, max_tokens=1024, temperature=0.7, retr
             # A provider response incurs usage even if its calls are truncated,
             # malformed or forbidden. Validate before publishing any content.
             result = _assistant(response, client.api_format, names)
+            if tool_choice == "none" and result["tool_calls"]:
+                raise ValueError("model_unexpected_tool_call")
             check_cancel()
             details = extract_response_details(response, client.api_format)
             reasoning = "".join(details.get(key, "") for key in ("reasoning_content", "reasoning_summary"))
