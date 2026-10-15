@@ -245,13 +245,17 @@ def _workflow_error(error) -> str:
         "knowledge_agent_invalid_tool_call": "指导员返回的工具调用格式无效。请检查节点模型的工具支持与提示词后重试。",
         "knowledge_agent_context_exhausted": "移出旧完整轮次后，本轮思考与工具记录仍占满指导员上下文，已在下次请求前停止。请扩大节点上下文，或减少每批任务数、单次输出上限。",
         "invalid_qa_director_planning_mode": "指导方式无效，请在指导员节点重新选择。",
+        "invalid_qa_director_learning_goal": "训练用途无效，请在指导员节点重新选择。",
+        "invalid_qa_director_learning_goal_weights": "资料阅读需要至少一种有效的线索类型，请调整指导员节点的配比。",
+        "invalid_qa_director_user_languages": "请在指导员节点至少选择中文或英文一种用户语言。",
+        "invalid_qa_director_language_offset": "用户语言调度记录无效，请保留任务记录并复制配置后新建任务。",
         "invalid_dialogue_design": "对话设计缺少有效目标或字段，请检查指导员提示词。",
         "invalid_qa_director_skip": "指导员返回了无效的跳过说明，请检查节点提示词。",
         "invalid_dialogue_step": "后续互动计划无效，已保留成功轮次；请检查指导员提示词。",
         "dialogue_step_stopped_before_multiturn": "对话未形成完整多轮，已隔离该候选，不补写无效轮次。",
         "invalid_qa_director_batch_size": "每批指导任务数应为 1 到 50，请调整指导员节点。",
         "invalid_qa_director_history_limit": "相似历史参考数应为 0 到 20，请调整指导员节点。",
-        "invalid_qa_director_type_weights": "题型配比应为 0 到 100，且至少一种大于 0，请调整指导员节点。",
+        "invalid_qa_director_type_weights": "题型配比应为 0 到 100，请按当前训练用途保留有效题型。",
         "invalid_qa_director_rules": "指导员规则不能为空或含无效字符，且每项最多 12,000 字符。",
         "invalid_qa_director_schedule": "指导员无法分配本批题型，请检查题型配比或复制配置后新建任务。",
         "qa_director_requires_qa_target": "请先选择对话或偏好训练目标，再开启对话指导员。",
@@ -1794,7 +1798,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 elif selected_node == "package":
                     st.caption("检查结构、去重并导出训练文件、报告与清单。")
             with prompts_tab:
-                if selected_node in {"sft", "cot"}:
+                if selected_node in {"sft", "cot", "multiturn"}:
                     render_generation_settings(selected_node, ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 elif selected_node == "trim":
                     render_trim_settings(ws, save_field=_save_draft_value, prompt_library=prompt_library)

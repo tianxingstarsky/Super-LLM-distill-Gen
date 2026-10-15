@@ -23,7 +23,7 @@ def learner_contract(contract):
     """
     if not isinstance(contract, dict):
         return None
-    return {key: contract[key] for key in ("qa_type", "answer_policy") if key in contract}
+    return {key: contract[key] for key in ("qa_type", "answer_policy", "learning_goal", "user_language") if key in contract}
 
 
 def learner_messages(target, payload):

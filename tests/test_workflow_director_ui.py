@@ -21,6 +21,7 @@ def _director(ui, *, balanced=False):
     ui.button(key="fixture-node:director").click().run()
     assert not ui.exception
     if balanced:
+        ui.selectbox(key="workflow-director-learning-goal:fixture").set_value("mixed").run()
         ui.selectbox(key="workflow-director-mode:fixture").set_value("balanced").run()
 
 
@@ -264,6 +265,140 @@ def test_new_snapshot_defaults_and_effective_batch_tools_do_not_mutate_saved_pre
     assert validate_qa_director(snapshot)["tools_mode"] == "disabled" and state == before
 
 
+def test_training_purpose_and_user_languages_persist_on_node_switch_and_draft_reopen():
+    script = SCRIPT + """
+from lib.presentation.streamlit.workflow_director_settings import director_snapshot
+st.session_state['fixture-director-snapshot'] = director_snapshot('fixture')
+"""
+    ui = AppTest.from_string(script).run()
+    _director(ui)
+    goal = 'workflow-director-learning-goal:fixture'
+    languages = 'workflow-director-user-languages:fixture'
+    assert ui.selectbox(key=goal).value == 'knowledge_application'
+    assert ui.multiselect(key=languages).value == ['zh', 'en']
+    ui.selectbox(key=goal).set_value('document_reading').run()
+    ui.multiselect(key=languages).set_value(['en']).run()
+    ui.button(key='fixture-node:sft').click().run()
+    ui.button(key='fixture-node:director').click().run()
+    assert not ui.exception
+    assert ui.selectbox(key=goal).value == 'document_reading'
+    assert ui.multiselect(key=languages).value == ['en']
+    assert ui.session_state['fixture-director-snapshot']['learning_goal'] == 'document_reading'
+    assert ui.session_state['fixture-director-snapshot']['user_languages'] == ['en']
+    saved = dict(ui.session_state['workflow-form-draft:fixture'])
+    reopened = AppTest.from_string(script)
+    reopened.session_state['workflow-form-draft:fixture'] = saved
+    reopened.session_state['workflow-setup-node:fixture'] = 'director'
+    reopened.run()
+    assert not reopened.exception
+    assert reopened.selectbox(key=goal).value == 'document_reading'
+    assert reopened.multiselect(key=languages).value == ['en']
+
+
+def test_clearing_last_user_language_restores_prior_selection_without_saving_empty_draft():
+    ui = AppTest.from_string(SCRIPT).run()
+    _director(ui)
+    key = 'workflow-director-user-languages:fixture'
+    ui.multiselect(key=key).set_value(['en']).run()
+    ui.multiselect(key=key).set_value([]).run()
+    assert not ui.exception
+    assert ui.multiselect(key=key).value == ['en']
+    assert ui.session_state['workflow-form-draft:fixture'][key] == ['en']
+    assert any('至少保留一种用户语言' in row.value for row in ui.caption)
+    ui.multiselect(key=key).set_value(['zh', 'en']).run()
+    assert not any('至少保留一种用户语言' in row.value for row in ui.caption)
+
+
+def test_director_language_and_purpose_snapshot_is_nonmutating_and_detached(monkeypatch):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from lib.presentation.streamlit import workflow_director_settings as settings
+
+    values = {'workflow-director-learning-goal:fixture': 'mixed',
+              'workflow-director-user-languages:fixture': ['en', 'zh', 'en']}
+    state = {'workflow-form-draft:fixture': values}
+    monkeypatch.setattr(settings, 'st', SimpleNamespace(session_state=state))
+    monkeypatch.setattr(settings, 'human_snapshot', lambda workspace: {'enabled': False})
+    before = deepcopy(state)
+    config = settings.director_snapshot('fixture')
+    assert config['learning_goal'] == 'mixed'
+    assert config['user_languages'] == ['en', 'zh']
+    config['user_languages'].append('external mutation')
+    assert state == before
+
+
+@pytest.mark.parametrize('mode', ['adaptive', 'balanced'])
+def test_new_director_controls_and_explanations_are_localized_in_english(mode):
+    code = SCRIPT.replace('import streamlit as st', """import streamlit as st
+from lib.presentation.streamlit.i18n import install_streamlit_localization
+install_streamlit_localization()
+st.session_state['ui_language'] = 'en' """, 1)
+    ui = AppTest.from_string(code).run()
+    _director(ui)
+    ui.selectbox(key='workflow-director-mode:fixture').set_value(mode).run()
+    goal = 'workflow-director-learning-goal:fixture'
+    assert ui.selectbox(key=goal).label == 'Training purpose'
+    assert ui.selectbox(key=goal).options == ['Apply learned knowledge', 'Read user documents', 'Train both skills']
+    assert ui.multiselect(key='workflow-director-user-languages:fixture').label == 'User languages'
+    assert ui.multiselect(key='workflow-director-user-languages:fixture').options == ['Chinese', 'English']
+    for value in ('knowledge_application', 'document_reading', 'mixed'):
+        ui.selectbox(key=goal).set_value(value).run()
+        assert not ui.exception
+        for row in ui.caption:
+            assert not re.search(r'[\u4e00-\u9fff]', row.value), row.value
+
+
+def test_balanced_weights_follow_training_purpose_without_discarding_saved_ratios():
+    script = SCRIPT + """
+from lib.presentation.streamlit.workflow_director_settings import director_snapshot
+st.session_state['fixture-director-snapshot'] = director_snapshot('fixture')
+"""
+    ui = AppTest.from_string(script).run()
+    _director(ui, balanced=True)
+    custom = {name: (index + 1) * 10 for index, name in enumerate(DEFAULT_TYPE_WEIGHTS)}
+    for name, weight in custom.items():
+        ui.number_input(key=f'workflow-director-weight:fixture:{name}').set_value(weight).run()
+    goal = 'workflow-director-learning-goal:fixture'
+    for purpose, visible in (
+        ('knowledge_application', set()),
+        ('document_reading', set(DEFAULT_TYPE_WEIGHTS) - {'closed_book'}),
+        ('mixed', set(DEFAULT_TYPE_WEIGHTS)),
+    ):
+        ui.selectbox(key=goal).set_value(purpose).run()
+        assert not ui.exception
+        assert {row.key.rsplit(':', 1)[1] for row in ui.number_input
+                if row.key and row.key.startswith('workflow-director-weight:')} == visible
+        assert ui.session_state['fixture-director-snapshot']['type_weights'] == custom
+        for name, weight in custom.items():
+            assert ui.session_state['workflow-form-draft:fixture'][f'workflow-director-weight:fixture:{name}'] == weight
+    ui.selectbox(key=goal).set_value('knowledge_application').run()
+    assert any('本用途只生成不附教师原文的直接任务' in row.value for row in ui.caption)
+    ui.button(key='fixture-node:sft').click().run()
+    ui.button(key='fixture-node:director').click().run()
+    ui.selectbox(key=goal).set_value('mixed').run()
+    for name, weight in custom.items():
+        assert ui.number_input(key=f'workflow-director-weight:fixture:{name}').value == weight
+
+
+def test_document_reading_requires_a_visible_source_type_but_knowledge_use_ignores_ratios(tmp_path):
+    source = tmp_path / 'source.txt'
+    source.write_text('A real source for the training-purpose fixture.', encoding='utf-8')
+    ui = AppTest.from_string(SCRIPT.replace("'fixture.txt'", repr(str(source)))).run()
+    ui.multiselect(key='workflow-sources:fixture:文档资料').set_value([str(source)]).run()
+    _director(ui, balanced=True)
+    for name in DEFAULT_TYPE_WEIGHTS:
+        ui.number_input(key=f'workflow-director-weight:fixture:{name}').set_value(0).run()
+    ui.selectbox(key='workflow-director-learning-goal:fixture').set_value('document_reading').run()
+    assert not ui.exception
+    assert not any(row.key == 'workflow-director-weight:fixture:closed_book' for row in ui.number_input)
+    assert ui.button(key='workflow-create:fixture').disabled
+    assert any('请至少保留一种带用户可见原文的问答类型' in row.value for row in ui.warning)
+    ui.selectbox(key='workflow-director-learning-goal:fixture').set_value('knowledge_application').run()
+    assert not ui.exception
+    assert not any('workflow-director-weight:' in (row.key or '') for row in ui.number_input)
+    assert not ui.button(key='workflow-create:fixture').disabled
+
+
 @pytest.mark.parametrize("key,bad", [
     ("workflow-director-context-mode:fixture", "unknown"),
     ("workflow-director-tools-mode:fixture", "execute_arbitrary_tools"),
@@ -280,6 +415,8 @@ def test_invalid_director_outputs_have_actionable_localized_errors():
 
     for code in (
         "invalid_qa_director_planning_mode", "invalid_dialogue_design", "invalid_dialogue_step",
+        "invalid_qa_director_learning_goal", "invalid_qa_director_learning_goal_weights",
+        "invalid_qa_director_user_languages", "invalid_qa_director_language_offset",
         "invalid_qa_director_skip", "dialogue_step_stopped_before_multiturn",
         "qa_history_dialogue_design_invalid",
         "invalid_qa_director_batch_size", "invalid_qa_director_history_limit",
@@ -315,6 +452,7 @@ def test_adaptive_default_hides_inactive_quotas_and_restores_after_node_switch()
     ui.button(key="fixture-node:director").click().run()
     assert ui.selectbox(key="workflow-director-mode:fixture").value == "adaptive"
     assert ui.text_area(key="workflow-director-question-rules:fixture").value == "Plan collaborative revisions."
+    ui.selectbox(key="workflow-director-learning-goal:fixture").set_value("mixed").run()
     ui.selectbox(key="workflow-director-mode:fixture").set_value("balanced").run()
     assert ui.number_input(key="workflow-director-weight:fixture:closed_book").value == 25
     ui.selectbox(key="workflow-director-mode:fixture").set_value("adaptive").run()

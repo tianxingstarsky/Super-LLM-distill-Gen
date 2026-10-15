@@ -7,7 +7,7 @@ from lib.domain.workflow_scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH
 from lib.domain.workflow_scale import NODE_ROLES, validate_node_models
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_production import MAX_PRODUCTION_GOAL, validate_production
-from lib.domain.workflow_generation import GENERATION_STYLES, MAX_GENERATION_INSTRUCTION_CHARS
+from lib.domain.workflow_generation import GENERATION_STYLES, REASONING_LANGUAGES, MAX_GENERATION_INSTRUCTION_CHARS
 from lib.domain.reasoning_trim import TRIM_TEMPLATE_NAMES, MAX_TRIM_INSTRUCTION_CHARS, MAX_TRIM_PROMPT_CHARS
 from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS, MAX_NODE_PROMPT_CHARS
 from lib.domain.workflow_package_review import MAX_PACKAGE_REVIEW_SAMPLES, MIN_PACKAGE_REVIEW_PERCENT
@@ -46,6 +46,7 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-mat
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
+               'workflow-generation-reasoning-language': frozenset(REASONING_LANGUAGES),
                'workflow-generation-answer-mode': frozenset({'joint', 'native_prefill'}),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'}),
@@ -57,6 +58,7 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-production-policy': frozenset({'quality_first', 'bounded_replenishment'}),
                     'workflow-creation-mode': frozenset({'自动生成', '人工问答增强', '人工制作图文'}),
                     'workflow-director-mode': frozenset({'adaptive', 'balanced'}),
+                    'workflow-director-learning-goal': frozenset({'knowledge_application', 'document_reading', 'mixed'}),
                     'workflow-director-context-mode': frozenset({'persistent', 'batch'}),
                     'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
@@ -64,7 +66,8 @@ BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
                   'workflow-human-enabled',
                   'workflow-production-enabled', 'workflow-agent-experience-enabled'}
 NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
-                          'workflow-generation-instruction', 'workflow-generation-answer-mode'}
+                          'workflow-generation-instruction', 'workflow-generation-answer-mode',
+                          'workflow-generation-reasoning-language'}
 HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
                 'workflow-human-question-requirements', 'workflow-human-answer-requirements'}
 _MODEL_INITIALIZATION_MARKERS = frozenset(
@@ -118,11 +121,12 @@ def validate_creation_draft(values):
         if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
                      'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
+                     'workflow-director-learning-goal', 'workflow-director-user-languages',
                      *HUMAN_FIELDS} and len(parts) != 2 and not model_initialized:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:
             parts = key.split(':')
-            if len(parts) != 3 or not parts[1] or parts[2] not in {'sft', 'cot'}:
+            if len(parts) != 3 or not parts[1] or parts[2] not in {'sft', 'cot', 'multiturn'}:
                 raise ValueError('invalid_creation_draft')
             if field == 'workflow-generation-answer-mode' and parts[2] != 'cot':
                 raise ValueError('invalid_creation_draft')
@@ -170,6 +174,10 @@ def validate_creation_draft(values):
             valid = isinstance(value, list) and len(value) <= 500 and all(isinstance(v, str) and len(v) <= 4096 for v in value)
         elif field == 'workflow-human-seeds':
             valid = _human_seeds(value)
+        elif field == 'workflow-director-user-languages':
+            valid = (isinstance(value, list) and 1 <= len(value) <= 2
+                     and all(isinstance(language, str) and language in {'zh', 'en'} for language in value)
+                     and len(set(value)) == len(value))
         elif field == 'workflow-node-bindings':
             # Persist references and limits only. The model validator rejects
             # endpoint URLs, credentials and arbitrary node/role keys.

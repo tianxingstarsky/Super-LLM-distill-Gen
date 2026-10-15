@@ -182,6 +182,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-generation-enabled:{workspace}:{node}"] = generation["enabled"]
         values[f"workflow-generation-style:{workspace}:{node}"] = generation["style"]
         values[f"workflow-generation-instruction:{workspace}:{node}"] = generation["instruction"]
+        if "reasoning_language" in generation:
+            values[f"workflow-generation-reasoning-language:{workspace}:{node}"] = generation["reasoning_language"]
         if node == "cot":
             values[f"workflow-generation-answer-mode:{workspace}:{node}"] = generation.get("answer_mode", "joint")
     trim = validate_reasoning_trim(recipe.get("reasoning_trim"))
@@ -208,6 +210,13 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-package-review-limit:{workspace}"] = package_review["max_samples_per_target"]
         values[f"workflow-package-review-escalation:{workspace}"] = package_review.get("escalate_failure_percent", 0.0)
     director = validate_qa_director(recipe.get("qa_director"))
+    supplied_director = recipe.get("qa_director") or {}
+    # Only explicit requirements belong to a copied historical recipe.
+    # Opening an old run must not silently select today's learning goal.
+    if "learning_goal" in supplied_director:
+        values[f"workflow-director-learning-goal:{workspace}"] = director.get("learning_goal", supplied_director["learning_goal"])
+    if "user_languages" in supplied_director:
+        values[f"workflow-director-user-languages:{workspace}"] = deepcopy(director.get("user_languages", supplied_director["user_languages"]))
     human = director.get("human_augmentation", {"enabled": False})
     values[f"workflow-human-enabled:{workspace}"] = human["enabled"]
     if human["enabled"]:

@@ -16,6 +16,12 @@ TYPE_LABELS = {
     "multi_source": "多线索整合", "distractor": "干扰线索问答",
 }
 DIRECTED_TARGETS = frozenset({"sft", "multiturn", "dpo", "orpo", "rlaif", "cot"})
+LEARNING_GOAL_LABELS = {
+    "knowledge_application": "运用已学知识",
+    "document_reading": "阅读用户资料",
+    "mixed": "兼顾两种能力",
+}
+USER_LANGUAGE_LABELS = {"zh": "中文", "en": "英文"}
 _LEGACY_RULE_DEFAULTS = {
     "question": (
         "围绕来源中的知识、技能与应用场景分配问题，问题应明确、自包含且互不重复。"
@@ -52,8 +58,13 @@ def director_snapshot(workspace: str, *, eligible=True) -> dict:
         return {"enabled": False}
     mode = _field(workspace, f"workflow-director-mode:{workspace}", "adaptive")
     context_mode = _field(workspace, f"workflow-director-context-mode:{workspace}", "persistent")
+    languages = _field(workspace, f"workflow-director-user-languages:{workspace}", ["zh", "en"])
     return {
         "enabled": True,
+        "learning_goal": _field(workspace, f"workflow-director-learning-goal:{workspace}", "knowledge_application"),
+        "user_languages": (list(dict.fromkeys(languages))
+                           if isinstance(languages, list) and all(isinstance(item, str) for item in languages)
+                           else languages),
         "question_separation": True,
         "planning_mode": mode,
         "context_mode": context_mode,
@@ -68,6 +79,18 @@ def director_snapshot(workspace: str, *, eligible=True) -> dict:
         "answer_rules": _field(workspace, f"workflow-director-answer-rules:{workspace}", DEFAULT_ANSWER_RULES),
         "human_augmentation": human_snapshot(workspace),
     }
+
+
+def _save_user_languages(workspace, key, save_field):
+    """Keep at least one selected language without writing an invalid draft."""
+    notice_key = f"director-user-languages-required:{workspace}"
+    if not st.session_state.get(key):
+        prior = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key, ["zh", "en"])
+        st.session_state[key] = list(prior) if isinstance(prior, list) and prior else ["zh", "en"]
+        st.session_state[notice_key] = True
+        return
+    st.session_state.pop(notice_key, None)
+    save_field(workspace, key)
 
 
 def director_has_issue(config: dict) -> bool:
@@ -91,9 +114,35 @@ def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
 def render_director_settings(workspace: str, *, save_field) -> None:
     if st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning"):
         st.caption("资料解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
+    language = st.session_state.get("ui_language", "zh")
+    goals = {key: translate_label(label, language) for key, label in LEARNING_GOAL_LABELS.items()}
+    languages = {key: translate_label(label, language) for key, label in USER_LANGUAGE_LABELS.items()}
+    goal_column, language_column = st.columns(2, gap="small")
+    with goal_column:
+        key = f"workflow-director-learning-goal:{workspace}"
+        st.session_state[key] = _field(workspace, key, "knowledge_application")
+        learning_goal = st.selectbox("训练用途", tuple(goals), key=key,
+            format_func=goals.__getitem__, on_change=save_field, args=(workspace, key),
+            help="选择新样本要训练的能力。CPT 语料处理不代表模型已学会资料，也不保证后续训练效果。")
+    with language_column:
+        key = f"workflow-director-user-languages:{workspace}"
+        st.session_state[key] = _field(workspace, key, ["zh", "en"])
+        st.multiselect("用户语言", tuple(languages), key=key, format_func=languages.__getitem__,
+            on_change=_save_user_languages, args=(workspace, key, save_field),
+            help="至少选择一种语言，用于指导员新设计的用户表达。已有人工问答和导入对话保持原文。")
+    if st.session_state.get(f"director-user-languages-required:{workspace}"):
+        st.caption("至少保留一种用户语言，已恢复上次选择。")
+    goal_help = {
+        "knowledge_application": "教师私有资料用于生成与核验；训练用户消息不附原文。",
+        "document_reading": "必要原文随用户消息提供，训练阅读、引用与核对资料的能力。",
+        "mixed": "兼顾知识应用与文档阅读；每条样本清楚区分用户是否能看到原文。",
+    }
+    st.caption(goal_help[learning_goal])
+    st.caption("每段对话使用一种主要用户语言，答案跟随用户；推理语言在 SFT、多轮或 CoT 节点独立设置。")
+    if st.session_state.get(f"workflow-creation-mode:{workspace}") == "人工问答增强":
+        st.caption("训练用途与语言用于新设计的互动；已有人工问答及导入对话保持原文。")
     st.caption("指导员按行号选完整知识块，生成模型通过系统资料记忆收到所选原文。训练输入按线索类型组织。")
     st.caption("有线索提问由指导员发出；无线索提问交给没有资料上下文的独立模型。SFT / 多轮模型收到问题和资料记忆后只负责回答。")
-    language = st.session_state.get("ui_language", "zh")
     context_labels = {"persistent": translate_label("同知识连续上下文", language),
                       "batch": translate_label("按批独立", language)}
     tool_labels = {"auto": translate_label("按需调用资料与历史工具", language),
@@ -147,12 +196,20 @@ def render_director_settings(workspace: str, *, save_field) -> None:
     st.caption("历史样本用于发现重复和设计新的互动，不作为事实依据。")
     if mode == "adaptive":
         st.info("指导员结合角色关系、沟通目标和上下文设计互动；可以澄清、协商、修改或共同解决问题，并按实际回应逐轮调整，不固定为同一种问答话术。")
+        st.caption("训练用途先限定题型；自适应按互动价值设计，不使用固定配比。")
         st.caption("达到目的即可结束；资料不足时允许跳过，不为数量或轮数凑内容。")
         return
+    if learning_goal == "knowledge_application":
+        st.caption("本用途只生成不附教师原文的直接任务；题型配比不改变此边界。")
+        return
     st.markdown("**问答类型配比**")
+    if learning_goal == "document_reading":
+        st.caption("仅在附有用户可见原文的题型间分配；无线索问答配比会保留，但不用于本用途。")
     language = st.session_state.get("ui_language", "zh")
     columns = st.columns(3, gap="small")
-    for index, (name, default) in enumerate(DEFAULT_TYPE_WEIGHTS.items()):
+    visible_weights = [(name, default) for name, default in DEFAULT_TYPE_WEIGHTS.items()
+                       if learning_goal != "document_reading" or name != "closed_book"]
+    for index, (name, default) in enumerate(visible_weights):
         key = f"workflow-director-weight:{workspace}:{name}"
         st.session_state[key] = _field(workspace, key, default)
         with columns[index % 3]:
@@ -160,9 +217,11 @@ def render_director_settings(workspace: str, *, save_field) -> None:
                             max_value=100, step=5, key=key,
                             on_change=save_field, args=(workspace, key))
     st.caption("数值表示相对配比，设为 0 即关闭该类型；资料不足时隔离任务，不虚构线索。")
-    st.caption("无线索样本直接回应，不写“根据所给资料”；有线索样本将资料写入用户输入。线索不足时澄清，干扰内容不改变事实依据。")
+    if learning_goal == "mixed":
+        st.caption("无线索样本直接回应，不写“根据所给资料”；有线索样本将资料写入用户输入。线索不足时澄清，干扰内容不改变事实依据。")
     if director_has_issue(director_snapshot(workspace)):
-        st.warning("请至少保留一种问答类型，并检查指导员规则。")
+        st.warning("请至少保留一种带用户可见原文的问答类型。" if learning_goal == "document_reading"
+                   else "请至少保留一种问答类型，并检查指导员规则。")
 
 
 def render_director_rules(workspace: str, *, save_field, prompt_library=None) -> None:

@@ -197,6 +197,62 @@ def test_empty_working_window_and_incomplete_draft_are_durable_without_a_run(tmp
     assert not list((tmp_path / "out/workflows").glob("*/recipe.json"))
 
 
+@pytest.mark.parametrize("from_parent", [False, True])
+def test_explicit_multiturn_style_prompt_survives_session_and_child_freezing(tmp_path, from_parent):
+    app, sid, output = application(tmp_path)
+    parent = generate(app, sid, output, tmp_path)[0] if from_parent else None
+    if parent:
+        assert engine.read_json(engine.run_path(output, parent["run_id"]) / "recipe.json")["version"] == 21
+    custom = "自定义多轮风格核对：逐轮保留语义和推理语言。{literal_json}"
+    configured = app.create_session(from_run_id=parent["run_id"] if parent else None,
+        targets=["sft"], initial_draft=design(),
+        node_prompts={"multiturn": {"workflow.style_check": custom}})
+    session = app.session(configured)
+    assert session["blueprint"]["node_prompts"]["multiturn"]["workflow.style_check"] == custom
+    child = app.generate_round(configured, request_id="custom-style",
+        expected_version=session["version"], sample_count=1)
+    frozen = engine.read_json(engine.run_path(output, child["run_id"]) / "recipe.json")
+    assert frozen["version"] == 22
+    assert frozen["node_prompt_templates"]["multiturn"]["workflow.style_check"] == custom
+
+
+def test_v22_parent_multiturn_style_template_survives_import_and_review_child(tmp_path):
+    app, _, output = application(tmp_path)
+    custom = "父任务自定义多轮风格核对：不重写用户问题，完整检查每轮推理。"
+    source = app.create_session(targets=["sft"], initial_draft=design(),
+        node_prompts={"multiturn": {"workflow.style_check": custom}})
+    parent, _, _ = generate(app, source, output, tmp_path)
+    parent_path = engine.run_path(output, parent["run_id"]) / "recipe.json"
+    before = parent_path.read_bytes()
+    frozen = engine.read_json(parent_path)
+    assert frozen["version"] == 22
+    imported = app.create_session(from_run_id=parent["run_id"], review_only=True)
+    session = app.session(imported)
+    assert session["blueprint"]["node_prompts"] == frozen["node_prompt_templates"]
+    candidate = app.results(imported)["rows"][0]
+    feedback = app.save_feedback(imported, session["rounds"][0]["id"], candidate["target"], candidate["candidate_id"],
+        instruction="使用更自然的安全提醒口吻。", expected_version=session["version"])
+    child = app.revise_round(imported, request_id="inherited-style-review",
+        selected_feedback_ids=[feedback["feedback_id"]], expected_version=feedback["version"], sample_count=1)
+    child_recipe = engine.read_json(engine.run_path(output, child["run_id"]) / "recipe.json")
+    assert child_recipe["version"] == 22
+    assert child_recipe["node_prompt_templates"]["multiturn"]["workflow.style_check"] == custom
+    assert parent_path.read_bytes() == before
+
+
+def test_v21_human_session_and_parent_import_keep_the_historical_prompt_catalog(tmp_path):
+    app, sid, output = application(tmp_path)
+    original = app.session(sid)["blueprint"]["node_prompts"]
+    assert "workflow.style_check" not in original["multiturn"]
+    parent, _, _ = generate(app, sid, output, tmp_path)
+    frozen = engine.read_json(engine.run_path(output, parent["run_id"]) / "recipe.json")
+    assert frozen["version"] == 21
+    imported = app.create_session(from_run_id=parent["run_id"])
+    assert app.session(imported)["blueprint"]["node_prompts"] == frozen["node_prompt_templates"] == original
+    reloaded = human_augmentation_application(tmp_path, output).session(sid)
+    assert reloaded["blueprint"]["node_prompts"] == original
+
+
 def test_actual_generation_feedback_and_same_question_revision_preserve_the_parent(tmp_path):
     app, sid, output = application(tmp_path)
     first, _, _ = generate(app, sid, output, tmp_path)

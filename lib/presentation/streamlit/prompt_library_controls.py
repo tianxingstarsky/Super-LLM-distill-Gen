@@ -92,6 +92,12 @@ def _apply(application, workspace, scope, fields, save_field, apply_extras):
     try:
         record = application.get_template(selected, scope)
         payload = record["payload"]
+        # Language became a separate generation-style setting after the
+        # original personal templates shipped. Apply their old wording
+        # unchanged and reset this new optional setting to its neutral value.
+        if (scope in {"generation:sft", "generation:cot", "generation:multiturn"} and isinstance(payload, dict)
+                and "reasoning_language" in fields and "reasoning_language" not in payload):
+            payload = {**payload, "reasoning_language": "auto"}
         if not isinstance(payload, dict) or any(name not in payload for name in fields):
             raise ValueError("prompt_library_invalid_payload")
         values = {key: payload[name] for name, key in fields.items()}

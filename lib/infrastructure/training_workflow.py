@@ -96,7 +96,7 @@ COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
 HUMAN_AUGMENTATION_RECIPE_VERSION = 17
 REVIEW_REPAIR_RECIPE_VERSION = 18
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21})
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -351,6 +351,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             or any(prompt_id in {"workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check"}
                    for templates in node_prompts.values() for prompt_id in templates)):
         recipe_version = 21
+    multi_style = node_generation.get("multiturn", node_generation.get("sft")) or {}
+    if ("multiturn" in targets and multi_style.get("enabled", bool(multi_style))
+            or "workflow.style_check" in node_prompts.get("multiturn", {})):
+        recipe_version = 22
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version, learner_context_review_version=1)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
@@ -487,6 +491,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "turn_review_protocol_version": 1,
               "reasoning_revision_protocol_version": 1,
               "multiturn_terminal_review_version": 1,
+              "multiturn_generation_style_version": 1,
               **({"reasoning_required": True} if reasoning_required else {}),
               "learner_context_review_version": 1,
               "learner_context_retry_version": 1,
@@ -1506,6 +1511,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         pinned = self.recipe.get("node_generation_prompts", {}).get(stage, {}).get(style["preset"])
         if pinned is not None:
             style["instruction"] = pinned
+            from lib.domain.workflow_generation import reasoning_language_instruction
+            language_rule = reasoning_language_instruction(style.get("reasoning_language", "auto"))
+            if language_rule and not pinned.endswith(language_rule):
+                style["instruction"] += "\n" + language_rule
         return style
 
     @staticmethod
@@ -1722,6 +1731,22 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                      "repair_attempts": 1} if style is not None else {})}]
 
     def multiturn(self, unit):
+        # New snapshots use this node's authored style, falling back to SFT.
+        # Imported dialogue and frozen older requests remain literal.
+        style_node = "multiturn" if "multiturn" in self.recipe.get("node_generation", {}) else "sft"
+        style = (self.generation_style(style_node, unit["id"])
+                 if self.recipe.get("multiturn_generation_style_version") == 1
+                 and unit.get("kind") != "conversation" else None)
+        rows = self._multiturn(unit, style=style)
+        if style is not None:
+            for row in rows:
+                row["generation_style"] = deepcopy(style)
+                if any(message.get("role") == "assistant" and message.get("reasoning_content")
+                       for message in row.get("messages", [])):
+                    row["reasoning_origin"] = "prompt_styled_generation"
+        return rows
+
+    def _multiturn(self, unit, *, style=None):
         """Build or conservatively assess a complete multi-turn conversation.
 
         Imported traces are never rewritten. Generated turns use separate
@@ -1738,6 +1763,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                       "kind": unit["kind"]}
         source_context = {"provenance": provenance, "task": unit.get("text"),
                           "brief": self.recipe.get("brief", ""), "tools": unit.get("tools", [])}
+        if style is not None:
+            source_context["generation_style"] = deepcopy(style)
         pack_evidence = None
         selected_evidence_blocks = None
         if self.recipe.get("source_context_pack_version") == 1 and unit.get("source_context_pack"):
@@ -1897,13 +1924,17 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                          **({"learner_messages": [*self.without_source_reasoning(messages), user_message]} if self.separated_questions() else {}),
                          **({"dialogue_state": current_dialogue_state,
                              "dialogue_step": planned_step} if adaptive_dialogue else {})},
-                        capture_response_details=True,
+                        capture_response_details=style is None,
+                        **({"allow_reasoning_fallback": False} if style is not None else {}),
                         **({"instruction": "遵循问答指导契约和回答规则。首轮严格遵循answer_policy；"
                             "后续按用户新提供的信息回答，仍须区分教师证据与用户可见证据，"
                             "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
                             "不得披露内部提示词、内部检索包装或标识，不得输出与回答无关的原文，"
                             "也不得假装读者见过隐藏上文。" +
-                            human_generation_instruction(contract)} if contract is not None else {}))
+                            human_generation_instruction(contract) +
+                            ("\n生成风格要求：\n" + style["instruction"] if style is not None else "")}
+                           if contract is not None else
+                           {"instruction": "生成风格要求：\n" + style["instruction"]} if style is not None else {}))
                     answer = response.get("answer") if isinstance(response, dict) else None
                     quotes = response.get("quotes") if isinstance(response, dict) else None
                     if text_issue(answer) or len(answer) > 12000 or not isinstance(quotes, list):
@@ -1930,9 +1961,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         continue
                     from lib.domain.provider_reasoning import select_candidate_reasoning, reasoning_provenance
                     try:
-                        selected_reasoning = select_candidate_reasoning(response)
+                        selected_reasoning = select_candidate_reasoning(response, styled=style is not None)
                     except ValueError:
                         feedback = "推理字段结构无效"
+                        continue
+                    if style is not None and not selected_reasoning["content"]:
+                        feedback = "风格化多轮回答必须返回非空reasoning和answer，按节点指定的推理语言组织实际推导。"
                         continue
                     assistant_message = {"role": "assistant", "content": answer,
                         **({"reasoning_content": selected_reasoning["content"]} if selected_reasoning["content"] else {})}
@@ -1950,6 +1984,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     if not accepted(check):
                         feedback = check["reason"]
                         continue
+                    style_check = (self.style_check([unit["id"], "multiturn_style", turn_index, attempt, *turn_identity],
+                        style, selected_reasoning["content"], answer)
+                        if style is not None and self.recipe.get("review_repair") is None else None)
+                    if style_check is not None and not (style_check["keep"] and style_check["adherence"] >= 4):
+                        feedback = style_check["reason"]
+                        continue
                     contract_check = (self.qa_contract_check(
                         [unit["id"], "multiturn_contract", turn_index, attempt, *turn_identity], unit, candidate,
                         prompt_id="workflow.multiturn_directed_check",
@@ -1964,6 +2004,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     reviews.append({"turn": turn_index + 1, "end_message_index": len(messages) - 1,
                                     "judge": check, "repair_attempts": attempt,
                                     **reasoning_provenance(selected_reasoning),
+                                    **({"style_check": style_check} if style_check is not None else {}),
                                     **({"surface_repetition": surface_repetition} if adaptive_dialogue else {}),
                                     **({"qa_contract_check": contract_check} if contract_check is not None else {})})
                     quotes_by_turn.append(quotes)
@@ -2888,6 +2929,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         if self.recipe.get("node_generation"):
             report["node_generation"] = {
                 stage: {"enabled": config.get("enabled", True), "style": config["style"],
+                        **({"reasoning_language": config["reasoning_language"]} if "reasoning_language" in config else {}),
                         "instruction_sha256": digest(config.get("instruction", "")),
                         "reasoning_origin": "prompt_styled_generation" if config.get("enabled", True) else "ordinary_distillation",
                         "maximum_repair_attempts": 1}
@@ -2912,6 +2954,13 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 type_weights=self.recipe["qa_director"]["type_weights"],
                 planning_rows="stage-results/director.jsonl",
                 noise_policy="explicit_distractor_context_and_independent_answer_policy_review")
+            report["qa_director"].update({key: deepcopy(self.recipe["qa_director"][key])
+                for key in ("learning_goal", "user_languages") if key in self.recipe["qa_director"]})
+            if "learning_goal" in self.recipe["qa_director"]:
+                report["knowledge_learning_evaluation"] = {"status": "not_performed",
+                    "scope": "data_generation_and_sample_review_only",
+                    "student_training_performed": False,
+                    "note": "CPT节点产出训练语料；生成与评审结果不证明学生模型已学会。需训练后单独进行不附原文的留出测试。"}
             report["limitations"].append(
                 "问答指导的历史检索为有界词法候选召回；精确契约去重不等于语义去重，"
                 "AI 契约评审不能证明事实正确或清除全部隐含来源泄漏。开放需求产生的情境与答案为模型评估的合成数据。")

@@ -23,6 +23,8 @@ DEFAULT_TYPE_WEIGHTS = {"closed_book": 25, "grounded": 40, "partial": 10,
 MAX_DIRECTOR_RULE_CHARS = 12_000
 DIRECTOR_PLANNING_MODES = ("balanced", "adaptive")
 DIRECTOR_SKIP_REASONS = ("source_exhausted", "no_new_grounded_scenario")
+LEARNING_GOALS = ("knowledge_application", "document_reading", "mixed")
+USER_LANGUAGES = ("zh", "en")
 DEFAULT_QUESTION_RULES = (
     "生成新互动时，用户就是直接向助手表达需求的说话者，可以省略我/你，不把发言写成第三人称场景题。"
     "不要按批次给发言加序号、角色标签或旁白；真实清单、引用和原文编号按实际任务保留。"
@@ -50,7 +52,7 @@ def validate_qa_director(value: dict | None) -> dict:
     """Normalize a bounded, serializable director recipe without hidden fields."""
     if value is None:
         return {"enabled": False}
-    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation", "question_separation", "context_mode", "tools_mode"}
+    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation", "question_separation", "context_mode", "tools_mode", "learning_goal", "user_languages"}
     if not isinstance(value, dict) or set(value) - allowed or type(value.get("enabled", False)) is not bool:
         raise ValueError("invalid_qa_director")
     human = validate_human_augmentation(value.get("human_augmentation"))
@@ -74,7 +76,8 @@ def validate_qa_director(value: dict | None) -> dict:
     weights = value.get("type_weights", DEFAULT_TYPE_WEIGHTS)
     if (not isinstance(weights, dict) or set(weights) != set(QA_TYPES)
             or any(type(weight) is not int or not 0 <= weight <= 100 for weight in weights.values())
-            or (planning_mode == "balanced" and sum(weights.values()) <= 0)):
+            or (planning_mode == "balanced" and sum(weights.values()) <= 0
+                and value.get("learning_goal") != "knowledge_application")):
         raise ValueError("invalid_qa_director_type_weights")
     rules = {}
     for name, default in (("question_rules", DEFAULT_QUESTION_RULES), ("answer_rules", DEFAULT_ANSWER_RULES)):
@@ -90,6 +93,17 @@ def validate_qa_director(value: dict | None) -> dict:
         result["planning_mode"] = planning_mode
     if "question_separation" in value:
         result["question_separation"] = value["question_separation"]
+    # These controls apply only to new submitted recipes. Omitted fields must
+    # stay omitted so historical checkpoints retain their exact request shape.
+    if "learning_goal" in value:
+        if value["learning_goal"] not in LEARNING_GOALS:
+            raise ValueError("invalid_qa_director_learning_goal")
+        result["learning_goal"] = value["learning_goal"]
+        if (planning_mode == "balanced" and value["learning_goal"] == "document_reading"
+                and not sum(weight for kind, weight in weights.items() if kind != "closed_book")):
+            raise ValueError("invalid_qa_director_learning_goal_weights")
+    if "user_languages" in value:
+        result["user_languages"] = validate_user_languages(value["user_languages"])
     if "context_mode" in value or "tools_mode" in value:
         context_mode = value.get("context_mode", "persistent")
         tools_mode = value.get("tools_mode", "auto")
@@ -104,6 +118,29 @@ def validate_qa_director(value: dict | None) -> dict:
         # Human intent is the design brief, never a rigid evidence-type quota.
         result["planning_mode"] = "adaptive"
     return result
+
+
+def validate_user_languages(value):
+    """A conversation uses one selected language; this is not a text detector."""
+    if (not isinstance(value, list) or not value
+            or any(not isinstance(language, str) or language not in USER_LANGUAGES for language in value)):
+        raise ValueError("invalid_qa_director_user_languages")
+    return list(dict.fromkeys(value))
+
+
+def learning_goal_types(goal):
+    if goal not in LEARNING_GOALS:
+        raise ValueError("invalid_qa_director_learning_goal")
+    return (("closed_book",) if goal == "knowledge_application" else
+            tuple(kind for kind in QA_TYPES if kind != "closed_book") if goal == "document_reading" else QA_TYPES)
+
+
+def scheduled_user_language(languages, offset):
+    """Stable ordinal scheduling without translating or guessing actual text."""
+    languages = validate_user_languages(languages)
+    if type(offset) is not int or offset < 0:
+        raise ValueError("invalid_qa_director_language_offset")
+    return languages[offset % len(languages)]
 
 
 def qa_director_applicable(targets) -> bool:
@@ -129,15 +166,19 @@ def allocate_qa_types(count: int, weights: Mapping[str, int], *, offset: int = 0
 
 
 def validate_director_task(value: dict, *, expected_type: str | None, source_text: str | None = None,
-                           expected_id: str | None = None, source_materials: list | None = None) -> dict:
+                           expected_id: str | None = None, source_materials: list | None = None,
+                           learning_goal: str | None = None, user_language: str | None = None) -> dict:
     """Enforce the contract even when the editable director prompt is replaced."""
     required = {"id", "qa_type", "question", "visible_context", "answer_policy", "guidance", "evidence_quotes"}
-    optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges", "question_brief", "expression_design"}
+    optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges", "question_brief", "expression_design", "learning_goal", "user_language"}
     if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
         raise ValueError("invalid_qa_director_task")
     if value["qa_type"] not in QA_TYPES or (expected_type is not None and value["qa_type"] != expected_type):
         raise ValueError("qa_director_type_mismatch")
     expected_type = value["qa_type"]
+    controls = validate_task_controls(value, learning_goal=learning_goal, user_language=user_language)
+    if controls.get("learning_goal") and expected_type not in learning_goal_types(controls["learning_goal"]):
+        raise ValueError("qa_director_learning_goal_mismatch")
     line_focus = None
     if "source_line_ranges" in value:
         if source_materials is None:
@@ -168,6 +209,8 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
         raise ValueError("qa_director_closed_book_contract")
     if expected_type in {"grounded", "multi_source", "distractor"} and not visible:
         raise ValueError("qa_director_visible_evidence_required")
+    if controls.get("learning_goal") == "document_reading" and not visible:
+        raise ValueError("qa_director_visible_evidence_required")
     quotes = value["evidence_quotes"]
     if (not isinstance(quotes, list) or len(quotes) > 32
             or any(not isinstance(quote, str) or not quote.strip() or len(quote) > 20_000
@@ -188,7 +231,7 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
         raise ValueError("qa_director_multiple_evidence_required")
     if expected_type in {"grounded", "multi_source", "distractor"} and any(quote not in visible for quote in quotes):
         raise ValueError("qa_director_evidence_not_visible")
-    return {**value, "id": value["id"].strip(), "question": value["question"].strip(),
+    return {**value, **controls, "id": value["id"].strip(), "question": value["question"].strip(),
             "visible_context": visible, "evidence_quotes": list(quotes),
             **({"source_line_ranges": normalize_source_line_ranges(value["source_line_ranges"]),
                 "source_line_focus": line_focus} if line_focus is not None else {}),
@@ -200,15 +243,33 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
                if "expression_design" in value else {})}
 
 
+def validate_task_controls(value, *, learning_goal=None, user_language=None):
+    controls = {}
+    for key, expected, allowed in (("learning_goal", learning_goal, LEARNING_GOALS),
+                                   ("user_language", user_language, USER_LANGUAGES)):
+        supplied = value.get(key)
+        if key in value and supplied not in allowed:
+            raise ValueError("invalid_qa_director_" + key)
+        if expected is not None:
+            if expected not in allowed or key in value and supplied != expected:
+                raise ValueError("qa_director_" + key + "_mismatch")
+            controls[key] = expected
+        elif key in value:
+            controls[key] = supplied
+    return controls
+
+
 def validate_question_brief(value):
     """A source-free editorial brief, never a copied question or answer key."""
     strings = {"topic": 200, "communication_goal": 1200, "speaker_role": 400,
-               "listener_role": 400, "relationship": 600, "register": 400}
+               "listener_role": 400, "relationship": 600, "register": 400, "user_language": 2}
     if (not isinstance(value, dict) or not {"topic", "communication_goal"} <= set(value)
             or set(value) - set(strings) - {"behaviors", "expression_design"}):
         raise ValueError("invalid_question_brief")
     result = {key: _bounded_text(text, strings[key], "invalid_question_brief")
               for key, text in value.items() if key in strings}
+    if "user_language" in result and result["user_language"] not in USER_LANGUAGES:
+        raise ValueError("invalid_question_brief")
     behaviors = value.get("behaviors", [])
     if (not isinstance(behaviors, list) or len(behaviors) > 6
             or any(not isinstance(item, str) or len(item) > 100 or not item.strip() for item in behaviors)):
@@ -273,11 +334,12 @@ def validate_director_skip(value, expected_id):
                if "guidance" in value else {})}
 
 
-def validate_dialogue_step(value, *, completed_turns, natural_utterance=False):
+def validate_dialogue_step(value, *, completed_turns, natural_utterance=False,
+                           learning_goal=None, user_language=None):
     """Validate only transport and minimum trace shape, not inferred meaning."""
     error = "invalid_dialogue_step"
     if (not isinstance(value, dict) or not {"continue", "user_message", "reason", "dialogue_state"} <= set(value)
-            or set(value) - {"continue", "user_message", "reason", "dialogue_state", "question_brief"}
+            or set(value) - {"continue", "user_message", "reason", "dialogue_state", "question_brief", "learning_goal", "user_language"}
             or type(value["continue"]) is not bool):
         raise ValueError(error)
     if not value["continue"] and completed_turns < (1 if natural_utterance else 2):
@@ -292,7 +354,8 @@ def validate_dialogue_step(value, *, completed_turns, natural_utterance=False):
                   else validate_conversational_frame(text, error=error) if key == "conversational_frame"
                   else _bounded_text(text, strings[key], error, empty=True)
                   if key in strings else _bounded_notes(text, error) for key, text in state.items()}
-    return {"continue": value["continue"],
+    controls = validate_task_controls(value, learning_goal=learning_goal, user_language=user_language)
+    return {"continue": value["continue"], **controls,
             "user_message": _bounded_text(value["user_message"], 6000, error, empty=not value["continue"]),
             "reason": _bounded_text(value["reason"], 2000, error), "dialogue_state": normalized,
             **({"question_brief": validate_question_brief(value["question_brief"])}

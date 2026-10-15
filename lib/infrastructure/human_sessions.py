@@ -231,8 +231,13 @@ class FilesystemHumanSessionDriver:
         from lib.domain.agent_experience import validate_agent_experience
         blueprint["agent_experience"] = validate_agent_experience(blueprint.get("agent_experience"))
         blueprint["document_parser"] = validate_document_parser(blueprint.get("document_parser"))
-        blueprint["node_prompts"] = snapshot_node_prompts(blueprint.get("node_prompts"),
-            recipe_version=21, learner_context_review_version=1)
+        node_prompts = blueprint.get("node_prompts") or {}
+        # Keep historical session catalogs stable, but never discard a parent's
+        # v22 templates or a newly configured multiturn style review.
+        prompt_version = (22 if (parent or {}).get("version", 0) >= 22
+                          or "workflow.style_check" in node_prompts.get("multiturn", {}) else 21)
+        blueprint["node_prompts"] = snapshot_node_prompts(node_prompts,
+            recipe_version=prompt_version, learner_context_review_version=1)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):

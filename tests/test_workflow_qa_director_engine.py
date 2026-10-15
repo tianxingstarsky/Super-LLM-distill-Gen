@@ -122,11 +122,12 @@ class Writer:
     model = "offline-director-writer"
 
     def __init__(self, *, policy="answer", duplicate=False, fail_batch=None,
-                 malformed=False, invented_context=False, bad_alternative=False):
+                 malformed=False, invented_context=False, bad_alternative=False, leaking_alternative=False):
         self.calls, self.usage = [], {"calls": 0}
         self.policy, self.duplicate, self.fail_batch = policy, duplicate, fail_batch
         self.malformed, self.invented_context = malformed, invented_context
         self.bad_alternative = bad_alternative
+        self.leaking_alternative = leaking_alternative
 
     def chat(self, messages, **kwargs):
         self.calls.append(deepcopy(messages))
@@ -173,7 +174,11 @@ class Writer:
             return json.dumps({"question": contract["question"], "answer": answer,
                 "reasoning": "先断电可以满足检查的安全前提。", "quotes": ["检查设备前必须先断电。"]}, ensure_ascii=False)
         if "另一个独立" in system:
-            return json.dumps({"answer": "BAD 隐藏资料要求先操作再断电。" if self.bad_alternative else "先保持断电。",
+            # A factual negative is legitimate preference supervision. Source
+            # fabrication is a separate defect and must remain quarantined.
+            answer = ("BAD 隐藏资料要求先操作再断电。" if self.leaking_alternative else
+                      "BAD 应先操作再断电。" if self.bad_alternative else "先保持断电。")
+            return json.dumps({"answer": answer,
                                "reasoning": "操作顺序是安全条件。"})
         if "reference_answer" in data:
             return json.dumps({"reasoning": "先确认安全前提，再执行断电措施。", "answer": "操作前应先断电。",
@@ -476,9 +481,23 @@ def test_preference_negative_can_be_wrong_while_verified_chosen_contract_is_kept
     assert state["status"] == "completed", state.get("error")
     row = engine.read_json(path / "artifacts/dpo.records.json")[0]
     assert row["qa_contract_check"]["keep"]
-    assert "BAD" in row["rejected"][0]["content"]
+    assert row["rejected"][0]["content"] == "BAD 应先操作再断电。"
     with QAHistory(output / "qa-history.sqlite3") as history:
         assert history.recent(namespace="sft")[0]["answer"] == row["chosen"][0]["content"]
+
+
+def test_preference_negative_with_hidden_source_leakage_is_quarantined(tmp_path):
+    state, path, output, *_ = execute(tmp_path, targets=["dpo"], writer=Writer(leaking_alternative=True))
+    assert state["status"] == "needs_attention", state.get("error")
+    row = engine.read_json(path / "artifacts/dpo.records.json")[0]
+    assert row["status"] == "quarantined"
+    assert row["reason"] == "training_surface_hidden_source_reference"
+    assert row["rejected"][0]["content"] == "BAD 隐藏资料要求先操作再断电。"
+    assert row["preference"]["chosen"]["correctness"] == 5
+    assert row["preference"]["rejected"]["correctness"] == 1
+    assert not (path / "artifacts/dpo.jsonl").read_text(encoding="utf-8").strip()
+    with QAHistory(output / "qa-history.sqlite3") as history:
+        assert history.coverage(namespace="sft") == {}
 
 
 @pytest.mark.parametrize("target,options,reason", [

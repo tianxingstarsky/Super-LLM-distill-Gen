@@ -23,7 +23,7 @@ from filelock import FileLock, Timeout
 from lib.domain.workflow_qa_director import (
     allocate_qa_types, validate_director_task, validate_qa_director,
     validate_director_skip, validate_dialogue_step,
-    validate_question_brief, ANSWER_POLICIES,
+    validate_question_brief, learning_goal_types, scheduled_user_language, ANSWER_POLICIES,
 )
 from lib.domain.workflow_quality import accepted, canonical, conversation_issue, text_issue
 from lib.domain.provider_reasoning import reasoning_provenance, select_candidate_reasoning
@@ -49,6 +49,8 @@ _PLAN_VALIDATION_CODES = frozenset({
     "source_line_material_not_found", "source_line_range_out_of_bounds", "source_line_range_empty",
     "invalid_qa_director_skip",
     "invalid_expression_design", "invalid_dialogue_design",
+    "qa_director_learning_goal_mismatch", "qa_director_user_language_mismatch",
+    "invalid_qa_director_learning_goal", "invalid_qa_director_user_language",
 })
 
 
@@ -86,10 +88,39 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _task_controls(contract):
+    return {key: contract[key] for key in ("learning_goal", "user_language") if key in contract}
+
+
+def _fixed_human_input(design):
+    if not isinstance(design, dict):
+        return False
+    seed = design.get("seed") or {}
+    return bool(seed.get("question") or seed.get("revision_context") or design.get("context"))
+
+
+def _candidate_controls(config, offset, design=None):
+    """Keep fixed human input outside automatic evidence/language scheduling."""
+    if not any(key in config for key in ("learning_goal", "user_languages")):
+        return {}
+    if _fixed_human_input(design):
+        return {"automatic_controls_applied": False, "preserve_human_input": True}
+    controls = {"automatic_controls_applied": True}
+    if "learning_goal" in config:
+        controls["learning_goal"] = config["learning_goal"]
+        controls["allowed_qa_types"] = list(learning_goal_types(config["learning_goal"]))
+    if "user_languages" in config:
+        controls["user_language"] = scheduled_user_language(config["user_languages"], offset)
+    return controls
+
+
 def learner_prompt(contract):
     """This is the only contract projection permitted in training messages."""
     question = contract["question"]
     if contract["visible_context"]:
+        if contract.get("user_language") == "en":
+            label = "User message:" if contract.get("dialogue_design") else "Question:"
+            return "Source material:\n" + contract["visible_context"] + "\n\n" + label + "\n" + question
         label = "用户消息：" if contract.get("dialogue_design") else "问题："
         return "资料：\n" + contract["visible_context"] + "\n\n" + label + "\n" + question
     return question
@@ -172,6 +203,10 @@ class WorkflowQADirector:
 
     def _question_brief_boundary(self, unit, contract, brief, visible_messages=None):
         """No source bodies, reference answers or addressed identities cross."""
+        if contract.get("user_language") and isinstance(brief, dict):
+            if brief.get("user_language", contract["user_language"]) != contract["user_language"]:
+                raise ValueError("qa_director_user_language_mismatch")
+            brief = {**brief, "user_language": contract["user_language"]}
         brief = validate_question_brief(brief)
         body = canonical(brief)
         public = "\n".join(message["content"] for message in visible_messages or [])
@@ -201,7 +236,7 @@ class WorkflowQADirector:
         from lib.infrastructure.source_memory_messages import directed_source_request
         data = directed_source_request(self.recipe, {
             "source_context": unit, "qa_contract": contract, "question_brief": brief,
-            "visible_dialogue": visible_messages}, unit, contract)
+            "visible_dialogue": visible_messages, **_task_controls(contract)}, unit, contract)
         for attempt in range(2):
             try:
                 result = self.ask([*key, "brief_boundary", _digest(brief), _digest(visible_messages), attempt],
@@ -258,7 +293,8 @@ class WorkflowQADirector:
             from lib.infrastructure.source_memory_messages import directed_source_request
             fit_data = directed_source_request(self.recipe, {
                 "source_context": unit, "qa_contract": contract, "question": question,
-                "question_brief": brief, "visible_dialogue": visible_messages or []}, unit, contract)
+                "question_brief": brief, "visible_dialogue": visible_messages or [],
+                **_task_controls(contract)}, unit, contract)
             try:
                 fit = self.ask([*key, "question_fit", attempt], "generation", "workflow.question_fit", fit_data,
                     model_stage="director", prompt_stage="director", allow_reasoning_fallback=False)
@@ -527,6 +563,7 @@ class WorkflowQADirector:
             "source_kind": source.get("kind", "brief"), "history_is_not_evidence": True,
             **({"dialogue_state": dialogue_state} if dialogue_state is not None else {}),
             **({"dialogue_steps": dialogue_steps} if dialogue_steps is not None else {}),
+            **_task_controls(contract),
         }
         minimum = (1, 2, 0) if prompt_id in {"workflow.sft_directed_check", "workflow.multiturn_directed_check"} else (1, 1, 0)
         if prompt_at_least(self.recipe, prompt_id, minimum):
@@ -591,6 +628,7 @@ class WorkflowQADirector:
             "question_rules": self.recipe["qa_director"]["question_rules"],
             "answer_rules": self.recipe["qa_director"]["answer_rules"], "feedback": feedback,
             **self._natural_expression_guidance(),
+            **_task_controls(unit["qa_contract"]),
         }
         if self.separated_questions():
             from lib.infrastructure.source_memory_messages import directed_source_request
@@ -665,7 +703,8 @@ class WorkflowQADirector:
             raise DialoguePlanError() from error
         try:
             step = validate_dialogue_step(value, completed_turns=len(messages) // 2,
-                                          natural_utterance=self.participant_utterances())
+                                          natural_utterance=self.participant_utterances(),
+                                          **_task_controls(unit["qa_contract"]))
             if self.participant_utterances():
                 from lib.domain.dialogue_expression import carry_expression_design
                 inherited = (previous_state or {}).get("expression_design", unit["qa_contract"].get("expression_design"))
@@ -730,7 +769,8 @@ class WorkflowQADirector:
                    "qa_contract": contract,
                    "requirement": self.recipe.get("brief", ""),
                    "question_rules": self.recipe["qa_director"]["question_rules"],
-                   "answer_rules": self.recipe["qa_director"]["answer_rules"]}
+                   "answer_rules": self.recipe["qa_director"]["answer_rules"],
+                   **_task_controls(contract)}
         if style is not None:
             context = self.without_source_reasoning(context)
             context["generation_style"] = style
@@ -854,7 +894,13 @@ class WorkflowQADirector:
         design_offset = offset + (self.state.get("production", {}).get("attempted", 0)
                                   if human.get("enabled") and self.production_enabled() else 0)
         assigned = ((None,) * len(guided) if adaptive else
+                    ("closed_book",) * len(guided) if config.get("learning_goal") == "knowledge_application" else
                     allocate_qa_types(len(guided), config["type_weights"], offset=offset))
+        # Language assignments are checkpointed with the plan, not inferred
+        # from text or translated after generation. Production attempts carry
+        # the ordinal across rounds; omitted controls retain the old schedule.
+        language_offset = offset + (self.state.get("production", {}).get("attempted", 0)
+                                   if "user_languages" in config else 0)
         def snapshot():
             limit = config["history_limit"]
             history = []
@@ -911,6 +957,21 @@ class WorkflowQADirector:
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
                     "targets": list(stages), **self._natural_expression_guidance()}
+            if any(name in config for name in ("learning_goal", "user_languages")):
+                for index, candidate in enumerate(data["candidates"]):
+                    controls = _candidate_controls(config, language_offset + index, candidate.get("human_design"))
+                    candidate.update(controls)
+                    if controls.get("learning_goal") == "knowledge_application":
+                        candidate["assigned_type"] = "closed_book"
+                    elif controls.get("learning_goal") == "document_reading" and not adaptive:
+                        weights = {kind: weight if kind != "closed_book" else 0
+                                   for kind, weight in config["type_weights"].items()}
+                        if not sum(weights.values()):
+                            raise ValueError("qa_director_learning_goal_weights_conflict")
+                        candidate["assigned_type"] = allocate_qa_types(1, weights, offset=design_offset + index)[0]
+                data["assigned_types"] = [candidate["assigned_type"] for candidate in data["candidates"]]
+                data.update({name: deepcopy(config[name]) for name in ("learning_goal", "user_languages") if name in config})
+                data["automatic_controls_preserve_fixed_human_input"] = True
             if runtime:
                 data["knowledge_agent_memory"] = self._knowledge_memory(runtime[1]["knowledge_id"])
             elif self.recipe.get("qa_agent_memory_version") == 1:
@@ -932,7 +993,9 @@ class WorkflowQADirector:
                 data["question_separation"] = True
             if adaptive:
                 data.update(request_phase="batch_design", planning_mode="adaptive",
-                    evidence_modes=list(config["type_weights"]),
+                    evidence_modes=(list(learning_goal_types(config["learning_goal"]))
+                                    if "learning_goal" in config and not any(candidate.get("preserve_human_input")
+                                        for candidate in data["candidates"]) else list(config["type_weights"])),
                     type_weights_are_not_quotas=True)
             binding = self.recipe.get("node_models", {}).get("director", {}).get("generation", {})
             context_limit = binding.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS)
@@ -1067,12 +1130,22 @@ class WorkflowQADirector:
                             # blocks that their SFT workers will receive.
                             # Literal custom prompts retain their old contract.
                             raise ValueError("source_line_ranges_required")
+                        if candidate.get("preserve_human_input"):
+                            # A model's label cannot change or translate fixed
+                            # human input. Keep its existing visibility choice.
+                            task = {name: value for name, value in task.items()
+                                    if name not in {"learning_goal", "user_language"}}
+                            if isinstance(task.get("question_brief"), dict):
+                                task["question_brief"] = {name: value for name, value in task["question_brief"].items()
+                                                          if name != "user_language"}
+                        controls = _task_controls(candidate)
                         contracts[candidate["id"]] = validate_director_task(
                             task, expected_type=candidate["assigned_type"],
                             source_text=self._director_evidence_text(candidate),
                             expected_id=candidate["id"],
-                            source_materials=self._director_evidence_materials(candidate))
-                        if self.separated_questions() and task["qa_type"] == "closed_book":
+                            source_materials=self._director_evidence_materials(candidate), **controls)
+                        if (self.separated_questions() and task["qa_type"] == "closed_book"
+                                and not candidate.get("preserve_human_input")):
                             self._question_brief_boundary(candidate, contracts[candidate["id"]], task.get("question_brief"))
                         if candidate.get("human_design"):
                             contracts[candidate["id"]]["human_design"] = deepcopy(candidate["human_design"])
@@ -1113,6 +1186,11 @@ class WorkflowQADirector:
                     if self.separated_questions():
                         repair_feedback["instruction"] += (
                             "closed_book须提供question_brief宽泛主题与交往目标，不含原文、摘要、参考问答或标识。")
+                    if any(name in config for name in ("learning_goal", "user_languages")):
+                        repair_feedback["instruction"] += (
+                            "逐候选遵守assigned_type、learning_goal和user_language；knowledge_application只能closed_book且visible_context为空，"
+                            "可直接应用私有教师知识回答，不把无线索等同于证据不足；document_reading保留用户可见原文且不能closed_book。"
+                            "同一对话保持指定用户语言，不自动翻译或改写preserve_human_input=true的人工问题与上下文。")
                     self.event("director_plan_repair", attempt=attempt + 1,
                         **({"validation_code": repair_feedback["validation_code"]}
                            if "validation_code" in repair_feedback else {}),
@@ -1139,6 +1217,8 @@ class WorkflowQADirector:
             return [unit if unit["kind"] == "conversation" else
                     {**unit, "director_plan_failure": DirectorPlanError.code} for unit in batch]
         result = []
+        preserved_human = {candidate["id"] for candidate in inputs["candidates"]
+                           if candidate.get("preserve_human_input")}
         for unit in batch:
             if unit["kind"] == "conversation":
                 result.append(unit)
@@ -1151,7 +1231,8 @@ class WorkflowQADirector:
                 feedback[contract["skip_reason"]] = feedback.get(contract["skip_reason"], 0) + 1
                 self.state["qa_director"]["skipped"] = self.state["qa_director"].get("skipped", 0) + 1
                 continue
-            if self.separated_questions() and contract["qa_type"] == "closed_book":
+            if (self.separated_questions() and contract["qa_type"] == "closed_book"
+                    and unit["id"] not in preserved_human):
                 try:
                     contract = self.checkpoint([*key, "question_dispatch", unit["id"], _digest(contract)],
                         lambda: self._closed_book_question(unit, contract, key=[*key, unit["id"]]))
@@ -1170,6 +1251,13 @@ class WorkflowQADirector:
                            "director_batch": offset // config["batch_size"]})
             self.state["qa_director"]["coverage"][contract["qa_type"]]["planned"] += 1
             self.state["qa_director"]["coverage"][contract["qa_type"]]["assigned"] += len(stages)
+            if contract.get("user_language"):
+                language_coverage = self.state["qa_director"].setdefault("user_language_coverage", {})
+                counts = language_coverage.setdefault(contract["user_language"], {"planned": 0, "assigned": 0, "accepted": 0, "rejected": 0})
+                counts["planned"] += 1
+                counts["assigned"] += len(stages)
+            if unit["id"] in preserved_human:
+                self.event("human_learning_controls_preserved", unit_id=unit["id"], automatic_controls_applied=False)
         metrics = self.state["stages"]["director"]
         metrics["done"] += len(guided)
         metrics["outputs"] += len(guided)
@@ -1291,6 +1379,10 @@ class WorkflowQADirector:
                     if row.get("reason"):
                         feedback = self.state["qa_director"]["feedback"]
                         feedback[row["reason"]] = feedback.get(row["reason"], 0) + 1
+                    if language := row["qa_contract"].get("user_language"):
+                        counts = self.state["qa_director"].setdefault("user_language_coverage", {}).setdefault(
+                            language, {"planned": 0, "assigned": 0, "accepted": 0, "rejected": 0})
+                        counts["accepted" if row["status"] == "eligible" else "rejected"] += 1
                 if self.recipe.get("knowledge_agent_context_version") == 1:
                     self.record_knowledge_outcome(unit, row, stage)
                 handle.write(canonical(row) + "\n")
@@ -1347,6 +1439,12 @@ class WorkflowQADirector:
                 "answer_dispatch": "source_memory_tool_and_actual_dialogue_roles"}
                if self.separated_questions() else {}),
         }
+        if any(key in config for key in ("learning_goal", "user_languages")):
+            self.state["qa_director"].update({key: deepcopy(config[key])
+                for key in ("learning_goal", "user_languages") if key in config})
+            self.state["qa_director"]["coverage_scope"] = "current_directed_generation_actual_contracts"
+            if "user_languages" in config:
+                self.state["qa_director"]["user_language_basis"] = "scheduled_request_semantically_reviewed_not_text_inference"
         if config.get("human_augmentation"):
             self.state["qa_director"]["human_augmentation"] = {
                 "enabled": True, "seeds": len(config["human_augmentation"]["seeds"]),

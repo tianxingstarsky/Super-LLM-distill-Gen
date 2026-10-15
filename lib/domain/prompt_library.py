@@ -36,7 +36,7 @@ def validate_prompt_template_name(name: str) -> str:
 def validate_prompt_scope(scope: str) -> str:
     if not isinstance(scope, str):
         raise ValueError("prompt_library_invalid_scope")
-    if scope in {"director.rules", "trim.rules", "generation:sft", "generation:cot"}:
+    if scope in {"director.rules", "trim.rules", "generation:sft", "generation:cot", "generation:multiturn"}:
         return scope
     if scope.startswith("experience:"):
         try:
@@ -72,7 +72,8 @@ def validate_prompt_payload(scope: str, payload: dict) -> dict:
             validate_qa_director({"enabled": True, **payload})
         elif scope.startswith("generation:"):
             stage = scope.split(":")[1]
-            if set(payload) != {"style", "instruction"}:
+            if (not {"style", "instruction"} <= set(payload)
+                    or set(payload) - {"style", "instruction", "reasoning_language"}):
                 raise ValueError("invalid_fields")
             validate_node_generation({stage: {"enabled": True, **payload}})
         else:

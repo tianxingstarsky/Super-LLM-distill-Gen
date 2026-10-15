@@ -230,7 +230,7 @@ def test_workbench_submits_active_node_styles_and_optional_trim_with_body():
     created = ui.session_state["fixture-created"]
     assert created["node_generation"] == {
         "sft": {"enabled": False, "style": "default", "instruction": ""},
-        "cot": {"enabled": True, "style": "skeptical", "instruction": "Check assumptions."},
+        "cot": {"enabled": True, "style": "skeptical", "instruction": "Check assumptions.", "answer_mode": "joint"},
     }
     assert created["reasoning_trim"] == {
         "enabled": True, "template": "custom", "instruction": "",

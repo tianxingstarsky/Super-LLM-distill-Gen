@@ -8,7 +8,7 @@ import streamlit as st
 
 from lib.domain.workflow_generation import (
     GENERATION_STYLES, MAX_GENERATION_INSTRUCTION_CHARS, STYLE_PRESETS,
-    validate_node_generation,
+    REASONING_LANGUAGES, validate_node_generation,
 )
 from lib.domain.workflow_graph import sft_uses_cot_output
 from lib.domain.reasoning_trim import (validate_reasoning_trim,
@@ -20,6 +20,8 @@ from lib.presentation.streamlit.prompt_library_controls import render_prompt_lib
 STYLE_LABELS = {"default": "遵循任务", "concise": "简洁工程", "structured": "分步教学",
                 "skeptical": "审慎核验", "reflective": "反思校验", "mixed": "多风格混合",
                 "custom": "自定义风格"}
+REASONING_LANGUAGE_LABELS = {"auto": "跟随任务", "zh": "中文推理", "en": "英文推理",
+                             "zh_en": "中英混合推理"}
 TRIM_LABELS = {"leakage": "提示词与包装清理", "concise": "精简重复推理", "custom": "自定义修剪模板"}
 TRIM_DESCRIPTIONS = {
     "leakage": "清理暴露的系统或开发者指令、检索包装与不必要的原文复述；保留任务所需事实、引用和关键推导。",
@@ -43,14 +45,23 @@ def _restore_field(workspace: str, key: str, default):
 
 def generation_snapshot(workspace: str, nodes) -> dict:
     """Read active nodes only, including settings hidden by node selection."""
-    return {node: {
+    configuration = {node: {
         "enabled": _field(workspace, f"workflow-generation-enabled:{workspace}:{node}", False),
         "style": _field(workspace, f"workflow-generation-style:{workspace}:{node}",
                         "default"),
         "instruction": _field(workspace, f"workflow-generation-instruction:{workspace}:{node}", ""),
         **({"answer_mode": _field(workspace, f"workflow-generation-answer-mode:{workspace}:{node}", "joint")}
            if node == "cot" and _field(workspace, f"workflow-generation-enabled:{workspace}:{node}", False) else {}),
-    } for node in nodes if node in {"sft", "cot"}}
+    } for node in nodes if node in {"sft", "cot", "multiturn"}}
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    for node, settings in configuration.items():
+        key = f"workflow-generation-reasoning-language:{workspace}:{node}"
+        language = _field(workspace, key, "auto")
+        # Merely opening an old draft must not introduce a new persisted
+        # requirement. Explicit choices survive even when the toggle is off.
+        if key in draft or language != "auto":
+            settings["reasoning_language"] = language
+    return configuration
 
 
 def generation_issues(configuration: dict) -> list[str]:
@@ -79,16 +90,19 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
     enabled_key = f"workflow-generation-enabled:{prefix}"
     style_key = f"workflow-generation-style:{prefix}"
     instruction_key = f"workflow-generation-instruction:{prefix}"
+    reasoning_language_key = f"workflow-generation-reasoning-language:{prefix}"
     _restore_field(workspace, enabled_key, False)
     _restore_field(workspace, style_key, "default")
     _restore_field(workspace, instruction_key, "")
+    _restore_field(workspace, reasoning_language_key, "auto")
     language = st.session_state.get("ui_language", "zh")
     with st.container(key=f"workbench-generation:{node}"):
         if node == "sft":
             st.caption("教师复用清洗资料包，按节点上下文容量安排相关资料；容纳不下时提示调整 token 上限。最终训练输入另行组织：知识内化样本独立作答，带资料样本写入必要上下文。")
         render_prompt_library(prompt_library, workspace, f"generation:{node}", save_field=save_field,
-                              fields={"style": style_key, "instruction": instruction_key},
-                              defaults={"style": "default", "instruction": ""},
+                              fields={"style": style_key, "instruction": instruction_key,
+                                      "reasoning_language": reasoning_language_key},
+                              defaults={"style": "default", "instruction": "", "reasoning_language": "auto"},
                               apply_extras={enabled_key: True}, restore_extras={enabled_key: False},
                               label="我的风格模板", save_label="保存风格")
         enabled = st.toggle("启用风格化生成", key=enabled_key,
@@ -98,6 +112,12 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
         style = st.selectbox("生成风格", GENERATION_STYLES, key=style_key, disabled=not enabled,
                              format_func=lambda value: translate_label(STYLE_LABELS[value], language),
                              on_change=save_field, args=(workspace, style_key))
+        st.selectbox("推理语言", REASONING_LANGUAGES, key=reasoning_language_key, disabled=not enabled,
+                     format_func=lambda value: translate_label(REASONING_LANGUAGE_LABELS[value], language),
+                     on_change=save_field, args=(workspace, reasoning_language_key),
+                     help="只影响风格化生成的显式推理。答案跟随当前用户语言；不会改写上游模型的原生推理。")
+        if not enabled:
+            st.caption("先开启风格化生成，才能指定显式推理的语言；关闭时保留选择但不生效。")
         if node == "cot" and enabled:
             mode_key = f"workflow-generation-answer-mode:{prefix}"
             _restore_field(workspace, mode_key, "joint")
@@ -117,7 +137,7 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                 st.error(error)
         st.text_area("风格要求", key=instruction_key, height=95, disabled=not enabled,
                      max_chars=MAX_GENERATION_INSTRUCTION_CHARS,
-                     placeholder="例如：使用自然中文；按当前问题组织解释，不套固定编号和思考流程。",
+                     placeholder="例如：按当前问题组织解释，保留关键依据，不套固定编号和思考流程。",
                      help="只控制表达要求；生成与核验指令在节点提示词中编辑。自定义风格开启时必须填写。",
                      on_change=save_field, args=(workspace, instruction_key))
         description = (STYLE_PRESETS.get(style) or (
@@ -273,6 +293,9 @@ def generation_summary(configuration: dict, language: str) -> str:
         label = translate(STYLE_LABELS.get(settings.get("style"), "遵循任务"), language)
         if settings.get("enabled"):
             detail = label + (" + " + translate("附加指令", language) if settings.get("instruction", "").strip() else "")
+            reasoning_language = settings.get("reasoning_language", "auto")
+            if reasoning_language != "auto":
+                detail += " · " + translate(REASONING_LANGUAGE_LABELS[reasoning_language], language)
         else:
             detail = translate("已有推理核验" if node == "cot" else "普通蒸馏", language)
         parts.append(f"{node.upper()} {detail}")

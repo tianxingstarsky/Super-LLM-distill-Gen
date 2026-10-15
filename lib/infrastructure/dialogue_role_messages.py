@@ -72,7 +72,8 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
                                     protocol_version=source_memory_protocol_version)[:-1]
     contract = data.get("qa_contract", {})
     dispatch = {key: deepcopy(contract[key]) for key in (
-        "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design", "expression_design") if key in contract}
+        "qa_type", "answer_policy", "guidance", "dialogue_design", "human_design", "expression_design",
+        "learning_goal", "user_language") if key in contract}
     if include_question:
         question = contract.get("question")
         if not isinstance(question, str) or not question.strip():

@@ -41,8 +41,10 @@ VERSION_20_NODE_PROMPT_IDS = {**VERSION_19_NODE_PROMPT_IDS,
                   "sft": (*VERSION_19_NODE_PROMPT_IDS["sft"], "workflow.sft_answer")}
 VERSION_21_NODE_PROMPT_IDS = {**VERSION_20_NODE_PROMPT_IDS,
                   "cot": (*VERSION_20_NODE_PROMPT_IDS["cot"], "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check")}
-NODE_PROMPT_IDS = {**VERSION_21_NODE_PROMPT_IDS,
-                  "review": (*VERSION_21_NODE_PROMPT_IDS["review"], "workflow.learner_context_check")}
+VERSION_22_NODE_PROMPT_IDS = {**VERSION_21_NODE_PROMPT_IDS,
+                  "multiturn": (*VERSION_21_NODE_PROMPT_IDS["multiturn"], "workflow.style_check")}
+NODE_PROMPT_IDS = {**VERSION_22_NODE_PROMPT_IDS,
+                  "review": (*VERSION_22_NODE_PROMPT_IDS["review"], "workflow.learner_context_check")}
 
 
 def builtin_node_prompt(prompt_id: str) -> str:
@@ -88,8 +90,10 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
         return (("workflow.sft_styled", "workflow.jev_score", "workflow.style_check")
                 if styled else ("workflow.sft", "workflow.jev_score"))
     if stage == "multiturn":
-        return ((*VERSION_16_NODE_PROMPT_IDS[stage], *human_prompt) if directed
-                else LEGACY_NODE_PROMPT_IDS[stage])
+        multi_style = (node_generation or {}).get("multiturn", (node_generation or {}).get("sft")) or {}
+        styled = bool(multi_style and multi_style.get("enabled", True))
+        base = ((*VERSION_16_NODE_PROMPT_IDS[stage], *human_prompt) if directed else LEGACY_NODE_PROMPT_IDS[stage])
+        return (*base, "workflow.style_check") if styled else base
     if stage == "cot":
         prompts = (("workflow.cot_rationale", "workflow.cot_prefix_check", "workflow.cot_native_answer", "workflow.rationale_check", "workflow.style_check")
                    if styled and config.get("answer_mode") == "native_prefill" else
@@ -131,7 +135,8 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None) ->
             VERSION_16_NODE_PROMPT_IDS if recipe_version <= 16 else
             VERSION_17_NODE_PROMPT_IDS if recipe_version <= 17 else
             VERSION_19_NODE_PROMPT_IDS if recipe_version <= 19 else
-            VERSION_20_NODE_PROMPT_IDS if recipe_version <= 20 else VERSION_21_NODE_PROMPT_IDS)
+            VERSION_20_NODE_PROMPT_IDS if recipe_version <= 20 else
+            VERSION_21_NODE_PROMPT_IDS if recipe_version <= 21 else VERSION_22_NODE_PROMPT_IDS)
     if learner_context_review_version == 1 and "review" in catalog:
         return {**catalog, "review": (*catalog["review"], "workflow.learner_context_check")}
     return catalog
