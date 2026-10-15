@@ -224,7 +224,10 @@ def test_review_uses_exact_export_payload_node_prompt_and_output_limit(tmp_path)
     assert call["data"]["answer"] == training
     assert "reasoning_content" not in call["data"]["answer"]["messages"][-1]
     assert row["messages"][-1]["reasoning_content"] == "SOURCE_REASONING"
-    assert call["messages"][0]["content"].endswith(custom)
+    # The stage's exact custom rule remains in system; saved procedural
+    # experience can follow it without becoming part of the learner payload.
+    assert call["messages"][0]["role"] == "system"
+    assert call["messages"][0]["content"].count(custom) == 1
     assert call["kwargs"]["max_tokens"] == 32768
     assert call["kwargs"]["allow_reasoning_fallback"] is False
 

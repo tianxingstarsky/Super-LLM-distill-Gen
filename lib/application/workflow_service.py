@@ -30,7 +30,7 @@ class WorkflowApplication:
             "batch_size", "node_models", "conversation_turns", "brief",
             "agent_replay_mode", "evaluation_sources", "web_research", "sources",
             "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director", "production",
-            "cpt_processing", "review_repair", "repair_inputs", "agent_experience") if key in recipe}
+            "cpt_processing", "review_repair", "repair_inputs", "agent_experience", "reasoning_required") if key in recipe}
         targets, node_models = validate_creation(**fields)
         validate_generation_review(targets, recipe.get("review_repair"), recipe.get("repair_inputs"))
         research = validate_web_research(recipe.get("web_research"), brief=recipe.get("brief", ""),

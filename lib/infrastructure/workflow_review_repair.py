@@ -193,11 +193,17 @@ def _authored_review_audit(target, row):
 
 
 def _row_training_surface_issue(target, row, recipe=None):
-    """Check visible answers; only authored rationale joins the training surface.
+    """Check exactly the versioned training surface, including native v2 text.
 
-    Provider reasoning remains exact private evidence, including earlier native
-    turns. Its visible answer does not inherit a blanket leakage exemption.
+    Frozen v1 runs retain their former native-evidence exemption. New v2 runs
+    inspect every exported assistant rationale, regardless of provenance.
     """
+    if not isinstance(row, dict):
+        return None
+    if (row.get("training_surface_protocol_version") == 2
+            or (recipe or {}).get("training_surface_protocol_version") == 2):
+        from lib.domain.training_surface import training_record_surface_issue
+        return training_record_surface_issue(target, row, protocol_version=2)
     if target not in {"sft", "multiturn", "agent", "cot"}:
         return None
     authored_origins = {"prompt_styled_generation", "prompt_revision", "human_revision", "prompt_trim"}
@@ -503,7 +509,15 @@ class WorkflowReviewRepair:
     def _review_score(self, target, row, evidence, key, instruction):
         self.state["stages"]["review"]["phase"] = "scoring"
         self.save(force=False)
-        if issue := _row_training_surface_issue(target, row, self.recipe):
+        required_issue = None
+        if (self.recipe.get("reasoning_revision_protocol_version") == 1
+                and self.recipe.get("reasoning_required") is True and target in {"sft", "multiturn", "agent"}):
+            from lib.domain.turn_review import reasoning_text
+            if any(isinstance(message, dict) and message.get("role") == "assistant"
+                   and not (message.get("tool_calls") or message.get("toolCalls")) and not reasoning_text(message)
+                   for message in row.get("messages", [])):
+                required_issue = "review_repair_reasoning_missing"
+        if issue := required_issue or _row_training_surface_issue(target, row, self.recipe):
             return {"keep": False, "grounded": False, "reasoning_valid": False, "correctness": 1,
                     "scores": {name: 1 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
                     "reason": issue}
@@ -514,9 +528,40 @@ class WorkflowReviewRepair:
                 "qa_contract": row.get("qa_contract"), "generation_style": row.get("generation_style")}
         data.update(_authored_review_audit(target, row))
         data = _selected_review_request(data, evidence)
+        turn_scope = self.recipe.get("turn_review_protocol_version") == 1 and target in {"sft", "multiturn", "agent"}
+        if turn_scope:
+            from lib.domain.turn_review import supervised_assistant_turns
+            data["supervised_assistant_turns"] = supervised_assistant_turns(data["candidate"],
+                reasoning_required=self.recipe.get("reasoning_required", False))
         def assessed(call_key, call_data):
             rules = ({"instruction": _authored_review_rules(self.recipe)}
                      if _authored_cot(target, row) and not call_data.get("learner_context_only") else {})
+            if call_data.get("supervised_assistant_turns") is not None:
+                from lib.domain.turn_review import turn_review_verdict
+                failures = []
+                for format_attempt in (1, 2):
+                    current_key = call_key if format_attempt == 1 else [*call_key, "turn_format_repair", 1]
+                    request = call_data if not failures else {**call_data, "format_repair": {
+                        "code": failures[-1]["code"],
+                        "instruction": "Return the complete aggregate and every listed assistant-turn verdict. Copy the exact original indices and hashes; recheck the actual content, never fabricate a missing grade."}}
+                    value = self.ask(current_key, role, "workflow.review_score",
+                        project_review_request(self.recipe, request, phase="review"),
+                        allow_reasoning_fallback=False, **rules)
+                    try:
+                        result = turn_review_verdict(value, call_data["supervised_assistant_turns"])
+                    except ValueError as error:
+                        failures.append({"attempt": format_attempt, "code": str(error),
+                            "response_sha256": hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()})
+                        row["assistant_turn_review_retry"] = {"version": 1, "attempts": format_attempt,
+                            "status": "invalid_after_retry" if format_attempt == 2 else "format_retry_pending",
+                            "schema_failures": deepcopy(failures)}
+                        # Keep each raw response in its original request checkpoint.
+                        if format_attempt == 2:
+                            raise
+                    else:
+                        row["assistant_turn_review_retry"] = {"version": 1, "attempts": format_attempt,
+                            "status": "schema_valid", "schema_failures": deepcopy(failures)}
+                        return result
             value = self.ask(call_key, role, "workflow.review_score",
                              project_review_request(self.recipe, call_data, phase="review"),
                              allow_reasoning_fallback=False, **rules)
@@ -583,6 +628,15 @@ class WorkflowReviewRepair:
         cot_delta = self.recipe.get("qa_agent_memory_version") == 1 and target == "cot"
         from lib.domain.learner_context import prompt_at_least
         multiturn_delta = target == "multiturn" and prompt_at_least(self.recipe, "workflow.review_repair", (1, 7, 0))
+        reasoning_revision = self.recipe.get("reasoning_revision_protocol_version") == 1
+        assistant_delta = reasoning_revision and target in {"sft", "multiturn"}
+        required_reasoning = []
+        if reasoning_revision and target in {"sft", "multiturn", "agent"}:
+            from lib.domain.turn_review import supervised_assistant_turns
+            # Export preferences can omit reasoning from the projection. They
+            # cannot turn an existing explanation into an answer-only repair.
+            required_reasoning = [turn["message_index"] for turn in supervised_assistant_turns(row,
+                reasoning_required=self.recipe.get("reasoning_required", False)) if turn["requires_reasoning"]]
         if cot_delta:
             rules["instruction"] = (rules.get("instruction", "") + "\n" + _COT_DELTA_REPAIR_RULES).lstrip()
         data = _selected_review_request(
@@ -592,10 +646,12 @@ class WorkflowReviewRepair:
              "qa_contract": row.get("qa_contract"),
              "generation_style": row.get("generation_style"),
              **_authored_review_audit(target, row)}, evidence)
+        if assistant_delta:
+            data["required_reasoning_indices"] = required_reasoning
         value = self.ask([*key, "repair"], "generation", "workflow.review_repair",
                          project_review_request(self.recipe, data, phase="repair"),
                          allow_reasoning_fallback=False, **rules)
-        if multiturn_delta and (not isinstance(value, dict) or set(value) != {"record", "quotes", "uncertain"}
+        if (multiturn_delta or assistant_delta) and (not isinstance(value, dict) or set(value) != {"record", "quotes", "uncertain"}
                 or not isinstance(value.get("quotes"), list) or len(value["quotes"]) > 32
                 or any(not isinstance(quote, str) or not quote.strip() or len(quote) > 20_000
                        or "\x00" in quote for quote in value["quotes"])):
@@ -604,12 +660,13 @@ class WorkflowReviewRepair:
                 or value.get("uncertain") or not isinstance(value.get("record"), dict)):
             return row, "review_repair_content_unavailable"
         candidate = value["record"]
-        if multiturn_delta:
+        if multiturn_delta or assistant_delta:
             from lib.domain.assistant_message_delta import apply_assistant_message_delta
             try:
                 # Index the unmodified original list; the model never copies
                 # user articles, role metadata or tool facts into its output.
-                messages = apply_assistant_message_delta(row.get("messages"), candidate)
+                messages = apply_assistant_message_delta(row.get("messages"), candidate,
+                    **({"required_reasoning_indices": required_reasoning} if assistant_delta else {}))
             except ValueError as error:
                 return row, str(error)
             candidate = {**deepcopy(payload), "messages": messages}
@@ -624,10 +681,30 @@ class WorkflowReviewRepair:
             _sync_cot_messages(updated)
         if canonical(_immutable_tool_facts(updated)) != canonical(_immutable_tool_facts(row)):
             return row, "review_repair_tool_facts_changed"
-        if (self.recipe.get("qa_agent_memory_version") == 1
+        if ((self.recipe.get("qa_agent_memory_version") == 1 or assistant_delta)
                 and canonical(_automatic_repair_task(target, updated)) != canonical(_automatic_repair_task(target, row))):
             return row, "review_repair_learner_task_changed"
         preserve_provider_reasoning(target, row, updated, origin="prompt_revision")
+        if reasoning_revision and target in {"sft", "multiturn", "agent"}:
+            from lib.domain.turn_review import reasoning_text
+            if any(not reasoning_text(updated["messages"][index]) for index in required_reasoning):
+                return row, "review_repair_reasoning_missing"
+        if assistant_delta:
+            updates = value["record"]["assistant_updates"]
+            audits = []
+            for update in updates:
+                index = update["message_index"]
+                if update.get("reasoning_content"):
+                    updated["reasoning_origin"] = "prompt_revision"
+                    for turn in updated.get("turn_reviews", []):
+                        if isinstance(turn, dict) and turn.get("end_message_index") == index:
+                            turn["reasoning_origin"] = "prompt_revision"
+                    audits.append({"message_index": index, "reasoning_origin": "prompt_revision",
+                        "scope": "model_authored_task_explanation_not_native_reasoning",
+                        "content_sha256": digest(updated["messages"][index]),
+                        "reasoning_trace": deepcopy(update.get("reasoning_trace"))})
+            if audits:
+                updated["reasoning_revision_audits"] = [*deepcopy(row.get("reasoning_revision_audits", [])), *audits]
         if issue := (_payload_issue(target, updated) or _row_training_surface_issue(target, updated, self.recipe)):
             return row, issue
         if evidence["source_kind"] == "document":
@@ -644,6 +721,25 @@ class WorkflowReviewRepair:
         from lib.infrastructure.training_workflow import digest
         target, original = item["target"], item["record"]
         config = validate_review_repair(self.recipe["review_repair"])
+        if (self.recipe.get("multiturn_terminal_review_version") == 1 and target == "multiturn"
+                and original.get("status") == "quarantined"
+                and original.get("reason") == "multiturn_natural_end_insufficient_turns"):
+            # A naturally completed single turn cannot become a multi-turn
+            # training item by editing assistant text. Preserve its actual
+            # terminal cause and all evidence without requesting a repair or
+            # presenting the absence of a review as a model quality verdict.
+            row = deepcopy(original)
+            try:
+                candidate_hash = digest(self._review_payload(target, row))
+            except (KeyError, TypeError, ValueError):
+                candidate_hash = None
+            row["review_repair"] = {"mode": config["mode"], "status": "rejected", "score": None,
+                "attempts": 0, "history": [], "node": "review", "terminal": True,
+                "assessment": "not_performed_terminal_generation", "reason": original["reason"],
+                "original_reason": original["reason"], "candidate_sha256": candidate_hash,
+                "config_sha256": digest(config)}
+            row["_review_target"] = target
+            return [row]
         if target == "cot" and config.get("native_regeneration") is True:
             from lib.infrastructure.workflow_native_regeneration import regenerate_native_cot_item
             return regenerate_native_cot_item(self, item)
@@ -668,7 +764,8 @@ class WorkflowReviewRepair:
             "source_snapshot", "tool_error", "simulated_tool", "unverified", "trajectory", "orphan_tool", "missing_tool"))
         if (issue in {"training_surface_hidden_source_reference", "training_surface_internal_process_reference"}
                 and config["mode"] == "auto" and config["max_rounds"] > 0
-                and item.get("revision_context") and getattr(self, "_authenticated_repair_branch", False)
+                and (self.recipe.get("reasoning_revision_protocol_version") == 1
+                     or item.get("revision_context") and getattr(self, "_authenticated_repair_branch", False))
                 and evidence is not None and not blocked):
             # This selected parent has already been authenticated as an
             # explicit correction. A leaked old body is editable input, not

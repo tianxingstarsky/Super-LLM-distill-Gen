@@ -9,6 +9,7 @@ from lib.domain.workflow_quality import canonical, accepted
 from lib.infrastructure import training_workflow as engine
 from test_review_repair_engine import check
 from tests.test_workflow_production import model_request_data
+from review_legacy_fixtures import legacy_review_runs  # noqa: F401 -- explicit v1 replay
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -10,6 +10,8 @@ from lib.infrastructure.workflow_review_repair import WorkflowReviewRepair
 from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
 from lib.prompts.workflow_repair import REVIEW_REPAIR_V1_7
+from lib.prompts.workflow_repair import REVIEW_REPAIR_V1_8
+from review_legacy_fixtures import legacy_review_runs  # noqa: F401 -- frozen v1.7 delta semantics
 from tests.test_review_repair_engine import ROOT, NoCalls, check, create_child
 from tests.test_workflow_production import model_request_data
 
@@ -236,5 +238,6 @@ def test_all_old_review_repair_snapshots_remain_byte_identical():
     }
     for version, digest in expected.items():
         assert sha256(get("workflow.review_repair", version=version).template.encode()).hexdigest() == digest
-    assert get("workflow.review_repair").version == "1.7.0"
-    assert render(get("workflow.review_repair")) == REVIEW_REPAIR_V1_7
+    assert render(get("workflow.review_repair", "1.7.0")) == REVIEW_REPAIR_V1_7
+    assert get("workflow.review_repair").version == "1.9.0"
+    assert render(get("workflow.review_repair", "1.8.0")) == REVIEW_REPAIR_V1_8

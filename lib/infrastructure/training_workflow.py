@@ -291,7 +291,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
-               review_repair=None, repair_inputs=None, agent_experience=None):
+               review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False):
     arithmetic_only = (targets == ["gsm8k"] or targets == ("gsm8k",) or targets == {"gsm8k"}) and not repair_inputs
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
@@ -302,7 +302,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         reasoning_trim=reasoning_trim, node_prompts=node_prompts,
         package_review=package_review, qa_director=qa_director, production=production,
         cpt_processing=None if arithmetic_only else cpt_processing,
-        review_repair=review_repair, repair_inputs=repair_inputs, agent_experience=agent_experience)
+        review_repair=review_repair, repair_inputs=repair_inputs, agent_experience=agent_experience,
+        reasoning_required=reasoning_required)
     review_repair = validate_review_repair(review_repair)
     repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
     validate_generation_review(targets, review_repair, repair_inputs)
@@ -482,7 +483,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
               "authored_role_projection_version": 3,
-              "review_context_protocol_version": 1,
+              "review_context_protocol_version": 2,
+              "turn_review_protocol_version": 1,
+              "reasoning_revision_protocol_version": 1,
+              "multiturn_terminal_review_version": 1,
+              **({"reasoning_required": True} if reasoning_required else {}),
               "learner_context_review_version": 1,
               "learner_context_retry_version": 1,
               **({"knowledge_agent_context_version": 1,
@@ -503,7 +508,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "qa_agent_memory_version": 1,
               "qa_expression_version": 2,
               "reasoning_shape_version": 1,
-              "training_surface_protocol_version": 1,
+              "training_surface_protocol_version": 2,
               "cpt_reference_releases": references,
               "evaluation_references": evaluation_references,
               "agent_sandbox_image": agent_sandbox_image,
@@ -839,14 +844,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
                             request_messages = answer_role_messages(system, memory_context, request_data, transport=transport,
                                 source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
-                    if (self.recipe.get("training_surface_protocol_version") == 1
+                    if (self.recipe.get("training_surface_protocol_version") in {1, 2}
                             and prompt_id == "workflow.sft_directed"
                             and isinstance(request_data, dict) and request_data.get("learner_messages")):
                         from lib.infrastructure.dialogue_role_messages import answer_role_messages
                         request_messages = answer_role_messages(system, memory_context, request_data,
                             transport="system" if memory_version == 2 else getattr(client, "source_memory_transport", "tool"),
                             include_question=True, source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
-                    if (self.recipe.get("training_surface_protocol_version") == 1
+                    if (self.recipe.get("training_surface_protocol_version") in {1, 2}
                             and prompt_id in {"workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.trim"}):
                         from lib.infrastructure.dialogue_role_messages import authored_role_messages
                         # DeepSeek beta disallows function-call history with
@@ -1993,7 +1998,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         "completed_turns": len(reviews), "dialogue_state": dialogue_state,
                         "dialogue_end_reason": dialogue_end_reason, "dialogue_end_guidance": dialogue_end_guidance,
                         "dialogue_end_scope": "director_suggestion_not_message_or_evidence"}
-                       if participant_stop else {})}]
+                       if participant_stop else {}),
+                    **({"source_context": deepcopy(unit), "evidence_level": evidence_level,
+                        "source_verification": source_verification,
+                        "quotes_by_turn": deepcopy(quotes_by_turn)}
+                       if self.recipe.get("multiturn_terminal_review_version") == 1
+                       and issue == "multiturn_natural_end_insufficient_turns" else {})}]
         completion_check = {}
         if ordinary_stop_audit:
             from lib.prompts.workflow_multiturn import NATURAL_COMPLETION_REVIEW
@@ -2237,7 +2247,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         task = {"prompt": self.without_source_reasoning(messages[:-1]), "source": source,
                 "quotes": sample.get("quotes", []), "reference_answer": messages[-1]["content"],
                 "generation_style": style}
-        if self.recipe.get("training_surface_protocol_version") == 1:
+        if self.recipe.get("training_surface_protocol_version") in {1, 2}:
             try:
                 assessed_reference = isinstance(sample.get("judge"), dict) and accepted(sample["judge"])
             except (KeyError, TypeError, ValueError):
@@ -2305,11 +2315,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 feedback = {"reasoning_protocol": issue,
                     "repair": "补齐具体前提、支持桥梁与本题针对性检查，保持任务和风格；不要只加字数或机械凑步骤。"}
                 continue
-            surface_protocol = self.recipe.get("training_surface_protocol_version") == 1
+            surface_protocol = self.recipe.get("training_surface_protocol_version") in {1, 2}
             if surface_protocol:
                 from lib.domain.training_surface import training_surface_issue
                 issue = training_surface_issue(value["reasoning"], value["answer"],
-                    visible_messages=task["prompt"], contract=sample.get("qa_contract"))
+                    visible_messages=task["prompt"], contract=sample.get("qa_contract"),
+                    protocol_version=self.recipe.get("training_surface_protocol_version", 1))
                 if issue:
                     feedback = {"training_surface": issue,
                         "repair": "解释和答案全文只围绕用户任务展开，用已掌握的事实推导；移除幕后制作过程，不删必要论证或编造经历。文章理解可引用用户实际可见的文章。"}
@@ -2319,7 +2330,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 "reasoning_trace_content_sha256": digest({"reasoning": value["reasoning"], "answer": value["answer"]})}
                 if protocol else {})
             if surface_protocol:
-                reasoning_audit["training_surface_protocol_version"] = 1
+                reasoning_audit["training_surface_protocol_version"] = self.recipe["training_surface_protocol_version"]
             if native_prefill:
                 reasoning_audit.update(prefill_audit)
             if self.recipe.get("review_repair") is not None:
@@ -2379,7 +2390,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         if issue := authored_rationale_issue(rationale):
             return None, {"reasoning_protocol": issue}
         issue = training_surface_issue(rationale["reasoning"], "",
-            visible_messages=task["prompt"], contract=sample.get("qa_contract"))
+            visible_messages=task["prompt"], contract=sample.get("qa_contract"),
+            protocol_version=self.recipe.get("training_surface_protocol_version", 1))
         if issue:
             return None, {"training_surface": issue}
         checked = self.adherence_check([sample["id"], "cot_prefix_check_v1", attempt],
@@ -2494,12 +2506,13 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         or text_issue(replacement.get("reasoning"))):
                     feedback = "仅返回有效的 reasoning 文本，不得包含或改写其他字段"
                     continue
-                if (self.recipe.get("training_surface_protocol_version") == 1
+                if (self.recipe.get("training_surface_protocol_version") in {1, 2}
                         and row.get("reasoning_origin") in {"prompt_styled_generation", "prompt_trim", "prompt_revision", "human_revision"}):
                     from lib.domain.training_surface import training_surface_issue
                     issue = training_surface_issue(replacement["reasoning"], answer,
                         visible_messages=prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}],
-                        contract=row.get("qa_contract"))
+                        contract=row.get("qa_contract"),
+                        protocol_version=self.recipe.get("training_surface_protocol_version", 1))
                     if issue:
                         feedback = {"training_surface": issue, "repair": "保留任务推导和事实，移除隐藏来源与制作过程自述。最终答案保持不变。"}
                         continue
@@ -3030,10 +3043,20 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                                     row["package_review"] = {"status": "not_selected", "mode": review_config["mode"],
                                                              "candidate_sha256": digest(payload)}
                             if (row["status"] == "eligible"
-                                    and self.recipe.get("training_surface_protocol_version") == 1):
+                                    and self.recipe.get("training_surface_protocol_version") in {1, 2}):
                                 from lib.infrastructure.workflow_review_repair import _row_training_surface_issue
                                 if issue := _row_training_surface_issue(target, row, self.recipe):
                                     row.update(status="quarantined", reason=issue)
+                            if (row["status"] == "eligible" and self.recipe.get("reasoning_required") is True
+                                    and target in {"sft", "multiturn", "agent"}):
+                                from lib.domain.turn_review import reasoning_text
+                                # Check the actual trainer payload as well as
+                                # the reviewed row: an output-style projection
+                                # must not erase reasoning required by this run.
+                                if any(message.get("role") == "assistant"
+                                       and not (message.get("tool_calls") or message.get("toolCalls"))
+                                       and not reasoning_text(message) for message in payload.get("messages", [])):
+                                    row.update(status="quarantined", reason="training_reasoning_required")
                             if row["status"] == "eligible":
                                 duplicate = self.final_qa_duplicate(row, target, qa_history)
                                 if duplicate:

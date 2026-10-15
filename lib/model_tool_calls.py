@@ -194,6 +194,12 @@ def _wire_messages(messages, api):
             state = _state(message, api)
             item = {key: deepcopy(value) for key, value in message.items()
                     if key in {"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"}}
+            # Normalized durable assistant replies use [] for no tool call.
+            # On the API wire this optional field must be absent rather than
+            # an empty invocation list. Keep native thinking and the saved
+            # history byte-for-byte; only the transport projection changes.
+            if item.get("tool_calls") in (None, []):
+                item.pop("tool_calls", None)
             if state and "reasoning_details" in state:
                 item["reasoning_details"] = deepcopy(state["reasoning_details"])
             result.append(item)

@@ -39,11 +39,17 @@ class Approve:
         self.usage = {"calls": 0}
 
     def chat(self, messages, **_kwargs):
-        self.calls.append(model_request_data(messages))
+        data = model_request_data(messages)
+        self.calls.append(data)
         self.usage["calls"] += 1
-        return json.dumps({"keep": True, "grounded": True, "reasoning_valid": True, "correctness": 5,
+        assessment = {"keep": True, "grounded": True, "reasoning_valid": True, "correctness": 5,
             "scores": {name: 5 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
-            "reason": "The answer preserves the source conditions."})
+            "reason": "The answer preserves the source conditions."}
+        if "supervised_assistant_turns" in data:
+            assessment["turn_verdicts"] = [{**deepcopy(assessment),
+                "message_index": turn["message_index"], "content_sha256": turn["content_sha256"],
+                "leakage_free": True, "critical_error": False} for turn in data["supervised_assistant_turns"]]
+        return json.dumps(assessment)
 
 
 def make_run(tmp_path, *, targets=("cpt",), text=SOURCE, batch=False, **options):

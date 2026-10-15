@@ -42,14 +42,18 @@ def row(index, answer, *, article=False):
                             "visible_context": ARTICLE if article else ""}}
 
 
-def package(tmp_path, values, *, review=False, marker=True):
+def package(tmp_path, values, *, review=False, marker=True, protocol=1, required=False, style=None):
     output = tmp_path / "output"
     rid = engine.create_run(output, brief="解释设备准备步骤。", targets=["sft"],
-                            package_review={"enabled": review, "mode": "all"})
+                            package_review={"enabled": review, "mode": "all"},
+                            reasoning_required=required, sft_output_style=style)
     path = engine.run_path(output, rid)
-    if not marker:
+    if not marker or protocol != 2:
         recipe = engine.read_json(path / "recipe.json")
-        recipe.pop("training_surface_protocol_version", None)
+        if marker:
+            recipe["training_surface_protocol_version"] = protocol
+        else:
+            recipe.pop("training_surface_protocol_version", None)
         atomic_json(path / "recipe.json", recipe)
         state = engine.read_json(path / "state.json")
         state["recipe_hash"] = engine.digest(recipe)
@@ -96,6 +100,20 @@ def test_real_visible_article_allows_native_answer_source_reference(tmp_path):
     records, exported, reviewer = package(tmp_path, [row(0, "这份资料指出应先确认可停机，再断电。", article=True)])
     assert records[0]["status"] == "eligible" and len(exported) == 1 and reviewer.calls == []
     assert exported[0]["messages"][-1]["reasoning_content"] == NATIVE
+
+
+def test_v2_final_guard_rejects_native_protocol_even_when_answer_is_clean(tmp_path):
+    original = row(0, "先确认可停机，再断电。")
+    records, exported, _ = package(tmp_path, [original], protocol=2)
+    assert not exported and records[0]["status"] == "quarantined"
+    assert records[0]["messages"][-1]["reasoning_content"] == NATIVE
+
+
+def test_required_reasoning_cannot_be_removed_by_output_projection(tmp_path):
+    original = row(0, "先确认可停机，再断电。")
+    original["messages"][-1]["reasoning_content"] = "只有确认能够停机才能切断电源，因此先确认，再断电。"
+    records, exported, _ = package(tmp_path, [original], protocol=2, required=True, style="drop")
+    assert not exported and records[0]["reason"] == "training_reasoning_required"
 
 
 @pytest.mark.parametrize("target", ["cpt", "dpo", "orpo", "rlaif", "gsm8k"])

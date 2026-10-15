@@ -13,6 +13,7 @@ from lib.io_utils import atomic_json
 from tests.test_workflow_production import model_request_data
 from tests.test_workflow_qa_director_engine import source_materials
 from source_memory_fixtures import memory_protocol_versions
+from review_legacy_fixtures import legacy_review_runs  # noqa: F401 -- historical scoring/delta contract
 
 
 @pytest.fixture(scope="session", autouse=True)

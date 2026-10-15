@@ -1,4 +1,4 @@
-"""Narrow checks of authored training text, never private traces or metadata.
+"""Narrow checks of text actually exported for training.
 
 These checks catch explicit source/process references. They do not establish
 semantic grounding or prove that a generated sample contains no information
@@ -10,7 +10,7 @@ from collections.abc import Mapping
 import re
 
 
-TRAINING_SURFACE_PROTOCOL_VERSION = 1
+TRAINING_SURFACE_PROTOCOL_VERSION = 2
 
 _SOURCE_REFERENCE = re.compile(
     r"(?:核对|检查|确认)[：:][^。！？\n]{0,200}(?:按|与)(?:资料|材料|原文|文档)"
@@ -84,6 +84,76 @@ _CURRENT_RESPONSE_ACTOR = re.compile(
     re.IGNORECASE,
 )
 
+# Version 2 treats provider reasoning as training text whenever it is exported.
+# These are private production field names, not broad words such as JSON,
+# prompt, quote, tool, reasoning or step. A visible technical task can discuss
+# these fields; an unrelated answer cannot disclose the generator's wrappers.
+_PRODUCTION_FIELD = re.compile(
+    r"\b(?:source_memory|dialogue_dispatch|teacher_evidence(?:_blocks)?|qa_contract|"
+    r"generation_style|answer_policy|dialogue_design|expression_design|"
+    r"source_context_pack|source_line_ranges|evidence_pack_sha256|"
+    r"training_surface_protocol_version|review_feedback|reasoning_trace(?:_status)?|"
+    r"generation_trace(?:_scope)?)\b", re.IGNORECASE,
+)
+_PRIVATE_PROMPT_SELF = re.compile(
+    r"(?:系统|开发者)(?:提示词?|指令)(?:中|里)?(?:说|写|要求|规定|让我)"
+    r"|(?:隐藏|内部)(?:提示词?|生成规则|输出规则|提示指令)(?:中|里)?(?:说|写|要求|规定|让我)"
+    r"|(?:本次|当前|我的)(?:提示词?|生成协议|输出协议|评分协议)"
+    r"|\b(?:my|our|this)\s+(?:(?:system|developer|hidden|internal)\s+)?"
+    r"(?:prompt|generation\s+protocol|output\s+protocol)\b"
+    r"|\bthe\s+(?:system|developer)\s+(?:prompt|instructions?)\s+(?:says?|tells?|requires?)\b",
+    re.IGNORECASE,
+)
+_PRIVATE_AUDIT_SCHEMA = re.compile(
+    r"\b(?:quotes|uncertain|evidence_quotes)\b.{0,70}"
+    r"(?:私有|内部|审计元数据|private\s+audit|internal\s+(?:audit|metadata))"
+    r"|(?:私有|内部|private|internal).{0,35}(?:审计|audit).{0,35}\b(?:quotes|uncertain)\b",
+    re.IGNORECASE,
+)
+_OUTPUT_SCHEMA_COMMAND = re.compile(
+    r"(?:\b(?:need|must|should|will|let(?:'s| us))\b.{0,45}"
+    r"\b(?:return|output|produce|emit)\b.{0,20}\bJSON\b"
+    r"|\b(?:need|must|should)\s+(?:valid\s+)?JSON\b"
+    r"|(?:仅|只|需要|必须|按要求)(?:返回|输出).{0,15}JSON)", re.IGNORECASE,
+)
+_SCHEMA_KEYS = re.compile(r"\b(?:answer|quotes|uncertain)\b", re.IGNORECASE)
+_SELECTED_PRIVATE_BLOCK = re.compile(
+    r"(?:quotes?|引文|引用).{0,70}(?:selected\s+(?:knowledge|evidence)\s+blocks|"
+    r"选定的?(?:知识|证据)块|实际选中(?:的)?块)", re.IGNORECASE,
+)
+
+
+def _production_protocol_reference(sentence, visible):
+    """Recognize concrete generator wrappers without banning technical prose."""
+    fields = list(_PRODUCTION_FIELD.finditer(sentence))
+    for field in fields:
+        # The actual question/source must contain the exact field. Neither
+        # assistant text nor audit metadata can make it learner-visible.
+        if field.group(0).casefold() not in visible.casefold():
+            return True
+    if _PRIVATE_AUDIT_SCHEMA.search(sentence):
+        if not (any(term in visible.casefold() for term in ("quotes", "uncertain", "evidence_quotes"))
+                and _TECHNICAL_TASK.search(visible) and not _PRIVATE_PROMPT_SELF.search(sentence)):
+            return True
+    if _PRIVATE_PROMPT_SELF.search(sentence):
+        # Explaining a user-supplied quotation is valid, but "my system prompt"
+        # is a disclosure of the current execution even in a prompt tutorial.
+        quoted = (sentence.strip().casefold() in visible.casefold()
+                  and _EXPLANATION_CUE.search(sentence) and not _PROCESS_CUE.search(sentence))
+        general_discussion = (_TECHNICAL_TASK.search(visible)
+                              and re.search(r"系统提示|开发者提示|system\s+prompt|developer\s+prompt", visible, re.I)
+                              and not re.search(r"(?:我|本次|当前)|\b(?:I|we|my|our|this)\b", sentence, re.I))
+        if not (quoted or general_discussion):
+            return True
+    if _OUTPUT_SCHEMA_COMMAND.search(sentence) and len(set(
+            key.group(0).strip("\"'`").casefold() for key in _SCHEMA_KEYS.finditer(sentence))) >= 2:
+        if not re.search(r"\bJSON\b|输出格式|返回格式|数据格式", visible, re.I):
+            return True
+    if _SELECTED_PRIVATE_BLOCK.search(sentence):
+        if not re.search(r"selected\s+(?:knowledge|evidence)\s+blocks|(?:知识|证据)块|引文|引用|quote", visible, re.I):
+            return True
+    return False
+
 
 def _text(value):
     if isinstance(value, str):
@@ -122,19 +192,23 @@ def _article_is_visible(visible, contract):
     return isinstance(article, str) and bool(article.strip()) and article.strip() in visible
 
 
-def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=None):
-    """Return a stable issue code for explicit leakage in authored output text.
+def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=None, protocol_version=1):
+    """Return a stable issue code for explicit leakage in exported output text.
 
     ``contract`` is not evidence by itself: source references are allowed only
     when its article is present in actual learner messages. Technical discussion
     of prompt/RAG fields remains valid; self-descriptions of this generation's
-    private wrappers do not. Input dictionaries and native provider traces are
-    outside this function's surface and must never be passed as authored text.
+    private wrappers do not. Input audit dictionaries are outside this surface.
+    Version 1 preserves historical authored-only callers. Version 2 also checks
+    native provider reasoning when the caller is about to export that text;
+    its provenance never grants permission to leak the production protocol.
     """
     visible = _visible_text(visible_messages)
     article_visible = _article_is_visible(visible, contract)
     for text in (_text(reasoning), _text(answer)):
         for sentence in re.split(r"[。！？!?；;\n]+|(?<=[.!?])\s+", text):
+            if protocol_version == 2 and _production_protocol_reference(sentence, visible):
+                return "training_surface_internal_process_reference"
             if _INTERNAL_FIELD.search(sentence) and _PROCESS_CUE.search(sentence):
                 return "training_surface_internal_process_reference"
             if match := _HIDDEN_PROTOCOL.search(sentence):
@@ -165,4 +239,50 @@ def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=N
                                             and _RETRIEVAL_REFERENCE.fullmatch(match.group(0)))
                     if not (quoted_discussion or general_rag_behavior):
                         return "training_surface_hidden_source_reference"
+    return None
+
+
+def training_record_surface_issue(target, row, *, protocol_version=None):
+    """Inspect every reasoning body in a v2 training record, without mutation.
+
+    This is a boundary check, not schema validation or a semantic judge. Private
+    response histories and reasoning summaries are deliberately not exported
+    and are not read. Assistant turns only inherit actual preceding user/tool
+    messages, so a later user disclosure cannot retroactively excuse a leak.
+    Callers retain the untouched candidate for bounded repair or quarantine.
+    """
+    if not isinstance(row, Mapping):
+        return None
+    version = protocol_version if protocol_version is not None else row.get("training_surface_protocol_version")
+    if version != 2:
+        return None
+    contract = row.get("qa_contract")
+    if target == "cot":
+        question = row.get("question")
+        visible = question if isinstance(question, list) else [{"role": "user", "content": question}]
+        return training_surface_issue(row.get("reasoning"), row.get("answer"),
+                                      visible_messages=visible, contract=contract, protocol_version=2)
+    if target in {"sft", "multiturn", "agent"}:
+        branches = [((), row.get("messages"))]
+    elif target in {"dpo", "orpo", "rlaif"}:
+        branches = [(row.get("prompt", ()), row.get(field)) for field in ("chosen", "rejected")]
+    else:
+        return None
+    for prefix, messages in branches:
+        if not isinstance(messages, (list, tuple)):
+            continue
+        visible = list(prefix) if isinstance(prefix, (list, tuple)) else []
+        for message in messages:
+            if not isinstance(message, Mapping):
+                continue
+            if message.get("role") == "assistant":
+                # Do not pick only the first populated alias: each of these
+                # fields can appear in an exported trainer conversation.
+                reasoning = "\n".join(_text(message.get(field))
+                                      for field in ("reasoning_content", "reasoning", "thinking"))
+                issue = training_surface_issue(reasoning, message.get("content"),
+                    visible_messages=visible, contract=contract, protocol_version=2)
+                if issue:
+                    return issue
+            visible.append(message)
     return None

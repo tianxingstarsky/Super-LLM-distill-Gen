@@ -117,6 +117,72 @@ def test_natural_end_after_one_complete_turn_is_isolated_without_buying_filler(t
     assert (path / "artifacts/multiturn.jsonl").read_text("utf-8") == ""
 
 
+@pytest.mark.parametrize("versioned", [False, True])
+def test_terminal_generation_keeps_source_snapshot_only_for_the_new_protocol(tmp_path, versioned):
+    from lib.infrastructure.human_revision import revision_evidence
+    output, run_id, path = create(tmp_path)
+    recipe = engine.read_json(path / "recipe.json")
+    if versioned:
+        recipe["multiturn_terminal_review_version"] = 1
+    else:
+        recipe.pop("multiturn_terminal_review_version", None)
+    atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    atomic_json(path / "state.json", state)
+    writer, judge = Writer(stop_after=1), Judge()
+    result = engine.Workflow(output, run_id, tmp_path, generator=writer, jev=judge).execute()
+    assert result["status"] == "needs_attention", result.get("error")
+    row = record(path)
+    assert row["reason"] == "multiturn_natural_end_insufficient_turns"
+    assert ("source_context" in row) is versioned
+    if versioned:
+        assert row["source_context"]["text"] == SOURCE
+        assert row["source_context"]["source_context_pack"]
+        assert row["evidence_level"] == "source_and_model_assessed"
+        assert row["quotes_by_turn"] == [[SOURCE]]
+        assert SOURCE in revision_evidence(row, recipe, path)["teacher_evidence"]
+    assert not judge.whole_calls and len(writer.answer_calls) == 1
+
+
+def test_batch_terminal_single_turn_bypasses_review_without_becoming_a_model_output_error(tmp_path, monkeypatch):
+    source = tmp_path / "terminal-guide.txt"
+    source.write_text(SOURCE, encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source], targets=["multiturn"],
+        conversation_turns=3, review_repair={"mode": "auto", "max_rounds": 2},
+        production={"version": 2, "goals": {"multiturn": 1}, "max_attempts": 1,
+                    "max_rounds": 1, "round_size": 1})
+    path = engine.run_path(output, run_id)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe["multiturn_terminal_review_version"] = 1
+    atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    atomic_json(path / "state.json", state)
+    class NoCalls:
+        model = "terminal-never-enters-review-model"
+        usage = {}
+        def chat(self, *_args, **_kwargs):
+            pytest.fail("A terminal generation result must not request a model review.")
+    def terminal(workflow, unit):
+        return [{**workflow.rejected(unit, "multiturn_natural_end_insufficient_turns"),
+            "messages": [{"role": "user", "content": "怎么检查？"},
+                         {"role": "assistant", "content": "先断电。", "reasoning_content": "检查前提是断电。"}],
+            "completed_turns": 1, "dialogue_end_reason": "natural_completion", "source_context": deepcopy(unit)}]
+    monkeypatch.setattr(engine.Workflow, "multiturn", terminal)
+    result = engine.Workflow(output, run_id, tmp_path, generator=NoCalls(), jev=NoCalls()).execute()
+    assert result["status"] != "failed", result.get("error")
+    row = record(path)
+    assert row["reason"] == "multiturn_natural_end_insufficient_turns"
+    assert row["review_repair"]["assessment"] == "not_performed_terminal_generation"
+    assert row["review_repair"]["original_reason"] == row["reason"]
+    assert not row.get("request_error") and not row["review_repair"].get("verdict")
+    assert row["review_repair"]["attempts"] == 0 and row["source_context"]["text"] == SOURCE
+    assert row["messages"][1]["reasoning_content"] == "检查前提是断电。"
+    assert engine.verify_artifacts(path)["counts"] == {"multiturn": 0}
+
+
 @pytest.mark.parametrize("invalid,reason", [
     ({"end": True, "reason": END_REASON}, "multiturn_stop_before_first_turn"),
     ({"stop": True, "reason": ""}, "invalid_multiturn_stop"),

@@ -746,3 +746,22 @@ SFT_DIRECTED_CHECK = _reasoning_spec_replace(SFT_DIRECTED_CHECK, version="1.3.0"
     "sft_directed_check", "核对真实用户行动与回答契约", SFT_DIRECTED_CHECK_V1_3).template)
 MULTITURN_DIRECTED_CHECK = _reasoning_spec_replace(MULTITURN_DIRECTED_CHECK, version="1.3.0", template=spec(
     "multiturn_directed_check", "核对自然多轮行动与信息权限", MULTITURN_DIRECTED_CHECK_V1_3).template)
+
+# All supervised assistant turns and their reasoning are assessed independently.
+# Prior versions remain registered for immutable submitted workflows.
+from lib.prompts.workflow_fact_review import REVIEW_SCORE_V1_7
+from lib.prompts.workflow_repair import REVIEW_REPAIR_V1_8
+REVIEW_SCORE_V1_6, REVIEW_REPAIR_V1_7 = REVIEW_SCORE, REVIEW_REPAIR
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.7.0", template=spec(
+    "review_score", "逐轮核验全部训练回答与推理", REVIEW_SCORE_V1_7).template)
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.8.0", template=spec(
+    "review_repair", "保留并重写必要推理的逐轮修正", REVIEW_REPAIR_V1_8).template)
+
+# Keep reported observations attached to their actual owner and study scope.
+from lib.prompts.workflow_fact_review import REVIEW_SCORE_V1_8
+from lib.prompts.workflow_repair import REVIEW_REPAIR_V1_9
+REVIEW_SCORE_V1_7, REVIEW_REPAIR_V1_8 = REVIEW_SCORE, REVIEW_REPAIR
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.8.0", template=spec(
+    "review_score", "逐轮核验结果归属与观察依据", REVIEW_SCORE_V1_8).template)
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.9.0", template=spec(
+    "review_repair", "保留推理并修正结果与角色归属", REVIEW_REPAIR_V1_9).template)

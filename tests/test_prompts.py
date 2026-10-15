@@ -98,7 +98,7 @@ def test_configured_explanation_length_does_not_conflict_with_short_default():
 def test_precise_fact_review_preserves_old_prompt_snapshots():
     for name, current_version, old_version in (
         ("rationale_check", "1.6.0", "1.2.0"),
-        ("review_score", "1.6.0", "1.3.0"),
+        ("review_score", "1.8.0", "1.3.0"),
         ("package_review", "1.4.0", "1.2.0"),
     ):
         current = get("workflow." + name)
@@ -111,11 +111,15 @@ def test_precise_fact_review_preserves_old_prompt_snapshots():
 def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_stays_pinned():
     from lib.prompts import workflow
     current = get("workflow.review_repair")
+    previous = get("workflow.review_repair", version="1.7.0")
     old = get("workflow.review_repair", version="1.3.0")
-    assert current.version == "1.7.0" and old == workflow.REVIEW_REPAIR_V1_3
-    assert "仅按实际question与可见文章判断用户的前提" in render(current)
-    assert "不能将这些内部材料中的错误归因给用户" in render(current)
-    assert "不叙述旧稿、返工、删除句子或遵守评语" in render(current)
+    assert current.version == "1.9.0" and old == workflow.REVIEW_REPAIR_V1_3
+    assert previous == workflow.REVIEW_REPAIR_V1_7
+    assert "仅按实际question与可见文章判断用户的前提" in render(previous)
+    assert "不能将这些内部材料中的错误归因给用户" in render(previous)
+    assert "不叙述旧稿、返工、删除句子或遵守评语" in render(previous)
+    assert "不归咎用户没有说过的错误" in render(current)
+    assert "不讨论旧稿、返工、评分" in render(current)
     assert "仅按实际question与可见文章判断用户的前提" not in render(old)
 
 
@@ -123,9 +127,13 @@ def test_user_hypotheses_do_not_become_asserted_beliefs_and_previous_snapshots_r
     from lib.prompts import workflow
     for name, new_version, old_version, previous in (
         ("cot_generate", "1.8.0", "1.6.0", workflow.COT_GENERATE_V1_6),
-        ("review_repair", "1.7.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
+        ("review_repair", "1.9.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
     ):
         assert get("workflow." + name).version == new_version
-        assert "保留其语言中的不确定性" in render(get("workflow." + name))
+        if name == "review_repair":
+            assert "保留其语言中的不确定性" in render(get("workflow.review_repair", version="1.7.0"))
+            assert "保持用户原任务、真实可见文章、角色、条件、表达风格" in render(get("workflow." + name))
+        else:
+            assert "保留其语言中的不确定性" in render(get("workflow." + name))
         assert get("workflow." + name, version=old_version) == previous
         assert "保留其语言中的不确定性" not in render(previous)

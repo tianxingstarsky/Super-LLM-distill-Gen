@@ -36,7 +36,10 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       agent_replay_mode="configured", evaluation_sources=(),
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
                       node_prompts=None, package_review=None, qa_director=None, production=None,
-                      cpt_processing=None, review_repair=None, repair_inputs=None, agent_experience=None):
+                      cpt_processing=None, review_repair=None, repair_inputs=None, agent_experience=None,
+                      reasoning_required=False):
+    if type(reasoning_required) is not bool:
+        raise ValueError("invalid_reasoning_required")
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
     if isinstance(targets, (str, bytes, dict)):
         raise ValueError(target_error)

@@ -76,10 +76,23 @@ class ReviewClient:
                 "reason": "The delivered inspection question is self-contained and names no hidden source."})
         assert "source_evidence" in data
         if "review_feedback" in data:
+            if "required_reasoning_indices" in data:
+                assert data["required_reasoning_indices"] == []
+                return json.dumps({"record": {"assistant_updates": [{
+                    "message_index": len(data["candidate"]["messages"]) - 1, "content": RIGHT}]},
+                    "quotes": self.quotes, "uncertain": False})
             payload = deepcopy(data["candidate"])
             payload["messages"][-1]["content"] = RIGHT
             return json.dumps({"record": payload, "quotes": self.quotes, "uncertain": False})
-        return json.dumps(verdict(self.accept_repaired and data["candidate"]["messages"][-1]["content"] == RIGHT))
+        assessment = verdict(self.accept_repaired and data["candidate"]["messages"][-1]["content"] == RIGHT)
+        if "supervised_assistant_turns" in data:
+            assessment["turn_verdicts"] = [{
+                **verdict(self.accept_repaired and data["candidate"]["messages"][turn["message_index"]]["content"] == RIGHT),
+                "message_index": turn["message_index"], "content_sha256": turn["content_sha256"],
+                "leakage_free": True,
+                "critical_error": data["candidate"]["messages"][turn["message_index"]]["content"] == WRONG}
+                for turn in data["supervised_assistant_turns"]]
+        return json.dumps(assessment)
 
 
 def review_fixture(tmp_path, *, selections=((2, 3),), numbered=True, quotes=None, memory_version=None):
@@ -188,6 +201,29 @@ def test_repair_cannot_quote_an_authentic_line_outside_the_director_selection(tm
     assert issue == "review_repair_source_quotes_missing"
     assert updated == row and updated["messages"][-1]["content"] == WRONG
     assert_selected_memory(client.message_history[0], row["qa_contract"]["source_line_ranges"], blocks)
+
+
+def test_v2_turn_review_and_delta_repair_keep_the_authenticated_source_selection(tmp_path):
+    workflow, row, _, blocks, client = review_fixture(tmp_path, selections=((2, 2),), memory_version=2)
+    assert workflow.recipe["review_context_protocol_version"] == 2
+    assert workflow.recipe["turn_review_protocol_version"] == 1
+    assert workflow.recipe["reasoning_revision_protocol_version"] == 1
+    client.accept_repaired = True
+    evidence = workflow._review_evidence(row)
+    initial = workflow._review_score("sft", row, evidence, [row["id"], "initial-v2"], "")
+    assert not initial["keep"] and initial["turn_verdicts"][0]["critical_error"]
+    expected_turn = client.calls[0]["supervised_assistant_turns"][0]
+    assert initial["turn_verdicts"][0]["content_sha256"] == expected_turn["content_sha256"]
+    updated, issue = workflow._repair_content("sft", row, evidence, [row["id"], "repair-v2"], initial, "")
+    assert issue is None and updated["messages"][0] == row["messages"][0]
+    assert updated["messages"][1]["content"] == RIGHT
+    final = workflow._review_score("sft", updated, evidence, [row["id"], "final-v2"], "")
+    assert final["keep"] and final["turn_verdicts"][0]["leakage_free"]
+    assert final["turn_verdicts"][0]["content_sha256"] != expected_turn["content_sha256"]
+    for wire in client.message_history:
+        if memory_packs(wire):
+            assert_selected_memory(wire, row["qa_contract"]["source_line_ranges"], blocks)
+            assert RESTART_RULE not in canonical(memory_packs(wire))
 
 
 def test_repair_rejects_a_quote_spanning_the_separator_between_disjoint_blocks(tmp_path):

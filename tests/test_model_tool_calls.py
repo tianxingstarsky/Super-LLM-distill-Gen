@@ -122,6 +122,38 @@ def test_deepseek_preserves_reasoning_from_all_prior_assistants_including_final_
         client.client.close()
 
 
+def test_persistent_final_assistant_omits_empty_calls_on_wire_but_keeps_native_history():
+    """A no-tool final reply must remain replayable in the next tool-enabled turn."""
+    captured = []
+    def handle(request):
+        body = json.loads(request.content)
+        captured.append(body)
+        if any(message.get("tool_calls") == [] for message in body["messages"]):
+            return httpx.Response(400, json={"error": {"type": "invalid_request_error",
+                "code": "invalid_request_error", "param": "messages.3.tool_calls",
+                "message": "Assistant tool_calls must not be empty when present."}})
+        return httpx.Response(200, json=reply("chat", calls=False, thought="exact native replay\n"))
+    client = sdk_client("chat", handle)
+    client.base_url = "https://api.deepseek.com/v1"
+    client.reasoning = {"mode": "enabled"}
+    try:
+        initial = [*MESSAGES[:1], {"role": "system", "content": "Source memory."}, *MESSAGES[1:]]
+        first = client.tool_turn(initial, TOOLS)
+        assert first["tool_calls"] == []
+        history = [*initial, first, {"role": "user", "content": "Continue the same real task."}]
+        before = deepcopy(history)
+        second = client.tool_turn(history, TOOLS)
+        assert second["content"] == ANSWER
+        sent = captured[1]["messages"][3]
+        assert "tool_calls" not in sent
+        assert sent["content"] == first["content"]
+        assert sent["reasoning_content"] == "exact native replay\n"
+        assert history == before and history[3]["tool_calls"] == []
+        assert captured[1]["tools"] == TOOLS and captured[1]["tool_choice"] == "auto"
+    finally:
+        client.client.close()
+
+
 @pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
 def test_hidden_reasoning_is_never_a_final_plan(api):
     data = reply(api, calls=False, content="", thought='{"plan":"hidden"}')
