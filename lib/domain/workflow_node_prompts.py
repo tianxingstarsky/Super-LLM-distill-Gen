@@ -127,7 +127,11 @@ def validate_node_prompts(value: dict | None) -> dict:
     return result
 
 
-def _prompt_catalog(recipe_version: int, learner_context_review_version=None) -> dict:
+def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
+                    claim_review_protocol_version=None) -> dict:
+    if claim_review_protocol_version is not None and (
+            type(claim_review_protocol_version) is not int or claim_review_protocol_version != 1):
+        raise ValueError("invalid_claim_review_protocol_version")
     catalog = (LEGACY_NODE_PROMPT_IDS if recipe_version == 9 else
             VERSION_10_NODE_PROMPT_IDS if recipe_version == 10 else
             VERSION_13_NODE_PROMPT_IDS if recipe_version <= 13 else
@@ -142,18 +146,29 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None) ->
     return catalog
 
 
-def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learner_context_review_version=None) -> dict:
+def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learner_context_review_version=None,
+                         claim_review_protocol_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
-    return {stage: {prompt_id: overrides.get(stage, {}).get(prompt_id, builtin_node_prompt(prompt_id))
+    def default_body(prompt_id):
+        # The same editable node has two wire contracts. A marker, rather than
+        # the registry's latest entry, selects the new claim-level contract.
+        # Existing catalogs retain the previous aggregate body verbatim.
+        if prompt_id == "workflow.review_score":
+            version = "1.12.0" if claim_review_protocol_version == 1 else "1.11.0"
+            return render(get(prompt_id, version=version))
+        return builtin_node_prompt(prompt_id)
+    return {stage: {prompt_id: overrides.get(stage, {}).get(prompt_id, default_body(prompt_id))
                     for prompt_id in prompt_ids}
-            for stage, prompt_ids in _prompt_catalog(recipe_version, learner_context_review_version).items()}
+            for stage, prompt_ids in _prompt_catalog(recipe_version, learner_context_review_version,
+                                                     claim_review_protocol_version).items()}
 
 
-def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11, learner_context_review_version=None) -> dict:
+def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11, learner_context_review_version=None,
+                                 claim_review_protocol_version=None) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
     templates = validate_node_prompts(value)
-    catalog = _prompt_catalog(recipe_version, learner_context_review_version)
+    catalog = _prompt_catalog(recipe_version, learner_context_review_version, claim_review_protocol_version)
     if (set(templates) != set(catalog)
             or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):

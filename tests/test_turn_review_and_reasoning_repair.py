@@ -302,10 +302,13 @@ def test_new_default_real_engine_keeps_revised_reasoning_and_reuses_paid_checkpo
             if "review_feedback" in data:
                 assert data["required_reasoning_indices"] == [1, 3]
                 return json.dumps({"record": updates(), "quotes": [SOURCE], "uncertain": False})
-            assert len(data["supervised_assistant_turns"]) == 2
-            value = {**grade(), "turn_verdicts": [{**grade(),
-                "message_index": turn["message_index"], "content_sha256": turn["content_sha256"],
-                "leakage_free": True, "critical_error": False} for turn in data["supervised_assistant_turns"]]}
+            assert data["claim_review_protocol_version"] == 1
+            value = {"claim_review_protocol_version": 1, "scope": data["scope"],
+                "coverage": "complete", "checked_fields": list(data["target_fields"]),
+                "claim_checks": [{"field": field, "quote": text, "status": "supported",
+                    "severity": "material", "basis": {"kind": "logic", "evidence": [],
+                        "derivation": "断电是检查的实际前置条件；记录发生在检查之后，当前解释保持这些依赖。"}}
+                    for field, text in data["target_fields"].items()], "verdict": grade()}
             return json.dumps(value)
 
     source = tmp_path / "source.txt"
@@ -322,11 +325,21 @@ def test_new_default_real_engine_keeps_revised_reasoning_and_reuses_paid_checkpo
     worker = engine.Workflow(output, run_id, root, generator=client)
     assert worker.recipe["review_context_protocol_version"] == 2
     assert worker.recipe["turn_review_protocol_version"] == 1
+    assert worker.recipe["claim_review_protocol_version"] == 1
     result = worker.execute()
     assert result["status"] == "completed", result.get("error")
     records = engine.read_json(worker.path / "artifacts/sft.records.json")
     assert len(records) == 1 and records[0]["status"] == "eligible"
-    assert records[0]["review_repair"]["attempts"] == 1 and len(client.calls) == 2
+    assert records[0]["review_repair"]["attempts"] == 1 and len(client.calls) == 3
+    assert [call["scope"]["message_index"] for call in client.calls[1:]] == [1, 3]
+    assert client.calls[1]["messages"] == records[0]["messages"][:2]
+    assert client.calls[2]["messages"] == records[0]["messages"]
+    for item in records[0]["claim_review"]["assessments"]:
+        reference = item["checkpoint"]
+        checkpoint = engine.read_json(worker.path / "checkpoints" / reference["stage"] /
+                                      (reference["checkpoint_sha256"] + ".json"))
+        assert checkpoint["data"] == item["review"]["raw_response"]
+        assert checkpoint["sha256"] == reference["response_sha256"]
     exported = json.loads((worker.path / "artifacts/sft.jsonl").read_text(encoding="utf-8"))
     assert all(exported["messages"][index]["reasoning_content"] == REASON for index in (1, 3))
     assert NATIVE not in canonical(exported) and NATIVE in canonical(records[0]["provider_reasoning_history"])

@@ -360,7 +360,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if ("multiturn" in targets and multi_style.get("enabled", bool(multi_style))
             or "workflow.style_check" in node_prompts.get("multiturn", {})):
         recipe_version = 22
-    node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version, learner_context_review_version=1)
+    node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+        learner_context_review_version=1, claim_review_protocol_version=1)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -468,7 +469,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if not repair_inputs and not source_cleaning and uses_shared_source_cleaning(targets, snapshots):
         source_cleaning = True
         recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
-        node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version, learner_context_review_version=1)
+        node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+            learner_context_review_version=1, claim_review_protocol_version=1)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -502,6 +504,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "authored_role_projection_version": 3,
               "review_context_protocol_version": 2,
               "turn_review_protocol_version": 1,
+              "claim_review_protocol_version": 1,
               "reasoning_revision_protocol_version": 1,
               "multiturn_terminal_review_version": 1,
               "multiturn_generation_style_version": 1,
@@ -847,8 +850,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         from lib.infrastructure.source_memory_messages import source_memory_messages
                         transport = ("system" if memory_version == 2 or prompt_id == "workflow.cot_native_answer" else
                                      getattr(client, "source_memory_transport", "tool"))
+                        if memory_context.get("claim_review_protocol_version") == 1:
+                            transport = "system"
                         request_messages = source_memory_messages(system, memory_context, transport=transport)
-                        if memory_context["teacher_context_pack"]:
+                        if memory_context["teacher_context_pack"] or memory_context.get("claim_review_protocol_version") == 1:
                             with self._lock:
                                 self.state.setdefault("source_memory_transports", {})[
                                     f"{model_stage or self.stage}.{role}"] = transport
@@ -3301,7 +3306,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     validate_node_prompt_snapshot(self.recipe.get("node_prompt_templates"),
                                                   self.recipe.get("node_prompt_system"),
                                                   recipe_version=self.recipe["version"],
-                                                  learner_context_review_version=self.recipe.get("learner_context_review_version"))
+                                                  learner_context_review_version=self.recipe.get("learner_context_review_version"),
+                                                  claim_review_protocol_version=self.recipe.get("claim_review_protocol_version"))
                 else:
                     if not isinstance(self.recipe.get("prompts"), dict):
                         raise ValueError("prompts_changed_create_new_run")

@@ -22,7 +22,8 @@ def legacy_review_runs(monkeypatch):
         path = engine.run_path(output, run_id)
         recipe = engine.read_json(path / "recipe.json")
         recipe.update(review_context_protocol_version=1, training_surface_protocol_version=1)
-        for field in ("turn_review_protocol_version", "reasoning_revision_protocol_version", "reasoning_required"):
+        for field in ("turn_review_protocol_version", "reasoning_revision_protocol_version", "reasoning_required",
+                      "claim_review_protocol_version"):
             recipe.pop(field, None)
         for prompt_id, version in (("workflow.review_score", "1.6.0"), ("workflow.review_repair", "1.7.0")):
             spec = get(prompt_id, version)

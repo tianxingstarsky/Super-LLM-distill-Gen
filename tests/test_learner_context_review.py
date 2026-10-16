@@ -58,6 +58,13 @@ def setup(tmp_path, *, legacy=False, custom=None):
     reviewer = Reviewer()
     workflow = engine.Workflow(output, rid, tmp_path, jev=reviewer)
     workflow.stage = "review"
+    # This suite isolates the existing context-only judge from its historic
+    # aggregate factual score. Prefix/claim scoring has a separate end-to-end
+    # suite; retain the exact old role, request and raw-score assertions here.
+    workflow.recipe.pop("claim_review_protocol_version")
+    workflow.recipe.pop("turn_review_protocol_version")
+    workflow.recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(
+        get("workflow.review_score", version="1.11.0"))
     if legacy:
         workflow.recipe.pop("learner_context_review_version")
     question = "资料中写了 relminxid。PostgreSQL 18 该怎么检查冻结边界？"

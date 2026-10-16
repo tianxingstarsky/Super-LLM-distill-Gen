@@ -144,7 +144,8 @@ def test_all_authored_turns_receive_separate_outcome_process_review_and_pinned_s
     assert request["generation_style"]["instruction"] == "按用户自定风格充分解释。"
     assert "assistant[1], assistant[3]" in worker.call_rules[0]["instruction"]
     assert "分别核对最终结果与实际推理" not in worker.call_rules[0]["instruction"]
-    assert "分别核对最终结果与实际推理" in render(get("workflow.review_score"))
+    # This probe has no claim-review marker and exercises the frozen rubric.
+    assert "分别核对最终结果与实际推理" in render(get("workflow.review_score", version="1.11.0"))
     assert [turn["message_index"] for turn in request["supervised_assistant_turns"]] == [1, 3]
     # Only the ordinary receipt may be added; input text and historical style stay exact.
     value.pop("assistant_turn_review_retry")
@@ -173,7 +174,7 @@ def test_retracted_exploration_remains_inspectable_and_is_not_a_keyword_failure(
     assert accepted(worker._review_score("multiturn", value, worker._review_evidence(value), ["item"], ""))
     assert worker.calls[0]["candidate"]["messages"][1]["reasoning_content"] == explanation
     assert "不因候选曾错误就判整段无效" not in worker.call_rules[0]["instruction"]
-    assert "不因候选曾错误就判整段无效" in render(get("workflow.review_score"))
+    assert "不因候选曾错误就判整段无效" in render(get("workflow.review_score", version="1.11.0"))
     # A model verdict fixture tests delivery and scope, not mathematical truth.
 
 
