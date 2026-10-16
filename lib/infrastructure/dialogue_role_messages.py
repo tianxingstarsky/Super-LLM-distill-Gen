@@ -37,16 +37,28 @@ def visible_dialogue(messages):
 
 
 def answer_role_messages(system, memory_context, data, *, transport="tool", include_question=False,
-                         source_memory_protocol_version=None):
+                         source_memory_protocol_version=None, answer_dispatch_protocol_version=1):
     """The final user is the learner's real utterance, never a task envelope."""
+    if type(answer_dispatch_protocol_version) is not int or answer_dispatch_protocol_version not in {1, 2}:
+        raise ValueError("invalid_answer_dispatch_protocol_version")
     rules = data.get("answer_rules", "")
     if rules:
         system += "\n本节点用户配置的回答规则：\n" + rules
     if data.get("question_rules"):
         system += "\n本节点用户配置的提问规则：\n" + data["question_rules"]
-    system += ("\nsource_memory 是内部事实记忆；dialogue_dispatch 是经工作流验证的设计简报，"
-               "不属于用户说过的话。实际用户/助手消息是模型当前要回应的对话。"
-               "human_design 中的参考答案仅是人类设计候选，须按事实核对，不能当作已评分通过或替代 source_memory。")
+    if answer_dispatch_protocol_version == 1:
+        system += ("\nsource_memory 是内部事实记忆；dialogue_dispatch 是经工作流验证的设计简报，"
+                   "不属于用户说过的话。实际用户/助手消息是模型当前要回应的对话。"
+                   "human_design 中的参考答案仅是人类设计候选，须按事实核对，不能当作已评分通过或替代 source_memory。")
+    else:
+        system += ("\nsource_memory 是内部来源记忆；来源与范围的校验不等于逐条事实已经独立核验。"
+                   "dialogue_dispatch 是经过结构检查的设计简报，尚未经过独立事实核验，"
+                   "不属于用户说过或确认过的话。guidance、dialogue_design、dialogue_state、dialogue_step"
+                   "中的计划、预设和推测不是已发生的事实，也不能确认用户的模型、数据、经历或约束。"
+                   "当前真实用户/助手消息才是正在发生的对话；事实判断须依据当前真实对话或已核对的来源依据，"
+                   "来源中的领域知识不能替用户确认其个人情况。将来可能出现的反馈、条件或轮次"
+                   "不得倒灌为当前已知事实；设计设想与当前真实对话冲突时，以真实对话为准。"
+                   "human_design 中的参考答案仅是人类设计候选，须按事实核对，不能当作已评分通过或替代 source_memory。")
     if include_question:
         system += ("只生成本轮回答及审计元数据；返回 schema 中的 question 必须从 "
                    "dialogue_dispatch.fixed_question 原样复制，不修改、扩写或重新创作用户问题。")

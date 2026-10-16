@@ -496,6 +496,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "reasoning_distillation_audit_version": 1,
               "style_verdict_protocol_version": 2,
               "question_brief_protocol_version": 2,
+              "answer_dispatch_protocol_version": 2,
               "multiturn_failure_audit_version": 1,
               "authored_role_projection_version": 3,
               "review_context_protocol_version": 2,
@@ -864,14 +865,16 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                                 **({"expression_guide_version": 2} if self.recipe.get("qa_expression_version") == 2 else {}))
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
                             request_messages = answer_role_messages(system, memory_context, request_data, transport=transport,
-                                source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
+                                source_memory_protocol_version=memory_version if memory_version in {1, 2} else None,
+                                answer_dispatch_protocol_version=self.recipe.get("answer_dispatch_protocol_version", 1))
                     if (self.recipe.get("training_surface_protocol_version") in {1, 2}
                             and prompt_id == "workflow.sft_directed"
                             and isinstance(request_data, dict) and request_data.get("learner_messages")):
                         from lib.infrastructure.dialogue_role_messages import answer_role_messages
                         request_messages = answer_role_messages(system, memory_context, request_data,
                             transport="system" if memory_version == 2 else getattr(client, "source_memory_transport", "tool"),
-                            include_question=True, source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
+                            include_question=True, source_memory_protocol_version=memory_version if memory_version in {1, 2} else None,
+                            answer_dispatch_protocol_version=self.recipe.get("answer_dispatch_protocol_version", 1))
                     if (self.recipe.get("training_surface_protocol_version") in {1, 2}
                             and prompt_id in {"workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.trim"}):
                         from lib.infrastructure.dialogue_role_messages import authored_role_messages
