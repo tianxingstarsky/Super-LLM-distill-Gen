@@ -1,5 +1,6 @@
 """Same-question native regeneration uses real SDK prefill and no paid service."""
 from copy import deepcopy
+from functools import wraps
 import hashlib
 
 import pytest
@@ -8,6 +9,7 @@ from lib.infrastructure.workflow_native_regeneration import regenerate_native_co
 from lib.domain.workflow_quality import canonical
 from lib.domain.review_repair import validate_review_repair
 from lib.infrastructure import training_workflow as engine
+from lib.prompts import get, render
 from test_workflow_native_prefill import setup_workflow, PREFIX, ANSWER, TEXT
 from test_native_answer_visible_retry import controlled_sdk
 from test_workflow_styled_generation import run
@@ -16,6 +18,39 @@ from test_workflow_styled_generation import run
 @pytest.fixture(scope="session", autouse=True)
 def mock_llm_server():
     yield
+
+
+@pytest.fixture(autouse=True)
+def native_legacy_review_runs(monkeypatch):
+    """These historical probes use one aggregate review between prefix/style.
+
+    New inventory/adjudication behavior is exercised separately by
+    test_native_condition_pending_review; keep the old wire/call assertions.
+    """
+    create = engine.create_run
+    @wraps(create)
+    def historical(output, *args, **kwargs):
+        run_id = create(output, *args, **kwargs)
+        path = engine.run_path(output, run_id)
+        recipe = engine.read_json(path / "recipe.json")
+        recipe.update(review_context_protocol_version=1, training_surface_protocol_version=1)
+        for name in ("turn_review_protocol_version", "reasoning_revision_protocol_version", "reasoning_required",
+                     "claim_review_protocol_version", "claim_review_adversarial_protocol_version",
+                     "claim_review_condition_contract_version"):
+            recipe.pop(name, None)
+        for prompt_id, version in (("workflow.review_score", "1.6.0"), ("workflow.review_repair", "1.7.0")):
+            spec = get(prompt_id, version)
+            recipe["prompts"][prompt_id] = {"version": version, "sha256": engine.digest(spec.template)}
+            for templates in recipe.get("node_prompt_templates", {}).values():
+                if prompt_id in templates:
+                    templates[prompt_id] = render(spec)
+        recipe.get("node_prompt_templates", {}).get("review", {}).pop("workflow.review_reference", None)
+        engine.atomic_json(path / "recipe.json", recipe)
+        state = engine.read_json(path / "state.json")
+        state["recipe_hash"] = engine.digest(recipe)
+        engine.atomic_json(path / "state.json", state)
+        return run_id
+    monkeypatch.setattr(engine, "create_run", historical)
 
 
 def selected_parent(tmp_path, monkeypatch, *, missing=False):

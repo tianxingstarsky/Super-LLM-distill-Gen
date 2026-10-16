@@ -120,6 +120,17 @@ _CLAIM_FORMAT_ERROR_CODES = frozenset({
     "missing_adversarial_evidence",
 })
 
+_CONDITION_INVENTORY_WIRE_PROTOCOL = (
+    "协议4 condition_contract_version=1。本阶段只登记原文条件，不作对错挑战。"
+    "返回claim_review_protocol_version=4、phase=claim_challenge、scope_sha256、issues=[]、"
+    "condition_ledger、limitations。condition_ledger对每个当前unit恰好一项unit_id/premises。"
+    "premises及引用严格使用response_json_schema，来源只定位原文、不证明推断。")
+_CONDITION_ADJUDICATION_WIRE_PROTOCOL = (
+    "协议4 condition_contract_version=1。本阶段逐原文检查段评审，不补条件、不替作者修稿。"
+    "保留既定coverage/checked_unit_ids/claim_checks/challenge_checks/verdict；"
+    "每条claim_checks新增必填premises，逐项记录实际使用的条件来源。challenge_checks=[]。"
+    "新增假设不能证明原句，无法核清用insufficient。严格使用response_json_schema。")
+
 
 def _claim_format_boundaries(request, phase):
     """Describe literal input paths/indices without echoing any text value."""
@@ -154,6 +165,8 @@ def _claim_format_boundaries(request, phase):
         result["current_target_unit_ids"] = [item["id"] for item in request["target_units"]]
         if phase == "claim_adjudication":
             result["current_challenge_issue_ids"] = [item["id"] for item in request["challenge_review"]["issues"]]
+        if request.get("condition_contract_version") == 1 and phase == "claim_challenge":
+            result["response_field_names"].append("condition_ledger")
     return result
 
 
@@ -1151,7 +1164,7 @@ class WorkflowReviewRepair:
         adversarial_version = self.recipe.get("claim_review_adversarial_protocol_version")
         if adversarial_version is not None and (type(adversarial_version) is not int or adversarial_version != 1):
             raise ValueError("invalid_claim_review_adversarial_protocol_version")
-        for name in ("claim_review_wire_schema_version", "claim_review_focus_version"):
+        for name in ("claim_review_wire_schema_version", "claim_review_focus_version", "claim_review_condition_contract_version"):
             setting = self.recipe.get(name)
             if setting is not None and (type(setting) is not int or setting != 1):
                 raise ValueError("invalid_" + name)
@@ -1228,11 +1241,15 @@ class WorkflowReviewRepair:
             if setting is not None and (type(setting) is not int or setting != 1):
                 raise ValueError("invalid_" + name)
         wire_metadata = {}
+        condition_contract = request.get("condition_contract_version") == 1
+        if condition_contract:
+            instruction = (_CONDITION_INVENTORY_WIRE_PROTOCOL if phase == "claim_challenge"
+                           else _CONDITION_ADJUDICATION_WIRE_PROTOCOL)
         if request.get("claim_review_protocol_version") == 4:
-            if schema_version == 1:
+            if schema_version == 1 or condition_contract:
                 from lib.infrastructure.claim_review_wire_schema import claim_review_wire_schema_metadata
                 wire_metadata.update(claim_review_wire_schema_metadata(request))
-            if focus_version == 1:
+            if focus_version == 1 and not condition_contract:
                 from lib.domain.review_claim_focus import claim_review_focus_units
                 wire_metadata["claim_review_focus"] = claim_review_focus_units(request["target_units"])
         call_instruction = instruction
@@ -1297,18 +1314,21 @@ class WorkflowReviewRepair:
                 return receipt, reference
 
     def _review_adversarial_claim_score(self, target, row, evidence, key):
-        """Challenge the actual candidate, then adjudicate with separate raw calls.
+        """Inventory conditions or challenge, then review in separate contexts.
 
-        The first call is candidate-aware and is never described as blind or
-        independent truth. Both fallible model outputs remain checkpointed.
+        The opt-in inventory supplies no pre-judgment. Historical runs retain
+        their candidate-aware challenge contract. Neither is blind or truth;
+        both actual, fallible model outputs remain checkpointed.
         """
         from lib.domain.adversarial_claim_review import (challenge_review_requests, validate_challenge_review,
             adversarial_claim_review_requests, validate_adversarial_claim_review, merge_adversarial_claim_reviews)
         from lib.infrastructure.training_workflow import digest
         payload = self._review_payload(target, row)
         requirements = current_claim_review_requirements(self, target, row) or None
+        condition_version = self.recipe.get("claim_review_condition_contract_version")
         inputs = challenge_review_requests(target, payload, evidence,
-            reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements)
+            reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
+            condition_contract_version=condition_version)
         audit = {"version": 4, "method": "adversarial_anchored_claim_review",
             "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
             "source_evidence_sha256": inputs[0]["scope"]["source_evidence_sha256"],
@@ -1325,7 +1345,7 @@ class WorkflowReviewRepair:
             audit["challenge_reviews"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
         requests = adversarial_claim_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
-            challenge_reviews=challenges)
+            challenge_reviews=challenges, condition_contract_version=condition_version)
         receipts = []
         for request in requests:
             call_key = [*key, "claim_adjudication", request["scope"]["message_index"], request["scope"]["scope_sha256"]]
@@ -1338,7 +1358,8 @@ class WorkflowReviewRepair:
         audit.update(status="complete", derived_verdict=deepcopy(check))
         row["reasoning_assessment_method"] = "llm_claim_review"
         row["reasoning_assessment_reference"] = {"kind": "llm_claim_review", "version": 4,
-            "scope": "candidate_aware_challenge_then_anchored_adjudication_not_truth_certification",
+            "scope": ("literal_condition_inventory_then_anchored_review_not_truth_certification"
+                if condition_version == 1 else "candidate_aware_challenge_then_anchored_adjudication_not_truth_certification"),
             "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
             "source_evidence_sha256": audit["source_evidence_sha256"],
             "challenge_checkpoints": [deepcopy(item["checkpoint"]) for item in audit["challenge_reviews"]],
@@ -1877,6 +1898,16 @@ class WorkflowReviewRepair:
                        and "claim_release_decision" in row else {})})
                 receipt.update(score=score, verdict=deepcopy(check), reason=check["reason"])
                 force_repair = False
+                if (self.recipe.get("claim_review_condition_contract_version") == 1
+                        and any(entry.get("review", {}).get("condition_guard", {}).get("needs_review")
+                            for entry in row.get("claim_review", {}).get("assessments", []))):
+                    # Missing support is not an error verdict. Keep the body
+                    # and raw scores; don't pay for speculative auto-rewrites.
+                    receipt.update(status="waiting_manual_review", reason="condition_support_pending_review",
+                                   stop_reason="condition_support_pending_review")
+                    receipt["history"][-1]["status"] = "waiting_manual_review"
+                    row.update(status="quarantined", reason="condition_support_pending_review")
+                    break
                 if keep:
                     receipt["status"] = "accepted"
                     row.update(status="eligible", judge=deepcopy(check))
@@ -1910,6 +1941,7 @@ class WorkflowReviewRepair:
                 selection["remaining"] = 0  # This review invocation has stopped.
                 selection["repair_attempts_consumed"] = receipt["attempts"]
                 selection["status"] = ("accepted" if selected is not None else
+                    "waiting_manual_review" if receipt["status"] == "waiting_manual_review" else
                     "rejected" if receipt.get("stop_reason") else "exhausted")
                 if original.get("reasoning_distillation"):
                     selection["parent_audit_sha256"] = digest(original["reasoning_distillation"])

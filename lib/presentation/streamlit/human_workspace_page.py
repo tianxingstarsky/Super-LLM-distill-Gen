@@ -128,6 +128,8 @@ def _render_record(row):
     status = record.get("status")
     if status == "eligible":
         st.caption("已通过本轮导出检查；可保留或提出修正意见。")
+    elif record.get("reason") == "condition_support_pending_review":
+        st.info("评审依据尚未核清，原稿已保留。请先复核条件与来源，再决定是否修正。")
     elif record.get("reason") in {"human_review_required", "manual_review_required"}:
         st.info("此候选等待人工评分和修正，尚未进入训练文件。")
     elif status:
@@ -626,10 +628,13 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
             can_revise = bool(selected_result.get("can_revise"))
             route = selected_result.get("route", "unknown")
             pending_human = row.get("record", {}).get("reason") in {"human_review_required", "manual_review_required"}
-            outcome = ("待人工评分与修正" if pending_human else "已通过 · 可保留或继续改善" if route == "accepted" else
+            pending_conditions = row.get("record", {}).get("reason") == "condition_support_pending_review"
+            outcome = ("待复核 · 依据尚未核清" if pending_conditions else "待人工评分与修正" if pending_human else "已通过 · 可保留或继续改善" if route == "accepted" else
                        "未通过 · 进入修正分支" if route == "rejected" else "评审尚未完成")
+            route_description = ("原稿已保留；先核对评审依据，再决定是否修正。" if pending_conditions else
+                "当前候选评分 → 修正分支修改 → 回到评分 → 通过保留 / 未通过待处理")
             st.html(f'<div class="df-human-assessment" data-route="{html.escape(route, quote=True)}"><strong>{outcome}</strong>'
-                    '<span>当前候选评分 → 修正分支修改 → 回到评分 → 通过保留 / 未通过待处理</span></div>')
+                    f'<span>{route_description}</span></div>')
             if selected_result.get("checks"):
                 with st.expander("查看本结果的评审依据", expanded=route == "rejected"):
                     for check in selected_result["checks"]:
@@ -638,7 +643,8 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
                             "评分与修正" if check["source"] == "review" else
                             ("JEV 评分" if (session["blueprint"].get("package_review") or {}).get("node") == "jev" else "AI 评审")
                             if check["source"] == "package_review" else "生成内质量核对")
-                        st.caption(check_label + (" · 通过" if check["status"] == "accepted" else " · 未通过"))
+                        st.caption(check_label + (" · 待复核" if pending_conditions and check["source"] == "review"
+                            else " · 通过" if check["status"] == "accepted" else " · 未通过"))
                         if verdict.get("scores"):
                             st.json(verdict["scores"])
                         if check.get("reason"):

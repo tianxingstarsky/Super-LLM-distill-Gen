@@ -178,6 +178,7 @@ def _workflow_error(error) -> str:
         "rlaif_generation_requires_ai_review": "RLAIF 需要 AI 评分与评语。请在评分与修正节点选择自动模式；人工审核可在生成后进行。",
         "manual_rlaif_change_requires_ai_review": "修改后的 RLAIF 候选需要 AI 重新评分，不能沿用原来的 AI 标签。请切换自动评分与修正。",
         "manual_review_required": "等待人工评分与修正。",
+        "condition_support_pending_review": "评审依据尚未核清，原稿已保留。请先复核条件与来源，再决定是否修正。",
         "manual_review_score_required": "请填写人工评分，再提交内容修正。",
         "manual_review_rejected": "人工评分或结论未达到通过要求，此版本保留在待处理结果中。",
         "manual_review_patch_target_mismatch": "修正内容与当前训练类型不一致，请保留该类型要求的字段。",

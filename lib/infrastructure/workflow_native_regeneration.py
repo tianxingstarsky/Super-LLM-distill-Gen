@@ -97,6 +97,7 @@ def regenerate_native_cot_item(workflow, item):
             "qa_contract": deepcopy(original.get("qa_contract")), "generation_style": style}
     history = []
     terminal, check, style_check = None, None, None
+    pending_review = False
     attempts = config["max_rounds"]
     for attempt in range(attempts):
         workflow.check_cancel()
@@ -189,6 +190,18 @@ def regenerate_native_cot_item(workflow, item):
             "rationale_checkpoint_sha256": digest(["call", [*key, "rationale"]]),
             "prefix_review_checkpoint_sha256": digest(["call", [*key, "prefix_check"]])}
         check = workflow._review_score("cot", updated, evidence, [*key, "final"], instruction)
+        if (workflow.recipe.get("claim_review_condition_contract_version") == 1
+                and any(entry.get("review", {}).get("condition_guard", {}).get("needs_review")
+                    for entry in updated.get("claim_review", {}).get("assessments", []))):
+            # A support gap does not justify buying another rationale or style
+            # judgment. This complete native body remains available to review;
+            # phase=final also prevents incomplete-output cleanup below.
+            history.append({"attempt": attempt, "phase": "final", "status": "waiting_manual_review",
+                            "verdict": deepcopy(check)})
+            row = updated
+            row.update(status="quarantined", reason="condition_support_pending_review")
+            pending_review = True
+            break
         style_check = _adherence(workflow, [*key, "style"], "workflow.style_check",
             {"generation_style": style, "reasoning": prefix, "answer": answer["answer"],
              "prompt": deepcopy(actual), "learner_messages": deepcopy(actual)})
@@ -220,9 +233,13 @@ def regenerate_native_cot_item(workflow, item):
     candidate_sha = (digest(workflow._review_payload("cot", row))
                      if row.get("answer") and row.get("reasoning") else None)
     row["review_repair"] = {"mode": "auto", "native_regeneration": True,
-        "status": "accepted" if row.get("status") == "eligible" else "rejected", "node": "review",
+        "status": ("waiting_manual_review" if pending_review else
+                   "accepted" if row.get("status") == "eligible" else "rejected"), "node": "review",
         "score": min(check["scores"].values()) / 5 if check else None, "score_threshold": config["score_threshold"],
         "attempts": len({entry["attempt"] for entry in history}), "history": history,
         "candidate_sha256": candidate_sha, "config_sha256": digest(config)}
+    if pending_review:
+        row["review_repair"].update(reason="condition_support_pending_review",
+                                   stop_reason="condition_support_pending_review")
     row["_review_target"] = "cot"
     return [row]

@@ -27,8 +27,8 @@ def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     assert recipe["claim_review_adversarial_protocol_version"] == 1
     assert recipe["claim_review_wire_schema_version"] == 1
     assert recipe["claim_review_focus_version"] == 1
-    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.18.0"
-    assert recipe["prompts"]["workflow.review_reference"]["version"] == "2.0.1"
+    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.19.0"
+    assert recipe["prompts"]["workflow.review_reference"]["version"] == "2.1.0"
     assert "workflow.review_reference" in recipe["node_prompt_templates"]["review"]
     assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.11.0"
     assert recipe["authored_reasoning_warmup_version"] == 1

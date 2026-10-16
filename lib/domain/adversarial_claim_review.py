@@ -28,16 +28,26 @@ def _request_hash(request):
     return v1._digest(value)
 
 
-def _challenge_request(core):
+def _challenge_request(core, condition_contract_version=None):
     request = deepcopy(core)
+    if condition_contract_version is not None:
+        if type(condition_contract_version) is not int or condition_contract_version != 1:
+            raise ValueError("invalid_claim_review_condition_contract_version")
+        request["condition_contract_version"] = 1
     request.update(claim_review_protocol_version=4, phase="claim_challenge",
-                   target_units=target_units(core["target_fields"], core["scope"]["message_index"]))
+                   target_units=target_units(core["target_fields"], core["scope"]["message_index"],
+                       segmentation_version=2 if condition_contract_version == 1 else None))
     request["scope"]["scope_sha256"] = _request_hash(request)
     return request
 
 
 def _core(request, phase):
     fields = _CORE | {"phase", "target_units"}
+    contract = request.get("condition_contract_version") if isinstance(request, dict) else None
+    if contract is not None:
+        if type(contract) is not int or contract != 1:
+            raise ValueError("invalid_claim_review_condition_contract_version")
+        fields |= {"condition_contract_version"}
     if phase == "claim_adjudication":
         fields |= {"challenge_review"}
     if (not isinstance(request, dict) or set(request) not in (fields, fields | {"review_requirements"})
@@ -47,9 +57,10 @@ def _core(request, phase):
             or request["scope"].get("scope_sha256") != _request_hash(request)):
         raise ValueError("invalid_adversarial_review_request")
     validate_target_units(request["target_units"], request.get("target_fields"),
-                          request["scope"].get("message_index"))
+                          request["scope"].get("message_index"),
+                          segmentation_version=2 if contract == 1 else None)
     core = {key: deepcopy(value) for key, value in request.items()
-            if key not in {"phase", "target_units", "challenge_review"}}
+            if key not in {"phase", "target_units", "challenge_review", "condition_contract_version"}}
     core["claim_review_protocol_version"] = 1
     if phase == "claim_adjudication":
         core["scope"].pop("challenge_request_sha256", None)
@@ -74,15 +85,18 @@ def _basis(basis, request, quote=None):
         v1._reference(evidence, request, basis["kind"])
 
 
-def challenge_review_requests(target, payload, evidence, reasoning_required=False, review_requirements=None):
+def challenge_review_requests(target, payload, evidence, reasoning_required=False, review_requirements=None,
+                              *, condition_contract_version=None):
     """The challenger sees this exact candidate, never a fake blind reference."""
-    return [_challenge_request(core) for core in v1.claim_review_requests(
+    return [_challenge_request(core, condition_contract_version) for core in v1.claim_review_requests(
         target, payload, evidence, reasoning_required, review_requirements)]
 
 
 def validate_challenge_review(value, request):
     core = _core(request, "claim_challenge")
-    if (not isinstance(value, dict) or set(value) != _CHALLENGE
+    contract = request.get("condition_contract_version") == 1
+    fields = _CHALLENGE | ({"condition_ledger"} if contract else set())
+    if (not isinstance(value, dict) or set(value) != fields
             or type(value["claim_review_protocol_version"]) is not int
             or value["claim_review_protocol_version"] != 4 or value["phase"] != "claim_challenge"):
         raise ValueError("invalid_challenge_review_response")
@@ -90,6 +104,14 @@ def validate_challenge_review(value, request):
         raise ValueError("stale_challenge_review_response")
     if not isinstance(value["issues"], list):
         raise ValueError("invalid_challenge_review_issues")
+    ledger = None
+    if contract:
+        from lib.domain.review_condition_contract import condition_ledger
+        ledger = condition_ledger(value["condition_ledger"], request)
+        # The first context inventories the literal candidate and its scope.
+        # It does not supply a fallible verdict for the second context to defend.
+        if value["issues"]:
+            raise ValueError("condition_inventory_contains_verdict")
     units = {unit["id"] for unit in request["target_units"]}
     seen = set()
     for issue in value["issues"]:
@@ -111,9 +133,12 @@ def validate_challenge_review(value, request):
         raise ValueError("invalid_challenge_review_limitations")
     for limitation in value["limitations"]:
         v1._text(limitation, "missing_challenge_review_limitation")
-    return {"claim_review_protocol_version": 4, "phase": "claim_challenge", "request": deepcopy(request),
+    receipt = {"claim_review_protocol_version": 4, "phase": "claim_challenge", "request": deepcopy(request),
             "raw_response": deepcopy(value), "raw_response_sha256": v1._digest(value),
             "structure_verified": True, "semantic_verification": _SEMANTICS}
+    if ledger is not None:
+        receipt["condition_ledger"] = ledger
+    return receipt
 
 
 def _challenge_receipt(receipt):
@@ -126,7 +151,7 @@ def _challenge_receipt(receipt):
 
 
 def adversarial_claim_review_requests(target, payload, evidence, reasoning_required=False,
-                                      review_requirements=None, *, challenge_reviews):
+                                      review_requirements=None, *, challenge_reviews, condition_contract_version=None):
     cores = v1.claim_review_requests(target, payload, evidence, reasoning_required, review_requirements)
     if not isinstance(challenge_reviews, list) or len(challenge_reviews) != len(cores):
         raise ValueError("incomplete_challenge_review_receipts")
@@ -139,11 +164,13 @@ def adversarial_claim_review_requests(target, payload, evidence, reasoning_requi
         by_index[index] = receipt
     requests = []
     for core in cores:
-        challenge = _challenge_request(core)
+        challenge = _challenge_request(core, condition_contract_version)
         receipt = by_index.get(core["scope"]["message_index"])
         if receipt is None or receipt["request"] != challenge:
             raise ValueError("stale_challenge_review_receipt")
         request = deepcopy(core)
+        if condition_contract_version is not None:
+            request["condition_contract_version"] = condition_contract_version
         request.update(claim_review_protocol_version=4, phase="claim_adjudication",
             target_units=deepcopy(challenge["target_units"]), challenge_review=deepcopy(receipt["raw_response"]))
         request["scope"].update(challenge_request_sha256=v1._digest(challenge),
@@ -155,7 +182,7 @@ def adversarial_claim_review_requests(target, payload, evidence, reasoning_requi
 
 def _grade_core(request):
     core = _core(request, "claim_adjudication")
-    challenge = _challenge_request(core)
+    challenge = _challenge_request(core, request.get("condition_contract_version"))
     receipt = validate_challenge_review(request["challenge_review"], challenge)
     if (request["scope"].get("challenge_request_sha256") != v1._digest(challenge)
             or request["scope"].get("challenge_review_sha256") != receipt["raw_response_sha256"]):
@@ -165,6 +192,7 @@ def _grade_core(request):
 
 def validate_adversarial_claim_review(value, request):
     core, challenge = _grade_core(request)
+    contract = request.get("condition_contract_version") == 1
     if (not isinstance(value, dict) or set(value) != _GRADE
             or type(value["claim_review_protocol_version"]) is not int or value["claim_review_protocol_version"] != 4):
         raise ValueError("invalid_adversarial_review_response")
@@ -178,9 +206,10 @@ def validate_adversarial_claim_review(value, request):
     claims = value["claim_checks"]
     if not isinstance(claims, list) or len(claims) != len(units):
         raise ValueError("invalid_adversarial_unit_coverage")
-    by_unit = {}
+    by_unit, condition_checks, unresolved = {}, [], []
     for claim in claims:
-        if not isinstance(claim, dict) or set(claim) != {"unit_id", "status", "severity", "basis"}:
+        fields = {"unit_id", "status", "severity", "basis"} | ({"premises"} if contract else set())
+        if not isinstance(claim, dict) or set(claim) != fields:
             raise ValueError("invalid_adversarial_claim")
         identifier = claim["unit_id"]
         if not isinstance(identifier, str) or identifier not in units or identifier in by_unit:
@@ -189,7 +218,26 @@ def validate_adversarial_claim_review(value, request):
                 or not isinstance(claim["severity"], str) or claim["severity"] not in {"material", "minor"}):
             raise ValueError("invalid_claim_review_claim_status")
         _basis(claim["basis"], core, units[identifier]["text"])
-        by_unit[identifier] = claim
+        if contract and any("message_index" in evidence
+                and core["messages"][evidence["message_index"]]["role"] == "assistant"
+                for evidence in claim["basis"]["evidence"]):
+            # An earlier answer can resolve a referent through premises, but
+            # cannot certify its own assertion through the old basis channel.
+            raise ValueError("condition_historical_assistant_not_evidence")
+        effective = deepcopy(claim)
+        if contract:
+            from lib.domain.review_condition_contract import validate_premises
+            premises = validate_premises(claim["premises"], request)
+            assumed_support = claim["status"] == "supported" and bool(
+                premises["required_assumptions"] or premises["counterexample_assumptions"])
+            if assumed_support:
+                effective["status"] = "insufficient"
+            if effective["status"] == "insufficient":
+                unresolved.append(identifier)
+            condition_checks.append({"unit_id": identifier, **premises,
+                "reported_status": claim["status"], "effective_status": effective["status"],
+                "unsupported_assumption_used_for_support": bool(assumed_support)})
+        by_unit[identifier] = effective
     issues = {issue["id"]: issue for issue in challenge["raw_response"]["issues"]}
     decisions = value["challenge_checks"]
     if not isinstance(decisions, list) or len(decisions) != len(issues):
@@ -230,8 +278,8 @@ def validate_adversarial_claim_review(value, request):
         "claim_checks": list(by_quote.values()), "verdict": deepcopy(value["verdict"])}
     primary = v1.validate_claim_review(normalized, core)
     derived = deepcopy(primary["verdict"])
-    refuted = [claim for claim in claims if claim["status"] == "refuted"]
-    material_missing = [claim for claim in claims if claim["status"] == "insufficient" and claim["severity"] == "material"]
+    refuted = [claim for claim in by_unit.values() if claim["status"] == "refuted"]
+    material_missing = [claim for claim in by_unit.values() if claim["status"] == "insufficient" and claim["severity"] == "material"]
     blocked_claims = refuted + material_missing
     if blocked_claims or blocked_issues:
         derived["keep"] = False
@@ -244,16 +292,34 @@ def validate_adversarial_claim_review(value, request):
         details += [f"challenge {issue['id']}: {decision['decision']} ({issue['severity']})"
                     for issue, decision in blocked_issues]
         derived["reason"] = "; ".join([derived["reason"], *details])
+    review_gap = contract and (bool(unresolved) or value["coverage"] != "complete")
+    if review_gap:
+        # Unproved support is a review gap, not proof the original is false.
+        # A later orchestration guard stops automatic answer rewriting here.
+        if not refuted and not blocked_issues:
+            derived = deepcopy(value["verdict"])
+        derived["keep"] = False
+        derived["reason"] += "; condition_support_pending_review: " + ", ".join(unresolved)
     critical = (primary["turn_verdict"]["critical_error"] or bool(material_missing)
                 or any(claim["severity"] == "material" for claim in refuted)
                 or any(issue["severity"] == "material" for issue, _ in blocked_issues))
+    if contract:
+        # Review coverage/support gaps are unverified, not known critical
+        # errors. Preserve the legacy normalizer separately for replay.
+        critical = any(claim["severity"] == "material" for claim in refuted)
     turn = {**deepcopy(derived), "message_index": core["scope"]["message_index"],
             "content_sha256": core["scope"]["prefix_sha256"],
             "leakage_free": derived["reasoning_valid"], "critical_error": critical}
-    return {"claim_review_protocol_version": 4, "request": deepcopy(request), "raw_response": deepcopy(value),
+    receipt = {"claim_review_protocol_version": 4, "request": deepcopy(request), "raw_response": deepcopy(value),
             "normalized_response": normalized, "normalized_receipt": primary, "verdict": derived,
             "turn_verdict": turn, "accepted": accepted(derived) and not critical,
             "structure_verified": True, "semantic_verification": _SEMANTICS}
+    if contract:
+        receipt["condition_guard"] = {"version": 1, "checks": condition_checks,
+            "needs_review": bool(review_gap), "unresolved_unit_ids": unresolved,
+            "coverage_complete": value["coverage"] == "complete",
+            "semantic_verification": "provenance_only_not_entailment"}
+    return receipt
 
 
 def merge_adversarial_claim_reviews(payload, receipts):

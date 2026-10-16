@@ -61,23 +61,35 @@ def challenge_response(request, *, bad=False, severity="material"):
             "counterexample": "With power on, the proposed inspection contradicts the source's required power-off condition.",
             "basis": {"kind": "source", "evidence": [{"quote": SOURCE, "source_path": ["teacher_evidence"]}],
                 "derivation": "The source requires power-off before inspection, so a powered inspection is not a permitted instance."}}]
-    return {"claim_review_protocol_version": 4, "phase": "claim_challenge",
+    raw = {"claim_review_protocol_version": 4, "phase": "claim_challenge",
         "scope_sha256": request["scope"]["scope_sha256"], "issues": issues, "limitations": []}
+    if request.get("condition_contract_version") == 1:
+        raw["issues"] = []
+        raw["condition_ledger"] = [{"unit_id": unit["id"], "premises": []} for unit in units]
+    return raw
 
 
 def adversarial_grade_response(request, *, decision="confirmed"):
     issues = request["challenge_review"]["issues"]
     challenged = {item["unit_id"] for item in issues} if decision == "confirmed" else set()
+    if request.get("condition_contract_version") == 1 and decision == "confirmed":
+        # The new first context inventories conditions without giving a verdict.
+        # This offline oracle supplies an explicit error in the second context.
+        challenged = {unit["id"] for unit in request["target_units"] if "WRONG_DRAFT" in unit["text"]}
     def basis():
         return {"kind": "source", "evidence": [{"quote": SOURCE, "source_path": ["teacher_evidence"]}],
             "derivation": "Power-off is an explicit inspection prerequisite in the source; it must be checked against the candidate action."}
-    return {"claim_review_protocol_version": 4, "scope_sha256": request["scope"]["scope_sha256"],
+    raw = {"claim_review_protocol_version": 4, "scope_sha256": request["scope"]["scope_sha256"],
         "coverage": "complete", "checked_unit_ids": [unit["id"] for unit in request["target_units"]],
         "claim_checks": [{"unit_id": unit["id"], "status": "refuted" if unit["id"] in challenged else "supported",
             "severity": next((issue["severity"] for issue in issues if issue["unit_id"] == unit["id"]), "material"),
             "basis": basis()} for unit in request["target_units"]],
         "challenge_checks": [{"id": issue["id"], "unit_id": issue["unit_id"], "decision": decision,
             "basis": basis()} for issue in issues], "verdict": grade()}
+    if request.get("condition_contract_version") == 1:
+        for claim in raw["claim_checks"]:
+            claim["premises"] = []
+    return raw
 
 
 class BlindProbe(Probe):
@@ -224,6 +236,7 @@ def freeze_pre_anchor(output, run_id):
     recipe = engine.read_json(path / "recipe.json")
     recipe.pop("claim_review_anchor_protocol_version", None)
     recipe.pop("claim_review_adversarial_protocol_version", None)
+    recipe.pop("claim_review_condition_contract_version", None)
     frozen = get("workflow.review_score", "1.16.0")
     recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(frozen)
     recipe["prompts"]["workflow.review_score"] = {"version": frozen.version, "sha256": engine.digest(frozen.template)}
@@ -242,6 +255,7 @@ def freeze_pre_adversarial(output, run_id):
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe.pop("claim_review_adversarial_protocol_version", None)
+    recipe.pop("claim_review_condition_contract_version", None)
     for prompt_id, version in (("workflow.review_score", "1.17.0"), ("workflow.review_reference", "1.0.1")):
         frozen = get(prompt_id, version)
         recipe["node_prompt_templates"]["review"][prompt_id] = render(frozen)

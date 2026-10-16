@@ -405,6 +405,13 @@ def assessment_from_verdict(payload: dict, check: dict, *, evidence_ref: str,
     if method == "llm_claim_review":
         claim_review = _validated_claim_audit(payload, check, claim_review)
     check = _reviewed_verdict(payload, check)
+    pending_review = bool(method == "llm_claim_review" and any(
+        item.get("review", {}).get("condition_guard", {}).get("needs_review")
+        for item in claim_review.get("assessments", [])))
+    review_gap_only = pending_review and not any(
+        claim["status"] == "refuted"
+        for item in claim_review["assessments"]
+        for claim in item["review"]["raw_response"]["claim_checks"])
     outcome_passed = (check["grounded"] and check["correctness"] >= 4
                       and check["scores"]["correctness"] >= 4 and check["scores"]["grounding"] >= 4)
     process_passed = check["reasoning_valid"] and check["scores"]["reasoning"] >= 4
@@ -419,15 +426,17 @@ def assessment_from_verdict(payload: dict, check: dict, *, evidence_ref: str,
         "method": method,
         "evidence_ref": evidence_ref,
         "score_threshold": float(score_threshold),
-        "outcome": ({"status": "unverified"} if method == "deterministic_guard" else
+        "outcome": ({"status": "unverified"} if method == "deterministic_guard" or review_gap_only else
                     {"status": "pass" if outcome_passed else "fail", "grounded": check["grounded"],
                      "correctness": check["correctness"]}),
-        "process": ({"status": "unverified"} if method == "deterministic_guard" else
+        "process": ({"status": "unverified"} if method == "deterministic_guard" or review_gap_only else
                     {"status": "pass" if process_passed else "fail", "reasoning_valid": check["reasoning_valid"]}),
         "accepted": passed,
     }
     if method == "llm_claim_review":
         result.update(derived_verdict=raw_verdict, claim_review=claim_review)
+        if review_gap_only:
+            result["review_status"] = "pending_review"
     else:
         result["raw_verdict"] = raw_verdict
     result["verdict"] = check
@@ -449,7 +458,7 @@ def select_reasoning_candidate(candidates: list[dict], config=None) -> dict:
         raise ValueError("invalid_reasoning_candidate_list")
     if limit is not None and len(candidates) > limit:
         raise ValueError("reasoning_candidate_limit_exceeded")
-    assessments, rejected, selected_index = [], [], None
+    assessments, rejected, pending, selected_index = [], [], [], None
     for index, entry in enumerate(candidates):
         if (not isinstance(entry, dict) or set(entry) != {"candidate", "assessment"}
                 or not isinstance(entry["assessment"], dict)):
@@ -471,16 +480,19 @@ def select_reasoning_candidate(candidates: list[dict], config=None) -> dict:
         if assessment["accepted"] and selected_index is None:
             selected_index = index
         elif not assessment["accepted"]:
-            rejected.append({"index": index, "candidate_sha256": assessment["candidate_sha256"],
+            collection = pending if assessment.get("review_status") == "pending_review" else rejected
+            collection.append({"index": index, "candidate_sha256": assessment["candidate_sha256"],
                              "outcome": assessment["outcome"]["status"],
                              "process": assessment["process"]["status"],
                              "reason": assessment["verdict"]["reason"],
                              "evidence_ref": assessment["evidence_ref"]})
     status = ("accepted" if selected_index is not None else
+              "waiting_manual_review" if pending else
               "rejected" if limit is None else "exhausted" if len(candidates) == limit else "needs_candidate")
     return {"version": REASONING_CANDIDATES_VERSION, "selection": "first_passing", "status": status,
             "candidate_limit": limit, "attempted": len(candidates),
             "remaining": limit - len(candidates) if limit is not None else None,
             "selected_index": selected_index,
             "candidate": deepcopy(candidates[selected_index]["candidate"]) if selected_index is not None else None,
-            "assessments": assessments, "rejections": rejected}
+            "assessments": assessments, "rejections": rejected,
+            **({"pending_reviews": pending} if pending else {})}

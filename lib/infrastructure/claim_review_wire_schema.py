@@ -58,6 +58,7 @@ def claim_review_response_schema(request):
             or request.get("phase") not in {"claim_challenge", "claim_adjudication"}):
         raise ValueError("invalid_claim_review_wire_schema_request")
     ids = [unit["id"] for unit in request["target_units"]]
+    condition_contract = request.get("condition_contract_version") == 1
     unit_id = {"type": "string", "enum": ids}
     source_reference = _object({"quote": _text(), "source_path": {
         "type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "integer", "minimum": 0}]},
@@ -70,7 +71,9 @@ def claim_review_response_schema(request):
         if fields:
             context_choices.append(_object({"quote": _text(), "message_index": {"type": "integer", "const": index},
                 "field": {"type": "string", "enum": fields}}))
-    context_reference = {"oneOf": context_choices} if context_choices else False
+    basis_context_choices = [choice for choice in context_choices if not condition_contract
+        or request["messages"][choice["properties"]["message_index"]["const"]]["role"] != "assistant"]
+    context_reference = {"oneOf": basis_context_choices} if basis_context_choices else False
     basis_choices = []
     for kind in ("source", "context", "logic"):
         item = ({"$ref": "#/$defs/source_reference"} if kind == "source" else
@@ -90,12 +93,40 @@ def claim_review_response_schema(request):
     props = {"claim_review_protocol_version": {"type": "integer", "const": 4},
              "scope_sha256": {"type": "string", "const": request["scope"]["scope_sha256"]}}
     severity = {"type": "string", "enum": ["material", "minor"]}
+    if condition_contract:
+        premise_choices = []
+        use = {"type": "string", "enum": ["task_condition", "reference_resolution", "support", "counterexample"]}
+        for origin in ("candidate", "context", "source", "assumption"):
+            fields = {"origin": {"type": "string", "const": origin}, "use": use, "quote": _text()}
+            if origin == "candidate":
+                fields["unit_id"] = unit_id
+                fields["use"] = {"type": "string", "enum": ["task_condition", "reference_resolution", "counterexample"]}
+            elif origin == "context":
+                choices = []
+                for context in context_choices:
+                    properties = context["properties"]
+                    index = properties["message_index"]["const"]
+                    choices.append(_object({**fields,
+                        "use": {"type": "string", "const": "reference_resolution"}
+                            if request["messages"][index]["role"] == "assistant" else use,
+                        "message_index": properties["message_index"], "field": properties["field"]}))
+                premise_choices.extend(choices)
+                continue
+            elif origin == "source":
+                fields["source_path"] = source_reference["properties"]["source_path"]
+            premise_choices.append(_object(fields))
+        premises = {"type": "array", "items": {"oneOf": premise_choices},
+            "description": "All conditions actually needed by this judgment, with their literal provenance. New assumptions cannot prove the original claim; quotes bind location, not entailment."}
     if request["phase"] == "claim_challenge":
         props.update(phase={"type": "string", "const": "claim_challenge"},
             issues={"type": "array", "items": _object({
                 "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
                 "unit_id": unit_id, "severity": severity, "problem": _text(), "counterexample": _text(), "basis": basis})},
             limitations={"type": "array", "items": _text()})
+        if condition_contract:
+            props["issues"] = {"type": "array", "maxItems": 0, "items": False}
+            props["condition_ledger"] = {"type": "array", "minItems": len(ids), "maxItems": len(ids),
+                "items": _object({"unit_id": unit_id, "premises": premises})}
     else:
         issues = request["challenge_review"]["issues"]
         decisions = [_object({"id": {"type": "string", "const": issue["id"]},
@@ -111,6 +142,9 @@ def claim_review_response_schema(request):
             challenge_checks={"type": "array", "minItems": len(issues), "maxItems": len(issues),
                               "items": {"oneOf": decisions} if decisions else False},
             verdict=verdict)
+        if condition_contract:
+            fields = props["claim_checks"]["items"]["properties"]
+            props["claim_checks"]["items"] = _object({**fields, "premises": premises})
     return {"$schema": "https://json-schema.org/draft/2020-12/schema", **_object(props),
             "$defs": {"source_reference": source_reference, "context_reference": context_reference,
                       "basis": {"oneOf": basis_choices}}}

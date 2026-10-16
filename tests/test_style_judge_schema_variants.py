@@ -8,7 +8,7 @@ import pytest
 from lib.domain.style_judge import style_verdict
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.workflow_native_regeneration import regenerate_native_cot_item
-from test_native_same_task_regeneration import selected_parent
+from test_native_same_task_regeneration import selected_parent, native_legacy_review_runs
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -1,4 +1,7 @@
-"""The new candidate-aware challenger and arbiter retain separate real calls."""
+"""Replay pre-condition-inventory adversarial receipts without upgrading them.
+
+The current factory contract is exercised in test_condition_review_workflow.
+"""
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -24,6 +27,17 @@ def workflow(tmp_path, client):
     output = tmp_path / "output"
     run_id = engine.create_run(output, brief="Arrange safe inspection.", targets=["sft"],
         reasoning_required=True, review_repair={"mode": "auto", "max_rounds": 0})
+    path = engine.run_path(output, run_id)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe.pop("claim_review_condition_contract_version")
+    for prompt_id, version in (("workflow.review_reference", "2.0.1"), ("workflow.review_score", "1.18.0")):
+        spec = get(prompt_id, version)
+        recipe["node_prompt_templates"]["review"][prompt_id] = render(spec)
+        recipe["prompts"][prompt_id] = {"version": version, "sha256": engine.digest(spec.template)}
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    engine.atomic_json(path / "state.json", state)
     flow = engine.Workflow(output, run_id, Path(__file__).resolve().parents[1], generator=client)
     flow.stage = "review"
     return flow
@@ -44,7 +58,7 @@ def assert_wire_boundary(call):
     return table
 
 
-def test_true_factory_uses_two_candidate_aware_calls_and_actual_current_units_source_and_audit(tmp_path):
+def test_historical_factory_uses_two_candidate_aware_calls_and_actual_current_units_source_and_audit(tmp_path):
     client, row = OfflineBlindClient(), sample(True)
     row["messages"][1]["reasoning_content"] = "CURRENT_T1_REASONING_883"
     row["messages"][3]["reasoning_content"] = "FUTURE_T2_REASONING_998"

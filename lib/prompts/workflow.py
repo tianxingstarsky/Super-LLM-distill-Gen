@@ -882,3 +882,11 @@ from lib.prompts.workflow_adversarial_review import CHALLENGE_FOCUS_BODY
 REVIEW_REFERENCE_V2_0 = REVIEW_REFERENCE
 REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.0.1", template=spec(
     "review_reference", "优先核查实际限制性断言并寻找合法反例", CHALLENGE_FOCUS_BODY).template)
+
+from lib.prompts.workflow_adversarial_review import CONDITION_INVENTORY_BODY, CONDITION_ADJUDICATION_BODY
+REVIEW_REFERENCE_V2_0_1 = REVIEW_REFERENCE
+REVIEW_SCORE_V1_18 = REVIEW_SCORE
+REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.1.0", template=spec(
+    "review_reference", "登记原句条件与指代，不预先判对错", CONDITION_INVENTORY_BODY).template)
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.19.0", template=spec(
+    "review_score", "逐句核对原强度与前提来源，未决项待复核", CONDITION_ADJUDICATION_BODY).template)
