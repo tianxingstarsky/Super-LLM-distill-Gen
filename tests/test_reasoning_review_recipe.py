@@ -13,12 +13,16 @@ def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     recipe = engine.read_json(engine.run_path(tmp_path, run_id) / "recipe.json")
     assert recipe["review_context_protocol_version"] == 2
     assert recipe["turn_review_protocol_version"] == 1
-    assert recipe["claim_review_protocol_version"] == 1
+    assert recipe["claim_review_protocol_version"] == 2
     assert recipe["reasoning_revision_protocol_version"] == 1
     assert recipe["multiturn_terminal_review_version"] == 1
     assert recipe["training_surface_protocol_version"] == 2
     assert recipe["reasoning_required"] is True
-    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.12.0"
+    assert recipe["claim_review_format_feedback_version"] == 1
+    assert recipe["claim_refutation_release_version"] == 1
+    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.15.0"
+    assert recipe["prompts"]["workflow.review_reference"]["version"] == "1.0.1"
+    assert "workflow.review_reference" in recipe["node_prompt_templates"]["review"]
     assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.11.0"
     assert recipe["authored_reasoning_warmup_version"] == 1
     assert recipe["reasoning_distillation_audit_version"] == 1

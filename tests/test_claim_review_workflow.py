@@ -317,6 +317,19 @@ def real_worker(tmp_path, client, *, jev=None, package_review=None):
     run_id = engine.create_run(output, brief="Arrange safe equipment inspection.", targets=["multiturn"],
                                reasoning_required=True, review_repair={"mode": "auto", "max_rounds": 0},
                                package_review=package_review)
+    # This file freezes protocol-one wire behavior. The new factory's blind
+    # protocol is exercised independently in test_blind_claim_workflow.py.
+    path = engine.run_path(output, run_id)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe["claim_review_protocol_version"] = 1
+    recipe["node_prompt_templates"]["review"].pop("workflow.review_reference", None)
+    old_score = get("workflow.review_score", version="1.12.0")
+    recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(old_score)
+    recipe["prompts"]["workflow.review_score"] = {"version": old_score.version, "sha256": digest(old_score.template)}
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = digest(recipe)
+    engine.atomic_json(path / "state.json", state)
     worker = engine.Workflow(output, run_id, Path(__file__).resolve().parents[1], generator=client, jev=jev)
     worker.stage = "review"
     return worker

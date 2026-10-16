@@ -840,3 +840,22 @@ from lib.prompts.workflow_claim_review import CLAIM_REVIEW_BODY
 REVIEW_SCORE_V1_11 = REVIEW_SCORE
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.12.0", template=spec(
     "review_score", "隔离当前轮并逐主张核验答案与解释", CLAIM_REVIEW_BODY).template)
+
+from lib.prompts.workflow_blind_review import BLIND_REFERENCE_BODY, BLIND_COMPARISON_BODY
+REVIEW_SCORE_V1_12 = REVIEW_SCORE
+REVIEW_REFERENCE = spec("review_reference", "不见候选时独立核验任务条件与事实", BLIND_REFERENCE_BODY)
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.13.0", template=spec(
+    "review_score", "对照盲核参照及实际来源检查全部主张", BLIND_COMPARISON_BODY).template)
+
+from lib.prompts.workflow_blind_review import BLIND_REFERENCE_V1_0_1, BLIND_COMPARISON_V1_14
+REVIEW_REFERENCE_V1_0 = REVIEW_REFERENCE
+REVIEW_SCORE_V1_13 = REVIEW_SCORE
+REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="1.0.1", template=spec(
+    "review_reference", "独立核对用户条件并隔离历史助手断言", BLIND_REFERENCE_V1_0_1).template)
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.14.0", template=spec(
+    "review_score", "核对候选与参照各自的实际依据", BLIND_COMPARISON_V1_14).template)
+
+from lib.prompts.workflow_blind_review import BLIND_COMPARISON_V1_15
+REVIEW_SCORE_V1_14 = REVIEW_SCORE
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.15.0", template=spec(
+    "review_score", "忠实核验具体主张并修正已被反驳的内容", BLIND_COMPARISON_V1_15).template)

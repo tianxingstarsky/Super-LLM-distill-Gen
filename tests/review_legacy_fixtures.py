@@ -31,6 +31,7 @@ def legacy_review_runs(monkeypatch):
             for templates in recipe.get("node_prompt_templates", {}).values():
                 if prompt_id in templates:
                     templates[prompt_id] = render(spec)
+        recipe.get("node_prompt_templates", {}).get("review", {}).pop("workflow.review_reference", None)
         atomic_json(path / "recipe.json", recipe)
         state = engine.read_json(path / "state.json")
         state["recipe_hash"] = engine.digest(recipe)

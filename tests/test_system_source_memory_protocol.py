@@ -247,6 +247,14 @@ def test_failed_fact_grade_cannot_be_rescued_by_a_blind_context_pass(tmp_path, m
     blind_pass = {"keep": True, "context_complete": True, "leakage_free": True, "reason": "Self-contained wording."}
     generator = CapturingGenerator([failed, blind_pass])
     worker = workflow(tmp_path, generator, review_repair={"mode": "auto", "max_rounds": 1})
+    # Replay the historical aggregate fact/context contract in both source
+    # transports. New candidate-blind checks are tested separately against the
+    # real default factory in test_blind_claim_workflow.py.
+    for field in ("claim_review_protocol_version", "turn_review_protocol_version", "reasoning_distillation_audit_version"):
+        worker.recipe.pop(field, None)
+    from lib.prompts import get, render
+    worker.recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(
+        get("workflow.review_score", version="1.11.0"))
     worker.recipe["source_memory_protocol_version"] = memory_version
     worker.stage = "review"
     row = {"id": "wrong-answer", "status": "eligible", "messages": [

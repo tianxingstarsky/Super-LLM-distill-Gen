@@ -287,7 +287,7 @@ def test_old_frozen_terminal_single_turn_still_uses_the_old_review_path():
         probe._review_repair_item({"target": "multiturn", "record": original})
 
 
-def test_new_default_real_engine_keeps_revised_reasoning_and_reuses_paid_checkpoints(tmp_path, monkeypatch):
+def test_protocol_one_real_engine_keeps_revised_reasoning_and_reuses_paid_checkpoints(tmp_path, monkeypatch):
     from lib.infrastructure import training_workflow as engine
     from tests.test_workflow_production import model_request_data
 
@@ -316,6 +316,19 @@ def test_new_default_real_engine_keeps_revised_reasoning_and_reuses_paid_checkpo
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["sft"], reasoning_required=True,
         review_repair={"mode": "auto", "max_rounds": 1}, sft_output_style="separated")
+    path = engine.run_path(output, run_id)
+    recipe = engine.read_json(path / "recipe.json")
+    from lib.prompts import get, render
+    recipe["claim_review_protocol_version"] = 1
+    recipe["node_prompt_templates"]["review"].pop("workflow.review_reference", None)
+    frozen_score = get("workflow.review_score", version="1.12.0")
+    recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(frozen_score)
+    recipe["prompts"]["workflow.review_score"] = {"version": frozen_score.version,
+                                                 "sha256": engine.digest(frozen_score.template)}
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    engine.atomic_json(path / "state.json", state)
     def generate(self, unit):
         return [{**row(), "id": unit["id"], "source_id": unit["source_id"], "source_context": deepcopy(unit),
                  "quotes": [SOURCE], "evidence_level": "source_and_model_assessed"}]
