@@ -237,7 +237,9 @@ class FilesystemHumanSessionDriver:
         prompt_version = (22 if (parent or {}).get("version", 0) >= 22
                           or "workflow.style_check" in node_prompts.get("multiturn", {}) else 21)
         blueprint["node_prompts"] = snapshot_node_prompts(node_prompts,
-            recipe_version=prompt_version, learner_context_review_version=1)
+            recipe_version=prompt_version, learner_context_review_version=1,
+            claim_review_protocol_version=2, claim_review_format_feedback_version=1,
+            claim_refutation_release_version=1)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):
