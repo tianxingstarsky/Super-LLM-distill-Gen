@@ -495,6 +495,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "authored_reasoning_warmup_version": 1,
               "reasoning_distillation_audit_version": 1,
               "style_verdict_protocol_version": 2,
+              "question_brief_protocol_version": 2,
               "multiturn_failure_audit_version": 1,
               "authored_role_projection_version": 3,
               "review_context_protocol_version": 2,
@@ -859,6 +860,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                                 and prompt_at_least(self.recipe, prompt_id, (1, 2, 0)) else 1)
                             request_messages = question_role_messages(system, request_data, transport=transport,
                                 first_turn_policy_version=first_turn_version,
+                                question_brief_protocol_version=self.recipe.get("question_brief_protocol_version", 1),
                                 **({"expression_guide_version": 2} if self.recipe.get("qa_expression_version") == 2 else {}))
                         elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
                             request_messages = answer_role_messages(system, memory_context, request_data, transport=transport,
@@ -1872,8 +1874,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         try:
                             planned_step = self.next_dialogue_step(unit, self.without_source_reasoning(messages), dialogue_state,
                                 attempt=attempt, feedback=feedback)
-                        except DialoguePlanError:
-                            feedback = "invalid_dialogue_step"
+                        except DialoguePlanError as error:
+                            feedback = (error.feedback if type(self.recipe.get("question_brief_protocol_version")) is int
+                                and self.recipe["question_brief_protocol_version"] == 2 else "invalid_dialogue_step")
                             continue
                         if not planned_step["continue"]:
                             dialogue_steps.append({"after_turn": turn_index, **planned_step})

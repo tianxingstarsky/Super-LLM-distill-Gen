@@ -149,9 +149,20 @@ def test_clarify_preserves_ambiguous_fixed_question_and_has_no_fact_quotes_requi
     ("workflow.sft_answer", "1.5.0", SFT_ANSWER_V1_5),
     ("workflow.question_user", "1.3.0", QUESTION_USER_V1_3),
 ])
-def test_registered_answer_contract_is_complete(prompt_id, version, body):
+def test_historical_answer_contract_is_complete(prompt_id, version, body):
+    assert get(prompt_id, version=version).version == version
+    assert render(get(prompt_id, version=version)) == body
+
+
+@pytest.mark.parametrize("prompt_id,version,previous", [
+    ("workflow.sft_directed", "1.10.0", SFT_DIRECTED_V1_8),
+    ("workflow.sft_answer", "1.7.0", SFT_ANSWER_V1_5),
+])
+def test_latest_answer_contract_adds_the_versioned_warmup_and_claim_scope(prompt_id, version, previous):
+    from lib.prompts.workflow_reasoning import warmup_generation_body, claim_scope_body
+    expected = claim_scope_body(warmup_generation_body(previous), phase="generation")
     assert get(prompt_id).version == version
-    assert render(get(prompt_id)) == body
+    assert render(get(prompt_id)) == expected
 
 
 @pytest.mark.parametrize("prompt_id,version,expected", [

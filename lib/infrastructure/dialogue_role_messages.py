@@ -92,7 +92,7 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
 
 
 def question_role_messages(system, data, *, transport="tool", first_turn_policy_version=1,
-                           expression_guide_version=1):
+                           expression_guide_version=1, question_brief_protocol_version=1):
     """Only a validated brief and public turns can cross to the questioner."""
     from lib.domain.workflow_qa_director import validate_question_brief
     if set(data) - {"question_brief", "visible_dialogue", "question_rules", "retry_code", "natural_expression_guidance"}:
@@ -105,7 +105,7 @@ def question_role_messages(system, data, *, transport="tool", first_turn_policy_
         if data["natural_expression_guidance"] != guide:
             raise ValueError("private_context_in_question_request")
         system += "\n自然表达的设计参考（无固定比例，用户规则可选择或扩展）：\n" + canonical(guide)
-    brief = validate_question_brief(data["question_brief"])
+    brief = validate_question_brief(data["question_brief"], version=question_brief_protocol_version)
     payload = {"question_brief": brief}
     if data.get("visible_dialogue"):
         # A completed visible conversation ends with an assistant response.

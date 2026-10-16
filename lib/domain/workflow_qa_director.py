@@ -167,8 +167,10 @@ def allocate_qa_types(count: int, weights: Mapping[str, int], *, offset: int = 0
 
 def validate_director_task(value: dict, *, expected_type: str | None, source_text: str | None = None,
                            expected_id: str | None = None, source_materials: list | None = None,
-                           learning_goal: str | None = None, user_language: str | None = None) -> dict:
+                           learning_goal: str | None = None, user_language: str | None = None,
+                           question_brief_protocol_version=1) -> dict:
     """Enforce the contract even when the editable director prompt is replaced."""
+    validate_question_brief_protocol_version(question_brief_protocol_version)
     required = {"id", "qa_type", "question", "visible_context", "answer_policy", "guidance", "evidence_quotes"}
     optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges", "question_brief", "expression_design", "learning_goal", "user_language"}
     if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
@@ -237,7 +239,7 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
                 "source_line_focus": line_focus} if line_focus is not None else {}),
             **({"dialogue_design": validate_dialogue_design(value["dialogue_design"])}
                if "dialogue_design" in value else {}),
-            **({"question_brief": validate_question_brief(value["question_brief"])}
+            **({"question_brief": validate_question_brief(value["question_brief"], version=question_brief_protocol_version)}
                if "question_brief" in value else {}),
             **({"expression_design": validate_expression_design(value["expression_design"])}
                if "expression_design" in value else {})}
@@ -259,20 +261,48 @@ def validate_task_controls(value, *, learning_goal=None, user_language=None):
     return controls
 
 
-def validate_question_brief(value):
+class QuestionBriefValidationError(ValueError):
+    """Safe schema feedback: field names and limits, never rejected content."""
+
+    def __init__(self, field="question_brief", **limits):
+        super().__init__("invalid_question_brief")
+        self.feedback = {"code": "invalid_question_brief", "field": field, **limits}
+
+
+def validate_question_brief_protocol_version(version):
+    if type(version) is not int or version not in {1, 2}:
+        raise ValueError("invalid_question_brief_protocol_version")
+    return version
+
+
+def validate_question_brief(value, *, version=1):
     """A source-free editorial brief, never a copied question or answer key."""
+    validate_question_brief_protocol_version(version)
     strings = {"topic": 200, "communication_goal": 1200, "speaker_role": 400,
                "listener_role": 400, "relationship": 600, "register": 400, "user_language": 2}
     if (not isinstance(value, dict) or not {"topic", "communication_goal"} <= set(value)
             or set(value) - set(strings) - {"behaviors", "expression_design"}):
-        raise ValueError("invalid_question_brief")
-    result = {key: _bounded_text(text, strings[key], "invalid_question_brief")
-              for key, text in value.items() if key in strings}
+        raise QuestionBriefValidationError() if version == 2 else ValueError("invalid_question_brief")
+    result = {}
+    for key, text in value.items():
+        if key not in strings:
+            continue
+        try:
+            result[key] = _bounded_text(text, strings[key], "invalid_question_brief")
+        except ValueError as error:
+            if version == 2:
+                raise QuestionBriefValidationError("question_brief." + key, max_chars=strings[key]) from error
+            raise
     if "user_language" in result and result["user_language"] not in USER_LANGUAGES:
-        raise ValueError("invalid_question_brief")
+        raise QuestionBriefValidationError("question_brief.user_language") if version == 2 else ValueError("invalid_question_brief")
     behaviors = value.get("behaviors", [])
+    behavior_limit = 512 if version == 2 else 100
     if (not isinstance(behaviors, list) or len(behaviors) > 6
-            or any(not isinstance(item, str) or len(item) > 100 or not item.strip() for item in behaviors)):
+            or any(not isinstance(item, str) or len(item) > behavior_limit or not item.strip()
+                   or version == 2 and "\x00" in item for item in behaviors)):
+        if version == 2:
+            raise QuestionBriefValidationError("question_brief.behaviors", max_items=6,
+                                               item_max_chars=512, item_type="nonempty_string")
         raise ValueError("invalid_question_brief")
     result["behaviors"] = list(dict.fromkeys(behaviors))
     if "expression_design" in value:
@@ -335,8 +365,9 @@ def validate_director_skip(value, expected_id):
 
 
 def validate_dialogue_step(value, *, completed_turns, natural_utterance=False,
-                           learning_goal=None, user_language=None):
+                           learning_goal=None, user_language=None, question_brief_protocol_version=1):
     """Validate only transport and minimum trace shape, not inferred meaning."""
+    validate_question_brief_protocol_version(question_brief_protocol_version)
     error = "invalid_dialogue_step"
     if (not isinstance(value, dict) or not {"continue", "user_message", "reason", "dialogue_state"} <= set(value)
             or set(value) - {"continue", "user_message", "reason", "dialogue_state", "question_brief", "learning_goal", "user_language"}
@@ -358,5 +389,5 @@ def validate_dialogue_step(value, *, completed_turns, natural_utterance=False,
     return {"continue": value["continue"], **controls,
             "user_message": _bounded_text(value["user_message"], 6000, error, empty=not value["continue"]),
             "reason": _bounded_text(value["reason"], 2000, error), "dialogue_state": normalized,
-            **({"question_brief": validate_question_brief(value["question_brief"])}
+            **({"question_brief": validate_question_brief(value["question_brief"], version=question_brief_protocol_version)}
                if "question_brief" in value else {})}
