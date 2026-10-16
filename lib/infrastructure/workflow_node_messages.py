@@ -58,7 +58,7 @@ def _learning_rules(data, config):
     return rules
 
 
-def split_node_rules(data, *, instruction=None, qa_director=None):
+def split_node_rules(data, *, instruction=None, qa_director=None, knowledge_application_voice_version=None):
     """Return a stable system suffix and an unmodified-content task projection.
 
     Only the explicit workflow instruction argument and rules matched against
@@ -81,6 +81,12 @@ def split_node_rules(data, *, instruction=None, qa_director=None):
     controls = _learning_rules(task, config)
     if controls:
         sections.append("本次样本用途与语言要求（仅约束候选对话，不约束评审回执语言）：\n" + "\n".join(controls))
+        if knowledge_application_voice_version == 3:
+            from lib.domain.knowledge_voice import knowledge_voice_rules
+            context = task.get("context") if isinstance(task.get("context"), dict) else task
+            contract = context.get("qa_contract") or task.get("qa_contract")
+            if voice := knowledge_voice_rules(config.get("learning_goal"), contract):
+                sections.append(voice)
     for field, label in (("question_rules", "提问规则"), ("answer_rules", "回答规则")):
         rule = config.get(field)
         if not isinstance(rule, str) or not rule:

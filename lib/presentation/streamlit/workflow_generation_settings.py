@@ -21,7 +21,7 @@ STYLE_LABELS = {"default": "遵循任务", "concise": "简洁工程", "structure
                 "skeptical": "审慎核验", "reflective": "反思校验", "mixed": "多风格混合",
                 "custom": "自定义风格"}
 REASONING_LANGUAGE_LABELS = {"auto": "跟随任务", "zh": "中文推理", "en": "英文推理",
-                             "zh_en": "中英互译推理"}
+                             "zh_en": "关键词句互译理解"}
 TRIM_LABELS = {"leakage": "提示词与包装清理", "concise": "精简重复推理", "custom": "自定义修剪模板"}
 TRIM_DESCRIPTIONS = {
     "leakage": "清理暴露的系统或开发者指令、检索包装与不必要的原文复述；保留任务所需事实、引用和关键推导。",
@@ -115,7 +115,7 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
         st.selectbox("推理语言", REASONING_LANGUAGES, key=reasoning_language_key, disabled=not enabled,
                      format_func=lambda value: translate_label(REASONING_LANGUAGE_LABELS[value], language),
                      on_change=save_field, args=(workspace, reasoning_language_key),
-                     help="中英互译按中文分析段与对应完整英文译段成对展开，保留相关依据、条件、推导与核对；不以术语混排或摘要代替全文翻译。答案跟随用户语言，只控制新撰写的显式推理。")
+                     help="围绕影响判断的关键概念、短语或关键句做忠实中英互译，解释含义、条件或歧义并推进论证。保留完整相关推理，避免全文写成两份译文。答案跟随用户语言，只控制新撰写的显式推理。")
         if not enabled:
             st.caption("先开启风格化生成，才能指定显式推理的语言；关闭时保留选择但不生效。")
         if node == "cot" and enabled:

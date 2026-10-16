@@ -177,7 +177,7 @@ def _authored_reasoning_language_requirements(recipe, target, row):
     reclassified as authored output by an untrusted row generation_style.
     """
     version = recipe.get("authored_reasoning_language_review_version")
-    if (version not in {1, 2}
+    if (version not in {1, 2, 3}
             or target not in {"sft", "multiturn"} or row.get("reasoning_route") == "sft_via_cot"):
         return []
     configs = recipe.get("node_generation", {})
@@ -189,7 +189,7 @@ def _authored_reasoning_language_requirements(recipe, target, row):
                and type(review.get("end_message_index")) is int and review.get("reasoning_origin")}
     authored = {"prompt_styled_generation", "prompt_revision", "prompt_trim"}
     return [{"message_index": index, "reasoning_language": "zh_en",
-             **({"protocol_version": 2} if version == 2 else {})}
+             **({"protocol_version": version} if version in {2, 3} else {})}
             for index, message in enumerate(row.get("messages", []))
             if isinstance(message, dict) and message.get("role") == "assistant"
             and not (message.get("tool_calls") or message.get("toolCalls"))
@@ -217,6 +217,9 @@ def _authored_reasoning_language_issue(row, requirements):
             if requirement.get("protocol_version") == 2:
                 issue += ("；当前 zh_en v2 要求完整中文分析段与紧邻的忠实英文译段。保留并补全本题相关论证，"
                           "补足缺失语言的全部对应内容；不能只加标题、术语、短摘要或删掉推理。")
+            elif requirement.get("protocol_version") == 3:
+                issue += ("；当前 zh_en v3 要求关键概念、词句的显式互译理解，运用跨语言澄清推进完整论证。"
+                          "补足缺失语言承载的含义、条件或歧义分析，不能只加术语、标题、整段翻译副本或删推理。")
             return issue
     return None
 
@@ -242,10 +245,41 @@ _TRANSLATION_REVIEW_V2 = (
 )
 
 
+_CONCEPT_TRANSLATION_REVIEW_V3 = (
+    "当前 zh_en v3 要求在完整显式推理中，对影响判断的关键概念、短语或关键句进行忠实、明确的中英互译，"
+    "利用跨语言表达澄清含义、适用条件、指代、歧义、否定或判断强度，并把澄清结果用于后续论证。"
+    "不是给术语换个名字，也不是中文正文夹英文缩写、装饰性英语、词汇表或最后附英文摘要。"
+    "不再要求每段中文后附完整英文副本；不要把整段推理写成两份语义相同的重复文本。"
+    "但真实用户明确要求翻译、引用对照或任务所需的少量完整句互译仍可保留，不能按重复关键词一律拒绝。"
+    "逐条检查每个监督轮次实际推理：任务相关前提、适用条件、必要中间关系、相关反例或替代解释、核对、"
+    "结论边界和剩余不确定性是否充分展开；只覆盖真正相关要点，不凑统一字数、段数、语言比例或固定步骤。"
+    "简洁风格不能省略必要论证。互译处须保留数值、单位、实体、关系、条件、否定、例外和不确定性，"
+    "不能偷加事实、弱化限制或增强结论；两种语言表达一致也不能代替对实际知识和任务的事实核验。"
+    "字符共现、英文词数量、标签或段落排版都不能证明达到互译理解。没有跨语言意义澄清、只有术语装饰或整篇双份抄写时，"
+    "该轮 keep=false、instruction 小于4，并指出具体缺少的作用或冗余位置；误译导致关键事实/推理错误时还按实际错误降低相关分数并标记 critical_error。"
+    "后续轮正确不能抵消早期不合格，不能靠删除 reasoning 或缩成结论过关。"
+    "最终答案仍跟随真实用户语言；本要求只针对新撰写的显式解释，不冒称模型原生思考，不约束评审回执的语言。"
+    "保留既有输出 schema 与逐轮 hash 绑定，不增加模型评审请求。"
+)
+
+
+_CONCEPT_TRANSLATION_REPAIR_V3 = (
+    "保留并修正完成当前任务所需的完整显式解释，补齐相关前提、条件、依赖、中间推导、核对和结论边界。"
+    "在影响判断的关键概念、短语或关键句处给出忠实明确的中英互译，借此澄清含义、适用条件或歧义，并把理解用于推进论证。"
+    "保留数值、单位、实体、关系、否定、例外和不确定性；不偷加事实，不把有条件结论译成确定结论。"
+    "不是只夹英文术语、缩写或附词汇表，也不是在每个中文段后复制完整英文段；不写成整篇双份重复。"
+    "真实任务需要的引用对照或关键句互译可保留。不要为减少重复而删掉仍相关的有效论证，也不靠无关分支或机械字数凑长。"
+    "不删 reasoning，不换题，不编造验证或个人经历；用户与工具事实保持原样，最终答案跟随真实用户语言。"
+    "遵守现有允许修改的助手字段和 schema，不把后台制作要求写进训练正文。"
+)
+
+
 def _authored_reasoning_language_review_rules(requirements):
     if not requirements:
         return ""
     indices = ", ".join(f"assistant[{item['message_index']}]" for item in requirements)
+    if any(item.get("protocol_version") == 3 for item in requirements):
+        return f"冻结节点配置给出的待审语言标准：{indices}。" + _CONCEPT_TRANSLATION_REVIEW_V3
     if any(item.get("protocol_version") == 2 for item in requirements):
         return f"冻结节点配置给出的待审语言标准：{indices}。" + _TRANSLATION_REVIEW_V2
     return (f"冻结节点配置给出的待审语言标准：{indices} 的新撰写显式推理要求 zh_en。"
@@ -257,6 +291,9 @@ def _authored_reasoning_language_review_rules(requirements):
 
 
 def _authored_reasoning_language_repair_rules(requirements):
+    if any(item.get("protocol_version") == 3 for item in requirements):
+        indices = ", ".join(f"assistant[{item['message_index']}]" for item in requirements)
+        return f"冻结节点配置给出的互译理解返工要求：{indices}。" + _CONCEPT_TRANSLATION_REPAIR_V3
     if not any(item.get("protocol_version") == 2 for item in requirements):
         return ""
     indices = ", ".join(f"assistant[{item['message_index']}]" for item in requirements)
@@ -273,7 +310,7 @@ def _authored_reasoning_language_repair_rules(requirements):
 def _authored_cot_language_v2(recipe, target, row):
     cot_route = target == "cot" or target == "sft" and row.get("reasoning_route") == "sft_via_cot"
     config = recipe.get("node_generation", {}).get("cot", {})
-    return (recipe.get("reasoning_language_contract_version") == 2 and cot_route
+    return (recipe.get("reasoning_language_contract_version") in {2, 3} and cot_route
             and row.get("reasoning_protocol_version") == AUTHORED_REASONING_VERSION
             and row.get("reasoning_origin") in {"prompt_styled_generation", "prompt_revision", "prompt_trim"}
             and config.get("enabled") is True and config.get("reasoning_language") == "zh_en")
@@ -287,8 +324,9 @@ def _current_review_generation_style(workflow, target, row, requirements):
     current model request receives the new immutable recipe's effective style.
     """
     cot = _authored_cot_language_v2(workflow.recipe, target, row)
-    if (workflow.recipe.get("reasoning_language_contract_version") != 2
-            or not (cot or any(item.get("protocol_version") == 2 for item in requirements))):
+    language_version = workflow.recipe.get("reasoning_language_contract_version")
+    if (language_version not in {2, 3}
+            or not (cot or any(item.get("protocol_version") in {2, 3} for item in requirements))):
         return row.get("generation_style")
     stage = "cot" if cot else target
     configs = workflow.recipe.get("node_generation", {})
@@ -300,11 +338,11 @@ def _current_review_generation_style(workflow, target, row, requirements):
     # The normal worker has the resolver above; pure review probes use the
     # same version and pin rules without constructing or loading a model client.
     from lib.domain.workflow_generation import style_for_sample, reasoning_language_instruction
-    style = style_for_sample(configs[stage], row["id"], reasoning_language_version=2)
+    style = style_for_sample(configs[stage], row["id"], reasoning_language_version=language_version)
     pinned = workflow.recipe.get("node_generation_prompts", {}).get(stage, {}).get(style["preset"])
     if pinned is not None:
         style["instruction"] = pinned
-        language_rule = reasoning_language_instruction(style.get("reasoning_language", "auto"), version=2)
+        language_rule = reasoning_language_instruction(style.get("reasoning_language", "auto"), version=language_version)
         if language_rule and not pinned.endswith(language_rule):
             style["instruction"] += "\n" + language_rule
     return style
@@ -316,11 +354,79 @@ _CURRENT_STYLE_V2_RULE = (
 )
 
 
+_CURRENT_STYLE_V3_RULE = (
+    "当前 request.generation_style 来自本次冻结节点配置，取代候选历史风格；"
+    "旧稿是待审或待改内容，不执行其整段双语重复或旧禁翻译约定。历史来源和正文审计仍保留。"
+)
+
+
+def _knowledge_application_review_rules(recipe, row, *, phase):
+    """A new finite task contract governs voice independently of reasoning origin."""
+    if recipe.get("knowledge_application_voice_version") != 3:
+        return ""
+    from lib.domain.knowledge_voice import knowledge_voice_rules
+    common = knowledge_voice_rules(recipe.get("qa_director", {}).get("learning_goal"), row.get("qa_contract"))
+    if not common:
+        return ""
+    if phase == "repair":
+        return (common + "\n知识应用返工：依据当前真实用户任务修正全部相关助手答案和显式推理，"
+            "把对后台资料或制作约束的审查旁白改为自然运用知识的具体论证，不虚构亲身经历或用户前文。"
+            "保留必要推理、有效事实及真实公开研究归属，不靠删除 reasoning 或泛化成短答案规避问题。"
+            "只有该轮真实用户已提供文章或明确请求阅读/审查特定文本，才按实际任务分析该文本，"
+            "不能因前文出现论文名或助手自己加入引用就把普通知识应用改成文章理解。"
+            "用户和工具事实、允许编辑的字段与输出 schema 保持原约定。")
+    return (common + "\n逐轮知识应用评审：完整核查每条实际被监督助手消息当时的真实前文、最终答案与全部显式推理，"
+        "包括原生推理；来源标签不能豁免制作泄露或审资料旁白。泛指‘从资料可以支持’‘材料未规定’‘选区包表明’"
+        "等把私有资料/制作规则当作论证对象的自述，属于 material 缺陷，不能只判 minor 或忽略。"
+        "先命名某篇公开论文，不会使随后泛指资料的审查旁白自动合法；"
+        "可以简洁直接陈述某公开方法做了什么，并保留准确研究归属，不能把公开归属与后台取证过程混为一谈。"
+        "只有该轮实际可见的用户文章或真实用户明确的阅读/审查请求，才提供相应的文读例外，"
+        "后来的用户发言或助手自造的引用不能回溯授权；公开文本的明确阅读请求不应被误拒。"
+        "这不禁止正常讨论文档、检索、提示词或来源技术对象，也不按‘资料’字样一律拒绝。"
+        "发现问题应定位 assistant 消息索引及答案/推理中的具体命题，keep=false、instruction 小于4；"
+        "若冒充隐藏背景或制作过程还应 leakage_free=false，并按实际关键错误标记 critical_error。"
+        "整段不能用最后一轮正确或平均分洗掉早期缺陷，仍用既有六字段及按需逐轮 hash 绑定输出。")
+
+
+def _knowledge_source_narration_reason(target, row, recipe):
+    """Locate a narrow deterministic failure without quoting private text."""
+    from lib.domain.training_surface import training_surface_issue
+    options = {"protocol_version": 2, "knowledge_application_voice_version": 3}
+    if "learning_goal" in recipe.get("qa_director", {}):
+        options["learning_goal"] = recipe["qa_director"]["learning_goal"]
+    issue = "training_surface_knowledge_source_narration"
+    contract = row.get("qa_contract")
+    if target == "cot":
+        question = row.get("question")
+        visible = question if isinstance(question, list) else [{"role": "user", "content": question}]
+        for field in ("reasoning", "answer"):
+            if training_surface_issue(row.get(field) if field == "reasoning" else "",
+                    row.get(field) if field == "answer" else "", visible_messages=visible,
+                    contract=contract, **options) == issue:
+                return f"{issue}:candidate.{field}"
+    branches = ([("messages", [], row.get("messages"))] if target in {"sft", "multiturn", "agent"}
+                else [(field, row.get("prompt", []), row.get(field)) for field in ("chosen", "rejected")]
+                if target in PREFERENCE_TARGETS else [])
+    for branch, prefix, messages in branches:
+        if not isinstance(messages, list):
+            continue
+        visible = list(prefix) if isinstance(prefix, (list, tuple)) else []
+        for index, message in enumerate(messages):
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                for field in ("reasoning_content", "reasoning", "thinking", "content"):
+                    if training_surface_issue(message.get(field) if field != "content" else "",
+                            message.get(field) if field == "content" else "", visible_messages=visible,
+                            contract=contract, **options) == issue:
+                        return f"{issue}:candidate.{branch}[{index}].{field}"
+            visible.append(message)
+    return issue
+
+
 def _record_accepted_revision_style(workflow, target, original, updated):
     """Record a successful new revision's style while keeping its old identity."""
     requirements = _authored_reasoning_language_requirements(workflow.recipe, target, updated)
     if not (_authored_cot_language_v2(workflow.recipe, target, updated)
-            or any(item.get("protocol_version") == 2 for item in requirements)):
+            or any(item.get("protocol_version") in {2, 3} for item in requirements)):
         return
     old_body = {field: original[field] for field in TRAINING_FIELDS[target] if field in original}
     new_body = {field: updated[field] for field in TRAINING_FIELDS[target] if field in updated}
@@ -330,7 +436,8 @@ def _record_accepted_revision_style(workflow, target, original, updated):
     if not isinstance(style, dict) or style == original.get("generation_style"):
         return
     from lib.infrastructure.training_workflow import digest
-    prior = {"version": 2, "scope": "historical_style_before_accepted_revision",
+    prior = {"version": workflow.recipe.get("reasoning_language_contract_version", 2),
+             "scope": "historical_style_before_accepted_revision",
              "generation_style": deepcopy(original.get("generation_style")),
              "training_record_sha256": digest(old_body),
              "replacement_training_record_sha256": digest(new_body),
@@ -379,7 +486,12 @@ def _row_training_surface_issue(target, row, recipe=None):
     if (row.get("training_surface_protocol_version") == 2
             or (recipe or {}).get("training_surface_protocol_version") == 2):
         from lib.domain.training_surface import training_record_surface_issue
-        return training_record_surface_issue(target, row, protocol_version=2)
+        voice = {}
+        if (recipe or {}).get("knowledge_application_voice_version") == 3:
+            voice["knowledge_application_voice_version"] = 3
+            if "learning_goal" in (recipe or {}).get("qa_director", {}):
+                voice["learning_goal"] = recipe["qa_director"]["learning_goal"]
+        return training_record_surface_issue(target, row, protocol_version=2, **voice)
     if target not in {"sft", "multiturn", "agent", "cot"}:
         return None
     authored_origins = {"prompt_styled_generation", "prompt_revision", "human_revision", "prompt_trim"}
@@ -696,6 +808,8 @@ class WorkflowReviewRepair:
         language_requirements = _authored_reasoning_language_requirements(self.recipe, target, row)
         if issue := (required_issue or _authored_reasoning_language_issue(row, language_requirements)
                      or _row_training_surface_issue(target, row, self.recipe)):
+            if issue == "training_surface_knowledge_source_narration":
+                issue = _knowledge_source_narration_reason(target, row, self.recipe)
             return {"keep": False, "grounded": False, "reasoning_valid": False, "correctness": 1,
                     "scores": {name: 1 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
                     "reason": issue}
@@ -719,12 +833,18 @@ class WorkflowReviewRepair:
                 rules["instruction"] = "\n".join(filter(None, (
                     rules.get("instruction"), _authored_reasoning_language_review_rules(language_requirements))))
             if not call_data.get("learner_context_only") and (
-                    any(item.get("protocol_version") == 2 for item in language_requirements)
+                    any(item.get("protocol_version") in {2, 3} for item in language_requirements)
                     or _authored_cot_language_v2(self.recipe, target, row)):
-                parts = [rules.get("instruction"), _CURRENT_STYLE_V2_RULE]
+                language_version = self.recipe.get("reasoning_language_contract_version")
+                parts = [rules.get("instruction"), _CURRENT_STYLE_V3_RULE if language_version == 3 else _CURRENT_STYLE_V2_RULE]
                 if not language_requirements:
-                    parts.append("冻结 CoT 节点配置给出的待审语言标准：当前新撰写解释。" + _TRANSLATION_REVIEW_V2)
+                    parts.append("冻结 CoT 节点配置给出的待审语言标准：当前新撰写解释。" + (
+                        _CONCEPT_TRANSLATION_REVIEW_V3 if language_version == 3 else _TRANSLATION_REVIEW_V2))
                 rules["instruction"] = "\n".join(filter(None, parts))
+            if not call_data.get("learner_context_only"):
+                knowledge_rules = _knowledge_application_review_rules(self.recipe, row, phase="review")
+                if knowledge_rules:
+                    rules["instruction"] = "\n".join(filter(None, (rules.get("instruction"), knowledge_rules)))
             if call_data.get("supervised_assistant_turns") is not None:
                 from lib.domain.turn_review import turn_review_verdict
                 failures = []
@@ -818,13 +938,19 @@ class WorkflowReviewRepair:
         language_repair = _authored_reasoning_language_repair_rules(language_requirements)
         cot_language_v2 = _authored_cot_language_v2(self.recipe, target, row)
         if cot_language_v2:
-            language_repair = ("冻结 CoT 节点配置给出的互译返工要求：保留并修正完整显式解释，"
+            language_repair = ("冻结 CoT 节点配置给出的互译理解返工要求：" + _CONCEPT_TRANSLATION_REPAIR_V3
+                if self.recipe.get("reasoning_language_contract_version") == 3 else
+                "冻结 CoT 节点配置给出的互译返工要求：保留并修正完整显式解释，"
                 "补齐所有相关论证，并给每个中文分析自然段配完整忠实英文译段，不只加术语、标题或摘要；"
                 "逐项核对前提、条件、数值、单位、实体、关系、否定、例外、限定、结论和不确定性，"
                 "不新增事实，不删 reasoning，不靠凑长，不改用户或工具事实。")
         if language_repair:
             rules["instruction"] = "\n".join(filter(None, (
-                rules.get("instruction"), _CURRENT_STYLE_V2_RULE, language_repair)))
+                rules.get("instruction"), _CURRENT_STYLE_V3_RULE if self.recipe.get(
+                    "reasoning_language_contract_version") == 3 else _CURRENT_STYLE_V2_RULE, language_repair)))
+        knowledge_rules = _knowledge_application_review_rules(self.recipe, row, phase="repair")
+        if knowledge_rules:
+            rules["instruction"] = "\n".join(filter(None, (rules.get("instruction"), knowledge_rules)))
         cot_delta = self.recipe.get("qa_agent_memory_version") == 1 and target == "cot"
         from lib.domain.learner_context import prompt_at_least
         multiturn_delta = target == "multiturn" and prompt_at_least(self.recipe, "workflow.review_repair", (1, 7, 0))
@@ -964,7 +1090,9 @@ class WorkflowReviewRepair:
         # missing facts by changing the text. These require new verified input.
         blocked = any(token in original.get("reason", "") for token in (
             "source_snapshot", "tool_error", "simulated_tool", "unverified", "trajectory", "orphan_tool", "missing_tool"))
-        if (issue in {"training_surface_hidden_source_reference", "training_surface_internal_process_reference"}
+        if ((issue in {"training_surface_hidden_source_reference", "training_surface_internal_process_reference"}
+                or self.recipe.get("knowledge_application_voice_version") == 3
+                and issue == "training_surface_knowledge_source_narration")
                 and config["mode"] == "auto" and config["max_rounds"] > 0
                 and (self.recipe.get("reasoning_revision_protocol_version") == 1
                      or item.get("revision_context") and getattr(self, "_authenticated_repair_branch", False))

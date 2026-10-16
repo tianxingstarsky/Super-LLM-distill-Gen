@@ -68,9 +68,9 @@ def test_only_new_active_sft_or_multiturn_mixed_configuration_freezes_the_guard(
     run_id = engine.create_run(output, brief="Explain inspection prerequisites.", targets=targets,
                               node_generation=configs)
     recipe = engine.read_json(engine.run_path(output, run_id) / "recipe.json")
-    assert (recipe.get("authored_reasoning_language_review_version") == 2) is expected
+    assert (recipe.get("authored_reasoning_language_review_version") == 3) is expected
     if expected:
-        assert recipe["reasoning_language_contract_version"] == 2
+        assert recipe["reasoning_language_contract_version"] == 3
     assert recipe["node_generation"] == validate_node_generation(configs)
 
 

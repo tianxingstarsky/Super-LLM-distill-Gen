@@ -100,8 +100,8 @@ def prepare(tmp_path, *, review=False, style_node="multiturn", separated=True, m
 @pytest.mark.parametrize("already_pinned", [False, True])
 def test_pinned_style_has_exactly_one_language_instruction(tmp_path, already_pinned):
     worker, _, _ = prepare(tmp_path)
-    expected = style_for_sample(STYLE, "sample", reasoning_language_version=2)
-    rule = reasoning_language_instruction("zh_en", version=2)
+    expected = style_for_sample(STYLE, "sample", reasoning_language_version=3)
+    rule = reasoning_language_instruction("zh_en", version=3)
     pinned = expected["instruction"] if already_pinned else "A versioned custom explanation rule."
     worker.recipe["node_generation_prompts"]["multiturn"]["concise"] = pinned
     actual = worker.generation_style("multiturn", "sample")
@@ -247,7 +247,7 @@ def test_actual_two_turn_generation_keeps_mixed_reasoning_and_provenance_in_ever
         assert dispatch["learning_goal"] == "knowledge_application" and dispatch["user_language"] == "en"
         assert dispatch["generation_style"] == row["generation_style"]
         assert "本段对话用户主要使用英文" in messages[0]["content"]
-        assert reasoning_language_instruction("zh_en", version=2) in messages[0]["content"]
+        assert reasoning_language_instruction("zh_en", version=3) in messages[0]["content"]
         assert SOURCE not in canonical([m for m in messages if m["role"] == "user"])
     style_calls = [messages for messages in client.calls if "你是风格与表达审校员" in messages[0]["content"]]
     assert len(style_calls) == (0 if review else 2)

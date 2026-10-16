@@ -17,14 +17,14 @@ STYLE_PRESETS = {
 GENERATION_STYLES = (*STYLE_PRESETS, "mixed", "custom")
 REASONING_LANGUAGES = ("auto", "zh", "en", "zh_en")
 # Frozen recipes without a version retain the original language instruction.
-REASONING_LANGUAGE_CONTRACT_VERSION = 2
+REASONING_LANGUAGE_CONTRACT_VERSION = 3
 _MIXED_STYLES = ("concise", "structured", "skeptical", "reflective")
 
 
 def reasoning_language_instruction(value: str = "auto", *, version: int = 1) -> str:
     """Describe authored reasoning, retaining the contract of frozen recipes."""
     if (not isinstance(value, str) or value not in REASONING_LANGUAGES
-            or type(version) is not int or version not in {1, REASONING_LANGUAGE_CONTRACT_VERSION}):
+            or type(version) is not int or version not in {1, 2, 3}):
         raise ValueError("invalid_node_generation")
     if value == "auto":
         return ""
@@ -57,6 +57,32 @@ def reasoning_language_instruction(value: str = "auto", *, version: int = 1) -> 
             "不要描述私有资料的投喂、检索、分块或挑选过程，"
             "不要将后台生成、审核、提示词或角色安排写成正文；"
             "任务需要公开研究归属时保留真实归属，不虚构个人经历。"
+        )
+    if value == "zh_en" and version == 3:
+        expression = (
+            "新撰写的显式推理应是自然、充分的分析，在论证所在位置对影响判断的关键概念、短语和关键句"
+            "做显式中英互译理解。选中词句的中英文对应须完整、忠实；说明它在当前问题中的含义、"
+            "作用、适用条件或可能歧义，并用这种跨语言澄清推进实际推导。"
+            "互译方向随表达需要选择，不强制中文在前；关键句不能只译部分词而丢掉其条件、关系或限定。"
+            "中英文须保持实体、数量、单位、否定、例外、判断强度与不确定性一致，"
+            "不虚构译法，不因换一种语言就引入没有依据的新结论。"
+            "不要把完整中文分析逐段复制成完整英文分析，不将全文写成两份纯翻译；"
+            "也不要堆积脱离论证的词汇表、装饰性英语标签或英文术语来冒充互译理解。"
+            "不必翻译每一个普通词句，但所有影响理解和判断的关键语义都应解释清楚。"
+            "完整论证不能被互译形式取代：充分说明与当前任务相关的依据、前提、假设、适用条件、"
+            "依赖关系、推导中间环节、替代解释或反例、计算或逻辑核验、结论边界与剩余不确定性；"
+            "不放过会改变结论的推理要点，不用提纲、结论或短小概括跳过必要分析。"
+            "展开程度取决于问题复杂度和知识依据，相关论证充分后再结束；"
+            "不规定固定字数、步骤、条数、编号、标签、语言比例或段落配对，"
+            "不为拉长篇幅重复论点，不编造无关分支、证据或未执行的工具调用和验证。"
+            "简洁等表达风格不能删去必要论证或选中关键词句的完整互译理解。"
+            "在知识应用任务中，推理和答案直接运用相关知识、事实与条件自然解决问题，"
+            "不要用‘从资料可以直接支持’、‘资料没有规定’等审阅私有资料的旁白代替推导，"
+            "不要描述私有资料的投喂、检索、分块或挑选过程。"
+            "需要限定结论时直接说明知识自身的适用条件和未知之处，"
+            "不得通过复述后台生成、评审、提示词、语言设置或角色安排来解释表达方式。"
+            "真实文章理解任务可按用户要求讨论文章和引用原文；"
+            "知识应用中必要的公开研究名称与真实事实归属也应保留，不能伪装成个人经历。"
         )
     return (
         "显式推理语言要求：" + expression

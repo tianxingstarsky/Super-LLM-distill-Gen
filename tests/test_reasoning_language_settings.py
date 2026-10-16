@@ -1,5 +1,6 @@
 """Authored reasoning language stays node-local, durable, and opt-in."""
 from copy import deepcopy
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -97,7 +98,7 @@ def test_frozen_bilingual_contract_keeps_original_instruction_byte_for_byte():
 
 
 def test_bilingual_contract_v2_requires_full_paired_translation_and_relevant_coverage():
-    instruction = reasoning_language_instruction("zh_en", version=REASONING_LANGUAGE_CONTRACT_VERSION)
+    instruction = reasoning_language_instruction("zh_en", version=2)
     assert "完整自然的中文分析段" in instruction
     assert "紧接一个忠实、完整的英文译段" in instruction
     assert "用空行分隔即可" in instruction
@@ -114,6 +115,58 @@ def test_bilingual_contract_v2_requires_full_paired_translation_and_relevant_cov
     assert "不修改或冒称上游原生推理" in instruction
     assert "最终答案跟随当前用户的语言与明确要求" in instruction
     assert "不要描述私有资料的投喂、检索、分块或挑选过程" in instruction
+
+
+@pytest.mark.parametrize("version,expected", [
+    (1, "97d48c72d677834944e9d97844740d116e6383392ff714a5ac4aa383661705c2"),
+    (2, "5a91e05d591adead69ba6422da525764f0b7e0e37e87f67aa2ebca2083868632"),
+])
+def test_frozen_bilingual_contract_versions_keep_their_original_utf8_hash(version, expected):
+    assert hashlib.sha256(reasoning_language_instruction("zh_en", version=version).encode("utf-8")).hexdigest() == expected
+
+
+def test_bilingual_contract_v3_requires_semantic_translation_with_complete_reasoning():
+    assert REASONING_LANGUAGE_CONTRACT_VERSION == 3
+    instruction = reasoning_language_instruction("zh_en", version=3)
+    assert "关键概念、短语和关键句" in instruction
+    assert "中英文对应须完整、忠实" in instruction
+    assert "含义、作用、适用条件或可能歧义" in instruction
+    assert "用这种跨语言澄清推进实际推导" in instruction
+    assert "不强制中文在前" in instruction
+    assert "不要把完整中文分析逐段复制成完整英文分析" in instruction
+    assert "不将全文写成两份纯翻译" in instruction
+    assert "脱离论证的词汇表、装饰性英语标签或英文术语" in instruction
+    for concept in ("依据、前提、假设、适用条件", "依赖关系", "推导中间环节", "替代解释或反例",
+                    "计算或逻辑核验", "结论边界与剩余不确定性"):
+        assert concept in instruction
+    assert "不放过会改变结论的推理要点" in instruction
+    assert "不规定固定字数、步骤、条数" in instruction
+    assert "不为拉长篇幅重复论点" in instruction
+    assert "不编造无关分支、证据或未执行的工具调用和验证" in instruction
+    assert "在知识应用任务中" in instruction
+    assert "推理和答案直接运用相关知识、事实与条件自然解决问题" in instruction
+    assert "‘从资料可以直接支持’、‘资料没有规定’" in instruction
+    assert "真实文章理解任务可按用户要求讨论文章和引用原文" in instruction
+    assert "公开研究名称与真实事实归属也应保留" in instruction
+    assert "后台生成、评审、提示词、语言设置或角色安排" in instruction
+    assert "最终答案跟随当前用户的语言与明确要求" in instruction
+    assert "不修改或冒称上游原生推理" in instruction
+
+
+@pytest.mark.parametrize("style", ["concise", "custom", "mixed"])
+def test_v3_preserves_custom_instruction_and_stable_style_while_adding_semantic_translation(style):
+    config = {"style": style, "instruction": "Keep the clinical definitions.\nPreserve the actual caveats.",
+              "reasoning_language": "zh_en"}
+    original = deepcopy(config)
+    selected = style_for_sample(config, "sample", reasoning_language_version=3)
+    assert config == original
+    assert selected["preset"] == style_for_sample(config, "sample")["preset"]
+    assert selected["reasoning_language"] == "zh_en"
+    assert config["instruction"] in selected["instruction"]
+    assert selected["instruction"].endswith(reasoning_language_instruction("zh_en", version=3))
+    assert "关键概念、短语和关键句" in selected["instruction"]
+    assert "紧接一个忠实、完整的英文译段" not in selected["instruction"]
+    assert "不做逐句双语翻译" not in selected["instruction"]
 
 
 @pytest.mark.parametrize("style", ["concise", "custom", "mixed"])
@@ -134,14 +187,15 @@ def test_v2_preserves_user_style_and_instruction_while_full_translation_takes_pr
 
 
 @pytest.mark.parametrize("language", ["auto", "zh", "en"])
-def test_bilingual_version_does_not_change_other_language_contracts(language):
-    assert reasoning_language_instruction(language, version=2) == reasoning_language_instruction(language)
+@pytest.mark.parametrize("version", [2, 3])
+def test_bilingual_version_does_not_change_other_language_contracts(language, version):
+    assert reasoning_language_instruction(language, version=version) == reasoning_language_instruction(language)
     config = {"style": "reflective", "instruction": "Retain the actual evidence.",
               "reasoning_language": language}
-    assert style_for_sample(config, "same", reasoning_language_version=2) == style_for_sample(config, "same")
+    assert style_for_sample(config, "same", reasoning_language_version=version) == style_for_sample(config, "same")
 
 
-@pytest.mark.parametrize("version", [None, False, True, "2", 0, 3, 2.0, [], {}])
+@pytest.mark.parametrize("version", [None, False, True, "2", "3", 0, 4, 2.0, 3.0, [], {}])
 def test_unknown_language_contract_versions_fail_before_generation(version):
     with pytest.raises(ValueError, match="invalid_node_generation"):
         reasoning_language_instruction("zh_en", version=version)
@@ -149,9 +203,10 @@ def test_unknown_language_contract_versions_fail_before_generation(version):
         style_for_sample({"reasoning_language": "zh_en"}, "sample", reasoning_language_version=version)
 
 
-def test_disabled_v2_does_not_enable_style_or_change_native_reasoning():
+@pytest.mark.parametrize("version", [2, 3])
+def test_disabled_language_versions_do_not_enable_style_or_change_native_reasoning(version):
     config = {"enabled": False, "style": "default", "reasoning_language": "zh_en"}
-    assert style_for_sample(config, "sample", reasoning_language_version=2) == {
+    assert style_for_sample(config, "sample", reasoning_language_version=version) == {
         "preset": "default", "instruction": STYLE_PRESETS["default"]}
 
 

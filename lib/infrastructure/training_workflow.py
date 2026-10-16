@@ -42,6 +42,7 @@ from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
 from lib.domain.workflow_generation import (validate_node_generation, style_for_sample,
                                              REASONING_LANGUAGE_CONTRACT_VERSION)
+from lib.domain.knowledge_voice import knowledge_voice_options
 from lib.domain.workflow_reasoning_route import cot_updates_sft, cot_with_sft_context, finalized_sft_rows
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
 from lib.domain.workflow_package_review import validate_package_review, package_review_stage
@@ -498,7 +499,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "multiturn_terminal_review_version": 1,
               "multiturn_generation_style_version": 1,
               "reasoning_language_contract_version": REASONING_LANGUAGE_CONTRACT_VERSION,
-              **({"authored_reasoning_language_review_version": 2} if authored_language_review else {}),
+              **({"authored_reasoning_language_review_version": 3} if authored_language_review else {}),
+              "knowledge_application_voice_version": 3,
               **({"reasoning_required": True} if reasoning_required else {}),
               "learner_context_review_version": 1,
               "learner_context_retry_version": 1,
@@ -794,7 +796,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         if prompt_stage is not None else self.prompt_text(prompt_id))
                     from lib.infrastructure.workflow_node_messages import split_node_rules
                     rule_system, request_data = split_node_rules(
-                        data, instruction=instruction, qa_director=self.recipe.get("qa_director"))
+                        data, instruction=instruction, qa_director=self.recipe.get("qa_director"),
+                        knowledge_application_voice_version=self.recipe.get("knowledge_application_voice_version"))
                     memory_version = self.recipe.get("source_memory_protocol_version")
                     sealed_review_request = (memory_version in {1, 2}
                                              and (memory_version == 2 or bool(self.recipe.get("repair_inputs")))
@@ -2370,7 +2373,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 from lib.domain.training_surface import training_surface_issue
                 issue = training_surface_issue(value["reasoning"], value["answer"],
                     visible_messages=task["prompt"], contract=sample.get("qa_contract"),
-                    protocol_version=self.recipe.get("training_surface_protocol_version", 1))
+                    protocol_version=self.recipe.get("training_surface_protocol_version", 1),
+                    **knowledge_voice_options(self.recipe))
                 if issue:
                     feedback = {"training_surface": issue,
                         "repair": "解释和答案全文只围绕用户任务展开，用已掌握的事实推导；移除幕后制作过程，不删必要论证或编造经历。文章理解可引用用户实际可见的文章。"}
@@ -2441,7 +2445,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
             return None, {"reasoning_protocol": issue}
         issue = training_surface_issue(rationale["reasoning"], "",
             visible_messages=task["prompt"], contract=sample.get("qa_contract"),
-            protocol_version=self.recipe.get("training_surface_protocol_version", 1))
+            protocol_version=self.recipe.get("training_surface_protocol_version", 1),
+            **knowledge_voice_options(self.recipe))
         if issue:
             return None, {"training_surface": issue}
         checked = self.adherence_check([sample["id"], "cot_prefix_check_v1", attempt],
@@ -2562,7 +2567,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     issue = training_surface_issue(replacement["reasoning"], answer,
                         visible_messages=prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}],
                         contract=row.get("qa_contract"),
-                        protocol_version=self.recipe.get("training_surface_protocol_version", 1))
+                        protocol_version=self.recipe.get("training_surface_protocol_version", 1),
+                        **knowledge_voice_options(self.recipe))
                     if issue:
                         feedback = {"training_surface": issue, "repair": "保留任务推导和事实，移除隐藏来源与制作过程自述。最终答案保持不变。"}
                         continue

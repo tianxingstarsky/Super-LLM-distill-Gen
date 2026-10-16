@@ -22,9 +22,10 @@ def test_new_run_pins_complete_translation_for_each_authored_node(tmp_path, stag
     run_id = engine.create_run(output, brief="Explain the conditions for the decision.",
         targets=[stage], node_generation={stage: STYLE})
     worker = engine.Workflow(output, run_id, tmp_path)
-    assert worker.recipe["reasoning_language_contract_version"] == 2
+    assert worker.recipe["reasoning_language_contract_version"] == 3
+    assert worker.recipe["knowledge_application_voice_version"] == 3
     style = worker.generation_style(stage, "sample")
-    expected_rule = reasoning_language_instruction("zh_en", version=2)
+    expected_rule = reasoning_language_instruction("zh_en", version=3)
     assert style["instruction"].count(expected_rule) == 1
     assert style["instruction"] == worker.recipe["node_generation_prompts"][stage]["concise"]
     assert "不做逐句双语翻译" not in style["instruction"]
@@ -56,5 +57,5 @@ def test_pinned_custom_rule_gains_only_its_own_frozen_language_contract(tmp_path
     before = deepcopy(worker.recipe)
     actual = worker.generation_style("sft", "sample")
     assert actual["instruction"] == ("Keep the saved editorial rule verbatim.\n"
-                                       + reasoning_language_instruction("zh_en", version=2))
+                                       + reasoning_language_instruction("zh_en", version=3))
     assert worker.recipe == before

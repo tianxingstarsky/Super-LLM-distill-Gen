@@ -192,7 +192,8 @@ def _article_is_visible(visible, contract):
     return isinstance(article, str) and bool(article.strip()) and article.strip() in visible
 
 
-def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=None, protocol_version=1):
+def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=None, protocol_version=1,
+                           knowledge_application_voice_version=None, learning_goal=None):
     """Return a stable issue code for explicit leakage in exported output text.
 
     ``contract`` is not evidence by itself: source references are allowed only
@@ -205,8 +206,12 @@ def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=N
     """
     visible = _visible_text(visible_messages)
     article_visible = _article_is_visible(visible, contract)
+    from lib.domain.knowledge_voice import knowledge_voice_rules, knowledge_voice_sentence_issue
+    voice_active = knowledge_application_voice_version == 3 and bool(knowledge_voice_rules(learning_goal, contract))
     for text in (_text(reasoning), _text(answer)):
         for sentence in re.split(r"[。！？!?；;\n]+|(?<=[.!?])\s+", text):
+            if voice_active and (issue := knowledge_voice_sentence_issue(sentence, visible, article_visible=article_visible)):
+                return issue
             if protocol_version == 2 and _production_protocol_reference(sentence, visible):
                 return "training_surface_internal_process_reference"
             if _INTERNAL_FIELD.search(sentence) and _PROCESS_CUE.search(sentence):
@@ -242,7 +247,8 @@ def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=N
     return None
 
 
-def training_record_surface_issue(target, row, *, protocol_version=None):
+def training_record_surface_issue(target, row, *, protocol_version=None,
+                                  knowledge_application_voice_version=None, learning_goal=None):
     """Inspect every reasoning body in a v2 training record, without mutation.
 
     This is a boundary check, not schema validation or a semantic judge. Private
@@ -257,11 +263,13 @@ def training_record_surface_issue(target, row, *, protocol_version=None):
     if version != 2:
         return None
     contract = row.get("qa_contract")
+    voice_options = ({"knowledge_application_voice_version": knowledge_application_voice_version,
+                      "learning_goal": learning_goal} if knowledge_application_voice_version == 3 else {})
     if target == "cot":
         question = row.get("question")
         visible = question if isinstance(question, list) else [{"role": "user", "content": question}]
         return training_surface_issue(row.get("reasoning"), row.get("answer"),
-                                      visible_messages=visible, contract=contract, protocol_version=2)
+                                      visible_messages=visible, contract=contract, protocol_version=2, **voice_options)
     if target in {"sft", "multiturn", "agent"}:
         branches = [((), row.get("messages"))]
     elif target in {"dpo", "orpo", "rlaif"}:
@@ -281,7 +289,7 @@ def training_record_surface_issue(target, row, *, protocol_version=None):
                 reasoning = "\n".join(_text(message.get(field))
                                       for field in ("reasoning_content", "reasoning", "thinking"))
                 issue = training_surface_issue(reasoning, message.get("content"),
-                    visible_messages=visible, contract=contract, protocol_version=2)
+                    visible_messages=visible, contract=contract, protocol_version=2, **voice_options)
                 if issue:
                     return issue
             visible.append(message)
