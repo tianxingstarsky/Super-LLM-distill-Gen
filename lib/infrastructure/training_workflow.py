@@ -40,7 +40,8 @@ from lib.domain.workflow_graph import SOURCE_CLEANING_RECIPE_VERSION, uses_share
 from lib.domain.document_parser import validate_document_parser
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_scale import PLAN_BATCH_SIZE
-from lib.domain.workflow_generation import validate_node_generation, style_for_sample
+from lib.domain.workflow_generation import (validate_node_generation, style_for_sample,
+                                             REASONING_LANGUAGE_CONTRACT_VERSION)
 from lib.domain.workflow_reasoning_route import cot_updates_sft, cot_with_sft_context, finalized_sft_rows
 from lib.domain.reasoning_trim import validate_reasoning_trim, trim_prompt
 from lib.domain.workflow_package_review import validate_package_review, package_review_stage
@@ -365,7 +366,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         if config.get("enabled", True):
             presets = (("concise", "structured", "skeptical", "reflective")
                        if config["style"] == "mixed" else (config["style"],))
-            generation_prompts[stage] = {preset: style_for_sample({**config, "style": preset}, "snapshot")["instruction"]
+            generation_prompts[stage] = {preset: style_for_sample({**config, "style": preset}, "snapshot",
+                                            reasoning_language_version=REASONING_LANGUAGE_CONTRACT_VERSION)["instruction"]
                                          for preset in presets}
     if (sft_output_style is not None and
             (type(sft_output_style) is not str or sft_output_style not in {"separated", "drop"}
@@ -495,7 +497,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "reasoning_revision_protocol_version": 1,
               "multiturn_terminal_review_version": 1,
               "multiturn_generation_style_version": 1,
-              **({"authored_reasoning_language_review_version": 1} if authored_language_review else {}),
+              "reasoning_language_contract_version": REASONING_LANGUAGE_CONTRACT_VERSION,
+              **({"authored_reasoning_language_review_version": 2} if authored_language_review else {}),
               **({"reasoning_required": True} if reasoning_required else {}),
               "learner_context_review_version": 1,
               "learner_context_retry_version": 1,
@@ -1511,12 +1514,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         config = self.recipe.get("node_generation", {}).get(stage)
         if not config or not config.get("enabled", True):
             return None
-        style = style_for_sample(config, sample_id)
+        language_version = self.recipe.get("reasoning_language_contract_version", 1)
+        style = style_for_sample(config, sample_id, reasoning_language_version=language_version)
         pinned = self.recipe.get("node_generation_prompts", {}).get(stage, {}).get(style["preset"])
         if pinned is not None:
             style["instruction"] = pinned
             from lib.domain.workflow_generation import reasoning_language_instruction
-            language_rule = reasoning_language_instruction(style.get("reasoning_language", "auto"))
+            language_rule = reasoning_language_instruction(style.get("reasoning_language", "auto"),
+                                                            version=language_version)
             if language_rule and not pinned.endswith(language_rule):
                 style["instruction"] += "\n" + language_rule
         return style

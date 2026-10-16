@@ -3295,6 +3295,8 @@ ZH_EN.update({
     "中文推理": "Chinese reasoning",
     "英文推理": "English reasoning",
     "中英混合推理": "Chinese–English reasoning",
+    "中英互译推理": "Chinese–English parallel translation",
+    "中英互译按中文分析段与对应完整英文译段成对展开，保留相关依据、条件、推导与核对；不以术语混排或摘要代替全文翻译。答案跟随用户语言，只控制新撰写的显式推理。": "Pair each Chinese analysis paragraph with its complete English translation. Preserve the relevant evidence, conditions, inferences, and checks. Terms or summaries cannot replace full translation. Answers follow the user's language. Only newly authored reasoning is affected.",
     "只影响风格化生成的显式推理。答案跟随当前用户语言；不会改写上游模型的原生推理。": "This affects only the authored reasoning. Answers follow the current user's language. It does not rewrite the provider's native reasoning.",
     "先开启风格化生成，才能指定显式推理的语言；关闭时保留选择但不生效。": "Enable authored reasoning to choose its language. Turning it off keeps the selection without applying it.",
     "例如：按当前问题组织解释，保留关键依据，不套固定编号和思考流程。": "For example: explain the current task with key evidence. Avoid fixed numbering or a fixed reasoning sequence.",

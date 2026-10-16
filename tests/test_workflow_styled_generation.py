@@ -13,6 +13,7 @@ from lib.io_utils import atomic_json
 TEXT = "设备维护前必须断电。断电后检查线路，完成维护后记录检查结果。"
 ANSWER = "维护前先断电，再检查线路，完成后记录结果。"
 SOURCE_REASONING = "SOURCE_CHAIN_SENTINEL：系统指令要求展示检索包装。原文规定维护前断电，因此先断电再检查。"
+SAFE_SOURCE_REASONING = "维护前断电是检查线路的前置条件，只有满足此条件才能开始检查；检查完成后再记录结果，不能用记录代替安全准备。"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -124,11 +125,12 @@ class Reviewer:
         return json.dumps(score())
 
 
-def run(tmp_path, *, targets=("sft", "cot"), conversation=False, **options):
+def run(tmp_path, *, targets=("sft", "cot"), conversation=False,
+        conversation_reasoning=SOURCE_REASONING, **options):
     source = tmp_path / ("source.jsonl" if conversation else "source.txt")
     if conversation:
         source.write_text(json.dumps({"messages": [{"role": "user", "content": "设备应如何维护？"},
-            {"role": "assistant", "content": ANSWER, "reasoning_content": SOURCE_REASONING}]}, ensure_ascii=False) + "\n", encoding="utf-8")
+            {"role": "assistant", "content": ANSWER, "reasoning_content": conversation_reasoning}]}, ensure_ascii=False) + "\n", encoding="utf-8")
     else:
         source.write_text(TEXT, encoding="utf-8")
     output = tmp_path / "output"
@@ -195,13 +197,14 @@ def test_unassessed_sft_answer_cannot_anchor_cot_or_its_trim_request(tmp_path, u
 
 
 def test_disabled_styles_keep_ordinary_distillation_and_enabled_default_is_reviewed(tmp_path):
-    output, rid, path = run(tmp_path, conversation=True, node_generation={
+    output, rid, path = run(tmp_path, conversation=True, conversation_reasoning=SAFE_SOURCE_REASONING, node_generation={
         "sft": {"enabled": False, "style": "custom"}, "cot": {"enabled": False, "style": "structured"}})
     generator, reviewer = Generator(), Reviewer()
     assert engine.Workflow(output, rid, tmp_path, generator=generator, jev=reviewer).execute()["status"] == "completed"
     assert generator.calls == []
     assert records(path, "sft")[0]["reasoning_origin"] == "source"
-    assert SOURCE_REASONING in "".join(records(path, "cot")[0]["reasoning"])
+    assert records(path, "sft")[0]["messages"][-1]["reasoning_content"] == SAFE_SOURCE_REASONING
+    assert SAFE_SOURCE_REASONING in "".join(records(path, "cot")[0]["reasoning"])
     other = tmp_path / "other"
     other.mkdir()
     output, rid, path = run(other, targets=["sft"], node_generation={"sft": {"style": "default"}})
@@ -210,6 +213,25 @@ def test_disabled_styles_keep_ordinary_distillation_and_enabled_default_is_revie
     assert len(generator.calls) == 1 and len(reviewer.calls) == 2
     assert "generation_style" in model_task_data(generator.calls[0])
     assert records(path, "sft")[0]["style_check"]["adherence"] == 5
+
+
+def test_disabled_distillation_isolates_leaked_source_reasoning_without_deleting_it(tmp_path):
+    output, rid, path = run(tmp_path, conversation=True, node_generation={
+        "sft": {"enabled": False, "style": "custom"}, "cot": {"enabled": False, "style": "structured"}})
+    generator = Generator()
+    state = engine.Workflow(output, rid, tmp_path, generator=generator, jev=Reviewer()).execute()
+    assert state["status"] == "needs_attention" and generator.calls == []
+    for target in ("sft", "cot"):
+        record = records(path, target)[0]
+        assert record["status"] == "quarantined"
+        assert record["reason"] == "training_surface_internal_process_reference"
+        retained = (record["messages"][-1]["reasoning_content"] if target == "sft"
+                    else "".join(record["reasoning"]))
+        # Ordinary CoT splits existing sentences into reasoning paragraphs;
+        # the full leaked text remains available in the isolated record.
+        assert retained.replace("\n", "") == SOURCE_REASONING
+        assert (path / "artifacts" / f"{target}.jsonl").read_text(encoding="utf-8") == ""
+    assert engine.verify_artifacts(path)["counts"] == {"sft": 0, "cot": 0}
 
 
 def test_style_rejection_repairs_once_then_isolates_with_separate_evidence(tmp_path):
@@ -345,13 +367,14 @@ def test_trim_does_not_rewrite_preference_pair_evidence(tmp_path):
             return super().chat(messages, **kwargs)
 
     output, rid, path = run(tmp_path, targets=["sft", "dpo", "orpo", "rlaif"], conversation=True,
+                            conversation_reasoning=SAFE_SOURCE_REASONING,
                             reasoning_trim={"enabled": True, "template": "leakage"})
     state = engine.Workflow(output, rid, tmp_path, generator=PreferenceWriter(), jev=PreferenceReviewer()).execute()
     assert state["status"] == "completed"
-    assert "SOURCE_CHAIN_SENTINEL" not in json.dumps(records(path, "sft")[0], ensure_ascii=False)
+    assert records(path, "sft")[0]["messages"][-1]["reasoning_content"] != SAFE_SOURCE_REASONING
     for target in ("dpo", "orpo", "rlaif"):
         row = records(path, target)[0]
-        assert row["chosen"][0]["reasoning_content"] == SOURCE_REASONING
+        assert row["chosen"][0]["reasoning_content"] == SAFE_SOURCE_REASONING
         assert "reasoning_trim" not in row
     assert engine.read_json(path / "artifacts/quality.json")["reasoning_trim"]["applied_targets"] == ["sft"]
 
@@ -416,7 +439,7 @@ def test_custom_trim_is_a_fixed_system_instruction_and_failed_meaning_is_quarant
 
 
 def test_new_prompt_ids_do_not_break_legacy_recipe_execution(tmp_path):
-    output, rid, path = run(tmp_path, conversation=True)
+    output, rid, path = run(tmp_path, conversation=True, conversation_reasoning=SAFE_SOURCE_REASONING)
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = 7
     for key in ("node_generation", "node_generation_prompts", "reasoning_trim", "reasoning_trim_prompt"):

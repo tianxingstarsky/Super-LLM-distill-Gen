@@ -16,12 +16,15 @@ STYLE_PRESETS = {
 }
 GENERATION_STYLES = (*STYLE_PRESETS, "mixed", "custom")
 REASONING_LANGUAGES = ("auto", "zh", "en", "zh_en")
+# Frozen recipes without a version retain the original language instruction.
+REASONING_LANGUAGE_CONTRACT_VERSION = 2
 _MIXED_STYLES = ("concise", "structured", "skeptical", "reflective")
 
 
-def reasoning_language_instruction(value: str = "auto") -> str:
-    """Describe authored reasoning only; provider-native history is untouched."""
-    if not isinstance(value, str) or value not in REASONING_LANGUAGES:
+def reasoning_language_instruction(value: str = "auto", *, version: int = 1) -> str:
+    """Describe authored reasoning, retaining the contract of frozen recipes."""
+    if (not isinstance(value, str) or value not in REASONING_LANGUAGES
+            or type(version) is not int or version not in {1, REASONING_LANGUAGE_CONTRACT_VERSION}):
         raise ValueError("invalid_node_generation")
     if value == "auto":
         return ""
@@ -34,6 +37,27 @@ def reasoning_language_instruction(value: str = "auto") -> str:
             "不能只给单语正文添加几个英文标签、术语或重复翻译来冒充中英混合推理。"
         ),
     }[value]
+    if value == "zh_en" and version == 2:
+        expression = (
+            "使用显式中英互译展开新撰写的推理说明。每个相关推理要点先用完整自然的中文分析段说明，"
+            "紧接一个忠实、完整的英文译段；相邻中文段与英文译段用空行分隔即可。"
+            "英文译段须保留中文段中的每个论证要点、前提、条件、数量、关系、限定和不确定性，"
+            "不能只给英文摘要，不能把术语、标签或零散英语词混入中文来代替互译。"
+            "若先写出英文分析，也必须整理为中文分析段在前、对应完整英文译段在后的成对正文。"
+            "按当前任务的真实需要充分展开：任务理解、相关知识与证据、假设和适用条件、"
+            "推导中间关系、可行的替代解释或反例、计算或逻辑核对、结论边界与剩余不确定性，"
+            "凡与该任务有关的要点都应交代清楚，不以提纲、结论或短小概括代替必要分析。"
+            "每个要点的展开程度由问题复杂度和证据决定，覆盖完整后再结束；"
+            "不为凑篇幅重复论点，不编造无关分支、证据或未执行的验证。"
+            "保持中文段与英文译段在意义上等价，公式、数值、单位、实体、否定、例外与判断强度须一致，"
+            "译段不额外添加中文段没有的结论。"
+            "段落和论证顺序随问题自然组织，不强制编号、固定标签、固定步骤或固定长度。"
+            "简洁风格只要求表达利落，其他风格或篇幅偏好不能省略任务所需的分析要点或对应完整译段；"
+            "完整覆盖和忠实互译优先于缩短。"
+            "不要描述私有资料的投喂、检索、分块或挑选过程，"
+            "不要将后台生成、审核、提示词或角色安排写成正文；"
+            "任务需要公开研究归属时保留真实归属，不虚构个人经历。"
+        )
     return (
         "显式推理语言要求：" + expression
         + "最终答案跟随当前用户的语言与明确要求，不因推理语言设置而强制双语。"
@@ -76,10 +100,11 @@ def validate_node_generation(value: dict | None) -> dict:
     return normalized
 
 
-def style_for_sample(config: dict | None, sample_id: str) -> dict:
+def style_for_sample(config: dict | None, sample_id: str, *, reasoning_language_version: int = 1) -> dict:
     """Select one stable style independent of concurrency, batching, and retries."""
     if not isinstance(sample_id, str):
         raise ValueError("invalid_generation_sample_id")
+    reasoning_language_instruction(version=reasoning_language_version)
     # Answer transport belongs to the CoT stage, not the text style itself.
     # Creation validates its scope; neutral style selection can serve either node.
     style_config = ({} if config is None else
@@ -96,5 +121,5 @@ def style_for_sample(config: dict | None, sample_id: str) -> dict:
     if node["enabled"] and language != "auto":
         result["reasoning_language"] = language
         result["instruction"] = "\n".join(part for part in (
-            instruction, reasoning_language_instruction(language)) if part)
+            instruction, reasoning_language_instruction(language, version=reasoning_language_version)) if part)
     return result
