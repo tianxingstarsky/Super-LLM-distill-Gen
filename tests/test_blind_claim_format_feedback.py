@@ -26,19 +26,25 @@ def workflow(tmp_path, client, *, enabled=True):
                                reasoning_required=True, review_repair={"mode": "auto", "max_rounds": 0})
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
-    assert recipe["claim_review_format_feedback_version"] == 1
+    assert recipe["claim_review_format_feedback_version"] == 2
+    # Freeze the first diagnostic version exercised by this historical file.
+    recipe.pop("claim_reference_policy_version")
+    versions = (("workflow.review_score", "1.15.0"), ("workflow.review_reference", "1.0.1"))
+    recipe["claim_review_format_feedback_version"] = 1
     if not enabled:
         recipe.pop("claim_review_format_feedback_version")
         recipe.pop("claim_refutation_release_version")
-        from lib.prompts import get, render
-        for prompt_id, version in (("workflow.review_score", "1.13.0"), ("workflow.review_reference", "1.0.0")):
-            frozen = get(prompt_id, version=version)
-            recipe["node_prompt_templates"]["review"][prompt_id] = render(frozen)
-            recipe["prompts"][prompt_id] = {"version": version, "sha256": engine.digest(frozen.template)}
-        engine.atomic_json(path / "recipe.json", recipe)
-        state = engine.read_json(path / "state.json")
-        state["recipe_hash"] = engine.digest(recipe)
-        engine.atomic_json(path / "state.json", state)
+        recipe.pop("claim_review_quote_matching_version")
+        versions = (("workflow.review_score", "1.13.0"), ("workflow.review_reference", "1.0.0"))
+    from lib.prompts import get, render
+    for prompt_id, version in versions:
+        frozen = get(prompt_id, version=version)
+        recipe["node_prompt_templates"]["review"][prompt_id] = render(frozen)
+        recipe["prompts"][prompt_id] = {"version": version, "sha256": engine.digest(frozen.template)}
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    engine.atomic_json(path / "state.json", state)
     result = engine.Workflow(output, run_id, Path(__file__).resolve().parents[1], generator=client)
     result.stage = "review"
     return result

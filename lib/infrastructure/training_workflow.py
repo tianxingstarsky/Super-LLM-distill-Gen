@@ -361,8 +361,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             or "workflow.style_check" in node_prompts.get("multiturn", {})):
         recipe_version = 22
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
-        learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=1,
-        claim_refutation_release_version=1)
+        learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
+        claim_refutation_release_version=1, claim_reference_policy_version=1)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -471,8 +471,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         source_cleaning = True
         recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
-            learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=1,
-            claim_refutation_release_version=1)
+            learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
+            claim_refutation_release_version=1, claim_reference_policy_version=1)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -507,8 +507,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "review_context_protocol_version": 2,
               "turn_review_protocol_version": 1,
               "claim_review_protocol_version": 2,
-              "claim_review_format_feedback_version": 1,
+              "claim_review_format_feedback_version": 2,
               "claim_refutation_release_version": 1,
+              "claim_review_quote_matching_version": 1,
+              "claim_reference_policy_version": 1,
               "reasoning_revision_protocol_version": 1,
               "multiturn_terminal_review_version": 1,
               "multiturn_generation_style_version": 1,
@@ -3313,7 +3315,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                                                   learner_context_review_version=self.recipe.get("learner_context_review_version"),
                                                   claim_review_protocol_version=self.recipe.get("claim_review_protocol_version"),
                                                   claim_review_format_feedback_version=self.recipe.get("claim_review_format_feedback_version"),
-                                                  claim_refutation_release_version=self.recipe.get("claim_refutation_release_version"))
+                                                  claim_refutation_release_version=self.recipe.get("claim_refutation_release_version"),
+                                                  claim_reference_policy_version=self.recipe.get("claim_reference_policy_version"))
                 else:
                     if not isinstance(self.recipe.get("prompts"), dict):
                         raise ValueError("prompts_changed_create_new_run")

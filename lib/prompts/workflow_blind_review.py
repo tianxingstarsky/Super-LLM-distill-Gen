@@ -60,3 +60,13 @@ BLIND_COMPARISON_V1_15 = BLIND_COMPARISON_V1_14.replace(
 ) + """
 每条refuted表示该具体主张已被本次评审否定，即使标minor或总体建议仍合理，也不能直接作为已核验样本放行；修正后须重评。minor只说明影响大小，不取消已指出的错误。不得为通过而把已找到的反例改称supported、删去问题引文或只降低数字分。仅仅换词更自然而不改变事实和推断，不属于refuted。保留你的实际判断，不为满足通过率编造错误。
 """
+
+BLIND_COMPARISON_V1_16 = BLIND_COMPARISON_V1_15.replace(
+    "必须给对应候选field和逐字quote，并在claim_checks为同一field/quote提供supported且有真实source/context引用和具体推导的反证；",
+    "必须给对应候选field和逐字quote，并在claim_checks为同一field/quote提供supported及具体反证；"
+    "反证可以是实际source/context引文，也可以是遵守真实任务条件的具体logic反例；",
+).replace(
+    "source或context", "source、context或logic",
+) + """
+参照中自己增加的普遍约束，不因标为material就成为用户义务。区分候选的关键事实无法确认，与参照把某种可行方案误当唯一合法方案。后一种若能给出满足用户全部已知条件的具体替代及依赖说明，可用reference_error，counter_evidence.kind=logic、evidence=[]，并在同field/quote的supported claim中完整说明同一反例。不能只写参照没依据、凭空假定新资源或更喜欢另一种方案；不能用此路径消除候选自身确实未知的关键事实。没有充分反证才保留uncertain。逻辑反例仍是模型意见，来源优先，不能伪称已执行或独立证明。
+"""

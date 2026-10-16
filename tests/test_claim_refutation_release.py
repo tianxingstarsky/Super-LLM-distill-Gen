@@ -133,7 +133,7 @@ def test_real_new_factory_minor_refutation_repairs_regrades_and_exports_full_rea
     client = MinorRefutationClient()
     flow = engine.Workflow(output, run_id, Path(__file__).resolve().parents[1], generator=client)
     assert flow.recipe["claim_refutation_release_version"] == 1
-    assert flow.recipe["prompts"]["workflow.review_score"]["version"] == "1.15.0"
+    assert flow.recipe["prompts"]["workflow.review_score"]["version"] == "1.16.0"
     assert flow.execute()["status"] == "completed"
     assert len(client.calls) == 4
     assert sum(call["data"].get("phase") == "blind_reference" for call in client.calls) == 1

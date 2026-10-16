@@ -18,9 +18,11 @@ def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     assert recipe["multiturn_terminal_review_version"] == 1
     assert recipe["training_surface_protocol_version"] == 2
     assert recipe["reasoning_required"] is True
-    assert recipe["claim_review_format_feedback_version"] == 1
+    assert recipe["claim_review_format_feedback_version"] == 2
     assert recipe["claim_refutation_release_version"] == 1
-    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.15.0"
+    assert recipe["claim_review_quote_matching_version"] == 1
+    assert recipe["claim_reference_policy_version"] == 1
+    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.16.0"
     assert recipe["prompts"]["workflow.review_reference"]["version"] == "1.0.1"
     assert "workflow.review_reference" in recipe["node_prompt_templates"]["review"]
     assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.11.0"

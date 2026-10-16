@@ -244,7 +244,7 @@ def _reference(reference, request, kind):
         raise ValueError("fabricated_claim_review_evidence_quote")
 
 
-def validate_claim_review(value, request):
+def validate_claim_review(value, request, *, quote_matching_version=None):
     """Preserve the raw response, deriving a separate conservative gate.
 
     Missing detail is not reported as verified. Partial coverage and any
@@ -252,6 +252,9 @@ def validate_claim_review(value, request):
     are five. An explicitly rejected exploratory hypothesis is a semantic
     review decision; this contract does not reject words such as 'perhaps'.
     """
+    if quote_matching_version is not None and (
+            type(quote_matching_version) is not int or quote_matching_version != 1):
+        raise ValueError("invalid_claim_review_quote_matching_version")
     _validate_request(request)
     if (not isinstance(value, dict) or set(value) != _RESPONSE_FIELDS
             or type(value["claim_review_protocol_version"]) is not int
@@ -269,12 +272,18 @@ def validate_claim_review(value, request):
     claims = value["claim_checks"]
     if not isinstance(claims, list) or not claims:
         raise ValueError("missing_claim_review_claims")
-    seen, covered, material = set(), set(), []
-    for claim in claims:
+    seen, covered, material, quote_bindings = set(), set(), [], []
+    for claim_index, claim in enumerate(claims):
         if not isinstance(claim, dict) or set(claim) != {"field", "quote", "status", "severity", "basis"}:
             raise ValueError("invalid_claim_review_claim")
         field, quote = claim["field"], _text(claim["quote"], "missing_claim_review_quote")
-        if not isinstance(field, str) or field not in fields or quote not in request["target_fields"][field]:
+        if not isinstance(field, str) or field not in fields:
+            raise ValueError("fabricated_claim_review_quote")
+        if quote_matching_version == 1:
+            from lib.domain.review_quote_binding import bind_candidate_quote
+            quote_bindings.append(bind_candidate_quote(request["target_fields"][field], quote,
+                field=field, response_path=["claim_checks", claim_index, "quote"], version=1))
+        elif quote not in request["target_fields"][field]:
             raise ValueError("fabricated_claim_review_quote")
         signature = (field, quote)
         if signature in seen:
@@ -328,7 +337,9 @@ def validate_claim_review(value, request):
     return {"claim_review_protocol_version": CLAIM_REVIEW_PROTOCOL_VERSION,
             "request": deepcopy(request), "raw_response": deepcopy(value), "verdict": derived,
             "turn_verdict": turn, "accepted": accepted(derived) and not incomplete and not material,
-            "structure_verified": True, "semantic_verification": "reviewer_reported_not_independently_verified"}
+            "structure_verified": True, "semantic_verification": "reviewer_reported_not_independently_verified",
+            **({"quote_matching_version": 1, "quote_bindings": quote_bindings}
+               if quote_matching_version == 1 else {})}
 
 
 def merge_claim_reviews(payload, receipts):
@@ -347,7 +358,8 @@ def merge_claim_reviews(payload, receipts):
         request = receipt.get("request")
         if not isinstance(request, dict):
             raise ValueError("invalid_claim_review_receipt")
-        expected = validate_claim_review(receipt.get("raw_response"), request)
+        expected = validate_claim_review(receipt.get("raw_response"), request,
+            quote_matching_version=receipt.get("quote_matching_version"))
         if expected != receipt:
             raise ValueError("altered_claim_review_receipt")
         if request["scope"]["candidate_sha256"] != _digest(payload):

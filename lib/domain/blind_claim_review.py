@@ -225,8 +225,11 @@ def _grade_components(request):
     return core, blind
 
 
-def validate_claim_review_v2(value, request):
+def validate_claim_review_v2(value, request, *, quote_matching_version=None, reference_policy_version=None):
     """Require every blind point comparison without requiring its repetition."""
+    if reference_policy_version is not None and (
+            type(reference_policy_version) is not int or reference_policy_version != 1):
+        raise ValueError("invalid_claim_reference_policy_version")
     core, blind = _grade_components(request)
     if (not isinstance(value, dict) or set(value) != v1._RESPONSE_FIELDS | {"reference_checks"}
             or type(value["claim_review_protocol_version"]) is not int
@@ -237,13 +240,14 @@ def validate_claim_review_v2(value, request):
     raw_core = {key: deepcopy(part) for key, part in value.items() if key != "reference_checks"}
     raw_core["claim_review_protocol_version"] = 1
     raw_core["scope"] = deepcopy(core["scope"])
-    previous = v1.validate_claim_review(raw_core, core)
+    previous = v1.validate_claim_review(raw_core, core, quote_matching_version=quote_matching_version)
+    quote_bindings = deepcopy(previous.get("quote_bindings", []))
     points = {point["id"]: point for point in blind["raw_response"]["reference_points"]}
     checks = value["reference_checks"]
     if not isinstance(checks, list) or len(checks) != len(points):
         raise ValueError("incomplete_claim_review_reference_checks")
     seen, failures = set(), []
-    for check in checks:
+    for reference_index, check in enumerate(checks):
         expected_fields = {"id", "relation", "field", "quote", "reason"}
         if isinstance(check, dict) and check.get("relation") == "reference_error":
             expected_fields.add("counter_evidence")
@@ -260,18 +264,29 @@ def validate_claim_review_v2(value, request):
             if check["field"] is not None or check["quote"] != "":
                 raise ValueError("invalid_claim_review_not_claimed_reference")
         elif (not isinstance(check["field"], str) or check["field"] not in request["target_fields"]
-              or not isinstance(check["quote"], str) or not check["quote"].strip()
-              or check["quote"] not in request["target_fields"][check["field"]]):
+              or not isinstance(check["quote"], str) or not check["quote"].strip()):
+            raise ValueError("fabricated_claim_review_reference_quote")
+        elif quote_matching_version == 1:
+            from lib.domain.review_quote_binding import bind_candidate_quote
+            try:
+                quote_bindings.append(bind_candidate_quote(request["target_fields"][check["field"]],
+                    check["quote"], field=check["field"],
+                    response_path=["reference_checks", reference_index, "quote"], version=1))
+            except ValueError as error:
+                raise ValueError("fabricated_claim_review_reference_quote") from error
+        elif check["quote"] not in request["target_fields"][check["field"]]:
             raise ValueError("fabricated_claim_review_reference_quote")
         if relation == "reference_error":
             counter = check["counter_evidence"]
-            if not isinstance(counter, dict) or counter.get("kind") not in ("source", "context"):
+            kinds = ("source", "context", "logic") if reference_policy_version == 1 else ("source", "context")
+            if not isinstance(counter, dict) or counter.get("kind") not in kinds:
                 raise ValueError("unsubstantiated_claim_review_reference_error")
             _basis(counter, blind["request"])
             supported = [claim for claim in value["claim_checks"]
                          if claim["field"] == check["field"] and claim["quote"] == check["quote"]
-                         and claim["status"] == "supported" and claim["basis"]["kind"] in {"source", "context"}
-                         and claim["basis"]["evidence"]]
+                         and claim["status"] == "supported" and claim["basis"]["kind"] in kinds
+                         and (claim["basis"]["evidence"] or (
+                             reference_policy_version == 1 and claim["basis"]["kind"] == "logic"))]
             if not supported:
                 raise ValueError("unsubstantiated_claim_review_reference_error")
         if points[identifier]["severity"] == "material" and relation in {"contradicted", "uncertain"}:
@@ -291,7 +306,10 @@ def validate_claim_review_v2(value, request):
     return {"claim_review_protocol_version": CLAIM_REVIEW_PROTOCOL_VERSION,
             "request": deepcopy(request), "raw_response": deepcopy(value), "verdict": derived,
             "turn_verdict": turn, "accepted": accepted(derived) and not turn["critical_error"],
-            "structure_verified": True, "semantic_verification": _SEMANTIC_STATUS}
+            "structure_verified": True, "semantic_verification": _SEMANTIC_STATUS,
+            **({"quote_matching_version": 1, "quote_bindings": quote_bindings}
+               if quote_matching_version == 1 else {}),
+            **({"reference_policy_version": 1} if reference_policy_version == 1 else {})}
 
 
 def scope_index(request):
@@ -307,7 +325,9 @@ def merge_claim_reviews_v2(payload, receipts):
         if not isinstance(receipt, dict) or not isinstance(receipt.get("request"), dict):
             raise ValueError("invalid_claim_review_v2_receipt")
         request = receipt["request"]
-        expected = validate_claim_review_v2(receipt.get("raw_response"), request)
+        expected = validate_claim_review_v2(receipt.get("raw_response"), request,
+            quote_matching_version=receipt.get("quote_matching_version"),
+            reference_policy_version=receipt.get("reference_policy_version"))
         if receipt != expected:
             raise ValueError("altered_claim_review_v2_receipt")
         if request["scope"]["candidate_sha256"] != v1._digest(payload):
