@@ -30,7 +30,8 @@ def workflow(tmp_path, client):
 
 
 def assert_wire_boundary(call):
-    table, = [json.loads(line) for line in call["wire"][0]["content"].splitlines()
+    text = call["data"].get("node_task_instructions", call["wire"][0]["content"])
+    table, = [json.loads(line) for line in text.splitlines()
         if line.startswith("{") and '"response_field_names"' in line]
     fields = (["claim_review_protocol_version", "phase", "scope_sha256", "issues", "limitations"]
         if call["data"]["phase"] == "claim_challenge" else ["claim_review_protocol_version", "scope_sha256",
@@ -50,7 +51,7 @@ def test_true_factory_uses_two_candidate_aware_calls_and_actual_current_units_so
     row.update(judge=grade(), qa_contract={"guidance": "PRIVATE_QA_GUIDANCE_221"})
     flow = workflow(tmp_path, client)
     assert flow.recipe["claim_review_adversarial_protocol_version"] == 1
-    assert flow.recipe["prompts"]["workflow.review_reference"]["version"] == "2.0.0"
+    assert flow.recipe["prompts"]["workflow.review_reference"]["version"] == "2.0.1"
     assert flow.recipe["prompts"]["workflow.review_score"]["version"] == "1.18.0"
     evidence = {"teacher_evidence": SOURCE, "source_id": "paper", "source_kind": "document"}
     check = flow._review_claim_score("multiturn", row, evidence, ["sample"])

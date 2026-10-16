@@ -217,29 +217,8 @@ def _claim_format_quote_diagnostic(raw, request, phase, *, quote_matching_versio
         if failures:
             result["unmatched_candidate_quotes"] = failures[:32]
     if error_code in {"invalid_claim_review_source_path", "fabricated_claim_review_evidence_quote"}:
-        paths, visited, truncated = [], 0, False
-        def leaves(value, path):
-            nonlocal visited, truncated
-            visited += 1
-            if visited > 512 or len(paths) >= 64 or len(path) > 12:
-                truncated = True
-                return
-            if isinstance(value, str):
-                paths.append(path)
-            elif isinstance(value, list):
-                for index, item in enumerate(value[:64]):
-                    leaves(item, [*path, index])
-                truncated = truncated or len(value) > 64
-            elif isinstance(value, dict):
-                for key, item in value.items():
-                    # A malicious key must not turn path-only diagnostics into
-                    # an arbitrary-text/exception echo channel.
-                    if isinstance(key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,79}", key):
-                        leaves(item, [*path, key])
-                    else:
-                        truncated = True
-        leaves(request.get("source_evidence"), [])
-        result.update(actual_source_leaf_paths=paths, source_leaf_paths_truncated=truncated)
+        from lib.infrastructure.claim_review_wire_schema import source_leaf_paths
+        result.update(source_leaf_paths(request.get("source_evidence")))
     return result
 _AUTHORED_REPAIR_RULES = (
     "当前 CoT 使用显式教学解释协议 v1。仍按本节点既有 record、quotes、uncertain 契约返回，"
@@ -1172,6 +1151,10 @@ class WorkflowReviewRepair:
         adversarial_version = self.recipe.get("claim_review_adversarial_protocol_version")
         if adversarial_version is not None and (type(adversarial_version) is not int or adversarial_version != 1):
             raise ValueError("invalid_claim_review_adversarial_protocol_version")
+        for name in ("claim_review_wire_schema_version", "claim_review_focus_version"):
+            setting = self.recipe.get(name)
+            if setting is not None and (type(setting) is not int or setting != 1):
+                raise ValueError("invalid_" + name)
         if adversarial_version == 1:
             return self._review_adversarial_claim_score(target, row, evidence, key)
         if version == 2:
@@ -1238,7 +1221,24 @@ class WorkflowReviewRepair:
         if format_version is not None and (type(format_version) is not int or format_version not in {1, 2}):
             raise ValueError("invalid_claim_review_format_feedback_version")
         boundaries = _claim_format_boundaries(request, phase) if format_version in {1, 2} else None
+        schema_version = self.recipe.get("claim_review_wire_schema_version")
+        focus_version = self.recipe.get("claim_review_focus_version")
+        for name, setting in (("claim_review_wire_schema_version", schema_version),
+                              ("claim_review_focus_version", focus_version)):
+            if setting is not None and (type(setting) is not int or setting != 1):
+                raise ValueError("invalid_" + name)
+        wire_metadata = {}
+        if request.get("claim_review_protocol_version") == 4:
+            if schema_version == 1:
+                from lib.infrastructure.claim_review_wire_schema import claim_review_wire_schema_metadata
+                wire_metadata.update(claim_review_wire_schema_metadata(request))
+            if focus_version == 1:
+                from lib.domain.review_claim_focus import claim_review_focus_units
+                wire_metadata["claim_review_focus"] = claim_review_focus_units(request["target_units"])
         call_instruction = instruction
+        if wire_metadata:
+            from lib.infrastructure.claim_review_wire_schema import CLAIM_REVIEW_DYNAMIC_WIRE_HEADER
+            call_instruction += CLAIM_REVIEW_DYNAMIC_WIRE_HEADER
         if boundaries is not None:
             boundary_note = ("\n以下仅说明JSON引用路径与实际messages数组索引；数组索引不是对话轮次编号。"
                 "context引用只能使用列出的合法数组索引及实际字段；scope只复制列出的字段及request原值，不增加target等字段。\n")
@@ -1246,6 +1246,11 @@ class WorkflowReviewRepair:
                 boundary_note = ("\n以下仅说明实际messages索引与本次候选单元id；context证据只能使用合法实际索引。"
                     "仅复制request.scope.scope_sha256为返回的scope_sha256，不返回整个scope；候选评审只引用本次unit_id，不抄quote。\n")
             call_instruction += boundary_note + canonical(boundaries)
+        if wire_metadata:
+            call_instruction += ("\n以下为本次实际输入派生的JSON传输元数据。response_json_schema是完整返回格式说明，"
+                "不表示上游已启用json_schema；仍使用现有json_object传输。source_path是相对source_evidence内部的键/整数索引数组，"
+                "basis.evidence始终为数组。claim_review_focus若存在仅提示当前原文中限制/依赖措辞的位置，"
+                "不是错误标签、事实证据或额外放行规则；所有候选单元仍须按节点自定义标准评审。\n" + canonical(wire_metadata))
         previous_error = None
         previous_detail = {}
         for attempt in (1, 2):

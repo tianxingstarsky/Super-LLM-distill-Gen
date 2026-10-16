@@ -35,7 +35,8 @@ def parent_run(tmp_path, monkeypatch, *, custom=False, legacy=False, previous_an
         recipe = engine.read_json(path / "recipe.json")
         for marker in ("claim_review_protocol_version", "claim_review_format_feedback_version", "claim_refutation_release_version",
                        "claim_review_quote_matching_version", "claim_reference_policy_version", "claim_review_experience_scope_version",
-                       "claim_review_anchor_protocol_version", "claim_review_adversarial_protocol_version"):
+                       "claim_review_anchor_protocol_version", "claim_review_adversarial_protocol_version",
+                       "claim_review_wire_schema_version", "claim_review_focus_version"):
             recipe.pop(marker)
         recipe["node_prompt_templates"] = snapshot_node_prompts(None, recipe_version=recipe["version"],
             learner_context_review_version=1)
@@ -84,7 +85,7 @@ def test_application_review_only_issue_rework_keeps_parent_text_and_adds_current
         else:
             assert "claim_review_adversarial_protocol_version" not in parent_recipe
             assert parent_recipe["prompts"]["workflow.review_score"]["version"] == "1.17.0"
-        assert templates["workflow.review_reference"] == render(get("workflow.review_reference", "2.0.0"))
+        assert templates["workflow.review_reference"] == render(get("workflow.review_reference", "2.0.1"))
         assert templates["workflow.review_score"] == render(get("workflow.review_score", "1.18.0"))
     else:
         assert templates == parent_recipe["node_prompt_templates"]["review"]
@@ -102,8 +103,10 @@ def test_application_review_only_issue_rework_keeps_parent_text_and_adds_current
     assert child_recipe["claim_reference_policy_version"] == 1
     assert child_recipe["claim_review_anchor_protocol_version"] == 1
     assert child_recipe["claim_review_adversarial_protocol_version"] == 1
+    assert child_recipe["claim_review_wire_schema_version"] == 1
+    assert child_recipe["claim_review_focus_version"] == 1
     assert child_recipe["prompts"]["workflow.review_score"]["version"] == "1.18.0"
-    assert child_recipe["prompts"]["workflow.review_reference"]["version"] == "2.0.0"
+    assert child_recipe["prompts"]["workflow.review_reference"]["version"] == "2.0.1"
     assert child_recipe["node_prompt_templates"]["review"] == templates
     assert child_recipe["repair_inputs"][0]["record"] == candidate["record"]
     client = OfflineBlindClient()

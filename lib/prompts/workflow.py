@@ -877,3 +877,8 @@ REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.0.0", te
     "review_reference", "检查候选中的具体反例与缺失前提", CHALLENGE_BODY).template)
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.18.0", template=spec(
     "review_score", "独立裁决反证并核验当前全部训练正文", ADJUDICATION_BODY).template)
+
+from lib.prompts.workflow_adversarial_review import CHALLENGE_FOCUS_BODY
+REVIEW_REFERENCE_V2_0 = REVIEW_REFERENCE
+REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.0.1", template=spec(
+    "review_reference", "优先核查实际限制性断言并寻找合法反例", CHALLENGE_FOCUS_BODY).template)
