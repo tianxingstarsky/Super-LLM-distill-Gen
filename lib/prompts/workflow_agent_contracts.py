@@ -406,3 +406,11 @@ QA_DIRECTOR_V1_9 = QA_DIRECTOR_V1_8.replace(
     "记录实际目标、联系、成功表现、可调整方向和自然结束依据；列表字段使用字符串数组。",
     _DIALOGUE_DESIGN_CONTRACT_V1_9,
 )
+
+
+# New authored defaults retain the native/authored exclusive field contract.
+# The old bodies above stay literal for already submitted workflows.
+from lib.prompts.workflow_reasoning import warmup_generation_body
+
+SFT_DIRECTED_V1_9 = warmup_generation_body(SFT_DIRECTED_V1_8)
+SFT_ANSWER_V1_6 = warmup_generation_body(SFT_ANSWER_V1_5)

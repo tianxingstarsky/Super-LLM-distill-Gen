@@ -492,6 +492,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "source_memory_protocol_version": 2,
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
+              "authored_reasoning_warmup_version": 1,
+              "reasoning_distillation_audit_version": 1,
               "authored_role_projection_version": 3,
               "review_context_protocol_version": 2,
               "turn_review_protocol_version": 1,
@@ -2300,6 +2302,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         task = {"prompt": self.without_source_reasoning(messages[:-1]), "source": source,
                 "quotes": sample.get("quotes", []), "reference_answer": messages[-1]["content"],
                 "generation_style": style}
+        if (type(self.recipe.get("authored_reasoning_warmup_version")) is int
+                and self.recipe["authored_reasoning_warmup_version"] == 1
+                and self.recipe.get("node_generation", {}).get("cot", {}).get("answer_mode") != "native_prefill"):
+            task["authored_reasoning_warmup"] = {"version": 1, "stage": "cot",
+                                                "fields": ["candidate.reasoning"]}
         if self.recipe.get("training_surface_protocol_version") in {1, 2}:
             try:
                 assessed_reference = isinstance(sample.get("judge"), dict) and accepted(sample["judge"])

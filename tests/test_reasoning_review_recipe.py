@@ -17,8 +17,10 @@ def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     assert recipe["multiturn_terminal_review_version"] == 1
     assert recipe["training_surface_protocol_version"] == 2
     assert recipe["reasoning_required"] is True
-    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.8.0"
-    assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.9.0"
+    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.11.0"
+    assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.11.0"
+    assert recipe["authored_reasoning_warmup_version"] == 1
+    assert recipe["reasoning_distillation_audit_version"] == 1
 
 
 @pytest.mark.parametrize("value", [1, "yes", None, []])

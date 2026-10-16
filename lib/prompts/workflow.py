@@ -779,3 +779,52 @@ from lib.prompts.workflow_fact_review import REVIEW_SCORE_V1_9
 REVIEW_SCORE_V1_8 = REVIEW_SCORE
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.9.0", template=spec(
     "review_score", "逐轮独立核验数量口径与推断依据", REVIEW_SCORE_V1_9).template)
+
+# Editable warmup defaults for newly submitted runs. Existing snapshots and
+# every prior version remain literal; no universal step sequence is imposed.
+from lib.prompts.workflow_reasoning import (
+    warmup_generation_body, warmup_review_body, REASONING_WARMUP_RESEARCH_SOURCE,
+)
+SFT_STYLED_V1_4, COT_GENERATE_V1_8 = SFT_STYLED, COT_GENERATE
+SFT_DIRECTED_V1_8, SFT_ANSWER_V1_5 = SFT_DIRECTED, SFT_ANSWER
+MULTITURN_ASSISTANT_V1_5 = MULTITURN_ASSISTANT
+RATIONALE_CHECK_V1_6 = RATIONALE_CHECK
+REVIEW_SCORE_V1_9, REVIEW_REPAIR_V1_9 = REVIEW_SCORE, REVIEW_REPAIR
+
+def _warmup_spec(previous, version, *, review=False, repair=False):
+    body = (warmup_review_body(render(previous), repair=repair) if review
+            else warmup_generation_body(render(previous)))
+    return _reasoning_spec_replace(previous, version=version,
+        source=REASONING_WARMUP_RESEARCH_SOURCE,
+        template=spec(previous.id.removeprefix("workflow."), previous.purpose, body).template)
+
+SFT_STYLED = _warmup_spec(SFT_STYLED, "1.5.0")
+SFT_DIRECTED = _warmup_spec(SFT_DIRECTED, "1.9.0")
+SFT_ANSWER = _warmup_spec(SFT_ANSWER, "1.6.0")
+MULTITURN_ASSISTANT = _warmup_spec(MULTITURN_ASSISTANT, "1.6.0")
+COT_GENERATE = _warmup_spec(COT_GENERATE, "1.9.0")
+RATIONALE_CHECK = _warmup_spec(RATIONALE_CHECK, "1.7.0", review=True)
+REVIEW_SCORE = _warmup_spec(REVIEW_SCORE, "1.10.0", review=True)
+REVIEW_REPAIR = _warmup_spec(REVIEW_REPAIR, "1.10.0", review=True, repair=True)
+
+# Real evaluations exposed overgeneralized validity criteria and proxy claims.
+# Keep the first warmup release intact for every already submitted task.
+from lib.prompts.workflow_reasoning import claim_scope_body
+SFT_STYLED_V1_5, COT_GENERATE_V1_9 = SFT_STYLED, COT_GENERATE
+SFT_DIRECTED_V1_9, SFT_ANSWER_V1_6 = SFT_DIRECTED, SFT_ANSWER
+MULTITURN_ASSISTANT_V1_6, RATIONALE_CHECK_V1_7 = MULTITURN_ASSISTANT, RATIONALE_CHECK
+REVIEW_SCORE_V1_10, REVIEW_REPAIR_V1_10 = REVIEW_SCORE, REVIEW_REPAIR
+
+def _claim_scope_spec(previous, version, phase):
+    return _reasoning_spec_replace(previous, version=version,
+        template=spec(previous.id.removeprefix("workflow."), previous.purpose,
+            claim_scope_body(render(previous), phase=phase)).template)
+
+SFT_STYLED = _claim_scope_spec(SFT_STYLED, "1.6.0", "generation")
+SFT_DIRECTED = _claim_scope_spec(SFT_DIRECTED, "1.10.0", "generation")
+SFT_ANSWER = _claim_scope_spec(SFT_ANSWER, "1.7.0", "generation")
+MULTITURN_ASSISTANT = _claim_scope_spec(MULTITURN_ASSISTANT, "1.7.0", "generation")
+COT_GENERATE = _claim_scope_spec(COT_GENERATE, "1.10.0", "generation")
+RATIONALE_CHECK = _claim_scope_spec(RATIONALE_CHECK, "1.8.0", "review")
+REVIEW_SCORE = _claim_scope_spec(REVIEW_SCORE, "1.11.0", "review")
+REVIEW_REPAIR = _claim_scope_spec(REVIEW_REPAIR, "1.11.0", "repair")

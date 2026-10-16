@@ -169,6 +169,58 @@ def _authored_cot(target, row):
     return target == "cot" and row.get("reasoning_protocol_version") == AUTHORED_REASONING_VERSION
 
 
+def _authored_reasoning_warmup_scope(recipe, target, row):
+    """Scope a new authoring curriculum using frozen settings and real origins.
+
+    A historical style in a row cannot opt in a task, and a whole-dialogue
+    origin cannot override an individual turn's provider or human origin.
+    This is not a native-reasoning rewrite or a text-keyword quality test.
+    """
+    version = recipe.get("authored_reasoning_warmup_version")
+    if type(version) is not int or version != 1 or target not in {"sft", "cot", "multiturn"}:
+        return None
+    cot_route = target == "cot" or target == "sft" and row.get("reasoning_route") == "sft_via_cot"
+    stage = "cot" if cot_route else target
+    configs = recipe.get("node_generation", {})
+    if stage == "multiturn" and stage not in configs:
+        stage = "sft"
+    if configs.get(stage, {}).get("enabled") is not True:
+        return None
+    authored = {"prompt_styled_generation", "prompt_revision", "prompt_trim"}
+    if target == "cot":
+        if not _authored_cot(target, row) or row.get("reasoning_origin") not in authored:
+            return None
+        return {"version": version, "stage": stage, "fields": ["candidate.reasoning"]}
+    if cot_route and row.get("reasoning_protocol_version") != AUTHORED_REASONING_VERSION:
+        return None
+    origins = {review["end_message_index"]: review.get("reasoning_origin")
+               for review in row.get("turn_reviews", []) if isinstance(review, dict)
+               and type(review.get("end_message_index")) is int and review.get("reasoning_origin")}
+    indices = [index for index, message in enumerate(row.get("messages", []))
+               if isinstance(message, dict) and message.get("role") == "assistant"
+               and not (message.get("tool_calls") or message.get("toolCalls"))
+               and origins.get(index, row.get("reasoning_origin")) in authored]
+    return {"version": version, "stage": stage, "assistant_indices": indices} if indices else None
+
+
+def _authored_warmup_requirements(recipe, target, row):
+    """Shared eligibility for the versioned candidate-audit integration."""
+    return _authored_reasoning_warmup_scope(recipe, target, row)
+
+
+def _authored_reasoning_warmup_rules(recipe, target, row, *, phase):
+    """Describe trusted scope only; the node owns its editable review rubric."""
+    scope = _authored_reasoning_warmup_scope(recipe, target, row)
+    if scope is None:
+        return ""
+    locations = ", ".join(f"assistant[{index}]" for index in scope.get("assistant_indices", []))
+    locations = locations or ", ".join(scope["fields"])
+    return (f"冻结节点配置确认的显式推理示范作用范围：{locations}。"
+            "当前request.generation_style来自本次冻结节点配置，取代候选历史风格；"
+            "不把未列出的原生或人工推理重新认定为作者示范。"
+            "具体评审或返工标准使用本节点冻结的可编辑模板，不从候选历史文字中恢复制作指令。")
+
+
 def _authored_reasoning_language_requirements(recipe, target, row):
     """Use only a new task's finite, trusted node choice and authored origins.
 
@@ -324,11 +376,12 @@ def _current_review_generation_style(workflow, target, row, requirements):
     current model request receives the new immutable recipe's effective style.
     """
     cot = _authored_cot_language_v2(workflow.recipe, target, row)
+    warmup = _authored_reasoning_warmup_scope(workflow.recipe, target, row)
     language_version = workflow.recipe.get("reasoning_language_contract_version")
-    if (language_version not in {2, 3}
+    if not warmup and (language_version not in {2, 3}
             or not (cot or any(item.get("protocol_version") in {2, 3} for item in requirements))):
         return row.get("generation_style")
-    stage = "cot" if cot else target
+    stage = warmup["stage"] if warmup else "cot" if cot else target
     configs = workflow.recipe.get("node_generation", {})
     if stage == "multiturn" and stage not in configs:
         stage = "sft"
@@ -338,6 +391,8 @@ def _current_review_generation_style(workflow, target, row, requirements):
     # The normal worker has the resolver above; pure review probes use the
     # same version and pin rules without constructing or loading a model client.
     from lib.domain.workflow_generation import style_for_sample, reasoning_language_instruction
+    if warmup and language_version not in {1, 2, 3}:
+        language_version = 1
     style = style_for_sample(configs[stage], row["id"], reasoning_language_version=language_version)
     pinned = workflow.recipe.get("node_generation_prompts", {}).get(stage, {}).get(style["preset"])
     if pinned is not None:
@@ -808,18 +863,26 @@ class WorkflowReviewRepair:
         language_requirements = _authored_reasoning_language_requirements(self.recipe, target, row)
         if issue := (required_issue or _authored_reasoning_language_issue(row, language_requirements)
                      or _row_training_surface_issue(target, row, self.recipe)):
+            if self.recipe.get("reasoning_distillation_audit_version") == 1:
+                row["reasoning_assessment_method"] = "deterministic_guard"
+                row["reasoning_assessment_reference"] = {"kind": "deterministic_guard", "code": issue}
             if issue == "training_surface_knowledge_source_narration":
                 issue = _knowledge_source_narration_reason(target, row, self.recipe)
             return {"keep": False, "grounded": False, "reasoning_valid": False, "correctness": 1,
                     "scores": {name: 1 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
                     "reason": issue}
         role = "jev" if self.recipe.get("package_review", {}).get("enabled") else "generation"
+        if self.recipe.get("reasoning_distillation_audit_version") == 1:
+            row["reasoning_assessment_method"] = "llm_review"
         data = {"target": target, "candidate": self._review_payload(target, row),
                 "source_evidence": evidence, "instruction": instruction,
                 "design_requirements": (row.get("revision_context") or {}).get("design_requirements", {}),
                 "qa_contract": row.get("qa_contract"), "generation_style": _current_review_generation_style(
                     self, target, row, language_requirements)}
         data.update(_authored_review_audit(target, row))
+        warmup_scope = _authored_reasoning_warmup_scope(self.recipe, target, row)
+        if warmup_scope:
+            data["authored_reasoning_warmup"] = warmup_scope
         data = _selected_review_request(data, evidence)
         turn_scope = self.recipe.get("turn_review_protocol_version") == 1 and target in {"sft", "multiturn", "agent"}
         if turn_scope:
@@ -845,6 +908,9 @@ class WorkflowReviewRepair:
                 knowledge_rules = _knowledge_application_review_rules(self.recipe, row, phase="review")
                 if knowledge_rules:
                     rules["instruction"] = "\n".join(filter(None, (rules.get("instruction"), knowledge_rules)))
+                warmup_rules = _authored_reasoning_warmup_rules(self.recipe, target, row, phase="review")
+                if warmup_rules:
+                    rules["instruction"] = "\n".join(filter(None, (rules.get("instruction"), warmup_rules)))
             if call_data.get("supervised_assistant_turns") is not None:
                 from lib.domain.turn_review import turn_review_verdict
                 failures = []
@@ -870,15 +936,24 @@ class WorkflowReviewRepair:
                     else:
                         row["assistant_turn_review_retry"] = {"version": 1, "attempts": format_attempt,
                             "status": "schema_valid", "schema_failures": deepcopy(failures)}
+                        if self.recipe.get("reasoning_distillation_audit_version") == 1:
+                            row["reasoning_assessment_reference"] = {"kind": "llm_review", "stage": "review",
+                                "key": deepcopy(current_key), "checkpoint_sha256": hashlib.sha256(
+                                    canonical(["call", current_key]).encode("utf-8")).hexdigest()}
                         return result
             value = self.ask(call_key, role, "workflow.review_score",
                              project_review_request(self.recipe, call_data, phase="review"),
                              allow_reasoning_fallback=False, **rules)
             try:
-                return verdict(value)
+                result = verdict(value)
             except ValueError:
                 self.invalidate_checkpoint(["call", call_key])
                 raise
+            if self.recipe.get("reasoning_distillation_audit_version") == 1:
+                row["reasoning_assessment_reference"] = {"kind": "llm_review", "stage": "review",
+                    "key": deepcopy(call_key), "checkpoint_sha256": hashlib.sha256(
+                        canonical(["call", call_key]).encode("utf-8")).hexdigest()}
+            return result
         check = assessed([*key, "score"], data)
         if target in PREFERENCE_TARGETS:
             # A failed preferred answer/pair cannot be released regardless of
@@ -912,6 +987,12 @@ class WorkflowReviewRepair:
                     context_check = self._review_learner_context(row, messages, context_key, role)
                     row["learner_context_check"] = {**context_check,
                         "scope": "actual_training_messages_only", "version": 1}
+                    if self.recipe.get("reasoning_distillation_audit_version") == 1:
+                        actual_context_key = ([*context_key, "format_repair", 1]
+                            if row.get("learner_context_retry", {}).get("attempts") == 2 else context_key)
+                        row["reasoning_assessment_reference"]["learner_context_checkpoint"] = {
+                            "key": actual_context_key, "checkpoint_sha256": hashlib.sha256(
+                                canonical(["call", actual_context_key]).encode("utf-8")).hexdigest()}
                     if not context_check["keep"]:
                         check = {**check, "keep": False, "reason": context_check["reason"]}
                 else:
@@ -951,6 +1032,9 @@ class WorkflowReviewRepair:
         knowledge_rules = _knowledge_application_review_rules(self.recipe, row, phase="repair")
         if knowledge_rules:
             rules["instruction"] = "\n".join(filter(None, (rules.get("instruction"), knowledge_rules)))
+        warmup_rules = _authored_reasoning_warmup_rules(self.recipe, target, row, phase="repair")
+        if warmup_rules:
+            rules["instruction"] = "\n".join(filter(None, (rules.get("instruction"), warmup_rules)))
         cot_delta = self.recipe.get("qa_agent_memory_version") == 1 and target == "cot"
         from lib.domain.learner_context import prompt_at_least
         multiturn_delta = target == "multiturn" and prompt_at_least(self.recipe, "workflow.review_repair", (1, 7, 0))
@@ -972,6 +1056,9 @@ class WorkflowReviewRepair:
              "qa_contract": row.get("qa_contract"),
              "generation_style": _current_review_generation_style(self, target, row, language_requirements),
              **_authored_review_audit(target, row)}, evidence)
+        warmup_scope = _authored_reasoning_warmup_scope(self.recipe, target, row)
+        if warmup_scope:
+            data["authored_reasoning_warmup"] = warmup_scope
         if assistant_delta:
             data["required_reasoning_indices"] = required_reasoning
         value = self.ask([*key, "repair"], "generation", "workflow.review_repair",
@@ -1125,13 +1212,20 @@ class WorkflowReviewRepair:
                     row["reason"] = receipt["reason"] if receipt["reason"] == "manual_rlaif_change_requires_ai_review" else "manual_review_rejected"
         else:
             check = None
+            audit_enabled = (type(self.recipe.get("reasoning_distillation_audit_version")) is int
+                and self.recipe["reasoning_distillation_audit_version"] == 1
+                and bool(_authored_warmup_requirements(self.recipe, target, row)))
+            assessed_candidates = []
             # Each entry belongs to this one item's fixed evidence, prompt and
             # instruction. A repair that returns to an already rejected body
             # has made no progress; another paid score cannot add new evidence.
             scored_candidates = {}
             score_fields = ("preference", "rlaif", "learner_context_check")
+            if audit_enabled:
+                score_fields += ("reasoning_assessment_method", "reasoning_assessment_reference")
             force_repair = bool(item.get("revision_context")) and config["max_rounds"] > 0
-            for attempt in range(config["max_rounds"] if force_repair else config["max_rounds"] + 1):
+            candidate_limit = config["max_rounds"] if force_repair else config["max_rounds"] + 1
+            for attempt in range(candidate_limit):
                 key = [row["id"], target, "review_repair", attempt]
                 if force_repair or attempt:
                     row, issue = self._repair_content(target, row, evidence, key,
@@ -1159,6 +1253,16 @@ class WorkflowReviewRepair:
                     row.update(status="quarantined", reason="review_repair_exhausted")
                     break
                 check = self._review_score(target, row, evidence, key, instruction)
+                if audit_enabled:
+                    from lib.domain.reasoning_candidates import assessment_from_verdict
+                    payload = deepcopy(self._review_payload(target, row))
+                    assessment = assessment_from_verdict(payload, check,
+                        evidence_ref=canonical({"assessment": row.get("reasoning_assessment_reference",
+                            {"kind": "supplied_review_verdict", "attempt_key": key}),
+                            "source_sha256": digest(evidence)}),
+                        score_threshold=config["score_threshold"],
+                        method=row.get("reasoning_assessment_method", "llm_review"))
+                    assessed_candidates.append({"candidate": payload, "assessment": assessment})
                 scored_candidates[candidate_hash] = (deepcopy(check),
                     {field: deepcopy(row[field]) for field in score_fields if field in row})
                 score = min(check["scores"].values()) / 5
@@ -1179,6 +1283,33 @@ class WorkflowReviewRepair:
             else:
                 receipt["status"] = "rejected"
                 row.update(status="quarantined", reason="review_repair_exhausted")
+            if audit_enabled:
+                from lib.domain.reasoning_candidates import select_reasoning_candidate
+                selection = select_reasoning_candidate(assessed_candidates,
+                    {"candidate_limit": candidate_limit})
+                # The existing score/repair node owns retries and early stopping.
+                # Keep every assessed body, not just the last verdict. These
+                # are feedback-conditioned revisions, not IID samples or RL.
+                if ((selection["status"] == "accepted") != (receipt["status"] == "accepted")):
+                    raise ValueError("reasoning_distillation_selection_mismatch")
+                selected = selection.pop("candidate")
+                if selected is not None and digest(selected) != digest(self._review_payload(target, row)):
+                    raise ValueError("reasoning_distillation_selected_body_mismatch")
+                selection.update(candidate_policy="bounded_feedback_revisions",
+                    training_method="supervised_distillation_data_only",
+                    stop_reason=receipt.get("stop_reason") or (
+                        "first_passing_candidate" if selected is not None else "review_limit_reached"),
+                    final_candidate_sha256=digest(self._review_payload(target, row)),
+                    final_status=receipt["status"])
+                selection["selection_status"] = selection["status"]
+                selection["unused_assessment_slots"] = selection["remaining"]
+                selection["remaining"] = 0  # This review invocation has stopped.
+                selection["repair_attempts_consumed"] = receipt["attempts"]
+                selection["status"] = ("accepted" if selected is not None else
+                    "rejected" if receipt.get("stop_reason") else "exhausted")
+                if original.get("reasoning_distillation"):
+                    selection["parent_audit_sha256"] = digest(original["reasoning_distillation"])
+                row["reasoning_distillation"] = selection
         if target == "cot" and receipt["status"] == "accepted" and row["status"] == "eligible":
             row.update(self.independent_cot_assessment(row, human=config["mode"] == "human"))
         # Binding the receipt to exactly the content that was assessed prevents

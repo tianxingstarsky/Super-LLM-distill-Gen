@@ -89,8 +89,9 @@ def test_prefix_and_final_review_parse_real_trace_separately_from_reasoning_and_
     ("workflow.rationale_check", "1.6.0", RATIONALE_CHECK_V1_6),
 ])
 def test_current_full_review_body_is_registered(prompt_id, version, body):
-    assert get(prompt_id).version == version
-    assert render(get(prompt_id)) == body
+    # The original full review remains addressable after newer editable defaults.
+    assert get(prompt_id, version=version).version == version
+    assert render(get(prompt_id, version=version)) == body
 
 
 @pytest.mark.parametrize("prompt_id,version,expected", [
