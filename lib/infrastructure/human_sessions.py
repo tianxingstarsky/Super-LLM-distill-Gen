@@ -239,7 +239,7 @@ class FilesystemHumanSessionDriver:
         blueprint["node_prompts"] = snapshot_node_prompts(node_prompts,
             recipe_version=prompt_version, learner_context_review_version=1,
             claim_review_protocol_version=2, claim_review_format_feedback_version=2,
-            claim_refutation_release_version=1, claim_reference_policy_version=1)
+            claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):

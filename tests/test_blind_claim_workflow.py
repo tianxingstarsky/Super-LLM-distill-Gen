@@ -37,6 +37,20 @@ def grade_response(request, *, relation="consistent"):
     return value
 
 
+def anchored_grade_response(request, *, bad=False, severity="material"):
+    ids = [unit["id"] for unit in request["target_units"]]
+    return {"claim_review_protocol_version": 3, "scope_sha256": request["scope"]["scope_sha256"],
+        "coverage": "complete", "checked_unit_ids": ids,
+        "claim_checks": [{"unit_id": unit["id"], "status": "refuted" if bad else "supported",
+            "severity": severity, "basis": {"kind": "source", "evidence": [{"quote": SOURCE,
+                "source_path": ["teacher_evidence"]}],
+                "derivation": "Power-off is the actual inspection prerequisite; the answer must preserve that condition."}}
+            for unit in request["target_units"]],
+        "reference_checks": [{"id": point["id"], "relation": "consistent", "unit_id": ids[0],
+            "reason": "The current candidate unit is compared with the independently prepared prerequisite."}
+            for point in request["reference_review"]["reference_points"]], "verdict": grade()}
+
+
 class BlindProbe(Probe):
     def __init__(self, *, relation="consistent", partial=False, responses=None, audit=False):
         super().__init__(audit=audit)
@@ -153,6 +167,9 @@ class OfflineBlindClient:
             return json.dumps({"record": body, "quotes": [SOURCE], "uncertain": False})
         if data.get("phase") == "blind_reference":
             return json.dumps(blind_response(data))
+        if data.get("claim_review_protocol_version") == 3:
+            return json.dumps(anchored_grade_response(data,
+                bad=self.repair and "WRONG_DRAFT" in canonical(data["target_fields"])))
         relation = "contradicted" if self.repair and "WRONG_DRAFT" in canonical(data["target_fields"]) else "consistent"
         return json.dumps(grade_response(data, relation=relation))
 
@@ -161,9 +178,25 @@ def worker(tmp_path, client):
     output = tmp_path / "output"
     run_id = engine.create_run(output, brief="Arrange safe equipment inspection.", targets=["sft"],
                                reasoning_required=True, review_repair={"mode": "auto", "max_rounds": 0})
+    freeze_pre_anchor(output, run_id)
     result = engine.Workflow(output, run_id, Path(__file__).resolve().parents[1], generator=client)
     result.stage = "review"
     return result
+
+
+def freeze_pre_anchor(output, run_id):
+    """Replay the completed protocol-two contract, not the new unit protocol."""
+    from lib.prompts import get, render
+    path = engine.run_path(output, run_id)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe.pop("claim_review_anchor_protocol_version", None)
+    frozen = get("workflow.review_score", "1.16.0")
+    recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(frozen)
+    recipe["prompts"]["workflow.review_score"] = {"version": frozen.version, "sha256": engine.digest(frozen.template)}
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    engine.atomic_json(path / "state.json", state)
 
 
 def test_real_ask_preserves_one_system_source_and_blind_reuse_after_current_draft_edit(tmp_path):
@@ -218,12 +251,13 @@ def test_protocol_catalog_keeps_v1_wire_and_new_reference_only_with_v2():
     assert two["review"]["workflow.review_score"] == render(get("workflow.review_score", version="1.13.0"))
 
 
-def test_default_real_execute_repairs_conflict_and_reuses_blind_before_export(tmp_path, monkeypatch):
+def test_protocol_two_real_execute_repairs_conflict_and_reuses_blind_before_export(tmp_path, monkeypatch):
     source = tmp_path / "source.txt"
     source.write_text(SOURCE, encoding="utf-8")
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["sft"], reasoning_required=True,
                                review_repair={"mode": "auto", "max_rounds": 1}, sft_output_style="separated")
+    freeze_pre_anchor(output, run_id)
     def generate(self, unit):
         row = sample()
         row["messages"][1]["content"] = "WRONG_DRAFT: Inspect with power on."

@@ -61,6 +61,18 @@ _CLAIM_REVIEW_V2_WIRE_PROTOCOL = (_CLAIM_REVIEW_WIRE_PROTOCOL
 _CLAIM_REVIEW_V2_WIRE_PROTOCOL += (
     "仅reference_error项另加counter_evidence，结构为kind（source/context）、evidence真实引文数组、"
     "derivation具体反证；同时claim_checks中同field和quote须有source/context真引文支持的supported项目。")
+_CLAIM_REVIEW_V3_WIRE_PROTOCOL = (
+    "本次使用claim_review_protocol_version=3固定传输契约；自定义节点文本决定语义标准，"
+    "本说明只规定唯一返回shape。仅返回JSON且只有claim_review_protocol_version（整数3）、"
+    "scope_sha256（复制request.scope.scope_sha256）、coverage（complete/partial）、checked_unit_ids、"
+    "claim_checks、reference_checks、verdict。checked_unit_ids只使用本次target_units实际unit_id。"
+    "claim_checks每项仅有unit_id、status（supported/refuted/insufficient）、severity（material/minor）、"
+    "basis；不抄写候选quote、field或整个scope。basis仅有kind（source/context/logic）、evidence、"
+    "derivation；source引文项为quote和source_path，context引文项为quote、message_index、field，"
+    "logic的evidence可为空数组。reference_checks每项只有id、relation、unit_id、reason；"
+    "relation为consistent/contradicted/not_claimed/uncertain/reference_error，not_claimed用unit_id=null，"
+    "其它relation仅选本次target_units实际unit_id；仅reference_error另有counter_evidence，"
+    "其结构为kind（source/context/logic）、evidence和derivation。verdict保留既定六字段与scores结构。")
 _CLAIM_FORMAT_ERROR_CODES = frozenset({
     "invalid_blind_review_response", "stale_blind_review_response", "invalid_blind_review_scope",
     "invalid_blind_review_coverage", "missing_blind_review_reference_points", "invalid_blind_review_reference_point",
@@ -99,15 +111,22 @@ def _claim_format_boundaries(request, phase):
     response_fields = (["claim_review_protocol_version", "phase", "scope", "coverage", "reference_points", "limitations"]
         if phase == "blind_reference" else ["claim_review_protocol_version", "scope", "coverage", "checked_fields",
                                                "claim_checks", "reference_checks", "verdict"])
-    return {"messages_index_table": table, "valid_context_message_indices": list(range(min(limit, len(messages)))),
+    result = {"messages_index_table": table, "valid_context_message_indices": list(range(min(limit, len(messages)))),
             "current_assistant_message_index": request["scope"]["message_index"],
             "scope_field_names": sorted(request["scope"]), "response_field_names": response_fields}
+    if request.get("claim_review_protocol_version") == 3:
+        result["scope_field_names"] = []
+        result["response_field_names"] = ["claim_review_protocol_version", "scope_sha256", "coverage",
+            "checked_unit_ids", "claim_checks", "reference_checks", "verdict"]
+        result["current_target_unit_ids"] = [item["id"] for item in request["target_units"]]
+    return result
 
 
-def _safe_claim_format_code(error, phase):
+def _safe_claim_format_code(error, phase, protocol_version=None):
     code = str(error)
     return code if code in _CLAIM_FORMAT_ERROR_CODES else (
-        "invalid_blind_review_response" if phase == "blind_reference" else "invalid_claim_review_v2_response")
+        "invalid_blind_review_response" if phase == "blind_reference" else
+        "invalid_claim_review_v3_response" if protocol_version == 3 else "invalid_claim_review_v2_response")
 
 
 def _claim_format_quote_diagnostic(raw, request, phase, *, quote_matching_version=None, error_code=None):
@@ -1071,7 +1090,8 @@ class WorkflowReviewRepair:
         refuted = []
         for item in audit["assessments"]:
             review = item["review"]
-            for claim in review["raw_response"]["claim_checks"]:
+            actual_claims = (review["normalized_response"] if audit["version"] == 3 else review["raw_response"])
+            for claim in actual_claims["claim_checks"]:
                 if claim["status"] == "refuted":
                     refuted.append({"message_index": review["request"]["scope"]["message_index"],
                         "field": claim["field"], "quote": claim["quote"], "severity": claim["severity"],
@@ -1109,6 +1129,9 @@ class WorkflowReviewRepair:
         reference_version = self.recipe.get("claim_reference_policy_version")
         if reference_version is not None and (type(reference_version) is not int or reference_version != 1):
             raise ValueError("invalid_claim_reference_policy_version")
+        anchor_version = self.recipe.get("claim_review_anchor_protocol_version")
+        if anchor_version is not None and (type(anchor_version) is not int or anchor_version != 1):
+            raise ValueError("invalid_claim_review_anchor_protocol_version")
         if version == 2:
             return self._review_blind_claim_score(target, row, evidence, key)
         payload = self._review_payload(target, row)
@@ -1175,16 +1198,23 @@ class WorkflowReviewRepair:
         boundaries = _claim_format_boundaries(request, phase) if format_version in {1, 2} else None
         call_instruction = instruction
         if boundaries is not None:
-            call_instruction += ("\n以下仅说明JSON引用路径与实际messages数组索引；数组索引不是对话轮次编号。"
-                "context引用只能使用列出的合法数组索引及实际字段；scope只复制列出的字段及request原值，不增加target等字段。\n"
-                + canonical(boundaries))
+            boundary_note = ("\n以下仅说明JSON引用路径与实际messages数组索引；数组索引不是对话轮次编号。"
+                "context引用只能使用列出的合法数组索引及实际字段；scope只复制列出的字段及request原值，不增加target等字段。\n")
+            if request.get("claim_review_protocol_version") == 3:
+                boundary_note = ("\n以下仅说明实际messages索引与本次候选单元id；context证据只能使用合法实际索引。"
+                    "仅复制request.scope.scope_sha256为返回的scope_sha256，不返回整个scope；候选评审只引用本次unit_id，不抄quote。\n")
+            call_instruction += boundary_note + canonical(boundaries)
         previous_error = None
         previous_detail = {}
         for attempt in (1, 2):
             call_key = base_key if attempt == 1 else [*base_key, "format_repair", 1]
             feedback = {"code": ("invalid_blind_review_response" if phase == "blind_reference"
+                                  else "invalid_claim_review_v3_response" if request.get("claim_review_protocol_version") == 3
                                   else "invalid_claim_review_v2_response"),
                         "instruction": "Return the complete current protocol contract and copy its scope exactly. Preserve the real evidence and candidate boundaries; do not fabricate missing fields."}
+            if request.get("claim_review_protocol_version") == 3:
+                feedback["instruction"] = ("Return the complete current protocol-3 contract. Copy only request.scope.scope_sha256 "
+                    "as scope_sha256; use only current target_units unit_id values. Do not return scope, field, or candidate quote.")
             if boundaries is not None and previous_error is not None:
                 feedback["instruction"] += "\nSchema-only diagnostic: " + canonical({
                     "error_code": previous_error, **boundaries, **previous_detail})
@@ -1198,7 +1228,8 @@ class WorkflowReviewRepair:
             try:
                 receipt = validator(raw, request)
             except ValueError as error:
-                previous_error = _safe_claim_format_code(error, phase) if boundaries is not None else str(error)
+                previous_error = (_safe_claim_format_code(error, phase, request.get("claim_review_protocol_version"))
+                                  if boundaries is not None else str(error))
                 if format_version == 2:
                     previous_detail = _claim_format_quote_diagnostic(raw, request, phase,
                         quote_matching_version=self.recipe.get("claim_review_quote_matching_version"),
@@ -1222,10 +1253,15 @@ class WorkflowReviewRepair:
             claim_review_requests_v2, validate_claim_review_v2, merge_claim_reviews_v2)
         from lib.infrastructure.training_workflow import digest
         payload = self._review_payload(target, row)
+        anchored = self.recipe.get("claim_review_anchor_protocol_version") == 1
+        if anchored:
+            from lib.domain.anchored_claim_review import (claim_review_requests_v3, validate_claim_review_v3,
+                                                         merge_claim_reviews_v3)
         requirements = current_claim_review_requirements(self, target, row) or None
         inputs = blind_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements)
-        audit = {"version": 2, "method": "blind_reference_model_claim_review",
+        audit = {"version": 3 if anchored else 2, "method": ("anchored_reference_model_claim_review" if anchored
+                else "blind_reference_model_claim_review"),
             "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
             "source_evidence_sha256": inputs[0]["scope"]["source_evidence_sha256"],
             "status": "pending", "blind_reviews": [], "assessments": [], "schema_failures": []}
@@ -1241,20 +1277,22 @@ class WorkflowReviewRepair:
                 phase="blind_reference", instruction=_BLIND_REFERENCE_WIRE_PROTOCOL)
             blind_receipts.append(receipt)
             audit["blind_reviews"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
-        requests = claim_review_requests_v2(target, payload, evidence,
+        build_requests = claim_review_requests_v3 if anchored else claim_review_requests_v2
+        requests = build_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
             blind_reviews=blind_receipts)
         receipts = []
-        validator = validate_claim_review_v2
+        validator = validate_claim_review_v3 if anchored else validate_claim_review_v2
         policies = {}
-        if self.recipe.get("claim_review_quote_matching_version") == 1:
+        if not anchored and self.recipe.get("claim_review_quote_matching_version") == 1:
             policies["quote_matching_version"] = 1
         if self.recipe.get("claim_reference_policy_version") == 1:
             policies["reference_policy_version"] = 1
         if policies:
-            validator = lambda raw, request: validate_claim_review_v2(raw, request, **policies)
-        grade_instruction = _CLAIM_REVIEW_V2_WIRE_PROTOCOL
-        if self.recipe.get("claim_reference_policy_version") == 1:
+            validate_grade = validator
+            validator = lambda raw, request: validate_grade(raw, request, **policies)
+        grade_instruction = _CLAIM_REVIEW_V3_WIRE_PROTOCOL if anchored else _CLAIM_REVIEW_V2_WIRE_PROTOCOL
+        if not anchored and self.recipe.get("claim_reference_policy_version") == 1:
             grade_instruction = grade_instruction.replace("kind（source/context）", "kind（source/context/logic）").replace(
                 "同时claim_checks中同field和quote须有source/context真引文支持的supported项目。",
                 "同时claim_checks中同field和quote须有supported项目，basis.kind为source/context/logic；"
@@ -1266,11 +1304,12 @@ class WorkflowReviewRepair:
                 phase="claim_review", instruction=grade_instruction)
             receipts.append(receipt)
             audit["assessments"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
-        check = merge_claim_reviews_v2(payload, receipts)
+        check = (merge_claim_reviews_v3 if anchored else merge_claim_reviews_v2)(payload, receipts)
         audit.update(status="complete", derived_verdict=deepcopy(check))
         row["reasoning_assessment_method"] = "llm_claim_review"
-        row["reasoning_assessment_reference"] = {"kind": "llm_claim_review", "version": 2,
-            "scope": "candidate_blind_reference_then_prefix_claim_review_not_truth_certification",
+        row["reasoning_assessment_reference"] = {"kind": "llm_claim_review", "version": 3 if anchored else 2,
+            "scope": ("candidate_blind_reference_then_program_bound_units_not_provider_quotes" if anchored else
+                      "candidate_blind_reference_then_prefix_claim_review_not_truth_certification"),
             "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
             "source_evidence_sha256": audit["source_evidence_sha256"],
             "blind_checkpoints": [deepcopy(item["checkpoint"]) for item in audit["blind_reviews"]],

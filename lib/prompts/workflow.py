@@ -864,3 +864,8 @@ from lib.prompts.workflow_blind_review import BLIND_COMPARISON_V1_16
 REVIEW_SCORE_V1_15 = REVIEW_SCORE
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.16.0", template=spec(
     "review_score", "核查候选并允许有依据地推翻过强参照", BLIND_COMPARISON_V1_16).template)
+
+from lib.prompts.workflow_blind_review import ANCHORED_COMPARISON_V1_17
+REVIEW_SCORE_V1_16 = REVIEW_SCORE
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.17.0", template=spec(
+    "review_score", "按程序锚点逐段核验当前回答与解释", ANCHORED_COMPARISON_V1_17).template)

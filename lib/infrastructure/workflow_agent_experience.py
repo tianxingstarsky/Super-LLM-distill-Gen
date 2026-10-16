@@ -3,6 +3,14 @@ from lib.domain.agent_experience import experience_scope
 
 
 def experience_system(recipe: dict, prompt_id: str) -> str:
+    review_scope_version = recipe.get("claim_review_experience_scope_version")
+    if review_scope_version is not None and (type(review_scope_version) is not int or review_scope_version != 1):
+        raise ValueError("invalid_claim_review_experience_scope_version")
+    if (prompt_id in {"workflow.review_reference", "workflow.learner_context_check"}
+            and review_scope_version is None):
+        # These templates historically had no scope. Domain/UI lookup can now
+        # identify their role without changing any sealed run's system bytes.
+        return ""
     if recipe.get("agent_experience_version") != 1:
         return ""
     scope = experience_scope(prompt_id)

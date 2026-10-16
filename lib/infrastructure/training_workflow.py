@@ -362,7 +362,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         recipe_version = 22
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
         learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
-        claim_refutation_release_version=1, claim_reference_policy_version=1)
+        claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -472,7 +472,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
             learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
-            claim_refutation_release_version=1, claim_reference_policy_version=1)
+            claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -511,6 +511,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_refutation_release_version": 1,
               "claim_review_quote_matching_version": 1,
               "claim_reference_policy_version": 1,
+              "claim_review_experience_scope_version": 1,
+              "claim_review_anchor_protocol_version": 1,
               "reasoning_revision_protocol_version": 1,
               "multiturn_terminal_review_version": 1,
               "multiturn_generation_style_version": 1,
@@ -856,10 +858,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         from lib.infrastructure.source_memory_messages import source_memory_messages
                         transport = ("system" if memory_version == 2 or prompt_id == "workflow.cot_native_answer" else
                                      getattr(client, "source_memory_transport", "tool"))
-                        if memory_context.get("claim_review_protocol_version") in {1, 2}:
+                        if memory_context.get("claim_review_protocol_version") in {1, 2, 3}:
                             transport = "system"
                         request_messages = source_memory_messages(system, memory_context, transport=transport)
-                        if memory_context["teacher_context_pack"] or memory_context.get("claim_review_protocol_version") in {1, 2}:
+                        if memory_context["teacher_context_pack"] or memory_context.get("claim_review_protocol_version") in {1, 2, 3}:
                             with self._lock:
                                 self.state.setdefault("source_memory_transports", {})[
                                     f"{model_stage or self.stage}.{role}"] = transport
@@ -3316,7 +3318,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                                                   claim_review_protocol_version=self.recipe.get("claim_review_protocol_version"),
                                                   claim_review_format_feedback_version=self.recipe.get("claim_review_format_feedback_version"),
                                                   claim_refutation_release_version=self.recipe.get("claim_refutation_release_version"),
-                                                  claim_reference_policy_version=self.recipe.get("claim_reference_policy_version"))
+                                                  claim_reference_policy_version=self.recipe.get("claim_reference_policy_version"),
+                                                  claim_review_anchor_protocol_version=self.recipe.get("claim_review_anchor_protocol_version"))
                 else:
                     if not isinstance(self.recipe.get("prompts"), dict):
                         raise ValueError("prompts_changed_create_new_run")

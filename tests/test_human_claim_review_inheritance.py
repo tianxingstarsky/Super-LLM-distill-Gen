@@ -32,7 +32,8 @@ def parent_run(tmp_path, monkeypatch, *, custom=False, legacy=False):
     if legacy:
         recipe = engine.read_json(path / "recipe.json")
         for marker in ("claim_review_protocol_version", "claim_review_format_feedback_version", "claim_refutation_release_version",
-                       "claim_review_quote_matching_version", "claim_reference_policy_version"):
+                       "claim_review_quote_matching_version", "claim_reference_policy_version", "claim_review_experience_scope_version",
+                       "claim_review_anchor_protocol_version"):
             recipe.pop(marker)
         recipe["node_prompt_templates"] = snapshot_node_prompts(None, recipe_version=recipe["version"],
             learner_context_review_version=1)
@@ -86,6 +87,7 @@ def test_application_review_only_issue_rework_keeps_parent_text_and_adds_current
     assert child_recipe["claim_review_format_feedback_version"] == 2
     assert child_recipe["claim_refutation_release_version"] == 1
     assert child_recipe["claim_reference_policy_version"] == 1
+    assert child_recipe["claim_review_anchor_protocol_version"] == 1
     assert child_recipe["node_prompt_templates"]["review"] == templates
     assert child_recipe["repair_inputs"][0]["record"] == candidate["record"]
     client = OfflineBlindClient()

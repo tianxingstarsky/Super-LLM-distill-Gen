@@ -77,7 +77,7 @@ def _reviewed_verdict(payload, check):
 
 def _validated_claim_audit(payload, check, audit):
     """Bind derived decisions to exact raw claim responses and request keys."""
-    if isinstance(audit, dict) and audit.get("version") == 2:
+    if isinstance(audit, dict) and audit.get("version") in (2, 3):
         return _validated_blind_claim_audit(payload, check, audit)
     from lib.domain.claim_review import merge_claim_reviews
     verdict(check)
@@ -173,8 +173,9 @@ def _validated_blind_claim_audit(payload, check, audit):
     verdict(check)
     fields = {"version", "method", "candidate_sha256", "source_input_sha256", "source_evidence_sha256",
               "status", "blind_reviews", "assessments", "schema_failures", "derived_verdict"}
-    if (set(audit) != fields or type(audit["version"]) is not int or audit["version"] != 2
-            or audit["method"] != "blind_reference_model_claim_review" or audit["status"] != "complete"
+    if (set(audit) != fields or type(audit["version"]) is not int or audit["version"] not in {2, 3}
+            or audit["method"] != ({2: "blind_reference_model_claim_review",
+                3: "anchored_reference_model_claim_review"}[audit["version"]]) or audit["status"] != "complete"
             or audit["candidate_sha256"] != reasoning_candidate_digest(payload)
             or not isinstance(audit["blind_reviews"], list) or not audit["blind_reviews"]
             or not isinstance(audit["assessments"], list) or not audit["assessments"]
@@ -202,7 +203,8 @@ def _validated_blind_claim_audit(payload, check, audit):
             base_key, call_data = reference["key"], request
             if "format_repair" in reference:
                 feedback = reference["format_repair"]
-                code = "invalid_blind_review_response" if phase == "blind_reference" else "invalid_claim_review_v2_response"
+                code = ("invalid_blind_review_response" if phase == "blind_reference" else
+                        "invalid_claim_review_v3_response" if audit["version"] == 3 else "invalid_claim_review_v2_response")
                 if (not isinstance(feedback, dict) or set(feedback) != {"code", "instruction"}
                         or feedback["code"] != code or not isinstance(feedback["instruction"], str)
                         or not feedback["instruction"].strip() or base_key[-2:] != ["format_repair", 1]):
@@ -255,7 +257,11 @@ def _validated_blind_claim_audit(payload, check, audit):
         failures.add(slot)
     if any(("format_repair" in reference) != (slot in failures) for slot, reference in wrapped.items()):
         raise ValueError("incomplete_reasoning_blind_claim_schema_history")
-    merged = merge_claim_reviews_v2(payload, [item["review"] for item in audit["assessments"]])
+    merge_reviews = merge_claim_reviews_v2
+    if audit["version"] == 3:
+        from lib.domain.anchored_claim_review import merge_claim_reviews_v3
+        merge_reviews = merge_claim_reviews_v3
+    merged = merge_reviews(payload, [item["review"] for item in audit["assessments"]])
     if audit["derived_verdict"] != merged:
         raise ValueError("altered_reasoning_blind_claim_aggregate")
     if (any(check[name] and not merged[name] for name in ("keep", "grounded", "reasoning_valid"))

@@ -22,7 +22,9 @@ def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     assert recipe["claim_refutation_release_version"] == 1
     assert recipe["claim_review_quote_matching_version"] == 1
     assert recipe["claim_reference_policy_version"] == 1
-    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.16.0"
+    assert recipe["claim_review_experience_scope_version"] == 1
+    assert recipe["claim_review_anchor_protocol_version"] == 1
+    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.17.0"
     assert recipe["prompts"]["workflow.review_reference"]["version"] == "1.0.1"
     assert "workflow.review_reference" in recipe["node_prompt_templates"]["review"]
     assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.11.0"

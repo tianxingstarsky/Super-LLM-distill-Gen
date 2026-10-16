@@ -8,7 +8,7 @@ import pytest
 from lib.domain.reasoning_candidates import assessment_from_verdict
 from lib.domain.workflow_quality import accepted, canonical
 from lib.infrastructure import training_workflow as engine
-from tests.test_blind_claim_workflow import OfflineBlindClient, grade_response, worker
+from tests.test_blind_claim_workflow import OfflineBlindClient, grade_response, worker, freeze_pre_anchor
 from tests.test_claim_review_workflow import SOURCE, sample
 from tests.test_workflow_production import model_request_data
 
@@ -107,6 +107,7 @@ def test_actual_refuted_emphasis_quote_routes_to_repair_not_schema_quarantine_an
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["sft"], reasoning_required=True,
         review_repair={"mode": "auto", "max_rounds": 1}, sft_output_style="separated")
+    freeze_pre_anchor(output, run_id)
     def generate(self, unit):
         row = row_with_emphasis()
         row["messages"][1]["content"] = "**WRONG_DRAFT: Inspect** with power on."

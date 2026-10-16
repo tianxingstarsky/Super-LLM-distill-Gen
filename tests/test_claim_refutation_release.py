@@ -9,7 +9,7 @@ from lib.domain.workflow_node_prompts import snapshot_node_prompts, validate_nod
 from lib.domain.workflow_quality import accepted, canonical
 from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
-from tests.test_blind_claim_workflow import BlindProbe, OfflineBlindClient, grade_response
+from tests.test_blind_claim_workflow import BlindProbe, OfflineBlindClient, grade_response, freeze_pre_anchor
 from tests.test_claim_review_workflow import SOURCE, sample
 from tests.test_workflow_production import model_request_data
 
@@ -124,6 +124,7 @@ def test_real_new_factory_minor_refutation_repairs_regrades_and_exports_full_rea
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["sft"], reasoning_required=True,
         review_repair={"mode": "auto", "max_rounds": 1}, sft_output_style="separated")
+    freeze_pre_anchor(output, run_id)
     def generate(self, unit):
         row = sample()
         row["messages"][1]["content"] = "WRONG_DRAFT: Inspect with power on."

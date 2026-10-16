@@ -89,6 +89,52 @@ def test_actual_model_request_puts_experience_in_system_not_task(tmp_path):
     assert all("EXPERIENCE_LITERAL" not in str(message) for message in messages[1:])
 
 
+@pytest.mark.parametrize("prompt_id", ["workflow.review_reference", "workflow.learner_context_check", "workflow.review_score"])
+def test_review_experience_scope_marker_changes_only_newly_mapped_real_system_prompts(tmp_path, monkeypatch, prompt_id):
+    output = tmp_path / "output"
+    rid = engine.create_run(output, brief="设备检查", targets=["sft"],
+        review_repair={"mode": "auto", "max_rounds": 0},
+        agent_experience={"review": {"enabled": True, "text": "REVIEW_SCOPE_LITERAL_{unchanged}_883"}})
+    writer = Mock(model="offline", usage={"calls": 0}, source_memory_transport="tool")
+    writer.chat.return_value = '{"ok":true}'
+    workflow = engine.Workflow(output, rid, tmp_path, generator=writer)
+    workflow.stage = "review"
+    assert workflow.recipe["claim_review_experience_scope_version"] == 1
+    workflow.ask(["new", prompt_id], "generation", prompt_id, {"case": "fixed_task"}, prompt_stage="review")
+    new_wire = deepcopy(writer.chat.call_args.args[0])
+    added = experience_system(workflow.recipe, prompt_id)
+    workflow.recipe.pop("claim_review_experience_scope_version")
+    workflow.ask(["frozen_old", prompt_id], "generation", prompt_id, {"case": "fixed_task"}, prompt_stage="review")
+    old_wire = deepcopy(writer.chat.call_args.args[0])
+    if prompt_id == "workflow.review_score":
+        assert new_wire == old_wire
+        assert "REVIEW_SCOPE_LITERAL_{unchanged}_883" in old_wire[0]["content"]
+    else:
+        assert new_wire[0]["content"] == old_wire[0]["content"] + added
+        assert "REVIEW_SCOPE_LITERAL_{unchanged}_883" not in old_wire[0]["content"]
+        # Replay the prior mapping itself and compare full actual request bytes.
+        import lib.infrastructure.workflow_agent_experience as adapter
+        previous_scope = adapter.experience_scope
+        monkeypatch.setattr(adapter, "experience_scope", lambda value: None if value == prompt_id else previous_scope(value))
+        workflow.ask(["old_mapping", prompt_id], "generation", prompt_id, {"case": "fixed_task"}, prompt_stage="review")
+        assert writer.chat.call_args.args[0] == old_wire
+    assert all("REVIEW_SCOPE_LITERAL" not in str(message) for message in new_wire[1:])
+    assert new_wire[1:] == old_wire[1:]
+
+
+@pytest.mark.parametrize("value", [True, False, 0, 2, "1", []])
+def test_invalid_review_experience_scope_marker_never_calls_a_model(tmp_path, value):
+    output = tmp_path / "output"
+    rid = engine.create_run(output, brief="设备检查", targets=["sft"], review_repair={"mode": "auto", "max_rounds": 0})
+    writer = Mock(model="offline", usage={"calls": 0})
+    workflow = engine.Workflow(output, rid, tmp_path, generator=writer)
+    workflow.stage = "review"
+    workflow.recipe["claim_review_experience_scope_version"] = value
+    with pytest.raises(ValueError, match="invalid_claim_review_experience_scope_version"):
+        workflow.ask(["invalid"], "generation", "workflow.review_reference", {}, prompt_stage="review")
+    writer.chat.assert_not_called()
+
+
 def test_draft_allows_partial_experience_edits_but_rejects_wrong_scopes():
     values = {"workflow-agent-experience-text:fixture:director": "",
               "workflow-agent-experience-enabled:fixture:director": False}

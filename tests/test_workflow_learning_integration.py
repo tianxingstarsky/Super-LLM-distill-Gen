@@ -86,6 +86,26 @@ def prepare(tmp_path, *, review=False, style_node="multiturn", separated=True, m
     run_id = engine.create_run(output, brief="Apply equipment inspection knowledge.", targets=["multiturn"],
         conversation_turns=2, node_generation={style_node: STYLE},
         qa_director={**CONFIG, "question_separation": separated}, **options)
+    # These fixed callback envelopes exercise the earlier language/learning
+    # contracts. Independent claim and anchor review have their own real-wire
+    # integration tests; do not accidentally feed them an aggregate-only mock.
+    if review:
+        from lib.io_utils import atomic_json
+        from lib.prompts import get, render
+        path = engine.run_path(output, run_id)
+        recipe = engine.read_json(path / "recipe.json")
+        for name in tuple(recipe):
+            if name.startswith("claim_review_") or name in {
+                    "claim_refutation_release_version", "claim_reference_policy_version"}:
+                recipe.pop(name)
+        prompt = get("workflow.review_score", version="1.11.0")
+        recipe["prompts"][prompt.id] = {"version": prompt.version, "sha256": engine.digest(prompt.template)}
+        recipe["node_prompt_templates"]["review"].pop("workflow.review_reference", None)
+        recipe["node_prompt_templates"]["review"][prompt.id] = render(prompt)
+        atomic_json(path / "recipe.json", recipe)
+        state = engine.read_json(path / "state.json")
+        state["recipe_hash"] = engine.digest(recipe)
+        atomic_json(path / "state.json", state)
     client = OfflineClient(missing_reasoning=missing_reasoning)
     worker = engine.Workflow(output, run_id, tmp_path, generator=client, jev=client, questioner=client)
     worker.stage = "multiturn"

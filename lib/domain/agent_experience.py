@@ -301,6 +301,7 @@ _PROMPT_SCOPES = {
         "workflow.question_brief_check", "workflow.question_fit", "workflow.jev_score", "workflow.judge",
         "workflow.style_check", "workflow.rationale_check", "workflow.cot_prefix_check",
         "workflow.package_review", "workflow.review_score", "workflow.review_repair",
+        "workflow.review_reference", "workflow.learner_context_check",
         "workflow.multiturn_consistency", "workflow.human_augmentation_check",
         "workflow.sft_directed_check", "workflow.multiturn_directed_check", "workflow.preference_directed_check",
         "workflow.cot_directed_check", "workflow.trim_directed_check", "workflow.trim_check", "workflow.trim_rules_check",
