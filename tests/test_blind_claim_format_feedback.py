@@ -31,6 +31,7 @@ def workflow(tmp_path, client, *, enabled=True):
     recipe.pop("claim_reference_policy_version")
     recipe.pop("claim_review_experience_scope_version")
     recipe.pop("claim_review_anchor_protocol_version")
+    recipe.pop("claim_review_adversarial_protocol_version")
     versions = (("workflow.review_score", "1.15.0"), ("workflow.review_reference", "1.0.1"))
     recipe["claim_review_format_feedback_version"] = 1
     if not enabled:

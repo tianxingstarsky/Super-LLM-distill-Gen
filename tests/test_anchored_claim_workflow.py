@@ -11,7 +11,7 @@ from lib.domain.workflow_quality import accepted, canonical
 from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
 from tests.test_blind_claim_workflow import (BlindProbe, OfflineBlindClient, anchored_grade_response,
-                                           blind_response)
+                                           blind_response, freeze_pre_adversarial)
 from tests.test_claim_review_workflow import SOURCE, sample
 from tests.test_workflow_production import model_request_data
 
@@ -25,6 +25,7 @@ def workflow(tmp_path, client):
     output = tmp_path / "output"
     run_id = engine.create_run(output, brief="Arrange safe inspection.", targets=["sft"],
         reasoning_required=True, review_repair={"mode": "auto", "max_rounds": 0})
+    freeze_pre_adversarial(output, run_id)
     result = engine.Workflow(output, run_id, Path(__file__).resolve().parents[1], generator=client)
     result.stage = "review"
     return result
@@ -193,6 +194,7 @@ def test_true_new_factory_execute_repairs_and_regrades_with_one_blind_reference_
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["sft"], reasoning_required=True,
         review_repair={"mode": "auto", "max_rounds": 1}, sft_output_style="separated")
+    freeze_pre_adversarial(output, run_id)
     def generate(self, unit):
         row = sample()
         row["messages"][1]["content"] = "**WRONG_DRAFT: Inspect** with power on."

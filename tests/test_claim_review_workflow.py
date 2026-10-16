@@ -326,6 +326,7 @@ def real_worker(tmp_path, client, *, jev=None, package_review=None):
     recipe.pop("claim_reference_policy_version", None)
     recipe.pop("claim_review_experience_scope_version", None)
     recipe.pop("claim_review_anchor_protocol_version", None)
+    recipe.pop("claim_review_adversarial_protocol_version", None)
     recipe["node_prompt_templates"]["review"].pop("workflow.review_reference", None)
     old_score = get("workflow.review_score", version="1.12.0")
     recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(old_score)

@@ -183,7 +183,7 @@ class FilesystemHumanSessionDriver:
                 continue
         return sorted(rows, key=lambda row: row["updated_at"], reverse=True)
 
-    def _blueprint(self, recipe, *, from_run_id=None):
+    def _blueprint(self, recipe, *, from_run_id=None, review_only=False):
         allowed = set(inspect.signature(create_run).parameters) - {"output", "settings_root", "run_id"}
         if set(recipe) - allowed:
             raise ValueError("invalid_human_session_configuration")
@@ -205,7 +205,20 @@ class FilesystemHumanSessionDriver:
                 for source in parent["sources"] if source.get("kind") != "human_design"]
             inherited["source_names"] = {str(parent_path / "inputs" / source["file"]): source["name"]
                 for source in parent["sources"] if source.get("kind") != "human_design"}
-            inherited["node_prompts"] = parent.get("node_prompt_templates", inherited.get("node_prompts"))
+            inherited["node_prompts"] = deepcopy(parent.get("node_prompt_templates", inherited.get("node_prompts")))
+            if review_only:
+                # A fresh review workspace uses the current review protocol.
+                # Registered defaults are defaults, even when an older human
+                # workspace submitted its whole catalog as literal overrides.
+                # Actual user-authored standards remain byte-for-byte intact.
+                from lib.prompts import registry_versions, render
+                registered = registry_versions()
+                review_templates = (inherited.get("node_prompts") or {}).get("review", {})
+                for prompt_id in ("workflow.review_reference", "workflow.review_score"):
+                    text = review_templates.get(prompt_id)
+                    if isinstance(text, str) and any(text == render(spec)
+                            for spec in registered.get(prompt_id, {}).values()):
+                        review_templates.pop(prompt_id)
             if parent.get("agent_experience_version") == 1:
                 from lib.domain.agent_experience import validate_agent_experience_snapshot
                 experience = validate_agent_experience_snapshot(parent.get("agent_experience"))
@@ -239,7 +252,8 @@ class FilesystemHumanSessionDriver:
         blueprint["node_prompts"] = snapshot_node_prompts(node_prompts,
             recipe_version=prompt_version, learner_context_review_version=1,
             claim_review_protocol_version=2, claim_review_format_feedback_version=2,
-            claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1)
+            claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
+            claim_review_adversarial_protocol_version=1)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):
@@ -254,7 +268,7 @@ class FilesystemHumanSessionDriver:
             raise ValueError("invalid_human_session_revision_limit")
         if type(review_only) is not bool or review_only and from_run_id is None:
             raise ValueError("invalid_human_session_review_mode")
-        blueprint, draft, parent = self._blueprint(recipe, from_run_id=from_run_id)
+        blueprint, draft, parent = self._blueprint(recipe, from_run_id=from_run_id, review_only=review_only)
         if initial_draft is not None:
             draft = validate_draft(initial_draft)
         draft["enabled"] = True

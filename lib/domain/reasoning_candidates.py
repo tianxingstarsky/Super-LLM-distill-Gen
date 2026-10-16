@@ -77,6 +77,8 @@ def _reviewed_verdict(payload, check):
 
 def _validated_claim_audit(payload, check, audit):
     """Bind derived decisions to exact raw claim responses and request keys."""
+    if isinstance(audit, dict) and audit.get("version") == 4:
+        return _validated_adversarial_claim_audit(payload, check, audit)
     if isinstance(audit, dict) and audit.get("version") in (2, 3):
         return _validated_blind_claim_audit(payload, check, audit)
     from lib.domain.claim_review import merge_claim_reviews
@@ -269,6 +271,105 @@ def _validated_blind_claim_audit(payload, check, audit):
             or any(score > merged["scores"][name] for name, score in check["scores"].items())
             or check.get("turn_verdicts") != merged.get("turn_verdicts")):
         raise ValueError("reasoning_blind_claim_gate_weakened")
+    return deepcopy(audit)
+
+
+def _validated_adversarial_claim_audit(payload, check, audit):
+    """Bind candidate-aware challenges and adjudication to their actual calls."""
+    from lib.domain.adversarial_claim_review import validate_challenge_review, merge_adversarial_claim_reviews
+    verdict(check)
+    fields = {"version", "method", "candidate_sha256", "source_input_sha256", "source_evidence_sha256",
+        "status", "challenge_reviews", "assessments", "schema_failures", "derived_verdict"}
+    if (set(audit) != fields or type(audit["version"]) is not int or audit["version"] != 4
+            or audit["method"] != "adversarial_anchored_claim_review" or audit["status"] != "complete"
+            or audit["candidate_sha256"] != reasoning_candidate_digest(payload)
+            or not isinstance(audit["challenge_reviews"], list) or not audit["challenge_reviews"]
+            or not isinstance(audit["assessments"], list) or not audit["assessments"]
+            or not isinstance(audit["schema_failures"], list)):
+        raise ValueError("invalid_reasoning_adversarial_claim_audit")
+    wrapped, challenge_by_index = {}, {}
+    for phase, collection in (("claim_challenge", audit["challenge_reviews"]), ("claim_adjudication", audit["assessments"])):
+        for item in collection:
+            if not isinstance(item, dict) or set(item) != {"review", "checkpoint"}:
+                raise ValueError("invalid_reasoning_adversarial_checkpoint")
+            receipt, reference = item["review"], item["checkpoint"]
+            request = receipt.get("request") if isinstance(receipt, dict) else None
+            if not isinstance(request, dict) or not isinstance(reference, dict):
+                raise ValueError("invalid_reasoning_adversarial_checkpoint")
+            scope = request.get("scope", {})
+            if not isinstance(scope, dict):
+                raise ValueError("invalid_reasoning_adversarial_checkpoint")
+            index = scope.get("message_index")
+            if type(index) is not int or (phase, index) in wrapped or request.get("phase") != phase:
+                raise ValueError("invalid_reasoning_adversarial_checkpoint")
+            ref_fields = {"stage", "key", "checkpoint_sha256", "request_sha256", "review_request_sha256", "response_sha256"}
+            if (set(reference) - {"format_repair"} != ref_fields or not isinstance(reference["stage"], str)
+                    or not reference["stage"] or not isinstance(reference["key"], list)):
+                raise ValueError("invalid_reasoning_adversarial_checkpoint")
+            base_key, call_data = reference["key"], request
+            if "format_repair" in reference:
+                feedback = reference["format_repair"]
+                code = "invalid_challenge_review_response" if phase == "claim_challenge" else "invalid_adversarial_review_response"
+                if (not isinstance(feedback, dict) or set(feedback) != {"code", "instruction"}
+                        or feedback["code"] != code or not isinstance(feedback["instruction"], str)
+                        or not feedback["instruction"].strip() or base_key[-2:] != ["format_repair", 1]):
+                    raise ValueError("invalid_reasoning_adversarial_checkpoint")
+                base_key, call_data = base_key[:-2], {**request, "format_repair": feedback}
+            expected_key = ["claim_challenge", request.get("target"), scope.get("scope_sha256")]
+            if ((base_key != expected_key if phase == "claim_challenge" else
+                    base_key[-3:] != ["claim_adjudication", index, scope.get("scope_sha256")])
+                    or reference["checkpoint_sha256"] != hashlib.sha256(
+                        canonical(["call", reference["key"]]).encode("utf-8")).hexdigest()
+                    or reference["request_sha256"] != reasoning_candidate_digest(call_data)
+                    or reference["review_request_sha256"] != reasoning_candidate_digest(request)
+                    or reference["response_sha256"] != reasoning_candidate_digest(receipt.get("raw_response"))
+                    or scope.get("source_input_sha256") != audit["source_input_sha256"]
+                    or scope.get("source_evidence_sha256") != audit["source_evidence_sha256"]):
+                raise ValueError("stale_reasoning_adversarial_checkpoint")
+            if phase == "claim_challenge":
+                if validate_challenge_review(receipt.get("raw_response"), request) != receipt:
+                    raise ValueError("altered_reasoning_challenge_review")
+                challenge_by_index[index] = receipt
+            wrapped[phase, index] = reference
+    if set(challenge_by_index) != {index for phase, index in wrapped if phase == "claim_adjudication"}:
+        raise ValueError("incomplete_reasoning_adversarial_turns")
+    for item in audit["assessments"]:
+        request = item["review"]["request"]
+        challenge = challenge_by_index[request["scope"]["message_index"]]
+        if (request.get("challenge_review") != challenge["raw_response"]
+                or request["scope"].get("challenge_review_sha256") != reasoning_candidate_digest(challenge["raw_response"])
+                or request["scope"].get("challenge_request_sha256") != reasoning_candidate_digest(challenge["request"])):
+            raise ValueError("stale_reasoning_adversarial_challenge_binding")
+    failures = set()
+    for failure in audit["schema_failures"]:
+        if (not isinstance(failure, dict) or set(failure) != {"phase", "message_index", "attempt", "code", "checkpoint"}
+                or not isinstance(failure["phase"], str) or type(failure["message_index"]) is not int
+                or type(failure["attempt"]) is not int or failure["attempt"] != 1
+                or not isinstance(failure["code"], str) or not failure["code"]):
+            raise ValueError("invalid_reasoning_adversarial_schema_failure")
+        slot = failure["phase"], failure["message_index"]
+        completed, failed = wrapped.get(slot), failure["checkpoint"]
+        if (slot in failures or completed is None or "format_repair" not in completed
+                or not isinstance(failed, dict) or set(failed) != set(completed) - {"format_repair"}
+                or failed["stage"] != completed["stage"] or failed["key"] != completed["key"][:-2]
+                or failed["checkpoint_sha256"] != hashlib.sha256(
+                    canonical(["call", failed["key"]]).encode("utf-8")).hexdigest()
+                or failed["request_sha256"] != completed["review_request_sha256"]
+                or failed["review_request_sha256"] != completed["review_request_sha256"]
+                or not isinstance(failed["response_sha256"], str) or len(failed["response_sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in failed["response_sha256"])):
+            raise ValueError("invalid_reasoning_adversarial_schema_failure")
+        failures.add(slot)
+    if any(("format_repair" in reference) != (slot in failures) for slot, reference in wrapped.items()):
+        raise ValueError("incomplete_reasoning_adversarial_schema_history")
+    merged = merge_adversarial_claim_reviews(payload, [item["review"] for item in audit["assessments"]])
+    if audit["derived_verdict"] != merged:
+        raise ValueError("altered_reasoning_adversarial_aggregate")
+    if (any(check[name] and not merged[name] for name in ("keep", "grounded", "reasoning_valid"))
+            or check["correctness"] > merged["correctness"]
+            or any(score > merged["scores"][name] for name, score in check["scores"].items())
+            or check.get("turn_verdicts") != merged.get("turn_verdicts")):
+        raise ValueError("reasoning_adversarial_gate_weakened")
     return deepcopy(audit)
 
 

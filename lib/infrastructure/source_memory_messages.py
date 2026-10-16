@@ -93,7 +93,7 @@ def sealed_review_memory_context(data, *, instruction=None, protocol_version=1):
     from copy import deepcopy
     _memory_version(protocol_version)
     evidence = data["source_evidence"]
-    if type(data.get("claim_review_protocol_version")) is int and data["claim_review_protocol_version"] in {1, 2, 3}:
+    if type(data.get("claim_review_protocol_version")) is int and data["claim_review_protocol_version"] in {1, 2, 3, 4}:
         # Claim citations refer to the original source_evidence JSON paths.
         # Keep that exact hierarchy once in a stable private system prefix;
         # material extraction would erase the paths visible to the reviewer.
@@ -172,7 +172,7 @@ def source_memory_messages(system, context, *, transport=None, protocol_version=
     version = _memory_version(context.get("source_memory_protocol_version", 1)
                               if protocol_version is None else protocol_version)
     if (type(context.get("claim_review_protocol_version")) is int
-            and context["claim_review_protocol_version"] in {1, 2, 3}):
+            and context["claim_review_protocol_version"] in {1, 2, 3, 4}):
         evidence = context["claim_source_evidence"]
         identity = hashlib.sha256(canonical(evidence).encode("utf-8")).hexdigest()
         if identity != context.get("claim_source_evidence_sha256"):

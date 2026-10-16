@@ -869,3 +869,11 @@ from lib.prompts.workflow_blind_review import ANCHORED_COMPARISON_V1_17
 REVIEW_SCORE_V1_16 = REVIEW_SCORE
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.17.0", template=spec(
     "review_score", "按程序锚点逐段核验当前回答与解释", ANCHORED_COMPARISON_V1_17).template)
+
+from lib.prompts.workflow_adversarial_review import CHALLENGE_BODY, ADJUDICATION_BODY
+REVIEW_REFERENCE_V1_0_1 = REVIEW_REFERENCE
+REVIEW_SCORE_V1_17 = REVIEW_SCORE
+REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.0.0", template=spec(
+    "review_reference", "检查候选中的具体反例与缺失前提", CHALLENGE_BODY).template)
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.18.0", template=spec(
+    "review_score", "独立裁决反证并核验当前全部训练正文", ADJUDICATION_BODY).template)

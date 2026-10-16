@@ -73,6 +73,24 @@ _CLAIM_REVIEW_V3_WIRE_PROTOCOL = (
     "relation为consistent/contradicted/not_claimed/uncertain/reference_error，not_claimed用unit_id=null，"
     "其它relation仅选本次target_units实际unit_id；仅reference_error另有counter_evidence，"
     "其结构为kind（source/context/logic）、evidence和derivation。verdict保留既定六字段与scores结构。")
+_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL = (
+    "本次使用协议4、phase=claim_challenge的固定传输契约；语义要求以可编辑节点模板为准。"
+    "仅返回JSON且只有claim_review_protocol_version（整数4）、phase（claim_challenge）、"
+    "scope_sha256（复制request.scope.scope_sha256）、issues和limitations。issues每项仅有id、unit_id、"
+    "severity（material/minor）、problem、counterexample、basis。id是唯一1至128位字母数字或_.-字符串；"
+    "unit_id只能来自本次target_units。basis仅kind（source/context/logic）、evidence、derivation；"
+    "source引文为quote和source_path，context引文为quote、message_index、field，logic的evidence可为空数组。"
+    "limitations是字符串数组。不返回评分、scope、候选quote或其它阶段字段。")
+_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL = (
+    "本次使用协议4、phase=claim_adjudication固定传输契约；语义要求以可编辑节点模板为准。"
+    "仅返回JSON且只有claim_review_protocol_version（整数4）、scope_sha256（复制request.scope.scope_sha256）、"
+    "coverage、checked_unit_ids、claim_checks、challenge_checks、verdict。coverage为complete/partial。"
+    "checked_unit_ids及claim_checks.unit_id只用本次target_units的id。claim_checks每项仅unit_id、"
+    "status（supported/refuted/insufficient）、severity（material/minor）、basis。challenge_checks每项仅id、"
+    "unit_id、decision（confirmed/dismissed/unresolved）、basis；id与unit_id绑定实际challenge_review的同一issue。"
+    "basis仅kind（source/context/logic）、evidence、derivation；source引文为quote和source_path，context引文为"
+    "quote、message_index、field，logic的evidence可为空数组。verdict保留既定六字段与scores结构。"
+    "不要抄候选quote、field、完整scope或reference_checks，不将程序normalized表示冒称模型原始返回。")
 _CLAIM_FORMAT_ERROR_CODES = frozenset({
     "invalid_blind_review_response", "stale_blind_review_response", "invalid_blind_review_scope",
     "invalid_blind_review_coverage", "missing_blind_review_reference_points", "invalid_blind_review_reference_point",
@@ -91,6 +109,15 @@ _CLAIM_FORMAT_ERROR_CODES = frozenset({
     "incomplete_claim_review_reference_checks", "invalid_claim_review_reference_check", "invalid_claim_review_reference_check_id",
     "invalid_claim_review_reference_relation", "missing_claim_review_reference_reason", "invalid_claim_review_not_claimed_reference",
     "fabricated_claim_review_reference_quote", "unsubstantiated_claim_review_reference_error",
+    "invalid_challenge_review_response", "stale_challenge_review_response", "invalid_challenge_review_issues",
+    "invalid_challenge_review_issue", "invalid_challenge_review_issue_id", "invalid_challenge_review_unit_id",
+    "invalid_challenge_review_severity", "missing_challenge_review_problem", "missing_challenge_review_counterexample",
+    "invalid_challenge_review_limitations", "missing_challenge_review_limitation", "invalid_adversarial_review_response",
+    "stale_adversarial_review_response", "invalid_adversarial_unit_coverage", "invalid_adversarial_claim",
+    "invalid_adversarial_unit_id", "invalid_adversarial_challenge_checks", "invalid_adversarial_challenge_check",
+    "invalid_adversarial_challenge_decision", "unbound_adversarial_challenge_check", "unconfirmed_adversarial_refutation",
+    "invalid_adversarial_basis", "missing_adversarial_derivation", "vacuous_adversarial_derivation",
+    "missing_adversarial_evidence",
 })
 
 
@@ -119,6 +146,14 @@ def _claim_format_boundaries(request, phase):
         result["response_field_names"] = ["claim_review_protocol_version", "scope_sha256", "coverage",
             "checked_unit_ids", "claim_checks", "reference_checks", "verdict"]
         result["current_target_unit_ids"] = [item["id"] for item in request["target_units"]]
+    elif request.get("claim_review_protocol_version") == 4:
+        result["scope_field_names"] = []
+        result["response_field_names"] = (["claim_review_protocol_version", "phase", "scope_sha256", "issues", "limitations"]
+            if phase == "claim_challenge" else ["claim_review_protocol_version", "scope_sha256", "coverage",
+                "checked_unit_ids", "claim_checks", "challenge_checks", "verdict"])
+        result["current_target_unit_ids"] = [item["id"] for item in request["target_units"]]
+        if phase == "claim_adjudication":
+            result["current_challenge_issue_ids"] = [item["id"] for item in request["challenge_review"]["issues"]]
     return result
 
 
@@ -126,6 +161,8 @@ def _safe_claim_format_code(error, phase, protocol_version=None):
     code = str(error)
     return code if code in _CLAIM_FORMAT_ERROR_CODES else (
         "invalid_blind_review_response" if phase == "blind_reference" else
+        "invalid_challenge_review_response" if protocol_version == 4 and phase == "claim_challenge" else
+        "invalid_adversarial_review_response" if protocol_version == 4 else
         "invalid_claim_review_v3_response" if protocol_version == 3 else "invalid_claim_review_v2_response")
 
 
@@ -1090,7 +1127,7 @@ class WorkflowReviewRepair:
         refuted = []
         for item in audit["assessments"]:
             review = item["review"]
-            actual_claims = (review["normalized_response"] if audit["version"] == 3 else review["raw_response"])
+            actual_claims = (review["normalized_response"] if audit["version"] in {3, 4} else review["raw_response"])
             for claim in actual_claims["claim_checks"]:
                 if claim["status"] == "refuted":
                     refuted.append({"message_index": review["request"]["scope"]["message_index"],
@@ -1132,6 +1169,11 @@ class WorkflowReviewRepair:
         anchor_version = self.recipe.get("claim_review_anchor_protocol_version")
         if anchor_version is not None and (type(anchor_version) is not int or anchor_version != 1):
             raise ValueError("invalid_claim_review_anchor_protocol_version")
+        adversarial_version = self.recipe.get("claim_review_adversarial_protocol_version")
+        if adversarial_version is not None and (type(adversarial_version) is not int or adversarial_version != 1):
+            raise ValueError("invalid_claim_review_adversarial_protocol_version")
+        if adversarial_version == 1:
+            return self._review_adversarial_claim_score(target, row, evidence, key)
         if version == 2:
             return self._review_blind_claim_score(target, row, evidence, key)
         payload = self._review_payload(target, row)
@@ -1200,7 +1242,7 @@ class WorkflowReviewRepair:
         if boundaries is not None:
             boundary_note = ("\n以下仅说明JSON引用路径与实际messages数组索引；数组索引不是对话轮次编号。"
                 "context引用只能使用列出的合法数组索引及实际字段；scope只复制列出的字段及request原值，不增加target等字段。\n")
-            if request.get("claim_review_protocol_version") == 3:
+            if request.get("claim_review_protocol_version") in {3, 4}:
                 boundary_note = ("\n以下仅说明实际messages索引与本次候选单元id；context证据只能使用合法实际索引。"
                     "仅复制request.scope.scope_sha256为返回的scope_sha256，不返回整个scope；候选评审只引用本次unit_id，不抄quote。\n")
             call_instruction += boundary_note + canonical(boundaries)
@@ -1209,12 +1251,19 @@ class WorkflowReviewRepair:
         for attempt in (1, 2):
             call_key = base_key if attempt == 1 else [*base_key, "format_repair", 1]
             feedback = {"code": ("invalid_blind_review_response" if phase == "blind_reference"
+                                  else "invalid_challenge_review_response" if request.get("claim_review_protocol_version") == 4
+                                       and phase == "claim_challenge"
+                                  else "invalid_adversarial_review_response" if request.get("claim_review_protocol_version") == 4
                                   else "invalid_claim_review_v3_response" if request.get("claim_review_protocol_version") == 3
                                   else "invalid_claim_review_v2_response"),
                         "instruction": "Return the complete current protocol contract and copy its scope exactly. Preserve the real evidence and candidate boundaries; do not fabricate missing fields."}
             if request.get("claim_review_protocol_version") == 3:
                 feedback["instruction"] = ("Return the complete current protocol-3 contract. Copy only request.scope.scope_sha256 "
                     "as scope_sha256; use only current target_units unit_id values. Do not return scope, field, or candidate quote.")
+            elif request.get("claim_review_protocol_version") == 4:
+                feedback["instruction"] = ("Return the complete current protocol-4 phase contract. Copy only request.scope.scope_sha256 "
+                    "as scope_sha256; use only current target_units unit_id values and actual challenge issue ids. "
+                    "Do not return scope, field, candidate quote, or a different phase's fields.")
             if boundaries is not None and previous_error is not None:
                 feedback["instruction"] += "\nSchema-only diagnostic: " + canonical({
                     "error_code": previous_error, **boundaries, **previous_detail})
@@ -1241,6 +1290,55 @@ class WorkflowReviewRepair:
                     raise
             else:
                 return receipt, reference
+
+    def _review_adversarial_claim_score(self, target, row, evidence, key):
+        """Challenge the actual candidate, then adjudicate with separate raw calls.
+
+        The first call is candidate-aware and is never described as blind or
+        independent truth. Both fallible model outputs remain checkpointed.
+        """
+        from lib.domain.adversarial_claim_review import (challenge_review_requests, validate_challenge_review,
+            adversarial_claim_review_requests, validate_adversarial_claim_review, merge_adversarial_claim_reviews)
+        from lib.infrastructure.training_workflow import digest
+        payload = self._review_payload(target, row)
+        requirements = current_claim_review_requirements(self, target, row) or None
+        inputs = challenge_review_requests(target, payload, evidence,
+            reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements)
+        audit = {"version": 4, "method": "adversarial_anchored_claim_review",
+            "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
+            "source_evidence_sha256": inputs[0]["scope"]["source_evidence_sha256"],
+            "status": "pending", "challenge_reviews": [], "assessments": [], "schema_failures": []}
+        row["claim_review"] = audit
+        role = "jev" if self.recipe.get("package_review", {}).get("enabled") else "generation"
+        challenges = []
+        for request in inputs:
+            call_key = ["claim_challenge", target, request["scope"]["scope_sha256"]]
+            receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_reference",
+                base_key=call_key, role=role, validator=validate_challenge_review, audit=audit,
+                phase="claim_challenge", instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL)
+            challenges.append(receipt)
+            audit["challenge_reviews"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
+        requests = adversarial_claim_review_requests(target, payload, evidence,
+            reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
+            challenge_reviews=challenges)
+        receipts = []
+        for request in requests:
+            call_key = [*key, "claim_adjudication", request["scope"]["message_index"], request["scope"]["scope_sha256"]]
+            receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_score",
+                base_key=call_key, role=role, validator=validate_adversarial_claim_review, audit=audit,
+                phase="claim_adjudication", instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL)
+            receipts.append(receipt)
+            audit["assessments"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
+        check = merge_adversarial_claim_reviews(payload, receipts)
+        audit.update(status="complete", derived_verdict=deepcopy(check))
+        row["reasoning_assessment_method"] = "llm_claim_review"
+        row["reasoning_assessment_reference"] = {"kind": "llm_claim_review", "version": 4,
+            "scope": "candidate_aware_challenge_then_anchored_adjudication_not_truth_certification",
+            "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
+            "source_evidence_sha256": audit["source_evidence_sha256"],
+            "challenge_checkpoints": [deepcopy(item["checkpoint"]) for item in audit["challenge_reviews"]],
+            "checkpoints": [deepcopy(item["checkpoint"]) for item in audit["assessments"]]}
+        return self._claim_refutation_release(row, check)
 
     def _review_blind_claim_score(self, target, row, evidence, key):
         """Establish candidate-blind reference points before inspecting a draft.

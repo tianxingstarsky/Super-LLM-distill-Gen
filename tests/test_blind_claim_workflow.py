@@ -51,6 +51,35 @@ def anchored_grade_response(request, *, bad=False, severity="material"):
             for point in request["reference_review"]["reference_points"]], "verdict": grade()}
 
 
+def challenge_response(request, *, bad=False, severity="material"):
+    units = request["target_units"]
+    issues = []
+    if bad:
+        unit = next((unit for unit in units if "WRONG_DRAFT" in unit["text"]), units[0])
+        issues = [{"id": "inspection-prerequisite", "unit_id": unit["id"], "severity": severity,
+            "problem": "The candidate permits inspection while the power prerequisite is unmet.",
+            "counterexample": "With power on, the proposed inspection contradicts the source's required power-off condition.",
+            "basis": {"kind": "source", "evidence": [{"quote": SOURCE, "source_path": ["teacher_evidence"]}],
+                "derivation": "The source requires power-off before inspection, so a powered inspection is not a permitted instance."}}]
+    return {"claim_review_protocol_version": 4, "phase": "claim_challenge",
+        "scope_sha256": request["scope"]["scope_sha256"], "issues": issues, "limitations": []}
+
+
+def adversarial_grade_response(request, *, decision="confirmed"):
+    issues = request["challenge_review"]["issues"]
+    challenged = {item["unit_id"] for item in issues} if decision == "confirmed" else set()
+    def basis():
+        return {"kind": "source", "evidence": [{"quote": SOURCE, "source_path": ["teacher_evidence"]}],
+            "derivation": "Power-off is an explicit inspection prerequisite in the source; it must be checked against the candidate action."}
+    return {"claim_review_protocol_version": 4, "scope_sha256": request["scope"]["scope_sha256"],
+        "coverage": "complete", "checked_unit_ids": [unit["id"] for unit in request["target_units"]],
+        "claim_checks": [{"unit_id": unit["id"], "status": "refuted" if unit["id"] in challenged else "supported",
+            "severity": next((issue["severity"] for issue in issues if issue["unit_id"] == unit["id"]), "material"),
+            "basis": basis()} for unit in request["target_units"]],
+        "challenge_checks": [{"id": issue["id"], "unit_id": issue["unit_id"], "decision": decision,
+            "basis": basis()} for issue in issues], "verdict": grade()}
+
+
 class BlindProbe(Probe):
     def __init__(self, *, relation="consistent", partial=False, responses=None, audit=False):
         super().__init__(audit=audit)
@@ -165,6 +194,10 @@ class OfflineBlindClient:
                 "content": "Confirm the power is off first.", "reasoning_content": "Inspection requires power-off.",
                 "reasoning_trace": trace()} for index in data["required_reasoning_indices"]]}
             return json.dumps({"record": body, "quotes": [SOURCE], "uncertain": False})
+        if data.get("claim_review_protocol_version") == 4:
+            return json.dumps(challenge_response(data,
+                bad=self.repair and "WRONG_DRAFT" in canonical(data["target_units"]))
+                if data["phase"] == "claim_challenge" else adversarial_grade_response(data))
         if data.get("phase") == "blind_reference":
             return json.dumps(blind_response(data))
         if data.get("claim_review_protocol_version") == 3:
@@ -190,9 +223,29 @@ def freeze_pre_anchor(output, run_id):
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe.pop("claim_review_anchor_protocol_version", None)
+    recipe.pop("claim_review_adversarial_protocol_version", None)
     frozen = get("workflow.review_score", "1.16.0")
     recipe["node_prompt_templates"]["review"]["workflow.review_score"] = render(frozen)
     recipe["prompts"]["workflow.review_score"] = {"version": frozen.version, "sha256": engine.digest(frozen.template)}
+    reference = get("workflow.review_reference", "1.0.1")
+    recipe["node_prompt_templates"]["review"]["workflow.review_reference"] = render(reference)
+    recipe["prompts"]["workflow.review_reference"] = {"version": reference.version, "sha256": engine.digest(reference.template)}
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    engine.atomic_json(path / "state.json", state)
+
+
+def freeze_pre_adversarial(output, run_id):
+    """Keep protocol three's previously submitted bodies and wire contract."""
+    from lib.prompts import get, render
+    path = engine.run_path(output, run_id)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe.pop("claim_review_adversarial_protocol_version", None)
+    for prompt_id, version in (("workflow.review_score", "1.17.0"), ("workflow.review_reference", "1.0.1")):
+        frozen = get(prompt_id, version)
+        recipe["node_prompt_templates"]["review"][prompt_id] = render(frozen)
+        recipe["prompts"][prompt_id] = {"version": frozen.version, "sha256": engine.digest(frozen.template)}
     engine.atomic_json(path / "recipe.json", recipe)
     state = engine.read_json(path / "state.json")
     state["recipe_hash"] = engine.digest(recipe)
