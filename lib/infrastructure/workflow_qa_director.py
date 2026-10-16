@@ -573,7 +573,16 @@ class WorkflowQADirector:
                     if name not in {"teacher_evidence", "source_context", "dialogue_state", "dialogue_steps"}}
             data.update(qa_contract=learner_contract(contract), learner_context_only=True)
         value = self.ask(key, "jev", prompt_id, data, allow_reasoning_fallback=False)
-        if (not isinstance(value, dict) or set(value) != {"keep", "adherence", "reason"}
+        format_metadata = (type(self.recipe.get("style_verdict_protocol_version")) is int
+                           and self.recipe["style_verdict_protocol_version"] == 2)
+        if format_metadata:
+            from lib.domain.style_judge import style_verdict
+            try:
+                value = style_verdict(value, allow_format_metadata=True)
+            except ValueError as error:
+                self._invalidate_director_call(key)
+                raise ValueError("invalid_qa_director_judge_schema") from error
+        elif (not isinstance(value, dict) or set(value) != {"keep", "adherence", "reason"}
                 or type(value.get("keep")) is not bool
                 or type(value.get("adherence")) is not int
                 or not 1 <= value["adherence"] <= 5

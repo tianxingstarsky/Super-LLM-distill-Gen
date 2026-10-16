@@ -1134,15 +1134,21 @@ class WorkflowReviewRepair:
         from lib.infrastructure.training_workflow import digest
         target, original = item["target"], item["record"]
         config = validate_review_repair(self.recipe["review_repair"])
-        if (self.recipe.get("multiturn_terminal_review_version") == 1 and target == "multiturn"
-                and original.get("status") == "quarantined"
-                and (original.get("reason") == "multiturn_natural_end_insufficient_turns"
-                     or (original.get("reason") == "multiturn_turn_failed_after_repair"
-                         and (original.get("messages") is None or original.get("messages") == [])))):
+        missing_dialogue = original.get("messages") is None or original.get("messages") == []
+        historical_terminal = (self.recipe.get("multiturn_terminal_review_version") == 1
+            and (original.get("reason") == "multiturn_natural_end_insufficient_turns"
+                 or original.get("reason") == "multiturn_turn_failed_after_repair" and missing_dialogue))
+        contract_output_terminal = (type(self.recipe.get("multiturn_failure_audit_version")) is int
+            and self.recipe["multiturn_failure_audit_version"] == 1
+            and original.get("reason") == "multiturn_contract_output_invalid" and missing_dialogue)
+        if (target == "multiturn" and original.get("status") == "quarantined"
+                and (historical_terminal or contract_output_terminal)):
             # A terminal single turn or failed generation without a dialogue
             # cannot become a multi-turn item by editing assistant text.
             # Preserve the actual cause and any partial-turn diagnostics;
             # missing input is not an API/parse failure or a quality verdict.
+            # failed_generation is diagnostic text, never a replacement for
+            # the absent main messages or an implicit training candidate.
             row = deepcopy(original)
             try:
                 candidate_hash = digest(self._review_payload(target, row))

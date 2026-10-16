@@ -828,3 +828,8 @@ COT_GENERATE = _claim_scope_spec(COT_GENERATE, "1.10.0", "generation")
 RATIONALE_CHECK = _claim_scope_spec(RATIONALE_CHECK, "1.8.0", "review")
 REVIEW_SCORE = _claim_scope_spec(REVIEW_SCORE, "1.11.0", "review")
 REVIEW_REPAIR = _claim_scope_spec(REVIEW_REPAIR, "1.11.0", "repair")
+
+from lib.prompts.workflow_utterance import QA_DIRECTOR_V1_11
+QA_DIRECTOR_V1_10 = QA_DIRECTOR
+QA_DIRECTOR = _reasoning_spec_replace(QA_DIRECTOR, version="1.11.0", template=spec(
+    "qa_director", "依据真实互动依赖选择多轮任务并自然结束", QA_DIRECTOR_V1_11).template)

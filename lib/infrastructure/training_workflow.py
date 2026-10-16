@@ -494,6 +494,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "authored_reasoning_protocol_version": 1,
               "authored_reasoning_warmup_version": 1,
               "reasoning_distillation_audit_version": 1,
+              "style_verdict_protocol_version": 2,
+              "multiturn_failure_audit_version": 1,
               "authored_role_projection_version": 3,
               "review_context_protocol_version": 2,
               "turn_review_protocol_version": 1,
@@ -1550,8 +1552,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         from lib.domain.style_judge import style_verdict
         value = self.ask(key, "jev", prompt_id, data,
                          **({"instruction": instruction} if instruction is not None else {}))
+        recipe = getattr(self, "recipe", {})
         try:
-            return style_verdict(value)
+            return style_verdict(value, allow_format_metadata=(
+                type(recipe.get("style_verdict_protocol_version")) is int
+                and recipe["style_verdict_protocol_version"] == 2))
         except ValueError:
             self.invalidate_checkpoint(["call", key])
             raise
@@ -1857,6 +1862,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
             finished_dialogue = False
             for turn_index in range(self.recipe.get("conversation_turns", 3)):
                 feedback = None
+                last_failed_candidate = None
                 for attempt in range(2):
                     planned_step = None
                     current_dialogue_state = dialogue_state
@@ -1985,6 +1991,11 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     assistant_message = {"role": "assistant", "content": answer,
                         **({"reasoning_content": selected_reasoning["content"]} if selected_reasoning["content"] else {})}
                     candidate = [*messages, user_message, assistant_message]
+                    if self.recipe.get("multiturn_failure_audit_version") == 1:
+                        last_failed_candidate = {"messages": deepcopy(candidate), "quotes": deepcopy(quotes),
+                            "candidate_sha256": digest({"messages": candidate, "quotes": quotes}),
+                            "status": "unaccepted_generation", "attempt": attempt,
+                            "turn": turn_index + 1, "training_eligible": False}
                     issue = conversation_issue(candidate)
                     if issue:
                         feedback = issue
@@ -2004,12 +2015,22 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     if style_check is not None and not (style_check["keep"] and style_check["adherence"] >= 4):
                         feedback = style_check["reason"]
                         continue
-                    contract_check = (self.qa_contract_check(
-                        [unit["id"], "multiturn_contract", turn_index, attempt, *turn_identity], unit, candidate,
-                        prompt_id="workflow.multiturn_directed_check",
-                        review_scope="completed_prefix",
-                        **({"dialogue_state": current_dialogue_state,
-                            "dialogue_steps": dialogue_steps} if adaptive_dialogue else {})) if contract is not None else None)
+                    try:
+                        contract_check = (self.qa_contract_check(
+                            [unit["id"], "multiturn_contract", turn_index, attempt, *turn_identity], unit, candidate,
+                            prompt_id="workflow.multiturn_directed_check",
+                            review_scope="completed_prefix",
+                            **({"dialogue_state": current_dialogue_state,
+                                "dialogue_steps": dialogue_steps} if adaptive_dialogue else {})) if contract is not None else None)
+                    except ValueError as error:
+                        if (self.recipe.get("multiturn_failure_audit_version") != 1
+                                or str(error) != "invalid_qa_director_judge_schema"):
+                            raise
+                        return [{**self.rejected(unit, "multiturn_contract_output_invalid"),
+                            "failed_turn": turn_index + 1, "feedback": str(error),
+                            "failed_generation": last_failed_candidate,
+                            "accepted_prefix": deepcopy(messages), "source_context": deepcopy(unit),
+                            "turn_reviews": reviews, "evidence_level": evidence_level}]
                     if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
                         feedback = contract_check["reason"]
                         continue
@@ -2036,6 +2057,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         else "multiturn_turn_failed_after_repair")
                     return [{**self.rejected(unit, reason),
                              "failed_turn": turn_index + 1, "feedback": feedback,
+                             **({"failed_generation": last_failed_candidate,
+                                 "accepted_prefix": deepcopy(messages), "source_context": deepcopy(unit)}
+                                if self.recipe.get("multiturn_failure_audit_version") == 1 else {}),
                              "turn_reviews": reviews, "evidence_level": evidence_level}]
                 if finished_dialogue:
                     break

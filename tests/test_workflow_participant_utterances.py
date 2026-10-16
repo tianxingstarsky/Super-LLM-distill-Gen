@@ -14,7 +14,7 @@ from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
 from lib.prompts.workflow_utterance import (
     PARTICIPANT_UTTERANCE_GUIDANCE, PARTICIPANT_UTTERANCE_REVIEW,
-    QA_DIRECTOR_V1_10, QUESTION_USER_V1_3, MULTITURN_USER_V1_5, SFT_V1_7,
+    QA_DIRECTOR_V1_10, QA_DIRECTOR_V1_11, QUESTION_USER_V1_3, MULTITURN_USER_V1_5, SFT_V1_7,
     QUESTION_FIT_V1_4, SFT_DIRECTED_CHECK_V1_3, MULTITURN_DIRECTED_CHECK_V1_3,
 )
 from tests.test_adaptive_dialogue_director import Expert, make_run
@@ -37,10 +37,17 @@ def mock_llm_server():
     ("sft_directed_check", "1.3.0", SFT_DIRECTED_CHECK_V1_3, PARTICIPANT_UTTERANCE_REVIEW),
     ("multiturn_directed_check", "1.3.0", MULTITURN_DIRECTED_CHECK_V1_3, PARTICIPANT_UTTERANCE_REVIEW),
 ])
-def test_latest_complete_contract_has_shared_guidance_once(name, version, body, shared):
-    prompt = get("workflow." + name)
+def test_versioned_complete_contract_has_shared_guidance_once(name, version, body, shared):
+    prompt = get("workflow." + name, version=version)
     assert prompt.version == version
     assert render(prompt) == body and body.count(shared) == 1
+
+
+def test_latest_director_retains_participant_contract_with_adaptive_multiturn_design():
+    prompt = get("workflow.qa_director")
+    assert prompt.version == "1.11.0"
+    assert render(prompt) == QA_DIRECTOR_V1_11
+    assert render(prompt).count(PARTICIPANT_UTTERANCE_GUIDANCE) == 1
 
 
 @pytest.mark.parametrize("name,version,expected", [
@@ -99,7 +106,7 @@ class ObservedExpert(Expert):
 def test_grounded_planning_and_next_turn_share_protocol_and_existing_review_call(tmp_path, monkeypatch):
     output, run_id, path, expert, worker, reviewer, _ = make_run(tmp_path, monkeypatch, ObservedExpert())
     recipe = engine.read_json(path / "recipe.json")
-    assert recipe["prompts"]["workflow.qa_director"]["version"] == "1.10.0"
+    assert recipe["prompts"]["workflow.qa_director"]["version"] == "1.11.0"
     before = deepcopy(recipe["node_prompt_templates"])
     state = engine.Workflow(output, run_id, tmp_path, jev=reviewer).execute()
     assert state["status"] == "completed", state.get("error")

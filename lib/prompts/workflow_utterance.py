@@ -46,6 +46,35 @@ QA_DIRECTOR_V1_10 = _before(QA_DIRECTOR_V1_9, "自然表达与停止：", PARTIC
     "dialogue_state还可包含conversational_frame，字段与上面相同。",
     "dialogue_state还可包含expression_design表达建议和conversational_frame，字段与上面相同。",
 )
+
+MULTITURN_TASK_DESIGN_GUIDANCE = (
+    "多轮目标的初始任务设计：以下补充只用于初始批次设计，即request_phase不是next_turn，"
+    "且本次实际targets数组含multiturn；不要从教师资料、旧样本或用户发言中的同名词推定目标。"
+    "multiturn表示需要真实前后依赖的协作，不是把一轮能答完的说明题强行延长。"
+    "应选择助手先交付当前可用成果、用户查看实际成果后提出有意义的新约束/反馈、"
+    "助手据此修订或共同解决的活动；具体活动依当前知识、用户目标和可用信息设计，"
+    "不要全部派成‘解释清楚某概念’或单次列表说明。"
+    "复用已有dialogue_design字段，不新增输出字段：interaction_goal写最终要得到什么可用成果，"
+    "并说明为什么后续行动真正依赖助手先给出的结果；success_criteria写实际可检查的完成表现；"
+    "turn_guidance写可依据真实回应选择的协作方向、哪些约束或判断须在成果出现后由用户表达；"
+    "stop_when写目标何时实际完成或何时已无有价值的下一行动。"
+    "这些字段要贴合本题，不只重复‘连续协作’‘继续追问’等口号，不设固定三步或轮次配额。"
+    "首轮问题应提出清楚且有实际用途的当前请求；助手首答必须充分完成当时请求，"
+    "不故意少答、隐藏已知条件或留下假缺口来制造追问。"
+    "可设计未来可能发生的偏好选择或约束变化，但它们在用户实际表达前只是规划，"
+    "不是共同知识、已发生事实或必须照演的台词；不预写未来助手答复，不虚构已执行实验或观察结果。"
+    "question_separation=true的closed_book仍只向独立发言者给无来源知识的合规question_brief："
+    "communication_goal表达当前协作目的，不夹带教师事实、答案或尚未发生的用户反馈。"
+    "只有固定输入时保留原题，不为符合多轮设计改写真实用户记录。"
+    "若当前资料无法设计有新价值的依赖活动，adaptive沿用已有skip_reason契约跳过，"
+    "不把天然单轮任务硬派成多轮。"
+    "本补充不改变next_turn的自然结束条件：后续只根据实际对话决定，"
+    "目标已满足或没有新价值就停止，不能为多轮结构追加‘还有吗’、假误解或无用途改写。"
+    "初始设计不是继续命令或事实证据；单轮结束仍保留真实记录，不因此获得多轮导出资格。"
+)
+
+QA_DIRECTOR_V1_11 = _before(QA_DIRECTOR_V1_10, "自然表达与停止：", MULTITURN_TASK_DESIGN_GUIDANCE)
+
 QUESTION_USER_V1_3 = _before(QUESTION_USER_V1_2, '仅返回JSON：', PARTICIPANT_UTTERANCE_GUIDANCE).replace(
     "question_rules控制本节点的表达设置；简报与长期经验不授权编造必要事实或个人经历。",
     "question_rules控制本节点的表达设置。简报可设计合成互动的目标、当前条件、偏好与关系，"
