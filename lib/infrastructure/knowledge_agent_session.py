@@ -13,6 +13,7 @@ import sqlite3
 
 from lib.domain.workflow_quality import canonical
 from lib.infrastructure.qa_history import _terms
+from lib.infrastructure.knowledge_agent_archive import KnowledgeAgentArchive
 
 
 MAX_EXPRESSION_BYTES = 32768
@@ -66,7 +67,7 @@ def knowledge_task_identity(contract, stage):
     return digest([core, revision]) if revision else core
 
 
-class KnowledgeAgentSession:
+class KnowledgeAgentSession(KnowledgeAgentArchive):
     def __init__(self, path):
         self.path = Path(path)
         if self.path.is_symlink():
@@ -102,6 +103,7 @@ class KnowledgeAgentSession:
                 "ON agent_task_dimensions(dimension,value,task_row_id)")
             db.execute("CREATE INDEX IF NOT EXISTS agent_tasks_knowledge_status "
                 "ON agent_tasks(knowledge,status,row_id)")
+            self._archive_schema(db)
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=30)
@@ -119,21 +121,29 @@ class KnowledgeAgentSession:
             raise ValueError("knowledge_agent_conversation_integrity_error")
         return value
 
-    def remember_turn(self, session, operation, messages):
+    def remember_turn(self, session, operation, messages, *, archive=False):
+        if type(archive) is not bool:
+            raise ValueError("knowledge_agent_archive_invalid_request")
         payload = canonical(messages)
         if len(payload.encode()) > 4 * 1024 * 1024:
             raise ValueError("knowledge_agent_turn_too_large")
         sha = hashlib.sha256(payload.encode()).hexdigest()
         with closing(self._connect()) as db, db:
+            if archive:
+                db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT payload,sha256 FROM agent_turns WHERE session=? AND operation=?",
                              (session, operation)).fetchone()
             if old is not None:
                 self._payload(old)
                 if old["sha256"] != sha:
                     raise ValueError("knowledge_agent_operation_changed")
+                if archive:
+                    self._archive_record(db, session, operation, messages, sha)
                 return False
             db.execute("INSERT INTO agent_turns(session,operation,payload,sha256) VALUES(?,?,?,?)",
                        (session, operation, payload, sha))
+            if archive:
+                self._archive_record(db, session, operation, messages, sha)
         return True
 
     def history(self, session, *, max_bytes=32768, max_turns=6, exclude_operation=""):

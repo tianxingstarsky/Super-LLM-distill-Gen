@@ -167,6 +167,11 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         copied_bindings.setdefault("ingest", {})["generation"] = parser["binding"]
     values[f"workflow-node-bindings:{workspace}"] = copied_bindings
     values[f"workflow-document-parse-mode:{workspace}"] = parser["mode"]
+    if parser["mode"] == "docling":
+        values[f"workflow-docling-artifacts:{workspace}"] = parser["artifacts_path"]
+        values[f"workflow-docling-ocr:{workspace}"] = parser["ocr"]
+        values[f"workflow-docling-ocr-models:{workspace}"] = parser.get("ocr_models_path", "")
+        values[f"workflow-docling-languages:{workspace}"] = ",".join(parser.get("ocr_languages", ["ch_sim", "en"]))
     cpt_processing = validate_cpt_processing(recipe.get("cpt_processing"))
     values[f"workflow-cpt-processing-mode:{workspace}"] = cpt_processing["mode"]
     if cpt_processing["mode"] == "model":

@@ -39,6 +39,9 @@ class WorkflowKnowledgeAgent:
     def knowledge_agent_enabled(self):
         return self.recipe.get("knowledge_agent_context_version") == 1
 
+    def knowledge_archive_enabled(self):
+        return self.recipe.get("knowledge_agent_archive_version") == 1
+
     def knowledge_expressions(self):
         return self.recipe.get("qa_expression_version") == 2
 
@@ -102,6 +105,8 @@ class WorkflowKnowledgeAgent:
             session_scope.append(["expression_guide", 2])
         if self.recipe.get("knowledge_agent_finalization_version") == 1:
             session_scope.append(["tool_finalization", 1])
+        if self.knowledge_archive_enabled():
+            session_scope.append(["conversation_archive", 1])
         session = digest(session_scope)
         descriptor = {"version": 1, "knowledge_id": knowledge, "session_id": session}
         store = self.knowledge_store()
@@ -175,6 +180,9 @@ class WorkflowKnowledgeAgent:
             history_search=lambda **arguments: self._knowledge_search(knowledge, **arguments),
             coverage=lambda: self._knowledge_coverage(knowledge),
             **({"include_expression": True} if self.knowledge_expressions() else {}))
+        if self.knowledge_archive_enabled():
+            from lib.infrastructure.knowledge_archive_tools import KnowledgeArchiveTools
+            tools = KnowledgeArchiveTools(tools, store, session, exclude_operation=operation)
         client = self.client("generation", stage="director")
         use_tools = (self.recipe["qa_director"].get("tools_mode", "auto") == "auto"
                      and getattr(client, "model_info", {}).get("tools") is not False)
@@ -187,24 +195,54 @@ class WorkflowKnowledgeAgent:
             rules, task = split_node_rules(data, instruction=instruction, qa_director=self.recipe.get("qa_director"))
             task = deepcopy(task)
             task["knowledge_agent_memory"] = self._knowledge_memory(knowledge)
+            archive = None
+            if self.knowledge_archive_enabled():
+                archive = store.archive_overview(session, exclude_operation=operation)
+                task["knowledge_agent_memory"]["conversation_archive"] = archive
+                task["knowledge_agent_memory"]["archive_tools_available"] = use_tools
             template = (self.prompt_text("workflow.qa_director", stage=prompt_stage)
                         if prompt_stage is not None else self.prompt_text("workflow.qa_director"))
             system = (self.recipe["node_prompt_system"] + NODE_RULE_HEADER + "\n"
                 + template + experience_system(self.recipe, "workflow.qa_director")
                 + rules + "\n" + self.recipe["knowledge_agent_instruction"])
-            messages = source_memory_messages(system,
-                split_context_request(self.path, task, protocol_version=self.recipe.get("source_memory_protocol_version", 2)))
+            def assemble():
+                return source_memory_messages(system,
+                    split_context_request(self.path, task, protocol_version=self.recipe.get("source_memory_protocol_version", 2)))
+            messages = assemble()
             fixed = len(canonical(messages).encode()) + len(canonical(schemas).encode()) + 4096
             available = context - output - fixed
+            # Shrink only optional archive previews. Never clip original
+            # dialogue, native state, source content or the current tool chain.
+            while available < 0 and archive and archive["entries"]:
+                archive["entries"].pop()
+                archive["results_limited"] = True
+                messages = assemble()
+                fixed = len(canonical(messages).encode()) + len(canonical(schemas).encode()) + 4096
+                available = context - output - fixed
             if available < 0:
                 raise ValueError("qa_director_context_too_small")
-            history = store.history(session, max_bytes=min(32768, available), exclude_operation=operation)
+            window_bytes = min(65536 if archive is not None else 32768, available)
+            history = store.history(session, max_bytes=window_bytes,
+                max_turns=12 if archive is not None else 6, exclude_operation=operation)
             current = messages.pop()
             messages.extend(history)
             messages.append(current)
             self.state["qa_director"]["knowledge_context"]["retained_messages"] = len(history)
+            if archive is not None:
+                return {"messages": messages, "memory": {
+                    "archive_version": 1, "archived_operations": archive["total_operations"],
+                    "archive_previews": len(archive["entries"]), "archive_tools_available": use_tools,
+                    "history_window_max_bytes": window_bytes, "retained_messages": len(history),
+                    "history_bytes": len(canonical(history).encode()) if history else 0,
+                    "history_is_not_evidence": True, "summary_kind": "extractive_public_archive"}}
             return messages
-        messages = self.checkpoint(["knowledge_agent_inputs", key], request_snapshot)
+        if self.knowledge_archive_enabled():
+            snapshot = self.checkpoint(["knowledge_agent_inputs_v2", key], request_snapshot)
+            messages = snapshot["messages"]
+            self.state["qa_director"]["knowledge_context"].update(snapshot["memory"])
+            self.event("knowledge_agent_memory_loaded", **snapshot["memory"])
+        else:
+            messages = self.checkpoint(["knowledge_agent_inputs", key], request_snapshot)
         start = len(messages) - 1
         history_start = next((index for index, message in enumerate(messages[:start])
                               if message.get("role") == "user"), start)
@@ -223,6 +261,10 @@ class WorkflowKnowledgeAgent:
                 del messages[history_start:end]
                 start -= end - history_start
             self.state["qa_director"]["knowledge_context"]["retained_messages"] = start - history_start
+            if self.knowledge_archive_enabled():
+                kept = messages[history_start:start]
+                self.state["qa_director"]["knowledge_context"]["history_bytes"] = (
+                    len(canonical(kept).encode()) if kept else 0)
             return fits()
 
         for round_number in range(MAX_TOOL_ROUNDS + 1):
@@ -371,7 +413,8 @@ class WorkflowKnowledgeAgent:
     def commit_knowledge_plan(self, key):
         pending = getattr(self, "_knowledge_pending", {}).pop(digest(key), None)
         if pending is not None:
-            self.knowledge_store().remember_turn(*pending)
+            self.knowledge_store().remember_turn(*pending,
+                **({"archive": True} if self.knowledge_archive_enabled() else {}))
         getattr(self, "_knowledge_final_calls", {}).pop(digest(key), None)
 
     def invalidate_knowledge_plan(self, key):

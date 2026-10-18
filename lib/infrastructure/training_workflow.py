@@ -70,7 +70,7 @@ from lib.infrastructure.production_review_quality import package_review_escalati
 from lib.infrastructure.planning_identities import PlanningIdentities
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector, DialoguePlanError
 from lib.infrastructure.workflow_knowledge_agent import WorkflowKnowledgeAgent
-from lib.domain.knowledge_agent import KNOWLEDGE_AGENT_INSTRUCTION
+from lib.domain.knowledge_agent import KNOWLEDGE_AGENT_INSTRUCTION, KNOWLEDGE_AGENT_ARCHIVE_INSTRUCTION
 from lib.infrastructure.workflow_cpt_processing import WorkflowCPTProcessing
 from lib.infrastructure.workflow_review_repair import WorkflowReviewRepair
 from lib.infrastructure.workflow_source_library import WorkflowSourceLibrary
@@ -391,6 +391,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     # Template arithmetic never consumes documents. Inactive parser settings
     # must not require a service, modality probe, or a paid parsing request.
     document_parser = validate_document_parser(None if arithmetic_only else document_parser)
+    document_parser_signature = None
+    if not repair_inputs and document_parser["mode"] == "docling" and any(
+            path.suffix.lower() == ".pdf" for path in files):
+        from lib.infrastructure.docling_document import docling_parse_signature
+        document_parser_signature = docling_parse_signature(document_parser)
     if not repair_inputs and document_parser["mode"] == "vision":
         from lib.infrastructure.document_vision import require_vision_model
         if settings_root is None or not files or any(path.suffix.lower() in {".json", ".jsonl"} for path in files):
@@ -534,8 +539,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"knowledge_agent_context_version": 1,
                   "knowledge_agent_session_rules_version": 1,
                   "knowledge_agent_finalization_version": 1,
+                  "knowledge_agent_archive_version": 1,
                   "qa_dialogue_agent_version": 1,
-                  "knowledge_agent_instruction": KNOWLEDGE_AGENT_INSTRUCTION}
+                  "knowledge_agent_instruction": KNOWLEDGE_AGENT_INSTRUCTION + "\n\n" + KNOWLEDGE_AGENT_ARCHIVE_INSTRUCTION}
                  if qa_director.get("context_mode") == "persistent" else {}),
               **({"native_regeneration_version": 1} if (review_repair or {}).get("native_regeneration") else {}),
               **({"repair_reference_sources_version": 1} if (review_repair or {}).get("reference_sources") else {}),
@@ -556,6 +562,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "sample_count": sample_count, "concurrency": concurrency, "batch_size": batch_size,
               "node_models": node_models, "web_research": web_research,
               "document_parser": document_parser,
+              **({"document_parser_signature": document_parser_signature}
+                 if document_parser_signature is not None else {}),
               "node_generation": node_generation,
               "node_prompts": node_prompts,
               "node_prompt_templates": node_prompt_templates,
@@ -1183,7 +1191,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         manual = self.recipe.get("qa_director", {}).get("human_augmentation", {})
         revision_round = bool(manual.get("enabled") and manual.get("seeds")
                               and all("revision_context" in seed for seed in manual["seeds"]))
-        if (self.recipe.get("source_library_version") == 1
+        if ((self.recipe.get("source_library_version") == 1
+                or self.recipe.get("document_parser", {}).get("mode") == "docling")
                 and source.get("kind") != "human_design" and not revision_round):
             yield from self._iter_library_source_units(source)
             return

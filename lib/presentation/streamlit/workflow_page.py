@@ -47,6 +47,8 @@ from lib.presentation.streamlit.workflow_director_settings import (
     director_snapshot, director_has_issue, render_director_toggle,
     render_director_settings, render_director_rules, TYPE_LABELS,
 )
+from lib.presentation.streamlit.knowledge_memory_summary import render_knowledge_memory_summary
+from lib.presentation.streamlit.docling_settings import docling_snapshot, docling_setup_issue, DOCLING_ERRORS
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas, node_display_label
 from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 from lib.presentation.streamlit.workflow_cpt_settings import cpt_processing_snapshot, render_cpt_settings, cpt_vision_unconfirmed
@@ -159,6 +161,12 @@ def _save_sft_output_style(workspace: str) -> None:
 def _workflow_error(error) -> str:
     if str(error) in REASONING_ERRORS:
         return REASONING_ERRORS[str(error)]
+    if str(error) in DOCLING_ERRORS:
+        return DOCLING_ERRORS[str(error)]
+    if str(error).startswith("document_docling_"):
+        return "Docling 本地解析未完成。请检查输入节点中的模型目录、PDF 与 OCR 设置；已有解析缓存会保留。"
+    if str(error).startswith("knowledge_agent_archive_"):
+        return "指导员历史档案未通过读取校验。请保留任务与缓存，检查本机存储后从断点重试。"
     if type(error).__name__ == "BudgetExceeded":
         error = "BudgetExceeded"
     if str(error).startswith("latex_") and str(error) not in {"latex_external_dependencies", "latex_unsupported_syntax"}:
@@ -917,6 +925,10 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
             failure_stage = "director" if "director" in stage_keys else "sft" if "sft" in stage_keys else failure_stage
         elif error_code in KNOWLEDGE_AGENT_ERRORS and "director" in stage_keys:
             failure_stage = "director"
+        elif isinstance(error_code, str) and error_code.startswith("knowledge_agent_archive_") and "director" in stage_keys:
+            failure_stage = "director"
+        elif isinstance(error_code, str) and error_code.startswith("document_docling_") and "ingest" in stage_keys:
+            failure_stage = "ingest"
         elif error_code in {"qa_director_clean_source_required", "source_context_pack_missing",
                             "source_context_pack_invalid", "source_context_pack_changed",
                             "source_context_requires_accepted_clean_text"} and "cpt" in stage_keys:
@@ -1126,6 +1138,8 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                         f'<div class="df-run-stat"><b>{max(0, passed)}</b><span>{passed_label}</span></div>'
                         f'<div class="df-run-stat"><b>{max(0, quarantined)}</b><span>{quarantined_label}</span></div>'
                         '</div>')
+            if selected_stage == "director":
+                render_knowledge_memory_summary(state, st.session_state.get("ui_language", "zh"))
             if selected_stage == "director" and state.get("qa_director", {}).get("coverage"):
                 language = st.session_state.get("ui_language", "zh")
                 coverage = state["qa_director"]["coverage"]
@@ -1670,6 +1684,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         sft_output_style = st.session_state[style_key]
     agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
     document_parser = {"mode": "native"}
+    if not arithmetic_only and source_mode == "文档资料" and document_parser_mode(ws) == "docling":
+        document_parser = docling_snapshot(ws)
     if not arithmetic_only and source_mode == "文档资料" and document_parser_mode(ws) in {"model", "vision"}:
         parser_mode = document_parser_mode(ws)
         document_parser = {"mode": parser_mode}
@@ -2159,6 +2175,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 source_suffixes.update(Path(upload.name).suffix.lower() for upload in uploaded or [])
                 parser_unavailable = (document_parser.get("mode") in {"model", "vision"} and
                     (not document_parser.get("binding") or document_parser.get("unconfirmed")))
+                docling_issue = (docling_setup_issue(document_parser, require_dependencies=".pdf" in source_suffixes)
+                    if document_parser.get("mode") == "docling" else None)
+                parser_unavailable = parser_unavailable or bool(docling_issue)
+                if docling_issue:
+                    st.caption(DOCLING_ERRORS.get(docling_issue, DOCLING_ERRORS["invalid_document_parser"]))
                 parser_unavailable = parser_unavailable or (source_mode == "文档资料" and document_parser.get("mode") != "vision"
                     and bool(source_suffixes.intersection({".png", ".jpg", ".jpeg", ".webp"})))
                 if source_missing:

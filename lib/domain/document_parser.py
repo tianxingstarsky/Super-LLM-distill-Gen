@@ -2,6 +2,8 @@
 from lib.domain.workflow_scale import validate_node_models
 import hashlib
 import json
+from pathlib import Path
+import re
 
 
 def vision_connection_signature(endpoint: dict) -> str:
@@ -25,6 +27,25 @@ def validate_document_parser(value=None) -> dict:
         return {"mode": "native"}
     if isinstance(value, dict) and value.get("unconfirmed"):
         raise ValueError("document_model_vision_not_confirmed")
+    if isinstance(value, dict) and value.get("mode") == "docling":
+        allowed = {"mode", "artifacts_path", "ocr", "ocr_models_path", "ocr_languages"}
+        if set(value) - allowed or type(value.get("ocr", False)) is not bool:
+            raise ValueError("invalid_document_parser")
+        def local_path(name):
+            path = value.get(name)
+            if not isinstance(path, str) or not path.strip() or not Path(path).is_absolute():
+                raise ValueError("document_docling_local_models_required")
+            return str(Path(path))
+        result = {"mode": "docling", "artifacts_path": local_path("artifacts_path"),
+                  "ocr": value.get("ocr", False)}
+        if result["ocr"]:
+            languages = value.get("ocr_languages", ["en"])
+            if (not isinstance(languages, list) or not 1 <= len(languages) <= 8
+                    or any(not isinstance(lang, str) or not re.fullmatch(r"[a-z]{2,3}(?:_[a-z]{2,4})?", lang)
+                           for lang in languages) or len(set(languages)) != len(languages)):
+                raise ValueError("invalid_document_docling_ocr_languages")
+            result.update(ocr_models_path=local_path("ocr_models_path"), ocr_languages=list(languages))
+        return result
     if not isinstance(value, dict) or set(value) - {"mode", "binding"}:
         raise ValueError("invalid_document_parser")
     if value.get("mode") == "native":

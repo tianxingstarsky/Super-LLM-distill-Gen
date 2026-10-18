@@ -9,6 +9,10 @@ from lib.domain.workflow_qa_director import (
 from lib.presentation.streamlit.i18n import translate_label
 from lib.presentation.streamlit.prompt_library_controls import render_prompt_library
 from lib.presentation.streamlit.human_augmentation_controls import human_snapshot
+from lib.presentation.streamlit.knowledge_memory_summary import (
+    knowledge_memory_context_help, knowledge_memory_retention_caption,
+    knowledge_memory_tools_help,
+)
 
 
 TYPE_LABELS = {
@@ -153,7 +157,7 @@ def render_director_settings(workspace: str, *, save_field) -> None:
         st.session_state[key] = _field(workspace, key, "persistent")
         context_mode = st.selectbox("上下文方式", tuple(context_labels), key=key,
             format_func=context_labels.__getitem__, on_change=save_field, args=(workspace, key),
-            help="知识集合和节点配置匹配时续接指导员会话；按批独立不继承会话。历史只帮助去重和调度，不作为事实依据。")
+            help=knowledge_memory_context_help(language))
     with tools:
         if context_mode == "batch":
             # Do not overwrite the draft's tool preference when the tool
@@ -167,11 +171,11 @@ def render_director_settings(workspace: str, *, save_field) -> None:
             st.session_state[key] = _field(workspace, key, "auto")
             st.selectbox("资料与历史工具", tuple(tool_labels), key=key,
                 format_func=tool_labels.__getitem__, on_change=save_field, args=(workspace, key),
-                help="模型支持工具时，按需检索清洗资料与同知识历史；关闭后仅使用已提供的上下文。")
+                help=knowledge_memory_tools_help(language))
     if context_mode == "batch":
         st.caption("按批独立时工具关闭；切回连续上下文会恢复工具选择。")
     else:
-        st.caption("连续上下文保存在本机；历史用于去重与调度，不作为事实依据。")
+        st.caption(knowledge_memory_retention_caption(language))
     key = f"workflow-director-mode:{workspace}"
     st.session_state[key] = _field(workspace, key, "adaptive")
     mode_labels = {"adaptive": translate_label("语言专家自适应", language),

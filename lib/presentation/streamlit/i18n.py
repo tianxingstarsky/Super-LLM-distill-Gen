@@ -9,6 +9,22 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "Docling 本地版面": "Docling local layout",
+    "Docling 可选依赖尚未安装，请先按文档准备本地解析环境。": "Docling is not installed. Follow the setup guide to prepare the local parser.",
+    "Docling 版本与适配器不一致，请使用 requirements-docling.txt 中的固定版本。": "The Docling version does not match this adapter. Use the versions in requirements-docling.txt.",
+    "请填写已准备好的本地模型目录；解析不会自动下载模型。": "Enter the prepared local model directory. Parsing will not download models.",
+    "OCR 语言代码无效，请使用 en、ch_sim 等 EasyOCR 语言代码。": "Use valid EasyOCR language codes, such as en or ch_sim.",
+    "文档解析配置无效，请检查输入节点。": "The parser settings are invalid. Check the input node.",
+    "PDF 在本机识别版面与表格，解析结果存入可复用资料库。其他文档沿用本地文本解析。": "Read PDF layouts and tables locally. Save results to the reusable source library. Other documents use local text parsing.",
+    "Docling 本地模型目录": "Docling local model directory",
+    "启用本地 OCR（扫描 PDF）": "Enable local OCR for scanned PDFs",
+    "EasyOCR 本地模型目录": "EasyOCR local model directory",
+    "OCR 语言代码": "OCR language codes",
+    "以逗号分隔，例如 ch_sim,en。": "Separate codes with commas, for example ch_sim,en.",
+    "本地依赖与目录已就绪；开始任务时会核验模型内容，识别结果仍需质量检查。": "Local packages and directories are ready. Model files are checked when the task starts. Extracted content still needs quality checks.",
+    "此功能不会下载模型或调用云端 API。配置方法见 docs/open-source-solutions.md。": "This feature will not download models or call cloud APIs. See docs/open-source-solutions.md for setup.",
+    "Docling 本地解析未完成。请检查输入节点中的模型目录、PDF 与 OCR 设置；已有解析缓存会保留。": "Docling could not finish parsing. Check the model directory, PDF and OCR settings in the input node. Existing parser caches are kept.",
+    "指导员历史档案未通过读取校验。请保留任务与缓存，检查本机存储后从断点重试。": "The director archive failed its read check. Keep the task and cache, check local storage, then resume from the checkpoint.",
     "回答引用了用户看不到的资料": "The answer refers to sources the user cannot see",
     "回答泄露了内部生成过程": "The answer exposes the internal generation process",
     "自动修正改变了用户题面，已拒绝": "Automatic repair changed the user's task and was rejected",

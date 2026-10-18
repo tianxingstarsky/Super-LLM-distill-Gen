@@ -111,6 +111,10 @@ class WorkflowSourceLibrary:
         library = SourceLibrary(self.path.parent.parent)
         saved_source = library.register_source(path, source["sha256"], source["name"])
         mode = self.recipe.get("document_parser", {}).get("mode", "native")
+        if mode == "docling" and path.suffix.lower() != ".pdf":
+            # Docling is an opt-in PDF layout backend. Preserve existing TeX,
+            # DOCX and text handling instead of inventing format capabilities.
+            mode = "native"
         if mode == "vision" and path.suffix not in {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"}:
             mode = "native"  # Plain text must never acquire an invented image modality.
         def status(receipt):
@@ -207,6 +211,20 @@ class WorkflowSourceLibrary:
                                 verification_status=sample.get("verification_status"), status="ready")
                         except (ValueError, TypeError, KeyError, AttributeError):
                             yield unit(index, status="quarantined", reason="invalid_or_incomplete_conversation")
+                return
+            if mode == "docling":
+                from lib.infrastructure.docling_document import docling_parse_signature, docling_parts
+                parser = self.recipe["document_parser"]
+                signature = docling_parse_signature(parser)
+                if signature != self.recipe.get("document_parser_signature"):
+                    raise ValueError("document_docling_configuration_changed")
+                def parsed_docling():
+                    yield from docling_parts(library.source_path(saved_source["id"]), parser,
+                        expected_signature=signature, check_cancel=self.check_cancel)
+                for part in library.iter_parts(saved_source, signature, parsed_docling,
+                        valid=lambda part: part.get("status") != "quarantined",
+                        check_cancel=self.check_cancel, on_status=status):
+                    yield from documents(part)
                 return
             if mode == "native":
                 for part in library.native_parts(saved_source,

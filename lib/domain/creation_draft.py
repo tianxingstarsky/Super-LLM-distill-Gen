@@ -32,6 +32,8 @@ DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT
                   'workflow-package-review-escalation': (0, 100),
                   'workflow-production-budget': (0, 1_000_000_000)}
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-math-theme': 20000,
+               'workflow-docling-artifacts': 4096, 'workflow-docling-ocr-models': 4096,
+               'workflow-docling-languages': 120,
                'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
                'workflow-web-research-query': 160, 'workflow-web-research-more': 700,
                'workflow-knowledge-query': 2000,
@@ -53,7 +55,7 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'}),
                'workflow-review-repair-mode': frozenset({'auto', 'human'})}
-ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model', 'vision'}),
+ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model', 'vision', 'docling'}),
                     'workflow-cpt-processing-mode': frozenset({'native', 'model'}),
                     'workflow-cpt-review-mode': frozenset({'text', 'vision'}),
                     'workflow-agent-mode': frozenset({'local', 'isolated'}),
@@ -64,6 +66,7 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-director-context-mode': frozenset({'persistent', 'batch'}),
                     'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
+                  'workflow-docling-ocr',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
                   'workflow-human-enabled',
                   'workflow-production-enabled', 'workflow-agent-experience-enabled'}

@@ -1,0 +1,4 @@
+# Optional local PDF backend. Install explicitly; models are provisioned separately.
+# API reviewed against these exact releases. The base requirements do not pull it in.
+docling[easyocr]==2.60.1
+docling-core==2.48.4

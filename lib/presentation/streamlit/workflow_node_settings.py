@@ -714,7 +714,7 @@ def document_parser_mode(workspace):
     key = f"workflow-document-parse-mode:{workspace}"
     saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key, "model")
     mode = st.session_state.get(draft_key, st.session_state.get(key, saved))
-    if mode not in {"native", "model", "vision"}:
+    if mode not in {"native", "model", "vision", "docling"}:
         mode = "model"
     st.session_state[draft_key] = mode
     return mode
@@ -722,7 +722,7 @@ def document_parser_mode(workspace):
 
 def _save_document_parser_mode(workspace):
     mode = st.session_state.get(f"workflow-document-parse-mode:{workspace}", "native")
-    if mode in {"native", "model", "vision"}:
+    if mode in {"native", "model", "vision", "docling"}:
         st.session_state[f"workflow-document-parse-mode-draft:{workspace}"] = mode
         _persist_draft_value(workspace, f"workflow-document-parse-mode:{workspace}", mode)
 
@@ -734,9 +734,12 @@ def render_document_parser(workspace, bindings, endpoints, *, backend_applicatio
     saved_mode = document_parser_mode(workspace)
     if key not in st.session_state:
         st.session_state[key] = saved_mode
-    mode = st.radio("文档解析方式", ("model", "vision", "native"), horizontal=True, key=key,
+    mode = st.radio("文档解析方式", ("model", "vision", "native", "docling"), horizontal=True, key=key,
                     on_change=_save_document_parser_mode, args=(workspace,),
-                    format_func=lambda value: {"native": "本地文本解析", "model": "模型辅助解析", "vision": "多模态识别"}[value])
+                    format_func=lambda value: {"native": "本地文本解析", "model": "模型辅助解析", "vision": "多模态识别", "docling": "Docling 本地版面"}[value])
+    if mode == "docling":
+        from lib.presentation.streamlit.docling_settings import render_docling_settings
+        return render_docling_settings(workspace)
     if mode == "native":
         st.caption("读取文档文字，不调用模型。扫描 PDF 与图片请使用多模态识别。")
         return {"mode": "native"}
