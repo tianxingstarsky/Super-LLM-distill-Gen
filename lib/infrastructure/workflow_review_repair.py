@@ -409,12 +409,26 @@ def _authored_reasoning_warmup_scope(recipe, target, row):
     if configs.get(stage, {}).get("enabled") is not True:
         return None
     authored = {"prompt_styled_generation", "prompt_revision", "prompt_trim"}
+    depth_version = recipe.get("reasoning_depth_contract_version")
+    authored_prefix = (cot_route and type(depth_version) is int and depth_version == 1
+                       and row.get("reasoning_origin") == "authored_prefix_native_answer")
     if target == "cot":
-        if not _authored_cot(target, row) or row.get("reasoning_origin") not in authored:
+        if not _authored_cot(target, row) or not (row.get("reasoning_origin") in authored or authored_prefix):
             return None
         return {"version": version, "stage": stage, "fields": ["candidate.reasoning"]}
     if cot_route and row.get("reasoning_protocol_version") != AUTHORED_REASONING_VERSION:
         return None
+    if authored_prefix:
+        # Only the final rewritten answer owns this newly authored prefix.
+        # Earlier turns and the upstream turn-review receipts retain their
+        # original native/human provenance; they cannot acquire this scope
+        # from a row-wide origin or veto the final prefix with an old origin.
+        final = next((index for index in range(len(row.get("messages", [])) - 1, -1, -1)
+                      if isinstance(row["messages"][index], dict)
+                      and row["messages"][index].get("role") == "assistant"), None)
+        if final is None or row["messages"][final].get("tool_calls") or row["messages"][final].get("toolCalls"):
+            return None
+        return {"version": version, "stage": stage, "assistant_indices": [final]}
     origins = {review["end_message_index"]: review.get("reasoning_origin")
                for review in row.get("turn_reviews", []) if isinstance(review, dict)
                and type(review.get("end_message_index")) is int and review.get("reasoning_origin")}
@@ -615,13 +629,18 @@ def _current_review_generation_style(workflow, target, row, requirements):
     from lib.domain.workflow_generation import style_for_sample, reasoning_language_instruction
     if warmup and language_version not in {1, 2, 3}:
         language_version = 1
-    style = style_for_sample(configs[stage], row["id"], reasoning_language_version=language_version)
+    depth_version = workflow.recipe.get("reasoning_depth_contract_version", 0)
+    style = style_for_sample(configs[stage], row["id"], reasoning_language_version=language_version,
+                             reasoning_depth_version=depth_version)
     pinned = workflow.recipe.get("node_generation_prompts", {}).get(stage, {}).get(style["preset"])
     if pinned is not None:
         style["instruction"] = pinned
         language_rule = reasoning_language_instruction(style.get("reasoning_language", "auto"), version=language_version)
         if language_rule and not pinned.endswith(language_rule):
             style["instruction"] += "\n" + language_rule
+    depth_rule = style.get("reasoning_depth_instruction")
+    if depth_version == 1 and depth_rule and not style["instruction"].endswith(depth_rule):
+        style["instruction"] += "\n" + depth_rule
     return style
 
 
@@ -643,6 +662,7 @@ def current_claim_review_requirements(workflow, target, row):
         language = _authored_reasoning_language_requirements(workflow.recipe, target, row)
         style = _current_review_generation_style(workflow, target, row, language)
         if isinstance(style, dict):
+            _validate_reasoning_depth_input_control(workflow, target, row, style)
             if target == "cot":
                 from lib.domain.learner_context import learner_messages
                 messages = learner_messages(target, workflow._review_payload(target, row))
@@ -654,7 +674,38 @@ def current_claim_review_requirements(workflow, target, row):
                 "style": style["preset"], "instruction": style["instruction"],
                 "assistant_indices": list(indices),
                 **({"reasoning_language": style["reasoning_language"]} if "reasoning_language" in style else {})}
+            if (workflow.recipe.get("reasoning_depth_contract_version") == 1
+                    and "reasoning_depth" in style):
+                # This comes from the frozen node resolver, never the row's
+                # old style, an API effort label, or the model's self-report.
+                requirements["generation_style"].update(
+                    reasoning_depth=style["reasoning_depth"],
+                    reasoning_depth_instruction=style["reasoning_depth_instruction"])
     return requirements
+
+
+def _validate_reasoning_depth_input_control(workflow, target, row, style):
+    """A sealed learner input cannot silently acquire a different depth.
+
+    The configured style may govern newly authored text only when its public
+    control is already part of this exact canonical training conversation.
+    Ordinary generation establishes that input; same-task review/repair only
+    validates it. Neither historical row metadata nor native/human text can
+    independently activate this requirement.
+    """
+    if (workflow.recipe.get("reasoning_depth_contract_version") != 1
+            or _authored_reasoning_warmup_scope(workflow.recipe, target, row) is None
+            or not isinstance(style, dict) or not style.get("reasoning_depth")):
+        return
+    from lib.domain.learner_context import learner_messages
+    from lib.domain.reasoning_depth import apply_reasoning_depth_control
+    actual = learner_messages(target, workflow._review_payload(target, row))
+    try:
+        expected = apply_reasoning_depth_control(actual, style["reasoning_depth"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("reasoning_depth_input_control_mismatch") from error
+    if canonical(actual) != canonical(expected):
+        raise ValueError("reasoning_depth_input_control_mismatch")
 
 
 _CURRENT_STYLE_V2_RULE = (
@@ -1168,6 +1219,9 @@ class WorkflowReviewRepair:
             setting = self.recipe.get(name)
             if setting is not None and (type(setting) is not int or setting != 1):
                 raise ValueError("invalid_" + name)
+        depth_version = self.recipe.get("reasoning_depth_contract_version", 0)
+        if type(depth_version) is not int or depth_version not in {0, 1}:
+            raise ValueError("invalid_reasoning_depth_contract_version")
         if adversarial_version == 1:
             return self._review_adversarial_claim_score(target, row, evidence, key)
         if version == 2:
@@ -1479,6 +1533,7 @@ class WorkflowReviewRepair:
                 "design_requirements": (row.get("revision_context") or {}).get("design_requirements", {}),
                 "qa_contract": row.get("qa_contract"), "generation_style": _current_review_generation_style(
                     self, target, row, language_requirements)}
+        _validate_reasoning_depth_input_control(self, target, row, data["generation_style"])
         data.update(_authored_review_audit(target, row))
         warmup_scope = _authored_reasoning_warmup_scope(self.recipe, target, row)
         if warmup_scope:
@@ -1618,6 +1673,8 @@ class WorkflowReviewRepair:
         payload = self._review_payload(target, row)
         rules = {"instruction": _authored_repair_rules(self.recipe)} if _authored_cot(target, row) else {}
         language_requirements = _authored_reasoning_language_requirements(self.recipe, target, row)
+        current_style = _current_review_generation_style(self, target, row, language_requirements)
+        _validate_reasoning_depth_input_control(self, target, row, current_style)
         language_repair = _authored_reasoning_language_repair_rules(language_requirements)
         cot_language_v2 = _authored_cot_language_v2(self.recipe, target, row)
         if cot_language_v2:
@@ -1656,7 +1713,7 @@ class WorkflowReviewRepair:
              "review_feedback": check, "instruction": instruction,
              "design_requirements": (row.get("revision_context") or {}).get("design_requirements", {}),
              "qa_contract": row.get("qa_contract"),
-             "generation_style": _current_review_generation_style(self, target, row, language_requirements),
+             "generation_style": current_style,
              **_authored_review_audit(target, row)}, evidence)
         warmup_scope = _authored_reasoning_warmup_scope(self.recipe, target, row)
         if warmup_scope:

@@ -22,6 +22,9 @@ STYLE_LABELS = {"default": "遵循任务", "concise": "简洁工程", "structure
                 "custom": "自定义风格"}
 REASONING_LANGUAGE_LABELS = {"auto": "跟随任务", "zh": "中文推理", "en": "英文推理",
                              "zh_en": "关键词句互译理解"}
+REASONING_DEPTH_LABELS = {"auto": "随任务（不控制）", "quick": "简短 · 关键依据",
+                          "standard": "标准 · 关键推导", "deep": "深入 · 充分论证",
+                          "mixed": "混合 · 按样本分配"}
 TRIM_LABELS = {"leakage": "提示词与包装清理", "concise": "精简重复推理", "custom": "自定义修剪模板"}
 TRIM_DESCRIPTIONS = {
     "leakage": "清理暴露的系统或开发者指令、检索包装与不必要的原文复述；保留任务所需事实、引用和关键推导。",
@@ -61,6 +64,11 @@ def generation_snapshot(workspace: str, nodes) -> dict:
         # requirement. Explicit choices survive even when the toggle is off.
         if key in draft or language != "auto":
             settings["reasoning_language"] = language
+        depth = _field(workspace, f"workflow-generation-reasoning-depth:{workspace}:{node}", "auto")
+        # The neutral UI choice removes the optional requirement, including
+        # after restoring a saved template. Old recipes remain opt-in.
+        if depth != "auto":
+            settings["reasoning_depth"] = depth
     return configuration
 
 
@@ -91,18 +99,22 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
     style_key = f"workflow-generation-style:{prefix}"
     instruction_key = f"workflow-generation-instruction:{prefix}"
     reasoning_language_key = f"workflow-generation-reasoning-language:{prefix}"
+    reasoning_depth_key = f"workflow-generation-reasoning-depth:{prefix}"
     _restore_field(workspace, enabled_key, False)
     _restore_field(workspace, style_key, "default")
     _restore_field(workspace, instruction_key, "")
     _restore_field(workspace, reasoning_language_key, "auto")
+    _restore_field(workspace, reasoning_depth_key, "auto")
     language = st.session_state.get("ui_language", "zh")
     with st.container(key=f"workbench-generation:{node}"):
         if node == "sft":
             st.caption("教师复用清洗资料包，按节点上下文容量安排相关资料；容纳不下时提示调整 token 上限。最终训练输入另行组织：知识内化样本独立作答，带资料样本写入必要上下文。")
         render_prompt_library(prompt_library, workspace, f"generation:{node}", save_field=save_field,
                               fields={"style": style_key, "instruction": instruction_key,
-                                      "reasoning_language": reasoning_language_key},
-                              defaults={"style": "default", "instruction": "", "reasoning_language": "auto"},
+                                      "reasoning_language": reasoning_language_key,
+                                      "reasoning_depth": reasoning_depth_key},
+                              defaults={"style": "default", "instruction": "", "reasoning_language": "auto",
+                                        "reasoning_depth": "auto"},
                               apply_extras={enabled_key: True}, restore_extras={enabled_key: False},
                               label="我的风格模板", save_label="保存风格")
         enabled = st.toggle("启用风格化生成", key=enabled_key,
@@ -112,12 +124,20 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
         style = st.selectbox("生成风格", GENERATION_STYLES, key=style_key, disabled=not enabled,
                              format_func=lambda value: translate_label(STYLE_LABELS[value], language),
                              on_change=save_field, args=(workspace, style_key))
-        st.selectbox("推理语言", REASONING_LANGUAGES, key=reasoning_language_key, disabled=not enabled,
-                     format_func=lambda value: translate_label(REASONING_LANGUAGE_LABELS[value], language),
-                     on_change=save_field, args=(workspace, reasoning_language_key),
-                     help="围绕影响判断的关键概念、短语或关键句做忠实中英互译，解释含义、条件或歧义并推进论证。保留完整相关推理，避免全文写成两份译文。答案跟随用户语言，只控制新撰写的显式推理。")
+        language_column, depth_column = st.columns(2, gap="small")
+        with language_column:
+            st.selectbox("推理语言", REASONING_LANGUAGES, key=reasoning_language_key, disabled=not enabled,
+                         format_func=lambda value: translate_label(REASONING_LANGUAGE_LABELS[value], language),
+                         on_change=save_field, args=(workspace, reasoning_language_key),
+                         help="围绕影响判断的关键概念、短语或关键句做忠实中英互译，解释含义、条件或歧义并推进论证。保留完整相关推理，避免全文写成两份译文。答案跟随用户语言，只控制新撰写的显式推理。")
+        with depth_column:
+            st.selectbox("显式推理深度", tuple(REASONING_DEPTH_LABELS), key=reasoning_depth_key,
+                         disabled=not enabled,
+                         format_func=lambda value: translate_label(REASONING_DEPTH_LABELS[value], language),
+                         on_change=save_field, args=(workspace, reasoning_depth_key),
+                         help="控制新生成的训练用解释如何展开，与模型原生思考强度独立，不保证字数。深入档补全必要推导与核对，不要求固定步骤或凑长；混合档为样本稳定分配档位。选择随任务即可取消控制。")
         if not enabled:
-            st.caption("先开启风格化生成，才能指定显式推理的语言；关闭时保留选择但不生效。")
+            st.caption("开启风格化生成后，可指定显式推理的语言与深度；关闭时保留选择但不生效。")
         if node == "cot" and enabled:
             mode_key = f"workflow-generation-answer-mode:{prefix}"
             _restore_field(workspace, mode_key, "joint")
@@ -151,7 +171,7 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                 '</strong><span>' + html.escape(translate(STYLE_LABELS[style], language)) + '</span></div>'
                 '<p>' + html.escape(translate(description if enabled else inactive_description, language)) + '</p></div>')
         if enabled:
-            st.caption("正文按任务自然组织，不套固定步骤；必要依据与核对另存审计记录。推理规范可在节点提示词编辑。" if node == "cot" else
+            st.caption("正文按任务自然组织，不套固定步骤；必要推导须写进正文，审计记录不能代替解释。推理规范可在节点提示词编辑。" if node == "cot" else
                        "教师根据提示词生成显式推理与答案，正确性与风格分别检查。")
 
 
@@ -296,6 +316,8 @@ def generation_summary(configuration: dict, language: str) -> str:
             reasoning_language = settings.get("reasoning_language", "auto")
             if reasoning_language != "auto":
                 detail += " · " + translate(REASONING_LANGUAGE_LABELS[reasoning_language], language)
+            if depth := settings.get("reasoning_depth"):
+                detail += " · " + translate(REASONING_DEPTH_LABELS[depth], language)
         else:
             detail = translate("已有推理核验" if node == "cot" else "普通蒸馏", language)
         parts.append(f"{node.upper()} {detail}")

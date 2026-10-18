@@ -73,7 +73,7 @@ def validate_prompt_payload(scope: str, payload: dict) -> dict:
         elif scope.startswith("generation:"):
             stage = scope.split(":")[1]
             if (not {"style", "instruction"} <= set(payload)
-                    or set(payload) - {"style", "instruction", "reasoning_language"}):
+                    or set(payload) - {"style", "instruction", "reasoning_language", "reasoning_depth"}):
                 raise ValueError("invalid_fields")
             validate_node_generation({stage: {"enabled": True, **payload}})
         else:

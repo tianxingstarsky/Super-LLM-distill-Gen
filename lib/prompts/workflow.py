@@ -890,3 +890,8 @@ REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.1.0", te
     "review_reference", "登记原句条件与指代，不预先判对错", CONDITION_INVENTORY_BODY).template)
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.19.0", template=spec(
     "review_score", "逐句核对原强度与前提来源，未决项待复核", CONDITION_ADJUDICATION_BODY).template)
+
+from lib.prompts.workflow_adversarial_review import CONDITION_DEPTH_ADJUDICATION_BODY
+REVIEW_SCORE_V1_19 = REVIEW_SCORE
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.20.0", template=spec(
+    "review_score", "按任务核验必要推导，保留原句条件与未决项", CONDITION_DEPTH_ADJUDICATION_BODY).template)

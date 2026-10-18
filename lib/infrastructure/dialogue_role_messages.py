@@ -24,6 +24,12 @@ def dispatch_history(payload, *, transport="tool"):
 def visible_dialogue(messages):
     if not isinstance(messages, list) or not messages:
         raise ValueError("invalid_visible_dialogue")
+    # Public learner depth controls are system instructions, never utterances
+    # to be attributed to a user actor. Do not relax any other role boundary.
+    from lib.domain.reasoning_depth import is_reasoning_depth_control_message
+    messages = [message for message in messages if not is_reasoning_depth_control_message(message)]
+    if not messages:
+        raise ValueError("invalid_visible_dialogue")
     result = []
     for index, message in enumerate(messages):
         expected = "user" if index % 2 == 0 else "assistant"
@@ -41,6 +47,10 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
     """The final user is the learner's real utterance, never a task envelope."""
     if type(answer_dispatch_protocol_version) is not int or answer_dispatch_protocol_version not in {1, 2}:
         raise ValueError("invalid_answer_dispatch_protocol_version")
+    from lib.domain.reasoning_depth import is_reasoning_depth_control_message
+    for message in data["learner_messages"]:
+        if is_reasoning_depth_control_message(message):
+            system += "\n" + message["content"]
     rules = data.get("answer_rules", "")
     if rules:
         system += "\n本节点用户配置的回答规则：\n" + rules
@@ -213,6 +223,15 @@ def _reference_dialogue_v3(source, actual, *, phase, reference_answer_status=Non
     if reference is None:
         return None
     original = reference["messages"]
+    from lib.domain.reasoning_depth import is_reasoning_depth_control_message
+    source_controls = [index for index, message in enumerate(original)
+                       if is_reasoning_depth_control_message(message)]
+    learner_controls = [index for index, message in enumerate(actual)
+                        if is_reasoning_depth_control_message(message)]
+    if source_controls or learner_controls:
+        return _reference_dialogue_depth_projection(reference, actual, phase=phase,
+            reference_answer_status=reference_answer_status,
+            source_controls=source_controls, learner_controls=learner_controls)
     shared = 0
     while (shared < min(len(original), len(actual))
            and canonical(original[shared]) == canonical(actual[shared])):
@@ -233,6 +252,61 @@ def _reference_dialogue_v3(source, actual, *, phase, reference_answer_status=Non
     if corresponding_tail and isolate:
         reference["omitted_assistant_tail"] = {
             "source_message_index": shared,
+            "sha256": hashlib.sha256(canonical(remaining[0]).encode("utf-8")).hexdigest(),
+            "scope": ("independent_reasoning_and_answer_without_old_answer" if phase in {
+                "rationale", "native_answer"} else "unassessed_current_answer_not_supplied"),
+        }
+        remaining = []
+    reference["messages"] = remaining
+    return reference
+
+
+def _reference_dialogue_depth_projection(reference, actual, *, phase,
+                                        reference_answer_status, source_controls, learner_controls):
+    """Compare exact public turns while mapping only the three known controls.
+
+    A generated depth control changes the learner prefix's physical indices,
+    not its original user/tool input. Keep explicit index lists and hashes so
+    shared-prefix provenance never pretends the arrays have equal offsets.
+    Arbitrary user-authored system/developer messages still compare literally.
+    The no-control version-three projection above is left unchanged.
+    """
+    original = reference["messages"]
+    source_control_set, learner_control_set = set(source_controls), set(learner_controls)
+    source_indices = [index for index in range(len(original)) if index not in source_control_set]
+    learner_indices = [index for index in range(len(actual)) if index not in learner_control_set]
+    shared = 0
+    while (shared < min(len(source_indices), len(learner_indices))
+           and canonical(original[source_indices[shared]]) == canonical(actual[learner_indices[shared]])):
+        shared += 1
+    reference.update(projection_version=3, source_message_count=len(original))
+    reference["reasoning_depth_control_projection"] = {
+        "version": 1, "scope": "exact_known_public_controls_only_not_source_facts",
+        "source_message_indices": list(source_controls),
+        "learner_message_indices": list(learner_controls),
+        "source_controls_sha256": hashlib.sha256(canonical(
+            [original[index] for index in source_controls]).encode("utf-8")).hexdigest(),
+        "learner_controls_sha256": hashlib.sha256(canonical(
+            [actual[index] for index in learner_controls]).encode("utf-8")).hexdigest(),
+    }
+    if shared:
+        reference["shared_learner_prefix"] = {
+            "source_message_indices": source_indices[:shared],
+            "learner_message_indices": learner_indices[:shared],
+            "message_count": shared,
+            "comparison_scope": "exact_public_messages_excluding_known_reasoning_depth_controls",
+            "sha256": hashlib.sha256(canonical(
+                [actual[index] for index in learner_indices[:shared]]).encode("utf-8")).hexdigest(),
+        }
+    remaining_indices = source_indices[shared:]
+    remaining = deepcopy([original[index] for index in remaining_indices])
+    corresponding_tail = (shared == len(learner_indices) and len(remaining) == 1
+                          and remaining[0].get("role") == "assistant")
+    isolate = (phase in {"rationale", "native_answer"}
+               or phase == "combined" and reference_answer_status == "unassessed_not_supplied")
+    if corresponding_tail and isolate:
+        reference["omitted_assistant_tail"] = {
+            "source_message_index": remaining_indices[0],
             "sha256": hashlib.sha256(canonical(remaining[0]).encode("utf-8")).hexdigest(),
             "scope": ("independent_reasoning_and_answer_without_old_answer" if phase in {
                 "rationale", "native_answer"} else "unassessed_current_answer_not_supplied"),

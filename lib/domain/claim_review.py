@@ -31,7 +31,8 @@ _PRIVATE_BOOKKEEPING = frozenset({"qa_contract", "qa_plan", "dialogue_dispatch",
     "judge", "review", "reviews", "review_repair", "revision_context", "aggregate_original", "turn_verdicts",
     "claim_review", "reasoning_revision_audits", "generation_trace", "reasoning_trace", "prefix_review"})
 _REQUIREMENT_FIELDS = frozenset({"generation_style", "learning_goal", "user_language", "preservation"})
-_STYLE_FIELDS = frozenset({"stage", "preset", "style", "instruction", "reasoning_language", "answer_mode", "enabled", "assistant_indices"})
+_STYLE_FIELDS = frozenset({"stage", "preset", "style", "instruction", "reasoning_language", "answer_mode", "enabled", "assistant_indices",
+                           "reasoning_depth", "reasoning_depth_instruction"})
 _PRESERVATION_FIELDS = frozenset({"reasoning_required", "preserve_reasoning", "preserve_user_messages", "preserve_source_attribution"})
 
 
@@ -108,6 +109,8 @@ def _requirements(value):
         if key == "generation_style":
             if not isinstance(part, dict) or set(part) - _STYLE_FIELDS:
                 raise ValueError("invalid_claim_review_requirements")
+            if ("reasoning_depth" in part) != ("reasoning_depth_instruction" in part):
+                raise ValueError("invalid_claim_review_requirements")
             for field, setting in part.items():
                 if field == "enabled":
                     if type(setting) is not bool:
@@ -117,8 +120,11 @@ def _requirements(value):
                             or any(type(index) is not int or index < 0 for index in setting)
                             or len(setting) != len(set(setting))):
                         raise ValueError("invalid_claim_review_requirements")
+                elif field == "reasoning_depth":
+                    if not isinstance(setting, str) or setting not in {"quick", "standard", "deep"}:
+                        raise ValueError("invalid_claim_review_requirements")
                 elif (not isinstance(setting, str) or "\x00" in setting
-                      or len(setting) > (16_000 if field == "instruction" else 256)
+                      or len(setting) > (16_000 if field in {"instruction", "reasoning_depth_instruction"} else 256)
                       or field != "instruction" and not setting.strip()):
                     raise ValueError("invalid_claim_review_requirements")
         elif key == "preservation":

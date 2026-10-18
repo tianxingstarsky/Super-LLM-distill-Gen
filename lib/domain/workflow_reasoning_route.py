@@ -4,6 +4,59 @@ from __future__ import annotations
 from copy import deepcopy
 
 
+def _depth_projected_source_messages(sample: dict, result: dict):
+    """Carry an explicit downstream depth without rebuilding old reasoning.
+
+    Authoring requests intentionally omit earlier assistant reasoning. Their
+    question therefore proves only the learner-input projection; it must not
+    replace the canonical source conversation and erase those earlier chains.
+    """
+    from lib.domain.reasoning_depth import (
+        RESOLVED_REASONING_DEPTHS, apply_reasoning_depth_control,
+        is_reasoning_depth_control_message, reasoning_depth_control_message,
+    )
+    style = result.get("generation_style")
+    depth = style.get("reasoning_depth") if isinstance(style, dict) else None
+    question = result.get("question")
+    if depth not in RESOLVED_REASONING_DEPTHS or not isinstance(question, list):
+        return None
+    controls = [message for message in question if is_reasoning_depth_control_message(message)]
+    if not controls:
+        return None
+    if len(controls) != 1 or controls[0] != reasoning_depth_control_message(depth):
+        raise ValueError("cot_sft_depth_control_mismatch")
+    original = sample.get("messages")
+    if not original or original[-1].get("role") != "assistant":
+        raise ValueError("cot_sft_lineage_mismatch")
+
+    def learner_input(messages):
+        projected = []
+        for message in messages:
+            if not isinstance(message, dict):
+                raise ValueError("cot_sft_lineage_mismatch")
+            if is_reasoning_depth_control_message(message):
+                continue
+            hidden = {"reasoning_content", "reasoning", "thinking"} if message.get("role") == "assistant" else set()
+            projected.append({key: value for key, value in message.items() if key not in hidden})
+        return projected
+
+    if learner_input(question) != learner_input(original[:-1]):
+        raise ValueError("cot_sft_lineage_mismatch")
+    projected = apply_reasoning_depth_control(original, depth)
+    if (any(message.get("role") == "assistant" for message in original[:-1])
+            and projected != original):
+        # Every exported assistant can receive training loss. Rewriting only
+        # the last response must not globally relabel earlier native/quick
+        # turns as deep explanations they were never authored to provide.
+        raise ValueError("reasoning_depth_history_control_mismatch")
+    original_indices = [index for index, message in enumerate(original)
+                        if not is_reasoning_depth_control_message(message)]
+    projected_indices = [index for index, message in enumerate(projected)
+                         if not is_reasoning_depth_control_message(message)]
+    mapping = dict(zip(original_indices, projected_indices))
+    return projected, mapping, depth
+
+
 def cot_updates_sft(recipe: dict) -> bool:
     """Historical recipes keep their independent SFT and CoT deliveries."""
     return (recipe.get("version", 0) >= 15
@@ -15,6 +68,26 @@ def cot_with_sft_context(sample: dict, result: dict) -> dict:
     if result.get("status") != "eligible":
         return {**result, "reasoning_route": "sft_via_cot"}
     row = {**deepcopy(sample), **deepcopy(result), "reasoning_route": "sft_via_cot"}
+    depth_projection = _depth_projected_source_messages(sample, result)
+    if depth_projection is not None:
+        row["messages"], index_mapping, depth = depth_projection
+        source_reviews = sample.get("turn_reviews")
+        if isinstance(source_reviews, list):
+            projected_reviews = deepcopy(source_reviews)
+            for review in projected_reviews:
+                old_index = review.get("end_message_index") if isinstance(review, dict) else None
+                if (type(old_index) is not int or old_index not in index_mapping
+                        or sample["messages"][old_index].get("role") != "assistant"):
+                    raise ValueError("cot_sft_turn_review_index_mismatch")
+                review["end_message_index"] = index_mapping[old_index]
+            row["turn_reviews"] = projected_reviews
+        row["reasoning_depth_route_audit"] = {
+            "version": 1, "reasoning_depth": depth,
+            "scope": "upstream_message_index_projection_not_new_review",
+            "source_turn_reviews": deepcopy(source_reviews),
+            "message_index_map": [{"source_index": source, "canonical_index": target}
+                                  for source, target in index_mapping.items()],
+        }
     messages = row.get("messages")
     if not messages or messages[-1].get("role") != "assistant":
         raise ValueError("cot_sft_lineage_mismatch")

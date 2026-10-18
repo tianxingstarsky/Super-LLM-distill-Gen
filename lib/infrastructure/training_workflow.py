@@ -364,7 +364,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
         claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
         claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
-        claim_review_condition_contract_version=1)
+        claim_review_condition_contract_version=1, reasoning_depth_contract_version=1)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -476,7 +476,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
-            claim_review_condition_contract_version=1)
+            claim_review_condition_contract_version=1, reasoning_depth_contract_version=1)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -501,6 +501,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
               "authored_reasoning_warmup_version": 1,
+              "reasoning_depth_contract_version": 1,
               "authored_repair_instruction_protocol_version": 2,
               "reasoning_distillation_audit_version": 1,
               "style_verdict_protocol_version": 2,
@@ -1562,7 +1563,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         if not config or not config.get("enabled", True):
             return None
         language_version = self.recipe.get("reasoning_language_contract_version", 1)
-        style = style_for_sample(config, sample_id, reasoning_language_version=language_version)
+        style = style_for_sample(config, sample_id, reasoning_language_version=language_version,
+            reasoning_depth_version=self.recipe.get("reasoning_depth_contract_version", 0))
         pinned = self.recipe.get("node_generation_prompts", {}).get(stage, {}).get(style["preset"])
         if pinned is not None:
             style["instruction"] = pinned
@@ -1571,7 +1573,24 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                                                             version=language_version)
             if language_rule and not pinned.endswith(language_rule):
                 style["instruction"] += "\n" + language_rule
+        if style.get("reasoning_depth_instruction"):
+            style["instruction"] += "\n" + style["reasoning_depth_instruction"]
         return style
+
+    @staticmethod
+    def controlled_training_messages(messages, style):
+        """Establish the learner's public control before review and hashing."""
+        if not style or not style.get("reasoning_depth"):
+            return messages
+        from lib.domain.reasoning_depth import apply_reasoning_depth_control
+        controlled = apply_reasoning_depth_control(messages, style["reasoning_depth"])
+        history = messages[:-1] if messages and messages[-1].get("role") == "assistant" else messages
+        if any(message.get("role") == "assistant" for message in history) and controlled != messages:
+            # Chat exports supervise prior assistant turns too. Do not relabel
+            # their existing explanations by changing a global system control
+            # while authoring only the latest response.
+            raise ValueError("reasoning_depth_history_control_mismatch")
+        return controlled
 
     @staticmethod
     def without_source_reasoning(value):
@@ -1666,6 +1685,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                    "requirement": self.recipe["brief"]}
         style = self.generation_style("sft", unit["id"])
         if style is not None:
+            if history:
+                self.controlled_training_messages(history[:-1], style)
             history = self.without_source_reasoning(history)
             context = self.without_source_reasoning(context)
             context["generation_style"] = style
@@ -1732,6 +1753,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     prefix = history[:-1] if history else [{"role": "user", "content": candidate["question"]}]
                 messages = [*prefix, {"role": "assistant", "content": candidate["answer"],
                     **({"reasoning_content": selected_reasoning["content"]} if selected_reasoning["content"] else {})}]
+                messages = self.controlled_training_messages(messages, style)
             issue = conversation_issue(messages)
             if issue:
                 feedback = issue
@@ -1897,7 +1919,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     return [{**self.rejected(unit, "multiturn_turn_rejected"), "failed_turn": turn_index + 1,
                              "turn_reviews": reviews, "evidence_level": evidence_level}]
         else:
-            messages = []
+            messages = self.controlled_training_messages([], style)
             raw_user_messages = []
             finished_dialogue = False
             for turn_index in range(self.recipe.get("conversation_turns", 3)):
@@ -1944,7 +1966,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                             feedback = str(error)
                             continue
                         if action["end"]:
-                            if not messages:
+                            if not any(message.get("role") == "assistant" for message in messages):
                                 feedback = "multiturn_stop_before_first_turn"
                                 continue
                             # A termination suggestion is private metadata,
@@ -2364,7 +2386,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 or text_issue(messages[-1].get("content"))):
             return [self.rejected(sample, "cot_missing_final_answer")]
         source = self.without_source_reasoning(sample.get("source_context"))
-        task = {"prompt": self.without_source_reasoning(messages[:-1]), "source": source,
+        task = {"prompt": self.controlled_training_messages(
+                    self.without_source_reasoning(messages[:-1]), style), "source": source,
                 "quotes": sample.get("quotes", []), "reference_answer": messages[-1]["content"],
                 "generation_style": style}
         if (type(self.recipe.get("authored_reasoning_warmup_version")) is int
@@ -3017,6 +3040,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
             report["node_generation"] = {
                 stage: {"enabled": config.get("enabled", True), "style": config["style"],
                         **({"reasoning_language": config["reasoning_language"]} if "reasoning_language" in config else {}),
+                        **({"reasoning_depth": config["reasoning_depth"]} if "reasoning_depth" in config else {}),
                         "instruction_sha256": digest(config.get("instruction", "")),
                         "reasoning_origin": "prompt_styled_generation" if config.get("enabled", True) else "ordinary_distillation",
                         "maximum_repair_attempts": 1}
@@ -3344,7 +3368,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                                                   claim_review_adversarial_protocol_version=self.recipe.get("claim_review_adversarial_protocol_version"),
                                                   claim_review_wire_schema_version=self.recipe.get("claim_review_wire_schema_version"),
                                                   claim_review_focus_version=self.recipe.get("claim_review_focus_version"),
-                                                  claim_review_condition_contract_version=self.recipe.get("claim_review_condition_contract_version"))
+                                                  claim_review_condition_contract_version=self.recipe.get("claim_review_condition_contract_version"),
+                                                  reasoning_depth_contract_version=self.recipe.get("reasoning_depth_contract_version"))
                 else:
                     if not isinstance(self.recipe.get("prompts"), dict):
                         raise ValueError("prompts_changed_create_new_run")

@@ -4,6 +4,9 @@ from __future__ import annotations
 import hashlib
 
 from lib.domain.workflow_quality import text_issue
+from lib.domain.reasoning_depth import (
+    validate_reasoning_depth, resolve_reasoning_depth, reasoning_depth_instruction,
+)
 
 
 MAX_GENERATION_INSTRUCTION_CHARS = 4000
@@ -102,7 +105,7 @@ def validate_node_generation(value: dict | None) -> dict:
     normalized = {}
     for stage, config in value.items():
         if (stage not in {"sft", "cot", "multiturn"} or not isinstance(config, dict)
-                or set(config) - {"enabled", "style", "instruction", "answer_mode", "reasoning_language"}):
+                or set(config) - {"enabled", "style", "instruction", "answer_mode", "reasoning_language", "reasoning_depth"}):
             raise ValueError("invalid_node_generation")
         enabled = config.get("enabled", True)
         style = config.get("style", "default")
@@ -117,6 +120,11 @@ def validate_node_generation(value: dict | None) -> dict:
         if "reasoning_language" in config:
             reasoning_language_instruction(config["reasoning_language"])
             normalized[stage]["reasoning_language"] = config["reasoning_language"]
+        if "reasoning_depth" in config:
+            try:
+                normalized[stage]["reasoning_depth"] = validate_reasoning_depth(config["reasoning_depth"])
+            except ValueError as error:
+                raise ValueError("invalid_node_generation") from error
         if "answer_mode" in config:
             mode = config["answer_mode"]
             if (stage != "cot" or not isinstance(mode, str) or mode not in {"joint", "native_prefill"}
@@ -126,10 +134,13 @@ def validate_node_generation(value: dict | None) -> dict:
     return normalized
 
 
-def style_for_sample(config: dict | None, sample_id: str, *, reasoning_language_version: int = 1) -> dict:
+def style_for_sample(config: dict | None, sample_id: str, *, reasoning_language_version: int = 1,
+                     reasoning_depth_version: int = 0) -> dict:
     """Select one stable style independent of concurrency, batching, and retries."""
     if not isinstance(sample_id, str):
         raise ValueError("invalid_generation_sample_id")
+    if type(reasoning_depth_version) is not int or reasoning_depth_version not in {0, 1}:
+        raise ValueError("invalid_reasoning_depth_contract_version")
     reasoning_language_instruction(version=reasoning_language_version)
     # Answer transport belongs to the CoT stage, not the text style itself.
     # Creation validates its scope; neutral style selection can serve either node.
@@ -148,4 +159,11 @@ def style_for_sample(config: dict | None, sample_id: str, *, reasoning_language_
         result["reasoning_language"] = language
         result["instruction"] = "\n".join(part for part in (
             instruction, reasoning_language_instruction(language, version=reasoning_language_version)) if part)
+    if reasoning_depth_version == 1 and node["enabled"] and "reasoning_depth" in node:
+        depth = resolve_reasoning_depth(node["reasoning_depth"], sample_id, version=reasoning_depth_version)
+        result["reasoning_depth"] = depth
+        # Keep this dynamic choice outside the pinned style instruction: a
+        # mixed node must not freeze every sample to the snapshot's depth.
+        result["reasoning_depth_instruction"] = reasoning_depth_instruction(
+            depth, version=reasoning_depth_version)
     return result

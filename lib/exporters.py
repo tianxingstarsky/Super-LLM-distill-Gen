@@ -38,7 +38,9 @@ def to_sharegpt_sample(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for m in messages:
         role = m.get("role")
         if role == "system":
-            system = m.get("content", "") or system
+            content = m.get("content", "")
+            if content:
+                system = f"{system}\n\n{content}" if system else content
             continue
         if role == "user":
             conversations.append({"from": "human", "value": m.get("content", "")})

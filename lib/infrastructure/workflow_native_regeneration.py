@@ -60,6 +60,15 @@ def regenerate_native_cot_item(workflow, item):
     if any(message.get("role") == "tool" or message.get("tool_calls") or message.get("function_call")
            for message in actual):
         raise ValueError("model_reasoning_prefill_tools_unsupported")
+    if workflow.recipe.get("reasoning_depth_contract_version") == 1:
+        depth_style = workflow.generation_style("cot", original["id"])
+        if depth_style and depth_style.get("reasoning_depth"):
+            from lib.domain.reasoning_depth import apply_reasoning_depth_control
+            if actual != apply_reasoning_depth_control(actual, depth_style["reasoning_depth"]):
+                # This route authenticates an immutable parent task. Creating
+                # a new public student instruction belongs to a new generation,
+                # never a silent change to same-task native regeneration.
+                raise ValueError("native_regeneration_reasoning_depth_control_mismatch")
     validate_prefill_client(workflow.client("generation", stage="cot"))
     row = deepcopy(original)
     revision = deepcopy(item["revision_context"])

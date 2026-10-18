@@ -8,6 +8,7 @@ from lib.domain.workflow_scale import NODE_ROLES, validate_node_models
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_production import MAX_PRODUCTION_GOAL, validate_production
 from lib.domain.workflow_generation import GENERATION_STYLES, REASONING_LANGUAGES, MAX_GENERATION_INSTRUCTION_CHARS
+from lib.domain.reasoning_depth import REASONING_DEPTHS
 from lib.domain.reasoning_trim import TRIM_TEMPLATE_NAMES, MAX_TRIM_INSTRUCTION_CHARS, MAX_TRIM_PROMPT_CHARS
 from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS, MAX_NODE_PROMPT_CHARS
 from lib.domain.workflow_package_review import MAX_PACKAGE_REVIEW_SAMPLES, MIN_PACKAGE_REVIEW_PERCENT
@@ -47,6 +48,7 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
                'workflow-generation-reasoning-language': frozenset(REASONING_LANGUAGES),
+               'workflow-generation-reasoning-depth': frozenset({'auto', *REASONING_DEPTHS}),
                'workflow-generation-answer-mode': frozenset({'joint', 'native_prefill'}),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'}),
@@ -67,7 +69,7 @@ BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
                   'workflow-production-enabled', 'workflow-agent-experience-enabled'}
 NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
                           'workflow-generation-instruction', 'workflow-generation-answer-mode',
-                          'workflow-generation-reasoning-language'}
+                          'workflow-generation-reasoning-language', 'workflow-generation-reasoning-depth'}
 HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
                 'workflow-human-question-requirements', 'workflow-human-answer-requirements'}
 _MODEL_INITIALIZATION_MARKERS = frozenset(

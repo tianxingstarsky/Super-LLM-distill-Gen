@@ -24,7 +24,7 @@ def mock_llm_server():
 def test_new_dialogue_prompt_replaces_the_exclusive_two_field_schema():
     spec = get("workflow.multiturn_assistant")
     body = render(spec)
-    assert spec.version == "1.5.0"
+    assert spec.version == "1.7.0"
     assert MULTITURN_ASSISTANT_OUTPUT_V1_5 in body
     assert MULTITURN_PRIVATE_QUOTES_V1_5 in body
     assert '仅返回 {"answer":"完整回答","quotes":["逐字来源片段"]}，开放需求' not in body
@@ -68,7 +68,7 @@ def test_schema_following_styled_model_returns_both_turns_without_format_retry(t
     assert len(responses) == client.answer_count == 2
     assert all(set(response) == {"answer", "reasoning", "quotes"} and response["quotes"] for response in responses)
     assert worker.recipe == frozen_recipe
-    assert worker.recipe["prompts"]["workflow.multiturn_assistant"]["version"] == "1.5.0"
+    assert worker.recipe["prompts"]["workflow.multiturn_assistant"]["version"] == "1.7.0"
 
 
 def test_closed_book_facts_with_empty_quotes_are_still_quarantined(tmp_path, monkeypatch):
@@ -101,7 +101,7 @@ def test_ordinary_answer_quotes_schema_keeps_each_turns_real_native_reasoning(tm
             NATIVE + " 第 1 轮。", NATIVE + " 第 2 轮。"]
         assert [turn["reasoning_origin"] for turn in row["turn_reviews"]] == ["provider_reasoning"] * 2
         recipe = engine.read_json(path / "recipe.json")
-        assert recipe["prompts"]["workflow.multiturn_assistant"]["version"] == "1.5.0"
+        assert recipe["prompts"]["workflow.multiturn_assistant"]["version"] == "1.7.0"
         assert MULTITURN_ASSISTANT_OUTPUT_V1_5 in recipe["node_prompt_templates"]["multiturn"]["workflow.multiturn_assistant"]
     finally:
         provider.close()

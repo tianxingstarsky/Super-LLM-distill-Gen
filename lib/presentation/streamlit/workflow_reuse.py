@@ -184,6 +184,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-generation-instruction:{workspace}:{node}"] = generation["instruction"]
         if "reasoning_language" in generation:
             values[f"workflow-generation-reasoning-language:{workspace}:{node}"] = generation["reasoning_language"]
+        if "reasoning_depth" in generation:
+            values[f"workflow-generation-reasoning-depth:{workspace}:{node}"] = generation["reasoning_depth"]
         if node == "cot":
             values[f"workflow-generation-answer-mode:{workspace}:{node}"] = generation.get("answer_mode", "joint")
     trim = validate_reasoning_trim(recipe.get("reasoning_trim"))

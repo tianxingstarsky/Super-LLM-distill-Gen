@@ -92,12 +92,13 @@ def _apply(application, workspace, scope, fields, save_field, apply_extras):
     try:
         record = application.get_template(selected, scope)
         payload = record["payload"]
-        # Language became a separate generation-style setting after the
-        # original personal templates shipped. Apply their old wording
-        # unchanged and reset this new optional setting to its neutral value.
-        if (scope in {"generation:sft", "generation:cot", "generation:multiturn"} and isinstance(payload, dict)
-                and "reasoning_language" in fields and "reasoning_language" not in payload):
-            payload = {**payload, "reasoning_language": "auto"}
+        # Optional generation controls appeared after the original personal
+        # templates. Applying an older template clears these controls without
+        # changing its saved wording or introducing a new requirement.
+        if scope in {"generation:sft", "generation:cot", "generation:multiturn"} and isinstance(payload, dict):
+            payload = {**payload, **{
+                name: "auto" for name in ("reasoning_language", "reasoning_depth")
+                if name in fields and name not in payload}}
         if not isinstance(payload, dict) or any(name not in payload for name in fields):
             raise ValueError("prompt_library_invalid_payload")
         values = {key: payload[name] for name, key in fields.items()}
@@ -120,6 +121,8 @@ def _save(application, workspace, scope, fields, *, update):
     # may run after this button's callback. Save the newest editor state.
     payload = {name: deepcopy(st.session_state[key] if key in st.session_state
                               else _field(workspace, key)) for name, key in fields.items()}
+    if scope.startswith("generation:") and payload.get("reasoning_depth") == "auto":
+        payload.pop("reasoning_depth")
     try:
         if update:
             selected = st.session_state.get(prompt_library_key(workspace, scope, "selection"))

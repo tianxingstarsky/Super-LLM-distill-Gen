@@ -827,7 +827,8 @@ class WorkflowQADirector:
         from lib.infrastructure.source_memory_messages import directed_source_request, directed_evidence_text, directed_evidence_blocks
         context = directed_source_request(self.recipe, context, unit, contract)
         if self.recipe.get("source_memory_protocol_version") in {1, 2}:
-            context["learner_messages"] = [{"role": "user", "content": learner_prompt(contract)}]
+            context["learner_messages"] = self.controlled_training_messages(
+                [{"role": "user", "content": learner_prompt(contract)}], style)
         selected_blocks = (directed_evidence_blocks(self.path, unit, contract)
                            if context.get("source_line_scope") == "selected" else None)
         feedback = None
@@ -884,7 +885,8 @@ class WorkflowQADirector:
             assistant_message = {"role": "assistant", "content": candidate["answer"]}
             if reasoning["content"]:
                 assistant_message["reasoning_content"] = reasoning["content"]
-            messages = [{"role": "user", "content": learner_prompt(contract)}, assistant_message]
+            messages = self.controlled_training_messages(
+                [{"role": "user", "content": learner_prompt(contract)}, assistant_message], style)
             issue = conversation_issue(messages)
             if issue:
                 feedback = issue
