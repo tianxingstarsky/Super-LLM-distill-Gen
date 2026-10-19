@@ -27,7 +27,15 @@ def local_config(tmp_path, monkeypatch):
         "docling-ibm-models": "fixture", "easyocr": "fixture"} if ocr else {
         "docling": adapter.DOCLING_VERSION, "docling-core": adapter.DOCLING_CORE_VERSION,
         "docling-ibm-models": "fixture"})
-    return {"mode": "docling", "artifacts_path": str(artifacts), "ocr": False}
+    return {"mode": "docling", "artifacts_path": str(artifacts), "ocr": False, "formula_enrichment": False}
+
+
+def formula_assets(config):
+    folder = Path(config["artifacts_path"]) / adapter.CODE_FORMULA_DIRECTORY
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in adapter._FORMULA_REQUIRED_FILES:
+        (folder / name).write_bytes(b"offline-formula-fixture")
+    return folder
 
 
 class Provenance:
@@ -71,8 +79,10 @@ def conversion(monkeypatch, texts=(PAGE_ONE, PAGE_TWO), *, status="success"):
 def test_explicit_local_config_and_defaults(local_config):
     assert validate_document_parser(None) == {"mode": "native"}
     assert validate_document_parser({**local_config, "ocr": False}) == local_config
+    assert validate_document_parser({"mode": "docling", "artifacts_path": local_config["artifacts_path"]})["formula_enrichment"] is False
     for value in ({"mode": "docling"}, {"mode": "docling", "artifacts_path": "https://models.example"},
                   {**local_config, "ocr": "true"}, {**local_config, "binding": {}},
+                  {**local_config, "formula_enrichment": "true"}, {**local_config, "formula_enrichment": 1},
                   {**local_config, "ocr": True}, {**local_config, "artifacts_path": "relative"}):
         with pytest.raises(ValueError):
             validate_document_parser(value)
@@ -139,12 +149,19 @@ def test_scanned_page_without_ocr_is_not_published_as_usable(tmp_path, local_con
 
 def test_cache_key_pins_backend_version_and_local_weights(tmp_path, local_config, monkeypatch):
     signature = adapter.docling_parse_signature(local_config)
+    assert signature["pdf_backend"] == "pypdfium2"
+    assert signature["page_export_policy"] == "provenance_charspan_v1"
     source = {"id": "1" * 64}
     key = SourceLibrary.parse_id(source, signature)
+    old_default_signature = {name: value for name, value in signature.items() if name != "pdf_backend"}
+    assert key != SourceLibrary.parse_id(source, old_default_signature)
+    old_page_export = {name: value for name, value in signature.items() if name != "page_export_policy"}
+    assert key != SourceLibrary.parse_id(source, old_page_export)
     assert key != SourceLibrary.parse_id(source, native_parse_signature())
-    monkeypatch.setattr(adapter, "DOCLING_ADAPTER_VERSION", 2)
+    version = adapter.DOCLING_ADAPTER_VERSION
+    monkeypatch.setattr(adapter, "DOCLING_ADAPTER_VERSION", version + 1)
     assert key != SourceLibrary.parse_id(source, adapter.docling_parse_signature(local_config))
-    monkeypatch.setattr(adapter, "DOCLING_ADAPTER_VERSION", 1)
+    monkeypatch.setattr(adapter, "DOCLING_ADAPTER_VERSION", version)
     weights = Path(local_config["artifacts_path"]) / "ds4sd--docling-layout-heron/weights.bin"
     weights.write_bytes(b"updated-model")
     assert key != SourceLibrary.parse_id(source, adapter.docling_parse_signature(local_config))
@@ -268,7 +285,8 @@ def test_text_and_tex_paths_do_not_import_or_require_docling(tmp_path, monkeypat
     assert any("P=VI" in row["text"] for row in rows)
 
 
-def test_constructor_disables_remote_plugins_and_automatic_ocr_downloads(local_config, tmp_path, monkeypatch):
+@pytest.mark.parametrize("formula", [False, True])
+def test_constructor_disables_remote_plugins_and_automatic_ocr_downloads(local_config, tmp_path, monkeypatch, formula):
     capture = {}
     class Options:
         def __init__(self, **kwargs):
@@ -276,21 +294,74 @@ def test_constructor_disables_remote_plugins_and_automatic_ocr_downloads(local_c
     class Converter:
         def __init__(self, **kwargs):
             capture.update(kwargs)
+    class ExplicitPdfBackend:
+        pass
+    monkeypatch.setitem(sys.modules, "docling.backend.pypdfium2_backend", SimpleNamespace(
+        PyPdfiumDocumentBackend=ExplicitPdfBackend))
     monkeypatch.setitem(sys.modules, "docling.datamodel.base_models", SimpleNamespace(
         InputFormat=SimpleNamespace(PDF="pdf")))
     monkeypatch.setitem(sys.modules, "docling.datamodel.pipeline_options", SimpleNamespace(
         PdfPipelineOptions=Options, EasyOcrOptions=Options))
     monkeypatch.setitem(sys.modules, "docling.document_converter", SimpleNamespace(
         DocumentConverter=Converter, PdfFormatOption=Options))
-    config = {**local_config, "ocr": True, "ocr_models_path": str(tmp_path), "ocr_languages": ["ch_sim", "en"]}
+    config = {**local_config, "ocr": True, "ocr_models_path": str(tmp_path), "ocr_languages": ["ch_sim", "en"],
+              "formula_enrichment": formula}
+    if formula:
+        formula_assets(config)
     adapter._make_converter(config)
     options = capture["format_options"]["pdf"].pipeline_options
     assert capture["allowed_formats"] == ["pdf"]
+    assert capture["format_options"]["pdf"].backend is ExplicitPdfBackend
     assert options.enable_remote_services is False and options.allow_external_plugins is False
-    assert options.do_formula_enrichment is False and options.do_picture_description is False
+    assert options.do_formula_enrichment is formula and options.do_picture_description is False
+    assert options.do_code_enrichment is False
     assert options.artifacts_path == Path(local_config["artifacts_path"])
     assert options.ocr_options.download_enabled is False
     assert options.ocr_options.model_storage_directory == str(tmp_path)
+
+
+def test_formula_assets_are_required_before_conversion_or_cache_lookup(local_config, monkeypatch):
+    config = {**local_config, "formula_enrichment": True}
+    monkeypatch.setattr(adapter, "_formula_package_versions", lambda: {"transformers": "4.57.1", "accelerate": "1.11.0"})
+    with pytest.raises(ValueError, match="document_docling_formula_models_required"):
+        adapter.docling_parse_signature(config)
+    with pytest.raises(ValueError, match="document_docling_formula_models_required"):
+        adapter._make_converter(config)
+    folder = formula_assets(config)
+    (folder / "model.safetensors").write_bytes(b"")
+    with pytest.raises(ValueError, match="document_docling_formula_models_required"):
+        adapter.formula_models_path(config)
+
+
+def test_formula_cache_fingerprints_switch_weights_and_runtime_versions(local_config, monkeypatch):
+    versions = {"transformers": "4.57.1", "accelerate": "1.11.0"}
+    monkeypatch.setattr(adapter, "_formula_package_versions", lambda: dict(versions))
+    original = adapter.docling_parse_signature(local_config)
+    assert original["formula_enrichment"] is False and "formula_sha256" not in original
+    config = {**local_config, "formula_enrichment": True}
+    folder = formula_assets(config)
+    enabled = adapter.docling_parse_signature(config)
+    assert enabled != original and enabled["formula_model"] == "CodeFormulaV2"
+    assert enabled["formula_packages"] == versions
+    (folder / "model.safetensors").write_bytes(b"different-local-formula-weights")
+    changed = adapter.docling_parse_signature(config)
+    assert enabled["formula_sha256"] != changed["formula_sha256"]
+    versions["transformers"] = "4.57.2"
+    assert changed != adapter.docling_parse_signature(config)
+
+
+def test_formula_runtime_dependency_versions_are_checked(monkeypatch):
+    versions = {"transformers": "4.57.1", "accelerate": "1.11.0"}
+    monkeypatch.setattr(importlib.metadata, "version", versions.__getitem__)
+    assert adapter._formula_package_versions() == versions
+    versions["transformers"] = "5.0.0"
+    with pytest.raises(ValueError, match="document_docling_version_mismatch"):
+        adapter._formula_package_versions()
+    def missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    with pytest.raises(ValueError, match="document_docling_unavailable"):
+        adapter._formula_package_versions()
 
 
 def test_incomplete_source_never_publishes_reusable_parse(tmp_path, local_config, monkeypatch):
@@ -303,3 +374,108 @@ def test_incomplete_source_never_publishes_reusable_parse(tmp_path, local_config
     units = list(run.iter_source_units(run.recipe["sources"][0]))
     assert any(row.get("reason") == "document_docling_page_empty" for row in units)
     assert not list((tmp_path / "output/.source-library/parses").rglob("parse.json"))
+
+
+@pytest.mark.parametrize("marker", [False, True])
+def test_undecoded_formula_is_quarantined_with_original_evidence(tmp_path, local_config, monkeypatch, marker):
+    source = text_pdf(tmp_path)
+    second = PAGE_TWO + ("\n<!-- formula-not-decoded -->" if marker else "")
+    _, doc = conversion(monkeypatch, (PAGE_ONE, second))
+    original_items = list(doc.iterate_items())
+    formula = SimpleNamespace(prov=[Provenance(2)], self_ref="#/texts/formula-1",
+                              label=SimpleNamespace(value="formula"), orig="PDF original: a 2 + b 2", text="")
+    doc.iterate_items = lambda: iter([*original_items, (formula, 0)])
+    first, quarantined = adapter.docling_parts(source, local_config)
+    assert "status" not in first
+    assert quarantined["status"] == "quarantined"
+    assert quarantined["reason"] == "document_docling_formula_undecoded"
+    assert quarantined["text"] == second  # Never invent a repair from PDF text.
+    reading = quarantined["document_reading"]
+    assert reading["formula_review"] == {"status": "required", "undecoded_markers": int(marker),
+                                         "undecoded_formula_refs": ["#/texts/formula-1"]}
+    evidence = reading["elements"][-1]
+    assert evidence["undecoded_formula"] == {"original_text": formula.orig, "decoded_text": ""}
+    assert evidence["provenance"]["page_no"] == 2
+    assert formula.text == "" and formula.orig == "PDF original: a 2 + b 2"
+
+
+def test_marker_without_formula_element_is_also_quarantined(tmp_path, local_config, monkeypatch):
+    conversion(monkeypatch, (PAGE_ONE, PAGE_TWO + "\n<!-- formula-not-decoded -->"))
+    parts = list(adapter.docling_parts(text_pdf(tmp_path), local_config))
+    assert parts[1]["reason"] == "document_docling_formula_undecoded"
+    assert parts[1]["document_reading"]["formula_review"]["undecoded_formula_refs"] == []
+
+
+def test_nonempty_formula_is_preserved_without_claiming_verified_accuracy(tmp_path, local_config, monkeypatch):
+    _, doc = conversion(monkeypatch, (PAGE_ONE, r"$$E = mc^2$$"))
+    original_items = list(doc.iterate_items())
+    formula = SimpleNamespace(prov=[Provenance(2)], self_ref="#/texts/formula-1",
+                              label=SimpleNamespace(value="formula"), orig="E mc2", text=r"E = mc^2")
+    doc.iterate_items = lambda: iter([*original_items, (formula, 0)])
+    parts = list(adapter.docling_parts(text_pdf(tmp_path), local_config))
+    assert parts[1]["text"] == r"$$E = mc^2$$"
+    assert "status" not in parts[1]
+    assert "formula_review" not in parts[1]["document_reading"]
+
+
+def test_scan_requirement_takes_priority_but_keeps_formula_diagnostics(tmp_path, local_config, monkeypatch):
+    from PIL import Image
+    source = tmp_path / "scanned.pdf"
+    Image.new("RGB", (20, 20), "gray").save(source, "PDF")
+    conversion(monkeypatch, ("<!-- formula-not-decoded -->",))
+    part, = adapter.docling_parts(source, local_config)
+    assert part["reason"] == "document_text_requires_vision"
+    assert part["document_reading"]["formula_review"]["undecoded_markers"] == 1
+
+
+def test_undecoded_formula_never_becomes_usable_library_content(tmp_path, local_config, monkeypatch):
+    configure(tmp_path)
+    second = PAGE_TWO + "\n<!-- formula-not-decoded -->"
+    conversion(monkeypatch, (PAGE_ONE, second))
+    run_id = engine.create_run(tmp_path / "output", sources=[text_pdf(tmp_path)], targets=["cpt"],
+                               settings_root=tmp_path, document_parser=local_config)
+    run = engine.Workflow(tmp_path / "output", run_id, tmp_path)
+    run.stage = "ingest"
+    units = list(run.iter_source_units(run.recipe["sources"][0]))
+    quarantined, = [item for item in units if item.get("reason") == "document_docling_formula_undecoded"]
+    assert quarantined["status"] == "quarantined" and quarantined["text"] == second
+    assert quarantined["document_reading"]["source_page"] == 2
+    assert quarantined["document_reading"]["formula_review"]["status"] == "required"
+    assert not list((tmp_path / "output/.source-library/parses").rglob("parse.json"))
+
+
+@pytest.mark.parametrize("production", [False, True])
+def test_formula_quarantine_survives_full_pipeline_and_cannot_be_a_cache_hit(
+        tmp_path, local_config, monkeypatch, production):
+    configure(tmp_path)
+    second = "UNDECODED_FORMULA_FORENSIC_TEXT " + PAGE_TWO + "\n<!-- formula-not-decoded -->"
+    calls, _ = conversion(monkeypatch, (PAGE_ONE, second))
+    def no_model_api(*args, **kwargs):
+        raise AssertionError("Local CPT processing must not request any model API")
+    monkeypatch.setattr(engine.Workflow, "ask", no_model_api)
+    source = text_pdf(tmp_path)
+    output = tmp_path / "output"
+    for name in ("initial", "another-run"):
+        options = {"production": {"goals": {"cpt": 1}}} if production else {}
+        run_id = engine.create_run(output, sources=[source], targets=["cpt"], settings_root=tmp_path,
+                                   document_parser=local_config, name=name, **options)
+        run = engine.Workflow(output, run_id, tmp_path)
+        state = run.execute()
+        assert state["status"] in {"completed", "needs_attention"}, state.get("error")
+        assert state["input_summary"]["quarantined"] == 1
+        assert state["source_library"]["hits"] == 0
+        saved_inputs = engine.read_json(run.path / "input_records.json")
+        quarantined, = [row for row in saved_inputs if row["status"] == "quarantined"]
+        assert quarantined["text"] == second
+        assert quarantined["document_reading"]["source_page"] == 2
+        assert quarantined["document_reading"]["formula_review"]["status"] == "required"
+        report = engine.read_json(run.path / "artifacts/quality.json")
+        assert report["input_issues"][0]["reason"] == "document_docling_formula_undecoded"
+        for target_file in (run.path / "artifacts").glob("cpt*.json*"):
+            training_text = target_file.read_text(encoding="utf-8")
+            assert "UNDECODED_FORMULA_FORENSIC_TEXT" not in training_text
+            assert "formula-not-decoded" not in training_text
+        engine.verify_artifacts(run.path)
+        assert not list((output / ".source-library/parses").rglob("parse.json"))
+    # An incomplete parse is rebuilt for a new run, not replayed as a complete hit.
+    assert len(calls) == 2

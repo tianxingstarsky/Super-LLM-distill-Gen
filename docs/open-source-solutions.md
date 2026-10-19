@@ -1,8 +1,9 @@
 # Open-source solutions and adoption status
 
 Reviewed on 2026-10-19. This is an engineering decision log, not a claim that a
-library or a paper guarantees correct training data. No paid model requests,
-model downloads, or new research benchmark runs were performed for this change.
+library or a paper guarantees correct training data. The initial adoption used
+offline fixtures. Local model provisioning and real-PDF checks are separate
+from public research benchmark results; no model API is needed for Docling.
 
 ## Long-running agents
 
@@ -53,6 +54,16 @@ license. The new adapter uses the published
 `docling-core==2.48.4`. These versions are an explicit compatibility baseline,
 not a statement that they are the latest release.
 
+The adapter explicitly uses Docling's official `PyPdfiumDocumentBackend` on
+every platform, as supported by the upstream
+[custom conversion example](https://docling-project.github.io/docling/_generated/examples/custom_convert/).
+The default docling-parse backend failed to find its glyph assets under the
+Windows installation's Chinese path even though the files existed. PDFium
+handles the PDF text and raster input; Docling's layout, table and optional
+formula models still perform their usual work. The backend name is part of the
+parse signature. This is an explicit backend choice, never an error-triggered
+fallback or a modification of installed package files.
+
 Select **Docling 本地版面** in the existing input node. Provide a local artifact
 directory. PDF pages are processed by Docling; TXT, Markdown, TeX, LaTeX, and
 DOCX continue to use the existing local parsers. JSON and JSONL keep their
@@ -81,9 +92,36 @@ language codes such as `ch_sim,en`. That directory must already contain the
 corresponding detection and recognition weights. OCR downloads are explicitly
 disabled. Remote services, external plugins, picture-description models,
 picture-classification models, code enrichment, and formula enrichment are also
-disabled. Consequently this adapter does not claim full diagram understanding
-or specialized formula OCR. Existing multimodal review remains useful for such
-material.
+disabled by default. Formula recognition can now be enabled separately in the
+same input node. It uses local CodeFormulaV2, never a cloud endpoint. Old node
+configurations keep this option off. Neither setting guarantees complete
+diagram or formula understanding.
+
+For formula recognition, also prepare `ds4sd--CodeFormulaV2/` under the configured
+artifact root. The official model moved from `ds4sd/CodeFormulaV2` to
+[docling-project/CodeFormulaV2](https://huggingface.co/docling-project/CodeFormulaV2),
+but Docling 2.60.1 still requires the old local directory name. A reviewed model
+revision is `ecedbe111d15c2dc60bfd4a823cbe80127b58af4` (about 640 MB including the
+tokenizer and processors). Its model license is CDLA-Permissive-2.0, separate
+from Docling's code license. Keep the complete inference assets together;
+preflight checks reject missing weights, processor files, or tokenizer files.
+Parsing uses the absolute local directory, with remote services and plugins
+disabled. For a strictly offline verification process, also set
+`HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` before launching it.
+
+With formula recognition off, a detected formula can become
+`<!-- formula-not-decoded -->` in Markdown. This is the pinned upstream
+[reading-order behavior](https://github.com/docling-project/docling/blob/v2.60.1/docling/models/readingorder_model.py)
+and [serialization behavior](https://github.com/docling-project/docling-core/blob/v2.48.4/docling_core/transforms/serializer/markdown.py).
+When enabled, the local model reads detected formula regions and emits LaTeX.
+Missed regions, inline formulas, unusual symbols, and incorrect crops still
+require comparison with the PDF. A conversion status of `success` does not
+prove mathematical accuracy. Inspect formula `orig`, `text`, and page
+provenance in the full Docling document, as well as undecoded Markdown markers.
+The adapter quarantines pages with an undecoded formula marker or an empty
+formula item. The original extracted text, formula references, and page
+provenance remain available for review. It never fills a formula from guesswork.
+Nonempty generated LaTeX is not marked as mathematically verified.
 
 For programmatic workflow creation, the same node configuration is accepted:
 
@@ -91,6 +129,7 @@ For programmatic workflow creation, the same node configuration is accepted:
 document_parser = {
     "mode": "docling",
     "artifacts_path": r"F:\models\docling",
+    "formula_enrichment": True,  # Requires local CodeFormulaV2 assets.
     "ocr": True,
     "ocr_models_path": r"F:\models\easyocr",
     "ocr_languages": ["ch_sim", "en"],
@@ -106,9 +145,22 @@ OCR are marked as requiring visual reading, even if the parser emits a fragment.
 
 The adapter uses the existing persistent source library. Cache identity includes
 the source, backend, adapter version, dependency versions, model-content hashes,
-OCR settings, and language selection. Original PDF page numbers, source hashes,
+OCR settings, language selection, and the formula-recognition setting. When
+formula recognition is enabled, its weights and Transformers/Accelerate
+versions also participate in cache identity. Original PDF page numbers, source hashes,
 element references, and bounding-box provenance survive into generated records.
 Cache reuse across runs does not depend on the requested sample count.
+
+The pinned upstream Markdown serializer assigns an entire merged paragraph to
+its first provenance page. The adapter instead makes a non-mutating page view
+and slices cross-page text by its original `provenance.charspan` ranges. Item
+references, parent/child links and table structures retain their original
+identities. Per-page metadata retains the original spans and lists split item
+references. Invalid, overlapping or incomplete spans stop parsing rather than
+guessing a page. Cross-page enriched formulas and non-text structures also
+require review because original character spans cannot safely split them.
+The pagination policy is part of the cache signature, preventing reuse of
+earlier outputs with text assigned to the wrong page.
 
 Within one worker, model hashes are memoized by resolved path, size, mtime,
 ctime, and inode. A changed file is rehashed; a new worker hashes again. This
@@ -120,11 +172,44 @@ source-library change detection model; it is not a defense against adversarial
 filesystem metadata forgery. Submitted runs reject changed parser signatures
 instead of silently changing their interpretation of source documents.
 
-Verification in this change uses genuine small PDF fixtures and a fake
+Initial adapter verification used genuine small PDF fixtures and a fake
 Docling-shaped conversion result. It checks page provenance, partial failures,
 scanned-page handling, cache reuse, changed weights, native TeX preservation,
-and UI persistence. Docling and its weights were not present on the development
-machine, so real layout/OCR quality has not been measured.
+and UI persistence. These regressions do not measure real layout/OCR quality.
+Real-PDF acceptance must report which formulas, table cells and page references
+were compared with the source, and retain any unresolved extraction defects.
+
+### Local paper validation (2026-10-19)
+
+The installed adapter was exercised on all 15 pages of
+[Attention Is All You Need, arXiv v7](https://arxiv.org/abs/1706.03762v7).
+The PDF SHA-256 was
+`bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697`.
+The runs used CPU inference, local weights and a Python audit hook that blocked
+socket connections. No model API was called. Baseline extraction took 34.516 s;
+formula enrichment with corrected page assignment took 70.047 s. These are
+single-document timings, not throughput guarantees.
+
+- All 15 physical pages were retained. Eight fragments from four cross-page
+  paragraphs were checked against their original character spans. All eight
+  belonged to the correct page after the pagination fix. Continuation text and
+  floating tables can still appear in a different within-page reading order.
+- Five displayed formula regions became nonempty. Three retained the checked
+  mathematical structure. Two still had identifier errors, including
+  `MultiHead` becoming `MutiHead` and corrupted learning-rate variable names.
+  Inline math and equation numbering were not fully preserved.
+- Four tables were detected. Tables 1–3 had structural or mathematical-text
+  defects; Table 4 retained the checked structure and scores. Disabling cell
+  matching improved column separation but introduced false parameter values,
+  so that alternative was rejected.
+- EasyOCR loaded local English and Chinese weights with downloading disabled.
+  The English title smoke test passed. The Chinese/English reader confused
+  `All` with `AII`; successful loading is not a claim of OCR accuracy.
+
+These results do not qualify the extracted mathematical content for unattended
+training-data use. Keep the source PDF and structured provenance for review;
+nonempty LaTeX and a successful conversion status are not correctness checks.
+No source PDF, model weights or local validation report is bundled in Git.
 
 ## Remaining candidates
 

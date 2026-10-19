@@ -19,7 +19,13 @@ from lib.domain.document_parser import validate_document_parser
 
 DOCLING_VERSION = "2.60.1"
 DOCLING_CORE_VERSION = "2.48.4"
-DOCLING_ADAPTER_VERSION = 1
+DOCLING_ADAPTER_VERSION = 2
+CODE_FORMULA_DIRECTORY = "ds4sd--CodeFormulaV2"
+_FORMULA_REQUIRED_FILES = (
+    "config.json", "generation_config.json", "model.safetensors", "preprocessor_config.json",
+    "processor_config.json", "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
+    "chat_template.json",
+)
 _MAX_ARTIFACT_FILES = 10000
 _MAX_PAGE_CHARS = 120000
 _ARTIFACT_HASHES = OrderedDict()
@@ -87,6 +93,32 @@ def _artifact_digest(path):
     return _digest(sorted(records))
 
 
+def formula_models_path(config):
+    """Require the pinned model's complete local inference assets before loading.
+
+Docling 2.60.1 hard-codes this legacy folder name even though the upstream
+repository has moved to docling-project/CodeFormulaV2. Never pass a hub ID.
+"""
+    path = Path(config["artifacts_path"]) / CODE_FORMULA_DIRECTORY
+    try:
+        if any(not (path / name).is_file() or (path / name).stat().st_size == 0
+               for name in _FORMULA_REQUIRED_FILES):
+            raise ValueError("document_docling_formula_models_required")
+    except OSError as error:
+        raise ValueError("document_docling_formula_models_required") from error
+    return path
+
+
+def _formula_package_versions():
+    try:
+        versions = {name: importlib.metadata.version(name) for name in ("transformers", "accelerate")}
+    except importlib.metadata.PackageNotFoundError as error:
+        raise ValueError("document_docling_unavailable") from error
+    if not versions["transformers"].startswith("4.") or not versions["accelerate"].startswith("1."):
+        raise ValueError("document_docling_version_mismatch")
+    return versions
+
+
 def docling_parse_signature(config):
     """Fingerprint implementation, local weights and OCR policy for cache reuse."""
     config = validate_document_parser(config)
@@ -99,9 +131,14 @@ def docling_parse_signature(config):
     layout = artifacts / "ds4sd--docling-layout-heron"
     table = artifacts / "ds4sd--docling-models" / "model_artifacts" / "tableformer" / "accurate"
     signature = {"mode": "docling", "parser_version": DOCLING_ADAPTER_VERSION,
-                 "packages": versions, "layout_model": "docling_layout_heron",
+                 "packages": versions, "pdf_backend": "pypdfium2", "layout_model": "docling_layout_heron",
+                 "page_export_policy": "provenance_charspan_v1",
                  "table_mode": "accurate", "ocr": config["ocr"],
+                 "formula_enrichment": config["formula_enrichment"],
                  "layout_sha256": _artifact_digest(layout), "table_sha256": _artifact_digest(table)}
+    if config["formula_enrichment"]:
+        signature.update(formula_model="CodeFormulaV2", formula_packages=_formula_package_versions(),
+                         formula_sha256=_artifact_digest(formula_models_path(config)))
     if config["ocr"]:
         signature.update(ocr_engine="easyocr", ocr_languages=config["ocr_languages"],
                          ocr_models_sha256=_artifact_digest(config["ocr_models_path"]))
@@ -110,7 +147,11 @@ def docling_parse_signature(config):
 
 def _make_converter(config):
     """The only third-party constructor; kept lazy for the base installation."""
+    config = validate_document_parser(config)
+    if config["formula_enrichment"]:
+        formula_models_path(config)
     try:
+        from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions
         from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -118,7 +159,8 @@ def _make_converter(config):
         raise ValueError("document_docling_unavailable") from error
     options = PdfPipelineOptions(
         artifacts_path=Path(config["artifacts_path"]), do_ocr=config["ocr"],
-        do_table_structure=True, do_code_enrichment=False, do_formula_enrichment=False,
+        do_table_structure=True, do_code_enrichment=False,
+        do_formula_enrichment=config["formula_enrichment"],
         do_picture_description=False, do_picture_classification=False,
         enable_remote_services=False, allow_external_plugins=False,
         generate_page_images=False, generate_picture_images=False,
@@ -128,8 +170,14 @@ def _make_converter(config):
             lang=config["ocr_languages"], model_storage_directory=config["ocr_models_path"],
             download_enabled=False, use_gpu=False,
         )
+    # Explicit on every platform. The default docling-parse backend cannot
+    # locate its glyph assets under this Windows Unicode installation path.
+    # This changes PDF text/raster loading only; Docling's layout, table and
+    # optional formula models remain the configured pipeline. No silent retry
+    # with a different backend is permitted, including on conversion failure.
     return DocumentConverter(allowed_formats=[InputFormat.PDF],
-                             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
+                             format_options={InputFormat.PDF: PdfFormatOption(
+                                 backend=PyPdfiumDocumentBackend, pipeline_options=options)})
 
 
 def _converter(config, signature):
@@ -183,6 +231,7 @@ operators are only a conservative hint. They never substitute for conversion.
 def _page_provenance(document, page_numbers):
     """Keep original element references and bounding boxes with each page."""
     result = {number: [] for number in page_numbers}
+    undecoded_chars = {number: 0 for number in page_numbers}
     count = 0
     for item, _ in document.iterate_items():
         for prov in getattr(item, "prov", []):
@@ -194,9 +243,89 @@ def _page_provenance(document, page_numbers):
                 raise ValueError("document_docling_provenance_limit")
             record = prov.model_dump(mode="json")
             label = getattr(item, "label", None)
-            result[number].append({"item_ref": getattr(item, "self_ref", None),
-                                   "label": getattr(label, "value", label), "provenance": record})
+            label = getattr(label, "value", label)
+            element = {"item_ref": getattr(item, "self_ref", None), "label": label, "provenance": record}
+            decoded = getattr(item, "text", "") or ""
+            if label == "formula" and not isinstance(decoded, str):
+                raise ValueError("document_docling_invalid_output")
+            if label == "formula" and not decoded.strip():
+                original = getattr(item, "orig", "") or ""
+                if not isinstance(original, str) or not isinstance(decoded, str):
+                    raise ValueError("document_docling_invalid_output")
+                undecoded_chars[number] += len(original) + len(decoded)
+                if undecoded_chars[number] > _MAX_PAGE_CHARS:
+                    raise ValueError("document_docling_invalid_output")
+                # Preserve, never reconstruct: the PDF text may itself be
+                # garbled. It is evidence for review, not a substitute formula.
+                element["undecoded_formula"] = {"original_text": original, "decoded_text": decoded}
+            result[number].append(element)
     return result
+
+
+def page_markdown(document, page_number):
+    """Project cross-page text into a page view without changing the source.
+
+The pinned Markdown serializer filters by an item's first provenance page and
+does not slice its text. Docling can merge paragraphs across page boundaries.
+Keep the original item indices/references and graph, replacing only those text
+items in a shallow document view with their provenanced page fragments.
+"""
+    texts = getattr(document, "texts", [])
+    text_indices = {getattr(item, "self_ref", None): index for index, item in enumerate(texts)
+                    if getattr(item, "self_ref", None) is not None}
+    replacements = {}
+    split_refs = []
+    for item, _ in document.iterate_items():
+        provenance = getattr(item, "prov", [])
+        pages = {entry.page_no for entry in provenance}
+        if len(pages) <= 1 or page_number not in pages:
+            continue
+        ref = getattr(item, "self_ref", None)
+        label = getattr(getattr(item, "label", None), "value", getattr(item, "label", None))
+        text = getattr(item, "text", None)
+        # Enriched formulas/codes do not necessarily retain the character
+        # offsets of the original OCR. Non-text structures need their own
+        # pagination policy; never pretend the whole item belongs to one page.
+        if ref not in text_indices or label in {"formula", "code"} or not isinstance(text, str):
+            raise ValueError("document_docling_page_span_ambiguous")
+        spans = []
+        for prov in provenance:
+            span = getattr(prov, "charspan", None)
+            if (not isinstance(span, (list, tuple)) or len(span) != 2
+                    or any(type(value) is not int for value in span)
+                    or not 0 <= span[0] < span[1] <= len(text)):
+                raise ValueError("document_docling_page_span_ambiguous")
+            spans.append((span[0], span[1], prov))
+        spans.sort(key=lambda entry: entry[:2])
+        end = 0
+        for start, stop, _ in spans:
+            if start < end or text[end:start].strip():
+                raise ValueError("document_docling_page_span_ambiguous")
+            end = stop
+        if text[end:].strip():
+            raise ValueError("document_docling_page_span_ambiguous")
+        fragments, local_provenance = [], []
+        offset = 0
+        for start, stop, prov in spans:
+            if prov.page_no != page_number:
+                continue
+            if fragments:
+                offset += 1
+            fragment = text[start:stop]
+            local_provenance.append(prov.model_copy(update={"charspan": (offset, offset + len(fragment))}))
+            fragments.append(fragment)
+            offset += len(fragment)
+        page_text = " ".join(fragments)
+        updates = {"text": page_text, "prov": local_provenance}
+        if getattr(item, "orig", None) == text:
+            updates["orig"] = page_text
+        replacements[text_indices[ref]] = item.model_copy(update=updates)
+        split_refs.append(ref)
+    page_document = document
+    if replacements:
+        page_document = document.model_copy(update={"texts": [replacements.get(index, item)
+                                                             for index, item in enumerate(texts)]})
+    return page_document.export_to_markdown(page_no=page_number, image_placeholder=""), split_refs
 
 
 def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
@@ -253,21 +382,33 @@ def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
     for number, original in zip(page_numbers, native):
         if check_cancel:
             check_cancel()
-        text = document.export_to_markdown(page_no=number, image_placeholder="")
+        text, split_refs = page_markdown(document, number)
         if not isinstance(text, str) or len(text) > _MAX_PAGE_CHARS:
             raise ValueError("document_docling_invalid_output")
         reading = {"mode": "docling", "parser_signature": signature,
                    "source_pdf_sha256": source_sha256, "source_page": number,
+                   "page_export": {"policy": "provenance_charspan_v1", "split_item_refs": split_refs},
                    "elements": provenance[number], "parsed_text_sha256": _digest(text),
                    "evidence_level": "local_layout_ocr_extraction"}
+        undecoded_refs = list(dict.fromkeys(item["item_ref"] for item in provenance[number]
+                                           if "undecoded_formula" in item))
+        has_empty_formula = any("undecoded_formula" in item for item in provenance[number])
+        markers = text.count("<!-- formula-not-decoded -->")
+        if has_empty_formula or markers:
+            reading["formula_review"] = {"status": "required", "undecoded_markers": markers,
+                                         "undecoded_formula_refs": undecoded_refs}
         part = {"location": f"page:{number}", "text": text, "document_reading": reading}
         if original.get("requires_vision") and not config["ocr"]:
             part.update(status="quarantined", reason="document_text_requires_vision", requires_vision=True)
         elif not text.strip():
             if original["has_content"]:
                 part.update(status="quarantined", reason="document_docling_page_empty")
+            elif has_empty_formula:
+                part.update(status="quarantined", reason="document_docling_formula_undecoded")
             else:
                 part.update(status="skipped", reason="empty_document_page")
+        elif has_empty_formula or markers:
+            part.update(status="quarantined", reason="document_docling_formula_undecoded")
         parts.append(part)
     if _file_hash(path) != source_sha256:
         raise ValueError("source_snapshot_changed")

@@ -10,6 +10,13 @@ from typing import Any
 
 ZH_EN: dict[str, str] = {
     "Docling 本地版面": "Docling local layout",
+    "跨页内容无法按原始位置可靠拆分，解析已停止。请对照原 PDF 检查，或改用其他解析方式。": "Cross-page content could not be split reliably from its original positions. Parsing stopped. Check the PDF or use another parser.",
+    "此页含未解码公式，已隔离并保留原文与页码。请检查本地公式识别设置，并对照原 PDF 复核。": "This page contains undecoded formulas and was quarantined. Its original text and page references are kept. Check local formula recognition settings and compare with the PDF.",
+    "公式未解码，需对照原 PDF 复核": "Undecoded formula: check against the original PDF",
+    "启用本地公式识别（LaTeX）": "Enable local formula recognition (LaTeX)",
+    "使用本地 CodeFormulaV2 识别公式区域，不调用云端 API。行内公式、符号与复杂排版仍需对照原文核验。": "Read formula regions with local CodeFormulaV2. No cloud API is called. Check inline formulas, symbols and complex layouts against the original.",
+    "公式识别未开启：检测到的公式区域可能仅保留未解码标记。": "Formula recognition is off. Detected formula regions may contain only an undecoded marker.",
+    "公式识别模型未就绪。请在 Docling 模型目录中准备完整的 ds4sd--CodeFormulaV2 文件夹。": "Formula recognition is not ready. Add the complete ds4sd--CodeFormulaV2 folder to the Docling model directory.",
     "Docling 可选依赖尚未安装，请先按文档准备本地解析环境。": "Docling is not installed. Follow the setup guide to prepare the local parser.",
     "Docling 版本与适配器不一致，请使用 requirements-docling.txt 中的固定版本。": "The Docling version does not match this adapter. Use the versions in requirements-docling.txt.",
     "请填写已准备好的本地模型目录；解析不会自动下载模型。": "Enter the prepared local model directory. Parsing will not download models.",

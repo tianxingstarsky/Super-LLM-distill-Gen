@@ -87,6 +87,7 @@ REASON_LABELS = {
     "document_parse_uncertain": "文档解析内容不确定",
     "invalid_document_parse_schema": "文档解析返回结构无效",
     "document_text_requires_vision": "扫描页需要多模态识别",
+    "document_docling_formula_undecoded": "公式未解码，需对照原 PDF 复核",
     "document_pdf_parse_failed": "PDF 文件解析失败",
     "document_pdf_encrypted": "PDF 文件已加密",
     "empty_document_page": "空白页已跳过",

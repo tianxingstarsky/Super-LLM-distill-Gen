@@ -126,8 +126,11 @@ class WorkflowSourceLibrary:
         def documents(part):
             location, text = part["location"], part.get("text", "")
             if part.get("status") in {"quarantined", "skipped"}:
+                evidence = {}
+                if (part.get("document_reading") or {}).get("mode") == "docling":
+                    evidence = {"text": text, "document_reading": part["document_reading"]}
                 yield unit(location, status=part["status"], reason=part["reason"],
-                           source_location={"file": source["name"], "record": location})
+                           source_location={"file": source["name"], "record": location}, **evidence)
                 return
             if part.get("requires_vision"):
                 yield unit(location, status="quarantined", reason="document_text_requires_vision",

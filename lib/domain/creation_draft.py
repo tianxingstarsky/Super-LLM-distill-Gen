@@ -66,7 +66,7 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-director-context-mode': frozenset({'persistent', 'batch'}),
                     'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
-                  'workflow-docling-ocr',
+                  'workflow-docling-ocr', 'workflow-docling-formula',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
                   'workflow-human-enabled',
                   'workflow-production-enabled', 'workflow-agent-experience-enabled'}
