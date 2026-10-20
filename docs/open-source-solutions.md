@@ -322,9 +322,98 @@ Seven of eight frozen examples had their main formula covered, but one lost
 a variable prefix and two crops included neighboring text. Reading the actual
 predicted crops with MFR passed formula-fragment checks in five of eight cases
 (eight of eleven fragments), not full paragraph reconstruction. It also converted stray
-ink into false accents in one projection formula. This detector is not
-integrated into the production parser: automatic replacement would still
-require reliable boundaries and correct text/formula reintegration.
+ink into false accents in one projection formula. The first experiment did
+not authorize automatic paragraph replacement.
+
+### Optional inline formula refinement
+
+The input node now accepts an optional **Inline formula Python environment**.
+Enable local formula recognition and set both the Docling interpreter and this
+separate detector interpreter. Install `requirements-docling-inline.txt` in the
+detector environment. Place the pinned PP-DocLayoutV3 ONNX assets in
+`PaddlePaddle--PP-DocLayoutV3_onnx` under the same local model directory.
+The tested model revision is
+`46bbdf188bb0a772c08aed74882ce7e51a8f1ea6`. Parsing does not download assets.
+
+The detector is isolated because PaddleX and the current Docling runtime need
+different NumPy and OpenCV packages. Both processes block Python socket access.
+The existing process-tree cancellation boundary also owns this child process.
+Model hashes, package versions, crop policies and export policies participate
+in the source-library cache signature.
+
+The refinement path uses a full-page view and 480-dpi paragraph crops. Each
+paragraph is centered on a white square so the detector preserves its aspect
+ratio. This avoids stretching a short line into a square. Native PDF glyphs
+and raster ink constrain boundary changes. They can recover a clipped
+identifier prefix or remove detached ink from a neighboring text line.
+The raw detector box, proposed box, character IDs and changed-pixel counts
+remain available as evidence.
+Detector boxes are intersected with the actual pasted source image before
+mapping back to PDF coordinates. White padding cannot introduce characters
+from an unseen neighboring line. Both raw and clipped image boxes are retained.
+
+Overlapping views are compared by their source character coverage. A crop
+containing only part of an expression cannot suppress a safe larger crop.
+Conflicting coverage requires review. Adjacent rows and formulas separated by
+prose are never joined just because their boxes are close.
+
+Mixed formula boxes receive an additional check before whole-box OCR. Native
+multiword text triggers a finer layout probe. An unknown-language code box with
+math fonts may also be probed; declared-language and fixed-pitch code is
+protected. The probe uses official Docling Parse `textline_cells` for physical
+line views, then closes each view around native glyph extents. It keeps the
+line IDs and source coordinates. Overlapping script or fraction rows share
+detector context; this does not assert that they form one equation.
+
+An overbroad detector box may be retained as a layout container only when its
+glyphs and raster ink are accounted for by formula candidates and untouched
+ordinary prose. Exact source-character alignment can place adjacent formula
+fragments when the original whitespace proves their boundaries. Each fragment
+remains separate. A successful mixed-block reconstruction uses a normal text
+item with embedded math, while preserving its reference and provenance.
+Code items keep their original type even when a probe produces matching math:
+character agreement alone cannot establish that programming-language content
+was mislabeled. Their proposed reconstruction remains review evidence.
+Unresolved items keep their original representation and review evidence.
+
+Before insertion, the pipeline checks native-parser characters against the
+PDF ink glyphs. `pylatexenc` decodes the candidate only for a variable/digit
+inventory check. This catches omissions and changes such as Latin `v` becoming
+Greek upsilon; it does not prove mathematical equivalence. Exact prose anchors
+and source character inventories then locate the replacement spans. Native
+line-end word hyphens may be ignored during anchor matching only when glyph
+geometry and the existing Docling paragraph establish the correspondence.
+Published prose is retained verbatim.
+
+Only a paragraph with no outstanding boundary, coverage or assembly issue is
+rewritten. Other paragraphs keep their original text and proposed candidates
+for review; their pages remain quarantined. Proven formula spans receive
+protected Markdown serialization, so a subscript `_` does not become a literal
+`\_`, and a comparison `<` is not converted into an HTML entity inside math.
+
+This remains a conservative native-PDF path. Scanned pages, rotated coordinate
+frames, ambiguous multi-page paragraphs, semantic equation continuation and
+missed inline regions are not silently treated as solved. Recognition, complete
+paragraph assembly and actual export are evaluated separately. None of the
+paper's expected formulas or acceptance strings enter the recognizer.
+
+The 2026-10-20 local adapter run on the same 15-page Attention paper took
+181.062 seconds. It published 17 formula spans in 10 paragraphs. Independent
+checks passed all 17 inserted spans and confirmed that reverting those
+insertions recovered the original prose. Five of the eight fixed difficult
+inline examples passed, compared with two before refinement. This is a
+small, selected benchmark, not a general accuracy estimate. Twenty-six
+inline records still required review, and pages 1–10 remained quarantined.
+Existing display-formula and table outputs were unchanged.
+
+A separate two-page native PDF fixture took 39.188 seconds through the same
+adapter. A polynomial split across two physical lines was reconstructed as
+two correct, ordered math spans. Its trailing prose stayed outside LaTeX.
+Two adjacent independent equations remained separate. A code-labeled region
+and an incorrectly capitalized symbol were held for review. This demonstrates
+physical line recovery and prose preservation; it does not establish semantic
+continuation for arbitrary equations. No remote model API was used. The
+relevant regression suite finished with 594 passed and one skipped.
 
 ## Remaining candidates
 

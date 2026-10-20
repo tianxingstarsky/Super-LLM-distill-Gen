@@ -22,7 +22,7 @@ def _deny_network(event, args):
 def inspect_runtime():
     from lib.infrastructure.docling_runtime import MODERN_PACKAGES, RUNTIME_PROTOCOL
     names = list(MODERN_PACKAGES) + ["pydantic", "transformers", "torch", "pypdfium2", "easyocr",
-                                  "onnxruntime", "optimum", "optimum-onnx"]
+                                  "onnxruntime", "optimum", "optimum-onnx", "pylatexenc"]
     versions = {}
     metadata_files = {}
     for name in names:
@@ -78,11 +78,13 @@ def parse_document(request):
     formula_evidence = {}
     if config["formula_enrichment"]:
         from lib.infrastructure.docling_formula_crops import enrich_formulas
-        formula_evidence = enrich_formulas(document, source, config["artifacts_path"])
+        formula_evidence = enrich_formulas(
+            document, source, config["artifacts_path"],
+            inline_config=config if config.get("inline_runtime_python") else None)
     provenance = _page_provenance(document, numbers)
     parts = []
     for number, native in zip(numbers, hints):
-        text, split_refs = page_markdown(document, number)
+        text, split_refs = page_markdown(document, number, inline_evidence=formula_evidence)
         if len(text) > _MAX_PAGE_CHARS:
             raise ValueError("document_docling_invalid_output")
         elements = provenance[number]
@@ -121,7 +123,10 @@ def main():
     args = parser.parse_args()
     sys.addaudithook(_deny_network)
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
-    if request.get("action") == "inspect":
+    if request.get("service") == "inline_layout":
+        from lib.infrastructure.docling_inline_worker import run_inline_layout
+        response = run_inline_layout(request)
+    elif request.get("action") == "inspect":
         response = inspect_runtime()
     elif request.get("action") == "parse":
         from lib.infrastructure.docling_runtime import WORKER_ERROR_CODES, RUNTIME_PROTOCOL

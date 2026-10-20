@@ -97,18 +97,29 @@ def render_formula_crop(pdf, page_number, bbox, *, dpi=240, padding_points=2, cl
                    "image_sha256": hashlib.sha256(data.getvalue()).hexdigest(), "clip_bbox": clip_bbox}
 
 
-def enrich_formulas(document, source_path, artifacts_path):
+def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None):
     import pypdfium2 as pdfium
 
     formulas = [item for item in document.texts if getattr(item.label, "value", item.label) == "formula"]
-    if not formulas and not document.tables:
+    if not formulas and not document.tables and not inline_config:
         return {}
     model = LocalFormulaReader(artifacts_path)
     evidence = {}
+    routes = {}
+    if inline_config:
+        from .docling_inline_routing import build_inline_route_map
+        routes = build_inline_route_map(document, source_path)
     pdf = pdfium.PdfDocument(source_path)
     try:
         for item in formulas:
             original = item.text
+            route = routes.get(item.self_ref, {})
+            if not route.get("allow_whole_formula_ocr", True):
+                evidence[item.self_ref] = {
+                    "status": "review_required", "reason": "mixed_formula_requires_inline_probe",
+                    "policy": FORMULA_POLICY, "backend_text": original, "routing": route,
+                }
+                continue
             if not item.prov:
                 # No page can own this review evidence. Reject the conversion
                 # rather than silently dropping an orphan formula on export.
@@ -184,4 +195,7 @@ def enrich_formulas(document, source_path, artifacts_path):
                              else "transcribed_unverified"}
     finally:
         pdf.close()
+    if inline_config:
+        from lib.infrastructure.docling_inline_formulas import enrich_inline_formulas
+        evidence.update(enrich_inline_formulas(document, source_path, inline_config, model, routes=routes))
     return evidence

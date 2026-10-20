@@ -3,6 +3,7 @@ from pathlib import Path
 
 MODERN_PACKAGES = {"docling": "2.140.0", "docling-core": "2.102.0", "docling-parse": "7.22.3",
                    "docling-ibm-models": "4.0.3"}
+INLINE_LAYOUT_PACKAGES = {"paddleocr": "3.7.0", "paddlex": "3.7.0", "onnxruntime": "1.31.0"}
 RUNTIME_PROTOCOL = 1
 TABLE_ENGINE = "tableformer_v1"
 WORKER_ERROR_CODES = frozenset({
@@ -11,6 +12,8 @@ WORKER_ERROR_CODES = frozenset({
     "document_docling_invalid_provenance", "document_docling_provenance_limit",
     "document_docling_page_span_ambiguous", "document_docling_invalid_output",
     "document_docling_formula_truncated", "document_docling_network_disabled",
+    "document_docling_inline_version_mismatch", "document_docling_inline_models_required",
+    "document_docling_inline_runtime_requires_formula",
     "document_pdf_encrypted", "document_vision_page_limit", "document_pdf_parse_failed",
     "source_snapshot_changed",
 })
@@ -28,7 +31,20 @@ def runtime_signature(config, *, check_cancel=None):
     versions = response.get("packages", {})
     if response.get("protocol") != RUNTIME_PROTOCOL or any(versions.get(n) != v for n, v in MODERN_PACKAGES.items()):
         raise ValueError("document_docling_version_mismatch")
-    validate_runtime_assets(config, runtime_info=response)
+    inline_info = None
+    if config.get("inline_runtime_python"):
+        if not config.get("formula_enrichment"):
+            raise ValueError("document_docling_inline_runtime_requires_formula")
+        inline_python = Path(config["inline_runtime_python"])
+        if not inline_python.is_absolute() or not inline_python.is_file():
+            raise ValueError("document_docling_runtime_unavailable")
+        inline_info = run_docling_worker(inline_python, {"action": "inspect", "service": "inline_layout"},
+                                         timeout_seconds=30, check_cancel=check_cancel)
+        inline_versions = inline_info.get("packages", {})
+        if (inline_info.get("protocol") != RUNTIME_PROTOCOL or not isinstance(inline_versions, dict)
+                or any(inline_versions.get(name) != version for name, version in INLINE_LAYOUT_PACKAGES.items())):
+            raise ValueError("document_docling_inline_version_mismatch")
+    validate_runtime_assets(config, runtime_info=response, inline_runtime_info=inline_info)
     root = Path(config["artifacts_path"])
     signature = {"mode": "docling", "parser_version": 3, "runtime_protocol": RUNTIME_PROTOCOL,
                  "packages": versions, "pdf_backend": "docling_parse_threaded", "table_mode": TABLE_ENGINE,
@@ -47,6 +63,27 @@ def runtime_signature(config, *, check_cancel=None):
                          table_math={"selection":MATH_REGION_POLICY, "padding_points":.5,
                                      "crop_policy":MATH_CELL_CROP_POLICY, "numeric_glyph_guard":True},
                          formula_sha256=_artifact_digest(root / FORMULA_DIRECTORY))
+    if inline_info is not None:
+        from lib.infrastructure.docling_inline_formulas import INLINE_LAYOUT_DIRECTORY, INLINE_LAYOUT_POLICY
+        from lib.infrastructure.docling_inline_geometry import INLINE_GEOMETRY_POLICY
+        from lib.infrastructure.docling_inline_assembly import INLINE_ASSEMBLY_POLICY
+        from lib.infrastructure.docling_inline_candidates import INLINE_CANDIDATE_POLICY
+        from lib.infrastructure.docling_math_consistency import MATH_CONSISTENCY_POLICY
+        from lib.infrastructure.docling_inline_markdown import INLINE_MARKDOWN_POLICY
+        from lib.infrastructure.docling_inline_routing import INLINE_ROUTING_POLICY
+        from lib.infrastructure.docling_inline_lines import INLINE_LINE_POLICY
+        from lib.infrastructure.docling_inline_partitions import INLINE_PARTITION_POLICY
+        signature["inline_formula"] = {
+            "runtime_protocol": RUNTIME_PROTOCOL, "packages": inline_info["packages"],
+            "detector": "PP-DocLayoutV3", "layout_policy": INLINE_LAYOUT_POLICY,
+            "geometry_policy": INLINE_GEOMETRY_POLICY, "assembly_policy": INLINE_ASSEMBLY_POLICY,
+            "candidate_policy": INLINE_CANDIDATE_POLICY, "consistency_policy": MATH_CONSISTENCY_POLICY,
+            "markdown_policy": INLINE_MARKDOWN_POLICY,
+            "routing_policy": INLINE_ROUTING_POLICY, "line_policy": INLINE_LINE_POLICY,
+            "partition_policy": INLINE_PARTITION_POLICY,
+            "render": {"page_dpi": 288, "paragraph_dpi": 480, "formula_dpi": 480},
+            "layout_sha256": _artifact_digest(root / INLINE_LAYOUT_DIRECTORY),
+        }
     if config["ocr"]:
         signature.update(ocr_engine="easyocr", ocr_languages=config["ocr_languages"],
                          ocr_models_sha256=_artifact_digest(config["ocr_models_path"]))

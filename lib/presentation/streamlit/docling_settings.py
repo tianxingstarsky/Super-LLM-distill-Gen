@@ -25,7 +25,29 @@ DOCLING_ERRORS = {
     "document_docling_runtime_formula_models_required": "本地公式模型文件不完整，请准备完整的 Pix2Text MFR 1.5 模型目录。",
     "document_docling_ocr_models_required": "本地 OCR 模型文件不完整，请准备检测模型及所选语言对应的识别模型。",
 }
-_FIELDS = {"artifacts": "", "ocr": False, "ocr-models": "", "languages": "ch_sim,en", "formula": False, "runtime": ""}
+_INLINE_ERRORS = {
+    "document_docling_inline_runtime_requires_formula": (
+        "行内公式环境需要独立解析环境，并开启本地公式识别。",
+        "Inline formulas require an isolated parser environment and local formula recognition."),
+    "document_docling_inline_version_mismatch": (
+        "行内公式环境版本不匹配，请使用 PaddleOCR 3.7.0、PaddleX 3.7.0 和 ONNX Runtime 1.31.0。",
+        "The inline formula environment requires PaddleOCR 3.7.0, PaddleX 3.7.0 and ONNX Runtime 1.31.0."),
+    "document_docling_inline_models_required": (
+        "行内公式版面模型不完整，请在本地模型目录中准备完整的 PaddlePaddle--PP-DocLayoutV3_onnx 文件夹。",
+        "Prepare the complete PaddlePaddle--PP-DocLayoutV3_onnx folder in the local model directory."),
+}
+# Existing submit/background error surfaces use this shared phrase dictionary.
+# Register the new local phrases there as well as using bilingual widget copy.
+DOCLING_ERRORS.update({code: phrases[0] for code, phrases in _INLINE_ERRORS.items()})
+from lib.presentation.streamlit.i18n import ZH_EN
+ZH_EN.update(dict(_INLINE_ERRORS.values()))
+_FIELDS = {"artifacts": "", "ocr": False, "ocr-models": "", "languages": "ch_sim,en",
+           "formula": False, "runtime": "", "inline-runtime": ""}
+
+
+def _tr(zh, en):
+    from lib.presentation.streamlit.i18n import language_code
+    return en if language_code(st.session_state.get("ui_language", "zh")) == "en" else zh
 
 
 def _value(workspace, field):
@@ -46,6 +68,9 @@ def docling_snapshot(workspace):
              "ocr": _value(workspace, "ocr"), "formula_enrichment": _value(workspace, "formula")}
     if _value(workspace, "runtime").strip():
         value["runtime_python"] = _value(workspace, "runtime").strip()
+    if (value.get("runtime_python") and value["formula_enrichment"]
+            and _value(workspace, "inline-runtime").strip()):
+        value["inline_runtime_python"] = _value(workspace, "inline-runtime").strip()
     if value["ocr"]:
         value.update(ocr_models_path=_value(workspace, "ocr-models"),
                      ocr_languages=[item.strip() for item in _value(workspace, "languages").split(",")
@@ -100,6 +125,13 @@ def render_docling_settings(workspace):
     st.checkbox("启用本地公式识别（LaTeX）", key=_widget_key(workspace, "formula"),
                 on_change=_save, args=(workspace, "formula"),
                 help="使用本地公式模型识别公式区域，不调用云端 API。行内公式、符号与复杂排版仍需对照原文核验。")
+    if _value(workspace, "runtime").strip() and _value(workspace, "formula"):
+        st.text_input(_tr("行内公式独立环境 Python（可选）", "Inline formula Python environment (optional)"),
+                      key=_widget_key(workspace, "inline-runtime"),
+                      on_change=_save, args=(workspace, "inline-runtime"),
+                      help=_tr(
+                          "填写独立的行内公式检测环境，启用本地检测与公式识别；留空保留现有解析方式。边界不确定时保留原文并标记待复核。",
+                          "Set a separate environment for local inline formula detection and recognition. Leave blank to keep current parsing. Uncertain boundaries preserve the source for review."))
     enabled = st.checkbox("启用本地 OCR（扫描 PDF）", key=_widget_key(workspace, "ocr"),
                           on_change=_save, args=(workspace, "ocr"))
     if enabled:
@@ -110,7 +142,8 @@ def render_docling_settings(workspace):
     config = docling_snapshot(workspace)
     issue = docling_setup_issue(config)
     if issue:
-        st.warning(DOCLING_ERRORS.get(issue, DOCLING_ERRORS["invalid_document_parser"]))
+        st.warning(_tr(*_INLINE_ERRORS[issue]) if issue in _INLINE_ERRORS
+                   else DOCLING_ERRORS.get(issue, DOCLING_ERRORS["invalid_document_parser"]))
     else:
         st.caption("本地依赖与目录已就绪；开始任务时会核验模型内容，识别结果仍需质量检查。")
     if not config["formula_enrichment"]:

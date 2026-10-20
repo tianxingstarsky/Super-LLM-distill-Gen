@@ -93,6 +93,24 @@ def test_mixed_prose_is_retained_and_review_evidence_survives(enrichment):
     assert evidence["#/tables/0"]["cells"][0]["reason"] == "mixed_prose_math"
 
 
+def test_mixed_display_probe_cannot_publish_whole_box_latex_before_partition(enrichment, monkeypatch):
+    from lib.infrastructure import docling_inline_routing as routing, docling_inline_formulas as inline
+    e = enrichment
+    route = {"probe_required": True, "allow_whole_formula_ocr": False}
+    monkeypatch.setattr(routing, "build_inline_route_map",
+                        lambda document, path: {e.formula.self_ref: route})
+    received = []
+    def probe(document, path, config, model, *, routes):
+        received.append((document.texts[0].text, routes))
+        return {}
+    monkeypatch.setattr(inline, "enrich_inline_formulas", probe)
+    evidence = e.crops.enrich_formulas(e.document, "local.pdf", "models", inline_config={"enabled": True})
+    assert e.calls == []
+    assert received == [("backend formula", {e.formula.self_ref: route})]
+    assert e.formula.text == "backend formula"
+    assert evidence[e.formula.self_ref]["status"] == "review_required"
+
+
 def test_bad_crop_keeps_original_and_does_not_lose_other_items(enrichment, monkeypatch):
     e = enrichment
     def fail(*a, **kw):

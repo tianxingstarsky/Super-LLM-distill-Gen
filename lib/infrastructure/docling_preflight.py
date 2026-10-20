@@ -23,6 +23,8 @@ _FORMULA_FILES = (
 )
 _FORMULA_PACKAGES = {"transformers": "4.57.6", "onnxruntime": "1.31.0",
                      "optimum": "2.1.0", "optimum-onnx": "0.1.0"}
+_INLINE_LAYOUT_FILES = ("inference.onnx", "inference.yml")
+_INLINE_FORMULA_PACKAGES = {"pylatexenc": "2.11"}
 
 
 def _stat_record(path):
@@ -69,15 +71,17 @@ def _runtime_fingerprint(python, info=None):
     return tuple(sorted((_stat_record(path) for path in tracked), key=lambda row: row[0]))
 
 
-def inspect_runtime_cached(python):
+def inspect_runtime_cached(python, *, service=None):
     """Return a detached inspection, invalidated by interpreter/package changes."""
-    from lib.infrastructure.docling_runtime import MODERN_PACKAGES, RUNTIME_PROTOCOL
+    from lib.infrastructure.docling_runtime import MODERN_PACKAGES, INLINE_LAYOUT_PACKAGES, RUNTIME_PROTOCOL
     from lib.infrastructure.docling_worker_client import run_docling_worker
 
+    if service not in (None, "inline_layout"):
+        raise ValueError("invalid_document_parser")
     python = Path(python)
     if not python.is_absolute() or not python.is_file():
         raise ValueError("document_docling_runtime_unavailable")
-    key = str(python.absolute())
+    key = (str(python.absolute()), service)
     with _INSPECTION_LOCK:
         cached = _INSPECTIONS.get(key)
         info = cached[1] if cached else None
@@ -86,16 +90,20 @@ def inspect_runtime_cached(python):
             _INSPECTIONS.move_to_end(key)
             result = deepcopy(info)
         else:
-            result = run_docling_worker(python, {"action": "inspect"}, timeout_seconds=30)
+            request = {"action": "inspect"}
+            if service:
+                request["service"] = service
+            result = run_docling_worker(python, request, timeout_seconds=30)
             if before != _runtime_fingerprint(python, info):
                 raise ValueError("document_docling_configuration_changed")
             _INSPECTIONS[key] = (_runtime_fingerprint(python, result), deepcopy(result))
             while len(_INSPECTIONS) > _MAX_INSPECTIONS:
                 _INSPECTIONS.popitem(last=False)
     versions = result.get("packages", {})
+    required = INLINE_LAYOUT_PACKAGES if service == "inline_layout" else MODERN_PACKAGES
     if (result.get("protocol") != RUNTIME_PROTOCOL or not isinstance(versions, dict)
-            or any(versions.get(name) != version for name, version in MODERN_PACKAGES.items())):
-        raise ValueError("document_docling_version_mismatch")
+            or any(versions.get(name) != version for name, version in required.items())):
+        raise ValueError("document_docling_inline_version_mismatch" if service else "document_docling_version_mismatch")
     return result
 
 
@@ -169,7 +177,7 @@ or mixed script families are rejected before creating a local model worker.
         raise ValueError("document_docling_unavailable") from exc
 
 
-def validate_runtime_assets(config, runtime_info=None):
+def validate_runtime_assets(config, runtime_info=None, *, inline_runtime_info=None):
     """Check every required file exists and is nonempty, without reading weights."""
     if config.get("formula_enrichment"):
         runtime_info = runtime_info if runtime_info is not None else inspect_runtime_cached(config["runtime_python"])
@@ -185,6 +193,23 @@ def validate_runtime_assets(config, runtime_info=None):
     if config.get("formula_enrichment"):
         _require_files(root / "breezedeus--pix2text-mfr-1.5", _FORMULA_FILES,
                        "document_docling_runtime_formula_models_required")
+    if config.get("inline_runtime_python"):
+        from lib.infrastructure.docling_runtime import INLINE_LAYOUT_PACKAGES, RUNTIME_PROTOCOL
+        from lib.infrastructure.docling_inline_formulas import INLINE_LAYOUT_DIRECTORY
+        if not config.get("runtime_python") or not config.get("formula_enrichment"):
+            raise ValueError("document_docling_inline_runtime_requires_formula")
+        formula_versions = (runtime_info or {}).get("packages", {})
+        if (not isinstance(formula_versions, dict)
+                or any(formula_versions.get(name) != version for name, version in _INLINE_FORMULA_PACKAGES.items())):
+            raise ValueError("document_docling_inline_version_mismatch")
+        info = inline_runtime_info if inline_runtime_info is not None else inspect_runtime_cached(
+            config["inline_runtime_python"], service="inline_layout")
+        versions = info.get("packages", {})
+        if (info.get("protocol") != RUNTIME_PROTOCOL or not isinstance(versions, dict)
+                or any(versions.get(name) != version for name, version in INLINE_LAYOUT_PACKAGES.items())):
+            raise ValueError("document_docling_inline_version_mismatch")
+        _require_files(root / INLINE_LAYOUT_DIRECTORY, _INLINE_LAYOUT_FILES,
+                       "document_docling_inline_models_required")
     if config.get("ocr"):
         info = runtime_info or inspect_runtime_cached(config["runtime_python"])
         if not info.get("packages", {}).get("easyocr"):

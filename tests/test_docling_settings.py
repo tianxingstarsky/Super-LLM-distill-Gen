@@ -19,6 +19,8 @@ def test_docling_node_shows_explicit_setup_and_retains_settings_when_hidden(tmp_
     ui.text_input(key="workflow-docling-runtime:demo").set_value(runtime_path).run()
     ui.checkbox(key="workflow-docling-ocr:demo").check().run()
     ui.checkbox(key="workflow-docling-formula:demo").check().run()
+    inline_path = str(tmp_path / "inline-parser" / "python.exe")
+    ui.text_input(key="workflow-docling-inline-runtime:demo").set_value(inline_path).run()
     ocr_path = str(tmp_path / "ocr-models")
     ui.text_input(key="workflow-docling-ocr-models:demo").set_value(ocr_path).run()
     ui.text_input(key="workflow-docling-languages:demo").set_value("en,ch_sim").run()
@@ -35,12 +37,19 @@ def test_docling_node_shows_explicit_setup_and_retains_settings_when_hidden(tmp_
     assert before["formula_enrichment"] is True
     assert before["runtime_python"] == runtime_path
     assert draft["workflow-docling-runtime:demo"] == runtime_path
+    assert before["inline_runtime_python"] == inline_path
+    assert draft["workflow-docling-inline-runtime:demo"] == inline_path
+    ui.checkbox(key="workflow-docling-formula:demo").uncheck().run()
+    assert "inline_runtime_python" not in ui.session_state["fixture-parser"]
+    ui.checkbox(key="workflow-docling-formula:demo").check().run()
+    assert ui.session_state["fixture-parser"]["inline_runtime_python"] == inline_path
 
 
 def test_reused_run_preserves_local_paths_and_ocr_policy(tmp_path):
     config = {"mode": "docling", "artifacts_path": str(tmp_path / "models"), "ocr": True,
               "ocr_models_path": str(tmp_path / "ocr"), "ocr_languages": ["ch_sim", "en"], "formula_enrichment": True,
               "runtime_python": str(tmp_path / "parser" / "python.exe")}
+    config["inline_runtime_python"] = str(tmp_path / "layout" / "python.exe")
     values = recipe_to_draft(recipe(document_parser=config), "Reuse", "w", [])["values"]
     validate_creation_draft(values)
     assert values["workflow-document-parse-mode:w"] == "docling"
@@ -49,6 +58,7 @@ def test_reused_run_preserves_local_paths_and_ocr_policy(tmp_path):
     assert values["workflow-docling-languages:w"] == "ch_sim,en"
     assert values["workflow-docling-artifacts:w"] == config["artifacts_path"]
     assert values["workflow-docling-runtime:w"] == config["runtime_python"]
+    assert values["workflow-docling-inline-runtime:w"] == config["inline_runtime_python"]
 
 
 def test_old_run_keeps_formula_disabled(tmp_path):
@@ -56,6 +66,7 @@ def test_old_run_keeps_formula_disabled(tmp_path):
     values = recipe_to_draft(recipe(document_parser=config), "Reuse", "w", [])["values"]
     assert values["workflow-docling-formula:w"] is False
     assert values["workflow-docling-runtime:w"] == ""
+    assert values["workflow-docling-inline-runtime:w"] == ""
 
 
 def test_formula_setup_fails_locally_before_start(tmp_path, monkeypatch):
@@ -79,6 +90,23 @@ def test_formula_copy_has_english_translations():
                    DOCLING_ERRORS["document_docling_page_span_ambiguous"],
                    DOCLING_ERRORS["document_docling_formula_models_required"]):
         assert not re.search(r"[\u4e00-\u9fff]", translate(phrase, "en"))
+
+
+def test_inline_widget_and_errors_are_bilingual(tmp_path):
+    import re
+    from lib.presentation.streamlit.docling_settings import _INLINE_ERRORS
+    from lib.presentation.streamlit.i18n import translate
+    ui = _document_ui(DOCUMENT_NAVIGATION_SCRIPT)
+    ui.session_state["ui_language"] = "en"
+    ui.radio(key="workflow-document-parse-mode:demo").set_value("docling").run()
+    ui.text_input(key="workflow-docling-artifacts:demo").set_value(str(tmp_path)).run()
+    ui.text_input(key="workflow-docling-runtime:demo").set_value(str(tmp_path / "python.exe")).run()
+    ui.checkbox(key="workflow-docling-formula:demo").check().run()
+    assert not ui.exception
+    label = ui.text_input(key="workflow-docling-inline-runtime:demo").label
+    assert "Inline formula" in label and not re.search(r"[\u4e00-\u9fff]", label)
+    for zh, en in _INLINE_ERRORS.values():
+        assert translate(zh, "en") == en
 
 
 def _modern_assets(tmp_path, *, formula=True):
@@ -213,3 +241,63 @@ def test_ocr_preflight_uses_upstream_language_files_without_importing_models(tmp
         config["ocr_languages"] = invalid
         with pytest.raises(ValueError, match="invalid_document_docling_ocr_languages"):
             preflight.validate_runtime_assets(config, runtime_info=info)
+
+
+def test_inline_preflight_uses_separate_service_cache_and_tracks_metadata(tmp_path, monkeypatch):
+    from collections import OrderedDict
+    from lib.infrastructure import docling_preflight as preflight, docling_runtime as runtime
+    from lib.infrastructure import docling_worker_client as client
+    executable = tmp_path / "Scripts/python.exe"
+    executable.parent.mkdir()
+    executable.write_bytes(b"fixture")
+    metadata = tmp_path / "Lib/site-packages/paddlex-3.7.0.dist-info/METADATA"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_bytes(b"v1")
+    calls = []
+    def inspect(python, request, **kwargs):
+        calls.append(dict(request))
+        packages = runtime.INLINE_LAYOUT_PACKAGES if request.get("service") else runtime.MODERN_PACKAGES
+        return {"protocol": 1, "packages": dict(packages), "metadata_files": {"paddlex": str(metadata)}}
+    monkeypatch.setattr(preflight, "_INSPECTIONS", OrderedDict())
+    monkeypatch.setattr(client, "run_docling_worker", inspect)
+    preflight.inspect_runtime_cached(executable)
+    preflight.inspect_runtime_cached(executable, service="inline_layout")
+    preflight.inspect_runtime_cached(executable, service="inline_layout")
+    assert calls == [{"action": "inspect"}, {"action": "inspect", "service": "inline_layout"}]
+    metadata.write_bytes(b"v2-expanded")
+    info = preflight.inspect_runtime_cached(executable, service="inline_layout")
+    assert len(calls) == 3
+    info["packages"]["paddlex"] = "changed"
+    assert preflight.inspect_runtime_cached(executable, service="inline_layout")["packages"]["paddlex"] == "3.7.0"
+
+
+def test_inline_preflight_requires_every_model_file_and_pinned_package(tmp_path):
+    import pytest
+    from lib.infrastructure import docling_preflight as preflight, docling_runtime as runtime
+    from lib.infrastructure.docling_inline_formulas import INLINE_LAYOUT_DIRECTORY
+    config = _modern_assets(tmp_path)
+    config.update(runtime_python=str(tmp_path / "parser.exe"), inline_runtime_python=str(tmp_path / "layout.exe"))
+    info = {"packages": {**preflight._FORMULA_PACKAGES, **preflight._INLINE_FORMULA_PACKAGES}}
+    inline_info = {"protocol": 1, "packages": dict(runtime.INLINE_LAYOUT_PACKAGES)}
+    with pytest.raises(ValueError, match="inline_models_required"):
+        preflight.validate_runtime_assets(config, info, inline_runtime_info=inline_info)
+    model = tmp_path / INLINE_LAYOUT_DIRECTORY
+    model.mkdir()
+    for name in preflight._INLINE_LAYOUT_FILES:
+        (model / name).write_bytes(b"local fixture")
+    assert preflight.validate_runtime_assets(config, info, inline_runtime_info=inline_info) is None
+    for name in preflight._INLINE_LAYOUT_FILES:
+        path = model / name
+        path.write_bytes(b"")
+        with pytest.raises(ValueError, match="inline_models_required"):
+            preflight.validate_runtime_assets(config, info, inline_runtime_info=inline_info)
+        path.write_bytes(b"local fixture")
+    for package in runtime.INLINE_LAYOUT_PACKAGES:
+        invalid = {"protocol": 1, "packages": {**runtime.INLINE_LAYOUT_PACKAGES, package: "0"}}
+        with pytest.raises(ValueError, match="inline_version_mismatch"):
+            preflight.validate_runtime_assets(config, info, inline_runtime_info=invalid)
+    with pytest.raises(ValueError, match="inline_version_mismatch"):
+        preflight.validate_runtime_assets(config, {"packages": preflight._FORMULA_PACKAGES},
+                                           inline_runtime_info=inline_info)
+    with pytest.raises(ValueError, match="inline_version_mismatch"):
+        preflight.validate_runtime_assets(config, info, inline_runtime_info={"protocol": 2, "packages": runtime.INLINE_LAYOUT_PACKAGES})

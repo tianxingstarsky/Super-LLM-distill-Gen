@@ -197,6 +197,10 @@ isolated flag intentionally ignores an inherited PYTHONPATH/user site.
     # No caller-supplied deletion target. Wait for transient handle release
     # after reaping the worker and closing our streams, before returning.
     with _owned_temporary_directory() as root:
+        # Nested workers and raster crops must live below this surviving
+        # parent's cleanup root. Forced cancellation cannot run child finally
+        # blocks, but the parent can still remove their entire temporary tree.
+        environment.update(TEMP=str(root), TMP=str(root), TMPDIR=str(root))
         input_path, output_path = root / "request.json", root / "response.json"
         with ExitStack() as files:
             try:

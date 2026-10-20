@@ -1,0 +1,7 @@
+# Optional detector: install in its own environment, separate from Docling.
+# PaddleX and Docling currently need different NumPy/OpenCV distributions.
+paddleocr==3.7.0
+paddlex[ocr-core]==3.7.0
+onnxruntime==1.31.0
+numpy==2.3.5
+PyYAML==6.0.2

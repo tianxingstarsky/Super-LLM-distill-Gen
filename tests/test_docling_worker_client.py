@@ -22,6 +22,17 @@ request_path=pathlib.Path(a.request);response_path=pathlib.Path(a.response)
 r=json.loads(request_path.read_text(encoding='utf-8'))
 mode=r.get('mode','echo')
 state={'pid':os.getpid(),'temporary':str(request_path.parent)}
+state.update(r.get('nested_state',{}))
+if mode=='nested':
+    sys.path.insert(0,r['repo'])
+    from lib.infrastructure.docling_worker_client import _owned_temporary_directory, run_docling_worker
+    with _owned_temporary_directory() as crops:
+        (crops/'private-crop.png').write_bytes(b'fixture pixels')
+        run_docling_worker(sys.executable,{
+            'mode':'sleep','marker':r['marker'],
+            'nested_state':{'outer_pid':os.getpid(),'outer_temporary':str(request_path.parent),
+                            'crop_temporary':str(crops)}},
+            _entrypoint=pathlib.Path(__file__).resolve(),timeout_seconds=20)
 if mode=='tree':
     child_marker=request_path.parent/'child.json'
     child_script='import json,os,pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(json.dumps({"pid":os.getpid()}));time.sleep(60)'
@@ -151,6 +162,33 @@ def test_worker_descendants_are_reaped_including_venv_launchers(worker, tmp_path
     assert not alive(state["child_launcher_pid"])
     assert not alive(state["child_pid"])
     assert not Path(state["temporary"]).exists()
+
+
+def test_cancel_cleans_nested_worker_ipc_and_crop_directories(worker, tmp_path):
+    marker = tmp_path / "nested-state.json"
+    original = OSError("original nested cancellation")
+
+    def cancel():
+        if marker.exists():
+            raise original
+
+    with pytest.raises(OSError) as raised:
+        run(worker, {"mode": "nested", "marker": str(marker),
+                     "repo": str(Path(__file__).resolve().parents[1])},
+            check_cancel=cancel, timeout_seconds=10)
+    assert raised.value is original
+    assert not getattr(original, "__notes__", [])
+    state = json.loads(marker.read_text())
+    outer = Path(state["outer_temporary"])
+    nested = Path(state["temporary"])
+    crops = Path(state["crop_temporary"])
+    assert nested.parent == outer
+    assert crops.parent == outer
+    assert not alive(state["outer_pid"])
+    assert not alive(state["pid"])
+    assert not outer.exists()
+    assert not nested.exists()
+    assert not crops.exists()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Exercise an actual Windows file-sharing violation")

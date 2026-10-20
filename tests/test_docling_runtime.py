@@ -83,3 +83,79 @@ def test_runtime_path_validation():
     for invalid in ("relative/python.exe",123,False,[],{}):
         with pytest.raises(ValueError):
             validate_document_parser({"mode":"docling","artifacts_path":str(__import__('pathlib').Path.cwd()),"runtime_python":invalid})
+
+
+def test_inline_runtime_requires_formula_and_isolated_parser(tmp_path):
+    base = {"mode": "docling", "artifacts_path": str(tmp_path),
+            "inline_runtime_python": sys.executable}
+    for options in ({}, {"runtime_python": sys.executable}, {"formula_enrichment": True}):
+        with pytest.raises(ValueError, match="inline_runtime_requires_formula"):
+            validate_document_parser({**base, **options})
+    valid = {**base, "runtime_python": sys.executable, "formula_enrichment": True}
+    assert validate_document_parser(valid)["inline_runtime_python"] == sys.executable
+    for invalid in ("relative/python", 123, False, [], {}):
+        with pytest.raises(ValueError):
+            validate_document_parser({**valid, "inline_runtime_python": invalid})
+    for empty in ("", None):
+        assert "inline_runtime_python" not in validate_document_parser({**valid, "inline_runtime_python": empty})
+
+
+def test_inline_signature_inspects_separate_runtime_and_fingerprints_policies(tmp_path, monkeypatch):
+    from lib.infrastructure import docling_preflight as preflight
+    from lib.infrastructure import docling_inline_formulas as inline
+    from lib.infrastructure import docling_inline_geometry as geometry, docling_inline_assembly as assembly
+    from lib.infrastructure import docling_inline_candidates as candidates, docling_math_consistency as consistency
+    from lib.infrastructure import docling_inline_markdown as markdown
+    from lib.infrastructure import docling_inline_routing as routing, docling_inline_lines as lines
+    from lib.infrastructure import docling_inline_partitions as partitions
+    from test_docling_settings import _modern_assets
+    config = _modern_assets(tmp_path / "models")
+    config.update(runtime_python=sys.executable, inline_runtime_python=sys.executable)
+    model = tmp_path / "models" / inline.INLINE_LAYOUT_DIRECTORY
+    model.mkdir()
+    for name in preflight._INLINE_LAYOUT_FILES:
+        (model / name).write_bytes(b"fixture")
+    calls, cancel = [], lambda: None
+    def inspect(python, request, **kwargs):
+        calls.append((request, kwargs.get("check_cancel")))
+        packages = (runtime.INLINE_LAYOUT_PACKAGES if request.get("service") == "inline_layout"
+                    else {**runtime.MODERN_PACKAGES, **preflight._FORMULA_PACKAGES, **preflight._INLINE_FORMULA_PACKAGES})
+        return {"protocol": 1, "packages": dict(packages)}
+    monkeypatch.setattr(client, "run_docling_worker", inspect)
+    signature = runtime.runtime_signature(config, check_cancel=cancel)
+    detail = signature["inline_formula"]
+    assert detail["layout_policy"] == inline.INLINE_LAYOUT_POLICY
+    assert detail["geometry_policy"] == geometry.INLINE_GEOMETRY_POLICY
+    assert detail["assembly_policy"] == assembly.INLINE_ASSEMBLY_POLICY
+    assert detail["candidate_policy"] == candidates.INLINE_CANDIDATE_POLICY
+    assert detail["consistency_policy"] == consistency.MATH_CONSISTENCY_POLICY
+    assert detail["markdown_policy"] == markdown.INLINE_MARKDOWN_POLICY
+    assert detail["routing_policy"] == routing.INLINE_ROUTING_POLICY
+    assert detail["line_policy"] == lines.INLINE_LINE_POLICY
+    assert detail["partition_policy"] == partitions.INLINE_PARTITION_POLICY
+    assert detail["render"] == {"page_dpi": 288, "paragraph_dpi": 480, "formula_dpi": 480}
+    assert detail["packages"] == runtime.INLINE_LAYOUT_PACKAGES
+    assert calls == [({"action": "inspect"}, cancel),
+                     ({"action": "inspect", "service": "inline_layout"}, cancel)]
+    (model / "inference.onnx").write_bytes(b"changed model")
+    assert runtime.runtime_signature(config)["inline_formula"]["layout_sha256"] != detail["layout_sha256"]
+    monkeypatch.setattr(geometry, "INLINE_GEOMETRY_POLICY", "changed-policy")
+    assert runtime.runtime_signature(config)["inline_formula"]["geometry_policy"] != detail["geometry_policy"]
+    config.pop("inline_runtime_python")
+    calls.clear()
+    assert "inline_formula" not in runtime.runtime_signature(config)
+    assert len(calls) == 1 and calls[0][0] == {"action": "inspect"}
+
+
+@pytest.mark.parametrize("damage", ["protocol", "paddleocr", "paddlex", "onnxruntime"])
+def test_inline_signature_rejects_runtime_mismatch_before_loading_assets(tmp_path, monkeypatch, damage):
+    config = {"runtime_python": sys.executable, "inline_runtime_python": sys.executable,
+              "formula_enrichment": True, "artifacts_path": str(tmp_path)}
+    def inspect(python, request, **kwargs):
+        if not request.get("service"):
+            return {"protocol": 1, "packages": runtime.MODERN_PACKAGES}
+        return {"protocol": 2 if damage == "protocol" else 1,
+                "packages": {**runtime.INLINE_LAYOUT_PACKAGES, damage: "changed"}}
+    monkeypatch.setattr(client, "run_docling_worker", inspect)
+    with pytest.raises(ValueError, match="inline_version_mismatch"):
+        runtime.runtime_signature(config)
