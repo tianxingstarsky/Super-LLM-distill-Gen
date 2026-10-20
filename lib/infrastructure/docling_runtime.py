@@ -79,6 +79,14 @@ def runtime_signature(config, *, check_cancel=None):
         from lib.infrastructure.docling_inline_native_preservation import NATIVE_PRESERVATION_POLICY
         from lib.infrastructure.docling_inline_continuation import INLINE_CONTINUATION_POLICY
         from lib.infrastructure.docling_math_style import MATH_STYLE_POLICY
+        from lib.infrastructure.docling_table_mixed_math import TABLE_MIXED_MATH_POLICY
+        from lib.infrastructure.docling_code_classification import (
+            CODE_CLASSIFICATION_POLICY, CODE_STRUCTURE_DIRECTORY,
+            CODE_STRUCTURE_FILES, CODE_LAYOUT_PARAMETERS, CODE_STRUCTURE_REVISION,
+        )
+        code_structure_path = root / CODE_STRUCTURE_DIRECTORY
+        code_structure_available = all((code_structure_path / name).is_file()
+                                       for name in CODE_STRUCTURE_FILES)
         signature["inline_formula"] = {
             "runtime_protocol": RUNTIME_PROTOCOL, "packages": inline_info["packages"],
             "detector": "PP-DocLayoutV3", "layout_policy": INLINE_LAYOUT_POLICY,
@@ -92,6 +100,16 @@ def runtime_signature(config, *, check_cancel=None):
             "native_preservation_policy": NATIVE_PRESERVATION_POLICY,
             "continuation_policy": INLINE_CONTINUATION_POLICY,
             "style_policy": MATH_STYLE_POLICY,
+            "table_mixed_math": {"policy": TABLE_MIXED_MATH_POLICY, "dpi": 480,
+                                 "padding_points": 0, "independent_native_line": True,
+                                 "ast_structure_guard": True},
+            "code_structure": {"policy": CODE_CLASSIFICATION_POLICY,
+                               "available": code_structure_available,
+                               "model": CODE_STRUCTURE_DIRECTORY,
+                               "revision": CODE_STRUCTURE_REVISION,
+                               "parameters": dict(CODE_LAYOUT_PARAMETERS),
+                               "model_sha256": (_artifact_digest(code_structure_path)
+                                                if code_structure_available else None)},
             "character_retry": {"dpi": [240, 360], "white_padding_points": 2,
                                 "source_region_unchanged": True, "punctuation_guard": "all_predictions",
                                 "style_guard": "all_predictions",

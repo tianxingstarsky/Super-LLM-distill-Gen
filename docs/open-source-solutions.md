@@ -371,9 +371,15 @@ ordinary prose. Exact source-character alignment can place adjacent formula
 fragments when the original whitespace proves their boundaries. Independent
 expressions remain separate. A successful mixed-block reconstruction uses a normal text
 item with embedded math, while preserving its reference and provenance.
-Code items keep their original type even when a probe produces matching math:
-character agreement alone cannot establish that programming-language content
-was mislabeled. Their proposed reconstruction remains review evidence.
+Character agreement alone cannot establish that programming-language content
+was mislabeled. An unknown-language code item can be reconsidered only with
+independent whole-page text evidence from both PP-DocLayoutV3 and the optional
+[official Docling Egret medium model](https://huggingface.co/docling-project/docling-layout-egret-medium).
+Both must cover every visible source glyph. An overlapping code or algorithm
+prediction, declared language, code syntax, monospaced font, code parent,
+neighboring code, or unavailable document context keeps the original type.
+The classifier never supplies published text. Exact native-prose assembly and
+all formula checks must still pass before a label can change.
 Unresolved items keep their original representation and review evidence.
 
 Before insertion, the pipeline checks native-parser characters against the
@@ -467,6 +473,58 @@ its document role. Both final runs used the actual adapter with networking
 disabled. The broader regression run passed 784 tests with one skipped; after
 the final boundary changes, 180 relevant regression tests passed again.
 These are results on this paper and fixture, not a general PDF accuracy claim.
+
+### Table headers and independent code-label review
+
+The optional Egret assets are local files under
+`docling-project--docling-layout-egret-medium` in the model directory. The pinned
+revision is `77ede7cc7bed96d853c58f319734803d6ea2ea5c`. Install its
+`config.json`, `preprocessor_config.json` and `model.safetensors`; the tested
+weight SHA-256 is
+`e7fc5b9a353826c123c5d03efc230909ac02b93e26293ec7cb4db8978fe9e3af`.
+It uses the existing isolated Transformers runtime, runs on CPU and never
+downloads during parsing. Missing optional assets leave ambiguous code held
+for review. The model files, decision thresholds and policy participate in
+the reusable source-cache signature.
+
+The independent classifier consumes the complete source page. Its image hash,
+page number, source hash and pixel coordinates bind the predictions to that
+page. Native document headings, neighboring items and original parent labels
+remain visible to code-protection checks. A corrected earlier item cannot
+erase its original code role from these checks. Empty language detection or a
+failed programming-language parse does not count as positive text evidence.
+
+Mixed table cells use Docling Parse physical lines, PDFium source glyphs and
+Pix2Text recognition of a tight 480-dpi math crop. Ordinary header text remains
+verbatim. A successful patch changes only the cell text; row and column spans,
+header flags, cell boundaries and table provenance are preserved. The parsed
+LaTeX must retain the ordered source symbols and attach each numeric script to
+the same concrete source base and AST leaf. A matching bag of characters is
+insufficient: swapping the scripts in `x²+x₂` is rejected. Non-numeric scripts,
+ambiguous baselines and unsupported two-dimensional structures remain held.
+The table refinement keeps at most one rendered page in memory.
+
+Granite-Docling was evaluated locally as a possible independent classifier.
+Its crop and full-page experiments produced repeated text, incorrect labels or
+unstructured answers. Those raw results are retained in the local validation
+artifacts. Granite is not a production fallback for this decision.
+
+The 2026-10-21 production-adapter rerun of the unchanged 15-page Attention paper
+took 209.843 seconds. Table 3 now exports `params` with a mathematical
+`×10⁶` in the same header cell. Its 21 rows, 13 columns and 115 explicit cells
+remain unchanged. The previous 36 inline records, 26 published paragraphs and
+55 math patches are unchanged, as are all 458 original text fields and six
+display-formula items. No page remains quarantined in this run.
+
+The two-page fixture rerun took 43.047 seconds. Independent Egret and
+PP-DocLayoutV3 predictions cover every visible source glyph in the previously
+code-labeled matrix paragraph. Exact source assembly publishes its dimensions
+as math in a normal text item. Its original text, reference, page and source
+bounds remain intact. The wrapped polynomial still exports as one complete
+`aligned` expression; independent equations remain separate. Both runs block
+networking and use no remote model API. The Docling regression suite passed
+727 tests with one skipped, and the related document and source-library suite
+passed 230 tests.
 
 ## Remaining candidates
 

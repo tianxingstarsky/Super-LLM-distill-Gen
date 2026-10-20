@@ -137,6 +137,25 @@ def test_inline_signature_inspects_separate_runtime_and_fingerprints_policies(tm
     assert detail["packages"] == runtime.INLINE_LAYOUT_PACKAGES
     assert calls == [({"action": "inspect"}, cancel),
                      ({"action": "inspect", "service": "inline_layout"}, cancel)]
+    from lib.infrastructure import docling_code_classification as code
+    from lib.infrastructure.docling_table_mixed_math import TABLE_MIXED_MATH_POLICY
+    assert detail["table_mixed_math"]["policy"] == TABLE_MIXED_MATH_POLICY
+    assert detail["code_structure"]["policy"] == code.CODE_CLASSIFICATION_POLICY
+    assert detail["code_structure"]["available"] is False
+    assert detail["code_structure"]["model_sha256"] is None
+    code_model = tmp_path / "models" / code.CODE_STRUCTURE_DIRECTORY
+    code_model.mkdir()
+    for name in code.CODE_STRUCTURE_FILES:
+        (code_model / name).write_bytes(b"local optional classifier")
+    with_code = runtime.runtime_signature(config)["inline_formula"]["code_structure"]
+    assert with_code["available"] is True
+    assert with_code["parameters"] == code.CODE_LAYOUT_PARAMETERS
+    assert with_code["revision"] == code.CODE_STRUCTURE_REVISION
+    (code_model / "model.safetensors").write_bytes(b"changed classifier")
+    changed = runtime.runtime_signature(config)["inline_formula"]["code_structure"]
+    assert changed["model_sha256"] != with_code["model_sha256"]
+    monkeypatch.setitem(code.CODE_LAYOUT_PARAMETERS, "text_threshold", .7)
+    assert runtime.runtime_signature(config)["inline_formula"]["code_structure"] != changed
     (model / "inference.onnx").write_bytes(b"changed model")
     assert runtime.runtime_signature(config)["inline_formula"]["layout_sha256"] != detail["layout_sha256"]
     monkeypatch.setattr(geometry, "INLINE_GEOMETRY_POLICY", "changed-policy")

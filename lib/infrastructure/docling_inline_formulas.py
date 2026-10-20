@@ -7,6 +7,7 @@ continuation is recognized again as one image, with its row evidence retained.
 from __future__ import annotations
 
 import hashlib
+import io
 import math
 import unicodedata
 from pathlib import Path
@@ -70,11 +71,12 @@ def _punctuation_matches(source, latex):
     return all(decoded.count(c) == source.count(c) for c in ".,;:!?")
 
 
-def _detector_boxes(response, prepared):
+def _detector_boxes(response, prepared, *, labels=None):
     """Validate returned pixel frames before mapping them into PDF points."""
     if (response.get("protocol") != 1 or response.get("network_disabled") is not True
             or len(response.get("images", [])) != len(prepared)):
         raise ValueError("document_docling_invalid_output")
+    labels = {"inline_formula", "display_formula"} if labels is None else labels
     boxes = {}
     for result, source in zip(response["images"], prepared):
         if (result.get("id") != source["id"] or result.get("size") != source["size"]
@@ -82,7 +84,7 @@ def _detector_boxes(response, prepared):
             raise ValueError("document_docling_invalid_output")
         found = []
         for index, item in enumerate(result["boxes"]):
-            if item.get("label") not in {"inline_formula", "display_formula"}:
+            if item.get("label") not in labels:
                 continue
             coordinates = item.get("coordinate")
             if (not isinstance(coordinates, list) or len(coordinates) != 4
@@ -114,6 +116,113 @@ def _detector_boxes(response, prepared):
     return boxes
 
 
+def _code_source_context(document, item, routes):
+    """Keep original structural context available to a code-label veto.
+
+    A narrow crop may be a comment continuation. The document's ordered items,
+    original parent chain and neighboring code must therefore remain visible.
+    """
+    result = {"available": False, "text": "", "records": [], "reasons": []}
+    try:
+        ordered = [value for value, _ in document.iterate_items() if hasattr(value, "text")]
+        positions = [i for i, value in enumerate(ordered) if value.self_ref == item.self_ref]
+        if len(positions) != 1 or len(item.prov) != 1:
+            return result
+        position, page_no = positions[0], item.prov[0].page_no
+        selected = []
+        for value in reversed(ordered[:position]):
+            if (getattr(value.label, "value", value.label) == "section_header"
+                    and any(p.page_no == page_no for p in value.prov)):
+                selected.append(value)
+                break
+        for index in (position - 1, position + 1):
+            if not 0 <= index < len(ordered):
+                continue
+            value = ordered[index]
+            if not any(p.page_no == page_no for p in value.prov):
+                continue
+            selected.append(value)
+            original_label = routes.get(value.self_ref, {}).get(
+                "original_label", getattr(value.label, "value", value.label))
+            if original_label == "code":
+                result["reasons"].append("adjacent_original_code_block")
+        by_ref = {value.self_ref: value for value in [
+            *document.texts, *document.groups, document.body, document.furniture]}
+        parent, visited = item.parent, set()
+        while parent is not None:
+            if parent.cref in visited or parent.cref not in by_ref:
+                return result
+            visited.add(parent.cref)
+            value = by_ref[parent.cref]
+            original_label = routes.get(value.self_ref, {}).get(
+                "original_label", getattr(value.label, "value", value.label))
+            if original_label == "code":
+                result["reasons"].append("original_code_parent")
+                selected.append(value)
+            parent = value.parent
+        unique = {value.self_ref: value for value in selected}
+        result.update(available=True, records=[
+            {"source_ref": value.self_ref, "label": getattr(value.label, "value", value.label),
+             "original_text": value.orig} for value in unique.values()],
+            text="\n".join(value.orig for value in unique.values()))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return result
+    return result
+
+
+def _classify_code_item(document, item, route, glyphs, page, image, layout_boxes,
+                        config, routes, cache):
+    from .docling_code_classification import (
+        CODE_CLASSIFICATION_POLICY, CODE_LAYOUT_PARAMETERS, CODE_STRUCTURE_DIRECTORY, CODE_STRUCTURE_FILES,
+        LocalCodeLayoutReader, assess_code_math_reclassification, protect_source_code,
+    )
+    context = _code_source_context(document, item, routes)
+    proof = {"policy": CODE_CLASSIFICATION_POLICY, "approved": False,
+             "source_ref": item.self_ref, "reasons": [], "source_context": context,
+             "transcription_used_for_publication": False}
+    native = protect_source_code(route, glyphs, item.text,
+                                 source_context=context["text"] if context["available"] else None)
+    proof["native_protection"] = native
+    if native["protected"] or context["reasons"]:
+        proof["reasons"] = native["reasons"] + context["reasons"]
+        return proof
+    if any(getattr(item, key, None) for key in (
+            "captions", "references", "footnotes", "image", "children")):
+        proof["reasons"] = ["owned_code_structure_requires_review"]
+        return proof
+    model_path = Path(config["artifacts_path"]) / CODE_STRUCTURE_DIRECTORY
+    if not all((model_path / name).is_file() for name in CODE_STRUCTURE_FILES):
+        proof["reasons"] = ["independent_code_layout_assets_unavailable"]
+        return proof
+    # Do not load the extra model for source that lacks independent positive
+    # text evidence. The final decision below still checks complete coverage.
+    if not any(box["label"] == "text" and box["score"] >= CODE_LAYOUT_PARAMETERS["pp_text_threshold"]
+               for box in layout_boxes):
+        proof["reasons"] = ["no_positive_independent_text_layout"]
+        return proof
+    if "reader" not in cache:
+        cache["reader"] = LocalCodeLayoutReader(config["artifacts_path"])
+    page_png = io.BytesIO()
+    image.save(page_png, format="PNG")
+    image_sha256 = hashlib.sha256(page_png.getvalue()).hexdigest()
+    page_key = (page["source_sha256"], page["page_no"], image_sha256)
+    if cache.get("page_key") != page_key:
+        prediction = cache["reader"].read_page(image)
+        cache.update(page_key=page_key, prediction=prediction)
+    else:
+        prediction = cache["prediction"]
+    page_proof = {
+        "source_bbox": {"l": 0, "b": 0, "r": page["width"], "t": page["height"],
+                        "coord_origin": "BOTTOMLEFT"},
+        "page_no": page["page_no"], "source_sha256": page["source_sha256"],
+        "image_sha256": image_sha256, "pixel_size": list(image.size),
+    }
+    decision = assess_code_math_reclassification(
+        route, glyphs, item.text, layout_boxes=layout_boxes, layout_prediction=prediction,
+        page_proof=page_proof, source_context=context["text"])
+    return dict(decision, source_ref=item.self_ref, source_context=context)
+
+
 def _publish_inline_item(document, item, assembly, route):
     """Change a mistaken block type only after exact native-prose assembly."""
     if not route.get("probe_required"):
@@ -121,9 +230,31 @@ def _publish_inline_item(document, item, assembly, route):
         item.prov[0] = item.prov[0].model_copy(update={"charspan": (0, len(item.text))})
         return True
     if getattr(item.label, "value", item.label) == "code":
-        # Character equality cannot prove that an unknown programming language
-        # was mislabeled. Keep recognized math as review evidence in this case.
-        return False
+        from .docling_code_classification import CODE_CLASSIFICATION_POLICY
+        classification = route.get("code_reclassification", {})
+        source_page = classification.get("source_page", {})
+        context = classification.get("source_context", {})
+        language = getattr(route.get("code_language"), "value", route.get("code_language"))
+        if (classification.get("approved") is not True
+                or classification.get("policy") != CODE_CLASSIFICATION_POLICY
+                or classification.get("source_ref") != item.self_ref
+                or classification.get("native_protection", {}).get("protected") is not False
+                or classification.get("reasons") != []
+                or context.get("available") is not True or context.get("reasons") != []
+                or language not in (None, "", "unknown")
+                or assembly.get("status") != "transcribed_unverified"
+                or assembly.get("review_reasons") != []
+                or any(getattr(item, key, None) for key in (
+                    "captions", "references", "footnotes", "image", "children"))
+                or classification.get("transcription_used_for_publication") is not False
+                or classification.get("egret_missing_source_char_indices") != []
+                or classification.get("pp_missing_source_char_indices") != []
+                or source_page.get("source_sha256") != route.get("source_sha256")
+                or not route.get("source_sha256")
+                or len(item.prov) != 1 or source_page.get("page_no") != item.prov[0].page_no
+                or assembly.get("backend_text") != item.text
+                or assembly.get("prose_preserved") is not True):
+            return False
     from docling_core.types.doc import TextItem
     original = item.model_dump(mode="python")
     # A code block can own captions/references. Relabeling that structure is not
@@ -154,6 +285,7 @@ def _enrich_single_source_items(document, source, config, reader, *, routes=None
     from .docling_worker_client import _owned_temporary_directory, run_docling_worker
 
     native_pages = read_native_character_pages(source)
+    code_classifier_cache = {}
     from .docling_inline_boundaries import read_pdf_citation_links, separate_linked_citation
     routes = routes or {}
     evidence, paragraphs, page_glyphs = {}, {}, {}
@@ -310,6 +442,7 @@ def _enrich_single_source_items(document, source, config, reader, *, routes=None
                 "images": [{"id": item["id"], "path": item["path"]} for item in prepared],
             })
             detections = _detector_boxes(response, prepared)
+            code_layouts = _detector_boxes(response, prepared, labels={"text", "algorithm", "code"})
 
             for number, items in paragraphs.items():
                 page, image = render_inline_page_evidence(source, number)
@@ -512,7 +645,15 @@ def _enrich_single_source_items(document, source, config, reader, *, routes=None
                                         or assembly["status"] == "review_required" or uncovered
                                         or any(fragment["status"] == "review_required" for fragment in fragments))
                         published = False
+                        code_classification = None
                         if assembly["status"] == "transcribed_unverified" and not needs_review:
+                            if getattr(item.label, "value", item.label) == "code":
+                                code_classification = _classify_code_item(
+                                    document, item, route, glyphs, page, image,
+                                    code_layouts.get(f"page-{number}", []), config, routes,
+                                    code_classifier_cache)
+                                route = dict(route, code_reclassification=code_classification,
+                                             automatic_relabel_allowed=code_classification["approved"])
                             published = _publish_inline_item(document, item, assembly, route)
                             needs_review = not published
                         evidence[item.self_ref] = {
@@ -529,6 +670,7 @@ def _enrich_single_source_items(document, source, config, reader, *, routes=None
                             "fragments": fragments, "uncovered_math_char_indices": uncovered,
                             "candidate_selection": selection, "alternatives": candidates,
                             "published": published, "routing": route,
+                            "code_classification": code_classification,
                             "physical_line_views": line_evidence.get(item.self_ref, []),
                             "layout_containers": containers, "partition": partition,
                             "partition_candidates": partition_candidates,

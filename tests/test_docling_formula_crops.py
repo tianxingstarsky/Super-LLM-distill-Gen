@@ -93,6 +93,74 @@ def test_mixed_prose_is_retained_and_review_evidence_survives(enrichment):
     assert evidence["#/tables/0"]["cells"][0]["reason"] == "mixed_prose_math"
 
 
+def test_mixed_table_expansion_publishes_only_a_proven_atomic_proposal(enrichment, monkeypatch):
+    from lib.infrastructure import docling_inline_assembly, docling_inline_lines, docling_inline_geometry
+    from lib.infrastructure import docling_table_mixed_math, docling_inline_routing, docling_inline_formulas
+    from PIL import Image
+    e = enrichment
+    original_bbox = e.cell.bbox
+    e.cell.model_dump = lambda **kwargs: dict(text=e.cell.text, bbox={}, row_span=1, col_span=1)
+    monkeypatch.setattr(e.regions, "inspect_math_region", lambda *a: {
+        "contains_math": False, "review_required": True, "status": "mixed_prose_math",
+        "reason": "mixed_prose_math_requires_boundary_review"})
+    monkeypatch.setattr(docling_inline_assembly, "read_native_character_pages", lambda *a: {1: ["native-chars"]})
+    monkeypatch.setattr(docling_inline_lines, "read_native_line_pages", lambda *a: {1: ["native-lines"]})
+    monkeypatch.setattr(docling_inline_geometry, "render_inline_page_evidence", lambda *a: (
+        dict(source_sha256="source-hash"), Image.new("RGB", (10, 10), "white")))
+    observed = []
+    def transcribe(pdf, page, cell, lines, chars, image, reader):
+        observed.append((page, cell, lines, chars))
+        return dict(status="transcribed_unverified", review_required=False, text="Accuracy for $x$", published=False)
+    monkeypatch.setattr(docling_table_mixed_math, "transcribe_mixed_table_math", transcribe)
+    monkeypatch.setattr(docling_inline_routing, "build_inline_route_map", lambda *a: {})
+    monkeypatch.setattr(docling_inline_formulas, "enrich_inline_formulas", lambda *a, **kw: {})
+    evidence = e.crops.enrich_formulas(e.document, "local.pdf", "models", inline_config={"enabled": True})
+    assert e.cell.text == "Accuracy for $x$" and e.cell.bbox is original_bbox
+    assert e.cell.start_row_offset_idx == 0 and e.cell.start_col_offset_idx == 0
+    proof = evidence["#/tables/0"]["cells"][0]
+    assert proof["backend_text"] == "Accuracy for x"
+    assert proof["selection"]["status"] == "mixed_prose_math"
+    assert proof["mixed_math"]["published"]
+    assert observed[0][0]["source_sha256"] == "source-hash"
+
+
+def test_mixed_table_raster_cache_closes_previous_page_before_loading_next(enrichment, monkeypatch):
+    from types import SimpleNamespace as NS
+    from lib.infrastructure import docling_inline_assembly, docling_inline_lines, docling_inline_geometry
+    from lib.infrastructure import docling_table_mixed_math, docling_inline_routing, docling_inline_formulas
+    e = enrichment
+    e.cell.model_dump = lambda **kwargs: dict(text=e.cell.text, bbox={})
+    second = NS(text="other mixed math", bbox=e.cell.bbox, start_row_offset_idx=0,
+                start_col_offset_idx=0, model_dump=lambda **kwargs: dict(text="other mixed math", bbox={}))
+    e.document.tables.append(NS(prov=[NS(page_no=2, bbox=e.document.tables[0].prov[0].bbox)],
+                                self_ref="#/tables/1", data=NS(table_cells=[second])))
+    monkeypatch.setattr(e.regions, "inspect_math_region", lambda *a: {
+        "contains_math": False, "review_required": True, "status": "mixed_prose_math"})
+    reads, events = [], []
+    def chars(*a):
+        reads.append("chars")
+        return {1: [], 2: []}
+    def lines(*a):
+        reads.append("lines")
+        return {1: [], 2: []}
+    def render(source, page):
+        events.append(("render", page))
+        return dict(page_no=page), NS(close=lambda: events.append(("close", page)))
+    def transcribe(pdf, page, *a):
+        events.append(("transcribe", page["page_no"]))
+        return dict(status="review_required", review_required=True, reason="review", published=False)
+    monkeypatch.setattr(docling_inline_assembly, "read_native_character_pages", chars)
+    monkeypatch.setattr(docling_inline_lines, "read_native_line_pages", lines)
+    monkeypatch.setattr(docling_inline_geometry, "render_inline_page_evidence", render)
+    monkeypatch.setattr(docling_table_mixed_math, "transcribe_mixed_table_math", transcribe)
+    monkeypatch.setattr(docling_inline_routing, "build_inline_route_map", lambda *a: {})
+    monkeypatch.setattr(docling_inline_formulas, "enrich_inline_formulas", lambda *a, **kw: {})
+    e.crops.enrich_formulas(e.document, "local.pdf", "models", inline_config={"enabled": True})
+    assert events == [("render", 1), ("transcribe", 1), ("close", 1),
+                      ("render", 2), ("transcribe", 2), ("close", 2)]
+    assert reads == ["chars", "lines"]
+
+
 def test_mixed_display_probe_cannot_publish_whole_box_latex_before_partition(enrichment, monkeypatch):
     from lib.infrastructure import docling_inline_routing as routing, docling_inline_formulas as inline
     e = enrichment

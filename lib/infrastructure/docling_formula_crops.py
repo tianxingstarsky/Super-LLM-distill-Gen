@@ -110,6 +110,7 @@ def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None
         from .docling_inline_routing import build_inline_route_map
         routes = build_inline_route_map(document, source_path)
     pdf = pdfium.PdfDocument(source_path)
+    mixed_context = {}
     try:
         for item in formulas:
             original = item.text
@@ -172,6 +173,35 @@ def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None
                              "row": cell.start_row_offset_idx, "column": cell.start_col_offset_idx}
                 if not selection["contains_math"]:
                     if selection.get("review_required"):
+                        if inline_config and selection.get("status") == "mixed_prose_math":
+                            from .docling_inline_assembly import read_native_character_pages
+                            from .docling_inline_lines import read_native_line_pages
+                            from .docling_inline_geometry import render_inline_page_evidence
+                            from .docling_table_mixed_math import transcribe_mixed_table_math
+                            if "native_chars" not in mixed_context:
+                                mixed_context["native_chars"] = read_native_character_pages(source_path)
+                                mixed_context["native_lines"] = read_native_line_pages(source_path)
+                                mixed_context["pages"] = {}
+                            if number not in mixed_context["pages"]:
+                                # Keep at most one full RGB page. Native character
+                                # and physical-line evidence is small and reusable;
+                                # page rasters must not grow with document length.
+                                for _, previous_image in mixed_context["pages"].values():
+                                    if previous_image is not None:
+                                        previous_image.close()
+                                mixed_context["pages"].clear()
+                                mixed_context["pages"][number] = render_inline_page_evidence(source_path, number)
+                            mixed_page, page_image = mixed_context["pages"][number]
+                            mixed = transcribe_mixed_table_math(
+                                pdf, mixed_page, cell.model_dump(mode="json"),
+                                mixed_context["native_lines"].get(number, []),
+                                mixed_context["native_chars"].get(number, []), page_image, model)
+                            if mixed["status"] == "transcribed_unverified" and not mixed["review_required"]:
+                                cell.text = mixed["text"]
+                                mixed["published"] = True
+                            cells.append({**cell_info, "status": mixed["status"],
+                                          "reason": mixed.get("reason"), "mixed_math": mixed})
+                            continue
                         cells.append({**cell_info, "status": "review_required",
                                       "reason": selection.get("reason", "ambiguous_math_region")})
                     continue
@@ -194,6 +224,9 @@ def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None
                     "status":"review_required" if any(c['status']=='review_required' for c in cells)
                              else "transcribed_unverified"}
     finally:
+        for _, image in mixed_context.get("pages", {}).values():
+            if image is not None:
+                image.close()
         pdf.close()
     if inline_config:
         from lib.infrastructure.docling_inline_formulas import enrich_inline_formulas
