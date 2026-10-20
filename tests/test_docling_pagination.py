@@ -87,6 +87,25 @@ def test_ambiguous_missing_overlapping_or_invalid_spans_are_never_guessed(spans)
         page_markdown(document, 1)
 
 
+def test_picture_descendants_keep_source_page_and_parent_role_in_provenance():
+    document = DoclingDocument(name="figure source roles")
+    document.add_page(page_no=1, size=Size(width=612, height=792))
+    picture = document.add_picture(prov=provenance(1, 0, 0))
+    caption = document.add_text(label=DocItemLabel.CAPTION, text="Figure caption",
+                                parent=picture, prov=provenance(1, 0, 14))
+    picture.captions.append(caption.get_ref())
+    label = document.add_text(label=DocItemLabel.TEXT, text="<EOS>",
+                              parent=picture, prov=provenance(1, 0, 5))
+    before = document.model_dump_json()
+    records = _page_provenance(document, [1])[1]
+    children = [row for row in records if row.get("picture_ref") == picture.self_ref]
+    assert [row["item_ref"] for row in children] == [caption.self_ref, label.self_ref]
+    assert all(row["parent_ref"] == picture.self_ref and row["source_role"] == "picture_child"
+               for row in children)
+    assert all(row["provenance"]["page_no"] == 1 for row in children)
+    assert document.model_dump_json() == before
+
+
 def test_multpage_enriched_formula_needs_explicit_review_not_character_guessing():
     document, _, _, _ = document_with_cross_page_text()
     item = document.add_text(label=DocItemLabel.FORMULA, text=r"x^{2}+y^{2}", orig="x2+y2",

@@ -38,3 +38,16 @@ def test_stale_patch_proof_is_rejected():
     document.texts[0].text += " changed"
     with pytest.raises(ValueError, match="invalid_output"):
         export_inline_markdown(document, 1, evidence)
+
+
+@pytest.mark.parametrize("replacement", ["$x_1\n+ x_2$", "$x_1\n\n+ x_2$", "$x\u2028+y$", "$$x$$", "unwrapped"])
+def test_invalid_inline_proof_cannot_inject_new_markdown_structure(replacement):
+    document, evidence = fixture()
+    item = document.texts[0]
+    proof = evidence[item.self_ref]
+    proof["assembly"]["patches"][0]["replacement"] = replacement
+    item.text = proof["assembly"]["text"] = item.text.replace("$h_t$", replacement)
+    before = document.model_dump_json()
+    with pytest.raises(ValueError, match="document_docling_invalid_output"):
+        export_inline_markdown(document, 1, evidence)
+    assert document.model_dump_json() == before

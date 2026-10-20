@@ -526,6 +526,60 @@ networking and use no remote model API. The Docling regression suite passed
 727 tests with one skipped, and the related document and source-library suite
 passed 230 tests.
 
+### Page reading order and figure text exports
+
+The page exporter now applies Docling's official
+[rule-based reading-order predictor](https://github.com/docling-project/docling/blob/main/docling/models/postprocessing/reading_order_rb.py)
+to the page view after exact cross-page text projection. A paragraph merged
+across pages no longer keeps its earlier page's slot ahead of a floating table.
+Only current-page sibling references are reordered. Tables, pictures, lists
+and their descendants remain intact. The source document is never rebuilt.
+The predictor must return a complete permutation with unchanged identities.
+Ambiguous geometry or conflicting satellite references require review.
+
+Figure text uses the official Markdown serializer's `traverse_pictures=True`
+and `caption_placement="layout"` options. The
+[upstream documentation](https://github.com/docling-project/docling/blob/main/docs/usage/vision_models.md)
+describes picture-child traversal. A small picture-serializer extension places
+existing children inside a blockquote at the picture's image position. This
+keeps figure labels separate from body prose. The official serializer still
+handles caption placement, escaping, lists and source spans. Rotated axis
+tokens retain their original child order and legitimate repeated words.
+They are not sorted by text-box height or joined into invented sentences.
+
+Page provenance now includes those picture descendants, their original parent
+and their picture reference. A source-render event log checks repeated source
+references before the upstream serializer deduplicates its span records.
+Duplicate or conflicting caption and footnote references cause quarantine.
+A unique caption attached by reference can retain its original body parent.
+Model descriptions and annotations remain metadata, outside native source
+Markdown. Inline math is restored only from a valid single-line patch proof.
+Unsupported legacy serializers fail explicitly when picture children would
+otherwise disappear. The tested complete path uses the installed isolated
+Docling 2.140.0 / Core 2.102.0 runtime.
+
+These changes recover native text and physical layout order. They do not
+infer attention links from diagrams or create missing raster image payloads.
+The page-13 item that already combines a page title and a figure label remains
+unchanged in the source graph. Recovering that item does not prove that its
+internal text was originally segmented correctly.
+
+The 2026-10-21 adapter rerun of the same 15-page paper took 203.469 seconds.
+Only pages 9 and 10 changed their body reading order. Across pages 4, 13, 14
+and 15, the export recovered 286 existing picture text children, including all
+67 previously omitted items on page 13. The complete source document, all four
+tables and all six display-formula items are identical to the preceding run.
+All 45 earlier formula-evidence records remain unchanged. Thirty additional
+records are native-preserved figure tokens whose provenance was previously
+omitted from page parts; they are not new OCR repairs. This run has no
+quarantined pages and made no remote model API calls.
+
+The base-environment Docling suite passed 738 tests, with 27 skips for optional
+or newer runtime features. The isolated modern runtime passed 69 focused tests
+for reading order, scoped picture export, pagination and inline math. Both
+successful export and deliberate quarantine cases are covered. Another 260
+document, source-library, quality-page and translation tests passed.
+
 ## Remaining candidates
 
 | Priority | Project and license | Concrete next step | Boundary |

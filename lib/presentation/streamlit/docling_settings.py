@@ -14,6 +14,8 @@ DOCLING_ERRORS = {
     "document_docling_formula_models_required": "公式识别模型未就绪。请在 Docling 模型目录中准备完整的 ds4sd--CodeFormulaV2 文件夹。",
     "document_docling_formula_undecoded": "此页含未解码公式，已隔离并保留原文与页码。请检查本地公式识别设置，并对照原 PDF 复核。",
     "document_docling_page_span_ambiguous": "跨页内容无法按原始位置可靠拆分，解析已停止。请对照原 PDF 检查，或改用其他解析方式。",
+    "document_docling_reading_order_requires_review": "此页的阅读顺序无法可靠确认，已保留原文并隔离。请对照原 PDF 检查版面和来源位置。",
+    "document_docling_picture_export_requires_review": "此页的图内内容未完整导出，已保留结构化原文并隔离。请对照原 PDF 检查图片子项。",
     "invalid_document_docling_ocr_languages": "OCR 语言代码无效，请使用 en、ch_sim 等 EasyOCR 语言代码。",
     "invalid_document_parser": "文档解析配置无效，请检查输入节点。",
     "document_docling_runtime_unavailable": "独立解析环境不可用，请检查 Python 路径或重新安装本地解析环境。",

@@ -53,7 +53,7 @@ class Document:
         self.texts = texts
         self.pages = {number: {} for number in range(1, len(texts) + 1)}
 
-    def iterate_items(self):
+    def iterate_items(self, *, traverse_pictures=False):
         for page in self.pages:
             yield SimpleNamespace(prov=[Provenance(page)], self_ref=f"#/texts/{page - 1}",
                                   label=SimpleNamespace(value="text")), 0
@@ -73,7 +73,38 @@ def conversion(monkeypatch, texts=(PAGE_ONE, PAGE_TWO), *, status="success"):
             calls.append(path)
             return SimpleNamespace(status=SimpleNamespace(value=status), document=doc)
     monkeypatch.setattr(adapter, "_make_converter", lambda config: Converter())
+    # These dispatch tests replace conversion with a small protocol double.
+    # Real tree ordering and figure serialization are covered separately.
+    from lib.infrastructure import docling_reading_order, docling_picture_export
+    monkeypatch.setattr(docling_reading_order, "project_page_reading_order", lambda doc, page: (
+        doc, {"review_required": False, "changed": False, "page_no": page}))
+    monkeypatch.setattr(docling_picture_export, "serialize_picture_page", lambda doc, page: (
+        doc.export_to_markdown(page_no=page, image_placeholder=""),
+        {"missing_child_refs": [], "duplicate_span_refs": [], "page_no": page}))
     return calls, doc
+
+
+@pytest.mark.parametrize("issue", ["order", "missing_picture_child", "duplicate_picture_child"])
+def test_page_export_review_keeps_source_and_quarantines_affected_page(
+        tmp_path, local_config, monkeypatch, issue):
+    source = text_pdf(tmp_path)
+    _, document = conversion(monkeypatch)
+    from lib.infrastructure import docling_reading_order, docling_picture_export
+    if issue == "order":
+        monkeypatch.setattr(docling_reading_order, "project_page_reading_order", lambda doc, page: (
+            doc, {"review_required": page == 2, "reasons": ["ambiguous_geometry"] if page == 2 else []}))
+        expected = "document_docling_reading_order_requires_review"
+    else:
+        key = "missing_child_refs" if issue == "missing_picture_child" else "duplicate_span_refs"
+        monkeypatch.setattr(docling_picture_export, "serialize_picture_page", lambda doc, page: (
+            doc.export_to_markdown(page_no=page, image_placeholder=""),
+            {key: ["#/texts/1"] if page == 2 else []}))
+        expected = "document_docling_picture_export_requires_review"
+    parts = list(adapter.docling_parts(source, local_config))
+    assert "status" not in parts[0]
+    assert parts[1]["status"] == "quarantined" and parts[1]["reason"] == expected
+    assert parts[1]["text"] == document.texts[1] == PAGE_TWO
+    assert parts[1]["document_reading"]["page_export"]["policy"] == adapter.PAGE_EXPORT_POLICY
 
 
 def test_explicit_local_config_and_defaults(local_config):
@@ -150,7 +181,7 @@ def test_scanned_page_without_ocr_is_not_published_as_usable(tmp_path, local_con
 def test_cache_key_pins_backend_version_and_local_weights(tmp_path, local_config, monkeypatch):
     signature = adapter.docling_parse_signature(local_config)
     assert signature["pdf_backend"] == "pypdfium2"
-    assert signature["page_export_policy"] == "provenance_charspan_v1"
+    assert signature["page_export_policy"] == adapter.PAGE_EXPORT_POLICY
     source = {"id": "1" * 64}
     key = SourceLibrary.parse_id(source, signature)
     old_default_signature = {name: value for name, value in signature.items() if name != "pdf_backend"}
@@ -384,7 +415,7 @@ def test_undecoded_formula_is_quarantined_with_original_evidence(tmp_path, local
     original_items = list(doc.iterate_items())
     formula = SimpleNamespace(prov=[Provenance(2)], self_ref="#/texts/formula-1",
                               label=SimpleNamespace(value="formula"), orig="PDF original: a 2 + b 2", text="")
-    doc.iterate_items = lambda: iter([*original_items, (formula, 0)])
+    doc.iterate_items = lambda **kwargs: iter([*original_items, (formula, 0)])
     first, quarantined = adapter.docling_parts(source, local_config)
     assert "status" not in first
     assert quarantined["status"] == "quarantined"
@@ -411,7 +442,7 @@ def test_nonempty_formula_is_preserved_without_claiming_verified_accuracy(tmp_pa
     original_items = list(doc.iterate_items())
     formula = SimpleNamespace(prov=[Provenance(2)], self_ref="#/texts/formula-1",
                               label=SimpleNamespace(value="formula"), orig="E mc2", text=r"E = mc^2")
-    doc.iterate_items = lambda: iter([*original_items, (formula, 0)])
+    doc.iterate_items = lambda **kwargs: iter([*original_items, (formula, 0)])
     parts = list(adapter.docling_parts(text_pdf(tmp_path), local_config))
     assert parts[1]["text"] == r"$$E = mc^2$$"
     assert "status" not in parts[1]

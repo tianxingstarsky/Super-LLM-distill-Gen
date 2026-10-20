@@ -88,6 +88,10 @@ def test_formula_copy_has_english_translations():
                    "公式未解码，需对照原 PDF 复核",
                    DOCLING_ERRORS["document_docling_formula_undecoded"],
                    DOCLING_ERRORS["document_docling_page_span_ambiguous"],
+                   DOCLING_ERRORS["document_docling_reading_order_requires_review"],
+                   DOCLING_ERRORS["document_docling_picture_export_requires_review"],
+                   "阅读顺序待复核，原文已保留",
+                   "图内内容导出不完整，结构化原文已保留",
                    DOCLING_ERRORS["document_docling_formula_models_required"]):
         assert not re.search(r"[\u4e00-\u9fff]", translate(phrase, "en"))
 

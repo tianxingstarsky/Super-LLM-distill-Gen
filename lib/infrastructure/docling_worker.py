@@ -84,7 +84,9 @@ def parse_document(request):
     provenance = _page_provenance(document, numbers)
     parts = []
     for number, native in zip(numbers, hints):
-        text, split_refs = page_markdown(document, number, inline_evidence=formula_evidence)
+        export_audit = {}
+        text, split_refs = page_markdown(
+            document, number, inline_evidence=formula_evidence, export_audit=export_audit)
         if len(text) > _MAX_PAGE_CHARS:
             raise ValueError("document_docling_invalid_output")
         elements = provenance[number]
@@ -95,7 +97,7 @@ def parse_document(request):
             if changes:
                 element["table_geometry_review"] = changes
         reading = {"mode": "docling", "parser_signature": request["signature"], "source_pdf_sha256": source_hash,
-                   "source_page": number, "page_export": {"policy": "provenance_charspan_v1", "split_item_refs": split_refs},
+                   "source_page": number, "page_export": export_audit,
                    "elements": elements, "parsed_text_sha256": _digest(text), "evidence_level": "local_layout_ocr_extraction"}
         part = {"location": f"page:{number}", "text": text, "document_reading": reading}
         undecoded = [e["item_ref"] for e in elements if "undecoded_formula" in e
@@ -105,6 +107,11 @@ def parse_document(request):
         elif undecoded or "<!-- formula-not-decoded -->" in text:
             reading["formula_review"] = {"status": "required", "undecoded_formula_refs": undecoded}
             part.update(status="quarantined", reason="document_docling_formula_undecoded")
+        elif export_audit["reading_order"].get("review_required"):
+            part.update(status="quarantined", reason="document_docling_reading_order_requires_review")
+        elif (export_audit["picture_export"].get("missing_child_refs")
+              or export_audit["picture_export"].get("duplicate_span_refs")):
+            part.update(status="quarantined", reason="document_docling_picture_export_requires_review")
         elif not text.strip():
             part.update(status="quarantined" if native["has_content"] else "skipped",
                         reason="document_docling_page_empty" if native["has_content"] else "empty_document_page")

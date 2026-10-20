@@ -88,6 +88,8 @@ REASON_LABELS = {
     "invalid_document_parse_schema": "文档解析返回结构无效",
     "document_text_requires_vision": "扫描页需要多模态识别",
     "document_docling_formula_undecoded": "公式未解码，需对照原 PDF 复核",
+    "document_docling_reading_order_requires_review": "阅读顺序待复核，原文已保留",
+    "document_docling_picture_export_requires_review": "图内内容导出不完整，结构化原文已保留",
     "document_pdf_parse_failed": "PDF 文件解析失败",
     "document_pdf_encrypted": "PDF 文件已加密",
     "empty_document_page": "空白页已跳过",

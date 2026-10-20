@@ -20,7 +20,9 @@ WORKER_ERROR_CODES = frozenset({
 
 
 def runtime_signature(config, *, check_cancel=None):
-    from lib.infrastructure.docling_document import _artifact_digest
+    from lib.infrastructure.docling_document import _artifact_digest, PAGE_EXPORT_POLICY
+    from lib.infrastructure.docling_reading_order import READING_ORDER_POLICY
+    from lib.infrastructure.docling_picture_export import PICTURE_EXPORT_POLICY
     from lib.infrastructure.docling_worker_client import run_docling_worker
     from lib.infrastructure.docling_table_geometry import GEOMETRY_POLICY
     from lib.infrastructure.docling_preflight import validate_runtime_assets
@@ -49,7 +51,10 @@ def runtime_signature(config, *, check_cancel=None):
     signature = {"mode": "docling", "parser_version": 3, "runtime_protocol": RUNTIME_PROTOCOL,
                  "packages": versions, "pdf_backend": "docling_parse_threaded", "table_mode": TABLE_ENGINE,
                  "table_geometry_policy": GEOMETRY_POLICY,
-                 "page_export_policy": "provenance_charspan_v1", "ocr": config["ocr"],
+                 "page_export_policy": PAGE_EXPORT_POLICY,
+                 "reading_order_policy": READING_ORDER_POLICY,
+                 "picture_export_policy": PICTURE_EXPORT_POLICY,
+                 "caption_placement": "layout", "ocr": config["ocr"],
                  "formula_enrichment": config["formula_enrichment"],
                  "layout_sha256": _artifact_digest(root / "docling-project--docling-layout-heron"),
                  "table_sha256": _artifact_digest(root / "docling-project--docling-models/model_artifacts/tableformer/accurate")}

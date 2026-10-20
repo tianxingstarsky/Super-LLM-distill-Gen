@@ -20,6 +20,7 @@ from lib.domain.document_parser import validate_document_parser
 DOCLING_VERSION = "2.60.1"
 DOCLING_CORE_VERSION = "2.48.4"
 DOCLING_ADAPTER_VERSION = 2
+PAGE_EXPORT_POLICY = "provenance_page_order_scoped_picture_children_v2"
 CODE_FORMULA_DIRECTORY = "ds4sd--CodeFormulaV2"
 _FORMULA_REQUIRED_FILES = (
     "config.json", "generation_config.json", "model.safetensors", "preprocessor_config.json",
@@ -133,9 +134,14 @@ def docling_parse_signature(config):
     # documented local layout prevents falling back to a hub download.
     layout = artifacts / "ds4sd--docling-layout-heron"
     table = artifacts / "ds4sd--docling-models" / "model_artifacts" / "tableformer" / "accurate"
+    from lib.infrastructure.docling_reading_order import READING_ORDER_POLICY
+    from lib.infrastructure.docling_picture_export import PICTURE_EXPORT_POLICY
     signature = {"mode": "docling", "parser_version": DOCLING_ADAPTER_VERSION,
                  "packages": versions, "pdf_backend": "pypdfium2", "layout_model": "docling_layout_heron",
-                 "page_export_policy": "provenance_charspan_v1",
+                 "page_export_policy": PAGE_EXPORT_POLICY,
+                 "reading_order_policy": READING_ORDER_POLICY,
+                 "picture_export_policy": PICTURE_EXPORT_POLICY,
+                 "caption_placement": "layout",
                  "table_mode": "accurate", "ocr": config["ocr"],
                  "formula_enrichment": config["formula_enrichment"],
                  "layout_sha256": _artifact_digest(layout), "table_sha256": _artifact_digest(table)}
@@ -235,8 +241,9 @@ def _page_provenance(document, page_numbers):
     """Keep original element references and bounding boxes with each page."""
     result = {number: [] for number in page_numbers}
     undecoded_chars = {number: 0 for number in page_numbers}
+    picture_refs = {picture.self_ref for picture in getattr(document, "pictures", [])}
     count = 0
-    for item, _ in document.iterate_items():
+    for item, _ in document.iterate_items(traverse_pictures=True):
         for prov in getattr(item, "prov", []):
             number = getattr(prov, "page_no", None)
             if type(number) is not int or number not in result:
@@ -248,6 +255,16 @@ def _page_provenance(document, page_numbers):
             label = getattr(item, "label", None)
             label = getattr(label, "value", label)
             element = {"item_ref": getattr(item, "self_ref", None), "label": label, "provenance": record}
+            parent = getattr(item, "parent", None)
+            if parent is not None:
+                element["parent_ref"] = parent.cref
+                seen = set()
+                while parent is not None and parent.cref not in seen:
+                    seen.add(parent.cref)
+                    if parent.cref in picture_refs:
+                        element.update(picture_ref=parent.cref, source_role="picture_child")
+                        break
+                    parent = getattr(parent.resolve(document), "parent", None)
             decoded = getattr(item, "text", "") or ""
             if label == "formula" and not isinstance(decoded, str):
                 raise ValueError("document_docling_invalid_output")
@@ -265,7 +282,7 @@ def _page_provenance(document, page_numbers):
     return result
 
 
-def page_markdown(document, page_number, *, inline_evidence=None):
+def page_markdown(document, page_number, *, inline_evidence=None, export_audit=None):
     """Project cross-page text into a page view without changing the source.
 
 The pinned Markdown serializer filters by an item's first provenance page and
@@ -278,7 +295,7 @@ items in a shallow document view with their provenanced page fragments.
                     if getattr(item, "self_ref", None) is not None}
     replacements = {}
     split_refs = []
-    for item, _ in document.iterate_items():
+    for item, _ in document.iterate_items(traverse_pictures=True):
         provenance = getattr(item, "prov", [])
         pages = {entry.page_no for entry in provenance}
         if len(pages) <= 1 or page_number not in pages:
@@ -328,10 +345,20 @@ items in a shallow document view with their provenanced page fragments.
     if replacements:
         page_document = document.model_copy(update={"texts": [replacements.get(index, item)
                                                              for index, item in enumerate(texts)]})
+    from lib.infrastructure.docling_reading_order import project_page_reading_order
+    page_document, order_audit = project_page_reading_order(page_document, page_number)
+    picture_audit = {}
     if inline_evidence:
         from lib.infrastructure.docling_inline_markdown import export_inline_markdown
-        return export_inline_markdown(page_document, page_number, inline_evidence), split_refs
-    return page_document.export_to_markdown(page_no=page_number, image_placeholder=""), split_refs
+        markdown = export_inline_markdown(
+            page_document, page_number, inline_evidence, export_audit=picture_audit)
+    else:
+        from lib.infrastructure.docling_picture_export import serialize_picture_page
+        markdown, picture_audit = serialize_picture_page(page_document, page_number)
+    if export_audit is not None:
+        export_audit.update(policy=PAGE_EXPORT_POLICY, split_item_refs=split_refs,
+                            reading_order=order_audit, picture_export=picture_audit)
+    return markdown, split_refs
 
 
 def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
@@ -392,12 +419,13 @@ def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
     for number, original in zip(page_numbers, native):
         if check_cancel:
             check_cancel()
-        text, split_refs = page_markdown(document, number)
+        export_audit = {}
+        text, split_refs = page_markdown(document, number, export_audit=export_audit)
         if not isinstance(text, str) or len(text) > _MAX_PAGE_CHARS:
             raise ValueError("document_docling_invalid_output")
         reading = {"mode": "docling", "parser_signature": signature,
                    "source_pdf_sha256": source_sha256, "source_page": number,
-                   "page_export": {"policy": "provenance_charspan_v1", "split_item_refs": split_refs},
+                   "page_export": export_audit,
                    "elements": provenance[number], "parsed_text_sha256": _digest(text),
                    "evidence_level": "local_layout_ocr_extraction"}
         undecoded_refs = list(dict.fromkeys(item["item_ref"] for item in provenance[number]
@@ -410,6 +438,11 @@ def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
         part = {"location": f"page:{number}", "text": text, "document_reading": reading}
         if original.get("requires_vision") and not config["ocr"]:
             part.update(status="quarantined", reason="document_text_requires_vision", requires_vision=True)
+        elif export_audit["reading_order"].get("review_required"):
+            part.update(status="quarantined", reason="document_docling_reading_order_requires_review")
+        elif (export_audit["picture_export"].get("missing_child_refs")
+              or export_audit["picture_export"].get("duplicate_span_refs")):
+            part.update(status="quarantined", reason="document_docling_picture_export_requires_review")
         elif not text.strip():
             if original["has_content"]:
                 part.update(status="quarantined", reason="document_docling_page_empty")

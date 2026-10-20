@@ -135,6 +135,13 @@ def test_inline_signature_inspects_separate_runtime_and_fingerprints_policies(tm
     assert detail["partition_policy"] == partitions.INLINE_PARTITION_POLICY
     assert detail["render"] == {"page_dpi": 288, "paragraph_dpi": 480, "formula_dpi": 480}
     assert detail["packages"] == runtime.INLINE_LAYOUT_PACKAGES
+    from lib.infrastructure.docling_document import PAGE_EXPORT_POLICY
+    from lib.infrastructure.docling_picture_export import PICTURE_EXPORT_POLICY
+    from lib.infrastructure.docling_reading_order import READING_ORDER_POLICY
+    assert signature["page_export_policy"] == PAGE_EXPORT_POLICY
+    assert signature["picture_export_policy"] == PICTURE_EXPORT_POLICY
+    assert signature["reading_order_policy"] == READING_ORDER_POLICY
+    assert signature["caption_placement"] == "layout"
     assert calls == [({"action": "inspect"}, cancel),
                      ({"action": "inspect", "service": "inline_layout"}, cancel)]
     from lib.infrastructure import docling_code_classification as code
