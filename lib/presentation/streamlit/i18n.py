@@ -9,7 +9,18 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "解析依赖版本不匹配。独立环境请使用 requirements-docling-runtime.txt，当前环境请使用 requirements-docling.txt。": "Parser package versions do not match. Use requirements-docling-runtime.txt for the isolated environment, or requirements-docling.txt for the current environment.",
+    "本地解析进程未能完全停止，请检查本机进程后重试。已有结果会保留。": "The local parser could not fully stop. Check local processes before retrying. Existing results are kept.",
+    "独立解析环境的版面或表格模型文件不完整，请检查本地模型目录。": "Local layout or table model files are incomplete. Check the model directory.",
+    "本地公式模型文件不完整，请准备完整的 Pix2Text MFR 1.5 模型目录。": "Formula model files are incomplete. Prepare the complete Pix2Text MFR 1.5 directory.",
+    "本地 OCR 模型文件不完整，请准备检测模型及所选语言对应的识别模型。": "OCR model files are incomplete. Prepare the detector and the recognizers for your selected languages.",
+    "使用本地公式模型识别公式区域，不调用云端 API。行内公式、符号与复杂排版仍需对照原文核验。": "Read formula regions with a local model. No cloud API is called. Check inline formulas, symbols and complex layouts against the PDF.",
     "Docling 本地版面": "Docling local layout",
+    "独立解析环境 Python（可选）": "Isolated parser Python (optional)",
+    "使用独立环境的原生词级解析，改善表格单元格对齐。留空沿用当前环境；Windows 安装目录需使用英文路径。": "Use native word-level parsing in an isolated environment to improve table cell alignment. Leave blank to use the current environment. On Windows, use an ASCII installation path.",
+    "独立解析环境不可用，请检查 Python 路径或重新安装本地解析环境。": "The isolated parser is unavailable. Check its Python path or reinstall the local environment.",
+    "本地解析超时，未发布不完整结果。可以检查文档后重试。": "Local parsing timed out. No incomplete result was published. Check the document and try again.",
+    "本地解析进程未完成，未发布不完整结果。请检查模型文件与解析环境。": "Local parsing did not finish. No incomplete result was published. Check the model files and parser environment.",
     "跨页内容无法按原始位置可靠拆分，解析已停止。请对照原 PDF 检查，或改用其他解析方式。": "Cross-page content could not be split reliably from its original positions. Parsing stopped. Check the PDF or use another parser.",
     "此页含未解码公式，已隔离并保留原文与页码。请检查本地公式识别设置，并对照原 PDF 复核。": "This page contains undecoded formulas and was quarantined. Its original text and page references are kept. Check local formula recognition settings and compare with the PDF.",
     "公式未解码，需对照原 PDF 复核": "Undecoded formula: check against the original PDF",

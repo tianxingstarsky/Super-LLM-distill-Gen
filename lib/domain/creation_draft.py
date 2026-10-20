@@ -33,7 +33,7 @@ DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT
                   'workflow-production-budget': (0, 1_000_000_000)}
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-math-theme': 20000,
                'workflow-docling-artifacts': 4096, 'workflow-docling-ocr-models': 4096,
-               'workflow-docling-languages': 120,
+               'workflow-docling-languages': 120, 'workflow-docling-runtime': 4096,
                'workflow-source-brief': 20000, 'workflow-preset': 128, 'workflow-source-mode': 128,
                'workflow-web-research-query': 160, 'workflow-web-research-more': 700,
                'workflow-knowledge-query': 2000,

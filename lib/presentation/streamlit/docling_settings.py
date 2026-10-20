@@ -9,15 +9,23 @@ from lib.infrastructure.docling_document import _package_versions, _formula_pack
 
 DOCLING_ERRORS = {
     "document_docling_unavailable": "Docling 可选依赖尚未安装，请先按文档准备本地解析环境。",
-    "document_docling_version_mismatch": "Docling 版本与适配器不一致，请使用 requirements-docling.txt 中的固定版本。",
+    "document_docling_version_mismatch": "解析依赖版本不匹配。独立环境请使用 requirements-docling-runtime.txt，当前环境请使用 requirements-docling.txt。",
     "document_docling_local_models_required": "请填写已准备好的本地模型目录；解析不会自动下载模型。",
     "document_docling_formula_models_required": "公式识别模型未就绪。请在 Docling 模型目录中准备完整的 ds4sd--CodeFormulaV2 文件夹。",
     "document_docling_formula_undecoded": "此页含未解码公式，已隔离并保留原文与页码。请检查本地公式识别设置，并对照原 PDF 复核。",
     "document_docling_page_span_ambiguous": "跨页内容无法按原始位置可靠拆分，解析已停止。请对照原 PDF 检查，或改用其他解析方式。",
     "invalid_document_docling_ocr_languages": "OCR 语言代码无效，请使用 en、ch_sim 等 EasyOCR 语言代码。",
     "invalid_document_parser": "文档解析配置无效，请检查输入节点。",
+    "document_docling_runtime_unavailable": "独立解析环境不可用，请检查 Python 路径或重新安装本地解析环境。",
+    "document_docling_worker_runtime_unavailable": "独立解析环境不可用，请检查 Python 路径或重新安装本地解析环境。",
+    "document_docling_worker_timeout": "本地解析超时，未发布不完整结果。可以检查文档后重试。",
+    "document_docling_worker_failed": "本地解析进程未完成，未发布不完整结果。请检查模型文件与解析环境。",
+    "document_docling_worker_stop_failed": "本地解析进程未能完全停止，请检查本机进程后重试。已有结果会保留。",
+    "document_docling_runtime_models_required": "独立解析环境的版面或表格模型文件不完整，请检查本地模型目录。",
+    "document_docling_runtime_formula_models_required": "本地公式模型文件不完整，请准备完整的 Pix2Text MFR 1.5 模型目录。",
+    "document_docling_ocr_models_required": "本地 OCR 模型文件不完整，请准备检测模型及所选语言对应的识别模型。",
 }
-_FIELDS = {"artifacts": "", "ocr": False, "ocr-models": "", "languages": "ch_sim,en", "formula": False}
+_FIELDS = {"artifacts": "", "ocr": False, "ocr-models": "", "languages": "ch_sim,en", "formula": False, "runtime": ""}
 
 
 def _value(workspace, field):
@@ -36,6 +44,8 @@ def _widget_key(workspace, field):
 def docling_snapshot(workspace):
     value = {"mode": "docling", "artifacts_path": _value(workspace, "artifacts"),
              "ocr": _value(workspace, "ocr"), "formula_enrichment": _value(workspace, "formula")}
+    if _value(workspace, "runtime").strip():
+        value["runtime_python"] = _value(workspace, "runtime").strip()
     if value["ocr"]:
         value.update(ocr_models_path=_value(workspace, "ocr-models"),
                      ocr_languages=[item.strip() for item in _value(workspace, "languages").split(",")
@@ -48,6 +58,11 @@ def docling_setup_issue(config, *, require_dependencies=True):
     try:
         config = validate_document_parser(config)
         if not require_dependencies:
+            return None
+        if config.get("runtime_python"):
+            from lib.infrastructure.docling_preflight import inspect_runtime_cached, validate_runtime_assets
+            info = inspect_runtime_cached(config["runtime_python"])
+            validate_runtime_assets(config, runtime_info=info)
             return None
         _package_versions(config["ocr"])
         if config["formula_enrichment"]:
@@ -79,9 +94,12 @@ def render_docling_settings(workspace):
     st.caption("PDF 在本机识别版面与表格，解析结果存入可复用资料库。其他文档沿用本地文本解析。")
     st.text_input("Docling 本地模型目录", key=_widget_key(workspace, "artifacts"),
                   on_change=_save, args=(workspace, "artifacts"))
+    st.text_input("独立解析环境 Python（可选）", key=_widget_key(workspace, "runtime"),
+                  on_change=_save, args=(workspace, "runtime"),
+                  help="使用独立环境的原生词级解析，改善表格单元格对齐。留空沿用当前环境；Windows 安装目录需使用英文路径。")
     st.checkbox("启用本地公式识别（LaTeX）", key=_widget_key(workspace, "formula"),
                 on_change=_save, args=(workspace, "formula"),
-                help="使用本地 CodeFormulaV2 识别公式区域，不调用云端 API。行内公式、符号与复杂排版仍需对照原文核验。")
+                help="使用本地公式模型识别公式区域，不调用云端 API。行内公式、符号与复杂排版仍需对照原文核验。")
     enabled = st.checkbox("启用本地 OCR（扫描 PDF）", key=_widget_key(workspace, "ocr"),
                           on_change=_save, args=(workspace, "ocr"))
     if enabled:

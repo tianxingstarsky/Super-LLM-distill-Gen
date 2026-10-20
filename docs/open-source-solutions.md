@@ -1,6 +1,6 @@
 # Open-source solutions and adoption status
 
-Reviewed on 2026-10-19. This is an engineering decision log, not a claim that a
+Reviewed on 2026-10-20. This is an engineering decision log, not a claim that a
 library or a paper guarantees correct training data. The initial adoption used
 offline fixtures. Local model provisioning and real-PDF checks are separate
 from public research benchmark results; no model API is needed for Docling.
@@ -49,12 +49,12 @@ before redistribution.
 document representation, PDF layout analysis, tables, and optional OCR. Its
 [technical report](https://arxiv.org/abs/2408.09869) describes the underlying
 document conversion approach. The code is MIT licensed; each model has its own
-license. The new adapter uses the published
+license. The original in-process adapter uses the published
 [2.60.1 API](https://github.com/docling-project/docling/tree/v2.60.1), with
 `docling-core==2.48.4`. These versions are an explicit compatibility baseline,
 not a statement that they are the latest release.
 
-The adapter explicitly uses Docling's official `PyPdfiumDocumentBackend` on
+The in-process adapter explicitly uses Docling's official `PyPdfiumDocumentBackend` on
 every platform, as supported by the upstream
 [custom conversion example](https://docling-project.github.io/docling/_generated/examples/custom_convert/).
 The default docling-parse backend failed to find its glyph assets under the
@@ -63,6 +63,13 @@ handles the PDF text and raster input; Docling's layout, table and optional
 formula models still perform their usual work. The backend name is part of the
 parse signature. This is an explicit backend choice, never an error-triggered
 fallback or a modification of installed package files.
+
+For better native word alignment, an optional isolated worker now uses
+[Docling 2.140.0](https://github.com/docling-project/docling/tree/v2.140.0),
+`docling-core==2.102.0`, `docling-parse==7.22.3`, and the default TableFormer V1.
+Its native parser is installed under an ASCII Windows path. The application
+does not upgrade its own environment or change existing saved workflows.
+The worker option and its formula engine are documented below.
 
 Select **Docling 本地版面** in the existing input node. Provide a local artifact
 directory. PDF pages are processed by Docling; TXT, Markdown, TeX, LaTeX, and
@@ -179,7 +186,7 @@ and UI persistence. These regressions do not measure real layout/OCR quality.
 Real-PDF acceptance must report which formulas, table cells and page references
 were compared with the source, and retain any unresolved extraction defects.
 
-### Local paper validation (2026-10-19)
+### Initial local paper validation (2026-10-19)
 
 The installed adapter was exercised on all 15 pages of
 [Attention Is All You Need, arXiv v7](https://arxiv.org/abs/1706.03762v7).
@@ -210,6 +217,114 @@ These results do not qualify the extracted mathematical content for unattended
 training-data use. Keep the source PDF and structured provenance for review;
 nonempty LaTeX and a successful conversion status are not correctness checks.
 No source PDF, model weights or local validation report is bundled in Git.
+
+### Isolated native parser and local formula crops
+
+Install the worker in a separate environment, using an ASCII path on Windows:
+
+```powershell
+python -m venv F:\docling-runtime
+F:\docling-runtime\Scripts\python.exe -m pip install -r requirements-docling-runtime.txt
+```
+
+In the existing input node, select **Docling 本地版面** and set
+**独立解析环境 Python（可选）** to that environment's Python executable.
+Prepare these complete local model directories:
+
+```text
+models/
+  docling-project--docling-layout-heron/
+  docling-project--docling-models/model_artifacts/tableformer/accurate/
+  breezedeus--pix2text-mfr-1.5/
+```
+
+The third directory is required only when local formula recognition is enabled.
+It uses the official [Pix2Text MFR 1.5 pure-formula ONNX route](https://huggingface.co/breezedeus/pix2text-mfr-1.5/blob/1cef9f0bdcd6a4c63df7de1311fb0894593340cc/README.md),
+with `TrOCRProcessor` and `ORTModelForVision2Seq`. The model is MIT licensed.
+The reviewed revision is `1cef9f0bdcd6a4c63df7de1311fb0894593340cc`.
+Keep both encoder and decoder ONNX weights, all processor/tokenizer files,
+and generation settings together. No custom model implementation or remote
+code is loaded.
+
+Detected display formulas are rendered from their original PDF coordinates at
+240 dpi with a 2-point margin. Pure mathematical table cells use a smaller
+0.5-point margin, clipped by adjacent cell geometry. Each result retains its
+original text, page, crop coordinates, image hash, raw prediction, and status.
+Mixed prose and math remain unchanged and require review. Rotated or offset
+page coordinates that the character selector cannot safely map also require
+review. A failed crop affects that item; it does not discard unrelated pages.
+Model initialization or inference failures still stop conversion.
+
+Numeric conservation is only a rejection check: changed digits are rejected,
+but matching digits do not prove correct order, exponents, or meaning.
+Truncated, empty, or unknown-symbol predictions are not published as valid
+formulas. A page with unresolved formula evidence is quarantined. Recognized
+formulas remain **unverified** until compared with the PDF.
+
+Table span refinement uses visible PDF rules and explicit cell boundaries.
+It does not infer missing table values or substitute paper-specific answers.
+Unsupported table geometry retains the upstream structure and an explanation.
+Inline formulas inside prose are not replaced using guessed glyph clusters.
+
+The worker disables remote services and downloads. A Python audit hook blocks
+its socket operations; inference uses only local assets. This is a runtime
+guard for the pinned libraries, not an operating-system network sandbox.
+The parent serializes local parsing across application processes, validates
+all page results before publishing any, and checks the source and model
+signature before and after parsing. Cancellation stops the owned process tree.
+The persistent source library reuses matching parsed documents across jobs.
+Changing the backend, weights, crop policy, or selection policy invalidates
+that reuse.
+
+UI preflight checks installed package metadata and required local files.
+It does not hash large weights on every rerender or load neural models.
+Full content hashes are checked when a task starts. Setup errors remain
+actionable inside the input node.
+
+### Follow-up paper validation (2026-10-20)
+
+The actual isolated-worker adapter parsed the same fixed 15-page PDF in
+61.235 seconds on CPU. Model API calls remained disabled. The final audit was
+bound to hashes of the document, formulas, tables, page parts, Markdown, and
+run metrics.
+
+- All six display-formula items, representing five source formula groups,
+  retained the checked mathematical structure.
+- All four table shapes, spans, values outside mathematical cells, and
+  original blank cells matched the frozen source checks. The audit covered
+  187 nonempty nonmathematical cells and 144 explicit blank cells.
+- Thirty-four of 35 mathematical table cells were accepted after source
+  comparison. The remaining mixed text/math header, `params ×10⁶`, was
+  deliberately left unchanged and page 9 quarantined. An earlier local
+  proposal read it correctly, but the conservative mixed-content guard
+  cannot authorize replacing that cell automatically.
+- All 15 physical page identities and eight cross-page text fragments were
+  correct. On pages 9 and 10, a continuation paragraph still precedes a
+  floating table in exported reading order.
+- Six of eight checked inline-math examples still lost fractions, scripts,
+  summation limits, or dimension relationships. The two literal successes
+  do not establish general inline recognition.
+- Picture coordinates and captions remain in the document. Embedded image
+  payloads and complete diagram semantics are not produced. A title inside
+  the page-13 figure remains in structured data but not in page Markdown.
+
+TableFormer V2, Camelot, and Granite crop experiments were retained as
+comparisons, not silently adopted. Some corrected an individual region but
+introduced other numeric or structural errors. Reference answers were used
+only by the independent evaluator; none entered the extraction pipeline.
+
+An additional isolated experiment uses the official
+[PP-DocLayoutV3 ONNX model](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_onnx)
+through PaddleOCR/PaddleX 3.7.0. Code and model are Apache-2.0. Local detection
+on pages 4–7 took 2.929 seconds after initialization, with
+`filter_overlap_boxes=False` to retain formulas nested inside text blocks.
+Seven of eight frozen examples had their main formula covered, but one lost
+a variable prefix and two crops included neighboring text. Reading the actual
+predicted crops with MFR passed formula-fragment checks in five of eight cases
+(eight of eleven fragments), not full paragraph reconstruction. It also converted stray
+ink into false accents in one projection formula. This detector is not
+integrated into the production parser: automatic replacement would still
+require reliable boundaries and correct text/formula reintegration.
 
 ## Remaining candidates
 

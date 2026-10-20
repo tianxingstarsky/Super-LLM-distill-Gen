@@ -28,7 +28,7 @@ def validate_document_parser(value=None) -> dict:
     if isinstance(value, dict) and value.get("unconfirmed"):
         raise ValueError("document_model_vision_not_confirmed")
     if isinstance(value, dict) and value.get("mode") == "docling":
-        allowed = {"mode", "artifacts_path", "ocr", "ocr_models_path", "ocr_languages", "formula_enrichment"}
+        allowed = {"mode", "artifacts_path", "ocr", "ocr_models_path", "ocr_languages", "formula_enrichment", "runtime_python"}
         if (set(value) - allowed or type(value.get("ocr", False)) is not bool
                 or type(value.get("formula_enrichment", False)) is not bool):
             raise ValueError("invalid_document_parser")
@@ -39,6 +39,10 @@ def validate_document_parser(value=None) -> dict:
             return str(Path(path))
         result = {"mode": "docling", "artifacts_path": local_path("artifacts_path"),
                   "ocr": value.get("ocr", False), "formula_enrichment": value.get("formula_enrichment", False)}
+        if value.get("runtime_python"):
+            result["runtime_python"] = local_path("runtime_python")
+        elif "runtime_python" in value and value["runtime_python"] not in (None, ""):
+            raise ValueError("invalid_document_parser")
         if result["ocr"]:
             languages = value.get("ocr_languages", ["en"])
             if (not isinstance(languages, list) or not 1 <= len(languages) <= 8

@@ -124,6 +124,9 @@ def docling_parse_signature(config):
     config = validate_document_parser(config)
     if config["mode"] != "docling":
         raise ValueError("invalid_document_parser")
+    if config.get("runtime_python"):
+        from lib.infrastructure.docling_runtime import runtime_signature
+        return runtime_signature(config)
     versions = _package_versions(config["ocr"])
     artifacts = Path(config["artifacts_path"])
     # These are the explicit layout/table models selected below. Requiring the
@@ -334,6 +337,10 @@ def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
     config = validate_document_parser(config)
     if path.suffix.lower() != ".pdf":
         raise ValueError("document_docling_pdf_required")
+    if config.get("runtime_python"):
+        from lib.infrastructure.docling_runtime import runtime_parts
+        yield from runtime_parts(path, config, expected_signature=expected_signature, check_cancel=check_cancel)
+        return
     signature = docling_parse_signature(config)
     if expected_signature is not None and signature != expected_signature:
         raise ValueError("document_docling_configuration_changed")
