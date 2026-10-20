@@ -14,7 +14,7 @@ import re
 import unicodedata
 
 
-MATH_REGION_POLICY = "pdfium_glyph_math_evidence_v2"
+MATH_REGION_POLICY = "pdfium_glyph_math_evidence_v3"
 
 
 def is_math_font(name):
@@ -106,9 +106,11 @@ def extract_pdf_page_glyphs(source, page_no):
             codepoint = raw.FPDFText_GetUnicode(textpage, index)
             text = chr(codepoint) if codepoint <= 0x10ffff else "\ufffd"
             box = textpage.get_charbox(index)
+            weight = raw.FPDFText_GetFontWeight(textpage, index)
             glyphs.append({"char_index": index, "text": text, "codepoint": codepoint,
                            "font_name": buffer.value.decode("utf-8", errors="replace"),
                            "font_flags": flags.value, "font_size": raw.FPDFText_GetFontSize(textpage, index),
+                           "font_weight": weight if weight > 0 else None,
                            "bbox": _box_dict(box), "origin": [x.value, y.value] if has_origin else None,
                            "generated": raw.FPDFText_IsGenerated(textpage, index) == 1})
         return {"page_no": page_no, "width": width, "height": height, "glyphs": glyphs,

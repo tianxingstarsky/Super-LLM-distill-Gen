@@ -12,9 +12,9 @@ def export_inline_markdown(document, page_number, evidence):
         proof = evidence.get(item.self_ref, {})
         if proof.get("kind") != "inline_math" or not proof.get("published"):
             continue
-        if len(item.prov) != 1 or item.prov[0].page_no != page_number:
+        if not item.prov or any(prov.page_no != page_number for prov in item.prov):
             continue
-        assembly = proof["assembly"]
+        assembly = proof.get("page_assemblies", {}).get(str(page_number), proof["assembly"])
         if item.text != assembly["text"] or not assembly.get("prose_preserved"):
             raise ValueError("document_docling_invalid_output")
         original, cursor, pieces, expected = assembly["backend_text"], 0, [], []

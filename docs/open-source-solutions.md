@@ -368,8 +368,8 @@ detector context; this does not assert that they form one equation.
 An overbroad detector box may be retained as a layout container only when its
 glyphs and raster ink are accounted for by formula candidates and untouched
 ordinary prose. Exact source-character alignment can place adjacent formula
-fragments when the original whitespace proves their boundaries. Each fragment
-remains separate. A successful mixed-block reconstruction uses a normal text
+fragments when the original whitespace proves their boundaries. Independent
+expressions remain separate. A successful mixed-block reconstruction uses a normal text
 item with embedded math, while preserving its reference and provenance.
 Code items keep their original type even when a probe produces matching math:
 character agreement alone cannot establish that programming-language content
@@ -384,6 +384,40 @@ and source character inventories then locate the replacement spans. Native
 line-end word hyphens may be ignored during anchor matching only when glyph
 geometry and the existing Docling paragraph establish the correspondence.
 Published prose is retained verbatim.
+Ordinary words next to parentheses are not sufficient evidence of a function
+call. The limited roman-name exception requires an operator, a continuous
+name and an adjacent opening parenthesis, with a mathematical variable on the
+same baseline. Spaces within the name or before its parenthesis prevent this
+exception. Operator spacing is allowed only inside a complete enclosing
+mathematical expression, with every intervening source ID proven to be a
+same-line space. Missing, duplicate or nonspace source characters block it.
+
+For a supported arithmetic continuation, physical lines must belong to the
+same source paragraph and preserve reading order. A later line must begin with
+an arithmetic operator and must not introduce another equation. The pipeline
+masks neighboring prose from one source crop, checks that no formula ink was
+removed, and runs Pix2Text again on the complete expression. It accepts this
+whole prediction only when its parsed structure agrees with the verified
+rows. Export uses one math span, not concatenated row predictions. A failed
+whole-expression check blocks publication of the partial reconstruction.
+
+Source PDF fonts also provide evidence. Pinned `pypdf` and `fontTools` readers
+can resolve a Type1 symbol encoding or an explicit bold declaration from the
+embedded font program. Each claim must bind to a source character, position,
+font and file hash. Unsupported encodings remain unresolved. Explicit bold
+commands in OCR output must agree with uniquely identified source glyphs;
+unknown or ambiguous weights require review. A complete prediction with a
+variable mismatch or a known unsupported bold style may receive two bounded
+retries of the identical region, at 240 and 360 dpi. All raw attempts remain
+available. The pipeline never fixes a candidate by replacing variables or
+stripping its bold commands.
+
+Already readable scalar values, identifiers, punctuation and author footnote
+markers can remain native text when the source glyphs, parser characters and
+paragraph agree. These records are marked as preserved, not new OCR fixes.
+Paragraphs spanning pages are processed by their proven source character spans
+and reassembled atomically. Any unresolved part keeps the entire original
+paragraph available for review.
 
 Only a paragraph with no outstanding boundary, coverage or assembly issue is
 rewritten. Other paragraphs keep their original text and proposed candidates
@@ -392,12 +426,12 @@ protected Markdown serialization, so a subscript `_` does not become a literal
 `\_`, and a comparison `<` is not converted into an HTML entity inside math.
 
 This remains a conservative native-PDF path. Scanned pages, rotated coordinate
-frames, ambiguous multi-page paragraphs, semantic equation continuation and
+frames, ambiguous multi-page paragraphs, unsupported equation continuations and
 missed inline regions are not silently treated as solved. Recognition, complete
 paragraph assembly and actual export are evaluated separately. None of the
 paper's expected formulas or acceptance strings enter the recognizer.
 
-The 2026-10-20 local adapter run on the same 15-page Attention paper took
+The initial 2026-10-20 local adapter run on the same 15-page Attention paper took
 181.062 seconds. It published 17 formula spans in 10 paragraphs. Independent
 checks passed all 17 inserted spans and confirmed that reverting those
 insertions recovered the original prose. Five of the eight fixed difficult
@@ -406,7 +440,7 @@ small, selected benchmark, not a general accuracy estimate. Twenty-six
 inline records still required review, and pages 1–10 remained quarantined.
 Existing display-formula and table outputs were unchanged.
 
-A separate two-page native PDF fixture took 39.188 seconds through the same
+A separate two-page native PDF fixture in that initial run took 39.188 seconds through the same
 adapter. A polynomial split across two physical lines was reconstructed as
 two correct, ordered math spans. Its trailing prose stayed outside LaTeX.
 Two adjacent independent equations remained separate. A code-labeled region
@@ -414,6 +448,25 @@ and an incorrectly capitalized symbol were held for review. This demonstrates
 physical line recovery and prose preservation; it does not establish semantic
 continuation for arbitrary equations. No remote model API was used. The
 relevant regression suite finished with 594 passed and one skipped.
+
+The follow-up run on the same unchanged paper took 204.359 seconds. The original
+26 review records were resolved as 12 mathematical-structure repairs, four
+formatting repairs and ten source-preservation cases. Across the paper, 26
+paragraphs contain 55 published math spans. All 458 original text fields remain
+unchanged. Display formulas and tables are byte-identical to the prior run.
+Page 9 still requires review for the existing mixed table-header issue; this
+is separate from the resolved inline records.
+
+The final two-page fixture took 42.438 seconds. Its wrapped polynomial now
+exports as one complete `aligned` expression, with the trailing prose outside
+the math span. Independent neighboring equations remain separate. Real crop
+retries restore the lowercase variable and the ordinary-weight subscripted
+variable, while retaining the rejected uppercase and bold outputs. The
+code-labeled example remains held because character agreement cannot resolve
+its document role. Both final runs used the actual adapter with networking
+disabled. The broader regression run passed 784 tests with one skipped; after
+the final boundary changes, 180 relevant regression tests passed again.
+These are results on this paper and fixture, not a general PDF accuracy claim.
 
 ## Remaining candidates
 

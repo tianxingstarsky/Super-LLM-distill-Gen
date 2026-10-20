@@ -24,7 +24,7 @@ _FORMULA_FILES = (
 _FORMULA_PACKAGES = {"transformers": "4.57.6", "onnxruntime": "1.31.0",
                      "optimum": "2.1.0", "optimum-onnx": "0.1.0"}
 _INLINE_LAYOUT_FILES = ("inference.onnx", "inference.yml")
-_INLINE_FORMULA_PACKAGES = {"pylatexenc": "2.11"}
+_INLINE_FORMULA_PACKAGES = {"pylatexenc": "2.11", "pypdf": "6.19.0", "fonttools": "4.67.0"}
 
 
 def _stat_record(path):

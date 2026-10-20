@@ -21,7 +21,7 @@ import unicodedata
 from .docling_math_regions import _box, _box_dict, extract_pdf_page_glyphs, is_math_font
 
 
-INLINE_GEOMETRY_POLICY = "pdfium_inline_glyph_raster_v1"
+INLINE_GEOMETRY_POLICY = "pdfium_inline_glyph_raster_owned_boundaries_v3"
 
 
 def _intersects(a, b):
@@ -140,7 +140,7 @@ def _pixel_evidence(page, image, original, proposed, retained, excluded, added):
 
 def refine_inline_formula_geometry(page, detector_bbox, paragraph_bbox, *,
                                    page_image=None, source_ref=None, fragment_id=None,
-                                   coord_origin="BOTTOMLEFT"):
+                                   coord_origin="BOTTOMLEFT", allow_math_delimiters=False):
     """Return a proposed crop and auditable evidence, retaining the input on doubt.
 
     ``page`` is the result of ``extract_pdf_page_glyphs``. All glyphs are examined
@@ -201,6 +201,7 @@ def refine_inline_formula_geometry(page, detector_bbox, paragraph_bbox, *,
     selected = [g for g in glyphs if _intersects(g["_box"], original)]
     anchors = [g for g in selected if _math(g)]
     if not anchors:
+        result["char_indices"] = sorted(g["char_index"] for g in selected)
         reasons.append("no_pdf_math_anchor")
         return result
     if any(g.get("generated") for g in selected):
@@ -276,10 +277,16 @@ def refine_inline_formula_geometry(page, detector_bbox, paragraph_bbox, *,
 
     # Main-baseline roman letters may be prose or a roman mathematical name.
     # Geometry alone cannot distinguish them, including short words.
-    if any(g["text"].isalpha() and not _math(g) and g["font_size"] >= .88 * largest
+    boundary_proven = False
+    if allow_math_delimiters:
+        from .docling_inline_boundaries import mathematical_boundary_proof
+        proof = mathematical_boundary_proof(retained, source_glyphs=page["glyphs"])
+        result["mathematical_boundary"] = proof
+        boundary_proven = proof["proven"]
+    if not boundary_proven and any(g["text"].isalpha() and not _math(g) and g["font_size"] >= .88 * largest
            for g in retained):
         reasons.append("ordinary_text_formula_boundary_ambiguous")
-    if any(any(unicodedata.category(c) in ("Ps", "Pe") for c in g["text"])
+    if not boundary_proven and any(any(unicodedata.category(c) in ("Ps", "Pe") for c in g["text"])
            and not is_math_font(g["font_name"]) for g in retained):
         reasons.append("ordinary_delimiter_boundary_ambiguous")
 
@@ -297,8 +304,33 @@ def refine_inline_formula_geometry(page, detector_bbox, paragraph_bbox, *,
     proposed = tuple(proposed)
     if not _contains(bounds, proposed):
         reasons.append("proposed_crop_outside_page")
-    if not _contains(paragraph, ink_box, tolerance=padding):
-        reasons.append("glyph_extension_outside_source_paragraph")
+    # Native layout boxes and PDFium ink boxes differ at font ascenders and
+    # descenders. Complete the originally selected glyph only when its center
+    # still belongs to this paragraph; never extend ownership to a neighbor.
+    owned_overhang = all(
+        g["char_index"] in selected_ids
+        and paragraph[0] <= (g["_box"][0] + g["_box"][2]) / 2 <= paragraph[2]
+        and paragraph[1] <= (g["_box"][1] + g["_box"][3]) / 2 <= paragraph[3]
+        for g in retained)
+    result["paragraph_glyph_ownership"] = {
+        "all_original_glyph_centers_inside": owned_overhang,
+        "requires_unique_native_alignment_before_publication": True}
+    overhang = not _contains(paragraph, ink_box, tolerance=padding)
+    if overhang:
+        if not owned_overhang:
+            reasons.append("glyph_extension_outside_source_paragraph")
+        # Inspect the entire physical page, including characters excluded by the
+        # paragraph selector. The exception may complete a glyph, never import
+        # ink belonging to another paragraph or a neighboring column.
+        for outside in page["glyphs"]:
+            if not outside["text"].strip() or outside["char_index"] in retained_ids:
+                continue
+            box = _box(outside["bbox"], page["height"])
+            center_inside = (paragraph[0] <= (box[0] + box[2]) / 2 <= paragraph[2]
+                             and paragraph[1] <= (box[1] + box[3]) / 2 <= paragraph[3])
+            if not center_inside and _intersects(box, proposed):
+                reasons.append("external_glyph_in_paragraph_overhang")
+                break
     result.update(proposed_bbox=_box_dict(proposed),
                   char_indices=sorted(g["char_index"] for g in retained),
                   added_char_indices=sorted(g["char_index"] for g in added),
@@ -308,7 +340,37 @@ def refine_inline_formula_geometry(page, detector_bbox, paragraph_bbox, *,
     elif _contains(bounds, proposed):
         try:
             evidence = _pixel_evidence(page, page_image, original, proposed, retained, excluded, added)
+            # Detached prose can leave a few raster rows at the crop edge.
+            # Trim only source-attributed excluded ink, with all formula ink
+            # protected. Each proposal is remeasured against the original.
+            if excluded and not evidence["unassigned_original_ink_pixels"]:
+                alternatives = []
+                for edge, axis, direction in (("top", 3, -1), ("bottom", 1, 1)):
+                    if not evidence["proposed_edge_ink_pixels"][edge]:
+                        continue
+                    for pixels in range(1, 4):
+                        bounded = list(proposed)
+                        bounded[axis] += direction * pixels * padding
+                        bounded = tuple(bounded)
+                        if bounded[1] >= bounded[3]:
+                            continue
+                        check = _pixel_evidence(
+                            page, page_image, original, bounded, retained, excluded, added)
+                        if (not any(check["proposed_edge_ink_pixels"].values())
+                                and not any(check[key] for key in (
+                                    "unassigned_added_ink_pixels", "unassigned_removed_ink_pixels",
+                                    "retained_glyph_ink_removed_pixels"))):
+                            alternatives.append((pixels, bounded, check))
+                            break
+                if alternatives:
+                    _, proposed, evidence = min(alternatives, key=lambda row: row[0])
+                    result["proposed_bbox"] = _box_dict(proposed)
+                    result["detached_edge_trim"] = {
+                        "method": "source_attributed_raster_rows", "max_rows": 3,
+                        "protected_formula_ink_removed": evidence["retained_glyph_ink_removed_pixels"]}
             result["pixel_evidence"] = evidence
+            if overhang and evidence["unassigned_original_ink_pixels"]:
+                reasons.append("unassigned_ink_prevents_paragraph_overhang")
             if evidence["original_ink_pixels"] == 0:
                 reasons.append("empty_detector_raster")
             if evidence["unassigned_added_ink_pixels"]:

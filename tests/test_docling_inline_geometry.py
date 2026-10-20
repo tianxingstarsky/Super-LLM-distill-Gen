@@ -169,12 +169,215 @@ def test_same_line_short_prose_and_closing_delimiter_preserve_source_box(prose):
     assert result["excluded_char_indices"] == []
 
 
+@pytest.mark.parametrize("expression", ["where (x)", "where(x)", "x+ please(x)"])
+def test_balanced_math_delimiters_cannot_authorize_nearby_ordinary_prose(expression):
+    text = f"Use {expression} here."
+    source, x = [], 10
+    for index, char in enumerate(text):
+        source.append(glyph(index, char, x, width=2 if char.isspace() else 3,
+                            font="CMMI10" if char == "x" else "Helvetica"))
+        x += 3 if char.isspace() else 3.5
+    data = page(*source)
+    before = deepcopy(data)
+    first, last = source[4], source[4 + len(expression) - 1]
+    box = (first["bbox"]["l"] - 1, 22, last["bbox"]["r"] + 1, 35)
+    # Whitespace has source IDs and boxes but no visible black pixels.
+    with raster(page(*(g for g in source if not g["text"].isspace()))) as image:
+        result = refine(data, box, page_image=image, allow_math_delimiters=True)
+
+    assert_retained_original(result)
+    assert "ordinary_text_formula_boundary_ambiguous" in result["review_reasons"]
+    assert not result["mathematical_boundary"]["proven"]
+    assert result["pixel_evidence"]["unassigned_original_ink_pixels"] == 0
+    assert result["added_char_indices"] == result["excluded_char_indices"] == []
+    assert data == before
+
+
+def test_enclosed_math_function_uses_complete_page_evidence_for_generated_operator_spaces():
+    source = []
+    for index, char in enumerate("(x + Transform(y))"):
+        g = glyph(index, char, 20 + 4 * index, width=3,
+                  font="CMMI10" if char in "xy" else "Helvetica")
+        if char.isspace():
+            x, y = g["origin"]
+            g.update(generated=True, font_name="", font_size=1,
+                     bbox={"l": x, "r": x, "b": y, "t": y})
+        source.append(g)
+    data = page(*source)
+    with raster(page(*(g for g in source if g["text"].strip()))) as image:
+        result = refine(data, (18, 22, 94, 35), page_image=image, allow_math_delimiters=True)
+    assert not result["review_required"], result["review_reasons"]
+    assert result["mathematical_boundary"]["roman_function_contexts"][0][
+        "source_whitespace_char_indices"] == [2, 4]
+    assert result["char_indices"] == [g["char_index"] for g in source if g["text"].strip()]
+    assert result["added_char_indices"] == result["excluded_char_indices"] == []
+    assert result["pixel_evidence"]["removed_ink_pixels"] == 0
+
+
 def test_narrow_paragraph_cannot_authorize_extension_into_neighbor():
     data = page(glyph(0, "x", 20), glyph(1, "y", 24.5))
     result = refine_inline_formula_geometry(data, (23, 22, 31, 35), (23, 20, 40, 38),
                                             page_image=raster(data))
     assert_retained_original(result)
     assert "glyph_extension_outside_source_paragraph" in result["review_reasons"]
+
+
+def descender_page():
+    return page(glyph(0, "f", 20),
+                glyph(1, "(", 25, y=23.5, height=10, baseline=24, font="CMR10"),
+                glyph(2, "a", 30),
+                glyph(3, ")", 35, y=23.5, height=10, baseline=24, font="CMR10"))
+
+
+@pytest.mark.parametrize("detector_bottom", [23, 24.5])
+def test_original_owned_descenders_can_complete_their_boxes_without_changing_paragraph(detector_bottom):
+    data = descender_page()
+    paragraph = (18, 24, 41, 36)
+    original = (19, detector_bottom, 40, 35)
+    before = deepcopy(data)
+    result = refine_inline_formula_geometry(
+        data, original, paragraph, page_image=raster(data), allow_math_delimiters=True)
+
+    assert not result["review_required"], result["review_reasons"]
+    assert result["char_indices"] == [0, 1, 2, 3]
+    assert result["added_char_indices"] == result["excluded_char_indices"] == []
+    assert result["paragraph_bbox"] == dict(l=18, b=24, r=41, t=36, coord_origin="BOTTOMLEFT")
+    assert result["bbox"]["b"] < min(g["bbox"]["b"] for g in data["glyphs"])
+    assert result["paragraph_glyph_ownership"]["all_original_glyph_centers_inside"]
+    assert result["paragraph_glyph_ownership"]["requires_unique_native_alignment_before_publication"]
+    assert not result["automatic_text_replacement_allowed"]
+    pixels = result["pixel_evidence"]
+    assert pixels["removed_ink_pixels"] == 0
+    assert (pixels["added_ink_pixels"] > 0) == (detector_bottom == 24.5)
+    assert all(pixels[name] == 0 for name in (
+        "unassigned_original_ink_pixels", "unassigned_added_ink_pixels",
+        "unassigned_removed_ink_pixels", "retained_glyph_ink_removed_pixels"))
+    assert not any(pixels["proposed_edge_ink_pixels"].values())
+    assert data == before
+
+
+def test_overhang_checks_external_glyph_even_when_retained_mask_explains_its_pixels():
+    data = descender_page()
+    # This separate character lies wholly below the paragraph. Its pixels fall
+    # inside the retained parenthesis mask, so zero unassigned ink is not proof
+    # that the expanded crop contains only this paragraph's characters.
+    data["glyphs"].append(glyph(4, "+", 26, y=23.1, width=2, height=.8, font="CMSY10"))
+    result = refine_inline_formula_geometry(
+        data, (19, 24.5, 40, 35), (18, 24, 41, 36),
+        page_image=raster(data), allow_math_delimiters=True)
+
+    assert_retained_original(result)
+    assert result["paragraph_glyph_ownership"]["all_original_glyph_centers_inside"]
+    assert result["char_indices"] == [0, 1, 2, 3]
+    assert "external_glyph_in_paragraph_overhang" in result["review_reasons"]
+    assert result["pixel_evidence"]["unassigned_original_ink_pixels"] == 0
+    assert result["pixel_evidence"]["unassigned_added_ink_pixels"] == 0
+
+
+def test_identifier_closure_cannot_use_center_ownership_to_add_a_cross_boundary_character():
+    data = page(glyph(0, "x", 20), glyph(1, "y", 24.5))
+    result = refine_inline_formula_geometry(
+        data, (24.25, 22, 31, 35), (22, 20, 40, 38), page_image=raster(data))
+
+    assert_retained_original(result)
+    assert result["char_indices"] == [0, 1]
+    assert result["added_char_indices"] == [0]
+    # The prefix center lies on the paragraph boundary, but the detector did
+    # not select it. The descender exception must not authorize that extension.
+    assert not result["paragraph_glyph_ownership"]["all_original_glyph_centers_inside"]
+    assert "glyph_extension_outside_source_paragraph" in result["review_reasons"]
+    assert result["pixel_evidence"]["added_ink_pixels"] > 0
+    assert result["pixel_evidence"]["unassigned_added_ink_pixels"] == 0
+
+
+@pytest.mark.parametrize("detector_top", [30.5, 34])
+def test_script_outside_paragraph_center_is_never_added_or_approved_as_owned_overhang(detector_top):
+    data = page(glyph(0, "x", 20),
+                glyph(1, "2", 24.5, y=31, height=6, size=6, font="CMR6"))
+    result = refine_inline_formula_geometry(
+        data, (18, 22, 30, detector_top), (18, 20, 32, 33), page_image=raster(data))
+
+    assert_retained_original(result)
+    assert result["added_char_indices"] == []
+    if detector_top < 31:
+        assert result["char_indices"] == [0]
+        assert "nearby_unselected_script_requires_review" in result["review_reasons"]
+    else:
+        assert result["char_indices"] == [0, 1]
+        assert not result["paragraph_glyph_ownership"]["all_original_glyph_centers_inside"]
+        assert "glyph_extension_outside_source_paragraph" in result["review_reasons"]
+
+
+def test_unassigned_original_ink_prevents_owned_descender_exception():
+    data = descender_page()
+    image = raster(data)
+    image.putpixel((78, 360), (0, 0, 0))
+    result = refine_inline_formula_geometry(
+        data, (19, 24.5, 40, 35), (18, 24, 41, 36),
+        page_image=image, allow_math_delimiters=True)
+
+    assert_retained_original(result)
+    assert result["paragraph_glyph_ownership"]["all_original_glyph_centers_inside"]
+    assert "unassigned_ink_prevents_paragraph_overhang" in result["review_reasons"]
+    assert result["pixel_evidence"]["unassigned_original_ink_pixels"] == 1
+    assert result["pixel_evidence"]["unassigned_added_ink_pixels"] == 0
+
+
+def detached_edge_page():
+    return page(glyph(0, "X", 20),
+                glyph(1, "3", 25, y=30, width=3, height=6, size=7, font="CMR7"),
+                glyph(2, "p", 23, y=36.1, height=8.5, baseline=43, font="Helvetica"),
+                glyph(3, "g", 35, y=36.1, height=8.5, baseline=43, font="Helvetica"))
+
+
+def test_detached_edge_trim_removes_only_attributed_prose_and_preserves_formula_ink():
+    data = detached_edge_page()
+    image = raster(data)
+    # A source-attributed antialiasing pixel survives at the first proposed
+    # edge. It is outside every formula glyph mask, including the superscript.
+    image.putpixel((93, 335), (0, 0, 0))
+    result = refine(data, (18, 22, 42, 37), page_image=image)
+
+    assert not result["review_required"], result["review_reasons"]
+    assert result["char_indices"] == [0, 1] and result["excluded_char_indices"] == [2, 3]
+    assert result["detached_edge_trim"]["method"] == "source_attributed_raster_rows"
+    assert result["detached_edge_trim"]["protected_formula_ink_removed"] == 0
+    assert result["bbox"]["t"] == 36
+    pixels = result["pixel_evidence"]
+    assert pixels["removed_ink_pixels"] > 0
+    assert pixels["retained_glyph_ink_removed_pixels"] == pixels["unassigned_removed_ink_pixels"] == 0
+    assert pixels["original_ink_pixels"] - pixels["proposed_ink_pixels"] == pixels["removed_ink_pixels"]
+    assert not any(pixels["proposed_edge_ink_pixels"].values())
+
+
+def test_detached_edge_trim_cannot_remove_even_one_formula_mask_pixel():
+    data = detached_edge_page()
+    image = raster(data)
+    # This edge pixel overlaps the superscript's mask as well as prose. A
+    # successful trim would be deleting protected formula ink.
+    image.putpixel((102, 335), (0, 0, 0))
+    result = refine(data, (18, 22, 42, 37), page_image=image)
+
+    assert_retained_original(result)
+    assert "detached_edge_trim" not in result
+    assert "ink_touches_proposed_boundary" in result["review_reasons"]
+    assert result["pixel_evidence"]["proposed_edge_ink_pixels"]["top"] == 1
+    assert result["pixel_evidence"]["retained_glyph_ink_removed_pixels"] == 0
+    assert result["char_indices"] == [0, 1]
+
+
+def test_detached_edge_trim_rejects_unassigned_removed_pixels():
+    data = detached_edge_page()
+    image = raster(data)
+    image.putpixel((93, 335), (0, 0, 0))
+    image.putpixel((160, 333), (0, 0, 0))
+    result = refine(data, (18, 22, 42, 37), page_image=image)
+
+    assert_retained_original(result)
+    assert "detached_edge_trim" not in result
+    assert "unassigned_original_ink_prevents_trimming" in result["review_reasons"]
+    assert "unexplained_or_protected_ink_removed" in result["review_reasons"]
+    assert result["pixel_evidence"]["unassigned_removed_ink_pixels"] == 1
 
 
 def test_added_region_with_ink_not_explained_by_glyphs_requires_review():

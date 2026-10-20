@@ -73,6 +73,12 @@ def runtime_signature(config, *, check_cancel=None):
         from lib.infrastructure.docling_inline_routing import INLINE_ROUTING_POLICY
         from lib.infrastructure.docling_inline_lines import INLINE_LINE_POLICY
         from lib.infrastructure.docling_inline_partitions import INLINE_PARTITION_POLICY
+        from lib.infrastructure.docling_inline_boundaries import INLINE_BOUNDARY_POLICY
+        from lib.infrastructure.docling_inline_provenance import INLINE_PROVENANCE_POLICY
+        from lib.infrastructure.docling_native_font_evidence import NATIVE_FONT_POLICY
+        from lib.infrastructure.docling_inline_native_preservation import NATIVE_PRESERVATION_POLICY
+        from lib.infrastructure.docling_inline_continuation import INLINE_CONTINUATION_POLICY
+        from lib.infrastructure.docling_math_style import MATH_STYLE_POLICY
         signature["inline_formula"] = {
             "runtime_protocol": RUNTIME_PROTOCOL, "packages": inline_info["packages"],
             "detector": "PP-DocLayoutV3", "layout_policy": INLINE_LAYOUT_POLICY,
@@ -81,6 +87,15 @@ def runtime_signature(config, *, check_cancel=None):
             "markdown_policy": INLINE_MARKDOWN_POLICY,
             "routing_policy": INLINE_ROUTING_POLICY, "line_policy": INLINE_LINE_POLICY,
             "partition_policy": INLINE_PARTITION_POLICY,
+            "boundary_policy": INLINE_BOUNDARY_POLICY, "provenance_policy": INLINE_PROVENANCE_POLICY,
+            "native_font_policy": NATIVE_FONT_POLICY,
+            "native_preservation_policy": NATIVE_PRESERVATION_POLICY,
+            "continuation_policy": INLINE_CONTINUATION_POLICY,
+            "style_policy": MATH_STYLE_POLICY,
+            "character_retry": {"dpi": [240, 360], "white_padding_points": 2,
+                                "source_region_unchanged": True, "punctuation_guard": "all_predictions",
+                                "style_guard": "all_predictions",
+                                "retry_style": "known_unsupported_bold_or_absent_misread_variable_v2"},
             "render": {"page_dpi": 288, "paragraph_dpi": 480, "formula_dpi": 480},
             "layout_sha256": _artifact_digest(root / INLINE_LAYOUT_DIRECTORY),
         }

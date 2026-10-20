@@ -22,7 +22,7 @@ def _deny_network(event, args):
 def inspect_runtime():
     from lib.infrastructure.docling_runtime import MODERN_PACKAGES, RUNTIME_PROTOCOL
     names = list(MODERN_PACKAGES) + ["pydantic", "transformers", "torch", "pypdfium2", "easyocr",
-                                  "onnxruntime", "optimum", "optimum-onnx", "pylatexenc"]
+                                  "onnxruntime", "optimum", "optimum-onnx", "pylatexenc", "pypdf", "fonttools"]
     versions = {}
     metadata_files = {}
     for name in names:

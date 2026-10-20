@@ -1,13 +1,14 @@
 """Local inline math: layout detection, crop evidence, conservative assembly.
 
 The detector receives pixels only. Native characters establish crop/prose
-boundaries; they never supply a guessed formula to the recognizer. Separate
-physical fragments remain separate, even when they share a paragraph.
+boundaries; they never supply a guessed formula to the recognizer. A proven
+continuation is recognized again as one image, with its row evidence retained.
 """
 from __future__ import annotations
 
 import hashlib
 import math
+import unicodedata
 from pathlib import Path
 
 from .docling_inline_assembly import (
@@ -37,8 +38,8 @@ def _intersects(glyph, bbox):
 
 def _math(glyph):
     import unicodedata
-    return is_math_font(glyph["font_name"]) or any(
-        unicodedata.category(char) == "Sm" for char in glyph["text"])
+    return bool(glyph["text"].strip()) and (is_math_font(glyph["font_name"]) or any(
+        unicodedata.category(char) == "Sm" for char in glyph["text"]))
 
 
 def _native_views(native, glyph_text, bbox):
@@ -58,6 +59,15 @@ def _overlap(first, second):
         0, min(first["t"], second["t"]) - max(first["b"], second["b"]))
     smaller = min((value["r"]-value["l"])*(value["t"]-value["b"]) for value in (first, second))
     return area / smaller if smaller > 0 else 0
+
+
+def _punctuation_matches(source, latex):
+    from pylatexenc.latex2text import LatexNodes2Text
+    # Unicode ellipsis and the standard LaTeX dots macro have the same visible
+    # punctuation. This comparison never edits either source or transcription.
+    decoded = LatexNodes2Text().latex_to_text(latex).replace("…", "...")
+    source = source.replace("…", "...")
+    return all(decoded.count(c) == source.count(c) for c in ".,;:!?")
 
 
 def _detector_boxes(response, prepared):
@@ -131,6 +141,12 @@ def _publish_inline_item(document, item, assembly, route):
 
 
 def enrich_inline_formulas(document, source, config, reader, *, routes=None):
+    from .docling_inline_provenance import enrich_provenance_parts
+    return enrich_provenance_parts(
+        document, source, config, reader, routes or {}, _enrich_single_source_items)
+
+
+def _enrich_single_source_items(document, source, config, reader, *, routes=None):
     """Enrich single-page native paragraphs and retain all unresolved evidence."""
     from PIL import Image, ImageOps
     import pypdfium2 as pdfium
@@ -138,11 +154,8 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
     from .docling_worker_client import _owned_temporary_directory, run_docling_worker
 
     native_pages = read_native_character_pages(source)
+    from .docling_inline_boundaries import read_pdf_citation_links, separate_linked_citation
     routes = routes or {}
-    native_lines = {}
-    if any(route.get("probe_required") for route in routes.values()):
-        from .docling_inline_lines import read_native_line_pages
-        native_lines = read_native_line_pages(source)
     evidence, paragraphs, page_glyphs = {}, {}, {}
     labels = {"text", "list_item", "footnote", "caption"}
     for item in document.texts:
@@ -196,6 +209,29 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
         paragraphs.setdefault(number, []).append((item, bbox, glyphs))
     if not paragraphs:
         return evidence
+    from .docling_inline_lines import read_native_line_pages
+    native_lines = read_native_line_pages(source)
+    citation_links = read_pdf_citation_links(source)
+    from .docling_native_font_evidence import read_native_font_evidence, reconcile_native_font_evidence
+    font_proofs = read_native_font_evidence(source, page_numbers=set(paragraphs))
+    font_comparisons = {
+        number: reconcile_native_font_evidence(
+            native_pages.get(number, []), page_glyphs[number]["glyphs"], font_proofs.get(number, {}))
+        for number in paragraphs
+    }
+    from .docling_inline_native_preservation import prove_native_preservation
+    native_proofs = {}
+    for number, items in paragraphs.items():
+        annotations = []
+        for item, bbox, glyphs in sorted(
+                items, key=lambda entry: getattr(entry[0].label, "value", entry[0].label) != "footnote"):
+            route = routes.get(item.self_ref, {})
+            source_text = item.text or (item.orig if route.get("probe_required") else "")
+            proof = prove_native_preservation(
+                glyphs, native_paragraph_chars(native_pages.get(number, []), bbox), source_text,
+                label=getattr(item.label, "value", item.label), annotation_markers=annotations)
+            native_proofs[item.self_ref] = proof
+            annotations.extend(p for p in proof["proofs"] if p["kind"] == "footnote_symbol")
 
     pdf = pdfium.PdfDocument(source)
     try:
@@ -243,11 +279,11 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
                     square.close()
                     padded.close()
                     crop.close()
+                    from .docling_inline_lines import select_inline_line_views
+                    views = select_inline_line_views(
+                        native_lines.get(number, []), bbox, page_glyphs[number]["glyphs"])
+                    line_evidence[item.self_ref] = views
                     if routes.get(item.self_ref, {}).get("probe_required"):
-                        from .docling_inline_lines import select_inline_line_views
-                        views = select_inline_line_views(
-                            native_lines.get(number, []), bbox, page_glyphs[number]["glyphs"])
-                        line_evidence[item.self_ref] = views
                         for index, view in enumerate(views):
                             if view["review_required"]:
                                 continue
@@ -280,15 +316,29 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
                 try:
                     for item, bbox, glyphs in items:
                         fragments = []
+                        native_proof = native_proofs[item.self_ref]
+                        preserved_ids = set(native_proof["proven_glyph_ids"])
                         candidates = [dict(box) for box in detections.get(item.self_ref, [])]
                         for identifier in line_views.get(item.self_ref, []):
                             candidates.extend(dict(box) for box in detections.get(identifier, []))
                         candidates.extend(dict(box) for box in detections.get(f"page-{number}", [])
                                           if _overlap(box["bbox"], bbox) > .8)
+                        candidates = [separate_linked_citation(candidate, page, citation_links.get(number, []))
+                                      for candidate in candidates]
                         for index, candidate in enumerate(candidates):
                             candidate["geometry"] = refine_inline_formula_geometry(
                                 page, candidate["bbox"], bbox, page_image=image,
-                                source_ref=item.self_ref, fragment_id=f"{item.self_ref}:{index}")
+                                source_ref=item.self_ref, fragment_id=f"{item.self_ref}:{index}",
+                                allow_math_delimiters=True)
+                        # A detector can call an intact scalar or author marker a
+                        # formula. Keep the detection as evidence, without forcing
+                        # an OCR rewrite of source-aligned flat text.
+                        preserved_candidates = [
+                            candidate for candidate in candidates
+                            if candidate["geometry"]["review_required"]
+                            and candidate["geometry"]["char_indices"]
+                            and set(candidate["geometry"]["char_indices"]) <= preserved_ids]
+                        candidates = [c for c in candidates if c not in preserved_candidates]
                         from .docling_inline_partitions import classify_inline_formula_containers
                         partition = classify_inline_formula_containers(
                             candidates, page, route=routes.get(item.self_ref, {}),
@@ -302,6 +352,11 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
                         selected = [candidates[index] for index in
                                     selection["selected_indices"] + selection["review_indices"]]
                         native = native_paragraph_chars(native_pages.get(number, []), bbox)
+                        font_comparison = font_comparisons[number]
+                        native_comparison = [
+                            dict(char, text=font_comparison["native_comparison_text"].get(char["index"], char["text"]))
+                            for char in native
+                        ]
                         ready = []
                         for index, candidate in enumerate(selected):
                             geometry = candidate["geometry"]
@@ -316,29 +371,116 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
                                     prediction = reader.read(crop)
                                 finally:
                                     crop.close()
+                                original_prediction = dict(prediction)
                                 # Native parser font boxes can extend above the
                                 # visible ink. Try center and intersection views;
                                 # accept only one unambiguous character set that
                                 # agrees with the independent PDF ink glyphs.
                                 from .docling_math_consistency import validate_math_characters
-                                glyph_text = "".join(glyph["text"] for glyph in page["glyphs"]
-                                                     if glyph["char_index"] in geometry["char_indices"])
-                                native_views = _native_views(native, glyph_text, geometry["bbox"])
+                                from .docling_math_style import validate_math_style
+                                chosen_glyphs = [glyph for glyph in page["glyphs"]
+                                                 if glyph["char_index"] in geometry["char_indices"]]
+                                glyph_text = "".join(
+                                    font_comparison["glyph_comparison_text"].get(glyph["char_index"], glyph["text"])
+                                    for glyph in chosen_glyphs)
+                                native_views = _native_views(native_comparison, glyph_text, geometry["bbox"])
                                 indices = native_views[0] if len(native_views) == 1 else [
                                     char["index"] for char in native if _inside(char, geometry["bbox"])]
                                 original = "".join(char["text"] for char in native if char["index"] in indices)
+                                comparison_original = "".join(
+                                    char["text"] for char in native_comparison if char["index"] in indices)
                                 if (prediction["status"] == "transcribed_unverified"
                                         and not numeric_glyphs_match(original, prediction["transcribed_text"])):
                                     prediction.update(status="review_required", reason="numeric_glyphs_changed")
                                 consistency = validate_math_characters(
-                                    original, glyph_text, prediction.get("transcribed_text", ""))
+                                    comparison_original, glyph_text, prediction.get("transcribed_text", ""))
+                                if not _punctuation_matches(glyph_text, prediction.get("transcribed_text", "")):
+                                    consistency["review_required"] = True
+                                    consistency["reasons"].append("source_punctuation_changed")
                                 if len(native_views) != 1:
                                     consistency["review_required"] = True
                                     consistency["reasons"].append("native_character_selection_not_unique")
-                                if consistency["review_required"]:
+                                style_proofs = font_comparison.get("glyph_style_proofs", {})
+                                style = validate_math_style(
+                                    chosen_glyphs, prediction.get("transcribed_text", ""),
+                                    glyph_style_proofs=style_proofs)
+                                attempts = []
+                                retryable_style_reasons = {
+                                    "source_font_weight_does_not_support_bold",
+                                    "source_font_program_does_not_support_bold",
+                                }
+                                # A misread variable cannot bind its bold command
+                                # to a source glyph that does not exist (e.g. Z vs z).
+                                # Allow another raw reading, not a style exemption.
+                                # Repeated/ambiguous existing symbols stay held.
+                                unbound_targets = [
+                                    target for target in style.get("targets", [])
+                                    if target.get("reason") == "bold_source_character_not_unique"]
+                                if (consistency["reasons"] == ["formula_variable_or_digit_changed"]
+                                        and style["reasons"] == ["bold_source_character_not_unique"]
+                                        and unbound_targets
+                                        and all(unicodedata.normalize("NFKC", target["text"]) not in
+                                                unicodedata.normalize("NFKC", glyph_text)
+                                                for target in unbound_targets)):
+                                    retryable_style_reasons.add("bold_source_character_not_unique")
+                                if (prediction["status"] == "transcribed_unverified"
+                                        and (consistency["review_required"] or style["review_required"])
+                                        and set(consistency["reasons"]) <= {"formula_variable_or_digit_changed"}
+                                        and set(style["reasons"]) <= retryable_style_reasons):
+                                    # Retry the identical source region at the mature OCR model's
+                                    # lower input scale. White padding adds no neighboring content.
+                                    # A new raw prediction must pass source checks; never replace
+                                    # a mistaken variable by editing the generated LaTeX.
+                                    from io import BytesIO
+                                    attempts.append({"prediction": dict(prediction), "crop": proof,
+                                                     "character_consistency": consistency,
+                                                     "style_consistency": style})
+                                    for retry_dpi in (240, 360):
+                                        retry_crop, retry_proof = render_formula_crop(
+                                            pdf, number, geometry["bbox"], dpi=retry_dpi, padding_points=0)
+                                        pad = round(2 * retry_dpi / 72)
+                                        padded = ImageOps.expand(retry_crop, border=pad, fill="white")
+                                        retry_crop.close()
+                                        try:
+                                            raw_image = BytesIO()
+                                            padded.save(raw_image, format="PNG")
+                                            retry_proof.update(
+                                                white_padding_pixels=pad,
+                                                recognition_input_sha256=hashlib.sha256(raw_image.getvalue()).hexdigest(),
+                                                recognition_pixel_size=list(padded.size))
+                                            alternative = reader.read(padded)
+                                        finally:
+                                            padded.close()
+                                        alternative_check = validate_math_characters(
+                                            comparison_original, glyph_text, alternative.get("transcribed_text", ""))
+                                        if not _punctuation_matches(glyph_text, alternative.get("transcribed_text", "")):
+                                            alternative_check["review_required"] = True
+                                            alternative_check["reasons"].append("source_punctuation_changed")
+                                        alternative_style = validate_math_style(
+                                            chosen_glyphs, alternative.get("transcribed_text", ""),
+                                            glyph_style_proofs=style_proofs)
+                                        attempts.append({"prediction": dict(alternative), "crop": retry_proof,
+                                                         "character_consistency": alternative_check,
+                                                         "style_consistency": alternative_style})
+                                        if (alternative["status"] == "transcribed_unverified"
+                                                and not alternative_check["review_required"]
+                                                and not alternative_style["review_required"]):
+                                            prediction, proof, consistency = alternative, retry_proof, alternative_check
+                                            style = alternative_style
+                                            break
+                                if consistency["review_required"] and prediction["status"] == "transcribed_unverified":
                                     prediction.update(status="review_required", reason="formula_character_review")
+                                if style["review_required"] and prediction["status"] == "transcribed_unverified":
+                                    prediction.update(status="review_required", reason="formula_style_review")
                                 fragment.update(**prediction, crop=proof, native_char_indices=indices)
+                                fragment["original_prediction"] = original_prediction
                                 fragment["character_consistency"] = consistency
+                                fragment["style_consistency"] = style
+                                fragment["recognition_attempts"] = attempts
+                                fragment["font_source_corrections"] = [
+                                    correction for correction in font_comparison["corrections"]
+                                    if correction["native_index"] in indices
+                                ]
                                 if fragment["status"] == "transcribed_unverified":
                                     ready.append(fragment)
                             fragments.append(fragment)
@@ -346,12 +488,28 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
                         route = routes.get(item.self_ref, {})
                         if route.get("probe_required") and not source_text:
                             source_text = item.orig
+                        from .docling_inline_continuation import recognize_inline_formula_continuation
+                        continuation = recognize_inline_formula_continuation(
+                            source, page, item.self_ref, bbox, ready, native,
+                            route or {"source_ref": item.self_ref, "page_no": number,
+                                      "source_sha256": page["source_sha256"],
+                                      "original_label": getattr(item.label, "value", item.label)}, reader,
+                            physical_line_views=line_evidence.get(item.self_ref, []))
+                        if continuation["fragment"] is not None:
+                            ready = [continuation["fragment"]]
                         assembly = assemble_inline_formulas(source_text, native, ready)
                         uncovered = [glyph["char_index"] for glyph in glyphs if _math(glyph)
+                                     and glyph["char_index"] not in preserved_ids
                                      and not any(_inside(glyph, fragment["geometry"]["bbox"])
                                                  for fragment in fragments
                                                  if not fragment["geometry"]["review_required"])]
-                        needs_review = (selection["review_required"] or assembly["status"] == "review_required" or uncovered
+                        native_only = not ready and not fragments and not uncovered and bool(preserved_ids)
+                        if native_only:
+                            assembly.update(
+                                status="native_preserved", review_reasons=[], prose_preserved=True)
+                        continuation_blocked = continuation["status"] == "review_required"
+                        needs_review = (continuation_blocked or selection["review_required"]
+                                        or assembly["status"] == "review_required" or uncovered
                                         or any(fragment["status"] == "review_required" for fragment in fragments))
                         published = False
                         if assembly["status"] == "transcribed_unverified" and not needs_review:
@@ -360,10 +518,12 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
                         evidence[item.self_ref] = {
                             "kind": "inline_math", "policy": INLINE_LAYOUT_POLICY,
                             "page_no": number, "model": "PP-DocLayoutV3 + Pix2Text MFR 1.5",
-                            "status": "review_required" if needs_review else "transcribed_unverified",
+                            "status": ("review_required" if needs_review else
+                                       "native_preserved" if native_only else "transcribed_unverified"),
                             "backend_text": assembly["backend_text"], "assembly": assembly,
                             "original_text_slot": original_text_slot,
                             "publication_block_reason": (
+                                "whole_formula_continuation_requires_review" if continuation_blocked else
                                 "source_code_label_requires_review"
                                 if route.get("original_label") == "code" and not published else None),
                             "fragments": fragments, "uncovered_math_char_indices": uncovered,
@@ -372,7 +532,10 @@ def enrich_inline_formulas(document, source, config, reader, *, routes=None):
                             "physical_line_views": line_evidence.get(item.self_ref, []),
                             "layout_containers": containers, "partition": partition,
                             "partition_candidates": partition_candidates,
-                            "continuation_inferred": False,
+                            "native_preservation": native_proof,
+                            "preserved_candidates": preserved_candidates,
+                            "continuation": continuation,
+                            "continuation_inferred": continuation["fragment"] is not None,
                         }
                 finally:
                     if image is not None:
