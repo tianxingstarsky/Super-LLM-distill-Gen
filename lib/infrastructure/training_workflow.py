@@ -842,6 +842,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                     rule_system, request_data = split_node_rules(
                         data, instruction=stable_instruction, qa_director=self.recipe.get("qa_director"),
                         knowledge_application_voice_version=self.recipe.get("knowledge_application_voice_version"))
+                    from lib.infrastructure.document_reading_context import project_reading_context
+                    request_data = project_reading_context(request_data)
                     if dynamic_review_instruction is not None:
                         # Scope hashes and current ids belong after the shared
                         # system/source prefix, not before its reusable memory.

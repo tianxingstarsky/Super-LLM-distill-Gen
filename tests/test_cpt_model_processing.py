@@ -144,13 +144,21 @@ def test_invalid_review_retry_reuses_durable_cleaning_call(tmp_path):
 
 
 def test_custom_prompts_are_literal_node_scoped_and_pinned(tmp_path):
-    output, rid, _ = make_run(tmp_path, cpt_processing=MODEL_CONFIG,
+    from lib.infrastructure.workflow_agent_experience import experience_system
+    output, rid, path = make_run(tmp_path, cpt_processing=MODEL_CONFIG,
         node_prompts={"cpt": {"workflow.cpt_clean": "CLEAN_CUSTOM {literal}",
                               "workflow.cpt_review": "REVIEW_CUSTOM {literal}"}})
     cleaner, reviewer = Cleaner(), Reviewer()
     assert Workflow(output, rid, tmp_path, generator=cleaner, jev=reviewer).execute()["status"] == "completed"
-    assert cleaner.calls[0][0]["content"].endswith("CLEAN_CUSTOM {literal}")
-    assert reviewer.calls[0][0]["content"].endswith("REVIEW_CUSTOM {literal}")
+    recipe = read_json(path / "recipe.json")
+    for client, prompt_id, literal, other in (
+            (cleaner, "workflow.cpt_clean", "CLEAN_CUSTOM {literal}", "REVIEW_CUSTOM {literal}"),
+            (reviewer, "workflow.cpt_review", "REVIEW_CUSTOM {literal}", "CLEAN_CUSTOM {literal}")):
+        assert recipe["node_prompt_templates"]["cpt"][prompt_id] == literal
+        system = client.calls[0][0]["content"]
+        prefix = recipe["node_prompt_system"] + "\n" + literal
+        assert system.startswith(prefix) and system.count(literal) == 1 and other not in system
+        assert system[len(prefix):] == experience_system(recipe, prompt_id)
 
 
 def test_absent_configuration_preserves_historical_native_catalog_and_calls(tmp_path):

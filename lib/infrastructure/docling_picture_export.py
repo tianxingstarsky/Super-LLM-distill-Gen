@@ -11,11 +11,85 @@ from collections import Counter
 import hashlib
 
 
-PICTURE_EXPORT_POLICY = "docling_picture_children_scoped_layout_captions_v1"
+PICTURE_EXPORT_POLICY = "docling_picture_children_exact_lines_clip_rows_spatial_titles_v3"
+
+
+def _project_text(item, structure, page_number, *, page_height=None):
+    """Apply only exact, source-bound physical lines; leave unknowns intact."""
+    plan = (structure or {}).get("items", {}).get(item.self_ref)
+    if not plan or plan.get("review_required") or plan.get("page_no") != page_number:
+        return None
+    text = item.text
+    if (plan.get("item_ref") != item.self_ref or plan.get("source_text") != text or not plan.get("exact_source_partition")
+            or plan.get("source_text_sha256") != hashlib.sha256(text.encode()).hexdigest()
+            or plan.get("source_provenance") != [p.model_dump(mode="json") for p in item.prov]):
+        raise ValueError("document_docling_invalid_output")
+    pieces, visible, cursor = [], [], 0
+    for segment in plan.get("segments", []):
+        start, stop = segment["source_charspan"]
+        if (type(start) is not int or type(stop) is not int
+                or not cursor <= start < stop <= len(text)
+                or segment["text"] != text[start:stop]
+                or segment["separator_before"] != text[cursor:start]):
+            raise ValueError("document_docling_invalid_output")
+        line = segment.get("native_line", {})
+        from lib.infrastructure.docling_picture_structure import _bounds, _contains, _compact
+        try:
+            # Original provenance may use either origin. Native lines use PDF
+            # bottom-left coordinates; a page height is required for conversion.
+            source_boxes = [prov.bbox.to_bottom_left_origin(page_height).model_dump(mode="json")
+                            if getattr(prov.bbox.coord_origin, "value", prov.bbox.coord_origin) != "BOTTOMLEFT"
+                            else prov.bbox.model_dump(mode="json") for prov in item.prov]
+            bound = (line.get("source_sha256") == structure.get("source_sha256")
+                     and line.get("page_no") == page_number
+                     and _compact(line.get("native_text", "")) == _compact(segment["text"])
+                     and any(_contains(_bounds(box), _bounds(line["bbox"])) for box in source_boxes))
+        except (AttributeError, KeyError, TypeError, ValueError):
+            bound = False
+        if not bound:
+            raise ValueError("document_docling_invalid_output")
+        pieces.extend((segment["separator_before"], segment["text"]))
+        if segment["display"]:
+            visible.append(segment["text"])
+        else:
+            proof = segment.get("visibility", {})
+            from lib.infrastructure.docling_pdf_text_visibility import validate_clipped_text_binding
+            if not validate_clipped_text_binding(proof, line, source_sha256=structure.get("source_sha256"),
+                                                  page_no=page_number):
+                raise ValueError("document_docling_invalid_output")
+        cursor = stop
+    pieces.append(plan.get("trailing_separator", ""))
+    if not plan.get("segments") or "".join(pieces) != text:
+        raise ValueError("document_docling_invalid_output")
+    return "\n".join(visible)
 
 
 def _label(item):
     return getattr(getattr(item, "label", None), "value", getattr(item, "label", None))
+
+
+def _validate_associated_view(document, source_document, associations):
+    """A valid source proof must also describe the actual exported nodes."""
+    if not associations or source_document is document:
+        return
+    from docling_core.types.doc import RefItem
+    fields = {"self_ref", "parent", "label", "content_layer", "prov", "children", "captions",
+              "references", "footnotes", "text", "orig", "level", "formatting", "hyperlink"}
+    try:
+        if (document.body.model_dump(mode="json", exclude={"children"}) !=
+                source_document.body.model_dump(mode="json", exclude={"children"})
+                or Counter(ref.cref for ref in document.body.children) !=
+                Counter(ref.cref for ref in source_document.body.children)):
+            raise ValueError("association_body_view_not_a_permutation")
+        refs = {entry[key] for entry in associations for key in
+                ("title_ref", "picture_ref", "anchor_item_ref", "anchor_picture_ref", "original_caption_ref")}
+        for ref in refs:
+            actual = RefItem(cref=ref).resolve(document)
+            source = RefItem(cref=ref).resolve(source_document)
+            if actual.model_dump(mode="json", include=fields) != source.model_dump(mode="json", include=fields):
+                raise ValueError("association_view_node_changed")
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("document_docling_invalid_output") from error
 
 
 def _needs_modern_picture_serializer(document):
@@ -63,7 +137,7 @@ def _satellite_references(document, page_number):
              "satellite_duplicate_reference_events": [event for events in duplicates.values() for event in events]})
 
 
-def _serializer(document, page_number, *, traverse_pictures):
+def _serializer(document, page_number, *, traverse_pictures, picture_structure=None, source_document=None):
     from docling_core.transforms.serializer.markdown import MarkdownDocSerializer, MarkdownParams
     from docling_core.transforms.serializer.common import create_ser_result
 
@@ -73,15 +147,40 @@ def _serializer(document, page_number, *, traverse_pictures):
             raise ValueError("document_docling_version_mismatch")
         return None, None
     from docling_core.transforms.serializer.markdown import (
-        MarkdownMetaSerializer, MarkdownPictureSerializer, _caption_goes_after,
+        MarkdownMetaSerializer, MarkdownPictureSerializer, MarkdownTextSerializer, _caption_goes_after,
     )
-    from docling_core.types.doc import PictureItem, TextItem, TableItem
+    from docling_core.types.doc import PictureItem, TextItem, TableItem, RefItem
     from pydantic import PrivateAttr
+    associations = []
+    if picture_structure and traverse_pictures:
+        from .docling_picture_structure import validated_spatial_title_associations
+        try:
+            associations = validated_spatial_title_associations(
+                source_document or document, picture_structure, page_no=page_number)
+            _validate_associated_view(document, source_document or document, associations)
+        except ValueError as error:
+            raise ValueError("document_docling_invalid_output") from error
+    external_titles = {entry["title_ref"]: entry for entry in associations}
+
+    class SourceTextSerializer(MarkdownTextSerializer):
+        def serialize(self, *, item, **kwargs):
+            source_page = document.pages.get(page_number)
+            projected = _project_text(item, picture_structure, page_number,
+                                       page_height=getattr(getattr(source_page, "size", None), "height", None))
+            if projected is not None:
+                if not projected:
+                    return create_ser_result()
+                item = item.model_copy(update={"text": projected})
+            return super().serialize(item=item, **kwargs)
 
     class SourceMarkdownDocSerializer(MarkdownDocSerializer):
         _source_events: list = PrivateAttr(default_factory=list)
 
         def serialize(self, *, item=None, **kwargs):
+            if item is not None and item.self_ref in external_titles:
+                # The source body node stays intact. It is rendered once at
+                # the source-proven picture position by the text serializer.
+                return create_ser_result()
             result = super().serialize(item=item, **kwargs)
             if (isinstance(item, (TextItem, TableItem)) and _label(item) != "caption"
                     and _has_source_content(item) and result.text):
@@ -118,9 +217,49 @@ def _serializer(document, page_number, *, traverse_pictures):
         def __init__(self):
             self.contexts = []
             self.groups = []
+            self.row_events = []
+            self.title_events = []
 
         def _children(self, item, doc_serializer, kwargs):
             parts = doc_serializer.get_parts(item=item, **kwargs)
+            title_parts = []
+            for entry in associations:
+                if entry["picture_ref"] != item.self_ref:
+                    continue
+                source_title = RefItem(cref=entry["title_ref"]).resolve(document)
+                options = dict(kwargs, visited=set())
+                result = doc_serializer.text_serializer.serialize(
+                    item=source_title, doc_serializer=doc_serializer, doc=document, **options)
+                if not result.text or [span.item.self_ref for span in result.spans] != [entry["title_ref"]]:
+                    raise ValueError("document_docling_invalid_output")
+                title_parts.append(result)
+                self.title_events.append(dict(entry, render_count=1,
+                                              source_role="spatially_associated_body_title"))
+            parts = title_parts + parts
+            rows = [row for row in (picture_structure or {}).get("pictures", {}).get(
+                item.self_ref, {}).get("token_rows", []) if row.get("page_no") == page_number]
+            by_first = {row["source_refs"][0]: row for row in rows}
+            projected, index, consumed = [], 0, []
+            while index < len(parts):
+                refs = [span.item.self_ref for span in parts[index].spans]
+                row = by_first.get(refs[0]) if len(refs) == 1 else None
+                if row is not None:
+                    group = parts[index:index + len(row["source_refs"]) ]
+                    actual = [[span.item.self_ref for span in part.spans] for part in group]
+                    if actual != [[ref] for ref in row["source_refs"]] or not row.get("source_order_preserved"):
+                        raise ValueError("document_docling_invalid_output")
+                    projected.append(create_ser_result(text=" ".join(part.text for part in group), span_source=group))
+                    self.row_events.append({"picture_ref": item.self_ref, "source_refs": row["source_refs"],
+                                            "source_order_preserved": True, "repetitions_preserved": True,
+                                            "semantic_relations_inferred": False})
+                    consumed.append(row["source_refs"])
+                    index += len(group)
+                else:
+                    projected.append(parts[index])
+                    index += 1
+            if consumed != [row["source_refs"] for row in rows]:
+                raise ValueError("document_docling_invalid_output")
+            parts = projected
             text = "\n\n".join(part.text for part in parts if part.text)
             quoted = "\n".join("> " + line if line else ">" for line in text.splitlines())
             return create_ser_result(text=quoted, span_source=parts)
@@ -163,10 +302,11 @@ def _serializer(document, page_number, *, traverse_pictures):
         pages={page_number}, image_placeholder="", traverse_pictures=traverse_pictures,
         caption_placement="layout")
     return SourceMarkdownDocSerializer(doc=document, params=params, picture_serializer=picture_serializer,
+                                       text_serializer=SourceTextSerializer(),
                                        meta_serializer=SourcePictureMetaSerializer()), picture_serializer
 
 
-def serialize_picture_page(document, page_number):
+def serialize_picture_page(document, page_number, *, picture_structure=None, source_document=None):
     """Return Markdown and a provenance audit without OCR or model inference.
 
     Cross-page text must first be projected using its exact character spans by
@@ -185,7 +325,9 @@ def serialize_picture_page(document, page_number):
                 raise ValueError("document_docling_invalid_provenance")
             if len(pages) > 1 and page_number in pages:
                 raise ValueError("document_docling_page_span_ambiguous")
-    serializer, picture_serializer = _serializer(document, page_number, traverse_pictures=True)
+    serializer, picture_serializer = _serializer(document, page_number, traverse_pictures=True,
+                                                  picture_structure=picture_structure,
+                                                  source_document=source_document)
     if serializer is None:
         return document.export_to_markdown(page_no=page_number, image_placeholder=""), {
             "policy": PICTURE_EXPORT_POLICY, "page_no": page_number,
@@ -193,6 +335,11 @@ def serialize_picture_page(document, page_number):
             **satellite_audit, "duplicate_span_refs": satellite_audit["satellite_duplicate_refs"],
         }
     result = serializer.serialize()
+    expected_titles = [entry["title_ref"] for entry in (picture_structure or {}).get("spatial_title_associations", [])
+                       if entry["page_no"] == page_number]
+    actual_titles = [entry["title_ref"] for entry in picture_serializer.title_events]
+    if Counter(actual_titles) != Counter(expected_titles) or len(set(actual_titles)) != len(actual_titles):
+        raise ValueError("document_docling_invalid_output")
     baseline, _ = _serializer(document, page_number, traverse_pictures=False)
     baseline_refs = {span.item.self_ref for span in baseline.serialize().spans}
     span_refs = [span.item.self_ref for span in result.spans]
@@ -228,6 +375,10 @@ def serialize_picture_page(document, page_number):
     child_refs = {child["item_ref"] for group in groups for child in group["children"]}
     required_refs = {child["item_ref"] for group in groups for child in group["children"]
                      if child["required_source_content"]}
+    structure_items = [plan for plan in (picture_structure or {}).get("items", {}).values()
+                       if plan.get("page_no") == page_number]
+    excluded = {plan["item_ref"] for plan in structure_items if not plan.get("review_required")
+                and plan.get("segments") and all(not segment["display"] for segment in plan["segments"])}
     source_events = [event for event in serializer._source_events if event["item_ref"] in required_refs]
     duplicate_emission_refs = [ref for ref, count in Counter(event["item_ref"] for event in source_events).items()
                                if count > 1]
@@ -235,7 +386,11 @@ def serialize_picture_page(document, page_number):
              "serialized_span_refs": span_refs,
              "recovered_refs": sorted((emitted - baseline_refs) & child_refs),
              "all_child_refs": sorted(child_refs), "required_source_child_refs": sorted(required_refs),
-             "missing_child_refs": sorted(required_refs - emitted),
+             "missing_child_refs": sorted(required_refs - emitted - excluded),
+             "visibility_excluded_refs": sorted(excluded),
+             "source_text_structure": structure_items,
+             "physical_row_projection_events": picture_serializer.row_events,
+             "spatial_title_projection_events": picture_serializer.title_events,
              "source_serialization_events": source_events,
              "duplicate_source_emission_refs": duplicate_emission_refs,
              # Final Docling spans are de-duplicated by create_ser_result; use

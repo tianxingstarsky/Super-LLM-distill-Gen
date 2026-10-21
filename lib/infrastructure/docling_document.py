@@ -20,7 +20,7 @@ from lib.domain.document_parser import validate_document_parser
 DOCLING_VERSION = "2.60.1"
 DOCLING_CORE_VERSION = "2.48.4"
 DOCLING_ADAPTER_VERSION = 2
-PAGE_EXPORT_POLICY = "provenance_page_order_scoped_picture_children_v2"
+PAGE_EXPORT_POLICY = "provenance_page_order_figure_structure_v3"
 CODE_FORMULA_DIRECTORY = "ds4sd--CodeFormulaV2"
 _FORMULA_REQUIRED_FILES = (
     "config.json", "generation_config.json", "model.safetensors", "preprocessor_config.json",
@@ -136,11 +136,14 @@ def docling_parse_signature(config):
     table = artifacts / "ds4sd--docling-models" / "model_artifacts" / "tableformer" / "accurate"
     from lib.infrastructure.docling_reading_order import READING_ORDER_POLICY
     from lib.infrastructure.docling_picture_export import PICTURE_EXPORT_POLICY
+    from lib.infrastructure.docling_picture_assets import PICTURE_ASSET_POLICY
     signature = {"mode": "docling", "parser_version": DOCLING_ADAPTER_VERSION,
                  "packages": versions, "pdf_backend": "pypdfium2", "layout_model": "docling_layout_heron",
                  "page_export_policy": PAGE_EXPORT_POLICY,
                  "reading_order_policy": READING_ORDER_POLICY,
                  "picture_export_policy": PICTURE_EXPORT_POLICY,
+                 "picture_asset_policy": PICTURE_ASSET_POLICY,
+                 "picture_structure_policy": "legacy_runtime_source_structure_unchanged",
                  "caption_placement": "layout",
                  "table_mode": "accurate", "ocr": config["ocr"],
                  "formula_enrichment": config["formula_enrichment"],
@@ -282,7 +285,7 @@ def _page_provenance(document, page_numbers):
     return result
 
 
-def page_markdown(document, page_number, *, inline_evidence=None, export_audit=None):
+def page_markdown(document, page_number, *, inline_evidence=None, export_audit=None, picture_structure=None):
     """Project cross-page text into a page view without changing the source.
 
 The pinned Markdown serializer filters by an item's first provenance page and
@@ -351,10 +354,12 @@ items in a shallow document view with their provenanced page fragments.
     if inline_evidence:
         from lib.infrastructure.docling_inline_markdown import export_inline_markdown
         markdown = export_inline_markdown(
-            page_document, page_number, inline_evidence, export_audit=picture_audit)
+            page_document, page_number, inline_evidence, export_audit=picture_audit,
+            picture_structure=picture_structure, source_document=document)
     else:
         from lib.infrastructure.docling_picture_export import serialize_picture_page
-        markdown, picture_audit = serialize_picture_page(page_document, page_number)
+        markdown, picture_audit = serialize_picture_page(page_document, page_number,
+                                                          picture_structure=picture_structure, source_document=document)
     if export_audit is not None:
         export_audit.update(policy=PAGE_EXPORT_POLICY, split_item_refs=split_refs,
                             reading_order=order_audit, picture_export=picture_audit)
@@ -402,6 +407,9 @@ def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
             result = converter.convert(path, raises_on_error=True)
         except Exception as error:
             raise ValueError("document_docling_conversion_failed") from error
+        from lib.infrastructure.docling_picture_assets import extract_picture_assets
+        picture_assets = (extract_picture_assets(result.document, path, source_sha256=source_sha256)
+                          if getattr(result.status, "value", result.status) == "success" else {})
     finally:
         conversion_lock.release()
     if check_cancel:
@@ -428,6 +436,8 @@ def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
                    "page_export": export_audit,
                    "elements": provenance[number], "parsed_text_sha256": _digest(text),
                    "evidence_level": "local_layout_ocr_extraction"}
+        if number in picture_assets:
+            reading["picture_assets"] = picture_assets[number]
         undecoded_refs = list(dict.fromkeys(item["item_ref"] for item in provenance[number]
                                            if "undecoded_formula" in item))
         has_empty_formula = any("undecoded_formula" in item for item in provenance[number])

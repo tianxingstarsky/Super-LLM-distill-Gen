@@ -23,6 +23,9 @@ def runtime_signature(config, *, check_cancel=None):
     from lib.infrastructure.docling_document import _artifact_digest, PAGE_EXPORT_POLICY
     from lib.infrastructure.docling_reading_order import READING_ORDER_POLICY
     from lib.infrastructure.docling_picture_export import PICTURE_EXPORT_POLICY
+    from lib.infrastructure.docling_picture_assets import PICTURE_ASSET_POLICY
+    from lib.infrastructure.docling_picture_structure import PICTURE_STRUCTURE_POLICY
+    from lib.infrastructure.docling_pdf_text_visibility import PDF_TEXT_VISIBILITY_POLICY, PDF_TEXT_VISIBILITY_BINDING_POLICY
     from lib.infrastructure.docling_worker_client import run_docling_worker
     from lib.infrastructure.docling_table_geometry import GEOMETRY_POLICY
     from lib.infrastructure.docling_preflight import validate_runtime_assets
@@ -54,6 +57,10 @@ def runtime_signature(config, *, check_cancel=None):
                  "page_export_policy": PAGE_EXPORT_POLICY,
                  "reading_order_policy": READING_ORDER_POLICY,
                  "picture_export_policy": PICTURE_EXPORT_POLICY,
+                 "picture_asset_policy": PICTURE_ASSET_POLICY,
+                 "picture_structure_policy": PICTURE_STRUCTURE_POLICY,
+                 "pdf_text_visibility_policy": PDF_TEXT_VISIBILITY_POLICY,
+                 "pdf_text_visibility_binding_policy": PDF_TEXT_VISIBILITY_BINDING_POLICY,
                  "caption_placement": "layout", "ocr": config["ocr"],
                  "formula_enrichment": config["formula_enrichment"],
                  "layout_sha256": _artifact_digest(root / "docling-project--docling-layout-heron"),

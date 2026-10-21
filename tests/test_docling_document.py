@@ -78,7 +78,7 @@ def conversion(monkeypatch, texts=(PAGE_ONE, PAGE_TWO), *, status="success"):
     from lib.infrastructure import docling_reading_order, docling_picture_export
     monkeypatch.setattr(docling_reading_order, "project_page_reading_order", lambda doc, page: (
         doc, {"review_required": False, "changed": False, "page_no": page}))
-    monkeypatch.setattr(docling_picture_export, "serialize_picture_page", lambda doc, page: (
+    monkeypatch.setattr(docling_picture_export, "serialize_picture_page", lambda doc, page, **kwargs: (
         doc.export_to_markdown(page_no=page, image_placeholder=""),
         {"missing_child_refs": [], "duplicate_span_refs": [], "page_no": page}))
     return calls, doc
@@ -96,7 +96,7 @@ def test_page_export_review_keeps_source_and_quarantines_affected_page(
         expected = "document_docling_reading_order_requires_review"
     else:
         key = "missing_child_refs" if issue == "missing_picture_child" else "duplicate_span_refs"
-        monkeypatch.setattr(docling_picture_export, "serialize_picture_page", lambda doc, page: (
+        monkeypatch.setattr(docling_picture_export, "serialize_picture_page", lambda doc, page, **kwargs: (
             doc.export_to_markdown(page_no=page, image_placeholder=""),
             {key: ["#/texts/1"] if page == 2 else []}))
         expected = "document_docling_picture_export_requires_review"

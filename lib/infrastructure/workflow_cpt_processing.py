@@ -9,6 +9,7 @@ from lib.domain.corpus_quality import inspect_corpus
 from lib.domain.workflow_quality import accepted
 from lib.domain.workflow_graph import SOURCE_CLEANING_RECIPE_VERSION
 from lib.infrastructure.workflow_rows import WorkflowRows, write_jsonl
+from lib.infrastructure.document_reading_context import document_reading_summary
 
 
 class WorkflowCPTProcessing:
@@ -102,8 +103,7 @@ class WorkflowCPTProcessing:
                 # and DOCX text blocks are checked against their source text.
                 review_mode = "text"
         key = [unit["id"], "cpt_clean", digest(original)]
-        reading_metadata = {name: value for name, value in reading.items()
-                            if name not in {"source_text", "parsed_text"}}
+        reading_metadata = document_reading_summary(reading)
         data = self.ask(key, "generation", "workflow.cpt_clean", {
             "source_text": original, "source_location": unit.get("source_location"),
             # Only this chunk is editable. Whole parser input/output bodies

@@ -81,12 +81,23 @@ def parse_document(request):
         formula_evidence = enrich_formulas(
             document, source, config["artifacts_path"],
             inline_config=config if config.get("inline_runtime_python") else None)
+    from lib.infrastructure.docling_picture_assets import extract_picture_assets
+    from lib.infrastructure.docling_picture_structure import build_picture_structure
+    try:
+        picture_structure, picture_structure_audit = build_picture_structure(document, source)
+    except ValueError as error:
+        if str(error) == "document_pdfium_visibility_api_unsupported":
+            raise ValueError("document_docling_version_mismatch") from error
+        raise
+    picture_assets = extract_picture_assets(document, source, source_sha256=source_hash,
+                                            picture_structure=picture_structure)
     provenance = _page_provenance(document, numbers)
     parts = []
     for number, native in zip(numbers, hints):
         export_audit = {}
         text, split_refs = page_markdown(
-            document, number, inline_evidence=formula_evidence, export_audit=export_audit)
+            document, number, inline_evidence=formula_evidence, export_audit=export_audit,
+            picture_structure=picture_structure)
         if len(text) > _MAX_PAGE_CHARS:
             raise ValueError("document_docling_invalid_output")
         elements = provenance[number]
@@ -99,6 +110,24 @@ def parse_document(request):
         reading = {"mode": "docling", "parser_signature": request["signature"], "source_pdf_sha256": source_hash,
                    "source_page": number, "page_export": export_audit,
                    "elements": elements, "parsed_text_sha256": _digest(text), "evidence_level": "local_layout_ocr_extraction"}
+        if number in picture_assets:
+            reading["picture_assets"] = picture_assets[number]
+        page_structure_items = [item for item in picture_structure_audit["items"]
+                                if any(prov["page_no"] == number for prov in item["source_provenance"])]
+        if page_structure_items:
+            reading["picture_structure"] = {
+                "policy": picture_structure_audit["policy"], "source_sha256": source_hash,
+                "page_no": number, "source_document_modified": False, "inference_performed": False,
+                "items": page_structure_items,
+                "physical_token_rows": [row for row in picture_structure_audit["physical_token_rows"]
+                                        if row["page_no"] == number],
+                "spatial_title_associations": [entry for entry in picture_structure_audit["spatial_title_associations"]
+                                                if entry["page_no"] == number],
+                "spatial_title_decisions": [entry for entry in picture_structure_audit["spatial_title_decisions"]
+                                             if entry.get("page_no") == number],
+                "review_required_refs": [item["item_ref"] for item in page_structure_items
+                                         if item.get("review_required")],
+            }
         part = {"location": f"page:{number}", "text": text, "document_reading": reading}
         undecoded = [e["item_ref"] for e in elements if "undecoded_formula" in e
                      or e.get("local_formula_transcription",{}).get("status") == "review_required"]
@@ -120,7 +149,7 @@ def parse_document(request):
         raise ValueError("source_snapshot_changed")
     return {"protocol": RUNTIME_PROTOCOL, "signature": request["signature"], "source_sha256": source_hash,
             "parts": parts, "document": document.model_dump(mode="json"), "network_disabled": True,
-            "table_geometry_audit": table_audit}
+            "table_geometry_audit": table_audit, "picture_structure_audit": picture_structure_audit}
 
 
 def main():

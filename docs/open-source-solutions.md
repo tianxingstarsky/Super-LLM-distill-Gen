@@ -580,6 +580,66 @@ for reading order, scoped picture export, pagination and inline math. Both
 successful export and deliberate quarantine cases are covered. Another 260
 document, source-library, quality-page and translation tests passed.
 
+## Figure visibility, physical rows, and source pixels
+
+The next parser revision uses the existing Docling Parse line and character
+geometry together with the [PDFium object and clip APIs](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/public/fpdf_transformpage.h).
+It does not add another OCR framework. Native text can survive extraction even
+when an ancestor Form clips it out of the rendered page. The export omits such
+a range only after a unique whole-text-object match and a complete rectangular
+clip proof. Object paths, cumulative transforms, source hashes, page coordinates
+and exact source character spans are checked again at serialization. Partial or
+complex clipping and ambiguous matches retain the original text.
+
+The complete native document stays unchanged. Display projections, hidden ranges
+and their original strings remain in per-page audit records. Physical figure
+rows use native orientation and aligned axis endpoints. They preserve reference
+order and repeated tokens; they do not infer sentences, panel ownership, or
+attention weights. Original heading levels and parent references remain visible
+in the audit rather than being guessed from font size or wording.
+
+An external body heading can gain an export-only spatial association when an
+existing in-picture heading anchors the same native baseline, a unique adjacent
+panel is centered below it, and the original linked caption spans that exact
+panel group. Intervening content, competing panels, changed source bindings and
+ambiguous matches block the association. The original body title, picture tree
+and caption links remain unchanged; the title is serialized once inside the
+proven figure scope. The stock caption predictor is not reused by relabeling
+headings: its nearest-caption assignment does not establish this evidence.
+
+Source figure PNGs use [Docling's official `get_image(document)` crop API](https://docling-project.github.io/docling/_generated/examples/export_figures/)
+with bounded local PDFium page rasters. Assets keep the original figure bounds,
+page, source reference, dimensions and byte hash. Pure-white source regions are
+marked explicitly. A separate crop can enclose displayed children that genuinely
+extend past their original parent bounds; the original crop is still retained.
+This conditional path must not enlarge figures just to match an expected image.
+For an associated external title, a unique complete PDFium text object supplies
+the actual ink bounds. A small coordinate matching tolerance only selects the
+source object; its real bounds, rather than invented padding, close the crop.
+
+The durable source-library payload keeps the PNGs and full audit. Text-model
+requests receive a bounded status and provenance summary instead. Base64 images,
+native glyph records, visibility proofs and duplicate source bodies do not enter
+ordinary CPT or QA prompt text. Explicit multimodal inputs retain their separate
+image channel. Both the isolated modern parser and the base runtime are tested;
+the native-line and clip projection requires the modern isolated parser.
+
+The same 15-page *Attention Is All You Need* PDF was parsed again locally in
+276.765 seconds. The independent acceptance audit passed all 30 checks. Five
+clipped-title projections, ten physical token rows (282 tokens), eight original
+figure PNGs and one complete title-and-panel crop were verified against source
+geometry and pixels. Four tables, six display formulas and the earlier 75
+evidence records stayed unchanged. Two white original figure objects remain
+explicitly marked; they are not replaced with invented images.
+
+After the final consumer-side source/view binding guard, all 15 pages and every
+figure asset were re-exported from that actual parse cache. Text, pixels and
+metadata matched the formal run exactly. The separate independent replay audit
+passed 11 checks. This was a cache re-export, not another recognition-model run.
+No model API was called. Regression checks passed in both runtimes: 854 base
+Docling tests, 200 final modern-parser tests, and 253 related document/source/CPT
+tests. These groups overlap and must not be added into a single test count.
+
 ## Remaining candidates
 
 | Priority | Project and license | Concrete next step | Boundary |

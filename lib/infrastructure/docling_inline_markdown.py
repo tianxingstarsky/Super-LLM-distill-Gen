@@ -5,7 +5,8 @@ import hashlib
 INLINE_MARKDOWN_POLICY = "proven_inline_spans_scoped_export_v2"
 
 
-def export_inline_markdown(document, page_number, evidence, *, export_audit=None):
+def export_inline_markdown(document, page_number, evidence, *, export_audit=None, picture_structure=None,
+                           source_document=None):
     protected, replacements = {}, {}
     all_text = "\n".join(item.text for item in document.texts)
     for index, item in enumerate(document.texts):
@@ -47,7 +48,8 @@ def export_inline_markdown(document, page_number, evidence, *, export_audit=None
         replacements.get(index, item) for index, item in enumerate(document.texts)
     ]}) if replacements else document
     from .docling_picture_export import serialize_picture_page
-    markdown, picture_audit = serialize_picture_page(view, page_number)
+    markdown, picture_audit = serialize_picture_page(view, page_number, picture_structure=picture_structure,
+                                                      source_document=source_document or document)
     for marker, math in protected.items():
         if markdown.count(marker) != 1:
             raise ValueError("document_docling_invalid_output")
