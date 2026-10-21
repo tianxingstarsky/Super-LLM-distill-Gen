@@ -640,6 +640,49 @@ No model API was called. Regression checks passed in both runtimes: 854 base
 Docling tests, 200 final modern-parser tests, and 253 related document/source/CPT
 tests. These groups overlap and must not be added into a single test count.
 
+## Cross-paper validation: unresolved generalization failures
+
+The same parser revision was tested on two additional, unmodified PDFs on
+2026-10-21: [GQA v3](https://arxiv.org/abs/2305.13245v3), seven pages, and
+[Deep Residual Learning v1](https://arxiv.org/abs/1512.03385v1), twelve pages.
+Both used the installed local recognition models. No model API was called.
+The earlier Attention-paper acceptance is not a cross-paper accuracy score.
+
+GQA completed the production adapter in 60.656 seconds. Independent source-page
+checks found all 36 table values in their correct columns and all six source
+figure PNGs preserved. However, the page-3 export moved the Ablations introduction
+after later subsection text and interrupted a cross-page continuation. The
+original document body order was correct. Author footnote markers and a
+bibliography paragraph triggered formula review and quarantined pages 1 and 5.
+The bibliography's exact offending glyph was not independently mapped. Table
+header subscripts were also flattened. The quality audit therefore failed even
+though the adapter returned a complete seven-page result.
+
+The ResNet production adapter failed with
+`document_docling_page_span_ambiguous`. A separate diagnostic run preserved the
+original recognized document and replayed the existing page exporter without
+changing its rules. The cross-page item `#/texts/64` had 671 characters but a
+provenance endpoint of 673; its page-boundary gap also contained a non-whitespace
+character. Pages 2 and 3 correctly failed the strict export contract. Ten other
+pages produced diagnostic exports. These are partial diagnostic results, not a
+successful production document. The diagnostic also exposed body paragraphs
+merged with chart-axis labels across pages. Clamping offsets or dropping the
+guard would conceal the source ambiguity and is not an accepted repair.
+
+Source-page checks of the ResNet diagnostic samples also found table-grid and
+math losses: the seven-column architecture table became eight columns, wide
+24-column result tables collapsed into four columns, and some powers lost their
+superscript position. One figure caption was assigned to the following figure.
+One figure's lower axis label was still clipped in its source PNG crop.
+Preserved numeric samples do not establish correct table ownership, caption
+association, or complete mathematical content.
+
+These cases remain reproducible failures. Full source documents, original
+failure responses, diagnostic output, source-first observations and independent
+audits are kept separately in the local cross-paper validation artifact folder.
+Hash bindings establish file identity; content judgments come from the stated
+source-page checks. No production parser rule was changed during this test.
+
 ## Remaining candidates
 
 | Priority | Project and license | Concrete next step | Boundary |
