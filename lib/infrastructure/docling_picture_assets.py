@@ -13,7 +13,7 @@ from io import BytesIO
 import math
 
 
-PICTURE_ASSET_POLICY = "docling_source_members_and_intersecting_label_ink_v4"
+PICTURE_ASSET_POLICY = "docling_source_members_label_ink_and_caption_pairs_v5"
 MAX_PAGE_EDGE = 2400
 MAX_PAGE_PIXELS = 6_000_000
 MAX_ASSET_BYTES = 2 * 1024 * 1024
@@ -38,7 +38,31 @@ def _region(document, picture, ordinal):
         "source_page": prov.page_no, "source_bbox": prov.bbox.model_dump(mode="json"),
         "page_size": page.size.model_dump(mode="json"),
         "source_role": "original_pdf_picture_pixels",
+        "source_caption": _source_caption(document,picture),
     }
+
+
+def _source_caption(document,picture):
+    """Retain the official source link; never synthesize a target for an image."""
+    records=[];valid=len(picture.prov)==1 and len(picture.captions)==1;seen=set()
+    for ref in picture.captions:
+        item=ref.resolve(document)
+        owners=[p.self_ref for p in document.pictures for r in p.captions if r.cref==ref.cref]
+        raw=getattr(item,"orig",None)
+        okay=(ref.cref not in seen and owners==[picture.self_ref]
+              and getattr(item.label,"value",item.label)=="caption" and isinstance(raw,str) and bool(raw.strip())
+              and len(item.prov)==1
+              and item.prov[0].page_no==picture.prov[0].page_no
+              and list(item.prov[0].charspan)==[0,len(item.text)])
+        valid=valid and okay;seen.add(ref.cref)
+        text=raw if isinstance(raw,str) else ""
+        records.append({"ref":ref.cref,"text":text,"text_sha256":hashlib.sha256(text.encode()).hexdigest(),
+                        "parsed_text":item.text,"text_origin":"Docling.orig",
+                        "provenance_charspan_applies_to":"parsed_text",
+                        "provenance":[p.model_dump(mode="json") for p in item.prov],"binding_valid":okay})
+    return {"status":"source_linked" if records and valid else "review_required" if records else "missing",
+            "text":" ".join(r["text"] for r in records),"items":records,
+            "generated":False,"source_graph_modified":False}
 
 
 def _coverage_region(document, picture, ordinal, structure, associations, visibility):

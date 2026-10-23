@@ -3324,6 +3324,12 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 raise ValueError("package_review_checkpoint_mismatch")
             if getattr(self, "_production_finalizing", False):
                 self._production_report(report)
+            input_records=self.path/"input_records.json"
+            if input_records.is_file() and not getattr(self,"_production_collecting",False):
+                from lib.infrastructure.document_figure_bundle import write_document_figure_bundle
+                figures=write_document_figure_bundle(iter_json_records(input_records),destination/"source_figures.zip",
+                    check_cancel=self.check_cancel)
+                if figures["figures"]:report["source_figures"]=figures
             _write_quality_report(destination / "quality.json", report,
                                   self.path / "input_records.json")
             self.state["quality"] = {"policy": report["policy"], "targets": report["targets"],
@@ -3338,6 +3344,8 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 self.state["quality"]["qa_director"] = report["qa_director"]
             if "review_repair" in report:
                 self.state["quality"]["review_repair"] = report["review_repair"]
+            if "source_figures" in report:
+                self.state["quality"]["source_figures"]=report["source_figures"]
             for pending in destination.glob(".*.pending"):
                 pending.unlink(missing_ok=True)
             files = {p.name: file_hash(p) for p in destination.iterdir() if p.is_file() and p.name != "manifest.json"}

@@ -151,7 +151,7 @@ def test_native_blocks_never_merge_across_columns_or_pages(monkeypatch):
 def test_caption_geometry_corrects_wrong_owner_without_rewriting(monkeypatch):
     predictor, rb = source_predictor(monkeypatch)
     upper = element(0,"picture",(30,400,250,650))
-    lower = element(1,"picture",(30,100,250,350))
+    lower = element(1,"picture",(30,100,250,340))
     caption = element(2,"caption",(30,370,250,390))
     monkeypatch.setattr(rb.ReadingOrderPredictor,"predict_to_captions",lambda *args:{1:[2]})
     assert predictor.predict_to_captions([upper,lower,caption]) == {0:[2]}
@@ -159,3 +159,20 @@ def test_caption_geometry_corrects_wrong_owner_without_rewriting(monkeypatch):
     # Two equally close owners do not justify changing upstream ownership.
     lower.t = 360
     assert predictor.predict_to_captions([upper,lower,caption]) == {1:[2]}
+
+
+def test_caption_between_stacked_tables_keeps_upstream_owner_even_if_other_is_closer(monkeypatch):
+    predictor,rb=source_predictor(monkeypatch)
+    upper=element(0,'table',(310,531,545,581));lower=element(1,'table',(310,456,545,493))
+    caption=element(2,'caption',(310,496,545,526))
+    monkeypatch.setattr(rb.ReadingOrderPredictor,'predict_to_captions',lambda *args:{0:[2]})
+    assert predictor.predict_to_captions([upper,lower,caption])=={0:[2]}
+    assert not predictor.source_audit['caption_changes']
+
+
+def test_full_width_caption_cannot_move_to_an_adjacent_single_column_figure(monkeypatch):
+    predictor,rb=source_predictor(monkeypatch)
+    upper=element(0,'picture',(99,620,495,720));lower=element(1,'picture',(60,466,275,581))
+    caption=element(2,'caption',(50,600,545,619))
+    monkeypatch.setattr(rb.ReadingOrderPredictor,'predict_to_captions',lambda *args:{1:[2]})
+    assert predictor.predict_to_captions([upper,lower,caption])=={0:[2]}

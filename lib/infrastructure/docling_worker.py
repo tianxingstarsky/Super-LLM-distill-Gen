@@ -135,6 +135,8 @@ def parse_document(request):
                                         if row["page_no"] == number],
                 "spatial_title_associations": [entry for entry in picture_structure_audit["spatial_title_associations"]
                                                 if entry["page_no"] == number],
+                "spatial_label_associations": [entry for entry in picture_structure_audit.get("spatial_label_associations",[])
+                                                if entry["page_no"] == number],
                 "spatial_title_decisions": [entry for entry in picture_structure_audit["spatial_title_decisions"]
                                              if entry.get("page_no") == number],
                 "review_required_refs": [item["item_ref"] for item in page_structure_items

@@ -74,6 +74,33 @@ def test_region_recognition_requires_a_separate_visual_approval(evidence):
     assert item["visual_reviews"][0]["candidate_sha256"]==assist.digest(item["transcription"]["text"])
 
 
+@pytest.mark.parametrize('correct_second',[True,False])
+def test_extra_model_check_requires_a_bounded_schema_retry_not_silent_approval(evidence,correct_second):
+    source,original=evidence;reviews=[]
+    def call(payload,*args):
+        if payload['operation']=='docling_region_transcription':return transcript()
+        reviews.append(payload)
+        value=judgment()
+        if len(reviews)==1 or not correct_second:value['checks']['reading_order']='pass'
+        return value
+    result=assist.assist_part(source,original,call,review_scope='regions',max_rounds=1)
+    assert len(reviews)==2 and 'schema_correction' in reviews[1]
+    audit=result['document_reading']['vision_assistance']['items'][0]['visual_reviews'][0]
+    assert audit['schema_attempts'][0]['error']=='vision_review_invalid_result'
+    assert audit['verdict']==('pass' if correct_second else 'uncertain')
+    assert (result.get('status')=='quarantined') is not correct_second
+
+
+def test_retained_multimodal_source_requires_real_image_bytes_and_changes_review_identity(tmp_path):
+    from test_document_figure_bundle import record
+    unit=record(tmp_path);pictures=review._retained_pictures(unit)
+    assert len(pictures)==1 and pictures[0]['destination']=='separate_source_multimodal_corpus'
+    assert pictures[0]['generated'] is False and pictures[0]['sft_validated'] is False
+    assert 'image' not in pictures[0]
+    unit['document_reading']['picture_assets']['items'][0]['image_sha256']='f'*64
+    with pytest.raises(ValueError,match='integrity'):review._retained_pictures(unit)
+
+
 def test_visual_comparison_may_select_only_one_source_checked_candidate(evidence):
     source,original=evidence
     def call(payload,*args):

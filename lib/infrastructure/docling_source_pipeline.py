@@ -7,7 +7,7 @@ the upstream separator-aware reading-order implementation remain unchanged.
 """
 from __future__ import annotations
 
-SOURCE_BLOCK_POLICY = "docling_unmerged_source_blocks_caption_neighbors_v1"
+SOURCE_BLOCK_POLICY = "docling_unmerged_source_blocks_unique_caption_neighbor_v2"
 
 
 def source_preserving_pipeline():
@@ -41,7 +41,10 @@ def source_preserving_pipeline():
                     if owner.page_no != caption.page_no:
                         continue
                     overlap = min(owner.r, caption.r) - max(owner.l, caption.l)
-                    if overlap < .6 * min(owner.r-owner.l, caption.r-caption.l):
+                    # A caption spanning both columns cannot be reassigned to
+                    # one column merely because that object's edge is closer.
+                    if (overlap < .6 * min(owner.r-owner.l, caption.r-caption.l)
+                            or not owner.l<=(caption.l+caption.r)/2<=owner.r):
                         continue
                     # A caption must be outside the object, directly adjacent
                     # vertically. Both above-table and below-figure styles work.
@@ -50,7 +53,10 @@ def source_preserving_pipeline():
                         continue
                     candidates.append((max(0, gap), owner.cid))
                 candidates.sort()
-                if not candidates or len(candidates) > 1 and candidates[1][0]-candidates[0][0] < 1:
+                # Between stacked tables, both above and below placements can
+                # be plausible. Distance alone cannot displace upstream's
+                # caption association; only one eligible owner is sufficient.
+                if len(candidates)!=1:
                     continue
                 target = candidates[0][1]
                 previous = [key for key, values in result.items() if caption.cid in values]

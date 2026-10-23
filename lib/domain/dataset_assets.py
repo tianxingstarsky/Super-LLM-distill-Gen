@@ -62,6 +62,8 @@ def output_category(relative_path: str) -> str:
         return "输入快照"
     if name.endswith(".records.json"):
         return "报告与状态"
+    if name=="source_figures.zip":
+        return "语料"  # Original image/text corpus; visible in normal assets.
     if "dpo" in name and suffix == ".jsonl":
         return "DPO 偏好对"
     if any(token in name for token in ("orpo", "rlaif")) and suffix == ".jsonl":

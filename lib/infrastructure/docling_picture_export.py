@@ -11,7 +11,7 @@ from collections import Counter
 import hashlib
 
 
-PICTURE_EXPORT_POLICY = "docling_picture_children_exact_lines_clip_rows_spatial_titles_v3"
+PICTURE_EXPORT_POLICY = "docling_picture_children_exact_lines_titles_and_labels_v4"
 
 
 def _project_text(item, structure, page_number, *, page_height=None):
@@ -82,7 +82,7 @@ def _validate_associated_view(document, source_document, associations):
                 Counter(ref.cref for ref in source_document.body.children)):
             raise ValueError("association_body_view_not_a_permutation")
         refs = {entry[key] for entry in associations for key in
-                ("title_ref", "picture_ref", "anchor_item_ref", "anchor_picture_ref", "original_caption_ref")}
+                ("title_ref", "label_ref", "picture_ref", "anchor_item_ref", "anchor_picture_ref", "original_caption_ref") if key in entry}
         for ref in refs:
             actual = RefItem(cref=ref).resolve(document)
             source = RefItem(cref=ref).resolve(source_document)
@@ -151,16 +151,19 @@ def _serializer(document, page_number, *, traverse_pictures, picture_structure=N
     )
     from docling_core.types.doc import PictureItem, TextItem, TableItem, RefItem
     from pydantic import PrivateAttr
-    associations = []
+    associations,label_associations = [],[]
     if picture_structure and traverse_pictures:
         from .docling_picture_structure import validated_spatial_title_associations
         try:
             associations = validated_spatial_title_associations(
                 source_document or document, picture_structure, page_no=page_number)
-            _validate_associated_view(document, source_document or document, associations)
+            from .docling_picture_labels import validated_picture_labels
+            label_associations=validated_picture_labels(source_document or document,picture_structure,page_no=page_number)
+            _validate_associated_view(document, source_document or document, associations+label_associations)
         except ValueError as error:
             raise ValueError("document_docling_invalid_output") from error
     external_titles = {entry["title_ref"]: entry for entry in associations}
+    external_labels = {entry["label_ref"]:entry for entry in label_associations}
 
     class SourceTextSerializer(MarkdownTextSerializer):
         def serialize(self, *, item, **kwargs):
@@ -177,7 +180,7 @@ def _serializer(document, page_number, *, traverse_pictures, picture_structure=N
         _source_events: list = PrivateAttr(default_factory=list)
 
         def serialize(self, *, item=None, **kwargs):
-            if item is not None and item.self_ref in external_titles:
+            if item is not None and (item.self_ref in external_titles or item.self_ref in external_labels):
                 # The source body node stays intact. It is rendered once at
                 # the source-proven picture position by the text serializer.
                 return create_ser_result()
@@ -219,6 +222,7 @@ def _serializer(document, page_number, *, traverse_pictures, picture_structure=N
             self.groups = []
             self.row_events = []
             self.title_events = []
+            self.label_events = []
 
         def _children(self, item, doc_serializer, kwargs):
             parts = doc_serializer.get_parts(item=item, **kwargs)
@@ -235,7 +239,17 @@ def _serializer(document, page_number, *, traverse_pictures, picture_structure=N
                 title_parts.append(result)
                 self.title_events.append(dict(entry, render_count=1,
                                               source_role="spatially_associated_body_title"))
-            parts = title_parts + parts
+            label_parts=[]
+            for entry in label_associations:
+                if entry["picture_ref"]!=item.self_ref:continue
+                source_label=RefItem(cref=entry["label_ref"]).resolve(document)
+                result=doc_serializer.text_serializer.serialize(item=source_label,doc_serializer=doc_serializer,
+                    doc=document,**dict(kwargs,visited=set()))
+                if not result.text or [span.item.self_ref for span in result.spans]!=[entry["label_ref"]]:
+                    raise ValueError("document_docling_invalid_output")
+                label_parts.append(result)
+                self.label_events.append(dict(entry,render_count=1,source_role="spatially_associated_body_label"))
+            parts = title_parts + parts + label_parts
             rows = [row for row in (picture_structure or {}).get("pictures", {}).get(
                 item.self_ref, {}).get("token_rows", []) if row.get("page_no") == page_number]
             by_first = {row["source_refs"][0]: row for row in rows}
@@ -340,6 +354,10 @@ def serialize_picture_page(document, page_number, *, picture_structure=None, sou
     actual_titles = [entry["title_ref"] for entry in picture_serializer.title_events]
     if Counter(actual_titles) != Counter(expected_titles) or len(set(actual_titles)) != len(actual_titles):
         raise ValueError("document_docling_invalid_output")
+    expected_labels=[e["label_ref"] for e in (picture_structure or {}).get("spatial_label_associations",[]) if e["page_no"]==page_number]
+    actual_labels=[e["label_ref"] for e in picture_serializer.label_events]
+    if Counter(actual_labels)!=Counter(expected_labels) or len(set(actual_labels))!=len(actual_labels):
+        raise ValueError("document_docling_invalid_output")
     baseline, _ = _serializer(document, page_number, traverse_pictures=False)
     baseline_refs = {span.item.self_ref for span in baseline.serialize().spans}
     span_refs = [span.item.self_ref for span in result.spans]
@@ -391,6 +409,7 @@ def serialize_picture_page(document, page_number, *, picture_structure=None, sou
              "source_text_structure": structure_items,
              "physical_row_projection_events": picture_serializer.row_events,
              "spatial_title_projection_events": picture_serializer.title_events,
+             "spatial_label_projection_events": picture_serializer.label_events,
              "source_serialization_events": source_events,
              "duplicate_source_emission_refs": duplicate_emission_refs,
              # Final Docling spans are de-duplicated by create_ser_result; use

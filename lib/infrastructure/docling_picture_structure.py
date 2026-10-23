@@ -14,7 +14,7 @@ import math
 from pathlib import Path
 
 
-PICTURE_STRUCTURE_POLICY = "docling_native_figure_lines_and_title_association_v2"
+PICTURE_STRUCTURE_POLICY = "docling_native_figure_lines_titles_and_labels_v3"
 _BOX_TOLERANCE = .05
 _MAX_PARTITION_CANDIDATES = 128
 
@@ -482,6 +482,8 @@ def build_picture_structure(document, source_pdf):
     content = bytes(source_pdf) if isinstance(source_pdf, (bytes, bytearray)) else Path(source_pdf).read_bytes()
     digest = hashlib.sha256(content).hexdigest()
     picture_pages = {p.page_no for item in document.pictures for p in item.prov}
+    from .docling_picture_labels import label_candidates,associate_picture_labels
+    body_labels={item.self_ref for item,_,_ in label_candidates(document)}
     descendants, owners = {}, {}
     for picture in document.pictures:
         for item, _ in document.iterate_items(root=picture, traverse_pictures=True):
@@ -491,15 +493,15 @@ def build_picture_structure(document, source_pdf):
             owners.setdefault(item.self_ref, []).append(picture.self_ref)
     candidates = [item for item in document.texts
                   if _label(item) in {"text", "section_header"}
-                  and (item.self_ref in descendants or (_label(item) == "section_header"
+                  and (item.self_ref in descendants or item.self_ref in body_labels or (_label(item) == "section_header"
                        and any(p.page_no in picture_pages for p in item.prov)))]
     pages = sorted({p.page_no for item in candidates for p in item.prov})
     mapping = {"policy": PICTURE_STRUCTURE_POLICY, "source_sha256": digest, "items": {}, "pictures": {},
-               "spatial_title_associations": []}
+               "spatial_title_associations": [],"spatial_label_associations":[]}
     audit = {"policy": PICTURE_STRUCTURE_POLICY, "source_sha256": digest,
              "source_document_modified": False, "inference_performed": False,
              "items": [], "physical_token_rows": [], "review_required_refs": [],
-             "spatial_title_associations": [], "spatial_title_decisions": []}
+             "spatial_title_associations": [], "spatial_title_decisions": [],"spatial_label_associations":[]}
     if not candidates:
         return mapping, audit
     native = read_native_picture_lines(content, page_numbers=pages)
@@ -508,7 +510,7 @@ def build_picture_structure(document, source_pdf):
         record = {"item_ref": item.self_ref, "label": _label(item),
                   "original_level": getattr(item, "level", None),
                   "original_parent_ref": item.parent.cref if item.parent else None,
-                  "source_role": "picture_child" if item.self_ref in descendants else "body_header",
+                  "source_role": "picture_child" if item.self_ref in descendants else "body_figure_label_candidate" if item.self_ref in body_labels else "body_header",
                   "picture_refs": owners.get(item.self_ref, []),
                   "source_provenance": [p.model_dump(mode="json") for p in item.prov],
                   "source_text": item.text, "status": "preserved", "review_required": False,
@@ -552,4 +554,9 @@ def build_picture_structure(document, source_pdf):
     for association in associations:
         mapping["items"][association["item_ref"]]["spatial_title_association"] = association
         mapping["pictures"][association["picture_ref"]].setdefault("external_title_refs", []).append(association["item_ref"])
+    labels=associate_picture_labels(document,mapping)
+    mapping["spatial_label_associations"]=labels
+    audit["spatial_label_associations"]=labels
+    for entry in labels:
+        mapping["pictures"][entry["picture_ref"]].setdefault("external_label_refs",[]).append(entry["label_ref"])
     return mapping, audit

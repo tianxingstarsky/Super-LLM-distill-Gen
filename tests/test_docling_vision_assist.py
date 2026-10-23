@@ -275,7 +275,8 @@ def test_prompt_extension_keeps_previous_document_reader_snapshot():
     from lib.prompts import get
     current=get("workflow.document_vision")
     old=get("workflow.document_vision",version="1.0.0")
-    assert current.version=="1.2.0" and "docling_region_transcription" in current.template
+    assert current.version=="1.3.0" and "docling_region_transcription" in current.template
     assert "docling_visual_review" in current.template
     assert get("workflow.document_vision",version="1.1.0").version=="1.1.0"
+    assert get("workflow.document_vision",version="1.2.0").version=="1.2.0"
     assert "docling_region_transcription" not in old.template
