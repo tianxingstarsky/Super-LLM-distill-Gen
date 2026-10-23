@@ -272,18 +272,28 @@ def _locate(text,slot):
 def repair_targets(part):
     reading=part.get("document_reading") or {}; text=part.get("text",""); targets=[]
     table_elements=[e for e in reading.get("page_export",{}).get("reading_order",{}).get("elements",[]) if e["label"]=="table"]
-    table_blocks=[t.map for t in MarkdownIt("commonmark").enable("table").parse(text) if t.type=="table_open"]
+    tokens=MarkdownIt("commonmark").enable("table").parse(text)
+    table_blocks=[t.map for t in tokens if t.type=="table_open"]
     offsets=[0]
     for line in text.splitlines(keepends=True):offsets.append(offsets[-1]+len(line))
     table_spans=({e["ref"]:(offsets[m[0]],offsets[m[1]]) for e,m in zip(table_elements,table_blocks)}
                  if len(table_elements)==len(table_blocks) else {})
+    undecoded={e["item_ref"] for e in reading.get("elements",[]) if "undecoded_formula" in e}
+    formula_elements=[e for e in reading.get("page_export",{}).get("reading_order",{}).get("elements",[])
+                      if e["label"]=="formula" and e["ref"] in undecoded]
+    markers=[t.map for t in tokens if t.type=="html_block" and t.content.strip()=="<!-- formula-not-decoded -->"]
+    formula_spans=({e["ref"]:(offsets[m[0]],offsets[m[1]]) for e,m in zip(formula_elements,markers)}
+                   if len(formula_elements)==len(markers) and len({e["ref"] for e in formula_elements})==len(formula_elements) else {})
     for e in reading.get("elements",[]):
         proof=e.get("local_formula_transcription") or {}
         if proof.get("status")!="review_required" and "undecoded_formula" not in e:continue
         kind="table" if e["label"]=="table" else "text"
         slot=(proof.get("assembly",{}).get("text") if proof.get("published") else
-              proof.get("original_text_slot") or proof.get("backend_text"))
+              proof.get("original_text_slot") or proof.get("backend_text") or
+              (e.get("undecoded_formula") or {}).get("original_text"))
         span=table_spans.get(e["item_ref"]) if kind=="table" else _locate(text,slot)
+        if e["label"]=="formula" and "undecoded_formula" in e and markers:
+            span=formula_spans.get(e["item_ref"])
         targets.append({"ref":e["item_ref"],"kind":kind,"label":e["label"],"bbox":e["provenance"]["bbox"],
                         "span":span,"slot":slot,"reason":"unbound_markdown_region" if span is None else None})
     return targets
@@ -389,6 +399,8 @@ def assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None):
                 replacement=("".join("$"+v+"$" if math else html.escape(_prose(v),quote=False)
                                     for math,v in _math_parts(value["text"])) if target["kind"]=="text"
                              else table_markdown(value)+"\n\n")
+                if part["text"][target["span"][0]:target["span"][1]].strip()=="<!-- formula-not-decoded -->":
+                    replacement+="\n\n"
                 record.update(status="adopted",reason=None,native_content_checked=True,native_operators_checked=True,transcription=value,
                               mathematical_correctness_certified=False)
                 adopted.append((*target["span"],replacement,target["ref"]))

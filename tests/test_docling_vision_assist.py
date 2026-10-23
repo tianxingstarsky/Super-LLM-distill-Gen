@@ -113,6 +113,19 @@ def test_no_api_for_clean_pages_or_unbound_duplicate_paragraphs(evidence):
     assert result["status"]=="quarantined"
 
 
+def test_display_formula_marker_is_bound_only_to_matching_export_order(evidence):
+    source,original=evidence;original["text"]="<!-- formula-not-decoded -->\n\nOther source text."
+    element=original["document_reading"]["elements"][0]
+    element.pop("local_formula_transcription");element["label"]="formula"
+    element["undecoded_formula"]={"original_text":"The result is x2.","decoded_text":""}
+    original["document_reading"]["page_export"]={"reading_order":{"elements":[{"label":"formula","ref":"#/texts/0"}]}}
+    result=assist.assist_part(source,original,lambda *args:transcript())
+    assert "status" not in result and result["text"].endswith("Other source text.")
+    original["text"]+="\n\n<!-- formula-not-decoded -->\n\nThe result is x2."
+    def forbidden(*args):pytest.fail("Ambiguous marker ownership must not call the API")
+    assert assist.assist_part(source,original,forbidden)["status"]=="quarantined"
+
+
 def test_source_mutation_and_cancellation_abort_without_patch(evidence):
     source,original=evidence
     def cancel():raise RuntimeError("cancelled")

@@ -794,9 +794,10 @@ The actual results, crops, raw readings, full Markdown and fingerprinted
 comparison report are in the ignored local
 `.dataforge/multimodal-parser-assist-2026-10-23/` artifact folder.
 The relevant regression suite passed 316 tests; the new assistance module
-subsequently passed all 25 tests, including the added prompt snapshot check.
-Four older reasoning-prompt version assertions also fail with the unchanged
-HEAD prompt module; they are unrelated to this parsing change and remain
+subsequently passed all 26 tests, including prompt snapshots and source-bound
+empty formula markers. Ambiguous placeholder ownership stays pending.
+Four older reasoning-prompt version assertions also fail with the pre-change
+prompt module; they are unrelated to this parsing change and remain
 separate from these results.
 
 ## Remaining candidates
