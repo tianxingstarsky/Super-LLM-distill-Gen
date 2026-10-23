@@ -3349,12 +3349,18 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                 self.state["quality"]["source_figures"]=report["source_figures"]
             for pending in destination.glob(".*.pending"):
                 pending.unlink(missing_ok=True)
+            # Audit sidecars can contain the original rejected text. Scan the
+            # whole package, not just its eligible trainer rows, before any
+            # manifest or QA-history publication can make it deliverable.
+            from lib.infrastructure.export_credentials import ExportCredentialGuard
+            ExportCredentialGuard.from_root(self.root).check_folder(destination)
             files = {p.name: file_hash(p) for p in destination.iterdir() if p.is_file() and p.name != "manifest.json"}
             if not getattr(self, "_production_collecting", False):
                 self.publish_qa_history(destination)
             atomic_json(destination / "manifest.json", {"status": "complete", "run_id": self.state["id"],
                         "recipe_hash": self.state["recipe_hash"], "policy": POLICY, "models": self.state.get("models", {}),
                         "sources": self.recipe["sources"], "counts": {t: v["eligible"] for t, v in report["targets"].items()},
+                        "credential_scan": {"status": "passed", "method": "exact_configured_model_credentials"},
                         "trainer_counts": {t: v["summary"]["compatible"] for t, v in report["trainer_exports"].items()
                                            if v["status"] == "ready"},
                         "negative_counts": {t: v["negative"] for t, v in report["targets"].items() if v.get("negative")},

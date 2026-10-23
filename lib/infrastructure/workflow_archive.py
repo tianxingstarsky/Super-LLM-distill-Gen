@@ -105,6 +105,8 @@ def display_prepared_bundle(run: Path, manifest: dict) -> dict | None:
 
 def prepared_bundle(run: Path, *, verified_manifest: dict | None = None) -> dict | None:
     """Strictly verify a prepared archive and, unless supplied, its sources."""
+    from lib.infrastructure.export_credentials import ExportCredentialGuard
+    ExportCredentialGuard.from_root().check_folder(Path(run) / "artifacts")
     return _cached(run, verified_manifest if verified_manifest is not None else verify_artifacts(run))
 
 
@@ -115,6 +117,8 @@ def prepare_bundle(run: Path, *, progress=None) -> dict:
         if progress:
             progress("source")
         manifest = verify_artifacts(run)
+        from lib.infrastructure.export_credentials import ExportCredentialGuard
+        ExportCredentialGuard.from_root().check_folder(Path(run) / "artifacts")
         cached = _cached(run, manifest)
         if cached:
             return cached
@@ -169,6 +173,8 @@ def bundle_bytes(run: Path) -> bytes:
 
 def artifact_bytes(run: Path, filename: str, max_bytes: int) -> bytes:
     manifest = verify_artifacts(run)
+    from lib.infrastructure.export_credentials import ExportCredentialGuard
+    ExportCredentialGuard.from_root().check_folder(Path(run) / "artifacts")
     expected = manifest["sha256"].get(filename)
     if not expected or Path(filename).name != filename:
         raise ValueError("artifact_not_listed")

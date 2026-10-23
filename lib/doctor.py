@@ -72,10 +72,7 @@ def checks(root=None):
         except OSError:
             ok = False
         add(f"Local service {port}", ok, "Start the console once; no watchdog is required")
-    harness = root / "components/deepseek-harness"
-    add("dsh source build", (harness / "apps/cli/lib/bin.js").exists(), "Build the pinned harness source first")
-    add("Node", shutil.which("node") is not None, "Install Node supported by harness")
-    for variable in ("PIP_CACHE_DIR", "HF_HOME", "DSH_HOME"):
+    for variable in ("PIP_CACHE_DIR", "HF_HOME"):
         value = os.environ.get(variable)
         add(variable, bool(value) and not (os.name == "nt" and value.lower().startswith("c:")), "Set a workspace/tools path; unset is not proof of F-drive isolation")
     return rows

@@ -1,0 +1,9 @@
+{
+  "upstream_repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "upstream_commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "checked_at": "2026-10-23",
+  "dsh_version": "0.2.1-rc.2",
+  "core_protocol": "dataforge.control",
+  "core_protocol_version": 1,
+  "references": ["docs/cookbook/adding-a-tool.md", "docs/user/develop/basic/publish.md", "packages/jobs/jobs/src/types.ts", "docs/subsystems/subprocess.md"]
+}

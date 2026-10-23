@@ -1,3 +1,5 @@
+> dsh 使用独立安装、独立版本的[适配包](../plugins/dsh-dataforge/README.md)。产品不再启动、构建或修改 dsh。
+
 # 操作与质量保障（当前实现边界）
 
 ## 启动与常用任务
@@ -13,7 +15,7 @@ Streamlit UI（8501）与审核 API（6900）在同一个服务进程；后台�
 python -m lib.cli doctor
 python -m lib.cli quality-report --input data/output/rollout_samples.jsonl
 python -m lib.cli export --format minimind --tag pilot-v1
-python -m lib.cli dsh --team --review-config quality=configs/review_remote.quality.yaml --review-config safety=configs/review_remote.safety.yaml "按 review-team 技能审核当前工作区，先给候选判定，不提交"
+# Configure the external adapter, then use dataforge_dispatch in dsh.
 ```
 
 `doctor` 只读环境和本地服务状态，不运行 pytest、不启动服务、不调用模型、不修改配置。未设置缓存目录会明确警告，而不是声称已经全部在 F 盘。

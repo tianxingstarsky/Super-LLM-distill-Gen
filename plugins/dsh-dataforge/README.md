@@ -1,75 +1,110 @@
-# DataForge 插件（deepseek-harness）
+# DataForge adapter for DeepSeek Harness
 
-把 Super-LLM-distill-Gen 的 df-* 数据管线暴露为 harness 工具：模型（或用户）
-在 dsh 对话里直接说"把文档转成训练数据"，agent 调 `dataforge` 工具执行对应管线。
+This is an **independently installed and versioned package**. DataForge does not install, launch, build, or import DeepSeek Harness. Its Python dependencies do not include a harness SDK.
 
-**已真机验证（headless 模式，2026-09）**：agent 调用 `dataforge` 执行
-`models`（`python -m lib.cli models`，返回后端 3 个模型）与
-`gate status`（G0/G1/G3 真实状态）两条命令，输出与实际一致。
+The adapter talks only to the provider-neutral `dataforge.control` protocol, version 1, over bounded JSON on stdin/stdout. Other external controllers can use the same protocol.
 
-## 前置：harness 仓库构建
+## Compatibility
 
-```bash
-cd components/deepseek-harness
-# pnpm 请用 corepack 安装并固定 11.7.0；缓存全部放 F 盘（C 盘纪律）：
-#   export COREPACK_HOME=F:/无项目工作文件夹/tools/corepack
-#   export npm_config_store_dir=F:/无项目工作文件夹/tools/pnpm-store
-#   export npm_config_cache=F:/无项目工作文件夹/tools/npm-cache
-# CI=true：跳过 lefthook 装 git 钩子（harness 是 submodule，core.worktree 在公共 config 里，装不了；运行不需要钩子）
-# 构建依赖时 PATH 需能解析 pnpm（Windows 下用 F:/无项目工作文件夹/tools/df-bin/pnpm.cmd 垫片，或 corepack enable）
-CI=true corepack pnpm@11.7.0 install --frozen-lockfile
-CI=true corepack pnpm@11.7.0 run build
+- Tested upstream: DeepSeek Harness `0.2.1-rc.2`, commit `687f282e8625c6b8d11ff58211a90524be2e4317`.
+- Node: 24 or later.
+- Compatibility is exact for this release. Unknown future harness versions are refused by the bundle engine declaration.
+- Update and test this package when harness interfaces change. The Python product does not need an update while protocol v1 remains compatible.
+- The old source launcher, private dependency junction setup, command-name mirror, and team patch generator have been retired.
+
+The official contracts are [tool authoring](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/docs/cookbook/adding-a-tool.md), [bundle publishing](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/docs/user/develop/basic/publish.md), [jobs](https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317/packages/jobs/jobs), and [managed subprocesses](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/docs/subsystems/subprocess.md).
+
+## Install separately
+
+From this package directory, create an archive:
+
+```sh
+npm pack
+dsh plugin --profile web add /absolute/path/to/dsh-shujian-dataforge-0.2.0.tgz --config.auto-install-peers=true
 ```
 
-## 安装
+The explicit pnpm flag installs the declared SDK peers into this external profile even if the machine has disabled automatic peers. Installation alone and --dump-config do not prove that an entry module can load; the release is also checked by importing the installed profile package.
 
-```bash
-# 1. 生成机器相关的补丁文件（make_dsh_patch.py 把插件名写成 file:// URL——
-#    插件名必须是带 scheme 的 URL，Windows 绝对路径原生 import() 不认）
-python scripts/make_dsh_patch.py
+This uses the operator's existing harness installation. It does not vendor or replace it. The package can be copied or published separately from the DataForge repository. No parent-repository files are needed at runtime.
 
-# 2. 设置环境变量
-export DF_ROOT="F:/无项目工作文件夹/Super-LLM-distill-Gen"
-export DF_PYTHON="$DF_ROOT/.venv/Scripts/python.exe"   # Windows；Linux/macOS 指向 venv/bin/python
+Configure the inserted row in the profile's `cordis.patch.yml`:
 
-# 3. 一键冒烟（自动准备插件依赖 junction + tsx loader + 环境）
-bash scripts/dsh_smoke.sh "用 dataforge 工具执行 models 子命令，列出可用模型"
-
-# 4. 手动启动（web 为例）；根脚本 dsh 是源码启动器（自带 node --import tsx/esm，能加载 .ts 插件）
-cd components/deepseek-harness
-corepack pnpm@11.7.0 run dsh web --patch "$DF_ROOT/plugins/dsh-dataforge/cordis.yml"
+```yaml
+- id: shujian-dataforge
+  config:
+    projects:
+      - id: local
+        root: /absolute/path/to/Super-LLM-distill-Gen
+        python: /absolute/path/to/venv/bin/python
+        workspace: default
+    allowMutations: true
+    allowModelLimitChanges: false
+    maxActiveWorkflows: 4
+    modelConcurrencyCeiling: 4
+    monitorIntervalMs: 2000
 ```
 
-## 踩坑记录（真机联调总结）
+On Windows use absolute Windows paths for both root and python, including the existing virtual environment's `Scripts/python.exe`. Do not copy model credentials into the patch. Each project points at its own configured DataForge installation.
 
-- **插件名 URL**：cordis 的 `insert.name` 必须是 `file:///…`（loader 只对 `./`、`../`
-  相对路径自动转 URL；Windows `F:/…` 原样传给 `import()` 会报
-  `ERR_UNSUPPORTED_ESM_URL_SCHEME`）。
-- **插件依赖解析**：pnpm workspace 的 `@deepseek-ai/cordis` 只按消费包逐包链接，
-  仓库**根** node_modules 里没有它。插件在仓库外，必须自备依赖：冒烟脚本会给
-  `plugins/dsh-dataforge/node_modules` 建 junction → `tools/dsh-plugin-deps/node_modules`
-  （内含 `@deepseek-ai/{cordis,dsh-tools}` 指回 harness 工作区包）。
-- **CI=true**：harness 是 submodule，root postinstall 的 lefthook 装钩必失败，
-  `CI=true` 让安装器跳过（仅影响 git 钩子，不影响运行）。
-- **位置参数**：`gate` / `review` / `review-remote` 的 action 是位置参数不是
-  `--action`；插件用 `POSITIONAL_OPS` 映射（有契约测试防漂移）。
-- **`.ts` 插件加载**：走 `node --import tsx/esm`（根脚本 `dsh` 已是），
-  直接跑构建产物 `apps/cli/lib/bin.js` 时无 tsx 注册器，需 `NODE_OPTIONS=--import tsx/esm`。
+The official subprocess provider scrubs ambient credentials. If a core installation uses environment-based keys, explicitly add an operator-owned `forwardEnv: [DEEPSEEK_API_KEY]` list to that project. Only those named variables are passed to the Python child; their values never enter tool arguments or output. Local backend credential files stay in the core installation.
 
-## 插件组成
+`allowMutations` defaults to false. The separate model-limit setting defaults to false too. When enabled by the operator, a new model limit cannot exceed `modelConcurrencyCeiling`. Normal generation always uses the core's existing shared model admission pool.
 
-- `src/dataforge.ts`：Cordis 插件（name/inject/apply + defineTool），调度
-  `python -m lib.cli <command>`；命令表与 lib/cli.py 子命令交叉校验
-  （tests/test_dsh_plugin.py），防止两边漂移。
-- `skills/dataforge/SKILL.md`：给 agent 的工作流说明（何时用哪条命令、
-  闸门铁律、预算与模型），可复制到 harness 的 skill 目录由 skill-filesystem 发现。
-- `cordis.yml`：由 make_dsh_patch.py 生成的补丁（file:// URL + 本机绝对路径，
-  不入库；cordis.example.yml 为模板）。
+The deployment must provide the official `jobs` service, a job controller such as `dsh-tool-jobs`, and the managed `subprocess` provider. Missing services or ownership fail before work starts. Built-in harness job ids belong to their creating session.
 
-## 安全设计
+## Tools
 
-- 所有数据智能都在 Python 管线（已过 97 项测试与真机评测）；插件零智能、只调度。
-- 闸门（G0/G1/G3）在 CLI 层硬拦截；插件描述与 skill 都要求 agent 先 gate status。
-- 输出上限 8MB；非零退出码时 stderr 一并返回给模型（isError 语义由上游处理）。
-- DeepSeek API key 只从 gitignored 的 configs/backends.local.yaml 读取（见 dsh_smoke.sh），
-  不硬编码、不入库；harness 会话/凭据放在 `DSH_HOME`（F 盘，不在仓库内）。
+`dataforge` accepts a project, action, and JSON params. Start with `capabilities`.
+
+- `runs.list`, `runs.inspect`: workflow history, live state, and node model bindings.
+- `runs.create`: freeze a complete recipe without executing it. Supply an explicit stable `request_id`; retries with the same content return the same run. Reusing the id for different content is rejected.
+- `runs.events`: incremental durable events, using the returned UTF-8 byte cursor.
+- `runs.streams`, `runs.stream_delta`: original live model output and per-request deltas.
+- `runs.preview`: bounded, verified final samples, with original reasoning fields.
+- `runs.quality`: verified inventory and content report. Scores are model assessments, not scientific proof.
+- `runs.cancel`: request cooperative cancellation; the execution process checks it.
+- `models.list`: configured and previously discovered model ids, without fetching a model catalog or exposing credentials.
+- `models.status`: shared active/queued counts, concurrency limit, queue timeout, and cooldown.
+- `models.limit`: operator-enabled shared limit adjustment; no provider credential access.
+
+Use `dataforge_dispatch` for long runs. For example:
+
+```json
+{
+  "runs": [
+    {"id":"clean","project":"local","run_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","priority":10},
+    {"id":"sft","project":"local","run_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","depends_on":["clean"]}
+  ]
+}
+```
+
+Replace the example ids with real frozen run ids. Dependencies wait for successful completion. They do not automatically change a child's inputs or bind the parent's artifacts: configure source reuse in the child's recipe before dispatch.
+
+One official background job is returned for each workflow. Use the harness's native `job_list`, `job_output`, and `job_kill`. The adapter publishes progress and new core journal events into the job output ring. Original model deltas remain available through the explicit stream tools.
+
+Scheduling supports up to 32 workflows in a plan, dependency validation, priorities, FIFO ties, a bounded waiting queue, and a global admission limit shared across callers of this adapter instance. The core independently enforces model limits across nodes, roles, and workflow processes within each core installation. Separate installations or machines do not share a model semaphore; this release does not claim a distributed model quota. Failed or cancelled dependencies block their children.
+
+## Cancellation and recovery
+
+Once a job is published, cancelling the outer tool call does not cancel it. Job cancellation or owner disposal requests core cancellation, then uses the official managed-process termination procedure if the worker does not exit during the grace period. Job settlement waits for cleanup.
+
+Harness background handles are process-local. They do not survive a harness restart. DataForge run ids, checkpoints, events, source caches, and final artifacts remain on disk. Inspect them and submit the same run ids to resume.
+
+Create requests reserve an identity before creating a workflow. A completed creation can be recovered after an interrupted acknowledgement. An incomplete directory is reported as `control_create_outcome_unconfirmed`; it is never silently recreated under a second identity.
+
+## Agent instructions
+
+The optional skills under `skills/` describe orchestration and review. Install them in the harness's configured skill directory if desired. They are adapter assets, not DataForge application settings. Generation and evaluation prompts remain configurable on the core's workflow nodes.
+
+Never change a frozen recipe, remove reasoning to make a sample pass, infer correctness from a high score, or combine historical rework parents with their corrected children as independent samples.
+
+## Validation
+
+Run this package's tests after installing its declared peer dependencies in a separate development directory:
+
+```sh
+npm install --ignore-scripts
+npm test
+```
+
+The tests exercise the actual declared `defineTool` SDK plus controlled jobs and subprocess contracts. The main Python suite separately exercises the public protocol, native CPT execution, idempotent creation, cursor framing, error isolation, and shared scheduler delegation. Neither suite needs a paid model API.

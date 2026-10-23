@@ -8,7 +8,7 @@ Windows 双击 `scripts/start_all.vbs`，或执行 `python -m lib.cli console`�
 - 两个监听端口属于同一服务 PID；生成任务按需使用隐藏子进程。
 - 原 Redis / Elasticsearch / Argilla 服务已经停用；历史数据文件没有删除。
 - `review-server` 是无需 UI 的独立部署选项，不要与 console 重复绑定同一个端口。
-- 后台子进程设置 CREATE_NO_WINDOW，dsh Node 子进程设置 windowsHide，不引入看门狗。
+- 产品后台子进程设置 CREATE_NO_WINDOW；产品不安装、启动或维护外部 Agent Harness。
 - 配置或端口冲突会报错退出，不自动杀掉占用端口的其他应用。
 
 运行态、日志与缓存使用项目输出目录或同盘 tools 目录。服务默认只监听回环地址。

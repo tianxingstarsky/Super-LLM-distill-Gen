@@ -215,7 +215,6 @@ def page_run(show_title=True):
         "文档语料整理": ("doc2corpus", {}),
         "文档问答生成": ("doc2data", {}),
         "质量报告": ("quality-report", {}),
-        "AI 审核小队": ("dsh", {"team": True, "task": "先读取 review-team 技能，依据本机资料与审核配置派发子智能体。未提供配置先报告缺项，不创建账号、不自行放行。"}),
         "协作者拉取": ("review-remote", {"action": "pull"}),
         "环境自检": ("doctor", {}),
         "全部命令": (None, {}),
@@ -225,7 +224,6 @@ def page_run(show_title=True):
         "文档语料整理": "解析文档并清洗、分块，形成可追溯语料。",
         "文档问答生成": "从文档生成问答候选，并保留来源片段。",
         "质量报告": "统计已有样本的质量问题与检查结果。",
-        "AI 审核小队": "使用本机审核配置处理需要专家复核的任务。",
         "协作者拉取": "拉取已配置协作服务中的待审核记录。",
         "环境自检": "检查本机缓存与模型服务的运行条件。",
         "全部命令": "使用完整命令目录；适合熟悉命令行参数的操作者。",
@@ -252,7 +250,6 @@ def page_run(show_title=True):
         "doc2corpus": {"input", "out", "chunk_size"},
         "doc2data": {"input", "mode", "qa_per_chunk"},
         "quality-report": {"input"},
-        "dsh": {"task", "review_config"},
         "review-remote": {"action", "config", "batch"},
     }.get(command, {"input", "out", "task"})
     primary = [action for action in actions if action.required or action.dest in primary_dests]

@@ -1,0 +1,42 @@
+{
+  "name": "dsh-shujian-dataforge",
+  "version": "0.2.0",
+  "description": "Independently installed DeepSeek Harness controller for DataForge protocol v1",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./dispatcher": "./dispatcher.mjs",
+    "./transport": "./transport.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "dispatcher.mjs",
+    "transport.mjs",
+    "cordis.patch.yml",
+    "skills",
+    "compatibility.json",
+    "README.md",
+    "test",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=24",
+    "dsh": "0.2.1-rc.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-jobs": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.2.1-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "Apache-2.0"
+}

@@ -59,7 +59,7 @@ def test_console_releases_owned_review_api_if_streamlit_fails(monkeypatch):
 def _prepare_launcher(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher, 'ROOT', tmp_path)
     monkeypatch.chdir(tmp_path)
-    for key in ('NO_PROXY', 'PYTHONIOENCODING', 'PIP_CACHE_DIR', 'HF_HOME', 'DSH_HOME'):
+    for key in ('NO_PROXY', 'PYTHONIOENCODING', 'PIP_CACHE_DIR', 'HF_HOME'):
         monkeypatch.setenv(key, 'test-value')
 
 

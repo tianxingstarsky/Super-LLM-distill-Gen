@@ -1,0 +1,9 @@
+- insert:
+    - id: shujian-dataforge
+      name: dsh-shujian-dataforge
+      config:
+        projects: []
+        allowMutations: false
+        maxActiveWorkflows: 4
+        modelConcurrencyCeiling: 4
+        monitorIntervalMs: 2000

@@ -175,7 +175,7 @@ def list_releases(output: Path) -> list[dict]:
     return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
 
 
-def release_file(output: Path, release_id: str, filename: str) -> bytes:
+def release_file(output: Path, release_id: str, filename: str, *, settings_root=None) -> bytes:
     """Recheck the selected release and payload immediately before downloading."""
     output = Path(output)
     for folder, kind, run_id in _release_dirs(output):
@@ -184,6 +184,8 @@ def release_file(output: Path, release_id: str, filename: str) -> bytes:
         release = _inspect(output, folder, kind, run_id)
         if not release["verified"]:
             raise ValueError(release.get("error", "发布版本校验失败"))
+        from lib.infrastructure.export_credentials import ExportCredentialGuard
+        ExportCredentialGuard.from_root(settings_root).check_folder(folder)
         item = next((file for file in release["files"] if file["name"] == filename), None)
         if item is None:
             raise ValueError("此文件未列入可下载清单")

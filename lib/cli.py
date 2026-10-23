@@ -794,27 +794,6 @@ def cmd_doctor(args) -> int:
     return doctor_main()
 
 
-def cmd_dsh(args) -> int:
-    """一键进 dsh：任务直跑（--team 挂审核小队补丁）。补丁/技能联接/环境全自动。"""
-    from lib.dsh_env import run
-    task = args.task or "读取 review-team 技能并组织审核。"
-    if args.review_config:
-        if not args.team:
-            raise ValueError("--review-config requires --team")
-        mappings = []
-        for assignment in args.review_config:
-            policy, separator, filename = assignment.partition("=")
-            if not separator or policy not in ("quality", "safety"):
-                raise ValueError("Use --review-config quality=PATH or safety=PATH")
-            path = pathlib.Path(filename).resolve()
-            if not path.is_file():
-                raise FileNotFoundError(path)
-            mappings.append({"policy": policy, "config": str(path)})
-        task += "\n审核配置分配（只传路径，不读取或回显密钥）：" + json.dumps(mappings, ensure_ascii=False)
-    task += f"\n所有 dataforge 调用显式传 ws={WS.resolve()}；不得自行批准闸门。"
-    return run(task, args.team, ROOT)
-
-
 def cmd_backend(args) -> int:
     """模型后端与密钥管理（密钥掩码显示；写 gitignored 本地覆盖）。"""
     from lib import backend_manager as bm
@@ -1261,12 +1240,6 @@ def build_parser():
     p_rserver = sub.add_parser("review-server", help="审核中心 HTTP 服务（独立模式；控制台进程内置同款）")
     p_rserver.add_argument("--port", type=int, default=6900)
     p_rserver.set_defaults(func=cmd_review_server)
-
-    p_dsh = sub.add_parser("dsh", help="一键进 dsh：任务直跑（--team 挂审核小队补丁，环境全自动）")
-    p_dsh.add_argument("task", nargs="?", help="给 harness agent 的任务文本")
-    p_dsh.add_argument("--review-config", action="append", help="可重复：quality=配置路径 或 safety=配置路径")
-    p_dsh.add_argument("--team", action="store_true", help="挂载审核小队补丁（子智能体协作用）")
-    p_dsh.set_defaults(func=cmd_dsh)
 
     p_doctor = sub.add_parser("doctor", help="环境全项自检（一键确认可开工）")
     p_doctor.set_defaults(func=cmd_doctor)

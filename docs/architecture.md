@@ -221,3 +221,7 @@ JSON dataset arrays now use incremental source reading. Single objects retain th
 
 
 Normalized source-conversation quality rules live in `lib/domain/source_conversation.py`. The filesystem importer still parses and normalizes formats, then asks the domain for the isolation reason. Recorded tool failures remain admissible for Agent assessment only when structure and error flags are valid. Context limits, tool snapshots, metadata checks, and dedicated multimodal routing retain their existing precedence. Input objects are not rewritten by these rules. This moves validation inward; it does not migrate the legacy normalizer or the full engine.
+
+## External controllers
+
+The Python product exposes provider-neutral `dataforge.control` protocol v1 through `python -m lib.control`. It has no harness SDK dependency and does not install, start, or patch dsh. External adapters have their own package manifest, version, tests, compatibility range, and release archive. They own job orchestration and presentation; core workflow validation, checkpoints, source caches, artifacts, and shared model admission remain authoritative. See [the protocol](external-control.md) and [the separate dsh package](../plugins/dsh-dataforge/README.md).

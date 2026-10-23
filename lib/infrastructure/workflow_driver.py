@@ -218,13 +218,22 @@ class FilesystemWorkflowDriver:
             records.close()
         return rows
 
+    def _check_export_credentials(self, run_id: str) -> None:
+        from lib.infrastructure.export_credentials import ExportCredentialGuard
+        folder = run_path(self.output, run_id) / "artifacts"
+        if folder.is_dir():
+            ExportCredentialGuard.from_root(self.root).check_folder(folder)
+
     def bundle(self, run_id: str) -> bytes:
+        self._check_export_credentials(run_id)
         return workflow_archive.bundle_bytes(run_path(self.output, run_id))
 
     def prepare_bundle(self, run_id: str) -> dict:
+        self._check_export_credentials(run_id)
         return workflow_archive.prepare_bundle(run_path(self.output, run_id))
 
     def prepared_bundle(self, run_id: str) -> dict | None:
+        self._check_export_credentials(run_id)
         return workflow_archive.prepared_bundle(run_path(self.output, run_id))
 
     def start_bundle(self, run_id: str) -> dict:
@@ -232,6 +241,7 @@ class FilesystemWorkflowDriver:
         path = run_path(self.output, run_id)
         if not has_deliverable_results(state) or run_is_active(path):
             raise ValueError("workflow_not_ready_to_package")
+        self._check_export_credentials(run_id)
         manifest = verify_artifacts(path)
         if not delivery_manifest_matches(state, manifest):
             raise ValueError("artifact_integrity_error")
@@ -246,6 +256,7 @@ class FilesystemWorkflowDriver:
         return review_release_jobs.cancel_release_job(self.output, run_id, "workflow")
 
     def artifact_file(self, run_id: str, filename: str) -> bytes:
+        self._check_export_credentials(run_id)
         return workflow_archive.artifact_bytes(run_path(self.output, run_id), filename,
                                                DIRECT_DOWNLOAD_LIMIT_BYTES)
 
@@ -301,7 +312,7 @@ class FilesystemWorkflowDriver:
         return catalog_releases(self.output)
 
     def release_file(self, release_id: str, filename: str) -> bytes:
-        return catalog_file(self.output, release_id, filename)
+        return catalog_file(self.output, release_id, filename, settings_root=self.root)
 
     @staticmethod
     def source_files(workspace_id: str, suffixes: frozenset[str], limit: int) -> list[dict]:

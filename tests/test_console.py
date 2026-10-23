@@ -37,8 +37,7 @@ def test_console_command_wired_in_cli():
 
 
 def test_command_registry_single_source_of_truth():
-    """命令注册表（configs/pipelines/commands.yaml）必须覆盖 CLI 全部子命令，
-    且 dsh 插件命令表与之完全一致——单一事实源防漂移。"""
+    """命令注册表覆盖产品 CLI；外部控制器另行消费版本化协议。"""
     from lib.extensions import load_commands
 
     cmds = load_commands(ROOT)
@@ -53,15 +52,9 @@ def test_command_registry_single_source_of_truth():
     import re as _re
 
     cli_commands = set(_re.findall(r"(?<![a-z0-9])[a-z][a-z0-9-]+(?![a-z0-9])", block))
-    cli_commands -= {"df", "h", "console", "commands", "ws", "dsh"}  # ws=--ws 选项；dsh=本地编排器不注册
+    cli_commands -= {"df", "h", "console", "commands", "ws"}
     assert cli_commands <= set(cmds), f"CLI 有但注册表缺: {cli_commands - set(cmds)}"
 
-    # dsh 插件命令表 == 注册表（插件暴露全部数据命令）
-    import re as _re2
-
-    plugin_keys = set(_re2.findall(r"^  '?([a-z][a-z0-9-]*)'?:",
-                                   (ROOT / "plugins" / "dsh-dataforge" / "src" / "dataforge.ts").read_text(encoding="utf-8"), _re2.M))
-    assert plugin_keys == set(cmds), f"插件与注册表漂移: 插件多 {plugin_keys - set(cmds)}，注册表多 {set(cmds) - plugin_keys}"
 
 
 def test_asset_categorization_logic():

@@ -98,6 +98,8 @@ def prepare_review_release(path, target, prefix, index, store, *, progress=None)
     store.write_snapshot(audit)
     if verify_artifacts(path) != before:
         raise ValueError("review_source_changed_retry")
+    from lib.infrastructure.export_credentials import ExportCredentialGuard
+    ExportCredentialGuard.from_root().check_folder(staging)
     manifest = {"status": "human_reviewed", "target": target, "run_id": path.name,
                 "version": version, "created_at": datetime.now(timezone.utc).isoformat(),
                 "source_artifact_sha256": before["sha256"][artifact_name],
@@ -139,6 +141,8 @@ def review_archive(path, prefix, release_id, expected_hash):
         import hashlib
         if hashlib.file_digest(handle, "sha256").hexdigest() != expected_hash:
             raise ValueError("review_archive_integrity_error")
+        from lib.infrastructure.export_credentials import ExportCredentialGuard
+        ExportCredentialGuard.from_root().check_file(archive)
         handle.seek(0)
         return handle
     except BaseException:

@@ -41,6 +41,9 @@ class ReplayableJSONLSamples:
 
 
 class FilesystemReleaseDriver:
+    def __init__(self, root=None):
+        self.root = root
+
     def raw_preview_samples(self, path: Path):
         from lib.infrastructure.sample_preview import RawSamplePreview
         return RawSamplePreview(path)
@@ -63,6 +66,12 @@ class FilesystemReleaseDriver:
     def write_release(self, samples: Iterable[dict], fmt: str, parent: Path, quality: dict,
                       *, expected_source_digest: str, corpus_path: Path | None, dpo_path: Path | None,
                       tag: str | None, bulk: bool) -> tuple[Path, dict[str, int]]:
+        from lib.infrastructure.export_credentials import ExportCredentialGuard
+        credentials = ExportCredentialGuard.from_root(self.root)
+        credentials.check_value(quality)
+        for sidecar in (corpus_path, dpo_path):
+            if sidecar is not None and sidecar.is_file():
+                credentials.check_file(sidecar)
         version = tag or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         destination = Path(parent) / version
         destination.mkdir(parents=True, exist_ok=False)
@@ -74,6 +83,7 @@ class FilesystemReleaseDriver:
 
         def tracked_samples():
             for sample in samples:
+                credentials.check_value(sample)
                 fingerprint = sample_hash(sample)
                 sample_hashes.append(fingerprint)
                 update_source_digest(source_digest, sample.get("id"), fingerprint)
@@ -86,6 +96,7 @@ class FilesystemReleaseDriver:
         if (len(sample_hashes) != quality["samples"]
                 or source_digest.hexdigest() != expected_source_digest):
             raise ValueError("release_source_changed")
+        credentials.check_folder(destination)
         files = {}
         for path in destination.glob("*.jsonl"):
             with path.open("rb") as handle:
@@ -97,5 +108,6 @@ class FilesystemReleaseDriver:
             "status": "complete", "created_at": datetime.now(timezone.utc).isoformat(),
             "format": fmt, "bulk": bulk, "counts": counts, "sha256": files,
             "sample_hashes": sample_hashes,
+            "credential_scan": {"status": "passed", "method": "exact_configured_model_credentials"},
         })
         return destination, counts

@@ -159,7 +159,8 @@ def test_doctor_does_not_run_tests_or_modify_state(tmp_path, monkeypatch):
     rows = doctor.checks(tmp_path)
     assert list(tmp_path.iterdir()) == []
     assert any("GPU" in r["check"] for r in rows)
-    assert rows[-1]["check"].startswith("DSH_HOME")
+    assert rows[-1]["check"] == "HF_HOME"
+    assert not any("dsh" in row["check"].lower() for row in rows)
 
 
 def test_incremental_import_preserves_samples_and_does_not_skip_capped_rows(tmp_path, monkeypatch):

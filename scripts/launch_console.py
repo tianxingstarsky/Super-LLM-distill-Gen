@@ -106,7 +106,7 @@ def _main_with_log(output: Path, log) -> int:
     with redirect_stdout(log), redirect_stderr(log):
         os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-        for key, name in (("PIP_CACHE_DIR", "pip-cache"), ("HF_HOME", "hf-home"), ("DSH_HOME", "dsh-home")):
+        for key, name in (("PIP_CACHE_DIR", "pip-cache"), ("HF_HOME", "hf-home")):
             os.environ.setdefault(key, str(ROOT.parent / "tools" / name))
         os.chdir(ROOT)
 

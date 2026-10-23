@@ -1,3 +1,5 @@
+> dsh 使用独立安装、独立版本的[适配包](../plugins/dsh-dataforge/README.md)。产品不再启动、构建或修改 dsh。
+
 # 协作审核与 dsh 子智能体
 
 ## 中心机
@@ -32,19 +34,15 @@ python -m lib.cli review-remote submit --config configs/review_remote.reviewer_a
 缓存按中心地址、数据集、账号分别存放于工作区 `review_batches/`，原子写入并加文件锁。
 未提交批次重复 pull 会复用原批次，不覆盖；提交可安全重试，不重复计票。
 
-## dsh 读取 Skill 后派发配置
+## dsh 独立调度
 
-```bash
-python -m lib.cli dsh --team --ws docs --review-config quality=configs/review_remote.quality.yaml --review-config safety=configs/review_remote.safety.yaml "按 review-team 技能审核 3 条，先给候选结果，不提交"
-```
+在已有 Harness 中安装适配包，并显式配置允许管理的核心安装路径。先调用 `dataforge` 的 `capabilities`；需要执行时，由操作人员启用适配器的写入权限，再使用 `dataforge_dispatch` 提交已冻结的 run id。
 
-该入口自动准备文件 URL 补丁、插件依赖和自定义 skill 根目录。无需拼长 shell 命令或接管用户全局技能目录。
-Lead 读取 review-team skill，再把角色、工作区、配置路径和用户授权范围下发给子智能体。配置不硬编码机器路径，也不让 Lead 读取或传播密钥。
-技能内含三块合同（`plugins/dsh-dataforge/skills/`）：**硬约束**（不得代批闸门/不得读密钥/未完成不得提交/不越权扩容）、
-**注意要点**（缓存按中心+账号隔离、内容哈希绑定、分歧不计通过、提交幂等）、
-**任务分布示范**（小批验证/双角色正式批/未完成处置/多工作区并行的可照抄任务卡与回报格式）。
-quality 与 safety 使用不同审核规则。超长输入、视觉样本、网络错误或缺少证据的输出明确为“未完成”，不得伪装为 reject 或成功提交。
-Agent Teams 是上游实验性功能，不等于工业级调度服务；本轮未追加付费团队模型实测。
+适配器使用官方 Jobs 和受管子进程，提供优先级、依赖关系、有界等待队列和任务进度。核心保留工作流检查点、原料缓存、训练产物及模型并发限制。失败或取消的前置任务会阻止后续任务执行；依赖不会隐式改写下游配方或传递资料。
+
+`skills/` 是可选的外部调度说明，需自行安装到 Harness 的技能目录；产品不接管全局技能。生成和评审提示词仍在工作流节点设置。当前控制协议不提供协作审核中心的账号管理或远程提交动作，上述 `review-remote` 操作继续通过核心的明确入口使用。
+
+包版本、SDK 兼容范围和测试独立维护。Harness 重启会丢失其进程内任务句柄，但核心 run id 可用于查询和恢复。本轮验证了真实 Harness 的只读工具调用，没有运行付费团队模型任务。
 
 ## 汇总与导出
 
