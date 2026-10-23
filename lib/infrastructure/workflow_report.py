@@ -25,9 +25,8 @@ from lib.domain.workflow_quality import canonical
 from lib.domain.workflow_report import content_digest, report_sample
 from lib.infrastructure.json_stream import iter_json_records
 from lib.infrastructure.jsonl_preview import read_rows
-from lib.infrastructure.training_workflow import (
-    file_hash, preferred_training_record, read_json, run_path,
-)
+from lib.infrastructure.workflow_store import file_hash, read_json, run_path
+from lib.contexts.datasets.contracts import preferred_training_record
 from lib.infrastructure.verified_preview import verified_snapshot, inventory_identity
 from lib.infrastructure.workflow_live_artifacts import live_artifacts
 from lib.infrastructure.workflow_report_jobs import REPORT_JOBS, ReportPreparationBusy

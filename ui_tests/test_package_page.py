@@ -31,7 +31,7 @@ def test_active_package_poll_does_not_load_large_artifacts(tmp_path, monkeypatch
     from filelock import FileLock
     from lib import workspace as ws
     from lib.infrastructure import review_release_jobs as jobs
-    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    from lib.contexts.datasets.infrastructure.driver import FilesystemDatasetDriver
     from lib.infrastructure.training_workflow import Workflow, create_run
 
     monkeypatch.setattr(ws, "ROOT", tmp_path)
@@ -46,7 +46,7 @@ def test_active_package_poll_does_not_load_large_artifacts(tmp_path, monkeypatch
     name = ws.DEFAULT
     run_id = create_run(ws.out(name), sources=[guide], targets=["cpt"], name="Background package")
     Workflow(ws.out(name), run_id, ROOT).execute()
-    driver = FilesystemWorkflowDriver(ROOT, ws.out(name))
+    driver = FilesystemDatasetDriver(ROOT, ws.out(name))
     monkeypatch.setattr(jobs.subprocess, "Popen", lambda *args, **kwargs: None)
     job = driver.start_bundle(run_id)
     path = jobs._paths(ws.out(name), run_id, "workflow")
@@ -55,7 +55,7 @@ def test_active_package_poll_does_not_load_large_artifacts(tmp_path, monkeypatch
     def no_artifact_load(*args):
         raise AssertionError("Polling must not scan large artifacts")
 
-    monkeypatch.setattr(FilesystemWorkflowDriver, "package_contents", no_artifact_load)
+    monkeypatch.setattr(FilesystemDatasetDriver, "package_contents", no_artifact_load)
     app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     app.session_state["ws"] = name
     app.session_state["nav"] = "输出打包"
@@ -357,9 +357,15 @@ def test_trl_sidecar_and_cached_zip_follow_verified_manifest(tmp_path, monkeypat
     fresh = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     fresh.session_state["ws"] = name
     fresh.session_state["nav"] = "输出打包"
+    fresh.session_state["ui_language"] = "en"
     fresh.run()
     assert not fresh.exception
     assert fresh.session_state[key] == package
+    markup = [str(item.value) for item in fresh.get("html")]
+    trainer_markup = next(value for value in markup if 'class="df-pack-trainer"' in value)
+    assert "Compatible" in trainer_markup and "1 / 1 records" in trainer_markup
+    assert not re.search(r"[\u4e00-\u9fff]", trainer_markup)
+    assert any("TRL-compatible training file" in value for value in markup)
 
     # A new valid manifest invalidates previously prepared bytes.
     native.write_text(json.dumps(sample, ensure_ascii=False) + "\n\n", encoding="utf-8")

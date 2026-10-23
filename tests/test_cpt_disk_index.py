@@ -7,7 +7,7 @@ import tracemalloc
 
 import pytest
 
-from lib.domain.corpus_quality import CorpusClusterSizes, CorpusNearDuplicateIndex
+from lib.contexts.datasets.infrastructure.corpus_index import CorpusClusterSizes, CorpusNearDuplicateIndex
 from lib.infrastructure.corpus_reference import (exact_release_match, released_corpus_index,
                                                  snapshot_released_corpus)
 from lib.infrastructure.training_workflow import (Cancelled, Workflow, _write_quality_report,

@@ -12,9 +12,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from lib.domain.model_reasoning import validate_reasoning
+from lib.contexts.models.domain.api_format import API_FORMATS, validate_api_format
 
 
-API_FORMATS = ("chat", "responses", "anthropic")
 ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
 
 
@@ -67,12 +67,6 @@ def reasoning_request(reasoning, *, api_format: str, base_url: str = "", model_i
         # field still lives at the top level of the actual HTTP request.
         result["extra_body"] = {"output_config": {"effort": effort}}
     return result
-
-
-def validate_api_format(value: str) -> str:
-    if value not in API_FORMATS:
-        raise ValueError("invalid_api_format")
-    return value
 
 
 def _calls(message):

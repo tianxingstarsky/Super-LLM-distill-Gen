@@ -10,7 +10,7 @@ from lib.domain.corpus_review import corpus_identity, validate_corpus_row
 from lib.domain.preference_review import pair_identity, validate_pair, validate_rlaif_pair
 from lib.domain.sft_review import sft_identity, validate_sft_record
 from lib.infrastructure.review_artifacts import iter_review_rows
-from lib.infrastructure.training_workflow import file_hash, verify_artifacts
+from lib.infrastructure.workflow_store import file_hash, verify_artifacts
 from lib.io_utils import atomic_json
 from lib.workspace import is_linked
 

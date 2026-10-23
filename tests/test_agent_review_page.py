@@ -221,10 +221,10 @@ def test_agent_review_jumps_to_a_requested_page_without_loading_the_full_queue(t
 
 
 def test_unverified_candidate_cannot_be_approved_in_review_ui(tmp_path, monkeypatch):
-    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    from lib.contexts.review.infrastructure.agent_driver import FilesystemAgentReviewAdapter
 
     output, run_id = _run(tmp_path)
-    original = FilesystemWorkflowDriver.agent_review_queue
+    original = FilesystemAgentReviewAdapter.agent_review_queue
 
     def inspect_only(self, *args, **kwargs):
         page = original(self, *args, **kwargs)
@@ -233,7 +233,7 @@ def test_unverified_candidate_cannot_be_approved_in_review_ui(tmp_path, monkeypa
                 item["independent_replay"] = False
         return page
 
-    monkeypatch.setattr(FilesystemWorkflowDriver, "agent_review_queue", inspect_only)
+    monkeypatch.setattr(FilesystemAgentReviewAdapter, "agent_review_queue", inspect_only)
     ui = _ui(output, run_id)
     assert not ui.exception
     candidate_id = FilesystemAgentReviewDriver(output).queue(run_id, limit=1)["items"][0]["candidate_id"]

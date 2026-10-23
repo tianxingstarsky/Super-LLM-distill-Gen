@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def live_canvas(app, run_id):
     return next(json.loads(item.proto.json_args)["spec"] for item in app.get("component_instance")
-                if json.loads(item.proto.json_args).get("key") == f"live-canvas:{run_id}")
+                if json.loads(item.proto.json_args).get("key", "").startswith(f"live-canvas:{run_id}:assets:"))
 
 
 def task_screen(output: str, workspace_id: str) -> None:

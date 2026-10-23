@@ -3,7 +3,7 @@ from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 
-from lib.infrastructure.training_workflow import read_json
+from lib.infrastructure.workflow_store import read_json
 from lib.domain.workflow_graph import execution_graph
 
 

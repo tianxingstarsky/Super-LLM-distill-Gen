@@ -12,7 +12,8 @@ import json
 from pathlib import Path
 import re
 
-from lib.domain.corpus_quality import CorpusNearDuplicateIndex, comparison_text
+from lib.domain.corpus_quality import comparison_text
+from lib.contexts.datasets.infrastructure.corpus_index import CorpusNearDuplicateIndex
 from lib.domain.corpus_review import validate_corpus_row
 
 

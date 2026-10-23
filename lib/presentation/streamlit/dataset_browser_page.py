@@ -1,7 +1,7 @@
 """Dataset browsing presentation with explicit workflow and file-selection inputs."""
 import html
 import streamlit as st
-from lib.application.workflow_service import WorkflowApplication
+from lib.contexts.datasets.api import DatasetApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.domain.workflow_quality import tool_error_flag
 from lib.domain.workflow_delivery import has_deliverable_results
@@ -21,7 +21,7 @@ def _move_sample(key, delta):
     st.session_state[key] += delta
 
 
-def render_dataset_preview(workflow_app: WorkflowApplication, workspace_id: str, selected_samples, show_title=True):
+def render_dataset_preview(workflow_app: DatasetApplication, workspace_id: str, selected_samples, show_title=True):
     if show_title:
         page_header("数据预览", "浏览已校验的语料、对话、偏好对与工具轨迹。", "SAMPLE PREVIEW")
     from lib.presentation.streamlit.data_management_style import DATA_MANAGEMENT_STYLE

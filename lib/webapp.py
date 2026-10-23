@@ -166,10 +166,10 @@ def page_overview():
 
 
 def page_preview(show_title=True):
-    from lib.bootstrap.workflows import workflow_application
+    from lib.bootstrap.datasets import dataset_application
     from lib.presentation.streamlit.dataset_browser_page import render_dataset_preview
 
-    render_dataset_preview(workflow_application(ROOT, _ws_out()), st.session_state["ws"],
+    render_dataset_preview(dataset_application(ROOT, _ws_out()), st.session_state["ws"],
                            lambda key: _selected_samples(key, preview_only=True), show_title=show_title)
 
 
@@ -416,9 +416,9 @@ def page_human_review():
 
 
 def page_output_packages():
-    from lib.bootstrap.workflows import workflow_application
+    from lib.bootstrap.datasets import dataset_application
     from lib.presentation.streamlit.package_page import render_package_page
-    render_package_page(workflow_application(ROOT, _ws_out()))
+    render_package_page(dataset_application(ROOT, _ws_out()))
 
 
 def page_quality(show_title=True):
@@ -540,9 +540,9 @@ def page_data_management():
     elif area == "质量报告":
         page_quality(show_title=False)
     elif area == "样本统计":
-        from lib.bootstrap.workflows import workflow_application
+        from lib.bootstrap.datasets import dataset_application
         from lib.presentation.streamlit.sample_statistics_page import render_sample_statistics
-        render_sample_statistics(workflow_application(ROOT, _ws_out()), st.session_state['ws'])
+        render_sample_statistics(dataset_application(ROOT, _ws_out()), st.session_state['ws'])
     elif area == "人工制作":
         from lib.bootstrap.manual_datasets import manual_dataset_application
         from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets

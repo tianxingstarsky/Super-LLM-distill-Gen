@@ -1,8 +1,8 @@
 """SFT review composition root."""
 from pathlib import Path
 
-from lib.application.sft_review_service import SftReviewApplication
-from lib.infrastructure.sft_review_driver import FilesystemSftReviewDriver
+from lib.contexts.review.api import SftReviewApplication
+from lib.contexts.review.infrastructure.sft_review_driver import FilesystemSftReviewDriver
 
 
 def sft_review_application(output: Path) -> SftReviewApplication:

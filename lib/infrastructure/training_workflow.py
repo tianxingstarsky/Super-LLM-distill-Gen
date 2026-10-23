@@ -26,13 +26,17 @@ import time
 
 from filelock import FileLock, Timeout
 
+from lib.infrastructure.workflow_store import (
+    now, digest, file_hash, read_json, run_path, list_runs, is_active, cancel, verify_artifacts,
+)
+
 from lib.application.preference_service import preference_summary
 from lib.application.trainer_export_service import prepare_trl_export
 from lib.domain.workflow_quality import POLICY, accepted, canonical, conversation_issue, same_answer, text_issue, tool_error_flag, verdict
 from lib.domain.agent_trajectory import REPLAY_POLICY_VERSION, assess_recorded_trajectory
 from lib.domain.source_conversation import source_conversation_issue
-from lib.domain.corpus_quality import (CorpusClusterSizes, CorpusNearDuplicateIndex,
-                                       inspect_corpus, summarize_corpus_sources)
+from lib.domain.corpus_quality import inspect_corpus, summarize_corpus_sources
+from lib.contexts.datasets.infrastructure.corpus_index import CorpusClusterSizes, CorpusNearDuplicateIndex
 from lib.domain.math_tasks import build_gsm8k, validate_gsm8k, validate_math_candidate
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue
 from lib.domain.workflow_creation import validate_creation, validate_generation_review
@@ -57,6 +61,8 @@ from lib.domain.workflow_node_prompts import (
 from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.generation_settings_file import FileGenerationSettingsDriver
+from lib.infrastructure.generation_settings_file import preference_snapshot
+from lib.contexts.datasets.contracts import preferred_training_record
 from lib.infrastructure.brave_web_research import (
     search as search_web, validate_search_document, validate_search_topic_document,
 )
@@ -108,33 +114,6 @@ UNAPPLIED_PREFERENCE_FIELDS = (
 )
 
 
-def preference_snapshot(root):
-    """Validate and pin settings once, before a run or any input is created."""
-    text = FileGenerationSettingsDriver(root).read("生成偏好")
-    return {"version": 1, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "values": preference_summary(text)}
-
-
-def preferred_training_record(target, row, preferences=None, *, reward_model=False,
-                              sft_output_style=None):
-    """Canonicalize SFT explanation fields without changing scored answers."""
-    record = rlaif_reward_model_record(row) if reward_model else training_record(target, row)
-    style = (sft_output_style if sft_output_style is not None else
-             preferences["values"]["cot_style"] if preferences else None)
-    if target not in {"sft", "multiturn"}:
-        return record
-    from lib.domain.reasoning_fields import sft_training_messages
-    return {**record, "messages": sft_training_messages(record["messages"], drop=style == "drop")}
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat()
-
-
-def digest(value):
-    return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
-
-
 def document_evidence_level(unit, *, assessed=False):
     reading = unit.get("document_reading") or {}
     mode = reading.get("mode") or ("vision" if reading.get("image_sha256") else None)
@@ -144,11 +123,6 @@ def document_evidence_level(unit, *, assessed=False):
     if assessed:
         return "source_and_model_assessed" if level == "source_text" else level + "_and_model_assessed"
     return level
-
-
-def file_hash(path):
-    with Path(path).open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def _write_quality_report(path: Path, report: dict, input_records: Path) -> None:
@@ -192,58 +166,6 @@ def _write_quality_report(path: Path, report: dict, input_records: Path) -> None
 def prompt_versions():
     return {key: {"version": value.version, "sha256": digest(value.template)}
             for key, value in registry().items() if key.startswith("workflow.")}
-
-
-def read_json(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-def run_path(output, run_id):
-    if not re.fullmatch(r"[a-f0-9]{32}", run_id):
-        raise ValueError("无效运行 ID")
-    return Path(output) / "workflows" / run_id
-
-
-def list_runs(output):
-    result = []
-    for path in (Path(output) / "workflows").glob("*/state.json"):
-        try:
-            result.append(read_json(path))
-        except (OSError, ValueError):
-            continue
-    return sorted(result, key=lambda item: item["created_at"], reverse=True)
-
-
-def is_active(path):
-    try:
-        with FileLock(str(Path(path) / ".run.lock"), timeout=0):
-            return False
-    except Timeout:
-        return True
-
-
-def cancel(output, run_id):
-    path = run_path(output, run_id)
-    if not (path / "state.json").exists():
-        raise ValueError("运行不存在")
-    atomic_json(path / "cancel.json", {"requested_at": now()})
-
-
-def verify_artifacts(path):
-    path = Path(path)
-    artifacts = path / "artifacts"
-    manifest = read_json(artifacts / "manifest.json")
-    hashes = manifest.get("sha256")
-    if manifest.get("status") != "complete" or not isinstance(hashes, dict) or not hashes:
-        raise ValueError("incomplete_artifact_manifest")
-    actual = {item.name for item in artifacts.iterdir() if item.is_file() and item.name != "manifest.json"}
-    if actual != set(hashes):
-        raise ValueError("artifact_inventory_mismatch")
-    for name, expected in hashes.items():
-        item = artifacts / name
-        if Path(name).name != name or item.is_symlink() or file_hash(item) != expected:
-            raise ValueError("artifact_integrity_error")
-    return manifest
 
 
 def write_trainer_export(destination, target, records, preferences=None, *,

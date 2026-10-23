@@ -11,7 +11,7 @@ import uuid
 
 from filelock import FileLock, Timeout
 
-from lib.infrastructure.training_workflow import read_json, run_path
+from lib.infrastructure.workflow_store import read_json, run_path
 from lib.io_utils import atomic_json, quiet_process
 from lib.workspace import is_linked
 

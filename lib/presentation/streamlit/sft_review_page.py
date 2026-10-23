@@ -8,7 +8,7 @@ from typing import Callable
 
 import streamlit as st
 
-from lib.application.sft_review_service import SftReviewApplication
+from lib.contexts.review.api import SftReviewApplication
 from lib.presentation.streamlit.shared import review_empty_state
 from lib.render import MESSAGE_CSS
 from lib.presentation.streamlit.sample_preview import render_sample_preview

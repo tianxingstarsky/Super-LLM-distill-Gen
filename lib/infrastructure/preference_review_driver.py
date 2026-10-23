@@ -1,11 +1,5 @@
-"""Typed DPO/ORPO adapter for the shared review store and streaming release."""
-from __future__ import annotations
-from pathlib import Path
-from lib.infrastructure.training_review_driver import FilesystemTrainingReviewDriver
+"""Compatibility import; implementation lives in ``lib.contexts.review.infrastructure.preference_review_driver``."""
+from importlib import import_module as _import_module
+import sys as _sys
 
-
-class FilesystemPreferenceReviewDriver(FilesystemTrainingReviewDriver):
-    def __init__(self, output: Path, *, target: str = "dpo"):
-        if target not in {"dpo", "orpo", "rlaif"}:
-            raise ValueError("invalid_preference_review_target")
-        super().__init__(output, target)
+_sys.modules[__name__] = _import_module("lib.contexts.review.infrastructure.preference_review_driver")

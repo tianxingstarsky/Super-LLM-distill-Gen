@@ -268,7 +268,7 @@ def studio_screen(root, session_id):
 
     from lib.bootstrap.workflows import human_augmentation_application, workflow_application
     from lib.infrastructure.training_workflow import run_path, read_json
-    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    from lib.contexts.workflows.infrastructure.driver import FilesystemWorkflowRunDriver
     from lib.io_utils import atomic_json
     from lib.presentation.streamlit import human_workspace_page
     from lib.presentation.streamlit.i18n import install_streamlit_localization
@@ -292,7 +292,7 @@ def studio_screen(root, session_id):
         state["stages"][stage]["status"] = "running"
         atomic_json(file, state)
 
-    with patch.object(FilesystemWorkflowDriver, "is_active", active), \
+    with patch.object(FilesystemWorkflowRunDriver, "is_active", active), \
             patch.object(human_workspace_page, "render_canvas", lambda *args, **kwargs: None):
         human_workspace_page.render_human_workspace(
             human_augmentation_application(root, output), workflow_application(root, output),
@@ -481,7 +481,7 @@ def test_imported_review_window_preserves_target_fields_without_qa_design_contro
     source.write_text("Stop the pump if its seal leaks.", encoding="utf-8")
     workflow = workflow_application(tmp_path, tmp_path / "output")
     run_id = workflow.create_run(sources=[str(source)], targets=[target],
-        review_repair={"mode": "human", "max_rounds": 2, "score_threshold": .8},
+        review_repair={"mode": "auto" if target == "rlaif" else "human", "max_rounds": 2, "score_threshold": .8},
         **({"cpt_processing": {"mode": "native"}} if target == "cpt" else {}))
     path = run_path(tmp_path / "output", run_id)
     recipe, state = read_json(path / "recipe.json"), read_json(path / "state.json")
@@ -505,9 +505,13 @@ def test_imported_review_window_preserves_target_fields_without_qa_design_contro
     assert not ui.exception
     assert not any(item.key and item.key.startswith("human-generate:") for item in ui.button)
     assert not any(item.key and item.key.startswith("human-seed:") for item in ui.text_area)
+    mode_key = f"human-review-mode:{context(session_id)}:{app.session(session_id)['rounds'][0]['id']}:{target}:candidate-a"
+    # CPT bypasses automatic scoring. RLAIF requires AI feedback when first
+    # generated. Either result can still be opened explicitly for human review.
+    ui.segmented_control(key=mode_key).set_value("human").run()
+    assert not ui.exception
     assert json.loads(text_area(ui, "完整候选内容（JSON）").value) == expected
     assert button(ui, "提交人工评分与修正")
-    mode_key = f"human-review-mode:{context(session_id)}:{app.session(session_id)['rounds'][0]['id']}:{target}:candidate-a"
     ui.segmented_control(key=mode_key).set_value("auto").run()
     assert not ui.exception
     assert button(ui, "修正答案并重新评分").disabled

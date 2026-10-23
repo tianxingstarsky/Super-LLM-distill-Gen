@@ -2,14 +2,24 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 import os
 from pathlib import Path
 import tempfile
 from threading import RLock
 from uuid import uuid4
 
+from lib.application.preference_service import preference_summary
+
 
 _WRITE_LOCK = RLock()
+
+
+def preference_snapshot(root):
+    """Validate and pin settings once, before a run or any input is created."""
+    text = FileGenerationSettingsDriver(root).read("生成偏好")
+    return {"version": 1, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "values": preference_summary(text)}
 
 
 class FileGenerationSettingsDriver:

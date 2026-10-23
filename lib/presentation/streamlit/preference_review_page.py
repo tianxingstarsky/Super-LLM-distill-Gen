@@ -6,7 +6,7 @@ import re
 
 import streamlit as st
 
-from lib.application.preference_review_service import PreferenceReviewApplication
+from lib.contexts.review.api import PreferenceReviewApplication
 from lib.presentation.streamlit.shared import page_header, review_empty_state
 from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
 from lib.presentation.streamlit.review_release_controls import render_active_release, render_review_release

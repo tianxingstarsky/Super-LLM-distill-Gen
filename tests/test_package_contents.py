@@ -8,7 +8,7 @@ import os
 import pytest
 
 from lib.application.workflow_service import WorkflowApplication
-from lib.infrastructure import training_workflow, verified_preview, workflow_driver
+from lib.infrastructure import workflow_store, verified_preview, workflow_driver
 
 
 def _application_and_files(tmp_path):
@@ -32,14 +32,14 @@ def _application_and_files(tmp_path):
 def test_package_contents_reuses_verified_snapshot_across_rerenders_and_preview(tmp_path, monkeypatch):
     application, run_id, sample, _, _, hashes = _application_and_files(tmp_path)
     calls = 0
-    original = training_workflow.verify_artifacts
+    original = workflow_store.verify_artifacts
 
     def counted(path):
         nonlocal calls
         calls += 1
         return original(path)
 
-    monkeypatch.setattr(training_workflow, "verify_artifacts", counted)
+    monkeypatch.setattr(workflow_store, "verify_artifacts", counted)
     contents = application.package_contents(run_id)
     again = application.package_contents(run_id)
     preview = application.artifact_preview(run_id, "cpt", limit=1)

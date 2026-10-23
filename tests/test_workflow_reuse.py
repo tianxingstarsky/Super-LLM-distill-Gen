@@ -160,7 +160,7 @@ def test_legacy_arithmetic_reuse_keeps_sources_and_restores_effective_theme(tmp_
 
 def test_copy_can_find_a_document_beyond_the_old_picker_window(tmp_path, monkeypatch):
     from lib.infrastructure.training_workflow import create_run
-    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    from lib.contexts.workflows.infrastructure.driver import FilesystemWorkflowRunDriver
 
     selected = tmp_path / "manual.txt"
     selected.write_text("Existing library document", encoding="utf-8")
@@ -174,7 +174,7 @@ def test_copy_can_find_a_document_beyond_the_old_picker_window(tmp_path, monkeyp
         limits.append(limit)
         return inventory[:limit]
 
-    monkeypatch.setattr(FilesystemWorkflowDriver, "source_files", staticmethod(bounded_inventory))
+    monkeypatch.setattr(FilesystemWorkflowRunDriver, "source_files", staticmethod(bounded_inventory))
     def copy_screen(output, run_id):
         import streamlit as st
         from pathlib import Path

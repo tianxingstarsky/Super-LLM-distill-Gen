@@ -832,6 +832,9 @@ ZH_EN: dict[str, str] = {
     '可直接下载自动质检数据包，也可按用途抽检或进行人工审核。包内 SHA-256 可由 manifest.json 复核。': 'Download the automatically checked package. You can also sample or review it by hand. Check file hashes with manifest.json.',
     '人工审核（可选）': 'Human review (optional)',
     '按需抽检、修订，或单独发布人工审核版本。': 'Sample or edit as needed. You can publish a separate version reviewed by people.',
+    '按需抽检、修订，或单独发布人工审核版本': 'Sample or edit as needed. You can publish a separate version reviewed by people.',
+    'TRL 兼容格式辅助文件': 'TRL-compatible training file',
+    '兼容': 'Compatible',
     '本次 AI 打包评审隔离了部分样本；通过检查的样本仍可导出，评审证据保留在 ZIP 中。': 'AI package review rejected some samples. Accepted samples can still be exported. Review evidence is included in the ZIP.',
     'AI 打包评审配置无效，请检查质检打包节点。': 'AI package review settings are invalid. Check the quality and packaging node.',
     '打包评审检查点与当前样本不一致，请保留任务记录并重新运行。': 'A package review checkpoint does not match its sample. Keep the task records and retry.',
@@ -3463,6 +3466,7 @@ def translate(value: Any, language: str = "en") -> Any:
         if value.startswith(prefix):
             return english + value[len(prefix):]
     package_patterns = [
+        (r"([\d,]+) / ([\d,]+) 条", lambda m: f"{m[1]} / {m[2]} records"),
         (r"AI 打包评审未通过 ×([\d,]+)", lambda m: f"AI package review rejected ×{m[1]}"),
         (r"任务 ID：(.+?)\s*·\s*更新于 (.+)", lambda m: f"Run ID: {m[1]} · Updated {m[2]}"),
         (r"([\d,]+) / ([\d,]+) 候选", lambda m: f"{m[1]} / {m[2]} candidates"),

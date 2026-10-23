@@ -19,7 +19,7 @@ def imported_modules(path: Path) -> set[str]:
 
 
 def test_domain_has_no_application_or_infrastructure_dependencies():
-    files = list((ROOT / "lib/domain").glob("*.py"))
+    files = list((ROOT / "lib/domain").rglob("*.py"))
     assert files
     for path in files:
         dependencies = imported_modules(path)
@@ -29,7 +29,7 @@ def test_domain_has_no_application_or_infrastructure_dependencies():
 
 
 def test_application_depends_only_inward_and_on_ports():
-    for path in (ROOT / "lib/application").glob("*.py"):
+    for path in (ROOT / "lib/application").rglob("*.py"):
         dependencies = imported_modules(path)
         assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.presentation"))
                        for name in dependencies), path.name
@@ -62,28 +62,28 @@ def test_streamlit_workflow_page_uses_application_contract_not_engine_adapter():
 
 def test_streamlit_preference_review_page_uses_application_contract():
     dependencies = imported_modules(ROOT / "lib/presentation/streamlit/preference_review_page.py")
-    assert "lib.application.preference_review_service" in dependencies
+    assert "lib.contexts.review.api" in dependencies
     assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workflow"))
                    for name in dependencies)
 
 
 def test_streamlit_corpus_review_page_uses_application_contract():
     dependencies = imported_modules(ROOT / "lib/presentation/streamlit/corpus_review_page.py")
-    assert "lib.application.corpus_review_service" in dependencies
+    assert "lib.contexts.review.api" in dependencies
     assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workflow"))
                    for name in dependencies)
 
 
 def test_streamlit_sft_review_page_uses_application_contract():
     dependencies = imported_modules(ROOT / "lib/presentation/streamlit/sft_review_page.py")
-    assert "lib.application.sft_review_service" in dependencies
+    assert "lib.contexts.review.api" in dependencies
     assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workflow"))
                    for name in dependencies)
 
 
 def test_streamlit_package_page_uses_application_contract():
     dependencies = imported_modules(ROOT / "lib/presentation/streamlit/package_page.py")
-    assert "lib.application.workflow_service" in dependencies
+    assert "lib.contexts.datasets.api" in dependencies
     assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workflow"))
                    for name in dependencies)
     assert "lib" not in dependencies
@@ -98,7 +98,7 @@ def test_asset_catalog_page_uses_application_contract():
 
 def test_dataset_browser_uses_application_contract_and_injected_file_selector():
     dependencies = imported_modules(ROOT / "lib/presentation/streamlit/dataset_browser_page.py")
-    assert "lib.application.workflow_service" in dependencies
+    assert "lib.contexts.datasets.api" in dependencies
     assert not any(name.startswith(("lib.infrastructure", "lib.bootstrap", "lib.workspace"))
                    for name in dependencies)
 

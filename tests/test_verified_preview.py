@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from lib.infrastructure import training_workflow, verified_preview
+from lib.infrastructure import workflow_store, verified_preview
 from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
 
 
@@ -22,8 +22,8 @@ def fixture(tmp_path):
 def test_preview_reuses_verification_and_expires(tmp_path, monkeypatch):
     driver, run_id, _ = fixture(tmp_path)
     calls = []
-    original = training_workflow.verify_artifacts
-    monkeypatch.setattr(training_workflow, "verify_artifacts",
+    original = workflow_store.verify_artifacts
+    monkeypatch.setattr(workflow_store, "verify_artifacts",
                         lambda path: (calls.append(path), original(path))[1])
     monkeypatch.setattr(verified_preview.time, "monotonic", lambda: 60)
     assert driver.artifact_preview(run_id, "sft", 1, 0) == [{"id": 0}]

@@ -1,7 +1,5 @@
-"""Explicit per-service routing; never infer a proxy bypass after a failure."""
+"""Compatibility import; implementation lives in ``lib.contexts.models.domain.network``."""
+from importlib import import_module as _import_module
+import sys as _sys
 
-
-def validate_network_route(value: str = "system") -> str:
-    if type(value) is not str or value not in {"system", "direct"}:
-        raise ValueError("invalid_model_network_route")
-    return value
+_sys.modules[__name__] = _import_module("lib.contexts.models.domain.network")

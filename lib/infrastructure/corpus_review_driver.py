@@ -1,9 +1,5 @@
-"""Typed CPT adapter for the shared review store and streaming release."""
-from __future__ import annotations
-from pathlib import Path
-from lib.infrastructure.training_review_driver import FilesystemTrainingReviewDriver
+"""Compatibility import; implementation lives in ``lib.contexts.review.infrastructure.corpus_review_driver``."""
+from importlib import import_module as _import_module
+import sys as _sys
 
-
-class FilesystemCorpusReviewDriver(FilesystemTrainingReviewDriver):
-    def __init__(self, output: Path):
-        super().__init__(output, "cpt")
+_sys.modules[__name__] = _import_module("lib.contexts.review.infrastructure.corpus_review_driver")

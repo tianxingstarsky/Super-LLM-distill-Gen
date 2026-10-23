@@ -15,9 +15,19 @@ from lib.workflow import Workflow, create_run
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def canvas_payload(app, key):
+    return next(payload for item in app.get("component_instance")
+                if (payload := json.loads(item.proto.json_args)).get("key", "").startswith(key + ":assets:"))
+
+
 def canvas(app, key):
-    return next(json.loads(item.proto.json_args)["spec"] for item in app.get("component_instance")
-                if json.loads(item.proto.json_args).get("key") == key)
+    return canvas_payload(app, key)["spec"]
+
+
+def component_key(app, key):
+    # Asset revisions are part of the real widget identity. Send click events
+    # to the current component, not an obsolete key ignored by Streamlit.
+    return canvas_payload(app, key)["key"]
 
 
 def setup_workspace(tmp_path, monkeypatch):
@@ -49,7 +59,7 @@ def test_preference_outputs_and_rlaif_review_fix_are_on_actual_nodes(tmp_path, m
     app.run()
     targets_key = next(widget.key for widget in app.pills if widget.key.startswith("workflow-targets:"))
     app.pills(key=targets_key).set_value(["orpo", "rlaif"]).run()
-    app.session_state[f"setup-canvas:{workspace}"] = {"node": "preference", "serial": "preferences"}
+    app.session_state[component_key(app, f"setup-canvas:{workspace}")] = {"node": "preference", "serial": "preferences"}
     app.run()
     assert not app.exception
     nodes = canvas(app, f"setup-canvas:{workspace}")["nodes"]
@@ -136,7 +146,7 @@ def test_generation_controls_survive_node_layout_changes_and_empty_targets(tmp_p
     assert_controls()
     assert canvas(app, f"setup-canvas:{workspace}")["selected"] == "sft"
     for serial, node in enumerate(("ingest", "package", "sft"), start=1):
-        app.session_state[f"setup-canvas:{workspace}"] = {
+        app.session_state[component_key(app, f"setup-canvas:{workspace}")] = {
             "node": node, "serial": f"layout-switch-{serial}",
         }
         app.run()
@@ -149,7 +159,7 @@ def test_generation_controls_survive_node_layout_changes_and_empty_targets(tmp_p
     assert app.button(key=f"workflow-create:{workspace}").disabled
     assert len([widget for widget in app.get("file_uploader")
                 if widget.key == f"workflow-upload:{workspace}:文档资料"]) == 1
-    assert not any(json.loads(item.proto.json_args).get("key") == f"setup-canvas:{workspace}"
+    assert not any(json.loads(item.proto.json_args).get("key", "").startswith(f"setup-canvas:{workspace}:assets:")
                    for item in app.get("component_instance"))
     # With no target selected, source and parameter edits remain usable.
     brief_key = f"workflow-source-brief:{workspace}:文档资料"
@@ -196,7 +206,7 @@ def test_configuration_issue_buttons_locate_panels_without_starting_run(tmp_path
     assert app.session_state[f"workflow-setup-node:{workspace}"] == "preference"
     assert app.session_state[f"workflow-node-bindings:{workspace}"] == bindings
     assert app.session_state[f"workflow-form-draft:{workspace}"] == draft
-    app.session_state[canvas_key] = {"node": "preference", "serial": "reopen-current-node"}
+    app.session_state[component_key(app, canvas_key)] = {"node": "preference", "serial": "reopen-current-node"}
     app.run()
     assert not app.exception
     assert app.session_state[open_key] is True
@@ -223,14 +233,14 @@ def test_agent_node_retains_verification_choice_and_blocks_unconfigured_start(tm
          if widget.label == "选择来源类型").set_value("Agent 上下文").run()
     app.multiselect(key=f"workflow-sources:{name}:Agent 上下文").set_value([str(trace)]).run()
     next(widget for widget in app.pills if widget.label == "训练目标").set_value(["agent"]).run()
-    app.session_state[f"setup-canvas:{name}"] = {"node": "agent", "serial": "agent-1"}
+    app.session_state[component_key(app, f"setup-canvas:{name}")] = {"node": "agent", "serial": "agent-1"}
     app.run()
     next(widget for widget in app.selectbox if widget.label == "轨迹验证方式").set_value("isolated").run()
     assert not app.exception
     assert next(button for button in app.button if button.key == f"workflow-create:{name}").disabled
-    app.session_state[f"setup-canvas:{name}"] = {"node": "package", "serial": "package-1"}
+    app.session_state[component_key(app, f"setup-canvas:{name}")] = {"node": "package", "serial": "package-1"}
     app.run()
-    app.session_state[f"setup-canvas:{name}"] = {"node": "agent", "serial": "agent-2"}
+    app.session_state[component_key(app, f"setup-canvas:{name}")] = {"node": "agent", "serial": "agent-2"}
     app.run()
     picker = next(widget for widget in app.selectbox if widget.label == "轨迹验证方式")
     assert picker.value == "isolated"
@@ -280,7 +290,7 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     assert any("查看并打包本次训练数据" in item.label for item in app.button)
     assert any(item.key == f"browse-preview:{rid}:cpt" and not item.disabled for item in app.button)
     assert any("来源与配方" in item.label for item in app.tabs)
-    app.session_state[f"live-canvas:{rid}"] = {"node": "cpt", "serial": "click-1"}
+    app.session_state[component_key(app, f"live-canvas:{rid}")] = {"node": "cpt", "serial": "click-1"}
     app.run()
     assert not app.exception
     assert app.session_state[f"workflow-stage:{rid}"] == "cpt"
@@ -355,13 +365,13 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     next(widget for widget in app.number_input if widget.label == "每段最多轮数").set_value(5)
     app.run()
     # This test covers local corpus processing and the multi-turn model node.
-    app.session_state[f"setup-canvas:{name}"] = {"node": "ingest", "serial": "choose-native-parser"}
+    app.session_state[component_key(app, f"setup-canvas:{name}")] = {"node": "ingest", "serial": "choose-native-parser"}
     app.run()
     app.radio(key=f"workflow-document-parse-mode:{name}").set_value("native").run()
-    app.session_state[f"setup-canvas:{name}"] = {"node": "cpt", "serial": "choose-native-cpt"}
+    app.session_state[component_key(app, f"setup-canvas:{name}")] = {"node": "cpt", "serial": "choose-native-cpt"}
     app.run()
     app.radio(key=f"workflow-cpt-processing-mode:{name}").set_value("native").run()
-    app.session_state[f"setup-canvas:{name}"] = {"node": "review", "serial": "choose-review-model"}
+    app.session_state[component_key(app, f"setup-canvas:{name}")] = {"node": "review", "serial": "choose-review-model"}
     app.run()
     app.toggle(key=f"workflow-package-review-enabled:{name}").set_value(True).run()
     assert next(b for b in app.button if b.label == "开始自动生成").disabled
@@ -372,7 +382,7 @@ def test_create_button_wires_exact_persisted_run_to_job(tmp_path, monkeypatch):
     confirm.click().run()
     assert app.button(key=f"node-model-confirm:{name}:review").disabled
     assert not next(b for b in app.button if b.label == "开始自动生成").disabled
-    app.session_state[f"setup-canvas:{name}"] = {"node": "package", "serial": "scale-settings-check"}
+    app.session_state[component_key(app, f"setup-canvas:{name}")] = {"node": "package", "serial": "scale-settings-check"}
     app.run()
     assert not app.exception
     values = {widget.label: widget.value for widget in app.number_input}
@@ -455,7 +465,7 @@ def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_node
     next(widget for widget in app.selectbox if widget.key == generation_key).set_value("write-v2").run()
     assert not app.exception
     assert app.session_state[draft_key]["sft"]["generation"]["model"] == "write-v2"
-    app.session_state[f"setup-canvas:{workspace}"] = {"node": "review", "serial": "switch-1"}
+    app.session_state[component_key(app, f"setup-canvas:{workspace}")] = {"node": "review", "serial": "switch-1"}
     app.run()
     assert not app.exception
     app.toggle(key=f"workflow-package-review-enabled:{workspace}").set_value(True).run()
@@ -466,7 +476,7 @@ def test_node_model_choices_survive_switching_nodes_and_do_not_change_other_node
     review_model_key = f"node-model:{workspace}:review:jev:model:writer"
     next(widget for widget in app.selectbox if widget.key == review_model_key).set_value("write-v2").run()
     assert not app.exception
-    app.session_state[f"setup-canvas:{workspace}"] = {"node": "sft", "serial": "switch-2"}
+    app.session_state[component_key(app, f"setup-canvas:{workspace}")] = {"node": "sft", "serial": "switch-2"}
     app.run()
     assert not app.exception
     assert next(widget for widget in app.selectbox if widget.key == generation_key).value == "write-v2"
@@ -526,7 +536,7 @@ def test_removed_node_service_requires_explicit_replacement(tmp_path, monkeypatc
     app.session_state["nav"] = "自动工作流"
     app.session_state["ui_language"] = "en"
     app.run()
-    app.session_state[f"setup-canvas:{workspace}"] = {"node": "review", "serial": "choose-review-service"}
+    app.session_state[component_key(app, f"setup-canvas:{workspace}")] = {"node": "review", "serial": "choose-review-service"}
     app.run()
     app.toggle(key=f"workflow-package-review-enabled:{workspace}").set_value(True).run()
     inventory["backends"] = [inventory["backends"][0]]
@@ -685,7 +695,7 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     ws, name, source = setup_workspace(tmp_path, monkeypatch)
     run_id = create_run(ws.out(name), sources=[source], targets=["cpt"], name="等待恢复的工作流")
     from lib.console_jobs import Job
-    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    from lib.contexts.workflows.infrastructure.driver import FilesystemWorkflowRunDriver
 
     commands = []
     monkeypatch.setattr(Job, "start", lambda self: commands.append(self.command))
@@ -704,7 +714,7 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     next(item for item in app.button if item.label == "继续执行 / 从断点重试").click().run()
     assert commands and commands[-1][-1] == run_id
 
-    monkeypatch.setattr(FilesystemWorkflowDriver, "is_active", lambda self, _run_id: True)
+    monkeypatch.setattr(FilesystemWorkflowRunDriver, "is_active", lambda self, _run_id: True)
     app.run()
     assert not app.exception
     next(item for item in app.button if item.label == "停止后续步骤").click().run()

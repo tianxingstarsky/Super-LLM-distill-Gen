@@ -7,7 +7,7 @@ import re
 
 import streamlit as st
 
-from lib.application.workflow_service import WorkflowApplication
+from lib.contexts.review.api import AgentReviewApplication
 from lib.domain.conversation_structure import message_windows
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
 from lib.presentation.streamlit.sample_preview import render_sample_preview
@@ -130,7 +130,7 @@ def _error_message(error: Exception) -> str:
     return "无法读取或保存 Agent 轨迹审核；请检查产物完整性及本机缓存状态。"
 
 
-def _load_page(application: WorkflowApplication, run_id: str, *, kind: str,
+def _load_page(application: AgentReviewApplication, run_id: str, *, kind: str,
                decision: str | None, size: int, page_key: str) -> tuple[dict, int, int]:
     page = max(1, int(st.session_state.get(page_key, 1)))
     offset = min((page - 1) * size, _MAX_OFFSET)
@@ -162,7 +162,7 @@ def _opened_trace_fragments(item: dict, *, preview_key: str) -> tuple[int, int, 
     return len(opened), total, next_unopened
 
 
-def render_agent_review(application: WorkflowApplication, run_id: str, *, workspace_id: str) -> None:
+def render_agent_review(application: AgentReviewApplication, run_id: str, *, workspace_id: str) -> None:
     """Review one verified run in the task detail, without changing pages."""
     language = st.session_state.get("ui_language", "zh")
     st.html(_STYLE)

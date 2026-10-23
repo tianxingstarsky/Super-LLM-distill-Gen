@@ -52,7 +52,7 @@ def test_stage_rows_appear_before_quality_report_and_update_when_new_samples_are
     assert "节点检查通过" in markup(ui)
     assert "不等于最终交付通过" in ui.caption[-1].value
     frame = ui.dataframe[0].value
-    assert "资料清洗" in frame["节点"].values and "Agent 轨迹" not in frame["节点"].values
+    assert "CPT 语料处理" in frame["节点"].values and "Agent 轨迹" not in frame["节点"].values
     assert frame.iloc[0]["已落盘"] == "1" and frame.iloc[0]["评分通过"] == "0"
     updated = deepcopy(ui.session_state["fixture-result"])
     updated["stages"][0].update(written=2, eligible=1, quarantined=1)
@@ -86,4 +86,4 @@ def test_english_live_view_translates_controls_and_keeps_source_text():
     assert "Live stage results" in markup(ui) and "Stage checks passed" in markup(ui)
     assert "已清洗的真实资料内容" in markup(ui)
     assert ui.selectbox[0].label == "Preview stage"
-    assert "Source cleaning" in ui.dataframe[0].value.iloc[0]["Stage"]
+    assert "CPT corpus processing" in ui.dataframe[0].value.iloc[0]["Stage"]

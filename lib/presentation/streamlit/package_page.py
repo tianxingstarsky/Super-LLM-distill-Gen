@@ -7,7 +7,7 @@ from typing import Any
 
 import streamlit as st
 
-from lib.application.workflow_service import WorkflowApplication
+from lib.contexts.datasets.api import DatasetApplication
 from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
@@ -165,7 +165,7 @@ def _render_empty(runs: list[dict], *, has_releases: bool = False) -> None:
                               key="package-empty-history", width="stretch")
 
 
-def _render_releases(application: WorkflowApplication, releases: list[dict]) -> None:
+def _render_releases(application: DatasetApplication, releases: list[dict]) -> None:
     if not releases:
         return
     verified = sum(bool(row["verified"]) for row in releases)
@@ -334,7 +334,7 @@ def _preview_targets(state: dict, inventory: dict) -> list[tuple[str, str]]:
     return targets
 
 
-def _render_previews(application: WorkflowApplication, run_id: str, state: dict, inventory: dict) -> None:
+def _render_previews(application: DatasetApplication, run_id: str, state: dict, inventory: dict) -> None:
     choices = _preview_targets(state, inventory)
     if not choices:
         return
@@ -428,7 +428,7 @@ def _render_format_cards(inventory: dict) -> None:
     ) + '</div>')
 
 
-def render_package_page(application: WorkflowApplication) -> None:
+def render_package_page(application: DatasetApplication) -> None:
     st.html(PACKAGE_STYLE)
     page_header("输出打包", "核对真实训练文件、质量证据和来源信息，导出可校验的完整数据包。", "DATASET RELEASE　·　完整性校验",
                 art_kind="delivery")

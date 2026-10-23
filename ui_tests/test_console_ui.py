@@ -181,16 +181,17 @@ def test_data_library_shows_real_sources_outputs_and_selected_excerpt(tmp_path):
     assert not view.exception
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
     assert "来源文件</span><strong>1" in html_blocks
-    assert "生成产物</span><strong>2" in html_blocks
+    assert "产物文件</span><strong>2" in html_blocks
     assert "训练数据文件</span><strong>2" in html_blocks
     assert "偏好文件</span><strong>1" in html_blocks
     assert "manual&amp;notes.md" in html_blocks
-    assert "sft.jsonl" in html_blocks and "dpo.jsonl" in html_blocks
+    files = next(item.value for item in view.dataframe if "文件名" in item.value)
+    assert set(files["文件名"]) == {"manual&notes.md", "sft.jsonl", "dpo.jsonl"}
 
     next(item for item in view.text_input if item.label == "搜索文件").set_value("manual").run()
     assert not view.exception
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
-    assert "1 个匹配文件" in html_blocks
+    assert any("显示 1–1 / 1 个文件" == item.value for item in view.caption)
     assert "已有资料" in html_blocks
     assert any("设备维护步骤 A" in str(item.value) for item in view.code)
 
@@ -219,22 +220,27 @@ def test_data_library_prioritizes_real_source_and_cpt_over_workflow_evidence(tmp
     html_blocks = "\n".join(str(item.value) for item in view.get("html"))
     assert "训练数据文件</span><strong>1" in html_blocks
     assert next(item for item in view.selectbox if item.label == "文件分类").value == "常用文件"
-    file_list = next(str(item.value) for item in view.get("html") if '<div class="df-data-list">' in str(item.value))
+    files = next(item.value for item in view.dataframe if "文件名" in item.value)
+    file_list = list(files["文件名"])
     assert file_list.index("guide.txt") < file_list.index("cpt.jsonl")
     assert "0000.txt" not in file_list and "recipe.json" not in file_list
     assert "cpt.records.json" not in file_list
-    assert "来源 / guide.txt" in file_list and "产物 / workflows" in file_list
+    assert files.iloc[0]["来源 / 目录"] == "来源"
+    assert files.iloc[1]["来源 / 目录"].startswith("产物 / ")
+    assert "artifacts" in files.iloc[1]["来源 / 目录"]
 
     next(item for item in view.selectbox if item.label == "文件分类").set_value("全部文件").run()
     assert not view.exception
-    file_list = next(str(item.value) for item in view.get("html") if '<div class="df-data-list">' in str(item.value))
+    files = next(item.value for item in view.dataframe if "文件名" in item.value)
+    file_list = list(files["文件名"])
     assert file_list.index("guide.txt") < file_list.index("0000.txt")
     assert "cpt.jsonl" in file_list and "recipe.json" in file_list
     assert "cpt.records.json" in file_list
-    assert "产物 / workflows" in file_list
+    assert all(value.startswith("产物 / ") for value in files.loc[files["文件名"] != "guide.txt", "来源 / 目录"])
     next(item for item in view.selectbox if item.label == "文件分类").set_value("输入快照").run()
     assert not view.exception
-    file_list = next(str(item.value) for item in view.get("html") if '<div class="df-data-list">' in str(item.value))
+    files = next(item.value for item in view.dataframe if "文件名" in item.value)
+    file_list = list(files["文件名"])
     assert "0000.txt" in file_list and "guide.txt" not in file_list
 
 
@@ -309,13 +315,15 @@ def test_console_uses_local_cache_despite_legacy_preferences(tmp_path, monkeypat
     assert not ws.out("alpha").exists()
 
 
-def test_backends_page_renders_without_exception():
+def test_legacy_backends_route_opens_shared_connections_without_budget_controls():
     view = app()
     navigate(view, "模型与密钥")
     assert not view.exception
+    assert view.session_state["nav"] == "系统设置"
     assert any(w.label == "后端名" for w in view.text_input)
     assert any(w.label == "选择后端" for w in view.selectbox)
-    assert any(w.label == "清零预算" for w in view.button)
+    assert not any(w.label == "清零预算" for w in view.button)
+    assert any("每次任务使用的模型在工作流节点选择" in item.value for item in view.caption)
 
 
 def test_generation_preferences_use_guided_controls():
@@ -323,6 +331,13 @@ def test_generation_preferences_use_guided_controls():
 
     view = app()
     navigate(view, "系统设置")
+    assert not view.exception
+    assert view.selectbox(key="workflow-default-sft-style:zh")
+    assert view.button(key="workflow-defaults-save")
+    assert not any(w.label == "默认样本占比" for w in view.slider)
+    # Advanced command preferences have their own existing route. They do not
+    # control automatic workflows and must not be asserted on settings home.
+    navigate(view, "偏好设置")
     assert not view.exception
     labels = {w.label for w in view.slider}
     assert {"默认样本占比", "推理与反思", "长上下文利用", "工具使用", "双语与知识桥接"} <= labels
@@ -612,7 +627,8 @@ def test_home_upload_entry_opens_generation_without_folder_dialog():
     view.button(key="overview:文档资料").click().run()
     assert not view.exception
     assert view.session_state["nav"] == "自动工作流"
-    assert any(w.label == "上传文档 / 上下文记录" for w in view.get("file_uploader"))
+    assert view.get("file_uploader")[0].key == "workflow-upload:default:文档资料"
+    assert view.get("file_uploader")[0].label == "导入文档或图片"
     assert not any(w.label == "已有文件夹路径" for w in view.text_input)
 
 

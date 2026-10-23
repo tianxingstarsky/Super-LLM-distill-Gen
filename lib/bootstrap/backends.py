@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lib.application.backend_service import BackendApplication
-from lib.infrastructure.backend_config_driver import FilesystemBackendConfigDriver
+from lib.contexts.models.api import BackendApplication
+from lib.contexts.models.infrastructure.configuration import FilesystemBackendConfigDriver
 
 
 def backend_application(root: Path) -> BackendApplication:

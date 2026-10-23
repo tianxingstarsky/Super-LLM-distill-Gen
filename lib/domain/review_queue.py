@@ -1,10 +1,5 @@
-"""Shared status filters and page limits for training-data review queues."""
-from __future__ import annotations
+"""Compatibility import; implementation lives in ``lib.contexts.review.domain.review_queue``."""
+from importlib import import_module as _import_module
+import sys as _sys
 
-DECISIONS = frozenset({"approved", "rejected", "skipped", "pending"})
-
-
-def review_query(offset: int, limit: int, decision: str | None) -> tuple[int, int, str | None]:
-    if decision is not None and decision not in DECISIONS:
-        raise ValueError("invalid_review_filter")
-    return max(0, int(offset)), max(1, min(int(limit), 100)), decision
+_sys.modules[__name__] = _import_module("lib.contexts.review.domain.review_queue")

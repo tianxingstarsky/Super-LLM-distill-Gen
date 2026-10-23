@@ -53,7 +53,7 @@ def isolated_console(tmp_path, monkeypatch):
     from lib.console_jobs import Job
     from lib.infrastructure.backend_config_driver import FilesystemBackendConfigDriver
     from lib.infrastructure.training_workflow import read_json, run_path
-    from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
+    from lib.contexts.workflows.infrastructure.driver import FilesystemWorkflowRunDriver
     from lib.io_utils import atomic_json
 
     monkeypatch.delenv("DF_WORKSPACE", raising=False)
@@ -83,7 +83,7 @@ def isolated_console(tmp_path, monkeypatch):
     monkeypatch.setattr(Job, "start", unexpected_worker)
     # Persisted state emulates a worker already in progress. These tests only
     # navigate; they never create an execution lock or call a model.
-    monkeypatch.setattr(FilesystemWorkflowDriver, "is_active", lambda driver, run_id:
+    monkeypatch.setattr(FilesystemWorkflowRunDriver, "is_active", lambda driver, run_id:
                         read_json(run_path(driver.output, run_id) / "state.json")["status"] == "running")
     output = ws.out("default")
     human = human_factory(tmp_path, output)

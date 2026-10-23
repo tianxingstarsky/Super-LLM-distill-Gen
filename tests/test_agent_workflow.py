@@ -114,8 +114,8 @@ def test_agent_preview_rejects_evidence_from_a_different_training_row(tmp_path, 
     def wrong_record(_path):
         yield {**record, "messages": [{"role": "assistant", "content": "unrelated"}]}
 
-    from lib.infrastructure import workflow_driver
-    monkeypatch.setattr(workflow_driver, "iter_json_records", wrong_record)
+    from lib.contexts.datasets.infrastructure import driver as dataset_driver
+    monkeypatch.setattr(dataset_driver, "iter_json_records", wrong_record)
     with pytest.raises(ValueError, match="artifact_integrity_error"):
         app.artifact_preview(run_id, "agent")
 

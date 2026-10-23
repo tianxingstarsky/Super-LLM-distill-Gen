@@ -21,7 +21,7 @@ def test_input_preview_stops_and_closes_reader(tmp_path, monkeypatch):
         finally:
             closed.append(True)
 
-    monkeypatch.setattr("lib.infrastructure.workflow_driver.iter_json_records", records)
+    monkeypatch.setattr("lib.contexts.workflows.infrastructure.driver.iter_json_records", records)
     app = WorkflowApplication(FilesystemWorkflowDriver(tmp_path, tmp_path))
     assert [row["id"] for row in app.quarantined_inputs(run_id, limit=2)] == ["first", "second"]
     assert closed == [True]

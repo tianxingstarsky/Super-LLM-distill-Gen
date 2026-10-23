@@ -12,7 +12,7 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
-from lib.domain.corpus_quality import CorpusNearDuplicateIndex
+from lib.contexts.datasets.infrastructure.corpus_index import CorpusNearDuplicateIndex
 from lib.domain.open_task_plan import MAX_TASK_CHARS, task_identity, task_plan_issue, validate_short_task_plan
 from lib.domain.workflow_production import (production_batch_size, validate_production,
     quality_first_production, soft_expectation_production, production_completion_status,

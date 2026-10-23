@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from lib.application.workflow_service import WorkflowApplication
+from lib.contexts.datasets.api import DatasetApplication
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.presentation.streamlit.sample_preview import render_sample_preview
@@ -40,7 +40,7 @@ def _preview_targets(manifest: dict, files: list[dict]) -> list[str]:
             and ("agent.negative.jsonl" if target == "agent_negative" else f"{target}.jsonl") in names]
 
 
-def render_workflow_samples(application: WorkflowApplication, workspace_id: str) -> bool:
+def render_workflow_samples(application: DatasetApplication, workspace_id: str) -> bool:
     """Browse completed results or explicitly committed partial deliveries."""
     runs = [row for row in application.task_runs()
             if has_deliverable_results(row) and row.get("id")]

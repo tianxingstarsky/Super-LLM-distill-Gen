@@ -474,7 +474,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
                                  help="直接在当前任务核对工具过程与重放证据，处理正样本并查看失败轨迹。"):
                         from lib.presentation.streamlit.agent_review_page import render_agent_review
 
-                        render_agent_review(application, selected_id, workspace_id=workspace_id)
+                        render_agent_review(application.review, selected_id, workspace_id=workspace_id)
                 if selected_run.get("recipe_readable", True):
                     render_run(application, selected_id, begin, embedded=True,
                                **({"human_application": human_application} if human_application is not None else {}),
