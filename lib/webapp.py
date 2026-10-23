@@ -529,15 +529,20 @@ def page_prefs(show_title=True):
 
 def page_data_management():
     page_header("数据管理", "统一浏览来源与产物，预览各类训练样本并查看质量检查结果。", "DATA LIBRARY", art_kind="library")
+    view_key = f"data-view:{st.session_state['ws']}"
     area = st.segmented_control(
-        "数据视图", ("资产管理", "数据预览", "人工制作", "质量报告"),
-        default="资产管理", key=f"data-view:{st.session_state['ws']}",
+        "数据视图", ("资产管理", "数据预览", "样本统计", "人工制作", "质量报告"),
+        default=None if view_key in st.session_state else "资产管理", key=view_key,
         label_visibility="collapsed",
     )
     if area == "数据预览":
         page_preview(show_title=False)
     elif area == "质量报告":
         page_quality(show_title=False)
+    elif area == "样本统计":
+        from lib.bootstrap.workflows import workflow_application
+        from lib.presentation.streamlit.sample_statistics_page import render_sample_statistics
+        render_sample_statistics(workflow_application(ROOT, _ws_out()), st.session_state['ws'])
     elif area == "人工制作":
         from lib.bootstrap.manual_datasets import manual_dataset_application
         from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets

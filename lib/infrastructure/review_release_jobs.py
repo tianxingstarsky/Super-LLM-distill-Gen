@@ -1,4 +1,4 @@
-"""Durable release jobs, run by isolated local worker processes."""
+"""Durable release and read-only analysis jobs in isolated local processes."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -24,10 +24,10 @@ class ReleaseCancelled(Exception):
 
 
 def _paths(output, run_id, target):
-    if target not in {"sft", "cpt", "dpo", "orpo", "rlaif", "workflow"}:
+    if target not in {"sft", "cpt", "dpo", "orpo", "rlaif", "workflow", "statistics"}:
         raise ValueError("invalid_review_target")
     run = run_path(output, run_id)
-    owner = run / ("delivery" if target == "workflow" else "human-review")
+    owner = run / ("analysis" if target == "statistics" else "delivery" if target == "workflow" else "human-review")
     directory = owner / ".jobs"
     if not (run / "state.json").is_file():
         raise ValueError("review_run_not_found")
@@ -138,7 +138,10 @@ def execute_release_job(output, run_id, target, job_id):
                 atomic_json(path, state)
 
         try:
-            if target == "workflow":
+            if target == "statistics":
+                from lib.infrastructure.workflow_statistics import build_statistics
+                result = build_statistics(run_path(output, run_id), progress=progress)
+            elif target == "workflow":
                 from lib.infrastructure.workflow_archive import prepare_bundle
                 result = prepare_bundle(run_path(output, run_id), progress=progress)
             else:

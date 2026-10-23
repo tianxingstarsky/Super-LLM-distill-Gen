@@ -9,6 +9,8 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "样本统计": "Sample Statistics",
+    "查看样本分布与文件大小": "View sample distributions and file sizes",
     "解析依赖版本不匹配。独立环境请使用 requirements-docling-runtime.txt，当前环境请使用 requirements-docling.txt。": "Parser package versions do not match. Use requirements-docling-runtime.txt for the isolated environment, or requirements-docling.txt for the current environment.",
     "本地解析进程未能完全停止，请检查本机进程后重试。已有结果会保留。": "The local parser could not fully stop. Check local processes before retrying. Existing results are kept.",
     "独立解析环境的版面或表格模型文件不完整，请检查本地模型目录。": "Local layout or table model files are incomplete. Check the model directory.",

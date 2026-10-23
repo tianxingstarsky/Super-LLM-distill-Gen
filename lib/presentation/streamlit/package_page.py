@@ -510,6 +510,9 @@ def render_package_page(application: WorkflowApplication) -> None:
             st.html(_heading("▤", "包内容预览", f"实际存在 {len(inventory['files']) + 1} 个文件 · "
                              f"已校验文件共 {_size(sum(int(row['bytes']) for row in inventory['files']))}"))
             st.html(_file_preview(inventory["files"]))
+            from lib.presentation.streamlit.sample_statistics_page import open_sample_statistics
+            st.button("查看样本分布与文件大小", on_click=open_sample_statistics, args=(run_id,),
+                      key=f"package-statistics:{run_id}", width="stretch")
         with st.container(border=True):
             _render_previews(application, run_id, state, inventory)
         with st.container(border=True):

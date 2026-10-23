@@ -153,6 +153,16 @@ class WorkflowApplication:
     def artifact_location(self, run_id: str) -> str:
         return self._driver.artifact_location(run_id)
 
+    def sample_statistics(self, run_id: str) -> dict:
+        """Read version-bound native sample distributions and actual file inventory."""
+        return self._driver.sample_statistics(run_id)
+
+    def start_sample_statistics(self, run_id: str) -> dict:
+        return self._driver.start_sample_statistics(run_id)
+
+    def cancel_sample_statistics(self, run_id: str) -> dict | None:
+        return self._driver.cancel_sample_statistics(run_id)
+
     def list_releases(self) -> list[dict]:
         """List local versions in the output workspace with integrity status."""
         return self._driver.list_releases()

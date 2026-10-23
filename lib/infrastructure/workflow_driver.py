@@ -300,10 +300,24 @@ class FilesystemWorkflowDriver:
         manifest, identity = verified_snapshot(path)
         contents = {"manifest": manifest, "files": self._verified_files(path, manifest),
                     "quality": self._verified_quality(path, manifest),
-                    "bundle": workflow_archive.display_prepared_bundle(path, manifest)}
+                    "bundle": workflow_archive.display_prepared_bundle(path, manifest),
+                    "manifest_bytes": (path / "artifacts" / "manifest.json").stat().st_size}
         if inventory_identity(path) != identity:
             raise ValueError("package_files_changed")
         return contents
+
+    def sample_statistics(self, run_id: str) -> dict:
+        from lib.infrastructure.workflow_statistics import cached_statistics
+        contents = self.package_contents(run_id)
+        run = run_path(self.output, run_id)
+        return {**contents, "statistics": cached_statistics(run, contents["manifest"]),
+                "job": review_release_jobs.release_job(self.output, run_id, "statistics")}
+
+    def start_sample_statistics(self, run_id: str) -> dict:
+        return review_release_jobs.start_release_job(self.output, run_id, "statistics", 0)
+
+    def cancel_sample_statistics(self, run_id: str) -> dict | None:
+        return review_release_jobs.cancel_release_job(self.output, run_id, "statistics")
 
     def artifact_location(self, run_id: str) -> str:
         return str(run_path(self.output, run_id) / "artifacts")
