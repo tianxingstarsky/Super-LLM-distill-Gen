@@ -79,6 +79,30 @@ def test_empty_document_never_opens_a_pdf(tmp_path):
     assert extract_picture_assets(DoclingDocument(name="No figure"), tmp_path / "absent.pdf", source_sha256="0"*64) == {}
 
 
+@pytest.mark.parametrize("valid",[True,False])
+def test_complete_source_label_ink_can_extend_crop_without_reparenting(tmp_path,valid):
+    from lib.infrastructure.docling_picture_assets import _coverage_region
+    _,doc,picture = fixture(tmp_path)
+    label = doc.add_text(label=DocItemLabel.TEXT,text="x",prov=ProvenanceItem(
+        page_no=1,charspan=(0,1),bbox=BoundingBox(l=30,r=40,b=28,t=34,coord_origin=CoordOrigin.BOTTOMLEFT)))
+    glyph = {"text":"x","char_index":5,"generated":False,
+             "bbox":{"l":31,"r":39,"b":27.5,"t":33}}
+    source_sha = "a"*64
+    structure = {"items":{},"source_sha256":source_sha}
+    visibility = {1:{"edge_glyphs":{"source_sha256":source_sha if valid else "b"*64,"glyphs":[glyph]}}}
+    before = doc.model_dump_json()
+    result = _coverage_region(doc,picture,0,structure,[],visibility)
+    assert doc.model_dump_json() == before
+    if not valid:
+        assert result is None
+        return
+    _,audit = result
+    assert audit["crop_bbox"]["b"] == 27.5
+    proof = audit["intersecting_body_sources"][0]
+    assert proof["item_ref"] == label.self_ref and not proof["ownership_modified"]
+    assert proof["source_glyphs"]["char_indices"] == [5]
+
+
 def test_owned_children_outside_original_picture_add_a_complete_source_crop(tmp_path):
     path, doc, picture = fixture(tmp_path)
     child = doc.add_text(label=DocItemLabel.TEXT, text="Source owned child", parent=picture,

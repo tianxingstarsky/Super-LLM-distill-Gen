@@ -93,6 +93,36 @@ def test_mixed_prose_is_retained_and_review_evidence_survives(enrichment):
     assert evidence["#/tables/0"]["cells"][0]["reason"] == "mixed_prose_math"
 
 
+@pytest.mark.parametrize("original,latex,accepted",[
+    ("10",r"\underline{10}",False),
+    ("10",r"\boxed{10}",False),
+    ("10",r"\ldots 10",False),
+    ("…10",r"\ldots 10",True),
+])
+def test_matching_digits_do_not_justify_invented_table_decorations(enrichment,monkeypatch,original,latex,accepted):
+    from types import SimpleNamespace as NS
+    e = enrichment
+    e.document.texts = []
+    e.cell.text = original
+    monkeypatch.setattr(e.regions,"inspect_math_region",lambda *a:{"contains_math":True})
+    monkeypatch.setattr(e.crops,"LocalFormulaReader",lambda _:NS(read=lambda image:
+        prediction_record(latex,latex,[0,13,2],eos_token_id=2)))
+    proof = e.crops.enrich_formulas(e.document,"local.pdf","models")["#/tables/0"]
+    assert (proof["status"] == "transcribed_unverified") == accepted
+    assert e.cell.text == ("$"+latex+"$" if accepted else original)
+    if not accepted:
+        assert proof["cells"][0]["reason"] == "unproven_table_math_decoration"
+
+
+def test_source_proven_flat_table_is_not_reprocessed_but_other_math_still_is(enrichment,monkeypatch):
+    e = enrichment
+    e.cell.text = "07++12"
+    monkeypatch.setattr(e.regions,"inspect_math_region",lambda *a:pytest.fail("proven flat grid must not enter MFR"))
+    proof = e.crops.enrich_formulas(e.document,"local.pdf","models",preserved_flat_table_refs={"#/tables/0"})
+    assert e.cell.text == "07++12" and "#/tables/0" not in proof
+    assert e.formula.text == "x" and e.calls == ["display"]
+
+
 def test_mixed_table_expansion_publishes_only_a_proven_atomic_proposal(enrichment, monkeypatch):
     from lib.infrastructure import docling_inline_assembly, docling_inline_lines, docling_inline_geometry
     from lib.infrastructure import docling_table_mixed_math, docling_inline_routing, docling_inline_formulas

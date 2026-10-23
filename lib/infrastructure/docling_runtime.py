@@ -25,6 +25,9 @@ def runtime_signature(config, *, check_cancel=None):
     from lib.infrastructure.docling_picture_export import PICTURE_EXPORT_POLICY
     from lib.infrastructure.docling_picture_assets import PICTURE_ASSET_POLICY
     from lib.infrastructure.docling_picture_structure import PICTURE_STRUCTURE_POLICY
+    from lib.infrastructure.docling_source_pipeline import SOURCE_BLOCK_POLICY
+    from lib.infrastructure.docling_table_recovery import TABLE_RECOVERY_POLICY
+    from lib.infrastructure.docling_native_typography import NATIVE_TYPOGRAPHY_POLICY
     from lib.infrastructure.docling_pdf_text_visibility import PDF_TEXT_VISIBILITY_POLICY, PDF_TEXT_VISIBILITY_BINDING_POLICY
     from lib.infrastructure.docling_worker_client import run_docling_worker
     from lib.infrastructure.docling_table_geometry import GEOMETRY_POLICY
@@ -59,6 +62,10 @@ def runtime_signature(config, *, check_cancel=None):
                  "picture_export_policy": PICTURE_EXPORT_POLICY,
                  "picture_asset_policy": PICTURE_ASSET_POLICY,
                  "picture_structure_policy": PICTURE_STRUCTURE_POLICY,
+                 "source_block_policy": SOURCE_BLOCK_POLICY,
+                 "table_recovery_policy": TABLE_RECOVERY_POLICY,
+                 "table_recovery_version": versions.get("camelot-py"),
+                 "native_typography_policy": NATIVE_TYPOGRAPHY_POLICY,
                  "pdf_text_visibility_policy": PDF_TEXT_VISIBILITY_POLICY,
                  "pdf_text_visibility_binding_policy": PDF_TEXT_VISIBILITY_BINDING_POLICY,
                  "caption_placement": "layout", "ocr": config["ocr"],

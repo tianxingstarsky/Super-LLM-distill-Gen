@@ -10,7 +10,7 @@ from collections import Counter
 import unicodedata
 FORMULA_DIRECTORY = "breezedeus--pix2text-mfr-1.5"
 FORMULA_REVISION = "1cef9f0bdcd6a4c63df7de1311fb0894593340cc"
-FORMULA_POLICY = "pix2text-mfr-1.5-crop-v2"
+FORMULA_POLICY = "pix2text-mfr-1.5-crop-v3"
 
 
 def numeric_glyphs_match(source, transcription):
@@ -97,7 +97,8 @@ def render_formula_crop(pdf, page_number, bbox, *, dpi=240, padding_points=2, cl
                    "image_sha256": hashlib.sha256(data.getvalue()).hexdigest(), "clip_bbox": clip_bbox}
 
 
-def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None):
+def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None,
+                    preserved_flat_table_refs=()):
     import pypdfium2 as pdfium
 
     formulas = [item for item in document.texts if getattr(item.label, "value", item.label) == "formula"]
@@ -152,6 +153,12 @@ def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None
         from lib.infrastructure.docling_math_cell_crops import render_math_cell_crop
         pages = {}
         for table in document.tables:
+            # Only the worker supplies these refs after Camelot's full grid
+            # has passed exact, once-only PDFium glyph ownership checks.
+            # Running MFR again would invent notation in plain source labels
+            # such as 07++12. The complete source proof stays in table audit.
+            if table.self_ref in preserved_flat_table_refs:
+                continue
             if not table.prov:
                 raise ValueError("document_docling_invalid_provenance")
             if len(table.prov) != 1:
@@ -215,6 +222,16 @@ def enrich_formulas(document, source_path, artifacts_path, *, inline_config=None
                 if (prediction["status"] == "transcribed_unverified"
                         and not numeric_glyphs_match(original, prediction["transcribed_text"])):
                     prediction.update(status="review_required", reason="numeric_glyphs_changed")
+                if prediction["status"] == "transcribed_unverified":
+                    import re
+                    value = prediction["transcribed_text"]
+                    # Rulings can look like underlines; clipped matrices can
+                    # elicit invented ellipses. Neither is approved by matching
+                    # the digits alone. Keep the original cell for review.
+                    if (re.search(r"\\(?:underline|overline|boxed|fbox)\b", value)
+                            or re.search(r"\\(?:ldots|cdots|dots|vdots|ddots)\b", value)
+                            and not any(mark in original for mark in ("...", "…", "⋯", "⋮", "⋱"))):
+                        prediction.update(status="review_required", reason="unproven_table_math_decoration")
                 if prediction["status"] == "transcribed_unverified":
                     cell.text = "$" + prediction["transcribed_text"] + "$"
                 cells.append({**crop, **prediction, **cell_info})

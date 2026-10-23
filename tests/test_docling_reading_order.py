@@ -115,6 +115,24 @@ def test_already_ordered_page_returns_same_document():
     assert audit["original_page_refs"] == audit["predicted_page_refs"] == audit["actual_page_refs"]
 
 
+def test_separator_aware_source_order_is_never_projected_again(monkeypatch):
+    doc = document()
+    # A spanning title/table can make an isolated y-order differ from the
+    # document-level ordering already obtained with page separators.
+    text(doc, "Left column continuation", left=50, right=270, bottom=100, top=150)
+    text(doc, "Right column beginning", left=330, right=550, bottom=600, top=650)
+    before = doc.model_dump_json()
+    monkeypatch.setattr(rb.ReadingOrderPredictor, "predict_reading_order",
+                        lambda *args: pytest.fail("source order must not be recomputed"))
+    view, audit = project_page_reading_order(doc,2,preserve_source_order=True)
+    assert view is doc and doc.model_dump_json() == before
+    assert audit["separator_aware_source_order_preserved"]
+    assert audit["actual_page_refs"] == refs(doc)
+    # Preservation still validates ownership and provenance.
+    doc.body.children.append(doc.body.children[0])
+    assert project_page_reading_order(doc,2,preserve_source_order=True)[1]["review_required"]
+
+
 def test_unprojected_cross_page_text_is_preserved_for_review():
     doc = document()
     paragraph = text(doc, "First second", page=1)

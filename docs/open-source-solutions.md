@@ -683,6 +683,59 @@ audits are kept separately in the local cross-paper validation artifact folder.
 Hash bindings establish file identity; content judgments come from the stated
 source-page checks. No production parser rule was changed during this test.
 
+## Cross-paper repairs: source blocks, columns and flat grids
+
+The 2026-10-23 repair keeps Docling's original separator-aware document order.
+The modern worker no longer recomputes page order from isolated sibling boxes
+without those separators. Ownership, source bounds and reference checks still
+run. An isolated pipeline subclass disables Docling's heuristic paragraph
+merges, which had joined body prose to chart axes and produced invalid
+dehyphenated character ranges. This uses Docling's supported pipeline-class
+extension point; installed packages and global classes are not patched.
+Physical text blocks remain separate, including cross-column/page fragments.
+Their presence is not proof that a semantic continuation has been reconstructed.
+
+[Camelot 2.0.0](https://github.com/camelot-dev/camelot) (MIT) is an optional
+local table recovery dependency. Its stream extraction and ruled lattice
+boundaries propose a wider grid inside the original table box. Each proposed
+cell must match the ordered PDFium source glyphs, and every source glyph must
+belong to exactly one cell. Multiline cells, script baselines, incomplete
+coverage and conflicting cell text are rejected. The two ResNet result tables
+recover 24 columns and 96 source-bound cells each. These fully verified flat
+grids bypass subsequent formula OCR. Otherwise labels such as `07++12` could
+be changed into invented boxed math after a correct extraction.
+
+Native typography restoration separately handles narrowly proven numeric
+powers and variable subscripts. It requires smaller shifted source glyphs and
+exact native/backend character alignment. It restores GQA's `T_infer` and five
+`R_1` headers and selected ResNet powers. It does not approve unrelated math or
+clear an existing review status for a whole paragraph. Author-list footnote
+symbols require an actual linked source-page footnote proof. Literal plus signs
+in ordinary identifiers are preserved only with flat geometry and exact text.
+
+Caption reassignment requires a unique adjacent source object. Ambiguous
+geometry retains the upstream assignment. Original picture PNGs remain intact;
+a separate expanded crop can include a source-bound axis label whose ink
+crosses the original picture edge. This does not change text ownership or
+certify visibility when the PDF text-object inventory is incomplete.
+
+Both additional papers now complete the formal adapter. GQA exports all seven
+pages without quarantine; its 36 numeric table cells retain their source
+columns. ResNet exports all twelve pages, with the Figure 6/7 captions assigned
+to the matching figures and its lower axis-label ink included. It still has
+quarantined pages and unresolved inline math. The complex architecture table
+still has eight columns instead of the source's seven; it is not accepted as
+fixed. Matching digits alone no longer permits newly invented underlines,
+boxes or unsupported ellipses in table math.
+
+New complete runs and their comparison report are stored separately under the
+local `docling-cross-paper-repair-2026-10-23` artifact folder. The original PDFs,
+source-first acceptance observations and failed baseline remain unchanged.
+The report exposes the actual page reading paths, source images, full Markdown,
+native structures and unresolved review records. All recognition runs are
+local with network access disabled; no model API was called. The checks have
+individual scopes and are not an overall mathematical accuracy score.
+
 ## Remaining candidates
 
 | Priority | Project and license | Concrete next step | Boundary |

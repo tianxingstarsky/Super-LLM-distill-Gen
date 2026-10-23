@@ -76,7 +76,7 @@ def conversion(monkeypatch, texts=(PAGE_ONE, PAGE_TWO), *, status="success"):
     # These dispatch tests replace conversion with a small protocol double.
     # Real tree ordering and figure serialization are covered separately.
     from lib.infrastructure import docling_reading_order, docling_picture_export
-    monkeypatch.setattr(docling_reading_order, "project_page_reading_order", lambda doc, page: (
+    monkeypatch.setattr(docling_reading_order, "project_page_reading_order", lambda doc, page, **kwargs: (
         doc, {"review_required": False, "changed": False, "page_no": page}))
     monkeypatch.setattr(docling_picture_export, "serialize_picture_page", lambda doc, page, **kwargs: (
         doc.export_to_markdown(page_no=page, image_placeholder=""),
@@ -91,7 +91,7 @@ def test_page_export_review_keeps_source_and_quarantines_affected_page(
     _, document = conversion(monkeypatch)
     from lib.infrastructure import docling_reading_order, docling_picture_export
     if issue == "order":
-        monkeypatch.setattr(docling_reading_order, "project_page_reading_order", lambda doc, page: (
+        monkeypatch.setattr(docling_reading_order, "project_page_reading_order", lambda doc, page, **kwargs: (
             doc, {"review_required": page == 2, "reasons": ["ambiguous_geometry"] if page == 2 else []}))
         expected = "document_docling_reading_order_requires_review"
     else:

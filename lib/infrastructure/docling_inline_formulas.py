@@ -43,6 +43,27 @@ def _math(glyph):
         unicodedata.category(char) == "Sm" for char in glyph["text"]))
 
 
+def _preserved_prose_candidate(candidate, glyphs, preserved_ids):
+    """Dismiss an OCR box only when its sole math signals are source-proven.
+
+    Detectors often include an author surname beside its footnote star. The
+    ordinary letters need no math proof, but must occupy one flat source row.
+    Unknown scripts, stacked fractions and actual unproven operators remain.
+    """
+    geometry = candidate["geometry"]
+    ids = set(geometry.get("char_indices", []))
+    chosen = [g for g in glyphs if g["char_index"] in ids and g["text"].strip()]
+    signals = {g["char_index"] for g in chosen if _math(g) or g["text"] in "*∗†‡"}
+    if not geometry["review_required"] or not chosen or not signals or not signals <= preserved_ids:
+        return False
+    ordinary = [g for g in chosen if g["char_index"] not in preserved_ids]
+    if not ordinary:
+        return True
+    first = ordinary[0]
+    return all(not _math(g) and abs(g["origin"][1]-first["origin"][1]) <= .08*first["font_size"]
+               and abs(g["font_size"]-first["font_size"]) <= .1*first["font_size"] for g in ordinary)
+
+
 def _native_views(native, glyph_text, bbox):
     from .docling_math_consistency import character_inventory
     views = []
@@ -470,7 +491,8 @@ def _enrich_single_source_items(document, source, config, reader, *, routes=None
                             candidate for candidate in candidates
                             if candidate["geometry"]["review_required"]
                             and candidate["geometry"]["char_indices"]
-                            and set(candidate["geometry"]["char_indices"]) <= preserved_ids]
+                            and (set(candidate["geometry"]["char_indices"]) <= preserved_ids
+                                 or _preserved_prose_candidate(candidate, glyphs, preserved_ids))]
                         candidates = [c for c in candidates if c not in preserved_candidates]
                         from .docling_inline_partitions import classify_inline_formula_containers
                         partition = classify_inline_formula_containers(

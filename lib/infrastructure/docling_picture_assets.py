@@ -13,7 +13,7 @@ from io import BytesIO
 import math
 
 
-PICTURE_ASSET_POLICY = "docling_get_image_source_members_and_object_coverage_bounded_v3"
+PICTURE_ASSET_POLICY = "docling_source_members_and_intersecting_label_ink_v4"
 MAX_PAGE_EDGE = 2400
 MAX_PAGE_PIXELS = 6_000_000
 MAX_ASSET_BYTES = 2 * 1024 * 1024
@@ -47,7 +47,7 @@ def _coverage_region(document, picture, ordinal, structure, associations, visibi
     prov = picture.prov[ordinal]
     page = document.pages[prov.page_no]
     original = prov.bbox.to_bottom_left_origin(page.size.height)
-    boxes, sources, title_sources = [original], [], []
+    boxes, sources, title_sources, edge_sources = [original], [], [], []
     for child, _ in document.iterate_items(root=picture, traverse_pictures=True):
         label = getattr(getattr(child, "label", None), "value", None)
         if child.self_ref == picture.self_ref or label in {"caption", "footnote", "picture"}:
@@ -100,6 +100,60 @@ def _coverage_region(document, picture, ordinal, structure, associations, visibi
                 "original_parent_ref": association["original_parent_ref"], "export_picture_ref": picture.self_ref,
                 "source_role": "spatially_associated_body_title", "object_binding_tolerance_points": .5,
                 "source_object": {key: record[key] for key in ("record_id", "source_sha256", "page_no", "object_path", "text", "bbox")}})
+    # Some native figure labels remain body text. If an original one-line box
+    # is predominantly inside exactly one picture but its ink crosses an edge,
+    # keep a separate complete crop. Do not reparent it or duplicate its text.
+    if structure:
+        for item in document.texts:
+            if (getattr(item.label, "value", item.label) != "text" or len(item.prov) != 1
+                    or item.prov[0].page_no != prov.page_no or item.parent is None
+                    or item.parent.cref != document.body.self_ref):
+                continue
+            box = item.prov[0].bbox.to_bottom_left_origin(page.size.height)
+            height = box.t-box.b
+            if not 0 < height <= 24:
+                continue
+            hit = []
+            for owner in document.pictures:
+                for p in owner.prov:
+                    if p.page_no != prov.page_no:
+                        continue
+                    region = p.bbox.to_bottom_left_origin(page.size.height)
+                    overlap = max(0, min(region.r,box.r)-max(region.l,box.l))*max(0,min(region.t,box.t)-max(region.b,box.b))
+                    if (region.l <= (box.l+box.r)/2 <= region.r and region.b <= (box.b+box.t)/2 <= region.t
+                            and overlap >= .5*(box.r-box.l)*height):
+                        hit.append(owner.self_ref)
+            overflow = max(original.l-box.l,box.r-original.r,original.b-box.b,box.t-original.t)
+            if hit != [picture.self_ref] or not .25 < overflow <= height/2:
+                continue
+            records = [r for r in visibility.get(prov.page_no, {}).get("records", [])
+                       if r.get("source_sha256") == structure["source_sha256"]
+                       and _compact(r.get("text", "")) == _compact(item.text)
+                       and box.l-.5 <= r["bbox"]["l"] and box.r+.5 >= r["bbox"]["r"]
+                       and box.b-.5 <= r["bbox"]["b"] and box.t+.5 >= r["bbox"]["t"]]
+            if len(records) == 1:
+                record = records[0]
+                ink = BoundingBox.model_validate(record["bbox"]).to_bottom_left_origin(page.size.height)
+                binding = {"source_object": {key: record[key] for key in
+                           ("record_id", "source_sha256", "page_no", "object_path", "text", "bbox")}}
+            else:
+                glyph_page = visibility.get(prov.page_no, {}).get("edge_glyphs", {})
+                glyphs = [g for g in glyph_page.get("glyphs", []) if g["text"].strip() and not g.get("generated")
+                          and box.l <= (g["bbox"]["l"]+g["bbox"]["r"])/2 <= box.r
+                          and box.b <= (g["bbox"]["b"]+g["bbox"]["t"])/2 <= box.t]
+                if (glyph_page.get("review_required") or glyph_page.get("source_sha256") != structure["source_sha256"]
+                        or not glyphs or _compact("".join(g["text"] for g in glyphs)) != _compact(item.text)):
+                    continue
+                ink = BoundingBox(l=min(g["bbox"]["l"] for g in glyphs), b=min(g["bbox"]["b"] for g in glyphs),
+                                  r=max(g["bbox"]["r"] for g in glyphs), t=max(g["bbox"]["t"] for g in glyphs),
+                                  coord_origin=CoordOrigin.BOTTOMLEFT)
+                binding = {"source_glyphs": {"char_indices": [g["char_index"] for g in glyphs],
+                           "source_sha256": glyph_page["source_sha256"], "page_no": prov.page_no,
+                           "text": item.text, "ink_bbox": ink.model_dump(mode="json")}}
+            boxes.extend([box, ink])
+            edge_sources.append({"item_ref": item.self_ref, "original_parent_ref": item.parent.cref,
+                "source_role": "source_body_text_intersecting_unique_picture_edge", "ownership_modified": False,
+                "bbox": box.model_dump(mode="json"), **binding})
     union = BoundingBox(l=min(box.l for box in boxes), r=max(box.r for box in boxes),
                         b=min(box.b for box in boxes), t=max(box.t for box in boxes),
                         coord_origin=CoordOrigin.BOTTOMLEFT)
@@ -110,6 +164,7 @@ def _coverage_region(document, picture, ordinal, structure, associations, visibi
     _region(document, projected, ordinal)  # Reject invalid geometry; never pad/clamp missing source.
     return projected, {"crop_bbox": union.model_dump(mode="json"), "source_children": sources,
                        "spatial_title_sources": title_sources,
+                       "intersecting_body_sources": edge_sources,
                        "source_order_and_ownership_preserved": True,
                        "semantic_relations_inferred": False,
                        "source_role": "original_pdf_picture_with_displayed_source_members"}
@@ -146,8 +201,10 @@ def extract_picture_assets(document, source, *, source_sha256, picture_structure
         from .docling_picture_structure import validated_spatial_title_associations
         from .docling_pdf_text_visibility import read_pdf_text_visibility
         associations = validated_spatial_title_associations(document, picture_structure)
-        if associations:
-            visibility = read_pdf_text_visibility(source, page_numbers=sorted({entry["page_no"] for entry in associations}))
+        visibility = read_pdf_text_visibility(source, page_numbers=sorted({p.page_no for item in pictures for p in item.prov}))
+        from .docling_math_regions import extract_pdf_page_glyphs
+        for number in visibility:
+            visibility[number]["edge_glyphs"] = extract_pdf_page_glyphs(source, number)
     regions = {}
     count = sum(len(picture.prov) for picture in pictures)
     if count > MAX_PICTURE_REGIONS:

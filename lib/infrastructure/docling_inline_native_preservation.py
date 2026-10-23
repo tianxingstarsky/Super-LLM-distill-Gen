@@ -14,7 +14,7 @@ import unicodedata
 from .docling_math_regions import is_math_font
 
 
-NATIVE_PRESERVATION_POLICY = "native_flat_text_preservation_v2"
+NATIVE_PRESERVATION_POLICY = "native_flat_text_and_linked_annotation_preservation_v4"
 _MARKERS = frozenset("*∗†‡")
 _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 _TOKEN = re.compile(
@@ -188,7 +188,7 @@ def _annotation_kind(token, glyphs, backend, label, annotation_markers):
         letters = [c for c in following if c["text"].isalpha()]
         if len(letters) >= 4 and all(not is_math_font(c["font_name"]) for c in letters):
             return "footnote_symbol"
-    if (label != "text" or not _EMAIL.search(backend)
+    if (label != "text"
             or not any(p.get("kind") == "footnote_symbol" and p.get("source_text") == g["text"]
                        and p.get("glyph_ids") and p.get("native_char_ids")
                        for p in annotation_markers)):
@@ -205,6 +205,14 @@ def _annotation_kind(token, glyphs, backend, label, annotation_markers):
         return None
     nearest_y = name_letters[-1]["origin"][1]
     before = [c for c in before if abs(c["origin"][1] - nearest_y) <= .1 * c["font_size"]]
+    # A source author list may put several names on one native line. The
+    # annotation belongs to the immediately preceding name, not earlier
+    # comma-separated names or their footnote markers.
+    separators = [i for i,c in enumerate(before) if c["text"] in ",;"]
+    if separators:
+        before = before[separators[-1]+1:]
+    if not any(c["text"].isalpha() for c in before):
+        return None
     if any(_signal(c) and c["text"] not in _MARKERS for c in before):
         return None
     words, current = [], []
@@ -223,7 +231,8 @@ def _annotation_kind(token, glyphs, backend, label, annotation_markers):
     rise = g["origin"][1] - base["origin"][1]
     if not .12 * base["font_size"] <= rise <= .85 * base["font_size"]:
         return None
-    return "author_symbol_with_name_and_email"
+    return ("author_symbol_with_name_and_email" if _EMAIL.search(backend)
+            else "source_annotation_after_prose")
 
 
 def prove_native_preservation(glyphs, native_chars, backend_text, *, label="text",
@@ -272,6 +281,12 @@ def prove_native_preservation(glyphs, native_chars, backend_text, *, label="text
     tokens = [[g] for g in gs if g["text"] in _MARKERS]
     for run in runs:
         text = "".join(g["text"] for g in run)
+        # A literal expression/identifier such as A+B or Python+NumPy needs no
+        # OCR when both parsers agree and there are no scripts. Treat the
+        # complete run atomically; never exempt an unmatched internal operator.
+        if (re.fullmatch(r"\w+(?:\+\w+)+", text, re.UNICODE)
+                and all(not is_math_font(g["font_name"]) for g in run)):
+            tokens.append(run)
         for match in _TOKEN.finditer(text):
             # Don't certify a prefix/suffix of an identifier or decimal.
             a, b = match.span()

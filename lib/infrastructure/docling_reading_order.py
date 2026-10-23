@@ -12,7 +12,7 @@ from collections import Counter
 import math
 
 
-READING_ORDER_POLICY = "docling_official_projected_page_siblings_v2"
+READING_ORDER_POLICY = "docling_official_source_order_or_projected_siblings_v3"
 
 
 def _finite_positive(value):
@@ -117,7 +117,7 @@ def _subtree_boxes(document, node, page_number, size, seen, external_satellites)
     return boxes, owners
 
 
-def project_page_reading_order(document, page_number):
+def project_page_reading_order(document, page_number, *, preserve_source_order=False):
     """Return ``(page_view, audit)`` without mutating the supplied document.
 
     Only existing top-level sibling slots that contain this page are permuted.
@@ -178,9 +178,10 @@ def project_page_reading_order(document, page_number):
             })
         original = [child.cref for child, *_ in candidates]
         audit.update(original_page_refs=original, actual_page_refs=list(original))
-        if len(candidates) < 2:
+        if len(candidates) < 2 or preserve_source_order:
             audit.update(status="unchanged", review_required=False,
-                         predicted_page_refs=list(original), actual_body_refs=list(refs))
+                         predicted_page_refs=list(original), actual_body_refs=list(refs),
+                         separator_aware_source_order_preserved=bool(preserve_source_order))
             return document, audit
 
         from docling.models.postprocessing.reading_order_rb import PageElement, ReadingOrderPredictor

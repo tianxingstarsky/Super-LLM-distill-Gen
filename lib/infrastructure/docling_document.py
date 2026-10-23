@@ -285,7 +285,8 @@ def _page_provenance(document, page_numbers):
     return result
 
 
-def page_markdown(document, page_number, *, inline_evidence=None, export_audit=None, picture_structure=None):
+def page_markdown(document, page_number, *, inline_evidence=None, export_audit=None, picture_structure=None,
+                  preserve_source_order=False):
     """Project cross-page text into a page view without changing the source.
 
 The pinned Markdown serializer filters by an item's first provenance page and
@@ -349,7 +350,8 @@ items in a shallow document view with their provenanced page fragments.
         page_document = document.model_copy(update={"texts": [replacements.get(index, item)
                                                              for index, item in enumerate(texts)]})
     from lib.infrastructure.docling_reading_order import project_page_reading_order
-    page_document, order_audit = project_page_reading_order(page_document, page_number)
+    page_document, order_audit = project_page_reading_order(
+        page_document, page_number, preserve_source_order=preserve_source_order)
     picture_audit = {}
     if inline_evidence:
         from lib.infrastructure.docling_inline_markdown import export_inline_markdown

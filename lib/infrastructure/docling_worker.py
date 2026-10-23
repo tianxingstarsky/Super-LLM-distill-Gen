@@ -22,7 +22,8 @@ def _deny_network(event, args):
 def inspect_runtime():
     from lib.infrastructure.docling_runtime import MODERN_PACKAGES, RUNTIME_PROTOCOL
     names = list(MODERN_PACKAGES) + ["pydantic", "transformers", "torch", "pypdfium2", "easyocr",
-                                  "onnxruntime", "optimum", "optimum-onnx", "pylatexenc", "pypdf", "fonttools"]
+                                  "onnxruntime", "optimum", "optimum-onnx", "pylatexenc", "pypdf", "fonttools",
+                                  "camelot-py"]
     versions = {}
     metadata_files = {}
     for name in names:
@@ -60,8 +61,10 @@ def parse_document(request):
     if config["ocr"]:
         options.ocr_options = EasyOcrOptions(lang=config["ocr_languages"],
             model_storage_directory=config["ocr_models_path"], download_enabled=False, use_gpu=False)
+    from lib.infrastructure.docling_source_pipeline import source_preserving_pipeline
     converter = DocumentConverter(allowed_formats=[InputFormat.PDF],
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options,
+                                                       pipeline_cls=source_preserving_pipeline())})
     result = converter.convert(DocumentStream(name=source.name, stream=BytesIO(source.read_bytes())), raises_on_error=True)
     if getattr(result.status, "value", result.status) != "success":
         raise ValueError("document_docling_conversion_incomplete")
@@ -75,12 +78,19 @@ def parse_document(request):
     refined, table_audit = refine_document_table_spans(
         document.model_dump(mode="json"), extract_pdf_rulings(source, table_pages))
     document = DoclingDocument.model_validate(refined)
+    from lib.infrastructure.docling_table_recovery import recover_flat_tables
+    table_audit.extend(recover_flat_tables(document, source))
     formula_evidence = {}
     if config["formula_enrichment"]:
         from lib.infrastructure.docling_formula_crops import enrich_formulas
         formula_evidence = enrich_formulas(
             document, source, config["artifacts_path"],
-            inline_config=config if config.get("inline_runtime_python") else None)
+            inline_config=config if config.get("inline_runtime_python") else None,
+            preserved_flat_table_refs={entry["table_ref"] for entry in table_audit
+                                       if entry.get("status") == "recovered"
+                                       and entry.get("source_sha256") == source_hash})
+    from lib.infrastructure.docling_native_typography import restore_native_typography
+    typography_audit = restore_native_typography(document, source, formula_evidence)
     from lib.infrastructure.docling_picture_assets import extract_picture_assets
     from lib.infrastructure.docling_picture_structure import build_picture_structure
     try:
@@ -97,7 +107,7 @@ def parse_document(request):
         export_audit = {}
         text, split_refs = page_markdown(
             document, number, inline_evidence=formula_evidence, export_audit=export_audit,
-            picture_structure=picture_structure)
+            picture_structure=picture_structure, preserve_source_order=True)
         if len(text) > _MAX_PAGE_CHARS:
             raise ValueError("document_docling_invalid_output")
         elements = provenance[number]
@@ -110,6 +120,8 @@ def parse_document(request):
         reading = {"mode": "docling", "parser_signature": request["signature"], "source_pdf_sha256": source_hash,
                    "source_page": number, "page_export": export_audit,
                    "elements": elements, "parsed_text_sha256": _digest(text), "evidence_level": "local_layout_ocr_extraction"}
+        if typography_audit:
+            reading["native_typography"] = [entry for entry in typography_audit if entry["page_no"] == number]
         if number in picture_assets:
             reading["picture_assets"] = picture_assets[number]
         page_structure_items = [item for item in picture_structure_audit["items"]
@@ -147,9 +159,12 @@ def parse_document(request):
         parts.append(part)
     if source_hash != _file_hash(source):
         raise ValueError("source_snapshot_changed")
+    source_block_audit = [pipeline.reading_order_model.ro_model.source_audit
+                          for pipeline in converter.initialized_pipelines.values()]
     return {"protocol": RUNTIME_PROTOCOL, "signature": request["signature"], "source_sha256": source_hash,
             "parts": parts, "document": document.model_dump(mode="json"), "network_disabled": True,
-            "table_geometry_audit": table_audit, "picture_structure_audit": picture_structure_audit}
+            "table_geometry_audit": table_audit, "picture_structure_audit": picture_structure_audit,
+            "source_block_audit": source_block_audit, "native_typography_audit": typography_audit}
 
 
 def main():
