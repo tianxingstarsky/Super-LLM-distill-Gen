@@ -130,6 +130,21 @@ def test_boundary_guard_follows_legacy_aliases_to_their_actual_context():
     assert canonical_dependency("lib.contexts.models.contracts") == "lib.contexts.models.contracts"
 
 
+def test_context_relative_module_imports_resolve_after_moves():
+    """A package move must include nested relative imports, even for optional SDK paths."""
+    missing = []
+    for path in CONTEXTS.rglob("*.py"):
+        package = module_name(path).rsplit(".", 1)[0]
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.ImportFrom) or not node.level or not node.module:
+                continue
+            module = importlib.util.resolve_name("." * node.level + node.module, package)
+            target = ROOT / module.replace(".", "/")
+            if not target.with_suffix(".py").is_file() and not (target / "__init__.py").is_file():
+                missing.append((str(path.relative_to(ROOT)), module))
+    assert not missing, missing
+
+
 def test_composition_uses_separate_adapters_and_narrow_use_cases(tmp_path):
     from lib.bootstrap.workflows import workflow_application
     from lib.contexts.workflows.api import WorkflowRunApplication
@@ -158,6 +173,9 @@ def test_composition_uses_separate_adapters_and_narrow_use_cases(tmp_path):
     ("lib.application.sft_review_service", "lib.contexts.review.application.sft_review_service"),
     ("lib.infrastructure.workflow_archive", "lib.contexts.datasets.infrastructure.archive"),
     ("lib.infrastructure.agent_review_driver", "lib.contexts.review.infrastructure.agent_review_driver"),
+    ("lib.infrastructure.latex_document", "lib.contexts.documents.domain.latex"),
+    ("lib.infrastructure.docling_runtime", "lib.contexts.documents.infrastructure.docling.runtime"),
+    ("lib.infrastructure.docling_inline_formulas", "lib.contexts.documents.infrastructure.docling.inline_formulas"),
 ])
 def test_compatibility_paths_resolve_to_one_implementation(old, new):
     assert importlib.import_module(old) is importlib.import_module(new)
@@ -215,3 +233,29 @@ def test_legacy_workflow_facade_uses_injected_dataset_and_review_ports():
     assert app.state("run")["owner"] == "runtime"
     assert app.artifact_preview("run", "sft", 3, 2) == ["run", "sft", 3, 2]
     assert app.agent_review_decide("run", "candidate", decision="approved")["decision"] == "approved"
+
+
+def test_execution_and_corpus_use_cases_need_no_concrete_runtime(tmp_path):
+    script = r'''
+import importlib.abc, sys
+class NoAdapters(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if (fullname.startswith(("lib.infrastructure", "lib.bootstrap", "lib.presentation"))
+                or ".infrastructure" in fullname
+                or fullname.split(".")[0] in {"streamlit", "docling", "pypdf", "docx", "openai", "anthropic"}):
+            raise AssertionError("use case loaded an adapter: " + fullname)
+sys.meta_path.insert(0, NoAdapters())
+from lib.contexts.workflows.application.execute_run import ExecuteWorkflowRun
+from lib.contexts.workflows.application.generate_batch import GenerateDatasetBatch
+from lib.contexts.workflows.domain.execution import BatchOutcome, TargetOutcome
+from lib.contexts.documents.api import PrepareDocumentCorpus, DocumentSource
+class Reader:
+    def read_text(self, source_path, **kwargs):
+        return "# Knowledge\n\nA table keeps its header."
+result = PrepareDocumentCorpus(Reader()).execute(DocumentSource("memory", "guide.md", ".md"))
+assert result.entries and result.source_chars > 0
+assert BatchOutcome((TargetOutcome("sft", 1),), frozenset(), 0, 0, 0, False).status == "completed"
+'''
+    result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr

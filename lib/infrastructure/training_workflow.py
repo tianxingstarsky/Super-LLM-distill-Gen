@@ -9,7 +9,6 @@ from copy import deepcopy
 from collections import deque
 from contextlib import ExitStack, closing
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 import hashlib
 import heapq
 import json
@@ -24,13 +23,10 @@ from itertools import islice
 import threading
 import time
 
-from filelock import FileLock, Timeout
-
 from lib.infrastructure.workflow_store import (
     now, digest, file_hash, read_json, run_path, list_runs, is_active, cancel, verify_artifacts,
 )
 
-from lib.application.preference_service import preference_summary
 from lib.application.trainer_export_service import prepare_trl_export
 from lib.domain.workflow_quality import POLICY, accepted, canonical, conversation_issue, same_answer, text_issue, tool_error_flag, verdict
 from lib.domain.agent_trajectory import REPLAY_POLICY_VERSION, assess_recorded_trajectory
@@ -60,7 +56,6 @@ from lib.domain.workflow_node_prompts import (
 )
 from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
-from lib.infrastructure.generation_settings_file import FileGenerationSettingsDriver
 from lib.infrastructure.generation_settings_file import preference_snapshot
 from lib.contexts.datasets.contracts import preferred_training_record
 from lib.infrastructure.brave_web_research import (
@@ -68,7 +63,6 @@ from lib.infrastructure.brave_web_research import (
 )
 from lib.infrastructure.workflow_rows import WorkflowRows, RowSpool, write_jsonl, write_json_array
 from lib.infrastructure.workflow_row_checkpoint import row_checkpoint
-from lib.infrastructure.workflow_candidates import prepare_generation_rows
 from lib.domain.workflow_production import validate_production
 from lib.infrastructure.workflow_production import WorkflowProduction
 from lib.infrastructure.production_checkpoints import ProductionCheckpoints
@@ -92,6 +86,7 @@ from lib.io_utils import _replace_state, atomic_json
 from lib.llm_client import ChatClient, chat_json, load_backend, snapshot_backend_endpoint
 from lib.infrastructure.workflow_stream_journal import StreamJournal
 from lib.prompts import get, registry, render
+from lib.contexts.workflows.domain.execution import WorkflowCancelled as Cancelled
 
 
 EXTENSIONS = INPUT_EXTENSIONS
@@ -534,11 +529,12 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     return run_id
 
 
-class Cancelled(Exception):
-    pass
+class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, WorkflowCPTProcessing, WorkflowReviewRepair, WorkflowSourceLibrary):
+    """Legacy node algorithms and checkpoint machinery, behind execution ports.
 
-
-class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, WorkflowCPTProcessing, WorkflowReviewRepair, WorkflowSourceLibrary):
+    Batch ordering and run lifecycle are composed in bootstrap/workflow_execution.
+    New orchestration belongs there, rather than in another runtime mixin.
+    """
     def __init__(self, output, run_id, root, *, generator=None, judge=None, jev=None, questioner=None):
         self.path = run_path(output, run_id)
         self.root = Path(root)
@@ -1541,9 +1537,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
     def without_source_reasoning(value):
         """Keep source facts without supplying an assistant's existing chain."""
         if isinstance(value, list):
-            return [Workflow.without_source_reasoning(item) for item in value]
+            return [TrainingWorkflowRuntime.without_source_reasoning(item) for item in value]
         if isinstance(value, dict):
-            return {key: Workflow.without_source_reasoning(item) for key, item in value.items()
+            return {key: TrainingWorkflowRuntime.without_source_reasoning(item) for key, item in value.items()
                     if not (value.get("role") == "assistant" and
                             key in {"reasoning_content", "reasoning", "thinking"})}
         return value
@@ -3297,223 +3293,14 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
             return []
 
     def execute(self, resume_run=False):
-        with FileLock(str(self.path / ".run.lock"), timeout=0):
-            self.state = read_json(self.path / "state.json")
-            if self.state["status"] in {"completed", "needs_attention"}:
-                verify_artifacts(self.path)
-                return self.state
-            if resume_run:
-                (self.path / "cancel.json").unlink(missing_ok=True)
-            self.state["attempt"] += 1
-            self.state["status"] = "running"
-            self.state.pop("error", None)
-            self.state.pop("request_failure", None)
-            self.save()
-            try:
-                # Read under the run lock: construction may precede execution.
-                self.recipe = read_json(self.path / "recipe.json")
-                if digest(self.recipe) != self.state["recipe_hash"] or self.recipe["version"] not in SUPPORTED_RECIPE_VERSIONS:
-                    raise ValueError("recipe_changed_create_new_run")
-                if self.recipe["version"] >= 9:
-                    validate_node_prompt_snapshot(self.recipe.get("node_prompt_templates"),
-                                                  self.recipe.get("node_prompt_system"),
-                                                  recipe_version=self.recipe["version"],
-                                                  learner_context_review_version=self.recipe.get("learner_context_review_version"),
-                                                  claim_review_protocol_version=self.recipe.get("claim_review_protocol_version"),
-                                                  claim_review_format_feedback_version=self.recipe.get("claim_review_format_feedback_version"),
-                                                  claim_refutation_release_version=self.recipe.get("claim_refutation_release_version"),
-                                                  claim_reference_policy_version=self.recipe.get("claim_reference_policy_version"),
-                                                  claim_review_anchor_protocol_version=self.recipe.get("claim_review_anchor_protocol_version"),
-                                                  claim_review_adversarial_protocol_version=self.recipe.get("claim_review_adversarial_protocol_version"),
-                                                  claim_review_wire_schema_version=self.recipe.get("claim_review_wire_schema_version"),
-                                                  claim_review_focus_version=self.recipe.get("claim_review_focus_version"),
-                                                  claim_review_condition_contract_version=self.recipe.get("claim_review_condition_contract_version"),
-                                                  reasoning_depth_contract_version=self.recipe.get("reasoning_depth_contract_version"))
-                else:
-                    if not isinstance(self.recipe.get("prompts"), dict):
-                        raise ValueError("prompts_changed_create_new_run")
-                    for key in self.recipe["prompts"]:
-                        self.historical_prompt(key)
-                if self.recipe.get("agent_experience_version") == 1:
-                    from lib.domain.agent_experience import validate_agent_experience_snapshot
-                    validate_agent_experience_snapshot(self.recipe.get("agent_experience"))
-                for source in self.recipe["sources"]:
-                    if file_hash(self.path / "inputs" / source["file"]) != source["sha256"]:
-                        raise ValueError("source_snapshot_changed")
-                if self.recipe.get("repair_inputs"):
-                    return self.execute_repair_branch()
-                if self.production_enabled():
-                    return self._execute_production()
-                selected_targets = set(self.recipe["targets"])
-                planned_targets = selected_targets & ({"cpt", "sft", "cot", "multiturn"} | PREFERENCE_TARGETS)
-                if self.arithmetic_only():
-                    units = []
-                    self.state["stages"]["ingest"].update(status="skipped", done=0, total=0)
-                elif self.recipe["brief"] and not self.recipe["sources"] and planned_targets:
-                    self.stage = "ingest"
-                    units = self.plan()
-                    self.state["stages"]["ingest"].update(status="completed", done=len(units),
-                                                          total=len(units), outputs=len(units), eligible=len(units))
-                else:
-                    units = self.stage_items("ingest", self.recipe["sources"], self.parse_source, stream_sources=True)
-                if "gsm8k" in selected_targets and not units and not self.independent_arithmetic():
-                    brief = self.recipe["brief"]
-                    source_id = digest(brief)
-                    units = row_checkpoint(
-                        self.path / "checkpoints" / "ingest" / "math-inputs.json",
-                        lambda: ({"id": digest([brief, "gsm8k", i]), "source_id": source_id,
-                                  "kind": "brief", "text": brief, "status": "ready"}
-                                 for i in range(self.recipe["tasks"])), self.check_cancel)
-                from collections import Counter
-                input_statuses = Counter(u["status"] for u in units)
-                eligible_count = input_statuses["ready"]
-                eligible = (units.ready(eligible_count, self.recipe["max_units"]) if isinstance(units, WorkflowRows)
-                            else [u for u in units if u["status"] == "ready"])
-                requested = self.recipe.get("sample_count") or self.recipe["tasks"]
-                planning_deferred = (max(0, requested - self.recipe["max_units"])
-                                     if not self.recipe["sources"] and not self.arithmetic_only() else 0)
-                self.state["input_summary"] = {"units": len(units), "ready": eligible_count,
-                    "quarantined": input_statuses["quarantined"], "skipped": input_statuses["skipped"],
-                    "deferred": max(max(0, eligible_count - self.recipe["max_units"]), planning_deferred),
-                    "targets": list(self.recipe["targets"])}
-                write_json_array(self.path / "input_records.json", units)
-                selected = eligible if isinstance(eligible, WorkflowRows) else eligible[:self.recipe["max_units"]]
-                generation_sources = self.prepare_clean_sources(selected)
-                needs_generated_candidates = bool(selected_targets & (PREFERENCE_TARGETS | {'sft', 'multiturn', 'cot'}))
-                generated = (prepare_generation_rows(self.path / "stage-results" / "generation-inputs.jsonl",
-                                                     generation_sources, self.recipe.get("sample_count"), self.check_cancel,
-                                                     variant_policy_version=2 if self.recipe["version"] >= 11 else 1)
-                             if needs_generated_candidates else [])
-                self.state["input_summary"]["generation_candidates"] = len(generated)
-                collections = {}
-                needs_sft = bool(selected_targets & (PREFERENCE_TARGETS | {"sft", "cot"}))
-                collections["cpt"] = (self.shared_cpt_collection() if self.shared_source_cleaning()
-                                      else self.stage_items("cpt", selected, self.cpt)) if "cpt" in selected_targets else []
-                directed = (self.directed_generation(generated, needs_sft=needs_sft,
-                            needs_multiturn="multiturn" in selected_targets)
-                            if self.recipe.get("qa_director", {}).get("enabled") else None)
-                if directed is None:
-                    self.state["stages"].setdefault("director", {"label": STAGES["director"], "done": 0, "total": 0})
-                    self.state["stages"]["director"]["status"] = "skipped"
-                collections["sft"] = (directed.get("sft", []) if directed is not None else
-                                      self.stage_items("sft", generated, self.sft) if needs_sft else [])
-                if not needs_sft:
-                    self.state["stages"]["sft"]["status"] = "skipped"
+        """Compatibility entry point; execution policy lives in the application."""
+        from lib.bootstrap.workflow_execution import workflow_execution
 
-                self.state["stages"].setdefault("multiturn", {"label": STAGES["multiturn"],
-                    "status": "pending", "done": 0, "total": 0})
-                collections["multiturn"] = (directed.get("multiturn", []) if directed is not None else
-                    self.stage_items("multiturn", generated, self.multiturn) if "multiturn" in selected_targets else [])
-                if "multiturn" not in selected_targets:
-                    self.state["stages"]["multiturn"]["status"] = "skipped"
+        return workflow_execution(self).execute(resume=resume_run)
 
-                self.state["stages"].setdefault("agent", {"label": STAGES["agent"], "status": "pending", "done": 0, "total": 0})
-                collections["agent"] = self.stage_items("agent", selected, self.agent) if "agent" in selected_targets else []
-                if "agent" not in selected_targets:
-                    self.state["stages"]["agent"]["status"] = "skipped"
 
-                if selected_targets & PREFERENCE_TARGETS:
-                    sft_items = collections["sft"].eligible(self.state["stages"]["sft"]["eligible"])
-                    pairs = self.stage_items("preference", sft_items, self.preference)
-                    collections["dpo"] = pairs if "dpo" in selected_targets else []
-                    collections["orpo"] = pairs if "orpo" in selected_targets else []
-                    def checked_rlaif(row):
-                        if row["status"] == "eligible":
-                            issue = rlaif_feedback_issue(row)
-                            if issue:
-                                row.update(status="quarantined", reason=issue)
-                        return row
-                    collections["rlaif"] = (WorkflowRows(pairs.path, len(pairs), transform=checked_rlaif)
-                                             if "rlaif" in selected_targets else [])
-                else:
-                    for target in PREFERENCE_TARGETS:
-                        collections[target] = []
-                    self.state["stages"]["preference"]["status"] = "skipped"
-
-                if "gsm8k" in selected_targets:
-                    seed_base = self.recipe["brief"] or canonical(self.recipe["sources"])
-                    source_id = digest(seed_base)
-                    count = min(self.recipe.get("sample_count") or self.recipe["tasks"], self.recipe["max_units"])
-                    items = self.arithmetic_inputs(
-                        self.path / "checkpoints" / "gsm8k" / "independent-math-seeds.json",
-                        self.recipe.get("sample_count") or self.recipe["tasks"]) if self.independent_arithmetic() else row_checkpoint(
-                        self.path / "checkpoints" / "gsm8k" / "math-seeds.json",
-                        lambda: ({"id": digest([seed_base, "gsm8k", index]),
-                                  "source_id": source_id, "status": "ready"}
-                                 for index in range(count)), self.check_cancel)
-                    from lib.infrastructure.workflow_arithmetic import legacy_arithmetic_guard
-                    with legacy_arithmetic_guard(self, items):
-                        collections["gsm8k"] = self.stage_items("gsm8k", items, self.gsm8k)
-                    if self.state.get("arithmetic_registry", {}).get("stop_reason") == "arithmetic_space_exhausted":
-                        self.state["stages"]["gsm8k"]["stop_reason"] = "arithmetic_space_exhausted"
-                        self.event("arithmetic_space_exhausted", generated=len(items))
-                else:
-                    collections["gsm8k"] = []
-                    self.state["stages"]["gsm8k"]["status"] = "skipped"
-
-                if "cot" in selected_targets:
-                    sft_items = collections["sft"].eligible(self.state["stages"]["sft"]["eligible"])
-                    collections["cot"] = self.stage_items("cot", sft_items, self.cot)
-                else:
-                    collections["cot"] = []
-                    self.state["stages"]["cot"]["status"] = "skipped"
-                self.finalize_reasoning_outputs(collections)
-                # Packaging is deliberately re-run after interruption, never trusted from a stale checkpoint.
-                self.stage = "package"
-                self.state["stages"]["package"].update(status="running", total=1, done=0)
-                self.save()
-                self.check_cancel()
-                self.package(collections)
-                self.state["stages"]["package"].update(
-                    status="completed", phase="completed", done=self.state["stages"]["package"]["total"], finished_at=now())
-                counts = self.state["quality"]["targets"]
-                cpt_quarantined = any(row["status"] == "quarantined" for row in collections["cpt"])
-                multiturn_quarantined = any(row["status"] == "quarantined" for row in collections["multiturn"])
-                agent_quarantined = any(row["status"] == "quarantined" for row in collections["agent"])
-                from lib.infrastructure.workflow_arithmetic import clean_arithmetic_exhaustion
-                attention = (any((not v["eligible"] and not (target == "gsm8k" and clean_arithmetic_exhaustion(self)))
-                                 or v.get("negative", 0) for target, v in counts.items())
-                             or any(v.get("package_review", {}).get("rejected", 0) for v in counts.values())
-                             or cpt_quarantined
-                             or multiturn_quarantined
-                             or agent_quarantined
-                             or self.state["input_summary"].get("source_cleaning", {}).get("quarantined", 0) > 0
-                             or self.state["input_summary"]["quarantined"] > 0
-                             or self.state["input_summary"]["deferred"] > 0)
-                self.state["status"] = "needs_attention" if attention else "completed"
-                self.event("run_finished")
-            except Cancelled:
-                self.state["status"] = "cancelled"
-                if self.production_enabled() and "production" in self.state:
-                    self.state["production"].update(status="cancelled", stop_reason="cancelled")
-                    self._production_partial_export("cancelled", "cancelled")
-                self.state["stages"][self.stage]["status"] = "cancelled"
-                self.event("run_cancelled")
-            except Exception as error:
-                # Never persist raw provider exceptions: they can contain credentials or source text.
-                code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else type(error).__name__
-                from lib.model_request_reliability import (ModelRequestError, classify_request_error,
-                                                           filter_request_diagnostic)
-                failure = classify_request_error(error)
-                request_failure = None
-                if isinstance(error, ModelRequestError):
-                    code = failure["code"]
-                    request_failure = filter_request_diagnostic(getattr(error, "diagnostics", None))
-                    if request_failure is not None:
-                        self.state["request_failure"] = request_failure
-                if self.production_enabled():
-                    code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else failure["code"]
-                    if "production" in self.state:
-                        self.state["production"].update(status="paused", stop_reason=code)
-                        if failure["code"] not in {"checkpoint_integrity_error", "source_snapshot_changed",
-                                                   "recipe_changed_create_new_run", "production_round_integrity_error",
-                                                   "production_review_integrity_error"}:
-                            self._production_partial_export("paused", code)
-                self.state.update(status="failed", error=code)
-                self.state["stages"][self.stage].update(status="failed", error=code)
-                self.event("run_failed", error=code,
-                           **({"request_failure": request_failure} if request_failure is not None else {}))
-            return self.state
+# Public compatibility alias: callers share one implementation and class identity.
+Workflow = TrainingWorkflowRuntime
 
 
 def resume(output, run_id, root, **clients):

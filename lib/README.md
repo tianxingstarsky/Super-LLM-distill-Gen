@@ -1,0 +1,19 @@
+# 代码导航
+
+先按业务找代码，再看所在层。完整约定见 [架构指南](../docs/architecture.md) 和 [命名与职责](../docs/architecture/naming.md)。
+
+| 目录 | 找什么 |
+| --- | --- |
+| [contexts](contexts/README.md) | 工作流、数据集、审核、模型配置、文档处理的正式业务边界 |
+| [bootstrap](bootstrap/README.md) | 创建用例，注入文件、数据库、运行时实现 |
+| [presentation](presentation/README.md) | 页面和交互，不承担业务判断 |
+| [domain](domain/README.md) | 尚未迁入 context 的纯规则，以及旧导入别名 |
+| [application](application/README.md) | 尚未迁移的用例、端口和旧入口兼容门面 |
+| [infrastructure](infrastructure/README.md) | 剩余执行器、文件存储、模型与解析适配器 |
+| [prompts](prompts/README.md) | 有版本的提示词资产 |
+| [adapters](adapters/README.md) | CLI 管线的数据格式入口 |
+| [components](components/README.md) | 控制台嵌入的浏览器组件 |
+
+`webapp.py`、`cli.py` 是入口。`llm_client.py` 及 `model_*` 仍是协议与请求运行时。`doc2corpus.py`、`workflow.py` 保留兼容入口。不要继续向这些入口追加领域规则。
+
+新增功能先决定所属业务域；用例中需要外部能力时，在该域 application 定义端口，在 infrastructure 实现，并由 bootstrap 装配。历史任务、缓存键、提示词版本及导出字段的变化须单独设计迁移。

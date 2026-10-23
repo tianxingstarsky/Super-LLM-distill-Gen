@@ -44,9 +44,30 @@
 
 ## 后续迁移边界
 
-1. **生成执行**：按阶段用例拆分 `training_workflow.py`，通过明确的状态和结果合同衔接，保持现有检查点与恢复合同。
-2. **资料与知识**：先定义来源版本、解析版本和复用资料的所有权，再统一公开入口；不把 Docling 内部结构变成业务合同。
+1. **生成执行**：普通批次和运行生命周期已进入应用层；继续按完整阶段拆分 `TrainingWorkflowRuntime` 的模型请求、多轮生成和评分修复。生产轮次调度仍在旧适配器中，迁移须保持轮次收据及部分交付合同。
+2. **资料与知识**：文档纯规则、本地语料用例及 Docling 适配已归入 documents；资料库缓存和知识库的版本所有权仍需独立整理。不把 Docling 内部结构变成业务合同。
 3. **人工增强**：会话、轮次、问题批次和返工状态需要独立的一致性边界，不能仅按页面名拆文件。
 4. **旧入口退出**：第一方调用全部迁移、兼容窗口结束后删除转发模块；期间不向转发文件增加业务规则。
 
 本次未引入消息中间件、微服务或统一大仓储。一致性继续由现有文件锁、SQLite 事务、不可变快照和哈希验证维护。
+
+## 执行职责与可维护性整理
+
+第二轮整理不只移动文件：
+
+| 原责任 | 当前归属 |
+| --- | --- |
+| 巨型 `Workflow.execute` 中的运行控制 | `workflows/application/execute_run.py` |
+| 普通批次的节点依赖与输出顺序 | `workflows/application/generate_batch.py` |
+| 目标隐含依赖、结束后是否需要关注 | `workflows/domain/execution.py` |
+| 文件锁、快照核验、检查点、错误落盘 | `workflows/infrastructure/execution_runtime.py` |
+| 旧 `Workflow` 类 | 明确命名为 `TrainingWorkflowRuntime`，旧名字指向同一类 |
+| `doc2corpus.py` 的业务流程与文件 I/O | `documents/application/prepare_corpus.py` 与 `documents/infrastructure/` |
+| 文本分块、TeX 保留规则 | `documents/domain/text_chunks.py`、`documents/domain/latex.py` |
+| 平铺的 38 个 `docling_*` 实现 | `documents/infrastructure/docling/` |
+
+Docling 旧 import 路径保留模块身份，旧 worker 脚本保留执行入口。worker 的仓库根目录、全局解析锁和同目录入口路径按新位置调整，算法和策略版本保持原样。
+
+批量取消改为显式 `WorkflowCancelled` 类型判断，不再依赖类名字符串。持久化状态仍使用原来的 `cancelled` 值。其他存储字段、统计口径、文本身份和导出字段未做迁移。
+
+各维护目录补充 README，说明职责、真实入口、依赖和测试；复杂旧代码仍明确标记，不将剩余迁移描述为已完成。

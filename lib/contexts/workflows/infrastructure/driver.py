@@ -89,8 +89,8 @@ class FilesystemWorkflowRunDriver:
             return {"isolated_configured": False, "configuration_invalid": True}
 
     def execute(self, run_id: str) -> dict:
-        from lib.infrastructure.training_workflow import Workflow
-        return Workflow(self.output, run_id, self.root).execute()
+        from lib.infrastructure.training_workflow import TrainingWorkflowRuntime
+        return TrainingWorkflowRuntime(self.output, run_id, self.root).execute()
 
     def resume(self, run_id: str) -> dict:
         from lib.infrastructure.training_workflow import resume as resume_run

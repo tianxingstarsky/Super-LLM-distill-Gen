@@ -55,7 +55,7 @@ def test_ingest_resume_preserves_input_totals_and_processing_limit(tmp_path,monk
                               for i in range(7))+'not json\n',encoding='utf-8')
     output=tmp_path/'output'
     rid=create_run(output,sources=[source],targets=['cpt'],max_units=2,sample_count=2)
-    monkeypatch.setattr('lib.infrastructure.training_workflow.prepare_generation_rows',
+    monkeypatch.setattr('lib.contexts.workflows.infrastructure.execution_runtime.prepare_generation_rows',
                         lambda *args:pytest.fail('CPT-only runs must not expand unused model candidates'))
     run=Workflow(output,rid,tmp_path)
     original=run.iter_source_units

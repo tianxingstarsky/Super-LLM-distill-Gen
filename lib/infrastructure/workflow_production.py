@@ -1,6 +1,8 @@
 """Finite, incremental delivery of accepted samples with durable round receipts."""
 from __future__ import annotations
 
+from lib.contexts.workflows.domain.execution import WorkflowCancelled
+
 from contextlib import ExitStack, closing
 from collections import deque
 from copy import deepcopy
@@ -177,7 +179,7 @@ class WorkflowProduction:
                 return action(unit)
             except Exception as error:
                 # Cancellation is control flow, never an isolated candidate failure.
-                if type(error).__name__ == "Cancelled":
+                if isinstance(error, WorkflowCancelled):
                     raise
                 # ChatClient already exhausted its bounded transport retries.
                 # A provider failure is not a quality verdict on this source;
@@ -261,7 +263,7 @@ class WorkflowProduction:
                     try:
                         data = self.ask(key, "generation", "workflow.plan", request)
                     except Exception as error:
-                        if type(error).__name__ == "Cancelled":
+                        if isinstance(error, WorkflowCancelled):
                             raise
                         failure = classify_request_error(error)
                         if failure["kind"] == "fatal":
@@ -369,7 +371,7 @@ class WorkflowProduction:
                             planned = validate_short_task_plan(data, size, seen)
                             break
                         except Exception as error:
-                            if type(error).__name__ == "Cancelled":
+                            if isinstance(error, WorkflowCancelled):
                                 raise
                             from lib.model_request_reliability import ModelRequestError
                             if isinstance(error, ModelRequestError):

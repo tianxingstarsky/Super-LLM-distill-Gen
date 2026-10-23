@@ -149,7 +149,7 @@ def test_build_uses_exact_clip_proof_only_and_never_changes_source_document(monk
         native["source_sha256"] = digest
     monkeypatch.setattr(module, "read_native_picture_lines", lambda *a, **k: {
         1: {"source_sha256": digest, "lines": [first, second]}})
-    visibility = ModuleType("lib.infrastructure.docling_pdf_text_visibility")
+    visibility = ModuleType("lib.contexts.documents.infrastructure.docling.pdf_text_visibility")
     visibility.read_pdf_text_visibility = lambda *a, **k: {1: {"source_sha256": digest}}
 
     def match(page, text, bbox, **kwargs):
