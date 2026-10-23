@@ -748,7 +748,7 @@ def render_document_parser(workspace, bindings, endpoints, *, backend_applicatio
                 if not supports_vision(endpoints.get(binding["backend"],{}),binding["model"]):
                     config["unconfirmed"]=True
                     st.warning(_tr("请在本节点测试并确认图片能力后开始。", "Test and confirm image support on this node before starting."))
-            st.caption(_tr("采用结果会记录截图、两次转录和原文核验；无法确定的内容保留待复核。", "Adopted results retain images, both transcriptions and source checks. Unresolved content stays in review."))
+            st.caption(_tr("识别稿、独立审查意见与原图证据一起保存；未处理的问题不会因再次返回通过而消失。", "Transcriptions, independent reviews and source images are kept together. A later pass cannot erase an unhandled issue."))
         return config
     if mode == "native":
         st.caption("读取文档文字，不调用模型。扫描 PDF 与图片请使用多模态识别。")

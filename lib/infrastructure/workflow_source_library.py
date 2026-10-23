@@ -231,26 +231,39 @@ class WorkflowSourceLibrary:
                         check_cancel=self.check_cancel,on_status=None if assistance else status)
                 def assisted_parts():
                     from lib.infrastructure.docling_vision_assist import assist_part,validate_transcript,POLICY,REGION_INSTRUCTION
-                    def valid_reply(value):
-                        try:
-                            validate_transcript(value,value.get("kind"));return True
-                        except (AttributeError,ValueError,TypeError,KeyError):return False
                     def call(payload,images,key):
+                        from lib.infrastructure.docling_visual_review import validate_review,validate_comparison,review_instruction
+                        reviewing=payload.get("operation")=="docling_visual_review"
+                        def valid_reply(value):
+                            try:
+                                if reviewing:
+                                    validator=validate_comparison if payload.get("scope")=="comparison" else validate_review
+                                    validator(value,refs={r["ref"] for r in payload["regions"]},candidate=payload["candidate"],
+                                        bindings={r["ref"]:r["candidate_block"] for r in payload["regions"] if "candidate_block" in r})
+                                else:validate_transcript(value,payload["kind"])
+                                return True
+                            except (AttributeError,ValueError,TypeError,KeyError):return False
                         value,_=library.cached_value(saved_source,assist_signature,["region",key],
                             lambda:self.ask([source["sha256"],"docling_assist",_digest([assist_signature,key])],
                                 "vision","workflow.document_vision",payload,image=[i["image"] for i in images],
-                                instruction=REGION_INSTRUCTION,allow_reasoning_fallback=False),valid=valid_reply)
+                                instruction=review_instruction(payload) if reviewing else REGION_INSTRUCTION,
+                                allow_reasoning_fallback=False),valid=valid_reply)
                         return value
                     for part in local_parts():
                         self.check_cancel()
                         yield assist_part(library.source_path(saved_source["id"]),part,call,
-                            max_rounds=assistance["max_rounds"],check_cancel=self.check_cancel)
+                            max_rounds=assistance["max_rounds"],check_cancel=self.check_cancel,
+                            review_scope=assistance.get("review_scope","off"))
                 if assistance:
                     from lib.infrastructure.docling_vision_assist import POLICY,REGION_INSTRUCTION,validation_versions
                     assist_signature={**self._source_library_signature("vision",binding=assistance["binding"]),
                         "mode":"docling_assisted","local_parser":signature,"policy":POLICY,
                         "instruction_sha256":_digest(REGION_INSTRUCTION),"max_rounds":assistance["max_rounds"],
                         "validation_versions":validation_versions()}
+                    if assistance.get("review_scope"):
+                        from lib.infrastructure.docling_visual_review import REVIEW_INSTRUCTION,COMPARISON_INSTRUCTION,REVIEW_POLICY
+                        assist_signature.update(review_scope=assistance["review_scope"],review_policy=REVIEW_POLICY,
+                            review_instruction_sha256=_digest([REVIEW_INSTRUCTION,COMPARISON_INSTRUCTION]))
                     parts=library.iter_parts(saved_source,assist_signature,assisted_parts,
                         valid=lambda part:part.get("status")!="quarantined",cache_incomplete=True,
                         check_cancel=self.check_cancel,on_status=status)

@@ -138,6 +138,7 @@ def digest(value):
 def document_evidence_level(unit, *, assessed=False):
     reading = unit.get("document_reading") or {}
     mode = reading.get("mode") or ("vision" if reading.get("image_sha256") else None)
+    if mode=="docling" and reading.get("evidence_level")=="model_transcribed_visual_source":mode="vision"
     level = {"model": "model_restructured_source_text",
              "vision": "model_transcribed_visual_source"}.get(mode, "source_text")
     if assessed:

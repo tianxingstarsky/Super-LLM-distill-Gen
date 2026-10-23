@@ -1,8 +1,9 @@
 """Selective, source-bound VLM transcription over immutable local PDF readings.
 
-Two independent image readings must agree. Native text/digits and table spans
-are rejection checks, not mathematical correctness certification. Original
-local evidence is retained even after an assisted patch is adopted.
+Strict mode requires two independent readings to agree. Review mode can also
+use a source-image adjudication of whole candidates. Native text/digits and
+table spans are rejection checks, not mathematical correctness certification.
+Original local evidence is retained after an assisted patch is adopted.
 """
 from __future__ import annotations
 
@@ -269,33 +270,47 @@ def _locate(text,slot):
     return hits[0] if len(hits)==1 else None
 
 
-def repair_targets(part):
+def repair_targets(part,additional=None):
     reading=part.get("document_reading") or {}; text=part.get("text",""); targets=[]
     table_elements=[e for e in reading.get("page_export",{}).get("reading_order",{}).get("elements",[]) if e["label"]=="table"]
     tokens=MarkdownIt("commonmark").enable("table").parse(text)
-    table_blocks=[t.map for t in tokens if t.type=="table_open"]
+    table_blocks=[t.map for t in tokens if t.type=="table_open" or t.type=="html_block"
+                  and t.content.strip().startswith("<table>") and t.content.strip().endswith("</table>")]
     offsets=[0]
     for line in text.splitlines(keepends=True):offsets.append(offsets[-1]+len(line))
     table_spans=({e["ref"]:(offsets[m[0]],offsets[m[1]]) for e,m in zip(table_elements,table_blocks)}
                  if len(table_elements)==len(table_blocks) else {})
+    previous={i["ref"]:i for i in reading.get("vision_assistance",{}).get("items",[]) if i["status"]=="adopted"}
     undecoded={e["item_ref"] for e in reading.get("elements",[]) if "undecoded_formula" in e}
     formula_elements=[e for e in reading.get("page_export",{}).get("reading_order",{}).get("elements",[])
-                      if e["label"]=="formula" and e["ref"] in undecoded]
+                      if e["label"]=="formula" and e["ref"] in undecoded and e["ref"] not in previous]
     markers=[t.map for t in tokens if t.type=="html_block" and t.content.strip()=="<!-- formula-not-decoded -->"]
     formula_spans=({e["ref"]:(offsets[m[0]],offsets[m[1]]) for e,m in zip(formula_elements,markers)}
                    if len(formula_elements)==len(markers) and len({e["ref"] for e in formula_elements})==len(formula_elements) else {})
     for e in reading.get("elements",[]):
         proof=e.get("local_formula_transcription") or {}
-        if proof.get("status")!="review_required" and "undecoded_formula" not in e:continue
+        extra=(additional or {}).get(e["item_ref"])
+        if e["item_ref"] in previous and extra is None:continue
+        if proof.get("status")!="review_required" and "undecoded_formula" not in e and extra is None:continue
         kind="table" if e["label"]=="table" else "text"
         slot=(proof.get("assembly",{}).get("text") if proof.get("published") else
               proof.get("original_text_slot") or proof.get("backend_text") or
-              (e.get("undecoded_formula") or {}).get("original_text"))
+              (e.get("undecoded_formula") or {}).get("original_text") or (extra or {}).get("candidate_quote"))
+        if e["item_ref"] in previous and extra is not None:slot=extra.get("candidate_quote")
         span=table_spans.get(e["item_ref"]) if kind=="table" else _locate(text,slot)
-        if e["label"]=="formula" and "undecoded_formula" in e and markers:
+        if e["label"]=="formula" and "undecoded_formula" in e and e["item_ref"] not in previous and markers:
             span=formula_spans.get(e["item_ref"])
+        if extra is not None and not proof and "undecoded_formula" not in e and kind=="text":
+            # Review findings can select only a complete existing paragraph.
+            # A short invented quote must never authorize replacing other text.
+            blocks=[(offsets[t.map[0]],offsets[t.map[1]]-len(text[offsets[t.map[0]]:offsets[t.map[1]]])
+                     +len(text[offsets[t.map[0]]:offsets[t.map[1]]].rstrip("\r\n"))) for t in tokens if t.type=="inline" and t.map
+                    and text[offsets[t.map[0]]:offsets[t.map[1]]].strip()==(slot or "").strip()]
+            span=blocks[0] if len(blocks)==1 and e["label"] in {"text","formula","caption"} else None
         targets.append({"ref":e["item_ref"],"kind":kind,"label":e["label"],"bbox":e["provenance"]["bbox"],
-                        "span":span,"slot":slot,"reason":"unbound_markdown_region" if span is None else None})
+                        "span":span,"slot":slot,"source_text":e.get("source_text"),
+                        "review_discovered":extra is not None and not proof and "undecoded_formula" not in e,
+                        "reason":"unbound_markdown_region" if span is None else None})
     return targets
 
 
@@ -303,27 +318,35 @@ def _images(source,page_no,box):
     with _PDF_LOCK:return _images_unlocked(source,page_no,box)
 
 
+def native_region(glyph_page,box):
+    """Complete source baselines inside one column, without OCR or rendering."""
+    from lib.infrastructure.docling_math_regions import _box
+    if glyph_page.get("review_required"):raise ValueError("vision_assist_native_source_unavailable")
+    width,height=glyph_page["width"],glyph_page["height"]
+    l,b,r,t=_box(box,height)
+    if not (0<=l<r<=width and 0<=b<t<=height):raise ValueError("document_docling_invalid_provenance")
+    glyphs=[g for g in glyph_page["glyphs"] if not g.get("generated") and g["text"].strip()
+            and l<=(g["bbox"]["l"]+g["bbox"]["r"])/2<=r]
+    baselines={round(g["origin"][1],2) for g in glyphs if g.get("origin")
+               and g["bbox"]["t"]>b and g["bbox"]["b"]<t}
+    complete=[g for g in glyphs if g.get("origin") and round(g["origin"][1],2) in baselines]
+    if complete:
+        b=max(0,min(b,min(g["bbox"]["b"] for g in complete)))
+        t=min(height,max(t,max(g["bbox"]["t"] for g in complete)))
+    native="".join(g["text"] for g in glyph_page["glyphs"] if not g.get("generated")
+                   and l<=(g["bbox"]["l"]+g["bbox"]["r"])/2<=r and b<=(g["bbox"]["b"]+g["bbox"]["t"])/2<=t)
+    return (l,b,r,t),native
+
+
 def _images_unlocked(source,page_no,box):
     import pypdfium2 as pdfium
-    from lib.infrastructure.docling_math_regions import extract_pdf_page_glyphs,_box
+    from lib.infrastructure.docling_math_regions import extract_pdf_page_glyphs
     glyph_page=extract_pdf_page_glyphs(source,page_no)
-    if glyph_page.get("review_required"):raise ValueError("vision_assist_native_source_unavailable")
+    (l,b,r,t),native=native_region(glyph_page,box)
     with closing(pdfium.PdfDocument(source)) as document:
         page=document[page_no-1]
         try:
-            width,height=page.get_size(); l,b,r,t=_box(box,height)
-            if not (0<=l<r<=width and 0<=b<t<=height):raise ValueError("document_docling_invalid_provenance")
-            # Docling's box can cut through a wrapped final line. PDFium exposes
-            # actual glyph origins: complete those intersecting source baselines
-            # within this column, rather than inventing or estimating text.
-            glyphs=[g for g in glyph_page["glyphs"] if not g.get("generated") and g["text"].strip()
-                    and l<=(g["bbox"]["l"]+g["bbox"]["r"])/2<=r]
-            baselines={round(g["origin"][1],2) for g in glyphs if g.get("origin")
-                       and g["bbox"]["t"]>b and g["bbox"]["b"]<t}
-            complete=[g for g in glyphs if g.get("origin") and round(g["origin"][1],2) in baselines]
-            if complete:
-                b=max(0,min(b,min(g["bbox"]["b"] for g in complete)))
-                t=min(height,max(t,max(g["bbox"]["t"] for g in complete)))
+            width,height=page.get_size()
             result=[]
             for scale,crop in [(min(1.5,1600/max(width,height)),(0,0,0,0)),
                                (min(4,2400/max(r-l,t-b)),(max(0,l-2),max(0,b-2),max(0,width-r-2),max(0,height-t-2)))]:
@@ -336,32 +359,45 @@ def _images_unlocked(source,page_no,box):
                                        "region_bbox":{"l":l,"b":b,"r":r,"t":t,"coord_origin":"BOTTOMLEFT"}})
                 finally:bitmap.close()
         finally:page.close()
-    native="".join(g["text"] for g in glyph_page["glyphs"] if not g.get("generated")
-        and l<=(g["bbox"]["l"]+g["bbox"]["r"])/2<=r and b<=(g["bbox"]["b"]+g["bbox"]["t"])/2<=t)
     return result,native
 
 
-def assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None):
+def _assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None,region_review=False,additional=None):
     """call(payload, image_records, key) owns transport, durable cache and usage."""
     source=Path(source); source_sha=hashlib.sha256(source.read_bytes()).hexdigest()
     reading=part.get("document_reading") or {}
     if reading.get("source_pdf_sha256")!=source_sha:raise ValueError("source_snapshot_changed")
-    targets=repair_targets(part)
+    targets=repair_targets(part,additional=additional)
     if not targets:return deepcopy(part)
     if type(max_rounds) is not int or not 1<=max_rounds<=2:raise ValueError("invalid_vision_assist_rounds")
     out=deepcopy(part); adopted=[]; audit=[]
     for target in targets:
-        check_cancel(); record={k:v for k,v in target.items() if k!="slot"};record["status"]="review_required"
+        check_cancel(); record={k:v for k,v in target.items() if k not in {"slot","source_text"}};record["status"]="review_required"
+        record["input_text_sha256"]=digest(part["text"])
+        if target["span"] is not None:record["original_text"]=part["text"][target["span"][0]:target["span"][1]]
         audit.append(record)
         if target["span"] is None:continue
         try:images,native=_images(source,reading["source_page"],target["bbox"])
         except ValueError as error:record["reason"]=str(error);continue
         record["images"]=[{k:v for k,v in image.items() if k!="image"} for image in images]
+        if target["review_discovered"] and target["kind"]=="text":
+            try:
+                # PDF glyphs are plain text. Treating [41](Fig.3,left) as
+                # Markdown would silently discard a real figure reference.
+                owners={_content(native)}
+                if target["source_text"] is not None:
+                    owners.update({_content(target["source_text"]),_content(decoded_text(target["source_text"]))})
+                if _content(decoded_text(target["slot"])) not in owners:
+                    raise ValueError("vision_review_quote_not_owned_by_source_ref")
+            except ValueError as error:record["reason"]=str(error);continue
+            record["candidate_ownership_checked"]=True
         grid=None
         if target["kind"]=="table":
             try:grid=native_table_grid(source,reading["source_page"],target["bbox"])
-            except ValueError as error:record["reason"]=str(error);continue
-            record["source_grid"]=grid
+            except ValueError as error:
+                record["native_grid_unavailable"]=str(error)
+                if not region_review:record["reason"]=str(error);continue
+            if grid:record["source_grid"]=grid
         for attempt in range(max_rounds):
             transcripts=[]
             for independent in range(2):
@@ -372,8 +408,11 @@ def assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None):
                     payload["grid_contract"]=("Determine merged cells from the visible cell separators, not the text baseline. "
                         "When a separator crosses only part of the table, cells not crossed by that separator span those rows. "
                         "Preserve the exact source grid; do not move a lower-aligned label into a separate bottom cell.")
+                if record.get("visual_reviews"):
+                    payload["review_findings"]=record["visual_reviews"][-1]["issues"]
                 key=[source_sha,POLICY,target["ref"],target["bbox"],[i["sha256"] for i in images],attempt,independent,
                      *([digest(payload["grid_contract"])] if target["kind"]=="table" else [])]
+                if payload.get("review_findings"):key.append(digest(payload["review_findings"]))
                 value=call(payload,images,key)
                 try:
                     value=validate_transcript(value,target["kind"])
@@ -383,25 +422,55 @@ def assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None):
             record.setdefault("attempts",[]).append({"transcripts":transcripts})
             if len(transcripts)!=2:continue
             try:
-                candidates=[bind_source_grid(t,grid) for t in transcripts] if grid else transcripts
-                if transcript_signature(candidates[0])!=transcript_signature(candidates[1]):
-                    raise ValueError("vision_assist_independent_reads_disagree")
-                value=candidates[0]
+                grid_bound=bool(grid)
+                try:candidates=[bind_source_grid(t,grid) for t in transcripts] if grid else transcripts
+                except ValueError:
+                    if not region_review:raise
+                    # A partly ruled table may contain additional unruled
+                    # columns. Its incomplete line grid is a retained proposal,
+                    # not a reason to fabricate native verification.
+                    candidates=transcripts;grid_bound=False
+                agree=transcript_signature(candidates[0])==transcript_signature(candidates[1])
+                selection=None
+                if not agree:
+                    if not region_review:raise ValueError("vision_assist_independent_reads_disagree")
+                    from lib.infrastructure.docling_visual_review import compare_regions
+                    selection=compare_regions(call,source_sha,reading["source_page"],target,images,candidates,
+                                              check_cancel=check_cancel)
+                    record.setdefault("visual_reviews",[]).append(selection)
+                    if selection["verdict"]!="pass":raise ValueError("vision_assist_independent_reads_disagree")
+                value=candidates[selection["candidate_index"] if selection else 0]
                 rendered=value["text"] if target["kind"]=="text" else " ".join(c["text"] for c in value["cells"])
                 decoded=_content(decoded_text(rendered))
                 original=_content(native)
-                if target["kind"]=="text":
+                native_available=bool(original)
+                if target["kind"]=="text" and (native_available or not region_review):
                     if decoded!=original:raise ValueError("vision_assist_source_text_changed")
-                elif Counter(decoded)!=Counter(original):raise ValueError("vision_assist_source_table_content_changed")
+                elif target["kind"]=="table" and (native_available or not region_review) and Counter(decoded)!=Counter(original):
+                    raise ValueError("vision_assist_source_table_content_changed")
                 operators=set("+=<>×÷±∓∑∏∫√∞≤≥≠∈∉∪∩")
-                if Counter(c for c in decoded_text(rendered) if c in operators)!=Counter(c for c in native if c in operators):
+                if (native_available or not region_review) and Counter(c for c in decoded_text(rendered) if c in operators)!=Counter(c for c in native if c in operators):
                     raise ValueError("vision_assist_source_operators_changed")
+                if region_review and selection is None:
+                    from lib.infrastructure.docling_visual_review import review_region
+                    review=review_region(call,source_sha,reading["source_page"],target,images,value,
+                                         check_cancel=check_cancel)
+                    record.setdefault("visual_reviews",[]).append(review)
+                    if review["verdict"]!="pass":raise ValueError("vision_assist_visual_review_required")
+                if grid and not grid_bound:
+                    record.pop("source_grid",None)
+                    record["source_grid_candidate"]=grid
+                elif grid:record["source_grid"]=grid
                 replacement=("".join("$"+v+"$" if math else html.escape(_prose(v),quote=False)
                                     for math,v in _math_parts(value["text"])) if target["kind"]=="text"
                              else table_markdown(value)+"\n\n")
                 if part["text"][target["span"][0]:target["span"][1]].strip()=="<!-- formula-not-decoded -->":
                     replacement+="\n\n"
-                record.update(status="adopted",reason=None,native_content_checked=True,native_operators_checked=True,transcription=value,
+                record.update(status="adopted",reason=None,native_content_checked=native_available,
+                              native_operators_checked=native_available,transcription=value,
+                              independent_readings_agree=agree,
+                              verification_basis="native_and_visual_review" if native_available and region_review else
+                                  "visual_consensus_and_review" if region_review else "native_checks",
                               mathematical_correctness_certified=False)
                 adopted.append((*target["span"],replacement,target["ref"]))
                 break
@@ -411,13 +480,27 @@ def assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None):
     text=part["text"]
     for a,b,replacement,_ in reversed(ordered):text=text[:a]+replacement+text[b:]
     if len(text)>120000:raise ValueError("document_docling_invalid_output")
+    patched_refs=[r[3] for r in ordered]
+    previous=reading.get("vision_assistance",{}).get("items",[])
+    current={r["ref"]:r for r in audit}
+    for old in previous:
+        if old["ref"] in current:current[old["ref"]]["previous_record"]=old
+        else:audit.append(deepcopy(old))
     resolved={r["ref"] for r in audit if r["status"]=="adopted"}
     unresolved=sorted(({r["ref"] for r in audit}-resolved)|(
-        set(reading.get("formula_review",{}).get("undecoded_formula_refs",[]))-resolved))
+        set(reading.get("formula_review",{}).get("undecoded_formula_refs",[]))-resolved)|(
+        set(reading.get("vision_assistance",{}).get("remaining_refs",[]))-resolved))
     out["text"]=text
-    out["document_reading"].update(original_parsed_text_sha256=reading["parsed_text_sha256"],parsed_text_sha256=digest(text),
-        vision_assistance={"policy":POLICY,"items":audit,"remaining_refs":unresolved,"original_text":part["text"],
-                           "scope":"model_consensus_and_native_content_checks","mathematical_correctness_certified":False})
+    out["document_reading"].update(original_parsed_text_sha256=reading.get("original_parsed_text_sha256",reading["parsed_text_sha256"]),parsed_text_sha256=digest(text),
+        vision_assistance={"policy":POLICY,"items":audit,"remaining_refs":unresolved,"last_patched_refs":patched_refs,
+                           "original_text":reading.get("vision_assistance",{}).get("original_text",part["text"]),
+                           "scope":"visual_fidelity_review_with_available_native_checks" if region_review else "model_consensus_and_native_content_checks",
+                           "mathematical_correctness_certified":False})
+    if region_review and unresolved:
+        out.update(status="quarantined",reason=out.get("reason") or "document_vision_review_required")
+    if region_review and any(r["status"]=="adopted" and (not r.get("native_content_checked") or not r.get("independent_readings_agree")
+            or r["kind"]=="table" and not r.get("source_grid")) for r in audit):
+        out["document_reading"]["evidence_level"]="model_transcribed_visual_source"
     if (not unresolved and part.get("reason")=="document_docling_formula_undecoded"
             and not re.search(r"<!--\s*formula-not-decoded\s*-->",text)):
         out.pop("status",None);out.pop("reason",None)
@@ -426,3 +509,11 @@ def assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None):
     check_cancel()
     if hashlib.sha256(source.read_bytes()).hexdigest()!=source_sha:raise ValueError("source_snapshot_changed")
     return out
+
+
+def assist_part(source,part,call,*,max_rounds=2,check_cancel=lambda:None,review_scope="off"):
+    """Keep saved strict recipes unchanged; new review modes are explicit."""
+    if not isinstance(review_scope,str) or review_scope not in {"off","regions","pages"}:raise ValueError("invalid_vision_review_scope")
+    if review_scope=="off":return _assist_part(source,part,call,max_rounds=max_rounds,check_cancel=check_cancel)
+    from lib.infrastructure.docling_visual_review import review_part
+    return review_part(source,part,call,max_rounds=max_rounds,check_cancel=check_cancel,scope=review_scope)

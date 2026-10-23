@@ -59,7 +59,7 @@ def validate_document_parser(value=None) -> dict:
             result.update(ocr_models_path=local_path("ocr_models_path"), ocr_languages=list(languages))
         assistance=value.get("assistance")
         if assistance is not None:
-            if (not isinstance(assistance,dict) or set(assistance)-{"enabled","binding","max_rounds"}
+            if (not isinstance(assistance,dict) or set(assistance)-{"enabled","binding","max_rounds","review_scope"}
                     or type(assistance.get("enabled")) is not bool):raise ValueError("invalid_document_parser")
             if assistance["enabled"]:
                 if not isinstance(assistance.get("binding"),dict):raise ValueError("document_vision_model_required")
@@ -67,6 +67,9 @@ def validate_document_parser(value=None) -> dict:
                 if type(rounds) is not int or not 1<=rounds<=2:raise ValueError("invalid_vision_assist_rounds")
                 binding=validate_node_models({"ingest":{"vision":assistance.get("binding")}})["ingest"]["vision"]
                 result["assistance"]={"enabled":True,"binding":binding,"max_rounds":rounds}
+                scope=assistance.get("review_scope","off")
+                if not isinstance(scope,str) or scope not in {"off","regions","pages"}:raise ValueError("invalid_vision_review_scope")
+                if scope!="off":result["assistance"]["review_scope"]=scope
         return result
     if not isinstance(value, dict) or set(value) - {"mode", "binding"}:
         raise ValueError("invalid_document_parser")

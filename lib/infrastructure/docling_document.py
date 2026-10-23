@@ -245,6 +245,7 @@ def _page_provenance(document, page_numbers):
     """Keep original element references and bounding boxes with each page."""
     result = {number: [] for number in page_numbers}
     undecoded_chars = {number: 0 for number in page_numbers}
+    source_chars = {number: 0 for number in page_numbers}
     picture_refs = {picture.self_ref for picture in getattr(document, "pictures", [])}
     count = 0
     for item, _ in document.iterate_items(traverse_pictures=True):
@@ -270,6 +271,15 @@ def _page_provenance(document, page_numbers):
                         break
                     parent = getattr(parent.resolve(document), "parent", None)
             decoded = getattr(item, "text", "") or ""
+            if isinstance(decoded,str) and decoded and source_chars[number]+len(decoded)<=_MAX_PAGE_CHARS:
+                source_text=decoded
+                if len(getattr(item,"prov",[]))>1:
+                    span=record.get("charspan")
+                    source_text=(decoded[span[0]:span[1]] if isinstance(span,(tuple,list)) and len(span)==2
+                                 and all(type(v) is int for v in span) and 0<=span[0]<span[1]<=len(decoded) else None)
+                if source_text is not None:
+                    element["source_text"]=source_text
+                    source_chars[number]+=len(source_text)
             if label == "formula" and not isinstance(decoded, str):
                 raise ValueError("document_docling_invalid_output")
             if label == "formula" and not decoded.strip():
