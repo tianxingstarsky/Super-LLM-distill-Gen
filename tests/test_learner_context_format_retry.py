@@ -249,8 +249,11 @@ def test_old_registered_review_bodies_are_byte_identical(prompt_id, version, dig
 
 
 def test_new_fact_and_context_prompts_have_separate_scopes_and_no_paper_specific_answer():
-    fact, visibility = render(get("workflow.review_score")), render(get("workflow.learner_context_check"))
-    assert get("workflow.review_score").version == "1.6.0"
+    # This release introduced the split scope; later claim protocols have
+    # distinct schemas and their own current-template contract tests.
+    fact = render(get("workflow.review_score", "1.6.0"))
+    visibility = render(get("workflow.learner_context_check"))
+    assert get("workflow.review_score", "1.6.0").version == "1.6.0"
     assert get("workflow.learner_context_check").version == "1.1.0"
     assert "绝对差和相对提升" in fact and "不等于用户可见摘录已经写明" in fact
     assert "某个辅助输入字段为空" in fact and "原作者的we写成用户团队" in visibility

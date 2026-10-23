@@ -8,6 +8,7 @@ from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.workflow_review_repair import WorkflowReviewRepair
 from tests.test_review_repair_engine import ROOT, SOURCE, RIGHT, NoCalls, check, create_child
 from tests.test_workflow_production import model_request_data
+from tests.review_protocol_fixtures import source_condition_response
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -42,6 +43,9 @@ class SurfaceClient:
         if "review_feedback" in data:
             return json.dumps({"record": {"reasoning": [self.body], "answer": self.answer},
                                "quotes": [SOURCE], "uncertain": False})
+        if data.get("claim_review_protocol_version") == 4:
+            return json.dumps(source_condition_response(messages, data, check(), quote=SOURCE,
+                derivation="Power isolation precedes inspection in the source, and the corrected explanation preserves this dependency."))
         return json.dumps(check())
 
 
@@ -81,7 +85,9 @@ def test_authenticated_parent_surface_failure_is_repaired_then_fully_checked(tmp
     assert row["question"] == parent["question"]
     assert not workflow._authenticated_repair_branch
     assert (parent_path / "artifacts/cot.records.json").read_bytes() == original
-    assert ["review_feedback" in data for data in client.calls] == ([True, False] if fixed else [True])
+    assert ["review_feedback" in data for data in client.calls] == ([True, False, False] if fixed else [True])
+    if fixed:
+        assert [data["phase"] for data in client.calls[1:]] == ["claim_challenge", "claim_adjudication"]
     if fixed:
         assert row["status"] == "eligible" and row["answer"] == RIGHT
         assert row["reasoning"] == [client.body]

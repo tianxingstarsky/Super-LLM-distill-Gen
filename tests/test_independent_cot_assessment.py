@@ -8,7 +8,7 @@ from lib.domain.workflow_node_prompts import snapshot_node_prompts
 from lib.infrastructure import training_workflow as engine
 from lib.io_utils import atomic_json
 from tests.test_review_repair_engine import create_child
-from tests.test_workflow_styled_generation import run, records, Generator, Reviewer, ANSWER
+from tests.test_workflow_styled_generation import run, records, Generator, Reviewer, ANSWER, model_task_data, score
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -36,7 +36,9 @@ def test_node_snapshot_resume_does_not_require_or_resolve_historical_metadata(tm
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = version
-    recipe["node_prompt_templates"] = snapshot_node_prompts(recipe["node_prompt_templates"], recipe_version=version)
+    recipe["node_prompt_templates"] = snapshot_node_prompts(recipe["node_prompt_templates"], recipe_version=version,
+        learner_context_review_version=recipe.get("learner_context_review_version"),
+        claim_review_protocol_version=recipe.get("claim_review_protocol_version"))
     for key in ("agent_experience_version", "agent_experience", "authored_role_projection_version"):
         recipe.pop(key)
     if metadata is None:
@@ -64,11 +66,33 @@ HUMAN_DESIGN = {"enabled": True, "human_augmentation": {"enabled": True,
 STYLE = {"cot": {"enabled": True, "style": "structured"}}
 
 
+class IndependentReviewer(Reviewer):
+    def chat(self, messages, **kwargs):
+        request = model_task_data(messages)
+        if request.get("claim_review_protocol_version") != 4:
+            return super().chat(messages, **kwargs)
+        self.calls.append(deepcopy(messages))
+        self.kwargs_calls.append(dict(kwargs))
+        self.usage["calls"] += 1
+        assert request["target"] == "cot" and request["target_fields"]["content"] == ANSWER
+        units = request["target_units"]
+        common = {"claim_review_protocol_version": 4, "scope_sha256": request["scope"]["scope_sha256"]}
+        if request["phase"] == "claim_challenge":
+            return json.dumps({**common, "phase": "claim_challenge", "issues": [], "limitations": [],
+                "condition_ledger": [{"unit_id": unit["id"], "premises": []} for unit in units]})
+        assert request["phase"] == "claim_adjudication"
+        return json.dumps({**common, "coverage": "complete", "checked_unit_ids": [unit["id"] for unit in units],
+            "claim_checks": [{"unit_id": unit["id"], "status": "supported", "severity": "material", "premises": [],
+                "basis": {"kind": "logic", "evidence": [], "derivation":
+                    "The authored maintenance advice puts isolation before inspection and recording after inspection, without asserting a completed observation."}}
+                for unit in units], "challenge_checks": [], "verdict": score()})
+
+
 @pytest.mark.parametrize("review", [None, {"mode": "auto", "max_rounds": 0}])
 def test_final_ai_assessment_releases_imported_independent_cot_in_human_design_mode(tmp_path, review):
     output, run_id, path = run(tmp_path, targets=["cot"], conversation=True,
         node_generation=STYLE, qa_director=HUMAN_DESIGN, review_repair=review)
-    writer, reviewer = Generator(), Reviewer()
+    writer, reviewer = Generator(), IndependentReviewer()
     # The unified review's generation role uses an offline scoring client.
     if review:
         original = writer.chat

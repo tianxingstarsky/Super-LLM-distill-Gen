@@ -12,6 +12,8 @@ from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.human_revision import revision_evidence, verified_revision_batch, verified_revision_parent
 from lib.infrastructure.workflow_source_context import load_context_pack
 from test_human_sessions import Writer as LegacyRepairWriter, Reviewer as LegacyReviewer
+from test_human_sessions import review_verdict
+from tests.review_protocol_fixtures import source_condition_response
 from tests.test_workflow_qa_director_engine import request_data, source_materials
 from source_memory_fixtures import memory_protocol_versions
 
@@ -42,6 +44,12 @@ def memory_materials(messages):
 
 class RepairWriter(LegacyRepairWriter):
     def chat(self, messages, **kwargs):
+        current = request_data(messages)
+        if current.get("claim_review_protocol_version") == 4:
+            self.calls.append(deepcopy(current))
+            self.usage["calls"] += 1
+            return json.dumps(source_condition_response(messages, current, review_verdict(current), quote=QUOTE,
+                derivation="The completion paragraph explicitly places isolation-switch closure before the supervisor's start permission."))
         projected = task_messages(messages)
         data = json.loads(projected[1]["content"])
         blocks = [material["text"] for material in memory_materials(messages)]
@@ -56,6 +64,12 @@ class RepairWriter(LegacyRepairWriter):
 
 class Reviewer(LegacyReviewer):
     def chat(self, messages, **kwargs):
+        current = request_data(messages)
+        if current.get("claim_review_protocol_version") == 4:
+            self.calls.append(deepcopy(current))
+            self.usage["calls"] += 1
+            return json.dumps(source_condition_response(messages, current, review_verdict(current), quote=QUOTE,
+                derivation="The completion paragraph specifies the order of switch closure and start permission."))
         return super().chat(task_messages(messages), **kwargs)
 
 

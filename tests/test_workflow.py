@@ -68,6 +68,73 @@ class Judge:
                            "reason": "应先断电再检查；带电操作不符合来源要求。"})
 
 
+class RecordedConversationReviewer(Judge):
+    """Offline protocol-four reviewer for the literal recorded tool fixture.
+
+    Unlike the legacy aggregate Judge, this double supplies both condition
+    inventory and unit judgments. Its verdict deliberately stays high even
+    for a contradicted answer so tests exercise the engine's claim veto.
+    """
+
+    def __init__(self, *, malformed_phase=None):
+        super().__init__()
+        self.requests, self.memories, self.responses = [], [], []
+        self.malformed_phase = malformed_phase
+
+    def chat(self, messages, **kwargs):
+        request = json.loads(messages[-1]["content"])
+        memory = next(json.loads(message["content"].removeprefix("<untrusted_source_memory>\n")
+                                .removesuffix("\n</untrusted_source_memory>"))
+                      for message in messages if message["role"] == "system"
+                      and message["content"].startswith("<untrusted_source_memory>\n"))
+        self.requests.append(request)
+        self.memories.append(memory)
+        self.calls += 1
+        self.usage["calls"] += 1
+        assert request["claim_review_protocol_version"] == 4
+        assert request["condition_contract_version"] == 1
+        index = request["scope"]["message_index"]
+        assert index in {1, 3}
+        units = request["target_units"]
+        if index == 1:
+            calls = json.loads(request["target_fields"]["tool_calls"])
+            assert calls == [{"id": "power-check", "type": "function",
+                              "function": {"name": "read_power", "arguments": "{}"}}]
+            premises = []
+            basis = {"kind": "logic", "evidence": [],
+                     "derivation": "This requests the power observation without claiming the tool has executed."}
+            contradicted = False
+        else:
+            observation = request["messages"][2]
+            assert observation["role"] == "tool" and observation["tool_call_id"] == "power-check"
+            quote = observation["content"]
+            assert quote in {"电源已断开", "电源仍接通"}
+            premises = [{"origin": "context", "use": "support", "quote": quote,
+                         "message_index": 2, "field": "content"}]
+            basis = {"kind": "context", "evidence": [{"quote": quote, "message_index": 2, "field": "content"}],
+                     "derivation": "The recorded tool observation states whether power is off; the answer must agree with it."}
+            contradicted = quote == "电源仍接通"
+        if request["phase"] == "claim_challenge":
+            response = {"claim_review_protocol_version": 4, "phase": "claim_challenge",
+                        "scope_sha256": request["scope"]["scope_sha256"], "issues": [], "limitations": [],
+                        "condition_ledger": [{"unit_id": unit["id"], "premises": premises} for unit in units]}
+        else:
+            assert request["phase"] == "claim_adjudication"
+            response = {"claim_review_protocol_version": 4, "scope_sha256": request["scope"]["scope_sha256"],
+                        "coverage": "complete", "checked_unit_ids": [unit["id"] for unit in units],
+                        "claim_checks": [{"unit_id": unit["id"], "status": "refuted" if contradicted else "supported",
+                                          "severity": "material", "basis": basis, "premises": premises} for unit in units],
+                        "challenge_checks": [], "verdict": {"keep": True, "grounded": True, "reasoning_valid": True,
+                            "correctness": 5, "scores": {key: 5 for key in
+                                ("correctness", "reasoning", "grounding", "instruction", "safety")},
+                            "reason": "Recorded conversation assessed against the actual tool observation."}}
+        if self.malformed_phase == request["phase"]:
+            # Omit mandatory coverage, including on the bounded schema retry.
+            response.pop("condition_ledger" if request["phase"] == "claim_challenge" else "checked_unit_ids")
+        self.responses.append(response)
+        return json.dumps(response)
+
+
 def make_run(tmp_path, **kwargs):
     source = tmp_path / "source.txt"
     source.write_text(TEXT, encoding="utf-8")
@@ -367,12 +434,11 @@ def test_recorded_answer_without_reasoning_is_preserved_without_regeneration(tmp
     assert row["evidence_level"] == "recorded_context_model_assessed"
 
 
-@pytest.mark.parametrize("with_reasoning", [False, True])
-def test_unified_review_preserves_imported_conversation_source_and_actual_tool_evidence(tmp_path, with_reasoning):
+def recorded_tool_run(tmp_path, with_reasoning, *, observation="电源已断开"):
     messages = [{"role": "user", "content": "设备可以检查了吗？"},
                 {"role": "assistant", "content": "", "tool_calls": [{"id": "power-check", "type": "function",
                     "function": {"name": "read_power", "arguments": "{}"}}]},
-                {"role": "tool", "tool_call_id": "power-check", "content": "电源已断开"},
+                {"role": "tool", "tool_call_id": "power-check", "content": observation},
                 {"role": "assistant", "content": "GOOD 电源已断开，可以检查。"}]
     if with_reasoning:
         messages[-1]["reasoning_content"] = "工具返回已断电，满足检查线路的前提。"
@@ -382,36 +448,96 @@ def test_unified_review_preserves_imported_conversation_source_and_actual_tool_e
     rid = create_run(tmp_path, sources=[source], targets=["sft"],
         review_repair={"mode": "auto", "max_rounds": 0},
         package_review={"enabled": True, "mode": "all", "node": "jev"})
+    return rid, messages, tools
 
-    class RecordReviewer(Judge):
-        def __init__(self):
-            super().__init__()
-            self.requests = []
 
-        def chat(self, request_messages, **kwargs):
-            self.requests.append(json.loads(request_messages[-1]["content"]))
-            return super().chat(request_messages, **kwargs)
-
-    gen, judge = Generator(), RecordReviewer()
+@pytest.mark.parametrize("with_reasoning", [False, True])
+def test_unified_review_preserves_imported_conversation_source_and_actual_tool_evidence(tmp_path, with_reasoning):
+    rid, messages, tools = recorded_tool_run(tmp_path, with_reasoning)
+    gen, judge = Generator(), RecordedConversationReviewer()
     state = execute(tmp_path, rid, gen, judge)
+    assert state["status"] == "completed", state.get("error")
     artifacts = run_path(tmp_path, rid) / "artifacts"
     row = read_json(artifacts / "sft.records.json")[0]
-    assert state["status"] == "completed", row.get("reason") or state.get("error")
     assert not gen.calls
-    assert judge.calls == 1
+    assert judge.calls == 4  # Inventory and adjudication for BOTH assistant messages, including the tool call.
     assert row["messages"] == messages and row["tools"] == tools
     assert row["reasoning_origin"] == "source"
     assert row["evidence_level"] == "recorded_context_model_assessed"
     assert row["review_repair"]["status"] == "accepted"
-    assert judge.requests[0]["candidate"]["messages"] == messages
-    evidence = json.dumps(judge.requests[0]["source_evidence"], ensure_ascii=False)
+    assert [(request["phase"], request["scope"]["message_index"]) for request in judge.requests] == [
+        ("claim_challenge", 1), ("claim_challenge", 3), ("claim_adjudication", 1), ("claim_adjudication", 3)]
+    for request, memory in zip(judge.requests, judge.memories):
+        assert request["messages"] == messages[:request["scope"]["message_index"] + 1]
+        assert "source_evidence" not in request  # Private recorded evidence is supplied in its own role.
+        assert request["source_evidence_ref"]["sha256"] == memory["source_evidence_sha256"]
+        assert memory["source_evidence"] == judge.memories[0]["source_evidence"]
+    evidence = json.dumps(judge.memories[0]["source_evidence"], ensure_ascii=False)
     assert "电源已断开" in evidence and "read_power" in evidence
     assert "GOOD 电源已断开，可以检查。" not in evidence
     assert "工具返回已断电，满足检查线路的前提。" not in evidence
-    assert judge.requests[0]["source_evidence"]["source_kind"] == "human_provided"
+    assert judge.memories[0]["source_evidence"]["source_kind"] == "human_provided"
     assert "recorded_not_independently_verified" in evidence
+    audit = row["claim_review"]
+    assert audit["status"] == "complete" and audit["schema_failures"] == []
+    receipts = audit["challenge_reviews"] + audit["assessments"]
+    assert [item["review"]["raw_response"] for item in receipts] == judge.responses
+    for item in receipts:
+        checkpoint = item["checkpoint"]
+        saved = read_json(run_path(tmp_path, rid) / "checkpoints/review" / (checkpoint["checkpoint_sha256"] + ".json"))
+        assert saved["data"] == item["review"]["raw_response"]
+    final_claims = audit["assessments"][-1]["review"]["raw_response"]["claim_checks"]
+    final_units = judge.requests[-1]["target_units"]
+    assert {claim["unit_id"] for claim in final_claims} == {unit["id"] for unit in final_units}
+    assert {unit["field"] for unit in final_units} == ({"content", "reasoning_content"} if with_reasoning else {"content"})
     exported = json.loads((artifacts / "sft.jsonl").read_text(encoding="utf-8"))
     assert exported["messages"] == messages and exported["tools"] == tools
+
+
+@pytest.mark.parametrize("with_reasoning", [False, True])
+@pytest.mark.parametrize("phase,code", [
+    ("claim_challenge", "invalid_challenge_review_response"),
+    ("claim_adjudication", "invalid_adversarial_review_response"),
+])
+def test_recorded_review_missing_coverage_fails_after_bounded_retry(tmp_path, with_reasoning, phase, code):
+    rid, _, _ = recorded_tool_run(tmp_path, with_reasoning)
+    judge = RecordedConversationReviewer(malformed_phase=phase)
+    state = execute(tmp_path, rid, Generator(), judge)
+    assert state["status"] == "failed" and state["error"] == code
+    assert judge.calls == (2 if phase == "claim_challenge" else 4)
+    assert judge.requests[-2]["phase"] == judge.requests[-1]["phase"] == phase
+    assert "format_repair" not in judge.requests[-2] and "format_repair" in judge.requests[-1]
+    checkpoints = list((run_path(tmp_path, rid) / "checkpoints/review").glob("*.json"))
+    assert len(checkpoints) == judge.calls
+    assert not (run_path(tmp_path, rid) / "artifacts/sft.jsonl").exists()
+
+
+def test_recorded_review_rejects_legacy_aggregate_score_in_current_protocol(tmp_path):
+    rid, _, _ = recorded_tool_run(tmp_path, True)
+    judge = Judge()
+    state = execute(tmp_path, rid, Generator(), judge)
+    assert state["status"] == "failed" and state["error"] == "invalid_challenge_review_response"
+    assert judge.calls == 2
+    assert not (run_path(tmp_path, rid) / "artifacts/sft.jsonl").exists()
+
+
+@pytest.mark.parametrize("with_reasoning", [False, True])
+def test_recorded_tool_contradiction_vetoes_high_score_and_preserves_original(tmp_path, with_reasoning):
+    rid, messages, tools = recorded_tool_run(tmp_path, with_reasoning, observation="电源仍接通")
+    gen, judge = Generator(), RecordedConversationReviewer()
+    state = execute(tmp_path, rid, gen, judge)
+    assert state["status"] == "needs_attention", state.get("error")
+    assert judge.calls == 4 and not gen.calls
+    artifacts = run_path(tmp_path, rid) / "artifacts"
+    assert (artifacts / "sft.jsonl").read_text(encoding="utf-8") == ""
+    row, = read_json(artifacts / "sft.records.json")
+    assert row["messages"] == messages and row["tools"] == tools
+    assert row["review_repair"]["status"] != "accepted"
+    review = row["claim_review"]["assessments"][-1]["review"]
+    assert review["raw_response"]["verdict"]["keep"] is True
+    assert review["raw_response"]["verdict"]["correctness"] == 5
+    assert all(claim["status"] == "refuted" for claim in review["raw_response"]["claim_checks"])
+    assert review["verdict"]["keep"] is False and review["accepted"] is False
 
 
 def test_rejected_recorded_answer_is_quarantined_without_silent_rewriting(tmp_path):

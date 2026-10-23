@@ -173,6 +173,7 @@ def test_director_issue_opens_settings_or_rules_for_the_actual_failure(invalid_r
     if invalid_rules:
         ui.text_area(key="workflow-director-question-rules:fixture").set_value(" ").run()
     else:
+        ui.selectbox(key="workflow-director-learning-goal:fixture").set_value("mixed").run()
         ui.selectbox(key="workflow-director-mode:fixture").set_value("balanced").run()
         for name in ("closed_book", "grounded", "partial", "multi_source", "distractor"):
             ui.number_input(key=f"workflow-director-weight:fixture:{name}").set_value(0).run()

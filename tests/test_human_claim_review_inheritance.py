@@ -87,7 +87,7 @@ def test_application_review_only_issue_rework_keeps_parent_text_and_adds_current
             assert "claim_review_adversarial_protocol_version" not in parent_recipe
             assert parent_recipe["prompts"]["workflow.review_score"]["version"] == "1.17.0"
         assert templates["workflow.review_reference"] == render(get("workflow.review_reference", "2.1.0"))
-        assert templates["workflow.review_score"] == render(get("workflow.review_score", "1.19.0"))
+        assert templates["workflow.review_score"] == render(get("workflow.review_score", "1.20.0"))
     else:
         assert templates == parent_recipe["node_prompt_templates"]["review"]
     candidate, = app.results(session_id)["rows"]
@@ -106,7 +106,7 @@ def test_application_review_only_issue_rework_keeps_parent_text_and_adds_current
     assert child_recipe["claim_review_adversarial_protocol_version"] == 1
     assert child_recipe["claim_review_wire_schema_version"] == 1
     assert child_recipe["claim_review_focus_version"] == 1
-    assert child_recipe["prompts"]["workflow.review_score"]["version"] == "1.19.0"
+    assert child_recipe["prompts"]["workflow.review_score"]["version"] == "1.20.0"
     assert child_recipe["prompts"]["workflow.review_reference"]["version"] == "2.1.0"
     assert child_recipe["node_prompt_templates"]["review"] == templates
     assert child_recipe["repair_inputs"][0]["record"] == candidate["record"]

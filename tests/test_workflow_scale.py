@@ -319,8 +319,10 @@ def test_fifty_thousand_math_inputs_and_seeds_stay_disk_backed(tmp_path, monkeyp
             last = row
             count += 1
         assert count == 50000
-        assert first['id'] == engine.digest(['Arithmetic practice', 'gsm8k', 0])
-        assert last['id'] == engine.digest(['Arithmetic practice', 'gsm8k', 49999])
+        assert first['id'] == engine.digest(['persistent_arithmetic_registry', run_id, 0])
+        assert last['id'] == engine.digest(['persistent_arithmetic_registry', run_id, 49999])
+        assert first['arithmetic_ordinal'] == 0 and last['arithmetic_ordinal'] == 49999
+        assert first['arithmetic_fingerprint'] != last['arithmetic_fingerprint']
         seen.append(count)
         raise ValueError('fixture_stop_before_math_generation')
     monkeypatch.setattr(run, 'stage_items', stage_items)
@@ -332,11 +334,10 @@ def test_fifty_thousand_math_inputs_and_seeds_stay_disk_backed(tmp_path, monkeyp
         tracemalloc.stop()
     assert state['error'] == 'fixture_stop_before_math_generation'
     assert seen == [50000]
-    assert state['input_summary']['ready'] == 50000
+    assert state['input_summary']['ready'] == 0  # Arithmetic has no document input units.
+    assert state['arithmetic_registry']['allocated_in_batch'] == 50000
     assert peak < 4 * 1024 * 1024
-    input_checkpoint = run.path / 'checkpoints' / 'ingest' / 'math-inputs.json'
-    seed_checkpoint = run.path / 'checkpoints' / 'gsm8k' / 'math-seeds.json'
-    assert engine.read_json(input_checkpoint)['data']['count'] == 50000
+    seed_checkpoint = run.path / 'checkpoints' / 'gsm8k' / 'independent-math-seeds.json'
     assert engine.read_json(seed_checkpoint)['data']['count'] == 50000
     # A second attempt verifies and reuses both saved row sets.
     state = run.execute(resume_run=True)

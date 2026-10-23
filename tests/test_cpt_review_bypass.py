@@ -45,6 +45,32 @@ class Approve:
         assessment = {"keep": True, "grounded": True, "reasoning_valid": True, "correctness": 5,
             "scores": {name: 5 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
             "reason": "The answer preserves the source conditions."}
+        if data.get("claim_review_protocol_version") == 4:
+            # Mixed new workflows use the current per-unit contract; legacy
+            # package-only and unversioned CPT cases below retain their score.
+            assert data["target"] == "sft" and data["condition_contract_version"] == 1
+            assert data["scope"]["message_index"] == 1
+            assert data["target_fields"] == {"content": "Disconnect the power supply before inspection."}
+            memory = next(json.loads(message["content"].removeprefix("<untrusted_source_memory>\n")
+                                    .removesuffix("\n</untrusted_source_memory>"))
+                          for message in messages if message["role"] == "system"
+                          and message["content"].startswith("<untrusted_source_memory>\n"))
+            assert memory["source_evidence"]["teacher_evidence"] == SOURCE
+            assert data["source_evidence_ref"]["sha256"] == memory["source_evidence_sha256"]
+            units = data["target_units"]
+            premises = [{"origin": "source", "use": "support", "quote": SOURCE,
+                         "source_path": ["teacher_evidence"]}]
+            common = {"claim_review_protocol_version": 4, "scope_sha256": data["scope"]["scope_sha256"]}
+            if data["phase"] == "claim_challenge":
+                return json.dumps({**common, "phase": "claim_challenge", "issues": [], "limitations": [],
+                    "condition_ledger": [{"unit_id": unit["id"], "premises": premises} for unit in units]})
+            assert data["phase"] == "claim_adjudication"
+            return json.dumps({**common, "coverage": "complete", "checked_unit_ids": [unit["id"] for unit in units],
+                "claim_checks": [{"unit_id": unit["id"], "status": "supported", "severity": "material",
+                    "premises": premises, "basis": {"kind": "source", "evidence": [
+                        {"quote": SOURCE, "source_path": ["teacher_evidence"]}],
+                        "derivation": "The source explicitly places disconnection before equipment inspection, as does the candidate."}}
+                    for unit in units], "challenge_checks": [], "verdict": assessment})
         if "supervised_assistant_turns" in data:
             assessment["turn_verdicts"] = [{**deepcopy(assessment),
                 "message_index": turn["message_index"], "content_sha256": turn["content_sha256"],
@@ -132,7 +158,10 @@ def test_mixed_workflow_preserves_cpt_rows_and_reviews_only_sft(tmp_path, monkey
     assert "cpt" not in state["quality"]["review_repair"]["targets"]
     assert engine.verify_artifacts(path)["counts"] == {"cpt": 1, "sft": int(mode == "auto")}
     if mode == "auto":
-        assert len(reviewer.calls) == 1
+        assert len(reviewer.calls) == 2
+        assert [call["phase"] for call in reviewer.calls] == ["claim_challenge", "claim_adjudication"]
+        assert all(call["target"] == "sft" for call in reviewer.calls)
+        assert sft["claim_review"]["status"] == "complete" and sft["claim_review"]["schema_failures"] == []
 
 
 @pytest.mark.parametrize("mode", ["all", "sample"])

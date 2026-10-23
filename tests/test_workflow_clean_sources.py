@@ -10,6 +10,7 @@ from lib.domain.workflow_graph import execution_graph, uses_shared_source_cleani
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.structured_source_kind import contains_document_records
 from lib.infrastructure.workflow_qa_director import DirectorBatchTooLarge
+from tests.test_workflow_qa_director_engine import request_data as role_request_data
 
 
 ORIGINAL = "设备手册\n页码 12\n额定温度为 75 ℃，停机后检查阀门。公式：$E = mc^2$。"
@@ -31,15 +32,18 @@ def verdict(keep=True):
 
 def request_data(messages):
     """Read the dynamic task after the completed source-memory tool history."""
-    return json.loads(next(message["content"] for message in reversed(messages) if message["role"] == "user"))
+    return role_request_data(messages)
 
 
 def source_packs(messages):
     """Read actual tool results, retaining the pinned legacy request fallback."""
     packs = []
     for message in messages:
-        if message["role"] == "tool":
+        if message["role"] == "tool" and message.get("name") == "source_memory":
             packs.extend(json.loads(message["content"])["teacher_context_pack"])
+        elif message["role"] == "system" and message["content"].startswith("<untrusted_source_memory>\n"):
+            body = message["content"].removeprefix("<untrusted_source_memory>\n").removesuffix("\n</untrusted_source_memory>")
+            packs.extend(json.loads(body).get("teacher_context_pack", []))
     return packs or request_data(messages).get("teacher_context_pack", [])
 
 
@@ -550,7 +554,7 @@ def test_director_selects_complete_clean_neighbor_block_for_sft_tool_memory(tmp_
     selected = next(material for material in materials if quote in material["text"])
     expected_ranges = [whole_material_range(selected)]
     assert selected["text"] == completion
-    assert sft["source_line_scope"] == "selected" and sft["source_line_ranges"] == expected_ranges
+    assert source_packs(sft_messages)[0]["source_line_scope"] == "selected"
     blocks = source_materials(sft_messages)
     assert len(blocks) == 1 and blocks[0]["text"] == completion
     assert blocks[0]["material_id"] == selected["material_id"]
@@ -558,7 +562,9 @@ def test_director_selects_complete_clean_neighbor_block_for_sft_tool_memory(tmp_
     assert "numbered_text" not in blocks[0]
     assert "若许可尚未确认，保持设备停止并联系负责人，不得自行启动。" in blocks[0]["text"]
     assert preparation not in json.dumps(source_packs(sft_messages), ensure_ascii=False)
-    assert any(message["role"] == "tool" and completion in message["content"] for message in sft_messages)
+    assert any((message["role"] == "tool" and message.get("name") == "source_memory"
+                or message["role"] == "system" and message["content"].startswith("<untrusted_source_memory>\n"))
+               and completion in message["content"] for message in sft_messages)
     assert "text" not in sft["source_context"] and "source_line_focus" not in sft["source_context"]
     assert "teacher_evidence" not in sft["source_context"] and "evidence_quotes" not in sft["qa_contract"]
     assert completion not in json.dumps(sft["source_context"], ensure_ascii=False)

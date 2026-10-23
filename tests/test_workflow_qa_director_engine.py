@@ -59,11 +59,11 @@ def source_materials(messages):
     packs = []
     for message in messages:
         if message["role"] == "tool" and message.get("name") == "source_memory":
-            packs.extend(json.loads(message["content"])["teacher_context_pack"])
+            packs.extend(json.loads(message["content"]).get("teacher_context_pack", []))
         elif (message.get("role") == "system"
               and message.get("content", "").startswith("<untrusted_source_memory>\n")):
             body = message["content"].removeprefix("<untrusted_source_memory>\n").removesuffix("\n</untrusted_source_memory>")
-            packs.extend(json.loads(body)["teacher_context_pack"])
+            packs.extend(json.loads(body).get("teacher_context_pack", []))
     if not packs:
         packs = request_data(messages).get("teacher_context_pack", [])
     materials = []

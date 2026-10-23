@@ -254,7 +254,7 @@ class FilesystemHumanSessionDriver:
             claim_review_protocol_version=2, claim_review_format_feedback_version=2,
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
-            claim_review_condition_contract_version=1)
+            claim_review_condition_contract_version=1, reasoning_depth_contract_version=1)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):

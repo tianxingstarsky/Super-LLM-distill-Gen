@@ -1,5 +1,6 @@
 """Offline tests: simulated SDKs must prove fixture content and tool structure."""
 import base64
+from contextlib import closing
 from io import BytesIO
 import json
 import re
@@ -148,7 +149,9 @@ def test_pdf_fixture_is_valid_extractable_and_renderable():
     assert len(data) < 1500
     pdf = PdfReader(BytesIO(data), strict=True)
     assert len(pdf.pages) == 1 and pdf.pages[0].extract_text().strip() == nonce
-    with pypdfium2.PdfDocument(data) as rendered:
+    # The supported local runtime also includes PDFium 4.x, whose document
+    # has close() but does not implement the context-manager protocol.
+    with closing(pypdfium2.PdfDocument(data)) as rendered:
         page = rendered[0]
         bitmap = page.render(scale=1)
         image = bitmap.to_pil()

@@ -15,6 +15,7 @@ from lib.infrastructure.workflow_rows import WorkflowRows, write_jsonl
 from lib.infrastructure.workflow_source_context import load_context_pack, prepare_source_context_packs
 from lib.io_utils import atomic_json
 from source_memory_fixtures import memory_protocol_versions
+from tests.review_protocol_fixtures import source_condition_response
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,10 +50,10 @@ def memory_packs(messages):
     result = []
     for message in messages:
         if message["role"] == "tool":
-            result.extend(json.loads(message["content"])["teacher_context_pack"])
+            result.extend(json.loads(message["content"]).get("teacher_context_pack", []))
         elif message["role"] == "system" and message["content"].startswith("<untrusted_source_memory>\n"):
             body = message["content"].removeprefix("<untrusted_source_memory>\n").removesuffix("\n</untrusted_source_memory>")
-            result.extend(json.loads(body)["teacher_context_pack"])
+            result.extend(json.loads(body).get("teacher_context_pack", []))
     return result
 
 
@@ -69,6 +70,13 @@ class ReviewClient:
         self.calls.append(deepcopy(data))
         self.message_history.append(deepcopy(messages))
         self.usage["calls"] += 1
+        if data.get("claim_review_protocol_version") == 4:
+            for unit in data["target_units"]:
+                assert unit["text"] == data["target_fields"][unit["field"]][unit["start"]:unit["end"]]
+            keep = self.accept_repaired and data["target_fields"]["content"] == RIGHT
+            return json.dumps(source_condition_response(messages, data, verdict(keep), quote=POWER_RULE,
+                refuted_text=WRONG,
+                derivation="The selected source explicitly requires power-off before inspection; the current reply must preserve that prerequisite."))
         if data.get("learner_context_only"):
             assert "source_evidence" not in data
             assert [message["role"] for message in data["learner_messages"]] == ["user", "assistant"]
@@ -131,6 +139,25 @@ def review_fixture(tmp_path, *, selections=((2, 3),), numbered=True, quotes=None
 
 
 def assert_selected_memory(messages, ranges, blocks):
+    task = request_data(messages)
+    if task.get("claim_review_protocol_version") == 4 and "source_evidence_ref" in task:
+        private = [json.loads(message["content"].split("\n", 1)[1].rsplit("\n", 1)[0])
+                   for message in messages if message["role"] == "system"
+                   and message["content"].startswith("<untrusted_source_memory>\n")]
+        private += [json.loads(message["content"]) for message in messages
+                    if message["role"] == "tool" and message.get("name") == "source_memory"]
+        memory = next(item for item in private if "source_evidence" in item)
+        evidence = memory["source_evidence"]
+        assert evidence["source_line_scope"] == "selected" and evidence["source_line_ranges"] == ranges
+        assert evidence["teacher_evidence_blocks"] == blocks
+        assert evidence["teacher_evidence"] == "\n\n".join(blocks).strip()
+        assert task["source_evidence_ref"]["sha256"] == memory["source_evidence_sha256"]
+        assert "source_evidence" not in task
+        assert OUTSIDE_BEFORE not in canonical(memory) and OUTSIDE_AFTER not in canonical(memory)
+        assert all(block.strip() not in canonical(task) for block in blocks)
+        roles = [message["role"] for message in messages]
+        assert roles == (["system", "assistant", "tool", "user"] if "tool" in roles else ["system", "system", "user"])
+        return
     packs = memory_packs(messages)
     assert len(packs) == 1
     assert packs[0]["source_line_scope"] == "selected"
@@ -149,7 +176,8 @@ def assert_selected_memory(messages, ranges, blocks):
     body = json.dumps(packs, ensure_ascii=False)
     assert OUTSIDE_BEFORE not in body and OUTSIDE_AFTER not in body
     task = request_data(messages)
-    assert task["source_line_scope"] == "selected" and task["source_line_ranges"] == ranges
+    scope = task["source_evidence"] if task.get("claim_review_protocol_version") == 4 else task
+    assert scope["source_line_scope"] == "selected" and scope["source_line_ranges"] == ranges
     assert "teacher_evidence" not in task["source_evidence"]
     assert "teacher_evidence_blocks" not in task["source_evidence"]
     task_body = json.dumps(task, ensure_ascii=False)
@@ -184,7 +212,8 @@ def test_same_run_score_and_repair_only_receive_selected_raw_blocks_as_private_m
     updated, issue = workflow._repair_content("sft", row, evidence, [row["id"], "review"], check, "Correct it.")
     assert issue is None and updated["messages"][-1]["content"] == RIGHT
     assert row["messages"][-1]["content"] == WRONG
-    assert len(client.message_history) == 2
+    assert len(client.message_history) == 3  # Both review phases, then the independent correction.
+    assert [request.get("phase") for request in client.calls[:2]] == ["claim_challenge", "claim_adjudication"]
     for messages in client.message_history:
         assert_selected_memory(messages, row["qa_contract"]["source_line_ranges"], blocks)
     span = updated["quote_spans"][0]
@@ -212,7 +241,8 @@ def test_v2_turn_review_and_delta_repair_keep_the_authenticated_source_selection
     evidence = workflow._review_evidence(row)
     initial = workflow._review_score("sft", row, evidence, [row["id"], "initial-v2"], "")
     assert not initial["keep"] and initial["turn_verdicts"][0]["critical_error"]
-    expected_turn = client.calls[0]["supervised_assistant_turns"][0]
+    expected_turn = {"content_sha256": client.calls[0]["scope"]["prefix_sha256"]}
+    assert client.calls[0]["scope"]["message_index"] == 1
     assert initial["turn_verdicts"][0]["content_sha256"] == expected_turn["content_sha256"]
     updated, issue = workflow._repair_content("sft", row, evidence, [row["id"], "repair-v2"], initial, "")
     assert issue is None and updated["messages"][0] == row["messages"][0]
@@ -221,7 +251,7 @@ def test_v2_turn_review_and_delta_repair_keep_the_authenticated_source_selection
     assert final["keep"] and final["turn_verdicts"][0]["leakage_free"]
     assert final["turn_verdicts"][0]["content_sha256"] != expected_turn["content_sha256"]
     for wire in client.message_history:
-        if memory_packs(wire):
+        if memory_packs(wire) or request_data(wire).get("claim_review_protocol_version") == 4:
             assert_selected_memory(wire, row["qa_contract"]["source_line_ranges"], blocks)
             assert RESTART_RULE not in canonical(memory_packs(wire))
 
@@ -369,7 +399,7 @@ def test_child_and_next_revision_reauthenticate_parent_selection_without_expandi
     assert detailed["teacher_evidence_blocks"] == expected["teacher_evidence_blocks"]
     assert detailed["source_line_ranges"] == expected["source_line_ranges"]
     for messages in first_client.message_history:
-        if memory_packs(messages):
+        if memory_packs(messages) or request_data(messages).get("claim_review_protocol_version") == 4:
             assert_selected_memory(messages, expected["source_line_ranges"], expected["teacher_evidence_blocks"])
     assert any(memory_packs(messages) for messages in first_client.message_history)
 
@@ -384,7 +414,7 @@ def test_child_and_next_revision_reauthenticate_parent_selection_without_expandi
     assert rejected["review_repair"]["history"][0]["repair_issue"] == "review_repair_source_quotes_missing"
     assert rejected["qa_contract"]["source_line_ranges"] == expected["source_line_ranges"]
     for messages in next_client.message_history:
-        if memory_packs(messages):
+        if memory_packs(messages) or request_data(messages).get("claim_review_protocol_version") == 4:
             assert_selected_memory(messages, expected["source_line_ranges"], expected["teacher_evidence_blocks"])
     # A local cached field or broadened current contract never supersedes the
     # selected ranges in the authenticated original parent.

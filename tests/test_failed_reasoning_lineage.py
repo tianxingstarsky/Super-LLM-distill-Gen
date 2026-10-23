@@ -110,6 +110,7 @@ def test_production_counts_only_successful_linked_outputs_after_trim_and_review_
     assert state["status"] == "completed", state.get("error")
     assert state["production"]["counts"] == {"sft": 1, "cot": 1}
     assert turns == {"cot": 3, "trim": 3}
-    assert len(client.calls) == 2, "Only the second and third canonical CoT rows have reviewable content."
+    assert len(client.calls) == 4, "Only the second and third canonical CoT rows receive both review phases."
+    assert [call["phase"] for call in client.calls] == ["claim_challenge", "claim_adjudication"] * 2
     assert all(call["target"] == "cot" for call in client.calls)
     assert engine.verify_artifacts(engine.run_path(output, run_id))["counts"] == {"sft": 1, "cot": 1}

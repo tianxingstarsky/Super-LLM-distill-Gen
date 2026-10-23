@@ -18,6 +18,12 @@ os.environ.setdefault("PYTHONPATH", str(ROOT))
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
 os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 
+
+@pytest.fixture
+def process_entrypoint(request, monkeypatch):
+    """Real Windows children load this test module, never a leftover AppTest app."""
+    monkeypatch.setitem(sys.modules, "__main__", request.module)
+
 @pytest.fixture(autouse=True)
 def isolated_review_store(tmp_path, monkeypatch):
     from lib import review_center as rc

@@ -30,7 +30,7 @@ _RESPONSE_FIELDS = frozenset({"claim_review_protocol_version", "scope", "coverag
 _PRIVATE_BOOKKEEPING = frozenset({"qa_contract", "qa_plan", "dialogue_dispatch", "dialogue_state", "dialogue_steps",
     "judge", "review", "reviews", "review_repair", "revision_context", "aggregate_original", "turn_verdicts",
     "claim_review", "reasoning_revision_audits", "generation_trace", "reasoning_trace", "prefix_review"})
-_REQUIREMENT_FIELDS = frozenset({"generation_style", "learning_goal", "user_language", "preservation"})
+_REQUIREMENT_FIELDS = frozenset({"generation_style", "learning_goal", "user_language", "preservation", "revision_instruction"})
 _STYLE_FIELDS = frozenset({"stage", "preset", "style", "instruction", "reasoning_language", "answer_mode", "enabled", "assistant_indices",
                            "reasoning_depth", "reasoning_depth_instruction"})
 _PRESERVATION_FIELDS = frozenset({"reasoning_required", "preserve_reasoning", "preserve_user_messages", "preserve_source_attribution"})
@@ -132,7 +132,7 @@ def _requirements(value):
                     or any(type(flag) is not bool for flag in part.values())):
                 raise ValueError("invalid_claim_review_requirements")
         elif (not isinstance(part, str) or not part.strip() or "\x00" in part
-              or len(part) > (4096 if key == "learning_goal" else 128)):
+              or len(part) > (16_000 if key == "revision_instruction" else 4096 if key == "learning_goal" else 128)):
             raise ValueError("invalid_claim_review_requirements")
     return deepcopy(value)
 

@@ -6,6 +6,7 @@ import pytest
 
 from lib.infrastructure import training_workflow as engine
 from lib.llm_client import BudgetExceeded
+from tests.test_workflow_production import model_request_data
 
 
 class Reviewer:
@@ -16,7 +17,9 @@ class Reviewer:
         self.fail_at, self.bad_text = fail_at, None
 
     def chat(self, messages, **kwargs):
-        payload = json.loads(messages[1]["content"])["answer"]
+        record = model_request_data(messages)["answer"]
+        assert record["messages"][-1]["role"] == "assistant"
+        payload = {"text": record["messages"][-1]["content"]}
         self.payloads.append(payload)
         self.usage["calls"] += 1
         if self.bad_text is None:
@@ -39,24 +42,27 @@ def make_run(tmp_path, reviewer, *, count=6, percent=1., threshold=None, product
     if threshold is not None:
         review["escalate_failure_percent"] = threshold
     output = tmp_path / "out"
-    rid = engine.create_run(output, sources=[source], targets=["cpt"], package_review=review,
-        batch_size=1, **({"production": {"goals": {"cpt": count}}} if production else {}))
+    # Current CPT keeps its cleaning verdict and intentionally bypasses sample
+    # scoring. Exercise expansion on SFT, which still requires package review.
+    rid = engine.create_run(output, sources=[source], targets=["sft"], package_review=review,
+        batch_size=1, **({"production": {"goals": {"sft": count}}} if production else {}))
     path = engine.run_path(output, rid)
     (path / "input_records.json").write_text("[]", encoding="utf-8")
     rows = [{"id": f"sample-{index}", "source_id": "source", "status": "eligible",
-             "text": f"Maintenance case {index}: disconnect power before inspecting the cable."}
+             "messages": [{"role": "user", "content": f"How should I inspect cable {index}?"},
+                          {"role": "assistant", "content": f"Maintenance case {index}: disconnect power before inspecting the cable."}]}
             for index in range(count)]
     return engine.Workflow(output, rid, tmp_path, jev=reviewer), rows, output, rid, path
 
 
 def summary(path):
-    return engine.read_json(path / "artifacts/quality.json")["package_review"]["targets"]["cpt"]
+    return engine.read_json(path / "artifacts/quality.json")["package_review"]["targets"]["sft"]
 
 
 def test_any_failed_sample_expands_current_target_and_does_not_pay_twice(tmp_path):
     reviewer = Reviewer()
     workflow, rows, _, _, path = make_run(tmp_path, reviewer)
-    workflow.package({"cpt": rows})
+    workflow.package({"sft": rows})
     result = summary(path)
     assert result["planned"] == result["reviewed"] == 6
     assert result["accepted"] == 5 and result["rejected"] == 1
@@ -71,7 +77,7 @@ def test_any_failed_sample_expands_current_target_and_does_not_pay_twice(tmp_pat
 def test_custom_threshold_does_not_expand_below_failure_rate(tmp_path):
     reviewer = Reviewer()
     workflow, rows, _, _, path = make_run(tmp_path, reviewer, percent=30., threshold=100.)
-    workflow.package({"cpt": rows})
+    workflow.package({"sft": rows})
     result = summary(path)
     assert result["planned"] == result["reviewed"] == 2
     assert len(reviewer.payloads) == 2 and result["unreviewed"] == 4
@@ -81,7 +87,7 @@ def test_custom_threshold_does_not_expand_below_failure_rate(tmp_path):
 def test_legacy_sampling_keeps_coverage_even_with_a_rejected_sample(tmp_path):
     reviewer = Reviewer()
     workflow, rows, _, _, path = make_run(tmp_path, reviewer, production=False)
-    workflow.package({"cpt": rows})
+    workflow.package({"sft": rows})
     assert summary(path)["reviewed"] == 1
     assert len(reviewer.payloads) == 1
     assert not summary(path).get("escalation")
@@ -91,12 +97,12 @@ def test_budget_stop_in_expansion_reuses_prior_verdicts_after_resume(tmp_path):
     reviewer = Reviewer(fail_at=3)
     workflow, rows, output, rid, path = make_run(tmp_path, reviewer)
     with pytest.raises(BudgetExceeded):
-        workflow.package({"cpt": rows})
+        workflow.package({"sft": rows})
     completed = [payload["text"] for payload in reviewer.payloads[:2]]
     assert not (path / "artifacts/manifest.json").exists()
     reviewer.fail_at = None
     restored = engine.Workflow(output, rid, tmp_path, jev=reviewer)
-    restored.package({"cpt": rows})
+    restored.package({"sft": rows})
     counts = Counter(payload["text"] for payload in reviewer.payloads)
     assert all(counts[text] == 1 for text in completed)
     assert len(reviewer.payloads) == 7

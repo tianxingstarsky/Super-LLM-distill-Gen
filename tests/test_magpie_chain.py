@@ -20,7 +20,7 @@ PORT = 18765
 os.environ.setdefault("OPENAI_API_KEY", "sk-mock")
 
 
-def test_magpie_chain_runs_and_caches(tmp_path):
+def test_magpie_chain_runs_and_caches(tmp_path, process_entrypoint):
     from distilabel.pipeline import Pipeline
 
     # Distilabel 1.5.3 opens YAML with the Windows locale codec; read UTF-8

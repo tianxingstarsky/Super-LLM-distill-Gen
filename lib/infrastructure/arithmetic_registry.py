@@ -182,6 +182,80 @@ class ArithmeticRegistry:
             if stop == capacity:
                 return None
 
+    def reserve_many(self, run_id: str, start_ordinal: int, count: int, theme: str = "", *, check_cancel=None):
+        """Yield bounded, fully committed batches with the same permanent keys.
+
+        FULL synchronous transactions and the unique indexes are unchanged.
+        A caller never observes a reservation before its batch is durable;
+        cancellation rolls back only the active batch. Resume restores any
+        already committed keys, including a batch not yet written downstream.
+        """
+        if not isinstance(run_id, str) or not run_id.strip() or len(run_id) > 2048:
+            raise ValueError("invalid_arithmetic_run_id")
+        if type(start_ordinal) is not int or not 0 <= start_ordinal <= 2**63 - 1:
+            raise ValueError("invalid_arithmetic_ordinal")
+        if type(count) is not int or count < 0 or start_ordinal + count > 2**63:
+            raise ValueError("invalid_arithmetic_count")
+        if not isinstance(theme, str):
+            raise ValueError("invalid_arithmetic_theme")
+        ordinal, end = start_ordinal, start_ordinal + count
+        while ordinal < end:
+            if check_cancel is not None:
+                check_cancel()
+            committed = []
+            exhausted = False
+            with closing(self._connect()) as db:
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    capacity, cursor = self._state(db)
+                    stop = min(cursor + _SCAN_CHUNK, capacity)
+                    added = 0
+                    while ordinal < end and len(committed) < _SCAN_CHUNK:
+                        if check_cancel is not None:
+                            check_cancel()
+                        row = db.execute("SELECT fingerprint, seed, payload, payload_sha256 "
+                                         "FROM arithmetic_allocations WHERE run_id=? AND ordinal=?",
+                                         (run_id, ordinal)).fetchone()
+                        if row is not None:
+                            committed.append((ordinal, self._restore(row)))
+                            ordinal += 1
+                            continue
+                        sample = None
+                        while cursor < stop:
+                            if check_cancel is not None:
+                                check_cancel()
+                            seed = cursor * GSM8K_V2_SEED_MULTIPLIER % capacity
+                            cursor += 1
+                            candidate = build_gsm8k(theme, seed, version=2)
+                            fingerprint = verified_arithmetic_fingerprint(candidate)
+                            inserted = db.execute("INSERT INTO arithmetic_fingerprints(fingerprint, origin) "
+                                "VALUES (?, ?) ON CONFLICT(fingerprint) DO NOTHING",
+                                (fingerprint, "run:" + run_id)).rowcount
+                            if not inserted:
+                                continue
+                            candidate.update(_registry_fingerprint=fingerprint, _registry_seed=seed)
+                            payload = json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                            checksum = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+                            db.execute("INSERT INTO arithmetic_allocations VALUES (?, ?, ?, ?, ?, ?)",
+                                       (run_id, ordinal, fingerprint, seed, payload, checksum))
+                            sample = candidate
+                            added += 1
+                            break
+                        if sample is None:
+                            exhausted = cursor == capacity
+                            break
+                        committed.append((ordinal, sample))
+                        ordinal += 1
+                    db.execute("UPDATE arithmetic_state SET cursor=?, allocated=allocated+?, "
+                               "registered=registered+? WHERE singleton=1", (cursor, added, added))
+                    db.commit()
+                except BaseException:
+                    db.rollback()
+                    raise
+            yield from committed
+            if exhausted:
+                return
+
     def seed_verified(self, records, *, source: str, check_cancel=None) -> dict:
         """Import checked history and report every invalid row to the caller.
 

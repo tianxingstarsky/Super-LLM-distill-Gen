@@ -33,6 +33,69 @@ def _process_reserve(arguments):
     return ArithmeticRegistry(path).reserve(run_id, ordinal, theme)
 
 
+def test_bulk_reservations_match_single_keys_and_resume_without_new_identities(tmp_path, monkeypatch):
+    from lib.infrastructure import arithmetic_registry as module
+    monkeypatch.setattr(module, "_SCAN_CHUNK", 4)
+    single = ArithmeticRegistry(tmp_path / "single.sqlite3")
+    bulk = ArithmeticRegistry(tmp_path / "bulk.sqlite3")
+    expected = [(ordinal, single.reserve("run", ordinal, "Same theme")) for ordinal in range(20)]
+    actual = list(bulk.reserve_many("run", 0, 20, "Same theme"))
+    assert actual == expected
+    assert list(ArithmeticRegistry(bulk.path).reserve_many("run", 0, 20, "Changed theme")) == expected
+    assert bulk.snapshot()["allocated"] == 20
+
+
+def test_bulk_only_yields_durable_batches_and_rolls_back_partial_next_batch(tmp_path, monkeypatch):
+    from lib.infrastructure import arithmetic_registry as module
+    monkeypatch.setattr(module, "_SCAN_CHUNK", 4)
+    original = module.build_gsm8k
+    calls = 0
+    def interrupted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 6:
+            raise RuntimeError("offline_batch_interrupted")
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module, "build_gsm8k", interrupted)
+    registry = ArithmeticRegistry(tmp_path / "bulk.sqlite3")
+    stream = registry.reserve_many("run", 0, 8)
+    first = next(stream)
+    assert registry.snapshot()["allocated"] == 4  # Commit precedes the first yielded row.
+    committed = [first, next(stream), next(stream), next(stream)]
+    with pytest.raises(RuntimeError, match="offline_batch_interrupted"):
+        next(stream)
+    assert registry.snapshot()["allocated"] == 4
+    monkeypatch.setattr(module, "build_gsm8k", original)
+    restored = list(ArithmeticRegistry(registry.path).reserve_many("run", 0, 8))
+    assert restored[:4] == committed
+    assert len({sample["_registry_fingerprint"] for _, sample in restored}) == 8
+    assert registry.snapshot()["allocated"] == 8
+
+
+def test_bulk_concurrent_runs_and_replays_keep_unique_permanent_keys(tmp_path, monkeypatch):
+    from lib.infrastructure import arithmetic_registry as module
+    monkeypatch.setattr(module, "_SCAN_CHUNK", 4)
+    path = tmp_path / "bulk.sqlite3"
+    def allocate(run_id):
+        return list(ArithmeticRegistry(path).reserve_many(run_id, 0, 12))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        a, b, a_again, b_again = list(pool.map(allocate, ("a", "b", "a", "b")))
+    assert a == a_again and b == b_again
+    assert len({sample["_registry_fingerprint"] for _, sample in a + b}) == 24
+    assert ArithmeticRegistry(path).snapshot()["allocated"] == 24
+
+
+def test_bulk_exhaustion_keeps_existing_reservations_without_recycling(tmp_path, monkeypatch):
+    from lib.infrastructure import arithmetic_registry as module
+    monkeypatch.setattr(module, "GSM8K_V2_SEED_CAPACITY", 8)
+    registry = ArithmeticRegistry(tmp_path / "bulk.sqlite3")
+    original = registry.reserve("old", 0)
+    registry.seed_verified([_sequence(index, capacity=8) for index in range(8)], source="all-history")
+    assert list(registry.reserve_many("new", 0, 3)) == []
+    assert list(registry.reserve_many("old", 0, 3)) == [(0, original)]
+    assert registry.snapshot()["allocated"] == 1 and registry.snapshot()["exhausted"] is True
+
+
 @pytest.mark.parametrize("left,right", [
     (" 2 + 3 ", "(3+2)"),
     ("(2 + 3) + 4", "4 + (3 + 2)"),
@@ -125,7 +188,7 @@ def test_concurrent_threads_resume_one_slot_and_allocate_distinct_other_slots(tm
     assert ArithmeticRegistry(path).snapshot()["allocated"] == 13
 
 
-def test_separate_processes_share_durable_unique_constraints(tmp_path):
+def test_separate_processes_share_durable_unique_constraints(tmp_path, process_entrypoint):
     path = tmp_path / "arithmetic.sqlite3"
     ArithmeticRegistry(path)
     requests = [(str(path), f"run-{index}", 0, f"Theme {index}") for index in range(8)]

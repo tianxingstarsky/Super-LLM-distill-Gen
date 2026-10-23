@@ -231,6 +231,7 @@ class PromoHandler(BaseHTTPRequestHandler):
             self._json(409, {"error": "A recording is already being saved"})
             return
         temporary: Path | None = None
+        result = (500, {"error": "Unable to save the recording"})
         try:
             with tempfile.NamedTemporaryFile(mode="wb", prefix=".recording-", suffix=".upload",
                                              dir=self.server.promo_root, delete=False) as destination:
@@ -251,15 +252,22 @@ class PromoHandler(BaseHTTPRequestHandler):
                 os.fsync(destination.fileno())
             os.replace(temporary, self.server.promo_root / RECORDING_NAME)
             temporary = None
-            self._json(200, {"saved": True, "url": RECORDING_NAME})
+            result = (200, {"saved": True, "url": RECORDING_NAME})
         except (ValueError, socket.timeout) as error:
-            self._json(400, {"error": str(error)})
+            result = (400, {"error": str(error)})
         except OSError:
-            self._json(500, {"error": "Unable to save the recording"})
+            result = (500, {"error": "Unable to save the recording"})
         finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-            self.server.record_lock.release()
+            try:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            except OSError:
+                result = (500, {"error": "Unable to clean up the incomplete recording"})
+            finally:
+                self.server.record_lock.release()
+        # Completion is observable only after the upload is committed or its
+        # temporary file is removed, and the next upload can acquire the lock.
+        self._json(*result)
 
     def log_message(self, format: str, *args):
         print(f"[promo] {self.address_string()} {format % args}", flush=True)

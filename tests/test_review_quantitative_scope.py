@@ -11,6 +11,7 @@ import pytest
 
 from lib.domain.turn_review import supervised_assistant_turns
 from lib.domain.workflow_quality import accepted
+from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
 from lib.prompts.workflow_fact_review import REVIEW_SCORE_V1_8, REVIEW_SCORE_V1_9
 from tests.test_turn_review_and_reasoning_repair import reviewed
@@ -25,7 +26,7 @@ def mock_llm_server():
 
 
 def test_review_1_9_retains_the_literal_1_8_body_and_existing_output_contract():
-    current = get("workflow.review_score")
+    current = get("workflow.review_score", version="1.9.0")
     frozen = get("workflow.review_score", version="1.8.0")
     assert current.version == "1.9.0"
     assert sha256(frozen.template.encode()).hexdigest() == "6fb8e603e0ce86c6c2f57a0238a168608abb39eeca5ec910c918107de96e23e6"
@@ -88,6 +89,16 @@ CASES = [
 def test_new_pinned_review_receives_full_evidence_and_both_turns_without_an_extra_node(
         tmp_path, monkeypatch, evidence, bad, bad_reason, correct, correct_reason, why):
     worker, client, _ = prepare(tmp_path, review=True)
+    # Replay the named 1.9 release's aggregate-plus-turn contract. Current
+    # condition/claim protocols are exercised by their separate workflow tests.
+    worker.recipe.pop("claim_review_protocol_version", None)
+    worker.recipe["turn_review_protocol_version"] = 1
+    released = get("workflow.review_score", "1.9.0")
+    worker.recipe["prompts"]["workflow.review_score"] = {"version": "1.9.0", "sha256": engine.digest(released.template)}
+    worker.recipe["node_prompt_templates"]["review"]["workflow.review_score"] = REVIEW_SCORE_V1_9
+    engine.atomic_json(worker.path / "recipe.json", worker.recipe)
+    worker.state["recipe_hash"] = engine.digest(worker.recipe)
+    engine.atomic_json(worker.path / "state.json", worker.state)
     worker.stage = "review"
     candidate = {"messages": [{"role": "user", "content": "Check the conclusion and keep the scope of the evidence clear."},
         {"role": "assistant", "content": bad, "reasoning_content": bad_reason},

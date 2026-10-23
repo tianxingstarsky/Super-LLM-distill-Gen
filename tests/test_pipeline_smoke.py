@@ -40,7 +40,7 @@ def _fresh_pipeline(tmp_path: pathlib.Path, tag: str):
     return pipeline
 
 
-def test_smoke_pipeline_runs_and_caches(tmp_path):
+def test_smoke_pipeline_runs_and_caches(tmp_path, process_entrypoint):
     # 阶段 1：dry-run 校验 DAG 可执行（batch_size=1 → 仅 1 行，真实调用 LLM 1 次）
     p1 = _fresh_pipeline(tmp_path, "dry")
     before_dry = mock_llm_server.MockLLMHandler.request_count

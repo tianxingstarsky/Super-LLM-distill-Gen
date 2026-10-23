@@ -28,6 +28,7 @@ def test_shared_conversation_contract(flags, issue):
                                     {"isError": False, "is_error": True}])
 def test_training_stage_rejects_error_before_model_access(stage, flags):
     workflow = Workflow.__new__(Workflow)
+    workflow.recipe = {}  # The real workflow always has a frozen recipe, even with all features off.
     unit = {"id": "trace", "messages": [{"role": "tool", "content": "4", **flags}]}
     result = getattr(workflow, stage)(unit)
     assert result[0]["status"] == "quarantined"

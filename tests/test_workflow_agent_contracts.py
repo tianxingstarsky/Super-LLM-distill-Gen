@@ -26,7 +26,7 @@ def mock_llm_server():
     ("workflow.style_check", "1.3.0", STYLE_CHECK_V1_3),
 ])
 def test_registered_stage_is_exact_complete_body_not_an_inherited_conflicting_tail(prompt_id, version, body):
-    current = get(prompt_id)
+    current = get(prompt_id, version=version)
     assert current.version == version
     assert render(current) == body
 

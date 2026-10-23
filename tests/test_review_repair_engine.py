@@ -14,6 +14,7 @@ from tests.test_workflow_production import model_request_data
 from tests.test_workflow_qa_director_engine import source_materials
 from source_memory_fixtures import memory_protocol_versions
 from review_legacy_fixtures import legacy_review_runs  # noqa: F401 -- historical scoring/delta contract
+from tests.review_protocol_fixtures import source_condition_response
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -51,6 +52,10 @@ class Client:
             payload = deepcopy(data["candidate"])
             payload["messages"][-1]["content"] = RIGHT if self.repair_ok else WRONG
             return json.dumps({"record": payload, "quotes": [SOURCE], "uncertain": False})
+        if data.get("claim_review_protocol_version") == 4:
+            return json.dumps(source_condition_response(messages, data,
+                check(WRONG not in json.dumps(data["target_fields"])), quote=SOURCE, refuted_text=WRONG,
+                derivation="The source requires power-off before inspection; the current candidate must preserve that prerequisite."))
         assert "source_evidence" in data, "Only review-node prompts may run in this branch."
         if self.fail_score_once:
             self.fail_score_once = False

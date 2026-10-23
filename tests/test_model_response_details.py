@@ -13,7 +13,7 @@ import pytest
 from lib.llm_client import chat_json
 from lib.model_response_details import ModelJSONResult
 from lib.model_streaming import ModelStreamError
-from lib.model_request_reliability import ModelJSONError
+from lib.model_request_reliability import ModelJSONError, ModelRequestError
 
 
 _spec = importlib.util.spec_from_file_location(
@@ -189,16 +189,24 @@ class BrokenResponse(httpx.SyncByteStream):
 
 
 @pytest.mark.parametrize("api", APIS)
-def test_connection_error_after_partial_deltas_clears_metadata(api):
-    body = BrokenResponse(stream_response(api, complete=False))
-    client = sdk_client(api, lambda request: httpx.Response(
-        200, headers={"content-type": "text/event-stream"}, stream=body))
+def test_connection_error_after_partial_deltas_clears_metadata(api, monkeypatch):
+    # Each bounded transport attempt opens a new HTTP body. Reusing one closed
+    # body accidentally tests StreamConsumed rather than a network interruption.
+    bodies = []
+    def interrupted(request):
+        body = BrokenResponse(stream_response(api, complete=False))
+        bodies.append(body)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=body)
+    monkeypatch.setattr("lib.llm_client.time.sleep", lambda _: None)
+    client = sdk_client(api, interrupted)
     details = {"reasoning_content": "stale"}
     try:
-        with pytest.raises(ModelStreamError, match="model_stream_interrupted"):
+        with pytest.raises(ModelRequestError, match="model_stream_interrupted") as error:
             chat_json(client, MESSAGES, response_details=details, on_stream=lambda event: None)
+        assert error.value.code == "model_stream_interrupted" and error.value.kind == "transient"
+        assert error.value.attempts == 3 and len(bodies) == 3
         assert details == {}
-        assert body.closed
+        assert all(body.closed for body in bodies)
     finally:
         client.client.close()
 

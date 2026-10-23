@@ -7,7 +7,8 @@ import tracemalloc
 
 import pytest
 
-from lib.domain.workflow_node_prompts import LEGACY_NODE_PROMPT_IDS
+from lib.domain.workflow_node_prompts import LEGACY_NODE_PROMPT_IDS, snapshot_node_prompts
+from lib.domain.workflow_scale import validate_node_models
 from lib.infrastructure import training_workflow as engine
 from lib.io_utils import atomic_json
 from lib.llm_client import BudgetExceeded
@@ -62,9 +63,18 @@ def make_run(tmp_path, count=6, *, targets=None, **options):
         recipe = engine.read_json(path / "recipe.json")
         recipe.pop("cpt_review_policy_version", None)
         recipe["package_review"] = engine.validate_package_review(options.get("package_review"))
+        if recipe["package_review"].get("node") == "jev":
+            # New pure-CPT creation correctly removes inactive review settings.
+            # This fixture explicitly reconstructs the historical JEV contract,
+            # including its schema version and complete node snapshot.
+            recipe["version"] = 16
+            recipe["node_prompt_templates"] = snapshot_node_prompts(options.get("node_prompts"), recipe_version=16)
+            recipe["node_models"] = validate_node_models(options.get("node_models"))
         atomic_json(path / "recipe.json", recipe)
         state = engine.read_json(path / "state.json")
         state.update(recipe_hash=engine.digest(recipe), package_review_enabled=recipe["package_review"]["enabled"])
+        if recipe["package_review"].get("node") == "jev" and recipe["package_review"]["enabled"]:
+            state["stages"]["jev"] = {"label": "JEV 质量评审", "status": "pending", "done": 0, "total": 0}
         atomic_json(path / "state.json", state)
     return output, rid, path, source
 

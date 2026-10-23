@@ -74,7 +74,11 @@ def test_rework_batch_is_only_review_preserves_original_and_tracks_true_success(
     state = engine.Workflow(output, row["run_id"], tmp_path, generator=writer, judge=Reviewer()).execute()
     assert state["status"] == "completed", state.get("error")
     assert state["stages"]["sft"]["status"] == "skipped" and state["stages"]["review"]["status"] == "completed"
-    assert all("candidate" in call for call in writer.calls)
+    assert all("candidate" in call for call in writer.calls if "review_feedback" in call)
+    review_calls = [call for call in writer.calls if call.get("claim_review_protocol_version") == 4]
+    assert [call["phase"] for call in review_calls] == ["claim_challenge", "claim_adjudication"]
+    assert all(call["review_requirements"]["revision_instruction"] == recipe["repair_inputs"][0]["instruction"]
+               for call in review_calls)
     page = app.issues(sid, status="completed")
     assert page["total"] == 1 and page["counts"]["pending"] == 0
     assert page["rows"][0]["result_run_id"] == row["run_id"]

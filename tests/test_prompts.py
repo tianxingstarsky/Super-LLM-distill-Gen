@@ -85,7 +85,7 @@ def test_legacy_module_compat():
 def test_configured_explanation_length_does_not_conflict_with_short_default():
     from lib.prompts import workflow
     current = get("workflow.cot_generate")
-    assert current.version == "1.8.0"
+    assert current.version == "1.10.0"
     assert "用户未配置篇幅时直接可解的问题可以很短" in current.template
     assert "用户明确配置篇幅时核对实际正文与有效信息量" in current.template
     assert "具体版本行为、阈值、CLI开关、SQL字段和锁类型" in current.template
@@ -93,19 +93,42 @@ def test_configured_explanation_length_does_not_conflict_with_short_default():
     assert historical == workflow.COT_GENERATE_V1_5
     assert "用户未配置篇幅时直接可解的问题可以很短" not in historical.template
     assert "只返回" in render(historical) or "仅返回" in render(historical)
+    assert get("workflow.cot_generate", version="1.8.0") == workflow.COT_GENERATE_V1_8
 
 
 def test_precise_fact_review_preserves_old_prompt_snapshots():
-    for name, current_version, old_version in (
+    # These assertions describe the precision-rule release, not whichever
+    # later protocol currently occupies the registry's default slot.
+    for name, released_version, old_version in (
         ("rationale_check", "1.6.0", "1.2.0"),
         ("review_score", "1.9.0", "1.3.0"),
         ("package_review", "1.4.0", "1.2.0"),
     ):
-        current = get("workflow." + name)
+        released = get("workflow." + name, version=released_version)
         old = get("workflow." + name, version=old_version)
-        assert current.version == current_version and old.version == old_version
-        assert "没有依据的精确细节应省略或明确保留不确定性" in render(current)
+        assert released.version == released_version and old.version == old_version
+        assert "没有依据的精确细节应省略或明确保留不确定性" in render(released)
         assert "没有依据的精确细节应省略或明确保留不确定性" not in render(old)
+
+
+def test_latest_review_protocol_preserves_literal_scope_and_refuses_invented_support():
+    current = get("workflow.review_score")
+    assert current.version == "1.20.0"
+    text = render(current)
+    for constraint in (
+        "保持原句的主体、动作、对象、时点、范围、否定、量词和必要/充分条件",
+        "引文只是位置凭据",
+        "额外添加一个条件后成立",
+        "后者不能supported原句，应用insufficient并说明缺口",
+        "不能将自行补入的条件隐藏在derivation里",
+        "证据不足保留待复核，不建议自动修改原稿",
+        "不伪造工具核验",
+    ):
+        assert constraint in text
+    for name, version in (("rationale_check", "1.8.0"), ("package_review", "1.4.0")):
+        spec = get("workflow." + name)
+        assert spec.version == version
+        assert "没有依据的精确细节应省略或明确保留不确定性" in render(spec)
 
 
 def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_stays_pinned():
@@ -113,7 +136,8 @@ def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_s
     current = get("workflow.review_repair")
     previous = get("workflow.review_repair", version="1.7.0")
     old = get("workflow.review_repair", version="1.3.0")
-    assert current.version == "1.9.0" and old == workflow.REVIEW_REPAIR_V1_3
+    assert current.version == "1.11.0" and old == workflow.REVIEW_REPAIR_V1_3
+    assert get("workflow.review_repair", version="1.9.0") == workflow.REVIEW_REPAIR_V1_9
     assert previous == workflow.REVIEW_REPAIR_V1_7
     assert "仅按实际question与可见文章判断用户的前提" in render(previous)
     assert "不能将这些内部材料中的错误归因给用户" in render(previous)
@@ -126,8 +150,8 @@ def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_s
 def test_user_hypotheses_do_not_become_asserted_beliefs_and_previous_snapshots_remain_registered():
     from lib.prompts import workflow
     for name, new_version, old_version, previous in (
-        ("cot_generate", "1.8.0", "1.6.0", workflow.COT_GENERATE_V1_6),
-        ("review_repair", "1.9.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
+        ("cot_generate", "1.10.0", "1.6.0", workflow.COT_GENERATE_V1_6),
+        ("review_repair", "1.11.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
     ):
         assert get("workflow." + name).version == new_version
         if name == "review_repair":

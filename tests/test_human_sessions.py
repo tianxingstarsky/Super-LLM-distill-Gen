@@ -11,6 +11,7 @@ from lib.domain.human_augmentation import HUMAN_CHECK_FIELDS, validate_human_aug
 from lib.infrastructure import training_workflow as engine
 from lib.io_utils import atomic_json
 from tests.test_human_augmentation import human_request_data
+from tests.review_protocol_fixtures import source_condition_response
 
 
 Q = "检查设备前应该先做什么？"
@@ -39,6 +40,9 @@ class Writer:
         data = human_request_data(messages)
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
+        if data.get("claim_review_protocol_version") == 4:
+            return json.dumps(source_condition_response(messages, data, review_verdict(data), quote=A,
+                derivation="The manual source requires disconnection before inspection and recording afterwards; the current reply retains those conditions."))
         if "你是实际对话上下文与角色边界审查员" in messages[0]["content"]:
             return json.dumps({"keep": True, "context_complete": True, "leakage_free": True,
                                "reason": "实际对话自包含，未引用隐藏前文。"})
@@ -56,7 +60,7 @@ class Writer:
                     answers[requested - 1]["content"] = "安全提醒：" + answers[requested - 1]["content"]
                 elif "answer" in payload:
                     payload["answer"] = "安全提醒：" + payload["answer"]
-            if (data.get("target") == "multiturn" and "assistant_updates" in messages[0]["content"]
+            if (data.get("target") in {"sft", "multiturn"} and "assistant_updates" in messages[0]["content"]
                     and len(payload["messages"]) == len(data["candidate"]["messages"])):
                 # New repairs do not copy user turns; deliberately truncated
                 # full-message replies below remain invalid adversarial cases.
@@ -64,8 +68,16 @@ class Writer:
                            if message["role"] == "assistant"]
                 selected = indices[min(requested, len(indices)) - 1]
                 message = payload["messages"][selected]
-                payload = {"assistant_updates": [{"message_index": selected, "content": message["content"],
-                    **({"reasoning_content": message["reasoning_content"]} if message.get("reasoning_content") else {})}]}
+                update = {"message_index": selected, "content": message["content"]}
+                if message.get("reasoning_content"):
+                    evidence = data["source_evidence"]["teacher_evidence"]
+                    update.update(reasoning_content=message["reasoning_content"], reasoning_trace={
+                        "task": "回答实际用户的安全检查问题，保留原有事实与本次表达要求。",
+                        "premises": [evidence], "steps": [{"basis": evidence,
+                            "inference": "保留操作前置条件及先后依赖，以建议表达当前应做的操作，不声称已经完成现场操作。",
+                            "result": message["content"]}], "checks": [{"check": "核对前置条件、记录顺序和事实归属。",
+                            "result": "回答保留输入中的操作条件，未声称工具执行或现场验证。"}], "limitations": []})
+                payload = {"assistant_updates": [update]}
             return json.dumps({"record": payload, "uncertain": False,
                                "quotes": [data["source_evidence"]["teacher_evidence"]]}, ensure_ascii=False)
         if data.get("request_phase") == "next_turn":
@@ -107,13 +119,16 @@ class Writer:
 
 
 def review_verdict(data):
-    candidate = data.get("candidate", {})
+    candidate = {"messages": data["messages"]} if data.get("claim_review_protocol_version") == 4 else data.get("candidate", {})
     answers = [m.get("content", "") for m in candidate.get("messages", []) if m.get("role") == "assistant"]
     if "answer" in candidate:
         answers.append(candidate["answer"])
-    instruction = data.get("instruction", "")
+    instruction = (data.get("review_requirements") or {}).get("revision_instruction", data.get("instruction", ""))
     requested = 3 if "第三轮" in instruction else 2 if "第二轮" in instruction else 1
     keep = (not instruction or len(answers) >= requested and "安全提醒：" in answers[requested - 1])
+    if data.get("claim_review_protocol_version") == 4 and len(answers) < requested:
+        # A later-turn edit must not reject an earlier unchanged prefix.
+        keep = True
     return {"keep": keep, "grounded": True, "reasoning_valid": True, "correctness": 5 if keep else 2,
         "scores": {key: 5 if keep else 2 for key in ("correctness", "reasoning", "grounding", "instruction", "safety")},
         "reason": "来源和回答通过模型核对。" if keep else "选中结果的人工反馈未落实。"}
@@ -129,6 +144,9 @@ class Reviewer:
         data, prompt = human_request_data(messages), messages[0]["content"]
         self.calls.append(deepcopy(data))
         self.usage["calls"] += 1
+        if data.get("claim_review_protocol_version") == 4:
+            return json.dumps(source_condition_response(messages, data, review_verdict(data), quote=A,
+                derivation="The manual source places power-off before inspection and recording after it; review the current reply under these actual conditions."))
         if "你是实际对话上下文与角色边界审查员" in prompt:
             return json.dumps({"keep": True, "context_complete": True, "leakage_free": True,
                                "reason": "实际对话自包含，未引用隐藏前文。"})
@@ -277,7 +295,9 @@ def test_actual_generation_feedback_and_same_question_revision_preserve_the_pare
     assert state["stages"]["sft"]["status"] == "skipped"
     assert state["stages"]["review"]["status"] == "completed"
     assert all(("learner_messages" in call and "source_evidence" not in call)
-               if call.get("learner_context_only") else ("candidate" in call and "source_evidence" in call)
+               if call.get("learner_context_only") else
+               ("messages" in call and "target_units" in call and "source_evidence_ref" in call)
+               if call.get("claim_review_protocol_version") == 4 else ("candidate" in call and "source_evidence" in call)
                for call in writer.calls)
     assert first["run_id"] != second["run_id"] and len(app.list_sessions()) == 1
 
@@ -334,9 +354,9 @@ def test_multiturn_revision_receives_full_selected_dialogue_and_final_feedback_c
     current = app.results(sid, target="multiturn")["rows"][0]
     assert current["lineage"]["messages"] == candidate["messages"]
     assert len(current["messages"]) == 4 and current["messages"][3]["content"].startswith("安全提醒：")
-    final = [call for call in writer.calls if "candidate" in call and "review_feedback" not in call
-             and not call.get("learner_context_only")]
-    assert len(final) == 1 and final[0]["candidate"]["messages"] == current["messages"]
+    final = [call for call in writer.calls if call.get("phase") == "claim_adjudication"]
+    assert [call["scope"]["message_index"] for call in final] == [1, 3]
+    assert all(call["messages"] == current["messages"][:call["scope"]["message_index"] + 1] for call in final)
     blind = [call for call in writer.calls if call.get("learner_context_only")]
     assert len(blind) == 1 and blind[0]["learner_messages"] == current["messages"]
     assert "candidate" not in blind[0] and "source_evidence" not in blind[0]
@@ -395,6 +415,11 @@ def test_real_feedback_revision_returns_to_jev_and_keeps_rejected_and_passed_ver
         def chat(self, messages, **kwargs):
             data = human_request_data(messages)
             response = super().chat(messages, **kwargs)
+            if self.reject and data.get("target") == "sft" and data.get("phase") == "claim_adjudication":
+                value = json.loads(response)
+                value["verdict"].update(keep=False, correctness=2, reason="请在回答中明确检查开始前断电。")
+                value["verdict"]["scores"] = {key: 2 for key in value["verdict"]["scores"]}
+                return json.dumps(value, ensure_ascii=False)
             if self.reject and data.get("target") == "sft" and "candidate" in data:
                 value = json.loads(response)
                 value.update(keep=False, correctness=2, reason="请在回答中明确检查开始前断电。")
@@ -421,7 +446,8 @@ def test_real_feedback_revision_returns_to_jev_and_keeps_rejected_and_passed_ver
     assert projection["generation_nodes"] == []
     assert projection["stages"]["self_check"]["status"] == "completed"
     assert projection["stages"]["scoring"]["rejected"] == 1
-    assert projection["reviewer_feedback"] == "请在回答中明确检查开始前断电。"
+    assert projection["reviewer_feedback"].endswith("请在回答中明确检查开始前断电。")
+    assert projection["reviewer_feedback"] == selected["record"]["review_repair"]["verdict"]["reason"]
     assert len(app.session(sid)["rounds"]) == 2 and original.read_bytes() == original_bytes
     rejected_bytes = (engine.run_path(output, second["run_id"]) / "artifacts/sft.records.json").read_bytes()
     saved = app.save_feedback(sid, second["id"], "sft", selected["candidate_id"],

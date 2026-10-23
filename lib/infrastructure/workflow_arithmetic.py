@@ -269,10 +269,7 @@ def registered_arithmetic_inputs(workflow, path, count, offset):
     source_id = _digest(["persistent_arithmetic_registry", run_id])
 
     def allocate():
-        for ordinal in range(offset, offset + count):
-            sample = registry.reserve(run_id, ordinal, theme, check_cancel=workflow.check_cancel)
-            if sample is None:
-                break
+        for ordinal, sample in registry.reserve_many(run_id, offset, count, theme, check_cancel=workflow.check_cancel):
             yield {"id": _digest(["persistent_arithmetic_registry", run_id, ordinal]), "source_id": source_id,
                    "kind": "arithmetic_seed", "status": "ready", "synthetic": True,
                    "arithmetic_ordinal": ordinal, "arithmetic_fingerprint": sample["_registry_fingerprint"]}

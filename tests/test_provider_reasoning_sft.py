@@ -6,6 +6,7 @@ import pytest
 from lib.domain.provider_reasoning import reasoning_provenance, select_candidate_reasoning
 from lib.domain.reasoning_fields import sft_training_messages
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector
+from lib.infrastructure.training_workflow import Workflow
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -114,6 +115,8 @@ ANSWER = "Disconnect its power first."
 
 
 class DirectedWorkflow(WorkflowQADirector):
+    controlled_training_messages = staticmethod(Workflow.controlled_training_messages)
+
     def __init__(self, candidate, *, style=None, separated=True, legacy_review=False, historical=False):
         self.candidate, self.style = candidate, style
         self.calls = []

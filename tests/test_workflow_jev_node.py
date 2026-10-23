@@ -10,6 +10,7 @@ from lib.domain.workflow_package_review import package_review_stage, validate_pa
 from lib.domain.workflow_node_prompts import active_node_prompt_ids, snapshot_node_prompts
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.workflow_stream_journal import read_streams
+from lib.infrastructure.workflow_agent_experience import experience_system
 from lib.llm_client import ChatClient
 from tests.test_workflow_package_review_engine import make_run, Reviewer, good_verdict, report
 
@@ -83,7 +84,8 @@ def test_jev_owns_scoring_progress_events_models_and_prompt(tmp_path, monkeypatc
     assert state["stages"]["jev"]["done"] == state["stages"]["jev"]["total"] == 3
     assert state["stages"]["package"]["done"] == state["stages"]["package"]["total"] == 1
     assert "jev.jev" in state["models"] and "package.jev" not in state["models"]
-    assert all(call["messages"][0]["content"].endswith(custom) for call in reviewer.package_calls)
+    experience = experience_system(engine.read_json(path / "recipe.json"), "workflow.package_review")
+    assert all(call["messages"][0]["content"].endswith(custom + experience) for call in reviewer.package_calls)
     assert all(call["kwargs"]["max_tokens"] == 32768 for call in reviewer.package_calls)
     assert {event["stage"] for event in state["events"] if event["kind"] == "model_started"} == {"jev"}
     assert any(event["stage"] == "jev" and event["kind"] == "stage_completed" for event in state["events"])

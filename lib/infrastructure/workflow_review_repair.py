@@ -644,7 +644,7 @@ def _current_review_generation_style(workflow, target, row, requirements):
     return style
 
 
-def current_claim_review_requirements(workflow, target, row):
+def current_claim_review_requirements(workflow, target, row, *, instruction=""):
     """Read finite current node controls without promoting old QA plans.
 
     Native/human explanations are not relabeled as newly authored merely
@@ -653,6 +653,15 @@ def current_claim_review_requirements(workflow, target, row):
     from the frozen current node configuration, never the candidate's history.
     """
     requirements = {}
+    revision_version = workflow.recipe.get("claim_review_revision_instruction_version")
+    if revision_version is not None and (type(revision_version) is not int or revision_version != 1):
+        raise ValueError("invalid_claim_review_revision_instruction_version")
+    if revision_version == 1:
+        if (not isinstance(instruction, str) or instruction and not instruction.strip()
+                or "\x00" in instruction or len(instruction) > 16_000):
+            raise ValueError("invalid_claim_review_revision_instruction")
+        if instruction:
+            requirements["revision_instruction"] = instruction
     director = workflow.recipe.get("qa_director", {})
     if director.get("enabled") is True and director.get("learning_goal") in {
             "knowledge_application", "document_reading", "mixed"}:
@@ -1186,7 +1195,7 @@ class WorkflowReviewRepair:
         return {**deepcopy(check), "keep": False,
             "reason": "; ".join([check["reason"], "claim_release_refuted_claim: " + canonical(refuted)])}
 
-    def _review_claim_score(self, target, row, evidence, key):
+    def _review_claim_score(self, target, row, evidence, key, *, instruction=""):
         """Assess real assistant prefixes without disclosing future turns.
 
         This replaces the primary aggregate score for explicitly versioned new
@@ -1223,13 +1232,13 @@ class WorkflowReviewRepair:
         if type(depth_version) is not int or depth_version not in {0, 1}:
             raise ValueError("invalid_reasoning_depth_contract_version")
         if adversarial_version == 1:
-            return self._review_adversarial_claim_score(target, row, evidence, key)
+            return self._review_adversarial_claim_score(target, row, evidence, key, instruction=instruction)
         if version == 2:
-            return self._review_blind_claim_score(target, row, evidence, key)
+            return self._review_blind_claim_score(target, row, evidence, key, instruction=instruction)
         payload = self._review_payload(target, row)
         requests = claim_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False),
-            review_requirements=current_claim_review_requirements(self, target, row) or None)
+            review_requirements=current_claim_review_requirements(self, target, row, instruction=instruction) or None)
         audit = {"version": 1, "method": "prefix_only_model_claim_review",
                  "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
                  "source_evidence_sha256": requests[0]["scope"]["source_evidence_sha256"],
@@ -1307,6 +1316,10 @@ class WorkflowReviewRepair:
                 from lib.domain.review_claim_focus import claim_review_focus_units
                 wire_metadata["claim_review_focus"] = claim_review_focus_units(request["target_units"])
         call_instruction = instruction
+        if (request.get("review_requirements") or {}).get("revision_instruction"):
+            call_instruction += ("\nreview_requirements.revision_instruction是本次用户明确的修正要求。"
+                "核对当前候选是否实际落实相关要求；它不是事实证据，不能补造前提、覆盖用户原话或修改工具记录。"
+                "尚未落实时在verdict说明实际缺口并拒绝放行；不能将表达要求未落实虚构为事实反证。\n")
         if wire_metadata:
             from lib.infrastructure.claim_review_wire_schema import CLAIM_REVIEW_DYNAMIC_WIRE_HEADER
             call_instruction += CLAIM_REVIEW_DYNAMIC_WIRE_HEADER
@@ -1367,7 +1380,7 @@ class WorkflowReviewRepair:
             else:
                 return receipt, reference
 
-    def _review_adversarial_claim_score(self, target, row, evidence, key):
+    def _review_adversarial_claim_score(self, target, row, evidence, key, *, instruction=""):
         """Inventory conditions or challenge, then review in separate contexts.
 
         The opt-in inventory supplies no pre-judgment. Historical runs retain
@@ -1378,7 +1391,7 @@ class WorkflowReviewRepair:
             adversarial_claim_review_requests, validate_adversarial_claim_review, merge_adversarial_claim_reviews)
         from lib.infrastructure.training_workflow import digest
         payload = self._review_payload(target, row)
-        requirements = current_claim_review_requirements(self, target, row) or None
+        requirements = current_claim_review_requirements(self, target, row, instruction=instruction) or None
         condition_version = self.recipe.get("claim_review_condition_contract_version")
         inputs = challenge_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
@@ -1420,7 +1433,7 @@ class WorkflowReviewRepair:
             "checkpoints": [deepcopy(item["checkpoint"]) for item in audit["assessments"]]}
         return self._claim_refutation_release(row, check)
 
-    def _review_blind_claim_score(self, target, row, evidence, key):
+    def _review_blind_claim_score(self, target, row, evidence, key, *, instruction=""):
         """Establish candidate-blind reference points before inspecting a draft.
 
         Blind references are fallible model assessments, not truth labels.
@@ -1435,7 +1448,7 @@ class WorkflowReviewRepair:
         if anchored:
             from lib.domain.anchored_claim_review import (claim_review_requests_v3, validate_claim_review_v3,
                                                          merge_claim_reviews_v3)
-        requirements = current_claim_review_requirements(self, target, row) or None
+        requirements = current_claim_review_requirements(self, target, row, instruction=instruction) or None
         inputs = blind_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements)
         audit = {"version": 3 if anchored else 2, "method": ("anchored_reference_model_claim_review" if anchored
@@ -1609,7 +1622,7 @@ class WorkflowReviewRepair:
                     "key": deepcopy(call_key), "checkpoint_sha256": hashlib.sha256(
                         canonical(["call", call_key]).encode("utf-8")).hexdigest()}
             return result
-        check = (self._review_claim_score(target, row, evidence, key)
+        check = (self._review_claim_score(target, row, evidence, key, instruction=instruction)
                  if claim_version in {1, 2} and target in {"sft", "multiturn", "cot"}
                  else assessed([*key, "score"], data))
         if target in PREFERENCE_TARGETS:

@@ -67,6 +67,12 @@ def setup(tmp_path, *, legacy=False, custom=None):
         get("workflow.review_score", version="1.11.0"))
     if legacy:
         workflow.recipe.pop("learner_context_review_version")
+    # A format-retry test opens a fresh Workflow from this same historical
+    # run. Freeze the deliberately isolated contract on disk as well, so a
+    # resume cannot silently reload the current claim-review defaults.
+    engine.atomic_json(workflow.path / "recipe.json", workflow.recipe)
+    workflow.state["recipe_hash"] = engine.digest(workflow.recipe)
+    engine.atomic_json(workflow.path / "state.json", workflow.state)
     question = "资料中写了 relminxid。PostgreSQL 18 该怎么检查冻结边界？"
     row = {"id": "row", "status": "eligible", "source_id": "source", "messages": [
         {"role": "user", "content": question},
