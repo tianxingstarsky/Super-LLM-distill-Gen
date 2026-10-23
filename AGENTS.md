@@ -13,3 +13,4 @@
 - 调整依赖时运行 `tests/test_ddd_architecture.py` 和对应业务回归。重构不得改变既有任务、缓存、审核记录与导出字段；涉及格式变化必须单独设计版本迁移。
 - 修改代码前看所在目录 README；新增维护目录同时写清职责、入口、依赖和验证。命名遵循 `docs/architecture/naming.md`，区分来源、候选、训练记录、审核决定，避免跨层使用含糊的 data/result。
 - 普通批次编排归 `ExecuteWorkflowRun` / `GenerateDatasetBatch`；旧 `TrainingWorkflowRuntime` 只承接尚未拆分的节点算法。取消使用显式异常类型，不能比较类名字符串。批次端口保持流式记录，不能因重构将完整数据集转成列表。
+- 多轮编排归 `GenerateMultiturnDialogue`；生产调度归 `ExecuteProductionRounds` / `GenerateProductionBatch`；自动评审与返工归 review 域的 `ReviewCandidate` / `ReviewGeneratedCollections` / `ExecuteRepairBranch`。通过组合根接入，不能将主循环重新塞回兼容运行时。保存收据成功后才能推进轮次；认证全部父版本后才能开始返工请求。

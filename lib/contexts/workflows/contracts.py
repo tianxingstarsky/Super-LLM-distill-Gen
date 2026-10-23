@@ -2,3 +2,5 @@
 from lib.contexts.workflows.domain.targets import (
     PREFERENCE_TARGETS, TARGETS, rlaif_feedback_issue, rlaif_reward_model_record, training_record,
 )
+
+from .domain.targets import TRAINING_FIELDS, preference_score_issue

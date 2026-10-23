@@ -129,10 +129,11 @@ def test_source_narration_native_repair_retains_original_audit_and_full_replacem
 
 
 def test_new_narration_issue_does_not_strand_initial_repairable_surface_failure(monkeypatch):
+    from lib.contexts.review.application import review_candidate
     original = knowledge_candidate(origin="prompt_styled_generation")
     original["messages"][1]["reasoning_content"] = "资料未规定具体阈值，先核验资料。"
-    actual = review_module._payload_issue
-    monkeypatch.setattr(review_module, "_payload_issue", lambda target, record:
+    actual = review_candidate._payload_issue
+    monkeypatch.setattr(review_candidate, "_payload_issue", lambda target, record:
         "training_surface_knowledge_source_narration" if record["messages"][1]["reasoning_content"] == original["messages"][1]["reasoning_content"]
         else actual(target, record))
     delta = updates()

@@ -188,15 +188,7 @@ class DirectorPlanError(ValueError):
         super().__init__(self.code)
 
 
-class DialoguePlanError(ValueError):
-    code = "invalid_dialogue_step"
-
-    def __init__(self, validation_error=None):
-        self.feedback = {"code": self.code}
-        if validation_error is not None:
-            self.code = str(validation_error)
-            self.feedback = deepcopy(getattr(validation_error, "feedback", {"code": self.code}))
-        super().__init__(self.code)
+from lib.contexts.workflows.domain.dialogue import DialoguePlanError
 
 
 class DirectorBatchTooLarge(ValueError):

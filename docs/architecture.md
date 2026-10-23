@@ -55,9 +55,15 @@ flowchart LR
 
 `ExecuteWorkflowRun` 在应用层协调独占会话、快照核验、执行分支、取消和失败；`GenerateDatasetBatch` 决定普通批次的阶段顺序。`RunSessionPort` 与 `BatchRuntimePort` 隔离文件操作及节点算法。`BatchGenerationPlan` 和 `BatchOutcome` 是纯领域决定，`RecordBatch` 允许磁盘流式记录，应用层不强制转换成列表。
 
+`GenerateMultiturnDialogue` 使用 `DialoguePort` 读取已认证资料和请求各角色，分别处理导入对话、逐轮生成和整段评审。`DialogueProgress` 只表示一次调用的临时进度；历史消息、推理字段、请求键和自然停止规则保持原合同。
+
+`ExecuteProductionRounds` 通过 `ProductionPort` 使用收据与流式批次；`ProductionProgress` 和领域策略重建轮次及饱和停止。`GenerateProductionBatch` 决定每个窗口的节点依赖。SQLite、落盘与收据原子替换属于适配器，完成收据写入后用例才推进轮次。最终聚合复用已核验评审；旧配方允许的补充与新配方的质量优先停止继续分别执行。
+
 **数据集版本**由原生训练文件、证据文件和清单共同确定。预览可以使用短期完整性缓存；发布和下载重新核验。失败本身不能成为可交付版本，明确提交的部分结果还必须与清单标记一致。
 
 **审核决定**绑定候选身份和来源哈希。来源改变后，旧页面不能覆盖新内容。审核发布消费明确的审核结果，保留证据和版本记录，不修改原始产物。
+
+自动评审由 `ReviewCandidate` 组织有界评分与修复：相同候选复用已取得的评审，不把未知条件补成事实，不把待复核当作自动修正理由。`ReviewGeneratedCollections` 保留流式集合与 CoT/SFT 血缘；`ExecuteRepairBranch` 在任何生成请求前认证全部选中父版本。模型返回协议、来源文件、模型请求和修订发布分别由审核基础设施承担。
 
 **模型配置**区分人工声明与实际探测证据。工作流保存配置快照和引用，密钥、SDK 和网络实现留在基础设施。模型调度池继续执行既有共享并发约束。
 
@@ -71,7 +77,7 @@ CPT 重复判定保留在纯领域规则中；SQLite 索引负责存储和候选
 
 `lib/infrastructure/workflow_store.py` 是既有运行目录和清单格式的文件边界。它不导入生成引擎。数据读取、统计、打包和运行查询通过它复用路径、哈希和锁语义。
 
-`training_workflow.py` 的节点生成算法、多轮对话和模型请求仍需后续拆分；生产轮次、资料库缓存、知识库和人工增强会话也仍有旧实现。普通批次的应用编排与本地语料准备已经分离。具体迁移范围见 [迁移记录](architecture/migration.md)。
+`training_workflow.py` 中的 SFT、CoT 单节点生成和通用模型请求仍需后续拆分；资料库缓存、知识库和人工增强会话仍有旧实现。普通批次、多轮生成、生产轮次、自动评审修复与本地语料准备已分离。旧运行时钩子为调用兼容继续保留，不再承载这些用例的主循环。具体迁移范围见 [迁移记录](architecture/migration.md)。
 
 ## 验证
 
@@ -84,6 +90,8 @@ python -m pytest -q --tb=short
 
 执行和语料应用的独立进程测试禁止所有具体基础设施。普通批次测试使用不可展开的百万条记录替身，验证清洗、指导、SFT、偏好、CoT 与发布之间的顺序及数据传递。包内相对导入同时进行静态路径检查，避免可选 SDK 未安装时掩盖迁移错误。
 
+多轮、生产与自动评审用例也在禁止加载基础设施与模型 SDK 的独立解释器中实际执行。内存端口测试覆盖分角色调用顺序、单轮自然停止不能冒充多轮、取消及提交失败不推进收据、重复候选不重复付费评审、修复保持用户任务与推理谱系。
+
 测试共用本地模拟服务端口，不同 pytest 进程应顺序运行。完整 Python 回归之后，再单独执行 `ui_tests`。
 
 既有技术细节和历史验证保存在 [实现记录](architecture/implementation-notes.md)。外部插件边界见 [控制协议](external-control.md)。
@@ -91,3 +99,5 @@ python -m pytest -q --tb=short
 本次整理的完整回归、版本补测和历史数据核验见 [验证记录](architecture/verification-2026-10-23.md)。
 
 后续执行用例、文档边界与目录说明整理见 [可维护性验证](architecture/maintainability-verification-2026-10-23.md)。
+
+多轮、生产轮次和自动评审迁移的行为对比见 [执行流程验证](architecture/pipeline-verification-2026-10-23.md)。

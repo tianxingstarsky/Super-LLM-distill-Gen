@@ -6,6 +6,7 @@
 | --- | --- |
 | 业务边界与装配 | `test_ddd_architecture.py`、`test_onion_architecture.py` |
 | 执行顺序与状态 | `test_workflow_execution_application.py`、工作流及 production 测试 |
+| 多轮、生产轮次、评分修复边界 | `test_pipeline_use_cases.py`、multiturn、production、review_repair 及 reasoning 回归 |
 | 文档准备 | `test_document_corpus_application.py`、`test_doc2corpus.py`、`test_latex_document.py` |
 | Docling 适配 | `test_docling*.py`，必要时使用独立解析环境补测 |
 | 数据集交付 | package、statistics、verified_preview、credential 相关测试 |

@@ -176,6 +176,10 @@ def test_composition_uses_separate_adapters_and_narrow_use_cases(tmp_path):
     ("lib.infrastructure.latex_document", "lib.contexts.documents.domain.latex"),
     ("lib.infrastructure.docling_runtime", "lib.contexts.documents.infrastructure.docling.runtime"),
     ("lib.infrastructure.docling_inline_formulas", "lib.contexts.documents.infrastructure.docling.inline_formulas"),
+    ("lib.infrastructure.workflow_production", "lib.contexts.workflows.infrastructure.production_runtime"),
+    ("lib.infrastructure.workflow_review_repair", "lib.contexts.review.infrastructure.automatic_runtime"),
+    ("lib.domain.review_repair", "lib.contexts.review.domain.repair"),
+    ("lib.infrastructure.reasoning_prefill_history", "lib.contexts.review.domain.reasoning_history"),
 ])
 def test_compatibility_paths_resolve_to_one_implementation(old, new):
     assert importlib.import_module(old) is importlib.import_module(new)
@@ -255,6 +259,30 @@ class Reader:
 result = PrepareDocumentCorpus(Reader()).execute(DocumentSource("memory", "guide.md", ".md"))
 assert result.entries and result.source_chars > 0
 assert BatchOutcome((TargetOutcome("sft", 1),), frozenset(), 0, 0, 0, False).status == "completed"
+'''
+    result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
+def test_dialogue_production_and_review_execute_without_adapters_or_model_sdks():
+    script = r'''
+import importlib.abc, sys
+class NoAdapters(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if (fullname.startswith(("lib.infrastructure", "lib.bootstrap", "lib.presentation", "lib.llm_client"))
+                or ".infrastructure" in fullname
+                or fullname.split(".")[0] in {"streamlit", "docling", "openai", "anthropic", "httpx", "requests"}):
+            raise AssertionError("application loaded an external adapter: " + fullname)
+sys.meta_path.insert(0, NoAdapters())
+from tests.test_pipeline_use_cases import (
+    test_dialogue_port_keeps_separate_actors_and_every_turn_reasoning,
+    test_million_row_production_use_case_only_handles_bounded_windows_and_receipts,
+    test_review_repairs_and_rescores_exact_body_without_changing_task,
+)
+test_dialogue_port_keeps_separate_actors_and_every_turn_reasoning()
+test_million_row_production_use_case_only_handles_bounded_windows_and_receipts()
+test_review_repairs_and_rescores_exact_body_without_changing_task()
 '''
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
                             capture_output=True, text=True, timeout=30)

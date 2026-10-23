@@ -12,7 +12,7 @@ from lib.domain.workflow_qa_director import validate_qa_director, qa_director_ap
 from lib.contexts.workflows.domain.production import validate_production, MAX_PRODUCTION_GOAL
 from lib.domain.cpt_processing import validate_cpt_processing
 from lib.domain.human_augmentation import HUMAN_QA_TARGETS
-from lib.domain.review_repair import validate_review_repair, validate_repair_inputs
+from lib.contexts.review.contracts import validate_review_repair, validate_repair_inputs
 from lib.contexts.workflows.domain.graph import SOURCE_QA_TARGETS, uses_shared_source_cleaning
 from lib.domain.agent_experience import validate_agent_experience
 

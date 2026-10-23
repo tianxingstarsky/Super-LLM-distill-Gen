@@ -17,3 +17,13 @@
 `webapp.py`、`cli.py` 是入口。`llm_client.py` 及 `model_*` 仍是协议与请求运行时。`doc2corpus.py`、`workflow.py` 保留兼容入口。不要继续向这些入口追加领域规则。
 
 新增功能先决定所属业务域；用例中需要外部能力时，在该域 application 定义端口，在 infrastructure 实现，并由 bootstrap 装配。历史任务、缓存键、提示词版本及导出字段的变化须单独设计迁移。
+
+执行链维护入口：
+
+| 想修改的行为 | 从哪里开始 |
+| --- | --- |
+| 普通批次、运行恢复和取消 | [工作流应用层](contexts/workflows/application/README.md) 的 `ExecuteWorkflowRun` / `GenerateDatasetBatch` |
+| 多轮角色调用、自然停止、逐轮与整段评审 | 同目录的 `GenerateMultiturnDialogue` |
+| 大批量窗口、收据恢复、质量饱和与最终补充 | 同目录的 `ExecuteProductionRounds` / `GenerateProductionBatch` |
+| 自动评分修正、重复稿停止、人工待复核和返工 | [审核应用层](contexts/review/application/README.md) 的三类自动评审用例 |
+| 改变模型或存储实现而保持上述行为 | [组合根](bootstrap/README.md) 注入新端口实现 |

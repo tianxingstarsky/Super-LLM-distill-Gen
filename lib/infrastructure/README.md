@@ -6,9 +6,10 @@
 | --- | --- |
 | 生成节点算法 | `training_workflow.py` 的 `TrainingWorkflowRuntime`；`Workflow` 是兼容别名 |
 | 普通批次执行顺序 | `contexts/workflows/application/generate_batch.py` |
-| 大批量轮次与饱和停止执行 | `workflow_production.py` |
+| 大批量轮次与饱和停止执行 | `contexts/workflows/application/execute_production.py`；本目录旧路径仅转发 |
 | 对话指导与知识上下文 | `workflow_qa_director.py`、`workflow_knowledge_agent.py` |
-| 自动评分、修正、重新评分 | `workflow_review_repair.py` |
+| 多轮生成 | `contexts/workflows/application/generate_dialogue.py` |
+| 自动评分、修正、重新评分 | `contexts/review/application/review_candidate.py`；本目录旧路径仅转发 |
 | 资料缓存与原件快照 | `source_library.py`、`source_snapshot.py`、`workflow_source_library.py` |
 | Docling 解析 | `contexts/documents/infrastructure/docling/`，本目录同名前缀文件仅转发 |
 | 运行只读与文件合同 | `workflow_store.py` |

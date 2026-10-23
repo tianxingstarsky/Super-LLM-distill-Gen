@@ -4,4 +4,12 @@
 
 职责是接收决定、校验业务约束、请求持久化并返回结果。不要创建 SQLite 连接、访问 Streamlit 状态，或把原始模型调用放入人工审核入口。
 
+| 自动处理入口 | 责任 |
+| --- | --- |
+| `review_candidate.py` / `AutomaticReviewPort` | 候选输入检查、人工决定或自动评分修复循环、重复稿停止、待复核与收据绑定 |
+| `review_collections.py` / `ReviewCollectionsPort` | 流式评审集合、验证可复用的候选收据、CoT 与派生 SFT 对齐 |
+| `execute_repair.py` / `RepairBranchPort` | 全部父版本认证后才开始返工，保持独立修正分支 |
+
+`automatic_ports.py` 中的端口不暴露文件路径、模型客户端或数据库。评分不等于发布；候选变更后必须重新绑定内容哈希，缺失条件支持仍保留为待人工复核。新用例可以仅用内存端口执行，见 `tests/test_pipeline_use_cases.py`。
+
 新增审核字段先明确它属于候选内容、审核意见还是发布证据。候选 ID 与来源哈希必须继续传递，不能只凭列表下标提交决定。

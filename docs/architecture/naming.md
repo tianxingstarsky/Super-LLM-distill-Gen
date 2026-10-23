@@ -21,7 +21,11 @@
 
 用例采用动作名：`ExecuteWorkflowRun`、`GenerateDatasetBatch`、`PrepareDocumentCorpus`。方法名应表达读、准备、生成、发布或决定，避免一个 `process()` 兼做多个阶段。
 
+多轮生成用 `GenerateMultiturnDialogue`；批量调度用 `ExecuteProductionRounds`，一个窗口用 `GenerateProductionBatch`；自动处理分为 `ReviewCandidate`、`ReviewGeneratedCollections`、`ExecuteRepairBranch`。候选修复与生产补充是不同动作，不能共用一个含糊的 retry 接口。
+
 领域值表达规则和事实，例如 `BatchGenerationPlan`、`TargetOutcome`。端口按使用方需要命名，例如 `RunSessionPort`、`BatchRuntimePort`、`DocumentTextPort`，不机械复制所有实现方法。
+
+`DialogueProgress` 表示当前对话状态；`ProductionProgress` 表示从收据重建的生产状态；`ProductionRoundPlan` 表示下一窗口，`PreparedProductionRound` 表示已准备的流式输入。它们不取代现有持久化字典，也不改变字段名称。
 
 适配器说明实际责任：`FilesystemRunSession` 管理运行会话，`CheckpointedBatchRuntime` 执行阶段，`LocalDocumentTextReader` 读取文档。既有 `Driver` / `Application` 公共名字继续兼容，避免无收益的全仓改名。
 

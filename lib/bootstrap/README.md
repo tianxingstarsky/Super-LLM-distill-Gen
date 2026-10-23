@@ -6,6 +6,9 @@
 | --- | --- |
 | `workflows.py` | 运行、数据集、Agent 审核与报告应用 |
 | `workflow_execution.py` | 执行会话、批次用例、检查点运行时 |
+| `dialogue_generation.py` | 多轮生成用例与来源/请求适配器 |
+| `production_execution.py` | 轮次调度、窗口生成、文件存储与注入的去重索引 |
+| `automatic_review.py` | 自动候选评审、集合评审与已认证返工分支 |
 | `document_corpus.py` | 文档语料用例与本地文本读取器 |
 | `datasets.py` | 数据集预览、统计和交付 |
 | `backends.py` | 模型配置 |
