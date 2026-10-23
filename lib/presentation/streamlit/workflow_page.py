@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import deepcopy
 import hashlib
 import html
 import json
@@ -854,7 +855,7 @@ def render_run(application, run_id, begin, *, embedded=False, draft_application=
     from lib.presentation.streamlit.workflow_report_panel import render_run_report_choice, render_workflow_report
     consume_app_navigation(run_id)
     if render_run_report_choice(application, run_id, embedded=embedded):
-        render_workflow_report(application, run_id, embedded=embedded)
+        render_workflow_report(application, run_id, embedded=embedded, human_application=human_application)
     else:
         _render_run_progress(application, run_id, begin, embedded=embedded,
                              draft_application=draft_application, backend_application=backend_application,
@@ -1292,8 +1293,11 @@ def _save_draft_value(workspace, key):
     if st.session_state[key] is None:
         st.session_state[key] = previous[key]
         return
+    if (key in previous and previous[key] == st.session_state[key]
+            and not st.session_state.get(f"workflow-draft-error:{workspace}")):
+        return
     st.session_state[draft_key] = {
-        **previous, key: st.session_state[key]}
+        **previous, key: deepcopy(st.session_state[key])}
     application = st.session_state.get(f"workflow-draft-application:{workspace}")
     if application is not None:
         try:
@@ -1306,26 +1310,73 @@ def _save_draft_value(workspace, key):
             st.session_state[f"workflow-draft-error:{workspace}"] = True
 
 
+def _creation_selection(workspace):
+    """Snapshot entry choices only; sources, models and prompts stay shared."""
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    def current(key, default):
+        return deepcopy(st.session_state.get(key, draft.get(key, default)))
+    preset = current(f"workflow-preset:{workspace}", "自动推荐")
+    return {
+        "workflow-preset": preset,
+        "workflow-targets": current(f"workflow-targets:{workspace}:{preset}", list(PRESETS.get(preset, ()))),
+        "workflow-source-mode": current(f"workflow-source-mode:{workspace}", "文档资料"),
+        "workflow-director-enabled": current(f"workflow-director-enabled:{workspace}", True),
+        "workflow-director-mode": current(f"workflow-director-mode:{workspace}", "adaptive"),
+    }
+
+
+def _remember_creation_selection(workspace, mode):
+    mode_id = {"自动生成": "auto", "人工问答增强": "human"}.get(mode)
+    if mode_id is None:
+        return
+    # These remain ordinary validated draft fields. No run recipe or storage
+    # version changes; legacy drafts simply lack the optional scoped values.
+    for field, value in _creation_selection(workspace).items():
+        key = f"{field}:{workspace}:creation:{mode_id}"
+        st.session_state[key] = value
+        _save_draft_value(workspace, key)
+
+
+def _restore_creation_selection(workspace, mode):
+    mode_id = {"自动生成": "auto", "人工问答增强": "human"}.get(mode)
+    if mode_id is None:
+        return
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    selection = _creation_selection(workspace)
+    if f"workflow-preset:{workspace}:creation:{mode_id}" in draft:
+        selection = {field: deepcopy(draft.get(f"{field}:{workspace}:creation:{mode_id}", value))
+                     for field, value in selection.items()}
+    elif mode == "人工问答增强":
+        selection.update({
+            "workflow-director-enabled": True,
+            "workflow-director-mode": "adaptive",
+            "workflow-preset": "自选目标",
+            "workflow-targets": [target for target in selection["workflow-targets"] if target in HUMAN_QA_TARGETS] or ["sft"],
+            "workflow-source-mode": "开放需求",
+        })
+    for field, value in selection.items():
+        key = f"{field}:{workspace}" + (f":{selection['workflow-preset']}" if field == "workflow-targets" else "")
+        st.session_state[key] = value
+        _save_draft_value(workspace, key)
+
+
 def _change_creation_mode(workspace):
     key = f"workflow-creation-mode:{workspace}"
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     if st.session_state[key] is None:
-        st.session_state[key] = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(key, "自动生成")
-    _save_draft_value(workspace, key)
+        st.session_state[key] = draft.get(key, "自动生成")
+        return
+    previous_mode = draft.get(key, "自动生成")
     mode = st.session_state[key]
+    if previous_mode != mode:
+        _remember_creation_selection(workspace, previous_mode)
+    _save_draft_value(workspace, key)
     enabled_key = f"workflow-human-enabled:{workspace}"
     st.session_state[enabled_key] = mode == "人工问答增强"
     _save_draft_value(workspace, enabled_key)
+    if previous_mode != mode:
+        _restore_creation_selection(workspace, mode)
     if mode == "人工问答增强":
-        preset = st.session_state.get(f"workflow-preset:{workspace}", "自动推荐")
-        selected = st.session_state.get(f"workflow-targets:{workspace}:{preset}", PRESETS.get(preset, []))
-        values = {f"workflow-director-enabled:{workspace}": True,
-                  f"workflow-director-mode:{workspace}": "adaptive",
-                  f"workflow-preset:{workspace}": "自选目标",
-                  f"workflow-targets:{workspace}:自选目标": [target for target in selected if target in HUMAN_QA_TARGETS] or ["sft"],
-                  f"workflow-source-mode:{workspace}": "开放需求"}
-        for field_key, value in values.items():
-            st.session_state[field_key] = value
-            _save_draft_value(workspace, field_key)
         st.session_state[f"canvas-open:setup-canvas:{workspace}"] = False
 
 
@@ -1597,6 +1648,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         default=None, key=source_key, on_change=_change_source_mode, args=(ws, source_key),
         help="按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。",
     ) or "文档资料"
+    recorded_conversations = False
     # Keep the actual source selection before its processing graph. Populate
     # this slot after parser settings are known without duplicating inputs.
     source_slot = st.container(key="workbench-source-entry")
@@ -1636,6 +1688,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             on_change=_save_draft_value, args=(ws, target_key),
             help="点击即可选中或取消，可以同时选择多类训练数据。",
         ) or []
+        receipt = st.session_state.get(f"conversation-import:{ws}:confirmed")
+        if (source_mode == "Agent 上下文" and creation_mode == "自动生成"
+                and isinstance(receipt, dict)
+                and receipt.get("target") == ("agent" if set(targets) == {"agent"} else "sft")):
+            recorded_paths = {row["path"] for row in receipt.get("rows", []) if isinstance(row, dict) and "path" in row}
+            recorded_conversations = bool(saved_sources) and set(saved_sources).issubset(recorded_paths)
         arithmetic_only = set(targets) == {"gsm8k"}
         cpt_only = set(targets) == {"cpt"}
         if "gsm8k" in targets:
@@ -1647,7 +1705,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         with trim_option:
             reasoning_trim = render_trim_toggle(ws, targets, save_field=_save_draft_value)
         with director_option:
-            qa_director = render_director_toggle(ws, targets, save_field=_save_draft_value)
+            if recorded_conversations:
+                qa_director = {"enabled": False}
+                st.caption("导入对话保留原有问题与轮次，无需配置对话指导员。")
+            else:
+                qa_director = render_director_toggle(ws, targets, save_field=_save_draft_value)
             if creation_mode == "人工问答增强":
                 # Designs belong to the persistent working window. The entry
                 # screen validates only the model and workflow configuration.
@@ -1954,7 +2016,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                             st.session_state[source_key] = list(dict.fromkeys([
                                 *selected_paths, *(row["path"] for row in rows)]))
                             _save_draft_value(ws, source_key)
-                        render_conversation_import(conversation_importer, ws, select_imported_sources, targets=targets)
+                        render_conversation_import(conversation_importer, ws, select_imported_sources, targets=targets,
+                            selected_paths=st.session_state.get(f"workflow-sources:{ws}:{source_mode}", []))
                         uploaded = []
                     else:
                         uploaded = st.file_uploader(upload_label, type=upload_types,
@@ -1982,12 +2045,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                    if language == "en" else f"本次已选 {len(selected):,} 份资料"))
                 else:
                     selected = []
-                if (source_mode == "文档资料" and document_parser.get("mode") == "native"
-                        and any(Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for path in selected)):
-                    if targets:
-                        _render_setup_issue(ws, "ingest", "图片需要多模态识别，点击配置输入模型", kind="image-parser")
-                    else:
-                        st.warning("图片需要多模态识别，请在输入解析节点选择并确认图片输入模型。")
                 upload_error = None if use_dsh else st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")
                 if upload_error:
                     st.error(_upload_cache_error(upload_error))
@@ -2003,6 +2060,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                    "拖入文件即保存并选中，关闭或重启后仍可使用。")
                         if source_mode != "Agent 上下文":
                             st.caption("解析一次，后续任务和批量生成自动复用；修改解析配置时另存新版本。")
+            image_parser_required = (source_mode == "文档资料" and document_parser.get("mode") != "vision"
+                and any(Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                        for path in [*selected, *(upload.name for upload in uploaded or [])]))
+            if image_parser_required:
+                if targets:
+                    _render_setup_issue(ws, "ingest", "图片需要多模态识别，点击配置输入模型", kind="image-parser")
+                else:
+                    st.warning("图片需要多模态识别，请在输入解析节点选择并确认图片输入模型。")
         if preview_in_input:
             from lib.presentation.streamlit.document_preview import render_document_preview
             with source_previews, st.container(border=True, key="workbench-source-preview"):
@@ -2041,7 +2106,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                       help=("根据真实回应推进，达到目的即可结束，不填满轮数；导入的完整对话保持原有轮次。"
                                                             if adaptive_dialogue else
                                                             "仅用于新生成的多轮对话；导入的完整对话保持原有轮次。"))
-                                      if "multiturn" in targets else 3)
+                                      if "multiturn" in targets and not recorded_conversations else 3)
             with batch_col:
                 a, b = st.columns(2, gap="small")
                 with a:
@@ -2218,8 +2283,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 parser_unavailable = parser_unavailable or bool(docling_issue)
                 if docling_issue:
                     st.caption(DOCLING_ERRORS.get(docling_issue, DOCLING_ERRORS["invalid_document_parser"]))
-                parser_unavailable = parser_unavailable or (source_mode == "文档资料" and document_parser.get("mode") != "vision"
-                    and bool(source_suffixes.intersection({".png", ".jpg", ".jpeg", ".webp"})))
+                parser_unavailable = parser_unavailable or image_parser_required
                 if source_missing:
                     st.caption("人工设计不能替代 CPT 等目标的真实资料，请切换来源并上传文档。" if human_needs_real_source else
                                "先补全指导员节点中的人工问题与参考答案。" if human_enabled and not human_ready else

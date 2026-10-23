@@ -29,7 +29,7 @@ def conversation_import_warnings(warnings):
                               for code in warnings))
 
 
-def render_conversation_import(application, workspace, on_confirm, *, targets=()):
+def render_conversation_import(application, workspace, on_confirm, *, targets=(), selected_paths=None):
     """Keep format handling outside the page and preserve the original messages."""
     prefix = f"conversation-import:{workspace}"
     uploaded = st.file_uploader(
@@ -118,18 +118,24 @@ def render_conversation_import(application, workspace, on_confirm, *, targets=()
                 if message.get("tool_calls"):
                     st.json(message["tool_calls"], expanded=False)
         st.caption("预览仅展示部分会话与消息，保存时保留完整记录。导入后仍按工作流配置进行审核。")
-    if st.session_state.get(prefix + ":confirmed"):
-        st.success("已加入本次资料，可继续配置或启动工作流。")
-        return
+    receipt = st.session_state.get(prefix + ":confirmed")
+    confirmed = isinstance(receipt, dict) and receipt.get("target") == target
+    if confirmed:
+        imported_paths = {row["path"] for row in receipt.get("rows", [])}
+        if imported_paths and (selected_paths is None or imported_paths <= set(selected_paths)):
+            st.success("已加入本次资料，可继续配置或启动工作流。")
+            return
+        st.caption("会话已保存在资料缓存中，目前未全部选中。可以重新加入本次任务，无需重新上传。")
     if eligibility.get("eligible_ids_truncated", False):
         st.caption("记录过多，请分批整理后导入。")
-    if st.button("确认导入并选中", key=prefix + ":confirm", type="primary", width="stretch",
+    if st.button("重新选入本次资料" if confirmed else "确认导入并选中",
+                 key=prefix + ":confirm", type="primary", width="stretch",
                  disabled=not eligible or eligibility.get("eligible_ids_truncated", False)):
         try:
             rows = application.confirm(preview["import_id"],
                 selected_ids=eligibility.get("eligible_ids") if blocked else None, target=target)
             on_confirm(rows)
-            st.session_state[prefix + ":confirmed"] = True
+            st.session_state[prefix + ":confirmed"] = {"target": target, "rows": rows}
             st.rerun()
         except (ValueError, OSError, RuntimeError) as error:
             st.error(conversation_import_error(str(error)))

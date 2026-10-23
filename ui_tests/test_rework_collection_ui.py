@@ -131,27 +131,79 @@ def review_controls_screen():
     class Application:
         def save_rejected(self, run_id, target, **kwargs):
             st.session_state["fixture-save-calls"].append({"run_id": run_id, "target": target, **kwargs})
-            return {"saved_count": 125, "session_id": "1" * 32}
+            if st.session_state.get("fixture-save-error"):
+                raise ValueError("incomplete_save")
+            return {"saved_count": 125, "session_id": "1" * 32,
+                    "issue_counts": st.session_state.get("fixture-counts", {"pending": 125})}
 
-        def collection(self, run_id):
-            return {"session_id": "1" * 32}
+        def existing_collection(self, run_id, target):
+            if st.session_state["fixture-save-calls"] or st.session_state.get("fixture-existing"):
+                return {"session_id": "1" * 32, "saved_count": 125}
+            return None
 
-    render_review_rework_controls(Application(), "3" * 32, "sft", 125)
+    render_review_rework_controls(Application(), "3" * 32, "sft",
+                                  st.session_state.get("fixture-rejected", 125))
 
 
 def test_formal_review_save_stays_in_review_and_open_targets_the_issue_collection():
     ui = AppTest.from_function(review_controls_screen, default_timeout=15).run()
     assert not ui.exception
     ui.text_input[0].set_value("保留安全前提。")
-    _button(ui, "把退回结果存入返工集合").click().run()
+    assert not any(item.label == "打开已存返工" for item in ui.button)
+    _button(ui, "仅保存退回结果").click().run()
     assert not ui.exception and not ui.error
     assert len(ui.session_state["fixture-save-calls"]) == 1
     assert "nav" not in ui.session_state.filtered_state
-    _button(ui, "打开返工集合").click().run()
+    _button(ui, "打开已存返工").click().run()
     assert not ui.exception and not ui.error
     assert len(ui.session_state["fixture-save-calls"]) == 1
     assert ui.session_state["nav"] == "人工问答增强"
     assert ui.session_state["human-result-view-pending:human:fixture:" + "1" * 32] == "issues"
+
+
+def test_save_and_open_is_one_action_and_does_not_open_after_a_partial_failure():
+    ui = AppTest.from_function(review_controls_screen, default_timeout=15).run()
+    ui.text_input[0].set_value("保留每一轮的推理。")
+    _button(ui, "保存并打开返工").click().run()
+    assert not ui.exception and not ui.error
+    assert len(ui.session_state["fixture-save-calls"]) == 1
+    assert ui.session_state["nav"] == "人工问答增强"
+    assert ui.session_state["fixture-save-calls"][0]["instruction"] == "保留每一轮的推理。"
+
+    failed = AppTest.from_function(review_controls_screen, default_timeout=15)
+    failed.session_state["fixture-save-error"] = True
+    failed.run()
+    _button(failed, "保存并打开返工").click().run()
+    assert not failed.exception and failed.error
+    assert "nav" not in failed.session_state.filtered_state
+    assert "human" not in failed.query_params
+
+
+@pytest.mark.parametrize("counts,expected", [({"pending": 3}, "pending"),
+    ({"needs_revision": 1}, "needs_revision"), ({"completed": 125}, "all")])
+def test_open_rework_resets_stale_filter_and_page_to_show_saved_records(counts, expected):
+    ui = AppTest.from_function(review_controls_screen, default_timeout=15)
+    context = "human:fixture:" + "1" * 32
+    ui.session_state["fixture-counts"] = counts
+    ui.session_state[f"rework-status:{context}"] = "completed"
+    ui.session_state[f"rework-offset:{context}:{expected}"] = 100
+    ui.run()
+    _button(ui, "保存并打开返工").click().run()
+    assert not ui.exception and not ui.error
+    assert ui.session_state[f"rework-status:{context}"] == expected
+    assert ui.session_state[f"rework-offset:{context}:{expected}"] == 0
+
+
+def test_existing_rework_can_reopen_in_a_fresh_session_with_no_current_rejections():
+    ui = AppTest.from_function(review_controls_screen, default_timeout=15)
+    ui.session_state["fixture-existing"] = True
+    ui.session_state["fixture-rejected"] = 0
+    ui.run()
+    assert not ui.exception and not ui.error
+    assert _button(ui, "保存并打开返工").disabled
+    _button(ui, "打开已存返工").click().run()
+    assert not ui.session_state["fixture-save-calls"]
+    assert ui.session_state["nav"] == "人工问答增强"
 
 
 @pytest.mark.parametrize("screen", [collection_screen, review_controls_screen])

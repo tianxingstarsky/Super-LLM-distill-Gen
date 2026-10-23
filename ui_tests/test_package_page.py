@@ -212,6 +212,10 @@ def test_verified_workflow_outputs_can_be_prepared_for_download(tmp_path, monkey
         assert {"cpt.jsonl", "quality.json", "manifest.json"} <= set(archive.namelist())
     assert any("已完成 · 产物校验通过" in str(item.value) for item in app.get("html"))
     assert any('data-ready="true"' in str(item.value) for item in app.get("html"))
+    rebuild = app.button(key=f"prepare-package:{run_id}")
+    assert rebuild.label == "重新生成并校验 ZIP" and rebuild.proto.type == "secondary"
+    download = next(item for item in app.get("download_button") if item.proto.label == "下载完整训练数据 ZIP")
+    assert download.proto.type == "primary"
     english = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
     english.session_state["ws"] = name
     english.session_state["nav"] = "输出打包"
@@ -242,6 +246,13 @@ def test_verified_workflow_outputs_can_be_prepared_for_download(tmp_path, monkey
     assert not app.exception
     assert any('data-attention="true"' in str(item.value) for item in app.get("html"))
     assert any("文件完整，质量需检查" in str(item.value) for item in app.get("html"))
+    app.session_state[f"task-return:{name}:package:{run_id}"] = {
+        "run_id": run_id, "view": "样本报告", "target": "cpt"}
+    app.button(key="package-back").click().run()
+    assert not app.exception
+    assert app.session_state["nav"] == "任务管理"
+    assert app.session_state[f"task-center-run:{name}"] == run_id
+    assert app.session_state[f"workflow-result-view:{run_id}"] == "样本报告"
 
 
 def test_orpo_package_opens_its_own_human_review_queue(tmp_path, monkeypatch):

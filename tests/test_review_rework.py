@@ -213,6 +213,9 @@ def test_real_rejection_opens_one_durable_issue_collection_without_generation(tm
     sft.decide(parent["run_id"], item["sample_id"], decision="rejected", reviewer="test",
                expected_hash=item["sample_id"], reason="安全提醒需要更清楚。")
     rework = ReviewReworkApplication(FilesystemReviewReworkDriver(output), human)
+    before_lookup = {p.relative_to(output) for p in output.rglob("*")}
+    assert rework.existing_collection(parent["run_id"], "sft") is None
+    assert {p.relative_to(output) for p in output.rglob("*")} == before_lookup
     first = rework.save_rejected(parent["run_id"], "sft")
     assert first["saved_count"] == 1
     issues = human.issues(first["session_id"], status="pending")
@@ -224,6 +227,50 @@ def test_real_rejection_opens_one_durable_issue_collection_without_generation(tm
     assert human.issues(second["session_id"], status="all")["total"] == 1
     assert len(human.session(second["session_id"])["rounds"]) == 1
     assert (len(writer.calls), len(reviewer.calls)) == before_calls
+    fresh = ReviewReworkApplication(FilesystemReviewReworkDriver(output), human)
+    persisted = fresh.existing_collection(parent["run_id"], "sft")
+    assert persisted["session_id"] == first["session_id"] and persisted["saved_count"] == 1
+    assert fresh.existing_collection(parent["run_id"], "dpo") is None
+
+
+def test_no_rejections_do_not_create_a_workspace_or_source_snapshot(tmp_path):
+    class Driver:
+        def rejected_batches(self, run_id, target):
+            yield {"rows": []}
+
+    class Human:
+        def review_session(self, run_id):
+            pytest.fail("An empty queue must not create a workspace")
+
+    app = ReviewReworkApplication(Driver(), Human())
+    assert app.save_rejected("a" * 32, "sft")["saved_count"] == 0
+    assert FilesystemReviewReworkDriver(tmp_path).existing_collection("a" * 32, "sft") is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_collection_lookup_ignores_unreadable_other_sessions_but_rejects_its_corrupt_store(tmp_path, monkeypatch):
+    folder = tmp_path / "human-sessions"
+    broken = folder / ("b" * 32) / "session.json"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("{interrupted", encoding="utf-8")
+    saved = folder / ("c" * 32) / "session.json"
+    saved.parent.mkdir()
+    saved.write_text(json.dumps({"id": "c" * 32, "version": 2, "review_only": True,
+        "rounds": [{"id": "d" * 32, "kind": "imported", "run_id": "a" * 32}]}), encoding="utf-8")
+    database = saved.parent / "review-issues.sqlite3"
+    db = sqlite3.connect(database)
+    db.execute("CREATE TABLE issues(round_id TEXT, target TEXT, superseded_by TEXT)")
+    db.execute("INSERT INTO issues VALUES(?, 'sft', NULL)", ("d" * 32,))
+    db.commit()
+    db.close()
+    original_glob = Path.glob
+    monkeypatch.setattr(Path, "glob", lambda path, pattern: iter([broken, saved])
+        if path == folder else original_glob(path, pattern))
+    driver = FilesystemReviewReworkDriver(tmp_path)
+    assert driver.existing_collection("a" * 32, "sft")["saved_count"] == 1
+    database.write_bytes(b"broken database")
+    with pytest.raises(ValueError, match="review_rework_collection_unavailable"):
+        driver.existing_collection("a" * 32, "sft")
 
 
 def test_compact_controls_save_without_launching_and_open_the_existing_issues_view():
@@ -264,16 +311,16 @@ def test_compact_controls_save_without_launching_and_open_the_existing_issues_vi
             self.saved.append((run_id, target, kwargs))
             return {"saved_count": 125, "session_id": "b" * 32}
 
-        def collection(self, _run):
-            return {"session_id": "b" * 32}
+        def existing_collection(self, _run, _target):
+            return {"session_id": "b" * 32, "saved_count": 125} if self.saved else None
 
     app = Application()
-    save_ui = UI("把退回结果存入返工集合")
+    save_ui = UI("仅保存退回结果")
     render_review_rework_controls(app, "a" * 32, "sft", 125, widgets=save_ui)
-    assert len(app.saved) == 1 and save_ui.labels == ["把退回结果存入返工集合", "打开返工集合"]
+    assert len(app.saved) == 1 and save_ui.labels == ["保存并打开返工", "仅保存退回结果", "打开已存返工"]
     assert "nav" not in save_ui.session_state and not save_ui.reran
     assert any("125" in message for message in save_ui.messages)
-    open_ui = UI("打开返工集合")
+    open_ui = UI("打开已存返工")
     render_review_rework_controls(app, "a" * 32, "sft", 125, widgets=open_ui)
     assert len(app.saved) == 1
     assert open_ui.session_state["nav"] == "人工问答增强"

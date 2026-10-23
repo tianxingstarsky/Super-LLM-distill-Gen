@@ -19,6 +19,7 @@ from lib.presentation.streamlit.workflow_page import GRAPH_LABELS, STAGE_GLYPHS,
 from lib.presentation.streamlit.model_scheduling_controls import render_run_scheduling
 from lib.domain.human_round_projection import project_feedback_branch
 from lib.domain.workflow_targets import TRAINING_FIELDS, training_record
+from lib.presentation.streamlit.review_navigation import return_to_task
 
 
 WORKSPACE_STYLE = """<style>
@@ -70,6 +71,16 @@ def _error(error):
 
 def _context(ws, session_id):
     return f"human:{ws}:{session_id}"
+
+
+def _review_return_run(session: dict, workspace: str) -> str | None:
+    """Prefer the originating task; history selection must not redirect it."""
+    runs = {row.get("run_id") for row in session.get("rounds", []) if row.get("run_id")}
+    remembered = st.session_state.get(f"task-return:{workspace}:human:{session['id']}", {})
+    if remembered.get("run_id") in runs:
+        return remembered["run_id"]
+    return next((row["run_id"] for row in session.get("rounds", [])
+                 if row.get("kind") == "imported" and row.get("run_id")), None)
 
 
 def _save_design(context, key):
@@ -516,7 +527,13 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
                 st.session_state.pop(f"human-save-error:{context}", None)
                 st.rerun()
         with exit_action:
-            if navigate:
+            return_run = _review_return_run(session, workspace) if review_only else None
+            if return_run:
+                st.button("返回当前任务", key=f"human-exit:{context}", width="stretch",
+                    icon=":material/logout:", on_click=return_to_task, args=(return_run,),
+                    kwargs={"destination": "human:" + session_id, "navigate": navigate},
+                    help="返回此任务，保留报告或运行视图。")
+            elif navigate:
                 st.button("返回工作流" if review_only else "退出人工增强", key=f"human-exit:{context}", width="stretch",
                     icon=":material/logout:", on_click=navigate, args=("自动工作流",),
                     help="返回数据生成。设计、结果和运行任务保留在工作管理中。")

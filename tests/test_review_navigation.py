@@ -271,7 +271,10 @@ class Application:
         return [dict(id='chosen-run',name='Chosen workflow',status='completed',targets=['cpt','orpo'])]
     def list_releases(self): return []
     def bundle_job(self, run_id): return None
-    def state(self, run_id): return dict(targets=['cpt','orpo'],stages={})
+    def state(self, run_id): return dict(status='completed',targets=['cpt','orpo'],stages={})
+    def package_inventory(self, run_id):
+        if st.session_state.get('damaged'): raise ValueError('artifact_integrity_error')
+        return self.package_contents(run_id)
     def package_contents(self, run_id):
         return dict(manifest=dict(counts=dict(cpt=1,orpo=1),sha256={},sources=[]),
                     files=[dict(name=key+'.jsonl',bytes=20,sha256='a'*64) for key in ['cpt','orpo']],
@@ -291,3 +294,12 @@ def test_package_consumes_target_handoff_after_verification_and_aligns_review():
     ui.button(key="package-review:chosen-run").click().run()
     assert not ui.exception
     assert ui.session_state["preference-review-run:orpo"] == "chosen-run"
+
+
+def test_package_review_revalidates_artifacts_after_rendering_before_navigation():
+    ui = _app(PACKAGE_SCRIPT)
+    assert not ui.exception
+    ui.session_state["damaged"] = True
+    ui.button(key="package-review:chosen-run").click().run()
+    assert not ui.exception and ui.error
+    assert "preference-review-run:orpo" not in ui.session_state

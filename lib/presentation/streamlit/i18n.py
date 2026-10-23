@@ -9,6 +9,22 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "导入对话保留原有问题与轮次，无需配置对话指导员。": "Imported conversations keep their original questions and turns. No dialogue director is needed.",
+    "重新选入本次资料": "Select for this task again",
+    "会话已保存在资料缓存中，目前未全部选中。可以重新加入本次任务，无需重新上传。": "The conversations are cached, but some are not selected. Add them to this task again without uploading.",
+    "保存并打开返工": "Save and open rework",
+    "仅保存退回结果": "Save rejected samples only",
+    "打开已存返工": "Open saved rework",
+    "保存退回结果后可直接进入返工，也可留待稍后处理。模型不会自动启动。": "Save rejected samples and open rework, or handle them later. No model starts automatically.",
+    "当前没有可存入的退回结果，请刷新审核列表。": "There are no rejected samples to save. Refresh the review list.",
+    "返回当前任务": "Back to this task",
+    "返回此任务，保留报告或运行视图。": "Return to this task and keep its report or process view.",
+    "重新生成并校验 ZIP": "Rebuild and verify ZIP",
+    "导出训练数据": "Export training data",
+    "审核当前类型": "Review this dataset type",
+    "报告尚未封存；可继续查看，审核与导出会在结果校验完成后开放。": "This report is not final yet. Keep reading; review and export will open after verification.",
+    "此类型可在评分与修正中处理。": "Use scoring and correction to handle this dataset type.",
+    "任务产物暂时无法校验，请返回运行过程检查。": "The task artifacts could not be verified. Check the process view.",
     "样本统计": "Sample Statistics",
     "查看样本分布与文件大小": "View sample distributions and file sizes",
     "解析依赖版本不匹配。独立环境请使用 requirements-docling-runtime.txt，当前环境请使用 requirements-docling.txt。": "Parser package versions do not match. Use requirements-docling-runtime.txt for the isolated environment, or requirements-docling.txt for the current environment.",

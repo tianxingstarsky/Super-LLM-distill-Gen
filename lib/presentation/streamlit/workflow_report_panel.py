@@ -4,6 +4,10 @@ from __future__ import annotations
 import streamlit as st
 
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
+from lib.domain.workflow_delivery import has_deliverable_results
+from lib.presentation.streamlit.review_navigation import (
+    REVIEW_MODES, consume_app_navigation, open_package, open_verified_review, open_verified_correction,
+)
 
 
 VIEW_OPTIONS = ("运行过程", "样本报告")
@@ -80,16 +84,18 @@ def _render_preparation(reports, run_id: str, target: str, page: dict, *, embedd
         st.info("正在准备报告：后台校验并建立分页索引。你可以切换页面，准备完成后会自动显示。")
 
 
-def render_workflow_report(application, run_id: str, *, embedded: bool = False) -> None:
+def render_workflow_report(application, run_id: str, *, embedded: bool = False, human_application=None) -> None:
     """Poll only live output or preparation; a finished reading page is stable."""
     refresh_key = f"workflow-report-refresh:{run_id}"
     refresh = st.session_state.get(refresh_key, True)
 
     @st.fragment(run_every=2 if refresh else None)
     def report_fragment():
+        consume_app_navigation(run_id)
         if st.session_state.get(_view_key(run_id)) != "样本报告":
             st.rerun(scope="app")
-        needs_refresh = _render_workflow_report(application, run_id, embedded=embedded)
+        needs_refresh = _render_workflow_report(application, run_id, embedded=embedded,
+                                               human_application=human_application)
         if needs_refresh != refresh:
             st.session_state[refresh_key] = needs_refresh
             st.rerun(scope="app")
@@ -97,7 +103,41 @@ def render_workflow_report(application, run_id: str, *, embedded: bool = False) 
     report_fragment()
 
 
-def _render_workflow_report(application, run_id: str, *, embedded: bool = False) -> bool:
+def _render_report_actions(application, run_id: str, target: str, page: dict, *, human_application=None) -> None:
+    """Keep task actions beside reading, with verification at the click boundary."""
+    if not callable(getattr(application, "state", None)):
+        return  # Older embedders expose only the read-only report port.
+    state = application.state(run_id)
+    active = getattr(application, "is_active", None)
+    if (not page.get("finalized") or not has_deliverable_results(state)
+            or (callable(active) and active(run_id))):
+        st.caption("报告尚未封存；可继续查看，审核与导出会在结果校验完成后开放。")
+        return
+    can_review = target in REVIEW_MODES
+    can_correct = (human_application is not None and target != "agent_negative"
+                   and target in state.get("targets", []) and state.get("status") in {"completed", "needs_attention"})
+    actions = st.columns(1 + int(can_review) + int(can_correct), gap="small")
+    actions[0].button("导出训练数据", on_click=open_package, args=(run_id, target),
+                     kwargs={"from_fragment": True}, key=f"workflow-report-package:{run_id}:{target}",
+                     type="primary", width="stretch")
+    index = 1
+    if can_review:
+        actions[index].button("审核当前类型", on_click=open_verified_review,
+                              args=(application, run_id, target), kwargs={"from_fragment": True},
+                              key=f"workflow-report-review:{run_id}:{target}", width="stretch")
+        index += 1
+    if can_correct:
+        actions[index].button("评分与修正", on_click=open_verified_correction,
+                              args=(application, human_application, run_id, target),
+                              kwargs={"from_fragment": True},
+                              key=f"workflow-report-correct:{run_id}:{target}", width="stretch")
+    if not can_review and can_correct:
+        st.caption("此类型可在评分与修正中处理。")
+    if st.session_state.pop(f"workflow-review-error:{run_id}", False):
+        st.error("任务产物暂时无法校验，请返回运行过程检查。")
+
+
+def _render_workflow_report(application, run_id: str, *, embedded: bool = False, human_application=None) -> bool:
     """Display a bounded report page; downloading never starts generation."""
     reports = application.reports
     language = st.session_state.get("ui_language", "zh")
@@ -156,6 +196,7 @@ def _render_workflow_report(application, run_id: str, *, embedded: bool = False)
                                file_name=f"{run_id[:8]}-{target}-page-{number}.html",
                                mime="text/html", key=f"workflow-report-download:{run_id}:{target}:{number}",
                                on_click="ignore", width="stretch")
+        _render_report_actions(application, run_id, target, page, human_application=human_application)
         previous, caption, following = st.columns([1, 4, 1], gap="small", vertical_alignment="center")
         previous.button("上一页", key=page_key + ":previous", disabled=number <= 1,
                         on_click=_move_page, args=(page_key, number - 1), width="stretch")

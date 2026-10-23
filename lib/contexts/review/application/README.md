@@ -13,3 +13,5 @@
 `automatic_ports.py` 中的端口不暴露文件路径、模型客户端或数据库。评分不等于发布；候选变更后必须重新绑定内容哈希，缺失条件支持仍保留为待人工复核。新用例可以仅用内存端口执行，见 `tests/test_pipeline_use_cases.py`。
 
 新增审核字段先明确它属于候选内容、审核意见还是发布证据。候选 ID 与来源哈希必须继续传递，不能只凭列表下标提交决定。
+
+`rework_collection.py` 的 `ReviewReworkApplication` 将退回队列分批保存到持久返工集合；没有退回记录时不创建工作室。`existing_collection` 只查询已存状态，保存完全成功后页面才直接进入返工；保存本身不启动模型。验证见 `tests/test_review_rework.py` 与 `ui_tests/test_rework_collection_ui.py`。

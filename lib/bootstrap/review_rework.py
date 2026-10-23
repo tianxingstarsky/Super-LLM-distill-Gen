@@ -1,9 +1,9 @@
 """Composition root for review queues and persistent batch rework."""
 from pathlib import Path
 
-from lib.application.review_rework_service import ReviewReworkApplication
+from lib.contexts.review.api import ReviewReworkApplication
 from lib.bootstrap.workflows import human_augmentation_application
-from lib.infrastructure.review_rework_driver import FilesystemReviewReworkDriver
+from lib.contexts.review.infrastructure.rework_collection import FilesystemReviewReworkDriver
 
 
 def review_rework_application(root: Path, output: Path, *, human_application=None):

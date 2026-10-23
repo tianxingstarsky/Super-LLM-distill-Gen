@@ -40,7 +40,47 @@ def screen():
     install_streamlit_localization()
     def selected(rows):
         st.session_state["selected"] = rows
-    render_conversation_import(st.session_state["service"], "test", selected, targets=["sft"])
+    render_conversation_import(st.session_state["service"], "test", selected,
+        targets=st.session_state.get("targets", ["sft"]),
+        selected_paths=[row["path"] for row in st.session_state.get("selected", [])])
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_deselected_import_can_be_selected_again_without_reparsing(monkeypatch, language):
+    import streamlit as st
+    service = ImportService()
+    monkeypatch.setattr(st, "file_uploader", lambda *a, **k: Upload(b"offline fixture"))
+    app = AppTest.from_function(screen)
+    app.session_state["service"] = service
+    app.session_state["ui_language"] = language
+    app.run()
+    app.button(key="conversation-import:test:confirm").click().run()
+    app.session_state["selected"] = []
+    app.run()
+    assert not app.exception and not app.success
+    assert app.session_state["selected"] == []  # Do not silently override user selection.
+    action = app.button(key="conversation-import:test:confirm")
+    assert action.label == ("Select for this task again" if language == "en" else "重新选入本次资料")
+    action.click().run()
+    assert not app.exception and app.success
+    assert app.session_state["selected"] == [{"path": "persistent-source.jsonl"}]
+    assert service.reads == 1 and len(service.saved) == 2
+
+
+def test_target_change_requires_confirmation_for_the_new_training_contract(monkeypatch):
+    import streamlit as st
+    service = ImportService()
+    monkeypatch.setattr(st, "file_uploader", lambda *a, **k: Upload(b"offline fixture"))
+    app = AppTest.from_function(screen)
+    app.session_state["service"] = service
+    app.run()
+    app.button(key="conversation-import:test:confirm").click().run()
+    app.session_state["targets"] = ["agent"]
+    app.run()
+    assert not app.exception and not app.success
+    app.button(key="conversation-import:test:confirm").click().run()
+    assert not app.exception and app.success
+    assert service.saved[-1] == ("saved-import", None, "agent")
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])

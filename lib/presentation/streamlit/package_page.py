@@ -18,7 +18,7 @@ from lib.presentation.streamlit.i18n import UntranslatedText
 from lib.presentation.streamlit.workflow_package_review_report import package_review_report_html
 from lib.presentation.streamlit.review_navigation import (
     REVIEW_MODES as _REVIEW_MODES, review_choices as _review_choices,
-    open_review as _go_to_review,
+    open_verified_review as _go_to_review, return_to_task,
 )
 
 
@@ -442,8 +442,6 @@ def render_package_page(application: DatasetApplication) -> None:
 
     labels = {row["id"]: row for row in ready}
     navigation, selection = st.columns([1, 2.8], gap="small", vertical_alignment="bottom")
-    with navigation:
-        st.button("← 返回自动工作流", key="package-back", on_click=_go_to_workflow)
     with selection:
         selection_key = f"package-run:{st.session_state['ws']}"
         if st.session_state.get(selection_key) not in labels:
@@ -452,6 +450,9 @@ def render_package_page(application: DatasetApplication) -> None:
             "选择工作流产物", list(labels), key=selection_key,
             format_func=lambda key: UntranslatedText(f"{labels[key].get('name', '未命名任务')} · {key[:8]}"),
         )
+    with navigation:
+        st.button("返回当前任务", key="package-back", on_click=return_to_task, args=(run_id,),
+                  kwargs={"destination": "package:" + run_id}, help="返回此任务，保留报告或运行视图。")
     run = labels[run_id]
     package_key = f"verified-package:{run_id}"
     job = application.bundle_job(run_id)
@@ -540,7 +541,17 @@ def render_package_page(application: DatasetApplication) -> None:
                 st.caption("ZIP 尚未生成；下方按钮会重新校验所有文件与打包内容。")
         with st.container(border=True):
             st.html(_heading("◈", "操作", "下载前生成并核对完整压缩包"))
-            if st.button("生成并校验完整 ZIP", type="primary", key=f"prepare-package:{run_id}",
+            if package is not None:
+                st.caption("数据包已保存到本地，刷新页面后仍可使用。")
+                st.code(package["path"], language=None)
+                if package["bytes"] <= DIRECT_DOWNLOAD_LIMIT_BYTES:
+                    st.download_button("下载完整训练数据 ZIP", lambda: application.bundle(run_id),
+                                       file_name=f"training-{run_id[:8]}.zip", mime="application/zip",
+                                       key=f"download-package:{run_id}", on_click="ignore", type="primary", width="stretch")
+                else:
+                    st.info("数据包较大，请使用上方本地路径读取，避免浏览器占用大量内存。")
+            if st.button("重新生成并校验 ZIP" if package is not None else "生成并校验完整 ZIP",
+                         type="secondary" if package is not None else "primary", key=f"prepare-package:{run_id}",
                          width="stretch"):
                 try:
                     application.start_bundle(run_id)
@@ -548,17 +559,7 @@ def render_package_page(application: DatasetApplication) -> None:
                 except (OSError, ValueError, TypeError, KeyError,
                         json.JSONDecodeError) as error:
                     st.session_state.pop(package_key, None)
-                    package = None
                     st.error(f"无法生成或校验数据包：{error}")
-            if package is not None:
-                st.caption("数据包已保存到本地，刷新页面后仍可使用。")
-                st.code(package["path"], language=None)
-                if package["bytes"] <= DIRECT_DOWNLOAD_LIMIT_BYTES:
-                    st.download_button("下载完整训练数据 ZIP", lambda: application.bundle(run_id),
-                                       file_name=f"training-{run_id[:8]}.zip", mime="application/zip",
-                                       key=f"download-package:{run_id}", on_click="ignore", width="stretch")
-                else:
-                    st.info("数据包较大，请使用上方本地路径读取，避免浏览器占用大量内存。")
             st.caption("可直接下载自动质检数据包，也可按用途抽检或进行人工审核。包内 SHA-256 可由 manifest.json 复核。")
         if quality.get("trainer_exports"):
             with st.container(border=True):
@@ -580,8 +581,10 @@ def render_package_page(application: DatasetApplication) -> None:
                         key=target_key,
                     )
                 st.button("进入当前任务的人工审核", on_click=_go_to_review,
-                          args=(run_id, review_target), key=f"package-review:{run_id}",
+                          args=(application, run_id, review_target), key=f"package-review:{run_id}",
                           width="stretch")
+                if st.session_state.pop(f"workflow-review-error:{run_id}", False):
+                    st.error("任务产物暂时无法校验，请返回运行过程检查。")
         with st.container(border=True):
             st.html(_heading("◷", "最近可导出任务", "本机已完成的工作流"))
             for recent in ready[:5]:

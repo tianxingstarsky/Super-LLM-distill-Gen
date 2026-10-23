@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import streamlit as st
+from filelock import Timeout
 from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 
 
@@ -14,6 +15,80 @@ REVIEW_MODES = {
     "agent": ("Agent 轨迹审查", None),
     "agent_negative": ("Agent 失败轨迹", None),
 }
+
+
+def remember_task_return(destination: str, run_id: str, target: str | None = None, *, widgets=None) -> None:
+    """Keep reading context outside widget keys while a different page is open."""
+    widgets = st if widgets is None else widgets
+    workspace = widgets.session_state.get("ws", "default")
+    origin_key = f"task-origin:{workspace}:{run_id}"
+    origin = widgets.session_state.get(origin_key, {})
+    view = widgets.session_state.get(f"workflow-result-view:{run_id}", origin.get("view", "运行过程"))
+    context = {
+        "run_id": run_id, "view": view if view in {"运行过程", "样本报告"} else "运行过程",
+        "target": target or widgets.session_state.get(f"workflow-report-target:{run_id}", origin.get("target")),
+        "limit": widgets.session_state.get(f"workflow-report-limit:{run_id}", origin.get("limit", 6)),
+        "page": widgets.session_state.get(f"workflow-report-page:{run_id}", origin.get("page", 1)),
+    }
+    widgets.session_state[origin_key] = context
+    widgets.session_state[f"task-return:{workspace}:{destination}"] = dict(context)
+
+
+def return_to_task(run_id: str, *, destination: str | None = None, navigate=None) -> None:
+    """Return to the exact run without changing its recipe or worker state."""
+    workspace = st.session_state.get("ws", "default")
+    saved = st.session_state.get(f"task-return:{workspace}:{destination}", {}) if destination else {}
+    if navigate is not None:
+        navigate("任务管理")
+    else:
+        st.session_state["nav"] = "任务管理"
+        st.query_params.pop("human", None)
+        st.session_state.pop("human-open-session", None)
+        st.query_params["page"] = "任务管理"
+    if saved.get("run_id") == run_id:
+        st.session_state[f"workflow-result-view:{run_id}"] = saved.get("view", "运行过程")
+        if saved.get("view") == "样本报告":
+            st.session_state[f"task-center-focus:{workspace}"] = True
+        if saved.get("target"):
+            st.session_state[f"workflow-report-target:{run_id}"] = saved["target"]
+        limit = saved.get("limit", 6)
+        if limit in {6, 12, 24}:
+            st.session_state[f"workflow-report-limit:{run_id}"] = limit
+            st.session_state[f"workflow-report-page:{run_id}"] = max(1, int(saved.get("page", 1)))
+            st.session_state[f"workflow-report-page:{run_id}:selection"] = (saved.get("target"), limit)
+    st.session_state["workflow-open-run"] = {"workspace": workspace, "run_id": run_id}
+
+
+def open_verified_correction(application, human_application, run_id: str, target: str,
+                             *, from_fragment: bool = False) -> None:
+    """Open a preserved candidate collection only after rechecking this run."""
+    error_key = f"workflow-review-error:{run_id}"
+    try:
+        state = application.state(run_id)
+        active = getattr(application, "is_active", None)
+        if (not has_deliverable_results(state) or state.get("status") not in {"completed", "needs_attention"}
+                or target not in state.get("targets", []) or (callable(active) and active(run_id))):
+            raise ValueError("workflow_not_ready_for_review")
+        inventory = application.package_inventory(run_id)
+        if not delivery_manifest_matches(state, inventory["manifest"]):
+            raise ValueError("artifact_integrity_error")
+        session_id = human_application.review_session(run_id)
+        session = human_application.session(session_id)
+        parent = next((row for row in session.get("rounds", []) if row.get("run_id") == run_id), None)
+        if parent is None:
+            raise ValueError("human_session_round_not_found")
+        context = f"human:{st.session_state['ws']}:{session_id}"
+        st.session_state[f"human-round-pending:{context}"] = parent["id"]
+        st.session_state[f"human-target:{context}:{parent['id']}"] = target
+        st.session_state[f"human-result-view-pending:{context}"] = "results"
+    except (OSError, ValueError, TypeError, KeyError, Timeout):
+        st.session_state[error_key] = True
+        return
+    st.session_state.pop(error_key, None)
+    remember_task_return("human:" + session_id, run_id, target)
+    st.session_state["human-open-session"] = {"workspace": st.session_state["ws"], "session_id": session_id}
+    if from_fragment:
+        request_app_navigation(run_id)
 
 
 def request_app_navigation(run_id: str) -> None:
@@ -55,6 +130,7 @@ def open_review(run_id: str, target: str) -> None:
     """Select the exact existing queue without changing any review decision."""
     if target not in REVIEW_MODES:
         raise ValueError("unsupported_review_target")
+    remember_task_return("review:" + run_id + ":" + target, run_id, target)
     workspace = st.session_state["ws"]
     mode, selector_key = REVIEW_MODES[target]
     if target in {"agent", "agent_negative"}:
@@ -102,6 +178,7 @@ def open_verified_review(application, run_id: str, target: str, *, from_fragment
 def open_package(run_id: str, target: str | None = None, *, from_fragment: bool = False) -> None:
     """Open this run's delivery page; that page verifies the current files."""
     workspace = st.session_state["ws"]
+    remember_task_return("package:" + run_id, run_id, target)
     st.session_state[f"package-run:{workspace}"] = run_id
     if target is not None:
         # The package selector uses (target, filename) tuples. Consume this
