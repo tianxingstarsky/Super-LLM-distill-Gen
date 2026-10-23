@@ -175,6 +175,7 @@ def page_preview(show_title=True):
 
 def page_workflow():
     from lib.bootstrap.workflows import workflow_application
+    from lib.bootstrap.conversation_import import conversation_import_application
     from lib.bootstrap.local_inputs import local_input_application
     from lib.presentation.streamlit.workflow_page import render_workbench
     from lib.bootstrap.document_previews import document_preview_application
@@ -187,6 +188,7 @@ def page_workflow():
     from lib.bootstrap.workflows import human_augmentation_application
     render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT),
                      input_cache=local_input_application(),
+                     conversation_importer=conversation_import_application(ROOT),
                      draft_application=creation_draft_application(_ws_out()),
                      backend_application=backend_application(ROOT),
                      manual_application=manual_dataset_application(_ws_out()),

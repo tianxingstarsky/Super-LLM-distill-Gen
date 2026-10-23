@@ -44,7 +44,7 @@
 
 ## 后续迁移边界
 
-1. **生成执行**：普通批次、运行生命周期、多轮生成、生产轮次及评分修复已进入对应应用层；继续拆分 `TrainingWorkflowRuntime` 的单节点 SFT/CoT 生成和通用模型请求。运行时仍保留规划检查点、来源和发布支持钩子，不能向其重新加入已迁出的主循环。
+1. **生成执行**：普通批次、运行生命周期、多轮、生产轮次、评分修复、SFT/CoT 节点、推理修剪和节点模型请求已进入对应应用层；剩余 CPT、偏好构造、质量辅助和部分运行状态仍需继续整理。models 已拥有文本/JSON/工具请求主循环，共享调度与流式传输继续使用已有适配器。旧运行时保留规划检查点、来源和发布支持钩子，不能重新加入已迁出的主循环。
 2. **资料与知识**：文档纯规则、本地语料用例及 Docling 适配已归入 documents；资料库缓存和知识库的版本所有权仍需独立整理。不把 Docling 内部结构变成业务合同。
 3. **人工增强**：会话、轮次、问题批次和返工状态需要独立的一致性边界，不能仅按页面名拆文件。
 4. **旧入口退出**：第一方调用全部迁移、兼容窗口结束后删除转发模块；期间不向转发文件增加业务规则。
@@ -88,3 +88,24 @@ Docling 旧 import 路径保留模块身份，旧 worker 脚本保留执行入�
 | 模型协议、风格解析与运行接入 | `review/infrastructure/{review_protocol,review_style,automatic_adapter,automatic_runtime}.py` |
 
 此轮不升级配方、提示词、缓存或导出协议。`DialogueProgress` 和 `ProductionRoundPlan` 都是内存值，不引入数据库表和新的持久字段。跨域配置验证通过 review/contracts，生产去重索引由组合根注入，旧 import 继续指向唯一实现。
+
+## SFT、CoT 与模型请求
+
+| 原职责 | 当前归属 |
+| --- | --- |
+| `TrainingWorkflowRuntime.sft/_sft/directed_sft` | `workflows/application/{generate_sft,generate_directed_sft}.py` |
+| 原生/风格化 CoT 与原生前缀回答 | `workflows/application/generate_cot.py` |
+| 推理修剪、SFT/CoT 交付投影 | `workflows/application/trim_reasoning.py` |
+| 风格、学习者问题和节点请求规则 | `workflows/domain/{generation,model_request}.py` |
+| `TrainingWorkflowRuntime.ask` | `workflows/application/request_node_model.py` |
+| 来源读取、冻结提示词、节点模型绑定、日志和检查点 | `workflows/infrastructure/{generation_adapter,model_request_adapter}.py` |
+| `ChatClient.chat` 的请求生命周期 | `models/application/execute_request.py` |
+| `chat_json` 的结构化响应尝试 | `models/application/request_json.py` |
+| 工具请求的准入和重试 | `models/application/execute_tool_turn.py` |
+| SDK、三种协议、配置读取与原预算台账 | `models/infrastructure/request_runtime.py` |
+| 工具报文和完整响应校验 | `models/infrastructure/tool_transport.py` |
+| 稳定请求错误与完整 JSON 解析 | `models/domain/{request_errors,json_response}.py` |
+
+装配分别位于 `bootstrap/node_generation.py`、`workflow_requests.py` 和 `model_requests.py`。请求用例使用消费方端口；旧入口保持签名和调用方替换钩子。`llm_client`、`model_tool_calls` 通过模块身份别名指向唯一实现，其余 `model_*` 保留成熟的调度、流式和诊断辅助。
+
+本轮没有改变配方版本、提示词文本、缓存键、源资料角色、响应捕获格式、预算/并发台账、推理字段或训练导出格式。`NodeModelRequest` 是内存意图，不是新的序列化格式。模型工具用例仍只返回调用决定，由上层执行和记录工具。

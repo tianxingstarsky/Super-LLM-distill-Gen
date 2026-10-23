@@ -103,8 +103,7 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _task_controls(contract):
-    return {key: contract[key] for key in ("learning_goal", "user_language") if key in contract}
+from lib.contexts.workflows.domain.generation import task_controls as _task_controls
 
 
 def _fixed_human_input(design):
@@ -129,16 +128,7 @@ def _candidate_controls(config, offset, design=None):
     return controls
 
 
-def learner_prompt(contract):
-    """This is the only contract projection permitted in training messages."""
-    question = contract["question"]
-    if contract["visible_context"]:
-        if contract.get("user_language") == "en":
-            label = "User message:" if contract.get("dialogue_design") else "Question:"
-            return "Source material:\n" + contract["visible_context"] + "\n\n" + label + "\n" + question
-        label = "用户消息：" if contract.get("dialogue_design") else "问题："
-        return "资料：\n" + contract["visible_context"] + "\n\n" + label + "\n" + question
-    return question
+from lib.contexts.workflows.domain.generation import learner_prompt
 
 
 def actual_qa_input_messages(row, target=None):
@@ -785,142 +775,12 @@ class WorkflowQADirector:
 
     @staticmethod
     def qa_metadata(sample, check=None):
-        if not sample.get("qa_contract"):
-            return ({"human_augmentation_status": "recorded_conversation_preserved"}
-                    if sample.get("human_augmentation_status") == "recorded_conversation_preserved" else {})
-        return {key: sample.get(key) for key in ("qa_contract", "family_id", "parent_id")} | (
-            {"qa_contract_check": check} if check is not None else {})
+        from lib.contexts.workflows.domain.generation import qa_metadata
+        return qa_metadata(sample, check)
 
     def directed_sft(self, unit):
-        """Consume exactly the director question, evidence visibility and policy."""
-        if unit.get("kind") == "conversation":
-            raise ValueError("qa_director_recorded_conversation_changed")
-        contract = unit["qa_contract"]
-        separated = self.separated_questions()
-        evidence_level = (unit.get("revision_source_level") or (
-            "human_provided_and_model_assessed" if unit.get("human_provided") else
-            "model_assessed_synthetic" if unit["kind"] == "brief" else
-            "model_restructured_source_text_and_model_assessed"
-                if (unit.get("document_reading") or {}).get("mode") == "model" else
-            "model_transcribed_visual_source_and_model_assessed" if unit.get("document_reading") else
-            "source_and_model_assessed"))
-        style = self.generation_style("sft", unit["id"])
-        native_capture = style is None and self.recipe.get("provider_reasoning_capture_version") == 1
-        context = {"source_context": {key: value for key, value in unit.items()
-                                      if key not in {"qa_contract", "family_id", "parent_id", "director_batch"}},
-                   "qa_contract": contract,
-                   "requirement": self.recipe.get("brief", ""),
-                   "question_rules": self.recipe["qa_director"]["question_rules"],
-                   "answer_rules": self.recipe["qa_director"]["answer_rules"],
-                   **_task_controls(contract)}
-        if style is not None:
-            context = self.without_source_reasoning(context)
-            context["generation_style"] = style
-        from lib.infrastructure.source_memory_messages import directed_source_request, directed_evidence_text, directed_evidence_blocks
-        context = directed_source_request(self.recipe, context, unit, contract)
-        if self.recipe.get("source_memory_protocol_version") in {1, 2}:
-            context["learner_messages"] = self.controlled_training_messages(
-                [{"role": "user", "content": learner_prompt(contract)}], style)
-        selected_blocks = (directed_evidence_blocks(self.path, unit, contract)
-                           if context.get("source_line_scope") == "selected" else None)
-        feedback = None
-        check = contract_check = style_check = None
-        instructions = ([human_generation_instruction(contract)] if contract.get("human_design") else [])
-        if style is not None:
-            instructions.append("生成风格要求：\n" + style["instruction"])
-        failure_kind = "invalid_output"
-        for attempt in range(2):
-            candidate = self.ask([unit["id"], "sft_directed", attempt], "generation",
-                "workflow.sft_answer" if separated else "workflow.sft_directed", {**context, "feedback": feedback},
-                **({"instruction": "\n".join(instructions)} if instructions else {}),
-                **({"allow_reasoning_fallback": False} if style is not None else {}),
-                **({"capture_response_details": True} if native_capture else {}))
-            failure_kind = "invalid_output"
-            required_fields = (("answer", "reasoning") if style is not None or not native_capture else ("answer",))
-            if not separated:
-                required_fields = ("question", *required_fields)
-            separated_schema_invalid = False
-            if separated and isinstance(candidate, dict):
-                if style is not None or not native_capture:
-                    separated_schema_invalid = set(candidate) != {"answer", "reasoning", "quotes"}
-                else:
-                    separated_schema_invalid = (not {"answer", "quotes"}.issubset(candidate) or
-                        not set(candidate).issubset({"answer", "reasoning", "quotes"}))
-            if (not isinstance(candidate, dict)
-                    or separated_schema_invalid
-                    or any(text_issue(candidate.get(key)) for key in required_fields)
-                    or (not separated and candidate["question"].strip() != contract["question"])):
-                feedback = (("只返回answer、reasoning、quotes，不新增或改写用户问题。" if style is not None or not native_capture else
-                             "只返回answer、quotes，可附带文本reasoning，不新增或改写用户问题。") if separated else
-                            "保持指导员分配的问题原文，返回完整问题和答案；推理字段须为文本。")
-                continue
-            try:
-                reasoning = select_candidate_reasoning(candidate if native_capture else dict(candidate),
-                                                       styled=style is not None)
-            except ValueError:
-                feedback = "推理字段必须是文本；不能把结构化对象当作推理。"
-                continue
-            quotes = candidate.get("quotes")
-            evidence_text = unit.get("text", "")
-            if unit.get("source_context_pack"):
-                from lib.infrastructure.workflow_source_context import pack_evidence_text
-                evidence_text = (directed_evidence_text(self.path, unit, contract)
-                    if context.get("source_line_scope") == "selected" else pack_evidence_text(unit, self.path))
-            if (not isinstance(quotes, list) or len(quotes) > 32
-                    or any(not isinstance(q, str) or not q.strip() for q in quotes)
-                    or any(q not in evidence_text for q in quotes)
-                    or (selected_blocks is not None and any(not any(q in block for block in selected_blocks) for q in quotes))
-                    or (unit["kind"] == "document" and contract["answer_policy"] in {"answer", "correct_premise"}
-                        and not quotes)):
-                feedback = "证据必须是教师来源中的逐字片段；不能把历史答案当作事实依据。"
-                continue
-            assistant_message = {"role": "assistant", "content": candidate["answer"]}
-            if reasoning["content"]:
-                assistant_message["reasoning_content"] = reasoning["content"]
-            messages = self.controlled_training_messages(
-                [{"role": "user", "content": learner_prompt(contract)}, assistant_message], style)
-            issue = conversation_issue(messages)
-            if issue:
-                feedback = issue
-                continue
-            if self.recipe.get("review_repair") is not None:
-                return [{"id": unit["id"], "source_id": unit["source_id"], "source_name": unit.get("source_name"),
-                         "location": unit.get("location"), "source_location": unit.get("source_location"),
-                         "status": "eligible", "messages": messages, "tools": [], "quotes": quotes,
-                         "source_context": unit, "qa_contract": contract, "family_id": unit["family_id"],
-                         "parent_id": unit.get("parent_id"), "generation_check": "structure_and_source_quotes",
-                         "repair_attempts": attempt, **reasoning_provenance(reasoning),
-                         "evidence_level": evidence_level,
-                         **({"generation_style": style} if style else {})}]
-            check = self.judge_answer([unit["id"], "sft_directed_judge", attempt],
-                {**context, "rendered_prompt": messages[:-1]}, messages,
-                **({"allow_reasoning_fallback": False} if style is not None else {}))
-            contract_check = self.qa_contract_check([unit["id"], "sft_directed_contract", attempt], unit, messages)
-            style_check = (self.style_check([unit["id"], "sft_directed_style", attempt], style,
-                           candidate["reasoning"], candidate["answer"]) if style is not None else None)
-            if (accepted(check) and contract_check["keep"] and contract_check["adherence"] >= 4
-                    and (style_check is None or (style_check["keep"] and style_check["adherence"] >= 4))):
-                return [{"id": unit["id"], "source_id": unit["source_id"],
-                         "source_name": unit.get("source_name"), "location": unit.get("location"),
-                         "source_location": unit.get("source_location"), "status": "eligible",
-                         "messages": messages, "tools": [], "quotes": quotes, "judge": check,
-                         "source_context": unit, "qa_contract": contract,
-                         "qa_contract_check": contract_check, "family_id": unit["family_id"],
-                         "parent_id": unit.get("parent_id"), "repair_attempts": attempt,
-                         **reasoning_provenance(reasoning),
-                         "evidence_level": evidence_level,
-                         **({"generation_style": style, "style_check": style_check} if style else {})}]
-            feedback = {"quality": check["reason"], "contract": contract_check["reason"],
-                        "style": style_check["reason"] if style_check else None}
-            failure_kind = "quality"
-        return [{**self.rejected(unit, "directed_sft_quality_failed_after_repair"),
-                 **({"messages": messages, "quotes": quotes} if self.recipe.get("review_repair") is not None
-                     and "messages" in locals() else {}),
-                 "qa_contract": contract, "family_id": unit["family_id"],
-                 "parent_id": unit.get("parent_id"), "feedback": feedback,
-                 **({"generation_failure_kind": failure_kind} if separated else {}),
-                 "judge": check, "qa_contract_check": contract_check,
-                 **({"generation_style": style, "style_check": style_check} if style else {})}]
+        from lib.bootstrap.node_generation import directed_sft_generator
+        return directed_sft_generator(self).execute(unit)
 
     def _director_batch_plan(self, batch, offset, config, local_history, published_history, stages):
         """Persist inputs *before* calling so resume cannot observe changed history."""

@@ -6,7 +6,11 @@
 | --- | --- |
 | 业务边界与装配 | `test_ddd_architecture.py`、`test_onion_architecture.py` |
 | 执行顺序与状态 | `test_workflow_execution_application.py`、工作流及 production 测试 |
+| DSH 会话导入与原记录保真 | `test_conversation_import.py`、`test_dsh_import_ingestion.py`；独立插件执行 `npm test`，页面另跑 `ui_tests/test_conversation_import_ui.py` |
 | 多轮、生产轮次、评分修复边界 | `test_pipeline_use_cases.py`、multiturn、production、review_repair 及 reasoning 回归 |
+| SFT、CoT、原生推理和修剪节点 | `test_generation_node_use_cases.py`，以及 SFT/CoT、reasoning、trim 回归 |
+| 节点提示词、检查点和请求结果 | `test_node_request_application.py`、角色与流式日志回归 |
+| 模型准入、重试、JSON 和工具决策 | `test_model_request_use_cases.py`、`test_llm_client.py`、`test_model_*` |
 | 文档准备 | `test_document_corpus_application.py`、`test_doc2corpus.py`、`test_latex_document.py` |
 | Docling 适配 | `test_docling*.py`，必要时使用独立解析环境补测 |
 | 数据集交付 | package、statistics、verified_preview、credential 相关测试 |

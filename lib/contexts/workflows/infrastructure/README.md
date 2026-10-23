@@ -11,6 +11,9 @@
 
 | 文件 | 责任 |
 | --- | --- |
+| `conversation_import.py` | 有界调用独立转换器、核对输入未变与输出收据、原子暂存和复用持久资料缓存 |
+| `generation_adapter.py` | 已认证来源、节点请求、生成检查点和流式推理交付；不承接生成循环 |
+| `model_request_adapter.py` | 冻结提示词、来源角色投影、模型绑定、流式日志、响应证据与检查点适配 |
 | `dialogue_adapter.py` | 读取并验证来源记忆；复用已有请求调度、角色、流式输出和检查点 |
 | `production_adapter.py` | 轮次会话、落盘、事务提交、部分结果与最终交付 |
 | `production_storage.py` | SQLite 来源窗口、按收据选择的流式产物集合 |
@@ -20,3 +23,7 @@
 `production_runtime.py` 中的兼容方法把调度交给应用用例。不要向这里重新添加轮次主循环。`lib/infrastructure/workflow_production.py` 仅保留同一模块的导入别名。组合根向生产适配器注入数据集域的磁盘索引，适配器不直接导入邻域实现。
 
 不要记录原始供应商异常，可能包含密钥或原文。不得因“已有检查点”跳过导出核验。验证包括工作流、取消、恢复、批量生成和凭据阻断测试。
+
+`CheckpointedModelRequest` 的旧客户端和提示词钩子由 `bootstrap/workflow_requests.py` 注入，保留历史测试和调用方替换点。不要在适配器中重新加入 SFT/CoT 或请求重试循环。检查点键、端点身份、提示词版本、响应证据和原生推理字段都继续使用已有合同。
+
+`ExternalConversationImporter` 不解释厂商事件格式。DSH 读取器位于 `plugins/dsh-dataforge`，核心只校验规范 JSONL 和版本化收据。临时输入与输出目录隔离，导入不执行记录中的工具或调用模型。`tests/test_conversation_import.py` 覆盖收据、篡改、重复导入、路径和文件名碰撞；`test_dsh_import_ingestion.py` 覆盖后续训练输入规则。

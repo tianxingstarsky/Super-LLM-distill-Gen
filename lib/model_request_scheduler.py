@@ -61,9 +61,7 @@ def _pool_signal(directory: Path) -> _PoolSignal:
         return signal
 
 
-class ModelQueueTimeout(RuntimeError):
-    code = "model_request_queue_timeout"
-    kind = "transient"
+from lib.contexts.models.domain.request_errors import ModelQueueTimeout
 
 
 def model_pool_identity(base_url: str, credential: str, model: str) -> str:

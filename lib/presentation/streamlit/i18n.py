@@ -4114,3 +4114,55 @@ ZH_EN.update({
     "历史对话已包含助手回复，不能通过修改开头的深度指令重新标注旧回复。请沿用历史原档位，或新建对话后重新生成。": "The conversation already contains assistant replies. Changing the initial depth instruction cannot relabel those replies. Keep the original depth, or start a new conversation and generate again.",
     "DeepSeek 前缀接口不支持实际工具对话。请在 CoT 节点选择同次生成，保留原工具记录。": "DeepSeek's prefix API does not support tool conversations. Select joint generation in the CoT node to preserve the original tool records.",
 })
+
+# DSH conversation intake labels. Source content is never translated.
+ZH_EN.update({
+    "对话文件格式": "Conversation format",
+    "标准 JSON / JSONL": "Standard JSON / JSONL",
+    "DSH 会话库": "DSH sessions",
+    "导入 DSH 原始会话": "Import a DSH session",
+    "选择 DSH 保存的 .jsonl.zstd 或 .jsonl 会话文件。搜索索引数据库不包含完整对话。": "Select an original DSH .jsonl.zstd or .jsonl session file. Search indexes do not contain complete conversations.",
+    "仅支持 DSH 会话库。保留角色、工具调用和已有推理；没有推理的记录保持原样。": "DSH sessions only. Roles, tool calls and existing reasoning are preserved. Missing reasoning stays absent.",
+    "正在还原 DSH 会话…": "Reading the DSH session…",
+    "**会话预览**": "**Conversation preview**",
+    "查看会话": "Preview conversation",
+    "系统": "System",
+    "开发者": "Developer",
+    "用户": "User",
+    "助手": "Assistant",
+    "工具": "Tool",
+    "已有推理": "Existing reasoning",
+    "预览仅展示部分会话与消息，保存时保留完整记录。导入后仍按工作流配置进行审核。": "The preview shows a limited selection. Saved records remain complete. Imported conversations still need workflow review.",
+    "已加入本次资料，可继续配置或启动工作流。": "Added to this run. Continue configuring or start the workflow.",
+    "确认导入并选中": "Confirm and select",
+    "重试导入": "Retry import",
+    "暂存会话校验失败，暂时无法确认导入。请修复本地导入缓存后重试。": "The staged session failed validation and cannot be confirmed. Repair the local import cache, then retry.",
+    "记录过多，请分批整理后导入。": "Too many records. Split them into smaller batches before importing.",
+    "原始会话没有推理字段，导入时不会补造。": "The original session has no reasoning field. None will be invented.",
+    "保留原始消息；压缩或替换后的视图另存为审计记录。": "Original messages are preserved. Compacted or replaced views are saved separately for audit.",
+    "已保留分支会话继承的前文，请确认这些消息属于本次训练资料。": "The branch keeps its inherited history. Check that these messages belong in the training sources.",
+    "已保留 developer 角色，当前训练流程不支持的会话不会选中。": "The developer role is preserved. Sessions unsupported by this training workflow stay unselected.",
+    "会话包含工具错误，需按目标流程审核。": "The session includes tool errors. Review them for the selected workflow.",
+    "部分工具调用缺少原始工具定义，导入时不会猜测补全。": "Some tool calls lack their original tool definitions. Missing definitions will not be guessed.",
+    "空消息事件已保留在审计记录中，不会伪造消息正文。": "Empty message events are kept in the audit record. Message text will not be invented.",
+    "导入器报告了未识别的提醒，请在确认前检查原始会话。": "The importer returned an unrecognized notice. Check the original session before confirming.",
+    "这是 DSH 搜索索引，不含完整对话。请改选原始 .jsonl.zstd 或 .jsonl 会话文件。": "This is a DSH search index. Select an original .jsonl.zstd or .jsonl session file instead.",
+    "DSH 会话导入组件尚未就绪。请按独立插件的安装说明配置后重试。": "The DSH importer is not ready. Follow the standalone plugin setup guide, then retry.",
+    "会话文件超过导入上限，请分批导入较小的原始会话文件。": "This session exceeds the import limit. Import smaller original session files separately.",
+    "文件中没有可导入的完整会话，请选择包含真实对话的 DSH 会话文件。": "No complete conversation was found. Select a DSH file with actual messages.",
+    "暂存会话已变化，请重新上传并核对预览。": "The staged session has changed. Upload it again and check the preview.",
+    "无法识别或完整还原这份 DSH 会话，请检查原始文件与插件支持的版本。其他数据库暂不支持。": "This DSH session could not be fully restored. Check the original file and the supported plugin version. Other databases are not supported yet.",
+    "导入完整对话；工具轨迹需要真实观测，推理缺失不会自动补造。": "Import complete conversations. Tool traces need real observations. Missing reasoning is never invented.",
+    "DSH 会话预览确认后加入资料，关闭或重启后仍可使用。": "Confirm the DSH preview to add it to sources. Saved sources remain available after restart."
+})
+
+ZH_EN.update({
+    "请在 DSH 中整理不支持的角色、不完整消息或过长会话，再导入新的原始会话。这里不会改写历史对话。": "Prepare unsupported roles, incomplete messages or long conversations in DSH, then import the new original session. Historical messages are not rewritten here.",
+    "会话过长，需按完整任务拆分": "Long conversation: split it into complete tasks",
+    "含当前训练流程不支持的角色": "Role not supported by the current training workflow",
+    "含疑似密钥，需先脱敏": "Possible credentials: redact them first",
+    "含疑似个人信息，需先脱敏": "Possible personal data: redact it first",
+    "工具错误尚未解决": "Unresolved tool error",
+    "附件需要专用多模态导入": "Attachments need a dedicated multimodal importer",
+    "对话结构需在 DSH 中整理": "Conversation structure needs preparation in DSH"
+})

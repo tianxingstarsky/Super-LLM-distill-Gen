@@ -5,8 +5,12 @@
 - 对外使用 [api.py](api.py) 中的 `WorkflowRunApplication`。
 - [application](application/README.md) 决定执行顺序；[domain](domain/README.md) 决定依赖和状态含义。
 - [infrastructure](infrastructure/README.md) 承担持久化、锁和阶段操作。
-- 装配入口是 `lib/bootstrap/workflows.py`、`workflow_execution.py`、`dialogue_generation.py` 和 `production_execution.py`。
+- 装配入口是 `lib/bootstrap/workflows.py`、`workflow_execution.py`、`dialogue_generation.py`、`production_execution.py`、`node_generation.py` 和 `workflow_requests.py`。
 
-维护执行行为从 `ExecuteWorkflowRun`、`GenerateDatasetBatch`、`GenerateMultiturnDialogue`、`ExecuteProductionRounds` 和 `GenerateProductionBatch` 开始。评分修复用例属于 review 域。SFT、CoT 单节点生成和通用请求运行时尚未全部拆出，不能把本轮迁移理解成整个引擎重写。
+维护执行顺序从 `ExecuteWorkflowRun`、`GenerateDatasetBatch`、`GenerateMultiturnDialogue`、`ExecuteProductionRounds` 和 `GenerateProductionBatch` 开始。SFT、CoT 和推理修剪分别由 `GenerateSft`、`GenerateDirectedSft`、`GenerateCot`、`TrimReasoning` 处理；`RequestNodeModel` 管理一次节点请求与检查点。评分修复用例属于 review 域；供应商请求重试属于 models 域。CPT、偏好构造及资料缓存仍有旧实现，本轮不是整个引擎重写。
 
 验证：`tests/test_workflow_execution_application.py`、`tests/test_workflow.py`、`tests/test_workflow_production.py`、`tests/test_workflow_reasoning_route.py`。
+
+节点与请求验证：`tests/test_generation_node_use_cases.py`、`tests/test_node_request_application.py`，以及 SFT、CoT、提示词角色、原生推理和恢复回归。
+
+`api.py` 同时公开 `ImportConversations`：先预览经过外部适配器还原的会话，再确认选入持久资料缓存。手动会话库目前只接 DSH；供应商格式解析属于独立插件，不能进入核心用例。验证见 `tests/test_conversation_import.py` 和 `tests/test_dsh_import_ingestion.py`。

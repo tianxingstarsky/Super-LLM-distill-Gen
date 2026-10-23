@@ -15,8 +15,7 @@ from lib.model_response_details import (build_response_details, commit_response_
 StreamCallback = Callable[[dict], None]
 
 
-class ModelStreamError(ValueError):
-    """A static, safe failure code: partial text must never become a sample."""
+from lib.contexts.models.domain.request_errors import ModelStreamError
 
 
 class _StreamWatchdog:

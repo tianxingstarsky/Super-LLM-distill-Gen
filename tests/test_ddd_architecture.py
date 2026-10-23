@@ -179,6 +179,8 @@ def test_composition_uses_separate_adapters_and_narrow_use_cases(tmp_path):
     ("lib.infrastructure.workflow_production", "lib.contexts.workflows.infrastructure.production_runtime"),
     ("lib.infrastructure.workflow_review_repair", "lib.contexts.review.infrastructure.automatic_runtime"),
     ("lib.domain.review_repair", "lib.contexts.review.domain.repair"),
+    ("lib.llm_client", "lib.contexts.models.infrastructure.request_runtime"),
+    ("lib.model_tool_calls", "lib.contexts.models.infrastructure.tool_transport"),
     ("lib.infrastructure.reasoning_prefill_history", "lib.contexts.review.domain.reasoning_history"),
 ])
 def test_compatibility_paths_resolve_to_one_implementation(old, new):
@@ -283,6 +285,50 @@ from tests.test_pipeline_use_cases import (
 test_dialogue_port_keeps_separate_actors_and_every_turn_reasoning()
 test_million_row_production_use_case_only_handles_bounded_windows_and_receipts()
 test_review_repairs_and_rescores_exact_body_without_changing_task()
+'''
+    result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
+
+def test_generation_and_request_use_cases_execute_without_adapters_or_model_sdks():
+    script = r'''
+import importlib.abc, sys
+class NoAdapters(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if (fullname.startswith(("lib.infrastructure", "lib.bootstrap", "lib.presentation", "lib.llm_client"))
+                or ".infrastructure" in fullname
+                or fullname in {"lib.model_tool_calls", "lib.model_request_scheduler", "lib.model_streaming"}
+                or fullname.split(".")[0] in {"streamlit", "docling", "openai", "anthropic", "httpx", "requests"}):
+            raise AssertionError("application loaded an external adapter: " + fullname)
+sys.meta_path.insert(0, NoAdapters())
+from tests.test_generation_node_use_cases import (
+    test_sft_retries_schema_without_spending_on_review_and_keeps_request_keys,
+    test_directed_sft_keeps_exact_assigned_question_and_rejects_foreign_evidence,
+    test_native_cot_retains_provider_bytes_including_whitespace,
+    test_styled_cot_keeps_unassessed_answer_out_of_request_without_erasing_input,
+)
+from tests.test_node_request_application import (
+    test_node_request_reuses_captured_checkpoint_without_new_model_call,
+    test_node_request_routes_generation_check_but_keeps_review_role,
+)
+from tests.test_model_request_use_cases import (
+    test_rate_limit_defers_before_releasing_slot_and_retries_with_clean_reservation,
+    test_json_capability_rejection_does_not_consume_retry_or_reuse_live_reservation,
+    test_json_retries_only_invalid_body_and_publishes_only_successful_attempt_details,
+    test_tool_decision_bills_invalid_response_and_never_executes_returned_tools,
+)
+test_sft_retries_schema_without_spending_on_review_and_keeps_request_keys()
+test_directed_sft_keeps_exact_assigned_question_and_rejects_foreign_evidence()
+test_native_cot_retains_provider_bytes_including_whitespace()
+test_styled_cot_keeps_unassessed_answer_out_of_request_without_erasing_input()
+test_node_request_reuses_captured_checkpoint_without_new_model_call()
+test_node_request_routes_generation_check_but_keeps_review_role()
+test_rate_limit_defers_before_releasing_slot_and_retries_with_clean_reservation()
+test_json_capability_rejection_does_not_consume_retry_or_reuse_live_reservation()
+test_json_retries_only_invalid_body_and_publishes_only_successful_attempt_details()
+test_tool_decision_bills_invalid_response_and_never_executes_returned_tools()
 '''
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
                             capture_output=True, text=True, timeout=30)

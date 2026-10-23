@@ -49,22 +49,10 @@ FATAL_VALIDATION_CODES = frozenset({
 })
 
 
-class ModelRequestError(RuntimeError):
-    """A stable, display-safe error, without a provider payload or endpoint."""
-
-    def __init__(self, code: str, kind: str, attempts: int, *, diagnostics: dict | None = None):
-        self.code, self.kind, self.attempts = code, kind, attempts
-        self.retryable = kind == "transient"
-        self.diagnostics = diagnostics
-        super().__init__(f"chat failed: {code} ({attempts} attempts)")
+from lib.contexts.models.domain.request_errors import ModelRequestError
 
 
-class ModelJSONError(RuntimeError):
-    code = "model_json_invalid"
-    kind = "invalid"
-
-    def __init__(self, attempts: int):
-        super().__init__(f"JSON 调用失败（{attempts} 次重试后）: model_json_invalid")
+from lib.contexts.models.domain.request_errors import ModelJSONError
 
 
 def _status(error: Exception) -> int | None:

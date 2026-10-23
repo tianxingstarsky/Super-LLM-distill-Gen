@@ -5,5 +5,17 @@
   "dsh_version": "0.2.1-rc.2",
   "core_protocol": "dataforge.control",
   "core_protocol_version": 1,
-  "references": ["docs/cookbook/adding-a-tool.md", "docs/user/develop/basic/publish.md", "packages/jobs/jobs/src/types.ts", "docs/subsystems/subprocess.md"]
+  "references": ["docs/cookbook/adding-a-tool.md", "docs/user/develop/basic/publish.md", "packages/jobs/jobs/src/types.ts", "docs/subsystems/subprocess.md"],
+  "conversation_import": {
+    "protocol": "dataforge.conversation_import",
+    "protocol_version": 1,
+    "checked_at": "2026-10-24",
+    "upstream_commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
+    "reader_sdk_version": "0.2.1-rc.2",
+    "current_session_format": 4,
+    "search_index_schema": 8,
+    "search_index_application_id": "0x44534851",
+    "input": ["jsonl", "jsonl.zstd"],
+    "references": ["packages/session/session-format-catalog/README.md", "packages/core/session/src/surface.ts", "packages/session/session-persistence/README.md", "packages/session-query/session-query-sqlite/src/schema.ts"]
+  }
 }

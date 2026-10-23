@@ -1520,7 +1520,8 @@ def _upload_cache_error(error):
 def render_workbench(application: WorkflowApplication, begin, model_application, *,
                      draft_application: CreationDraftApplication | None = None,
                      backend_application=None, input_cache=None, manual_application=None, document_preview=None,
-                     knowledge_application=None, prompt_library=None, human_application=None):
+                     knowledge_application=None, prompt_library=None, human_application=None,
+                     conversation_importer=None):
     page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL", art_kind="hero")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
@@ -1921,18 +1922,46 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         knowledge_files, input_cache=input_cache, save_field=_save_draft_value)
                 brief = _draft_brief("补充生成要求（可选）", key=f"workflow-source-brief:{ws}:{source_mode}")
             else:
-                files_column, brief_column = st.columns([1.5, 1], gap="large")
+                # Conversation history needs reading width. Optional instructions
+                # must not leave an empty column beside the import preview.
+                if source_mode == "Agent 上下文":
+                    files_column = st.container()
+                    brief_key = f"workflow-source-brief:{ws}:{source_mode}"
+                    brief_column = st.expander("补充生成要求（可选）",
+                        expanded=bool(st.session_state.get(brief_key,
+                            st.session_state.get(f"workflow-form-draft:{ws}", {}).get(brief_key, ""))))
+                else:
+                    files_column, brief_column = st.columns([1.5, 1], gap="large")
                 upload_options = ({"on_change": _cache_source_uploads, "args": (input_cache, ws, source_mode)}
                                   if input_cache is not None else {})
                 upload_types = sorted(e[1:] for e in source_extensions)
                 upload_label = ("导入文档或图片" if source_mode == "文档资料"
                                 else "导入 JSON / JSONL 上下文记录")
                 with files_column:
-                    uploaded = st.file_uploader(upload_label, type=upload_types,
+                    use_dsh = False
+                    if source_mode == "Agent 上下文" and conversation_importer is not None:
+                        format_key = f"workflow-conversation-format:{ws}"
+                        formats = ["标准 JSON / JSONL", "DSH 会话库"]
+                        _restore_selection(ws, format_key, "标准 JSON / JSONL", formats)
+                        intake = st.segmented_control("对话文件格式", formats,
+                            default=None, key=format_key, on_change=_save_draft_value, args=(ws, format_key))
+                        use_dsh = intake == "DSH 会话库"
+                    if use_dsh:
+                        from lib.presentation.streamlit.conversation_import_controls import render_conversation_import
+                        def select_imported_sources(rows):
+                            source_key = f"workflow-sources:{ws}:{source_mode}"
+                            selected_paths = st.session_state.get(source_key, [])
+                            st.session_state[source_key] = list(dict.fromkeys([
+                                *selected_paths, *(row["path"] for row in rows)]))
+                            _save_draft_value(ws, source_key)
+                        render_conversation_import(conversation_importer, ws, select_imported_sources, targets=targets)
+                        uploaded = []
+                    else:
+                        uploaded = st.file_uploader(upload_label, type=upload_types,
                                                 accept_multiple_files=True, max_upload_size=50,
                                                 help="选择文件或拖入此处。单文件最多 50 MiB，本次来源合计最多 200 MiB。",
                                                 key=f"workflow-upload:{ws}:{source_mode}", **upload_options)
-                    st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
+                        st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
                 if input_cache is not None:
                     # The callback already persisted and selected these uploads.
                     uploaded = []
@@ -1959,19 +1988,21 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         _render_setup_issue(ws, "ingest", "图片需要多模态识别，点击配置输入模型", kind="image-parser")
                     else:
                         st.warning("图片需要多模态识别，请在输入解析节点选择并确认图片输入模型。")
-                upload_error = st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")
+                upload_error = None if use_dsh else st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")
                 if upload_error:
                     st.error(_upload_cache_error(upload_error))
                 with brief_column:
                     brief = _draft_brief("补充生成要求（可选）", height=120,
                                          placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                          key=f"workflow-source-brief:{ws}:{source_mode}")
-                    st.caption("导入完整的 JSON / JSONL 对话记录；工具轨迹需要真实观测。"
+                    st.caption("导入完整对话；工具轨迹需要真实观测，推理缺失不会自动补造。"
                                if source_mode == "Agent 上下文" else
                                "扫描件与图片可在输入节点配置多模态识别。")
                     if input_cache is not None:
-                        st.caption("拖入文件即保存并选中，关闭或重启后仍可使用。")
-                        st.caption("解析一次，后续任务和批量生成自动复用；修改解析配置时另存新版本。")
+                        st.caption("DSH 会话预览确认后加入资料，关闭或重启后仍可使用。" if use_dsh else
+                                   "拖入文件即保存并选中，关闭或重启后仍可使用。")
+                        if source_mode != "Agent 上下文":
+                            st.caption("解析一次，后续任务和批量生成自动复用；修改解析配置时另存新版本。")
         if preview_in_input:
             from lib.presentation.streamlit.document_preview import render_document_preview
             with source_previews, st.container(border=True, key="workbench-source-preview"):
@@ -2206,7 +2237,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       or agent_unavailable or web_unavailable
                                       or bool(generation_invalid) or trim_invalid or prompts_invalid or director_invalid
                                       or parser_unavailable or cpt_vision_blocked
-                                      or (not arithmetic_only and bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}"))),
+                                      or (not arithmetic_only
+                                          and not (source_mode == "Agent 上下文" and
+                                              st.session_state.get(f"workflow-conversation-format:{ws}") == "DSH 会话库")
+                                          and bool(st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}"))),
                                       key=f"workflow-create:{ws}", width="stretch")
                 if draft_application is not None:
                     if st.button("保存为独立草稿", key=f"workflow-save-draft:{ws}", width="stretch",

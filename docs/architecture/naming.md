@@ -38,3 +38,12 @@
 结构重构先验证行为：清洗先于问答、CoT 在最终 SFT 投影前完成、偏好复用同一对结果、取消不重试、恢复不重做已核验工作、打包重新核验。替换文件适配器后，应用用例应能使用内存端口运行。
 
 每个业务目录 README 描述职责、入口、允许依赖和验证位置。文档写当前事实，明确剩余旧代码；不要把计划迁移的内容描述成已经完成。
+
+## 节点算法与模型请求
+
+- `GenerateSft` / `GenerateDirectedSft` 区分普通候选与指导员指定问题；`GenerateCot` 处理原生、风格化和原生前缀路径；`TrimReasoning` 负责修剪和训练交付投影。
+- `RequestNodeModel` 表示工作流的一次可恢复节点调用，`NodeModelRequest` 表示其临时意图；`CheckpointedModelRequest` 负责提示词、模型绑定、日志和响应证据。
+- `ExecuteModelRequest`、`RequestJSONResponse`、`ExecuteToolTurn` 分别管理文本传输、JSON 完整性尝试、工具决策请求。它们不等于生成节点，也不承担工具执行。
+- `SDKModelRequestAdapter`、`ClientJSONResponseAdapter`、`SDKToolRequestAdapter` 说明实际连接责任。`ChatClient` 保留兼容名，不能将重试主循环重新放回客户端入口。
+
+节点重跑、结构化响应重试、网络重试和返工是不同动作；修改某层策略时不得隐式改变其他层的次数、检查点或计费语义。
