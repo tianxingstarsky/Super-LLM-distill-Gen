@@ -28,6 +28,9 @@ DOCLING_ERRORS = {
     "document_docling_ocr_models_required": "本地 OCR 模型文件不完整，请准备检测模型及所选语言对应的识别模型。",
 }
 _INLINE_ERRORS = {
+    "document_vision_model_required": ("请在输入节点选择多模态辅助模型。", "Choose a vision assistance model on the input node."),
+    "document_model_vision_not_confirmed": ("请先在输入节点确认模型的图片输入能力。", "Confirm image input support on the input node first."),
+    "invalid_vision_assist_rounds": ("多模态辅助最多进行两轮。", "Vision assistance supports up to two rounds."),
     "document_docling_inline_runtime_requires_formula": (
         "行内公式环境需要独立解析环境，并开启本地公式识别。",
         "Inline formulas require an isolated parser environment and local formula recognition."),
@@ -43,7 +46,7 @@ _INLINE_ERRORS = {
 DOCLING_ERRORS.update({code: phrases[0] for code, phrases in _INLINE_ERRORS.items()})
 from lib.presentation.streamlit.i18n import ZH_EN
 ZH_EN.update(dict(_INLINE_ERRORS.values()))
-_FIELDS = {"artifacts": "", "ocr": False, "ocr-models": "", "languages": "ch_sim,en",
+_FIELDS = {"artifacts": "", "ocr": False, "ocr-models": "", "languages": "ch_sim,en", "assist":False,
            "formula": False, "runtime": "", "inline-runtime": ""}
 
 
@@ -77,6 +80,9 @@ def docling_snapshot(workspace):
         value.update(ocr_models_path=_value(workspace, "ocr-models"),
                      ocr_languages=[item.strip() for item in _value(workspace, "languages").split(",")
                                     if item.strip()])
+    if _value(workspace,"assist"):
+        binding=st.session_state.get(f"workflow-node-bindings:{workspace}",{}).get("ingest",{}).get("vision")
+        value["assistance"]={"enabled":True,**({"binding":binding} if binding else {})}
     return value
 
 
@@ -141,8 +147,12 @@ def render_docling_settings(workspace):
                       on_change=_save, args=(workspace, "ocr-models"))
         st.text_input("OCR 语言代码", key=_widget_key(workspace, "languages"),
                       on_change=_save, args=(workspace, "languages"), help="以逗号分隔，例如 ch_sim,en。")
+    st.checkbox(_tr("多模态 API 自动辅助", "Automatic vision API assistance"),key=_widget_key(workspace,"assist"),
+                on_change=_save,args=(workspace,"assist"),help=_tr(
+                    "本地解析后，仅将待复核区域和所在页截图交给节点模型。两次独立转录一致并通过原文检查后自动采用，最多两轮。结果持久缓存。",
+                    "Send uncertain regions and their page images to the node model. Adopt matching independent readings after source checks, with up to two rounds. Results are cached."))
     config = docling_snapshot(workspace)
-    issue = docling_setup_issue(config)
+    issue = docling_setup_issue({k:v for k,v in config.items() if k!="assistance"})
     if issue:
         st.warning(_tr(*_INLINE_ERRORS[issue]) if issue in _INLINE_ERRORS
                    else DOCLING_ERRORS.get(issue, DOCLING_ERRORS["invalid_document_parser"]))
@@ -150,5 +160,5 @@ def render_docling_settings(workspace):
         st.caption("本地依赖与目录已就绪；开始任务时会核验模型内容，识别结果仍需质量检查。")
     if not config["formula_enrichment"]:
         st.caption("公式识别未开启：检测到的公式区域可能仅保留未解码标记。")
-    st.caption("此功能不会下载模型或调用云端 API。配置方法见 docs/open-source-solutions.md。")
+    st.caption(_tr("本地解析不会下载模型；开启自动辅助后，待复核截图将发送至所选模型服务。", "Local parsing does not download models. When assistance is on, review images are sent to the selected model service."))
     return config

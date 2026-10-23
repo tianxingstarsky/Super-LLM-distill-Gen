@@ -183,7 +183,7 @@ class SourceLibrary:
             raise ValueError("source_library_integrity_error") from error
 
     def iter_parts(self, source, signature, build, *, valid=None, check_cancel=None, on_status=None,
-                   cached_valid=None):
+                   cached_valid=None, cache_incomplete=False):
         """Stream all parts; closing or failing the producer never publishes a hit."""
         key = self.parse_id(source, signature)
         folder = self.path / "parses" / source["id"] / key
@@ -193,6 +193,9 @@ class SourceLibrary:
                 check_cancel()
             self.source_path(source["id"])
             cached = self._read_manifest(folder, source, signature)
+            if cached is not None and cached.get("evidence_only") and not cache_incomplete:
+                cached=None
+                (folder/"parse.json").unlink()
             if cached is not None and cached_valid is not None:
                 # A stricter consumer can retire only obsolete invalid results
                 # while preserving good expensive readings under the same key.
@@ -276,7 +279,7 @@ class SourceLibrary:
                             close()
                     handle.flush()
                     os.fsync(handle.fileno())
-                if not successful:
+                if not successful and not cache_incomplete:
                     progress("incomplete", last_row)
                     return
                 self.source_path(source["id"])
@@ -287,6 +290,7 @@ class SourceLibrary:
                           "requires_vision": requires_vision, "empty_parts": empty_parts,
                           "parts_sha256": _hash_file(pending),
                           "created_at": _now()}
+                if not successful:record["evidence_only"]=True
                 if last_row is not None:
                     record.update({name: last_row[name] for name in ("location", "parse_segment") if name in last_row})
                 destination = folder / "parts.jsonl"

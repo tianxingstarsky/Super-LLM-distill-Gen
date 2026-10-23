@@ -738,8 +738,18 @@ def render_document_parser(workspace, bindings, endpoints, *, backend_applicatio
                     on_change=_save_document_parser_mode, args=(workspace,),
                     format_func=lambda value: {"native": "本地文本解析", "model": "模型辅助解析", "vision": "多模态识别", "docling": "Docling 本地版面"}[value])
     if mode == "docling":
-        from lib.presentation.streamlit.docling_settings import render_docling_settings
-        return render_docling_settings(workspace)
+        from lib.presentation.streamlit.docling_settings import render_docling_settings,_tr
+        config=render_docling_settings(workspace)
+        if config.get("assistance"):
+            render_node_models("ingest","多模态文档",workspace,bindings,endpoints,backend_application=backend_application)
+            binding=bindings.get("ingest",{}).get("vision")
+            if binding:
+                config["assistance"]["binding"]=deepcopy(binding)
+                if not supports_vision(endpoints.get(binding["backend"],{}),binding["model"]):
+                    config["unconfirmed"]=True
+                    st.warning(_tr("请在本节点测试并确认图片能力后开始。", "Test and confirm image support on this node before starting."))
+            st.caption(_tr("采用结果会记录截图、两次转录和原文核验；无法确定的内容保留待复核。", "Adopted results retain images, both transcriptions and source checks. Unresolved content stays in review."))
+        return config
     if mode == "native":
         st.caption("读取文档文字，不调用模型。扫描 PDF 与图片请使用多模态识别。")
         return {"mode": "native"}

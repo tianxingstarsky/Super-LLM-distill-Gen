@@ -396,6 +396,12 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             path.suffix.lower() == ".pdf" for path in files):
         from lib.infrastructure.docling_document import docling_parse_signature
         document_parser_signature = docling_parse_signature(document_parser)
+        if document_parser.get("assistance"):
+            from lib.infrastructure.document_vision import require_vision_model
+            binding=document_parser["assistance"]["binding"]
+            if settings_root is None:raise ValueError("document_vision_model_required")
+            require_vision_model(Path(settings_root),binding)
+            node_models.setdefault("ingest",{})["vision"]=binding
     if not repair_inputs and document_parser["mode"] == "vision":
         from lib.infrastructure.document_vision import require_vision_model
         if settings_root is None or not files or any(path.suffix.lower() in {".json", ".jsonl"} for path in files):
@@ -615,9 +621,9 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         self.state = read_json(self.path / "state.json")
         self.recipe = read_json(self.path / "recipe.json")
         parser = validate_document_parser(self.recipe.get("document_parser"))
-        if not self.recipe.get("repair_inputs") and not self.arithmetic_only() and parser["mode"] == "vision":
+        if not self.recipe.get("repair_inputs") and not self.arithmetic_only() and (parser["mode"] == "vision" or parser.get("assistance")):
             from lib.infrastructure.document_vision import require_vision_model
-            require_vision_model(self.root, parser["binding"])
+            require_vision_model(self.root, parser.get("assistance",parser)["binding"])
         cpt_config = validate_cpt_processing(self.recipe.get("cpt_processing"))
         if not self.recipe.get("repair_inputs") and not self.arithmetic_only() and cpt_config["mode"] == "model" and cpt_config["review_mode"] == "vision":
             from lib.infrastructure.document_vision import require_vision_model
@@ -700,7 +706,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
         if role == "vision":
             from lib.infrastructure.document_vision import require_vision_model
             parser = validate_document_parser(self.recipe.get("document_parser"))
-            require_vision_model(self.root, parser["binding"])
+            require_vision_model(self.root, parser.get("assistance",parser)["binding"])
         field = {"judge": "judge", "jev": "jev", "question": "questioner"}.get(role, "generator")
         client = getattr(self, field)
         if client is None:
@@ -788,6 +794,10 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
             allow_reasoning_fallback=True, model_stage=None, prompt_stage=None,
             capture_response_details=False, reasoning_prefix=None, native_request_attempts=None):
+        image_values=([image] if isinstance(image,str) else image) if image is not None else []
+        if (not isinstance(image_values,list) or len(image_values)>8
+                or any(not isinstance(value,str) or not value for value in image_values)):
+            raise ValueError("invalid_document_images")
         if native_request_attempts is not None and (
                 prompt_id != "workflow.cot_native_answer" or type(native_request_attempts) is not int
                 or not 1 <= native_request_attempts <= 10):
@@ -885,7 +895,7 @@ class Workflow(WorkflowProduction, WorkflowQADirector, WorkflowKnowledgeAgent, W
                         {"role": "system", "content": system},
                         {"role": "user", "content": request_text if image is None else [
                             {"type": "text", "text": request_text},
-                            {"type": "image_url", "image_url": {"url": image}}]}]
+                            *[{"type": "image_url", "image_url": {"url": value}} for value in image_values]]}]
                     if source_pack_request and memory_version in {1, 2}:
                         from lib.infrastructure.source_memory_messages import source_memory_messages
                         transport = ("system" if memory_version == 2 or prompt_id == "workflow.cot_native_answer" else

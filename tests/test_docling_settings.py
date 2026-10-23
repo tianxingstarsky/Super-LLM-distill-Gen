@@ -69,6 +69,30 @@ def test_old_run_keeps_formula_disabled(tmp_path):
     assert values["workflow-docling-inline-runtime:w"] == ""
 
 
+def test_assistance_is_configured_on_the_input_node_and_survives_navigation():
+    ui=_document_ui(DOCUMENT_NAVIGATION_SCRIPT)
+    ui.radio(key="workflow-document-parse-mode:demo").set_value("docling").run()
+    ui.checkbox(key="workflow-docling-assist:demo").check().run()
+    assert not ui.exception
+    parser=ui.session_state["fixture-parser"]
+    assert parser["assistance"]["binding"]["model"]=="alpha"
+    assert parser["unconfirmed"] is True
+    assert any("本节点测试" in warning.value for warning in ui.warning)
+    ui.radio(key="fixture-node").set_value("sft").run()
+    ui.radio(key="fixture-node").set_value("ingest").run()
+    assert ui.checkbox(key="workflow-docling-assist:demo").value is True
+    assert ui.session_state["fixture-parser"]["assistance"]["binding"]["model"]=="alpha"
+
+
+def test_assistance_binding_and_toggle_are_preserved_when_reusing_run(tmp_path):
+    binding={"backend":"teacher","model":"vision","context_window_tokens":131072,"max_output_tokens":32768}
+    config={"mode":"docling","artifacts_path":str(tmp_path),"assistance":{"enabled":True,"binding":binding}}
+    values=recipe_to_draft(recipe(document_parser=config),"Reuse","w",[])["values"]
+    validate_creation_draft(values)
+    assert values["workflow-docling-assist:w"] is True
+    assert values["workflow-node-bindings:w"]["ingest"]["vision"]==binding
+
+
 def test_formula_setup_fails_locally_before_start(tmp_path, monkeypatch):
     from lib.presentation.streamlit import docling_settings as settings
     monkeypatch.setattr(settings, "_package_versions", lambda ocr: {})

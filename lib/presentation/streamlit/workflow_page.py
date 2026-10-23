@@ -1704,7 +1704,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if selected_node not in graph_nodes:
             selected_node = graph_nodes[0]
         st.session_state[selection_key] = selected_node
-        model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
+        model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" or document_parser.get("assistance") else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
         if source_mode == "开放需求" and creation_mode == "人工问答增强":
             # The run snapshots these designs as input units. It never calls
             # the open-brief planning model to parse an existing human QA.
@@ -1720,6 +1720,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             vision_binding = document_parser["binding"]
             if not supports_vision(endpoints.get(vision_binding["backend"], {}), vision_binding["model"]):
                 document_parser["unconfirmed"] = True
+        if document_parser.get("assistance"):
+            from lib.domain.document_parser import supports_vision
+            vision_binding=bindings.get("ingest",{}).get("vision")
+            if vision_binding:
+                document_parser["assistance"]["binding"]=vision_binding
+                if not supports_vision(endpoints.get(vision_binding["backend"],{}),vision_binding["model"]):
+                    document_parser["unconfirmed"]=True
         model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
     workbench = st.container(key="workbench-layout")
@@ -1787,7 +1794,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 if selected_node == "ingest" and source_mode == "文档资料":
                     document_parser = render_document_parser(ws, bindings, endpoints,
                         backend_application=backend_application)
-                    model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
+                    model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" or document_parser.get("assistance") else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
                 elif selected_node == "ingest" and source_mode == "知识库检索" and knowledge_application is not None:
                     from lib.presentation.streamlit.knowledge_page import render_knowledge_settings
                     render_knowledge_settings(knowledge_application, ws)

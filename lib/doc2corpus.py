@@ -138,8 +138,25 @@ def _table_separator(line: str) -> bool:
 def _document_blocks(text: str):
     """Keep fences and tables whole; headings do not require surrounding blanks."""
     lines = text.splitlines(keepends=True)
+    # Merged-cell tables from the image reader use standard HTML. Let the
+    # Markdown parser bind complete blocks so row spans survive chunking.
+    html_tables={}
+    if re.search(r"<table(?:\s|>)",text,re.I):
+        from markdown_it import MarkdownIt
+        html_tables={token.map[0]:token.map[1] for token in MarkdownIt("commonmark").parse(text)
+                     if token.type=="html_block" and token.map
+                     and re.match(r"\s*<table(?:\s|>)",token.content,re.I)
+                     and re.search(r"</table>\s*$",token.content,re.I)}
     paragraph, index = [], 0
     while index < len(lines):
+        if index in html_tables:
+            if paragraph:
+                yield "".join(paragraph),"prose"
+                paragraph=[]
+            end=html_tables[index]
+            yield "".join(lines[index:end]),"atomic"
+            index=end
+            continue
         line = lines[index]
         fence = _FENCE.match(line)
         table = (index + 1 < len(lines) and "|" in line
@@ -230,7 +247,7 @@ def chunk_text(text: str, target_chars: int = 2000, overlap: int = 0, *,
                 # Do not carry raw code/table syntax into the next prose block.
                 previous = chunks[-1]
                 if (len(block) + overlap <= target_chars
-                        and not (_HEADING.match(previous) or any(
+                        and not (_HEADING.match(previous) or re.match(r"\s*<table(?:\s|>)",previous,re.I) or any(
                             _FENCE.match(line) or _table_separator(line) for line in previous.splitlines()))):
                     buffer = previous[-overlap:]
             buffer += block

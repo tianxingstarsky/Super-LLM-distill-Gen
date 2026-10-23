@@ -736,6 +736,69 @@ native structures and unresolved review records. All recognition runs are
 local with network access disabled; no model API was called. The checks have
 individual scopes and are not an overall mathematical accuracy score.
 
+## Optional multimodal assistance for pending PDF regions
+
+The input node now offers **Automatic vision API assistance** inside the
+Docling settings. It uses the existing model binding, capability checks,
+editable `workflow.document_vision` prompt, shared per-model request pool,
+stream journal and cancellation checks. The local Docling worker stays
+offline. Enabling assistance sends the page image and a higher-resolution
+region crop to the selected model service. No separate model page is added.
+
+The implementation reuses the project's Chat, Responses and Anthropic
+transport. [Docling's vision-model documentation](https://docling-project.github.io/docling/usage/vision_models/)
+describes the broader VLM option; this implementation selectively assists
+pending source regions instead of replacing the whole local conversion.
+The console dependencies include pylatexenc, MarkdownIt and
+[pdfplumber 0.11.7](https://github.com/jsvine/pdfplumber/tree/v0.11.7).
+That pdfplumber release preserves compatibility with the existing local
+Docling environment's Pillow and PDFium constraints.
+
+Each region receives two independent readings, with at most two rounds.
+Neither reading sees the other's answer. PDFium glyph origins complete a
+partly clipped final source line. The original text, coordinates, image
+fingerprints, raw transcripts and adoption decisions remain in the reading
+record. Ordered source letters and digits, selected unambiguous operators,
+LaTeX structure and table spans have separate checks. pylatexenc parses math
+structure; normalization preserves scripts, vector styles, matrix row
+separators and brackets. It ignores only equivalent delimiter, alignment and
+prose-formatting choices. These checks do not certify mathematical meaning.
+
+For ruled tables, pdfplumber derives the source grid from actual PDF rules.
+Open outer sides require matching full-width top and bottom source rules;
+no internal border is invented. Model-created blank subdivisions can merge
+only inside one proven source cell. Crossing a source boundary, multiple
+nonempty texts in that cell, missing native coverage or conflicting readings
+keeps the result pending. A borderless table or scan without these independent
+proofs is not silently approved. Merged tables export as escaped HTML, and
+the downstream chunker preserves the whole table. Raw Docling structures
+remain available alongside the assisted output.
+
+Local evidence and assisted output have separate persistent cache signatures.
+Changing the model route, prompt or assistance policy does not repeat local
+OCR. Quarantined cached evidence remains quarantined; strict consumers cannot
+treat an evidence-only cache as accepted data. Completed region readings can
+be reused after an interrupted task or in another run.
+
+Real validation on the unchanged GQA and ResNet PDFs covers 19 pages and 30
+pending regions. GQA stays unchanged without an API call. ResNet's pending
+pages fall from 11 to zero under the current checks. Its architecture table
+exports nine rows, seven columns and 48 source-grid cells. A preliminary
+model consensus had missed merged cells, which is why the native grid check
+is required. The final replay reused 62 cached readings and made no new API
+requests. Across capability probes and all experiments, 126 calls were
+recorded, with 174,818 input and 129,742 output tokens. These are recorded
+client usage totals, not a provider bill or an overall accuracy score.
+
+The actual results, crops, raw readings, full Markdown and fingerprinted
+comparison report are in the ignored local
+`.dataforge/multimodal-parser-assist-2026-10-23/` artifact folder.
+The relevant regression suite passed 316 tests; the new assistance module
+subsequently passed all 25 tests, including the added prompt snapshot check.
+Four older reasoning-prompt version assertions also fail with the unchanged
+HEAD prompt module; they are unrelated to this parsing change and remain
+separate from these results.
+
 ## Remaining candidates
 
 | Priority | Project and license | Concrete next step | Boundary |

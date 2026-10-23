@@ -168,6 +168,9 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     values[f"workflow-node-bindings:{workspace}"] = copied_bindings
     values[f"workflow-document-parse-mode:{workspace}"] = parser["mode"]
     if parser["mode"] == "docling":
+        values[f"workflow-docling-assist:{workspace}"]=bool(parser.get("assistance"))
+        if parser.get("assistance"):
+            copied_bindings.setdefault("ingest",{})["vision"]=parser["assistance"]["binding"]
         values[f"workflow-docling-artifacts:{workspace}"] = parser["artifacts_path"]
         values[f"workflow-docling-ocr:{workspace}"] = parser["ocr"]
         values[f"workflow-docling-formula:{workspace}"] = parser["formula_enrichment"]

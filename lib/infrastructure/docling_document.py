@@ -123,6 +123,7 @@ def _formula_package_versions():
 def docling_parse_signature(config):
     """Fingerprint implementation, local weights and OCR policy for cache reuse."""
     config = validate_document_parser(config)
+    config.pop("assistance",None)  # API settings belong to a separate reusable repair cache.
     if config["mode"] != "docling":
         raise ValueError("invalid_document_parser")
     if config.get("runtime_python"):
@@ -372,6 +373,7 @@ def docling_parts(path, config, *, expected_signature=None, check_cancel=None):
     """Yield whole original PDF pages; reject partial conversions and empty OCR."""
     path = Path(path)
     config = validate_document_parser(config)
+    config.pop("assistance",None)  # The isolated local worker always remains offline.
     if path.suffix.lower() != ".pdf":
         raise ValueError("document_docling_pdf_required")
     if config.get("runtime_python"):

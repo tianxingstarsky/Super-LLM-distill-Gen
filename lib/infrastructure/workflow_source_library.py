@@ -66,11 +66,11 @@ class WorkflowSourceLibrary:
             # until another expensive request finishes.
             self.save(force=True)
 
-    def _source_library_signature(self, mode):
+    def _source_library_signature(self, mode, *, binding=None):
         prompt_id = "workflow.document_vision" if mode == "vision" else "workflow.document_parse"
         role = "vision" if mode == "vision" else "generation"
         parser = self.recipe["document_parser"]
-        binding = parser["binding"]
+        binding = binding or parser["binding"]
         pin = self.recipe.get("endpoint_pins", {}).get("ingest", {}).get(role, {})
         # Transport identity affects parsing; keys, quotas, prices and mutable
         # provider model inventories do not. Only hashes of public URLs are kept.
@@ -224,9 +224,38 @@ class WorkflowSourceLibrary:
                 def parsed_docling():
                     yield from docling_parts(library.source_path(saved_source["id"]), parser,
                         expected_signature=signature, check_cancel=self.check_cancel)
-                for part in library.iter_parts(saved_source, signature, parsed_docling,
-                        valid=lambda part: part.get("status") != "quarantined",
-                        check_cancel=self.check_cancel, on_status=status):
+                assistance=parser.get("assistance")
+                def local_parts():
+                    yield from library.iter_parts(saved_source,signature,parsed_docling,
+                        valid=lambda part:part.get("status")!="quarantined",cache_incomplete=bool(assistance),
+                        check_cancel=self.check_cancel,on_status=None if assistance else status)
+                def assisted_parts():
+                    from lib.infrastructure.docling_vision_assist import assist_part,validate_transcript,POLICY,REGION_INSTRUCTION
+                    def valid_reply(value):
+                        try:
+                            validate_transcript(value,value.get("kind"));return True
+                        except (AttributeError,ValueError,TypeError,KeyError):return False
+                    def call(payload,images,key):
+                        value,_=library.cached_value(saved_source,assist_signature,["region",key],
+                            lambda:self.ask([source["sha256"],"docling_assist",_digest([assist_signature,key])],
+                                "vision","workflow.document_vision",payload,image=[i["image"] for i in images],
+                                instruction=REGION_INSTRUCTION,allow_reasoning_fallback=False),valid=valid_reply)
+                        return value
+                    for part in local_parts():
+                        self.check_cancel()
+                        yield assist_part(library.source_path(saved_source["id"]),part,call,
+                            max_rounds=assistance["max_rounds"],check_cancel=self.check_cancel)
+                if assistance:
+                    from lib.infrastructure.docling_vision_assist import POLICY,REGION_INSTRUCTION,validation_versions
+                    assist_signature={**self._source_library_signature("vision",binding=assistance["binding"]),
+                        "mode":"docling_assisted","local_parser":signature,"policy":POLICY,
+                        "instruction_sha256":_digest(REGION_INSTRUCTION),"max_rounds":assistance["max_rounds"],
+                        "validation_versions":validation_versions()}
+                    parts=library.iter_parts(saved_source,assist_signature,assisted_parts,
+                        valid=lambda part:part.get("status")!="quarantined",cache_incomplete=True,
+                        check_cancel=self.check_cancel,on_status=status)
+                else:parts=local_parts()
+                for part in parts:
                     yield from documents(part)
                 return
             if mode == "native":

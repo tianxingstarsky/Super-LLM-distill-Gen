@@ -29,7 +29,7 @@ def validate_document_parser(value=None) -> dict:
         raise ValueError("document_model_vision_not_confirmed")
     if isinstance(value, dict) and value.get("mode") == "docling":
         allowed = {"mode", "artifacts_path", "ocr", "ocr_models_path", "ocr_languages",
-                   "formula_enrichment", "runtime_python", "inline_runtime_python"}
+                   "formula_enrichment", "runtime_python", "inline_runtime_python", "assistance"}
         if (set(value) - allowed or type(value.get("ocr", False)) is not bool
                 or type(value.get("formula_enrichment", False)) is not bool):
             raise ValueError("invalid_document_parser")
@@ -57,6 +57,16 @@ def validate_document_parser(value=None) -> dict:
                            for lang in languages) or len(set(languages)) != len(languages)):
                 raise ValueError("invalid_document_docling_ocr_languages")
             result.update(ocr_models_path=local_path("ocr_models_path"), ocr_languages=list(languages))
+        assistance=value.get("assistance")
+        if assistance is not None:
+            if (not isinstance(assistance,dict) or set(assistance)-{"enabled","binding","max_rounds"}
+                    or type(assistance.get("enabled")) is not bool):raise ValueError("invalid_document_parser")
+            if assistance["enabled"]:
+                if not isinstance(assistance.get("binding"),dict):raise ValueError("document_vision_model_required")
+                rounds=assistance.get("max_rounds",2)
+                if type(rounds) is not int or not 1<=rounds<=2:raise ValueError("invalid_vision_assist_rounds")
+                binding=validate_node_models({"ingest":{"vision":assistance.get("binding")}})["ingest"]["vision"]
+                result["assistance"]={"enabled":True,"binding":binding,"max_rounds":rounds}
         return result
     if not isinstance(value, dict) or set(value) - {"mode", "binding"}:
         raise ValueError("invalid_document_parser")
