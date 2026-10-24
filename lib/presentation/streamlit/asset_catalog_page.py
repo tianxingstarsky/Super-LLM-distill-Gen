@@ -8,18 +8,11 @@ from lib.application.asset_catalog_service import AssetCatalogApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.i18n import translate
 from lib.domain.dataset_assets import generation_source_mode
+from lib.presentation.file_sizes import format_file_size as _asset_size
 
 
 def _move_page(key: str, delta: int):
     st.session_state[key] += delta
-
-
-def _asset_size(size: int) -> str:
-    if size < 1024:
-        return f"{size} B"
-    if size < 1024 * 1024:
-        return f"{size / 1024:.1f} KB"
-    return f"{size / (1024 * 1024):.1f} MB"
 
 
 def _asset_folder(asset, language):

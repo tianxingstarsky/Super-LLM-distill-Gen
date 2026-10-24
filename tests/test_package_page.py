@@ -14,9 +14,11 @@ class Application:
     def bundle_job(self,run_id): return None
     def state(self,run_id):
         st.session_state['state_calls']=st.session_state.get('state_calls',[])+[run_id]
-        return dict(targets=['rlaif'], stages={})
+        return dict(id=run_id,status='completed',targets=['rlaif'], stages={})
+    def package_inventory(self,run_id): return self.package_contents(run_id)
     def package_contents(self,run_id):
-        return dict(manifest=dict(counts={'rlaif':1},sha256={},sources=[]),files=[],
+        return dict(manifest=dict(counts={'rlaif':1},sha256={'rlaif.jsonl':'a'*64},sources=[]),
+                    files=[dict(name='rlaif.jsonl',bytes=1024,sha256='a'*64)],
                     quality=dict(targets={'rlaif':dict(total=1,eligible=1)}),bundle=None)
     def artifact_preview(self,*args,**kwargs): return []
 render_package_page(Application())
@@ -38,6 +40,7 @@ def test_package_only_loads_selected_state_and_recovers_missing_selection():
     assert ui.session_state['review-mode:fixture']=='RLAIF 反馈审核'
     assert ui.session_state['preference-review-run:rlaif']=='b'
     assert ui.session_state['nav']=='人工审核'
+    assert 'workflow-review-error:b' not in ui.session_state
 
 
 RELEASE_SCRIPT = '''

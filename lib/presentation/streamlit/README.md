@@ -21,3 +21,5 @@
 `workflow_report_panel.py`、`review_navigation.py` 负责报告、审核、修正与交付之间的任务定位，保存阅读类型和页码，操作时重新校验产物；现成 ZIP 优先提供下载。回归见 `ui_tests/test_result_actions_ui.py`、`test_package_page.py` 与 `tests/test_review_navigation.py`。
 
 返工版本按实际子任务的目标展示结果，不从父任务的全部目标默认打开空分类。输出页把本任务已有的人工审核发布放在自动候选包之前，明确两个版本的区别；默认选中审核后的训练文件。历史发布和原候选包仍可读取，文件格式与审核记录不变。
+
+人工图文页的创建和保存操作在提交时检查必填字段，接收当前输入，不要求先按回车使按钮可用；空输入不进入应用存储。重名人工数据集沿用稳定编号，避免重绘后把样本写入其他集合。回归见 `tests/test_manual_dataset_page.py`，并以真实上传、保存和 ZIP 下载复核。

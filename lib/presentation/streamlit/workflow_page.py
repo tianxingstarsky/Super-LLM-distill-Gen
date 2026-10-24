@@ -1836,11 +1836,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     node_index = graph_nodes.index(selected_node)
                     previous_node, next_node = st.columns(2, gap="small")
                     previous_node.button("上一个节点", icon=":material/arrow_back:",
-                        key=f"workflow-previous-config:{ws}", width="stretch", disabled=node_index == 0,
+                        key=f"workflow-previous-node:{ws}", width="stretch", disabled=node_index == 0,
                         on_click=_select_setup_node,
                         args=(selection_key, graph_nodes[max(0, node_index - 1)]))
                     next_node.button("下一个节点", icon=":material/arrow_forward:",
-                        key=f"workflow-next-config:{ws}", width="stretch", disabled=node_index == len(graph_nodes) - 1,
+                        key=f"workflow-next-node:{ws}", width="stretch", disabled=node_index == len(graph_nodes) - 1,
                         on_click=_select_setup_node,
                         args=(selection_key, graph_nodes[min(len(graph_nodes) - 1, node_index + 1)]))
             route = reasoning_route_description(selected_node, targets)

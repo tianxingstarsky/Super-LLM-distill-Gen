@@ -22,6 +22,7 @@ class Application:
             raise OSError('C:/SECRET/private.json')
         return st.session_state.get('datasets', [])
     def create_dataset(self, name):
+        st.session_state['create-calls'] = st.session_state.get('create-calls',0)+1
         if st.session_state.get('create-fails'):
             raise OSError('C:/SECRET/private.json')
         dataset_id = 'a' * 32
@@ -70,20 +71,27 @@ def button(ui, label):
 def test_empty_library_create_dataset_then_author_in_same_page():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
-    assert button(ui, '创建数据集').disabled
-    ui.text_input[0].set_value('My image examples').run()
+    assert not button(ui, '创建数据集').disabled
+    button(ui, '创建数据集').click().run()
+    assert 'create-calls' not in ui.session_state
+    assert any('请填写数据集名称' in error.value for error in ui.error)
+    ui.text_input[0].set_value('My image examples')
     button(ui, '创建数据集').click().run()
     assert not ui.exception
     assert len(ui.text_area) == 3
     assert ui.selectbox[0].value == 'a'*32
     assert ui.text_input[0].value == ''
-    assert button(ui, '创建数据集').disabled
+    assert not button(ui, '创建数据集').disabled
+    assert ui.session_state['create-calls'] == 1
     assert 'append-calls' not in ui.session_state
 
 
 def test_save_clears_successful_draft_and_never_marks_it_reviewed():
     ui = author_ui()
-    assert button(ui, '保存并继续下一条').disabled
+    assert not button(ui, '保存并继续下一条').disabled
+    button(ui, '保存并继续下一条').click().run()
+    assert 'append-calls' not in ui.session_state
+    assert any('请填写问题与参考答案' in error.value for error in ui.error)
     ui.text_area[0].set_value('What is in this picture?').run()
     ui.text_area[1].set_value('A red cube.').run()
     ui.text_area[2].set_value('Describe visible objects.').run()
@@ -93,10 +101,36 @@ def test_save_clears_successful_draft_and_never_marks_it_reviewed():
     assert ui.session_state['saved']['question'] == 'What is in this picture?'
     assert ui.session_state['saved']['system'] == 'Describe visible objects.'
     assert all(item.value == '' for item in ui.text_area)
-    assert button(ui, '保存并继续下一条').disabled
+    assert not button(ui, '保存并继续下一条').disabled
     assert '待复核' in ui.success[0].value
     ui.run()
     assert ui.session_state['append-calls'] == 1
+
+
+def test_save_accepts_pending_text_without_an_extra_enter_or_preview_rerun():
+    ui = author_ui()
+    ui.text_area[0].set_value('What is in this picture?')
+    ui.text_area[1].set_value('A blue cube.')
+    button(ui, '保存并继续下一条').click().run()
+    assert not ui.exception
+    assert ui.session_state['saved']['question'] == 'What is in this picture?'
+    assert ui.session_state['saved']['answer'] == 'A blue cube.'
+    assert ui.session_state['append-calls'] == 1
+
+
+def test_same_named_datasets_keep_the_selected_id_through_an_unrelated_rerun():
+    ui = author_ui()
+    ui.session_state['datasets'] = [
+        {'id':key*32,'name':'Same name','count':0,'updated_at':'2026-10-24'} for key in ('a','b')]
+    ui.run()
+    assert len(set(ui.selectbox[0].options)) == 2
+    ui.selectbox[0].set_value('b'*32).run()
+    ui.text_area[0].set_value('What is shown?').run()
+    assert ui.selectbox[0].value == 'b'*32
+    ui.text_area[1].set_value('A cube.')
+    button(ui, '保存并继续下一条').click().run()
+    assert not ui.exception
+    assert ui.session_state['saved']['dataset_id'] == 'b'*32
 
 
 def test_failure_retains_draft_and_hides_storage_paths():

@@ -9,6 +9,7 @@ import streamlit as st
 
 from lib.presentation.streamlit.i18n import UntranslatedText
 from lib.presentation.streamlit.manual_dataset_style import MANUAL_DATASET_STYLE
+from lib.presentation.streamlit.selection_labels import unique_choice_labels
 from lib.presentation.streamlit.shared import page_header, section_heading
 
 
@@ -196,6 +197,7 @@ def render_manual_datasets(application: Any, workspace: Any, *, show_title: bool
         st.error("数据集暂时无法读取。请检查本机存储后重试。")
         return
     by_id = {row["id"]: row for row in datasets}
+    dataset_labels = unique_choice_labels({key: str(row["name"]) for key, row in by_id.items()})
     selection_key = f"{prefix}:dataset"
     pending = st.session_state.pop(f"{prefix}:pending-dataset", None)
     if pending in by_id:
@@ -208,13 +210,15 @@ def render_manual_datasets(application: Any, workspace: Any, *, show_title: bool
         with picker:
             dataset_id = st.selectbox("人工数据集", list(by_id), disabled=not by_id,
                                       key=selection_key, placeholder="先创建一个数据集",
-                                      format_func=lambda value: UntranslatedText(str(by_id[value]["name"])))
+                                      format_func=lambda value: UntranslatedText(dataset_labels[value]))
         with new_name:
             name = st.text_input("新数据集名称", key=f"{prefix}:name", max_chars=100,
                                  placeholder="例如：产品图片问答")
         with create:
-            if st.button("创建数据集", key=f"{prefix}:create", width="stretch", disabled=not name.strip()):
+            if st.button("创建数据集", key=f"{prefix}:create", width="stretch"):
                 try:
+                    if not name.strip():
+                        raise ValueError("invalid_manual_dataset_name")
                     created_id = application.create_dataset(name.strip())
                     st.session_state[f"{prefix}:pending-dataset"] = created_id
                     st.session_state[f"{prefix}:notice"] = "数据集已创建，可开始制作样本。"
@@ -265,10 +269,12 @@ def render_manual_datasets(application: Any, workspace: Any, *, show_title: bool
         if attachment_error:
             st.error(attachment_error)
         if st.button("保存并继续下一条", key=f"{draft}:save", type="primary", width="stretch",
-                     disabled=not question.strip() or not answer.strip() or attachment_error is not None):
+                     disabled=attachment_error is not None):
             submitted_key = f"{prefix}:last-submitted:{dataset_id}"
             if st.session_state.get(submitted_key) != revision:
                 try:
+                    if not question.strip() or not answer.strip():
+                        raise ValueError("invalid_manual_dataset_text")
                     saved = application.append_sample(dataset_id, question=question, answer=answer,
                                                       system=system, attachments=attachments)
                     st.session_state[submitted_key] = revision

@@ -176,15 +176,15 @@ def test_adjacent_node_controls_keep_the_draft_and_stop_at_graph_boundaries(tmp_
     ui.text_input(key="workflow-name:fixture").set_value("Keep my task name").run()
     ui.button(key="fixture-node:ingest").click().run()
     bindings = deepcopy(ui.session_state["workflow-node-bindings:fixture"])
-    assert ui.button(key="workflow-previous-config:fixture").disabled
-    ui.button(key="workflow-next-config:fixture").click().run()
+    assert ui.button(key="workflow-previous-node:fixture").disabled
+    ui.button(key="workflow-next-node:fixture").click().run()
     assert not ui.exception
     assert ui.session_state["workflow-setup-node:fixture"] == "cpt"
     assert ui.session_state["canvas-open:setup-canvas:fixture"]
-    ui.button(key="workflow-previous-config:fixture").click().run()
+    ui.button(key="workflow-previous-node:fixture").click().run()
     assert ui.session_state["workflow-setup-node:fixture"] == "ingest"
     assert ui.session_state["workflow-node-bindings:fixture"] == bindings
     assert ui.text_input(key="workflow-name:fixture").value == "Keep my task name"
     ui.button(key="fixture-node:package").click().run()
     assert not ui.exception
-    assert ui.button(key="workflow-next-config:fixture").disabled
+    assert ui.button(key="workflow-next-node:fixture").disabled

@@ -11,6 +11,7 @@ from lib.contexts.datasets.api import DatasetApplication
 from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.domain.workflow_targets import TARGETS
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
+from lib.presentation.file_sizes import format_file_size as _size
 from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.package_style import PACKAGE_STYLE
 from lib.presentation.streamlit.shared import page_header
@@ -62,15 +63,6 @@ def _poll_bundle(application, run_id):
 
 def _safe(value: Any) -> str:
     return html.escape(str(value), quote=True)
-
-
-def _size(value: int) -> str:
-    size = float(value)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024
-    return f"{size:.1f} GB"
 
 
 def _stamp(value: Any) -> str:

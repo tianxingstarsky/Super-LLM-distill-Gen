@@ -1,9 +1,10 @@
 """A welcoming overview of local work, with direct creation and review shortcuts."""
-import html
 import base64
+import html
 
 import streamlit as st
 
+from lib.presentation.file_sizes import format_file_size
 from lib.application.workflow_service import WorkflowApplication
 from lib.presentation.streamlit.home_style import HOME_STYLE
 from lib.presentation.streamlit.brand_art import studio_art_url
@@ -162,7 +163,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                     rows.append('<div class="df-home-source"><b>' + html.escape(ext[:4])
                                 + '</b><strong data-user-content title="' + html.escape(relative, quote=True)
                                 + '">' + html.escape(relative) + '</strong><small>'
-                                + f'{item["size"] / 1024:.1f} KB' + '</small></div>')
+                                + format_file_size(item["size"]) + '</small></div>')
                 st.html('<div class="df-home-source-list">' + ''.join(rows) + '</div>')
             else:
                 st.html('<div class="df-home-empty"><strong>尚无来源文件</strong>'

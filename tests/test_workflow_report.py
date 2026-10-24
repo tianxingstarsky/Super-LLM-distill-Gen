@@ -173,6 +173,23 @@ def test_unfinished_live_index_counts_are_explicit_lower_bounds():
     assert "<strong>≥ 160</strong>" in document
 
 
+def test_report_sources_use_readable_sizes_and_preserve_measured_bytes():
+    overview = {"run_id": RID, "name": "Real work", "status": "failed", "finalized": False,
+                "updated_at": "now", "stages": [], "sources": [
+                    {"name": "small.txt", "bytes": 125},
+                    {"name": "paper.pdf", "bytes": 1536},
+                    {"name": "collection.zip", "bytes": 2 * 1024 ** 3},
+                    {"name": "unknown"},
+                ]}
+    original = deepcopy(overview)
+    page = {"run_id": RID, "target": "sft", "offset": 0, "rows": [], "finalized": False,
+            "total": None, "summary": {"indexing": True, "quarantined": 0}}
+    document = report_module.render_report_html(overview, page, language="en")
+    assert "125 B" in document and "1.50 KB" in document and "2.00 GB" in document
+    assert "2147483648 B" not in document
+    assert overview == original
+
+
 def test_index_damage_rebuilds_from_immutable_formal_records(tmp_path):
     app, run, _, _ = fixture_run(tmp_path, [cot()])
     assert app.samples(RID, "cot")["rows"][0]["training_body"]["answer"] == "Real answer 0."

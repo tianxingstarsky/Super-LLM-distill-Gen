@@ -6,6 +6,7 @@ import streamlit as st
 
 from lib.domain.workflow_delivery import has_deliverable_results, delivery_manifest_matches
 from lib.domain.workflow_targets import TARGETS
+from lib.presentation.file_sizes import format_file_size as size_label
 from lib.presentation.streamlit.dataset_preview_page import TARGET_LABELS
 from lib.presentation.streamlit.i18n import UntranslatedText, translate
 
@@ -29,15 +30,6 @@ def _safe(value):
 
 def _target_label(value):
     return translate(TARGET_LABELS.get(value, value.upper()), st.session_state.get("ui_language", "zh"))
-
-
-def size_label(value):
-    if value is None:
-        return "—"
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if value < 1024 or unit == "TiB":
-            return f"{value:,.0f} {unit}" if unit == "B" else f"{value:,.2f} {unit}"
-        value /= 1024
 
 
 def _bars(title, values, labels=None):

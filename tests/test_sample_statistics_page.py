@@ -1,3 +1,4 @@
+import pytest
 from streamlit.testing.v1 import AppTest
 
 
@@ -13,7 +14,7 @@ class Application:
         stats=Distribution(); stats.add('sft',dict(messages=[dict(role='user',content='Hello'),dict(role='assistant',content='Hi')]))
         result=dict(total=stats.result(),targets=dict(sft=stats.result()),manifest_digest='v1')
         return dict(manifest=dict(counts=dict(sft=1),sha256={'sft.jsonl':'a'*64},sources=[]),
-                    files=[dict(name='sft.jsonl',bytes=1024,sha256='a'*64)],manifest_bytes=200,
+                    files=[dict(name='sft.jsonl',bytes=st.session_state.get('file_bytes',1024),sha256='a'*64)],manifest_bytes=200,
                     statistics=result if not st.session_state.get('pending') else None,
                     job=st.session_state.get('job'),bundle=None)
     def start_sample_statistics(self, run_id):
@@ -30,7 +31,7 @@ def test_cached_report_has_measured_sizes_no_estimated_zip_and_no_new_worker():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
     markup = '\n'.join(x.value for x in ui.get('html'))
-    assert '1.00 KiB' in markup and '1.20 KiB' in markup
+    assert '1.00 KB' in markup and '1.20 KB' in markup
     assert '尚未生成' in markup
     assert 'starts' not in ui.session_state
     assert not ui.get('progress')
@@ -59,3 +60,16 @@ def test_english_statistics_have_no_chinese_static_labels():
     markup = '\n'.join(x.value for x in ui.get('html'))
     assert 'Native records' in markup and 'Not built' in markup
     assert '原生样本' not in markup and '尚未生成' not in markup
+
+
+@pytest.mark.parametrize('byte_count,label', [(512,'512 B'), (1536,'1.50 KB'),
+                                           (1024**2,'1.00 MB'), (3*1024**3,'3.00 GB')])
+def test_actual_byte_metadata_is_scaled_for_statistics(byte_count,label):
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['file_bytes'] = byte_count
+    ui.run()
+    assert not ui.exception
+    assert label in '\n'.join(item.value for item in ui.get('html'))
+    table = ui.dataframe[0].value
+    assert table.loc[0,'大小'] == label
+    assert table.loc[0,'字节'] == byte_count

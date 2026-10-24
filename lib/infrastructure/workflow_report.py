@@ -31,6 +31,7 @@ from lib.infrastructure.verified_preview import verified_snapshot, inventory_ide
 from lib.infrastructure.workflow_live_artifacts import live_artifacts
 from lib.infrastructure.workflow_report_jobs import REPORT_JOBS, ReportPreparationBusy
 from lib.io_utils import atomic_json
+from lib.presentation.file_sizes import format_file_size
 
 INDEX_VERSION = 4
 MAX_RECORD_CHARS = 20_000_000
@@ -618,7 +619,7 @@ def render_report_html(overview: dict, page: dict, *, language: str = "zh") -> s
                    and type(value) is int else "") + number(value)) + '</strong></div>' for key, value in (
         ("total", total), ("eligible", summary.get("eligible") if formal else None),
         ("quarantined", summary.get("quarantined")), ("page", None if preparing else len(page["rows"]))))
-    sources = ''.join('<li><b>' + _escape(item.get("name", "")) + '</b><span>' + _escape(number(item.get("bytes"))) + ' B</span></li>' for item in overview.get("sources", []))
+    sources = ''.join('<li><b>' + _escape(item.get("name", "")) + '</b><span>' + _escape(format_file_size(item.get("bytes"))) + '</span></li>' for item in overview.get("sources", []))
     stages = ''.join('<li><b>' + _escape(item["stage"]) + '</b><span>' + _escape(_status(item.get("status", "unknown"), labels)) + ' · ' + _escape(number(item.get("done"))) + '/' + _escape(number(item.get("total"))) + '</span></li>' for item in overview.get("stages", []))
     artifact_label = labels["preparation_failed"] if preparation_failed else labels["preparing"] if preparing else labels["partial"] if formal and overview.get("partial_export") else labels["formal"] if formal else labels["provisional"]
     notice = labels["preparation_error_hint"] if preparation_failed else labels["preparation_hint"] if preparing else labels["notice"] if formal else labels["live"]
