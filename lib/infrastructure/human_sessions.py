@@ -265,7 +265,7 @@ class FilesystemHumanSessionDriver:
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
             claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1,
-            claim_repair_feedback_version=1, preference_design_version=2 if contrastive_enabled else None,
+            claim_repair_feedback_version=1, preference_design_version=3 if contrastive_enabled else None,
             preference_design_prompt_version=1 if contrastive_enabled else None)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]

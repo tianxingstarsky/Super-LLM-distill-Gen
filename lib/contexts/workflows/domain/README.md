@@ -10,9 +10,9 @@
 
 依赖只向内，或使用其他业务域的 `contracts.py`。规则变更须覆盖相应领域测试和历史配方回归。
 
-`preference_design.py` 校验新任务的负例类型与推理长度对照。默认 `off_topic_short`，可选 `opposite_short`，两种都要求负例推理非空。`preference_design_version=1` 启用类型设计；新配方固定版本 2，另行核验负例推理是否自然支撑自己的回答，不能泄漏制作意图。旧配方、任务和检查点不自动迁移，训练文件字段不变。
+`preference_design.py` 校验负例类型与推理长度对照。新任务通过 `new_preference_design` 默认选择 `associative_drift_short`，优先复用已认证的同题真实失败稿。没有合适原稿才生成从原问题逐渐错误联想、偏离任务的短推理负例；保留相反结论和历史完全无关话题选项。真实失败稿保留完整推理，不套合成负例的长度限制，质量和分差检查仍必须通过。
 
-控制台在偏好节点提交显式配置；程序接口未传 `preference_design` 时保留旧采样合同。传 `{}` 启用默认答非所问模式。新 `preference_design_prompt_version=1` 将负例设计核验与既有优选问答契约分开；早期版本 1/2 的固定模板仍按原字段读取。
+控制台在偏好节点提交显式配置；程序接口未传 `preference_design` 时保留旧采样合同。传 `{}` 启用版本 3 的新默认配置。`validate_preference_design` 对旧配方的缺省行为不变，历史版本 1/2 不迁移。`preference_design_prompt_version=1` 将负例类型核验与优选问答契约分开。版本、检查点和训练导出字段保留；回归见 `test_preference_revision_v3.py`。
 
 `training_identity.py` 以实际学习者可见消息标识任务。SFT、CoT 和偏好视图可共用同一输入；保留系统约束、用户、工具内容及多轮前文，仅排除私有推理元数据。它沿用旧 canonical JSON 哈希，不改历史索引身份。通过 `contracts.py` 提供给审核域，旧运行时路径仅兼容转发。
 

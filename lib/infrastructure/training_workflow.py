@@ -205,9 +205,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                node_generation=None, reasoning_trim=None, node_prompts=None,
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
                review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None):
-    from lib.contexts.workflows.contracts import validate_preference_design, preference_design_requested
+    from lib.contexts.workflows.contracts import new_preference_design, preference_design_requested
     contrastive_enabled = preference_design_requested(preference_design, node_prompts)
-    preference_design = validate_preference_design(preference_design)
+    preference_design = new_preference_design(preference_design)
     arithmetic_only = (targets == ["gsm8k"] or targets == ("gsm8k",) or targets == {"gsm8k"}) and not repair_inputs
     targets, node_models = validate_creation(
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
@@ -279,7 +279,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
         claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
         claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1,
-        claim_repair_feedback_version=1, preference_design_version=2 if contrastive_enabled else None,
+        claim_repair_feedback_version=1, preference_design_version=3 if contrastive_enabled else None,
         preference_design_prompt_version=1 if contrastive_enabled else None)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
@@ -404,7 +404,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
             claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1,
-            claim_repair_feedback_version=1, preference_design_version=2 if contrastive_enabled else None,
+            claim_repair_feedback_version=1, preference_design_version=3 if contrastive_enabled else None,
             preference_design_prompt_version=1 if contrastive_enabled else None)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
@@ -456,7 +456,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_context_quote_feedback_version": 1,
               "review_reference_reassessment_version": 1,
               "training_format_lineage_version": 1,
-              **({"preference_design_version": 2, "preference_design_prompt_version": 1,
+              **({"preference_design_version": 3, "preference_design_prompt_version": 1,
                   "preference_design": preference_design} if contrastive_enabled else {}),
               "claim_review_revision_instruction_version": 1,
               "reasoning_revision_protocol_version": 1,
@@ -1324,7 +1324,7 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
         return [row]
 
     def dpo(self, sample):
-        if self.recipe.get("preference_design_version") in {1, 2} and self.recipe.get("review_repair") is not None:
+        if self.recipe.get("preference_design_version") in {1, 2, 3} and self.recipe.get("review_repair") is not None:
             from lib.bootstrap.node_generation import preference_generator
             return preference_generator(self).execute(sample)
         prefix, chosen = sample["messages"][:-1], sample["messages"][-1]

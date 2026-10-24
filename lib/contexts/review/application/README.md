@@ -11,7 +11,7 @@
 | `execute_repair.py` / `RepairBranchPort` | 全部父版本认证后才开始返工，保持独立修正分支 |
 | `review_claim_windows.py` / `ClaimWindowPort` | 有界评审返回、明确输出上限后的递归细分、完整覆盖后汇总；不截断或重写候选 |
 | `authorize_format_view.py` / `FormatLineagePort` | 认证本次父版本与历史发布所有者，核对同源任务的不同训练视图；独立重复任务仍隔离 |
-| `assess_preference_pair.py` / `PreferenceAssessmentPort` | 匿名评审完整正负例，再校验指定的偏差类型、非空短推理和既有正确性分差；不颠倒标签或调整原始评分 |
+| `assess_preference_pair.py` / `PreferenceAssessmentPort` | 匿名评审完整正负例，再校验既有分差；合成负例另验类型与短推理，真实失败稿另验原文和审核证据，不颠倒标签或调整原始评分 |
 | `review_preference_view.py` | 将同一偏好对的评分、修正请求归一化，再投影 DPO/ORPO/RLAIF；内容、依据或指令不同不能复用检查点 |
 
 `automatic_ports.py` 中的端口不暴露文件路径、模型客户端或数据库。评分不等于发布；候选变更后必须重新绑定内容哈希，缺失条件支持仍保留为待人工复核。新用例可以仅用内存端口执行，见 `tests/test_pipeline_use_cases.py`。

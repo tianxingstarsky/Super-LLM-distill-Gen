@@ -8,14 +8,15 @@ from tests.review_protocol_fixtures import source_condition_response
 
 SOURCE='Inspect the equipment only after turning off the power. Record the result after inspection.'
 POSITIVE='Turn off the power before inspection.'
-NEGATIVE='Sourdough needs regular feeding.'
+NEGATIVE='Power management is about efficiency. Focus on reducing electricity bills by choosing a cheaper tariff.'
+NEGATIVE_REASONING='Power means bills, so a cheaper tariff is key.'
 
 
 def grade(keep):
     score=5 if keep else 1
     return {'keep':keep,'grounded':keep,'reasoning_valid':keep,'correctness':score,
         'scores':{key:score for key in ('correctness','reasoning','grounding','instruction','safety')},
-        'reason':'The actual response answers the task.' if keep else 'The response discusses sourdough instead of the equipment question.'}
+        'reason':'The actual response answers the task.' if keep else 'The response drifts from shutdown timing to electricity tariffs.'}
 
 
 class ContrastClient:
@@ -24,12 +25,14 @@ class ContrastClient:
     def chat(self,messages,**options):
         request=model_request_data(messages);self.calls.append(deepcopy(request));self.usage['calls']+=1
         if 'reference_response' in request:
-            return json.dumps({'answer':NEGATIVE,'reasoning':'Feeding sustains yeast.'})
+            return json.dumps({'answer':NEGATIVE,'reasoning':NEGATIVE_REASONING})
         if 'contrastive_design' in request:
             assert 'rationale_supports_answer' in messages[0]['content']
             return json.dumps({'same_task':False,'opposite':False,'off_topic':True,'rationale_supports_answer':True,
-                'chosen_claim':POSITIVE,'rejected_claim':NEGATIVE,'rationale_quote':'Feeding sustains yeast.',
-                'reason':'The negative discusses food fermentation, not equipment inspection.'})
+                'chosen_claim':POSITIVE,'rejected_claim':NEGATIVE,'rationale_quote':NEGATIVE_REASONING,
+                'topic_linked':True,'associative_drift':True,'topic_anchor':'power',
+                'drift_quote':'Focus on reducing electricity bills',
+                'reason':'The negative associates power with energy costs and fails to answer shutdown timing.'})
         if request.get('claim_review_protocol_version')==4:
             negative=NEGATIVE in json.dumps(request['target_fields'])
             return json.dumps(source_condition_response(messages,request,grade(not negative),quote=SOURCE,
@@ -61,4 +64,4 @@ def test_explicit_design_traverses_real_batch_review_and_native_three_format_exp
     assert len({row['id'] for row in rows})==1
     assert len([request for request in client.calls if 'contrastive_design' in request and 'candidate' in request])==1
     assert all(row['preference']['chosen']['correctness']==5 and row['preference']['rejected']['correctness']==1 for row in rows)
-    assert all(row['rejected'][0]['reasoning_content']=='Feeding sustains yeast.' for row in rows)
+    assert all(row['rejected'][0]['reasoning_content']==NEGATIVE_REASONING for row in rows)

@@ -6,7 +6,7 @@ from .candidate_content import candidate_digest
 from .claim_windows import validate_windowed_claim_audit
 
 
-def claim_repair_feedback(payload, evidence, audit):
+def claim_repair_feedback(payload, evidence, audit, *, include_quality_feedback=False):
     """Feedback is a reviewer opinion, never proof or invented task conditions.
 
     A manual edit can supersede an earlier audit. In that case no stale span
@@ -36,7 +36,16 @@ def claim_repair_feedback(payload, evidence, audit):
                 "unit": deepcopy(units[claim["unit_id"]]),
                 "reviewer_claim": deepcopy(claim), "condition_provenance": deepcopy(guard),
                 "related_candidate_units": [deepcopy(unit) for unit in units.values() if unit["id"] in related]})
-    return {"version": 1, "candidate_sha256": audit["candidate_sha256"],
+    packet = {"version": 1, "candidate_sha256": audit["candidate_sha256"],
         "source_input_sha256": audit["source_input_sha256"], "audit_sha256": candidate_digest(audit),
         "semantic_verification": "provenance_only_not_entailment", "reviewer_opinions_not_facts": True,
         "disputes": disputes}
+    if include_quality_feedback:
+        packet["quality_feedback"] = [
+            {"message_index": item["review"]["request"]["scope"]["message_index"],
+             "unit_ids": deepcopy(window["review"]["request"]["review_window"]["unit_ids"]),
+             "verdict": deepcopy(window["review"]["raw_response"]["verdict"])}
+            for item in checked["assessments"] for window in item["windows"]
+            if (window["review"]["raw_response"]["verdict"]["keep"] is False
+                or min(window["review"]["raw_response"]["verdict"]["scores"].values()) < 4)]
+    return packet

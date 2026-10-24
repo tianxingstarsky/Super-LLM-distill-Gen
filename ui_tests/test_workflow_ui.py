@@ -64,7 +64,7 @@ def test_preference_outputs_and_rlaif_review_fix_are_on_actual_nodes(tmp_path, m
     assert not app.exception
     nodes = canvas(app, f"setup-canvas:{workspace}")["nodes"]
     assert next(node for node in nodes if node["id"] == "preference")["label"] == "RLAIF · ORPO"
-    assert app.radio(key=f"workflow-preference-mode:{workspace}").value == "off_topic_short"
+    assert app.radio(key=f"workflow-preference-mode:{workspace}").value == "associative_drift_short"
     assert app.radio(key=f"workflow-preference-mode:{workspace}").label == translate_label("负例类型", language)
     assert app.number_input(key=f"workflow-preference-negative-chars:{workspace}").value == 160
     assert app.number_input(key=f"workflow-preference-negative-ratio:{workspace}").value == 25

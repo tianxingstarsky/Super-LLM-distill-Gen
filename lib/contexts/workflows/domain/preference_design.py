@@ -14,10 +14,10 @@ def preference_design_requested(config, prompts=None):
 def validate_preference_design(value=None):
     config = deepcopy(DEFAULT_PREFERENCE_DESIGN)
     if value is not None:
-        if not isinstance(value, dict) or set(value) - set(config):
+        if not isinstance(value, dict) or set(value) - set(config) - {"reuse_reviewed_failures"}:
             raise ValueError("invalid_preference_design")
         config.update(value)
-    if not isinstance(config["mode"], str) or config["mode"] not in {"opposite_short", "off_topic_short"}:
+    if not isinstance(config["mode"], str) or config["mode"] not in {"opposite_short", "off_topic_short", "associative_drift_short"}:
         raise ValueError("invalid_preference_design_mode")
     maximum = config["negative_reasoning_max_chars"]
     ratio = config["negative_reasoning_max_ratio"]
@@ -25,4 +25,14 @@ def validate_preference_design(value=None):
         raise ValueError("invalid_negative_reasoning_max_chars")
     if type(ratio) not in {int, float} or not 0.05 <= ratio <= 0.5:
         raise ValueError("invalid_negative_reasoning_max_ratio")
+    if "reuse_reviewed_failures" in config and type(config["reuse_reviewed_failures"]) is not bool:
+        raise ValueError("invalid_reuse_reviewed_failures")
     return config
+
+
+def new_preference_design(value=None):
+    """Defaults for newly submitted work; frozen legacy mappings stay literal."""
+    if value is not None and not isinstance(value, dict):
+        raise ValueError("invalid_preference_design")
+    return validate_preference_design({"mode": "associative_drift_short", "reuse_reviewed_failures": True,
+        **(value or {})})

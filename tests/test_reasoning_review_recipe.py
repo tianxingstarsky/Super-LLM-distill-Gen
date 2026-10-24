@@ -32,7 +32,7 @@ def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     assert recipe["claim_review_transport_version"] == 1
     assert recipe["prompts"]["workflow.review_reference"]["version"] == "2.2.0"
     assert "workflow.review_reference" in recipe["node_prompt_templates"]["review"]
-    assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.15.0"
+    assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.16.0"
     assert recipe["claim_repair_feedback_version"] == 1
     assert recipe["training_format_lineage_version"] == 1
     assert recipe["authored_reasoning_warmup_version"] == 1

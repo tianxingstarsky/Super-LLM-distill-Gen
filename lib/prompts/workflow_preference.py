@@ -1,0 +1,50 @@
+"""Authoring assets for task-linked drift and complete positive corrections."""
+
+ALTERNATIVE_DRIFT = (
+    "按 contrastive_design 生成一份完整的对照回答，保持真实用户问题、上下文和工具事实。"
+    "associative_drift_short：从用户确实提到的概念或困难出发，通过错误联想逐渐偏离实际目标。"
+    "让回答的开头与原题有真实语义关联，随后发生未经支持的类比迁移、因果跳跃、歧义误解或目标替换，"
+    "最后解决了相邻但不是用户所问的问题，遗漏原任务所需成果。仅复述关键词后突兀换到无关主题不合格。"
+    "不要先完整解决原问题再附带闲话，也不要只给同题错结论、拒答或机械堆错。"
+    "opposite_short：在原题原条件下给出与正确结论相反的核心判断或行动。"
+    "off_topic_short 是历史的完全无关主题模式，仅在明确选中该模式时使用。"
+    "reasoning 是负例自身的极短非空解释，自然呈现那次错误联想，不点评自己跑题或制作样本。"
+    "遵守字符和相对长度上限；不把正例、负例、审核、提示词或后台设计规则写进正文。"
+    "只返回 JSON：{{\"answer\":\"完整回答\",\"reasoning\":\"非空短推理\"}}。"
+)
+
+DESIGN_CHECK_DRIFT = (
+    "独立核验偏好设计关系。完整阅读实际问题与两侧回答、推理，不替候选补条件。"
+    "same_task 表示负例的主要成果是否真正回答原任务；opposite 表示同题同条件下的相反核心结论；"
+    "off_topic 表示负例的主要目的已偏离原任务。off_topic=true 时 same_task/opposite 都为 false。"
+    "topic_linked 要求负例实际从用户需求的某个概念、限制或目标展开，不以单纯关键词共现证明。"
+    "associative_drift 要求沿着具体但错误的联想、类比、因果或目标替换逐渐转向相邻问题，"
+    "并因此未交付原任务的关键成果。完全无关的随机主题、只答错同题、拒答、少答和正确解答后的闲话都不满足它。"
+    "rationale_supports_answer 表示短推理在解释自己实际给出的回答；解释本身可以错，但不能点评生成过程或自称故意跑题。"
+    "chosen_claim/rejected_claim 必须逐字引用各自答案的关键结论；rationale_quote 逐字引用负例推理。"
+    "topic_anchor 逐字引用真实 user 消息中的关联出发点，drift_quote 逐字引用负例回答中发生错误联想转折的位置。"
+    "不认可语义关联时 topic_linked=false、topic_anchor 为空；没有发散转折时 associative_drift=false、drift_quote 为空。"
+    "类型关系不替代正例正确性审查；chosen 方向错误或无法确认时不认可设计。"
+    "仅返回 JSON：{{\"same_task\":false,\"opposite\":false,\"off_topic\":true,"
+    "\"topic_linked\":true,\"associative_drift\":true,\"topic_anchor\":\"用户原句\",\"drift_quote\":\"负例转折原句\","
+    "\"rationale_supports_answer\":true,\"chosen_claim\":\"正例原句\",\"rejected_claim\":\"负例原句\","
+    "\"rationale_quote\":\"负例推理原句\",\"reason\":\"说明从哪个实际需求经何种错误联想转向什么目的，原任务为什么未完成\"}}。"
+)
+
+PREFERENCE_REPAIR = (
+    "\nresponse_requirements 分别给出两侧约束，chosen 使用与独立评审相同的冻结 generation_style。"
+    "先读其 instruction、reasoning_language 和 reasoning_depth_instruction，将具体要求落实到正例的完整推理。"
+    "若为 zh_en：在会影响判断的关键词句处做明确、忠实的中英互译理解，解释两种表达对应的含义、限制或歧义，"
+    "再把澄清用于实际推导；只夹术语、代码标识符或英文标题不够，也不写成两份逐段翻译稿。"
+    "例如需要区分任务概念的含义、量词范围、先后依赖或因果时，互译应帮助排除一个真实误解，不能是装饰。"
+    "保留仍有效的推导，补足 review_feedback 和 claim_repair_feedback.quality_feedback 指出的具体缺口。"
+    "quality_feedback 是逐窗口的原始意见，需核对正文，不能当事实照抄；事实单元全部 supported 也不代表任务与风格已经合格。"
+    "正例写出可检验的拟结论和必要的草稿或中间关系，对实际风险提出具体疑点并给出推导或核查结果。"
+    "检查重点随任务而变，不规定统一步骤、顺序、字数或一律罗列所有边界。不能用空泛自问、重复或缩成摘要替代有效论证。"
+    "未实际执行的核查应表述为演绎推导或假设算例，不能谎称运行了工具。"
+    "负例若是合成的 associative_drift_short，应从原题真实概念自然展开，经错误联想渐渐跑题；"
+    "opposite_short 要同题相反；off_topic_short 才是完全无关主题。两侧推理字段均保留。"
+    "若 preference_negative_source.kind=reviewed_failure，负例是已经认证的真实失败稿，必须逐字保留其回答与完整推理，"
+    "不能为满足短推理或发散类型而改写、截断它；只修正正例，最终仍独立评审并核验原有正确性分差。"
+    "不把后台规则、审核、修稿、样本设计或质量分写进训练正文；不改变原问题和工具事实。"
+)

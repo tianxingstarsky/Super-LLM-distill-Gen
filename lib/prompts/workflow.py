@@ -1046,3 +1046,15 @@ REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.2.0", te
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.22.0", template=spec(
     "review_score", "逐句核验实际承诺，区分原文算例与新增条件",
     render(REVIEW_SCORE_V1_21) + EXPLICIT_SCENARIO_SCOPE).template)
+
+from lib.prompts.workflow_preference import ALTERNATIVE_DRIFT, DESIGN_CHECK_DRIFT, PREFERENCE_REPAIR
+ALTERNATIVE_V1_4 = ALTERNATIVE
+ALTERNATIVE = _reasoning_spec_replace(ALTERNATIVE, version="1.5.0", template=spec(
+    "alternative", "由原题出发的错误联想与渐进跑题", ALTERNATIVE_DRIFT).template)
+PREFERENCE_DESIGN_CHECK_V1_0 = PREFERENCE_DESIGN_CHECK
+PREFERENCE_DESIGN_CHECK = _reasoning_spec_replace(PREFERENCE_DESIGN_CHECK, version="1.1.0", template=spec(
+    "preference_design_check", "绑定真实需求与负例中的发散转折", DESIGN_CHECK_DRIFT).template)
+REVIEW_REPAIR_V1_15 = REVIEW_REPAIR
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.16.0", template=spec(
+    "review_repair", "保持正例互译与核查，复用真实失败或构建渐进跑题对照",
+    render(REVIEW_REPAIR_V1_12) + PREFERENCE_REPAIR).template)

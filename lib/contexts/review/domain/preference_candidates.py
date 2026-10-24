@@ -116,8 +116,10 @@ def contrastive_reasoning_issue(record, config):
 def validate_contrast_assessment(value, record, *, version=1):
     """Claims must quote actual answers; this binds, but does not prove, a judge."""
     fields = {"same_task", "opposite", "off_topic", "chosen_claim", "rejected_claim", "reason"}
-    if version == 2:
+    if version in {2, 3}:
         fields |= {"rationale_supports_answer", "rationale_quote"}
+    if version == 3:
+        fields |= {"topic_linked", "associative_drift", "topic_anchor", "drift_quote"}
     if not isinstance(value, dict) or set(value) != fields:
         raise ValueError("invalid_preference_contrast_assessment")
     if any(type(value[key]) is not bool for key in ("same_task", "opposite", "off_topic")):
@@ -131,19 +133,34 @@ def validate_contrast_assessment(value, record, *, version=1):
             raise ValueError("preference_contrast_quote_not_in_answer")
     if not isinstance(value["reason"], str) or not value["reason"].strip():
         raise ValueError("invalid_preference_contrast_assessment")
-    if version == 2:
+    if version in {2, 3}:
         quote = value["rationale_quote"]
         rationale = "\n".join(reasoning_text(message) for message in record["rejected"])
         if type(value["rationale_supports_answer"]) is not bool:
             raise ValueError("invalid_preference_contrast_assessment")
         if not isinstance(quote, str) or not quote.strip() or quote not in rationale:
             raise ValueError("preference_contrast_quote_not_in_rationale")
+    if version == 3:
+        if any(type(value[key]) is not bool for key in ("topic_linked", "associative_drift")):
+            raise ValueError("invalid_preference_contrast_assessment")
+        if value["associative_drift"] and (not value["topic_linked"] or not value["off_topic"]):
+            raise ValueError("inconsistent_preference_contrast_assessment")
+        for flag, key, texts in (
+            ("topic_linked", "topic_anchor", [m.get("content", "") for m in record["prompt"] if m.get("role") == "user"]),
+            ("associative_drift", "drift_quote", [m.get("content", "") for m in record["rejected"]]),
+        ):
+            quote = value[key]
+            if not isinstance(quote, str) or (value[flag] and (not quote.strip() or not any(
+                    isinstance(text, str) and quote in text for text in texts))) or (not value[flag] and quote):
+                raise ValueError("preference_drift_quote_not_in_" + key)
     return deepcopy(value)
 
 
 def contrastive_repair_contract(config, *, version=1):
     config = validate_preference_design(config)
-    negative_rule = ("rejected 必须明显答非所问：自然回答另一个无关问题，不能继续回答或解决当前问题；"
+    negative_rule = ("rejected 从原题真实概念或需求出发，经过错误联想逐渐偏离实际目标；不能突兀换成完全无关话题，也不能先答对再附闲话。"
+        if config["mode"] == "associative_drift_short" else
+        "rejected 必须明显答非所问：自然回答另一个无关问题，不能继续回答或解决当前问题；"
         "只给错结论、少答一部分、推脱或拒答，都不等于答非所问。"
         if config["mode"] == "off_topic_short" else
         "rejected 必须对同一核心问题给出与正确结论完全相反的判断或行动建议。")
@@ -155,7 +172,7 @@ def contrastive_repair_contract(config, *, version=1):
         f"负例推理必须非空，不超过 {config['negative_reasoning_max_chars']} 字符，且不超过正例的 "
         f"{config['negative_reasoning_max_ratio']:.0%}。若长短比不满足，先检查正例是否缺少必要推导，不能用废话扩写。"
         "两侧已有推理字段都保留并改写；生成、评审、正负标签和这些制作规则不得写进训练正文。"
-        + ("负例推理要自然解释它自己的回答为什么成立，不能评论“我没回答原问题”“未涉及 CSV”等偏题制作意图。" if version == 2 else "")
+        + ("负例推理要自然解释它自己的回答为什么成立，不能评论“我没回答原问题”“未涉及 CSV”等偏题制作意图。" if version in {2, 3} else "")
         +
         "不能满足所选设计时 uncertain=true，保留待处理状态。\n")
 
@@ -164,6 +181,9 @@ def contrastive_relationship_issue(assessment, config):
     if assessment.get("rationale_supports_answer") is False:
         return "preference_negative_rationale_meta"
     mode = validate_preference_design(config)["mode"]
+    if mode == "associative_drift_short":
+        return None if (assessment.get("associative_drift") is True and assessment.get("topic_linked") is True
+            and assessment["off_topic"] and not assessment["same_task"]) else "preference_associative_drift_required"
     if mode == "off_topic_short":
         return None if assessment["off_topic"] and not assessment["same_task"] else "preference_off_topic_answer_required"
     return None if assessment["same_task"] and assessment["opposite"] else "preference_opposite_answer_required"

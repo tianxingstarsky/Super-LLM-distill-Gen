@@ -194,7 +194,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          preference_design_version=None, preference_design_prompt_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
-    if preference_design_version is not None and (type(preference_design_version) is not int or preference_design_version not in {1, 2}):
+    if preference_design_version is not None and (type(preference_design_version) is not int or preference_design_version not in {1, 2, 3}):
         raise ValueError("invalid_preference_design_version")
     if claim_review_transport_version is not None and (
             type(claim_review_transport_version) is not int or claim_review_transport_version != 1):
@@ -204,8 +204,11 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
         raise ValueError("invalid_claim_repair_feedback_version")
     def default_body(prompt_id):
         if prompt_id == "workflow.alternative":
-            return render(get(prompt_id, version="1.4.0" if preference_design_version == 2 else
+            return render(get(prompt_id, version="1.5.0" if preference_design_version == 3 else
+                "1.4.0" if preference_design_version == 2 else
                 "1.3.0" if preference_design_version == 1 else "1.1.0"))
+        if prompt_id == "workflow.preference_design_check":
+            return render(get(prompt_id, version="1.1.0" if preference_design_version == 3 else "1.0.0"))
         if prompt_id == "workflow.preference_directed_check":
             if preference_design_prompt_version == 1:
                 return render(get(prompt_id, version="1.1.0"))
@@ -235,7 +238,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
             version = "1.0.1" if claim_review_format_feedback_version in {1, 2} else "1.0.0"
             return render(get(prompt_id, version=version))
         if prompt_id == "workflow.review_repair":
-            return render(get(prompt_id, version="1.15.0" if preference_design_version == 2 else
+            return render(get(prompt_id, version="1.16.0" if preference_design_version == 3 else
+                "1.15.0" if preference_design_version == 2 else
                 "1.14.0" if preference_design_version == 1 else
                 "1.12.0" if claim_repair_feedback_version == 1 else "1.11.0"))
         return builtin_node_prompt(prompt_id)

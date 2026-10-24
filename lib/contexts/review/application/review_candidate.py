@@ -132,7 +132,7 @@ class ReviewCandidate:
         # has made no progress; another paid score cannot add new evidence.
         scored_candidates = {}
         score_fields = ("preference", "rlaif", "learner_context_check")
-        contrastive = target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}
+        contrastive = target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2, 3}
         if contrastive:
             score_fields += ("preference_assessment",)
         if self.recipe.get("claim_review_protocol_version") in {1, 2}:

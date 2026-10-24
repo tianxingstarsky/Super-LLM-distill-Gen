@@ -59,7 +59,7 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-package-review-mode': frozenset({'sample', 'all'}),
                'workflow-review-repair-mode': frozenset({'auto', 'human'})}
 ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model', 'vision', 'docling'}),
-                    'workflow-preference-mode': frozenset({'off_topic_short', 'opposite_short'}),
+                    'workflow-preference-mode': frozenset({'off_topic_short', 'opposite_short', 'associative_drift_short'}),
                     'workflow-cpt-processing-mode': frozenset({'native', 'model'}),
                     'workflow-cpt-review-mode': frozenset({'text', 'vision'}),
                     'workflow-agent-mode': frozenset({'local', 'isolated'}),
@@ -70,6 +70,7 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-director-context-mode': frozenset({'persistent', 'batch'}),
                     'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
+                  'workflow-preference-reuse-failures',
                   'workflow-docling-ocr', 'workflow-docling-formula', 'workflow-docling-assist', 'workflow-docling-page-review',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
                   'workflow-human-enabled',

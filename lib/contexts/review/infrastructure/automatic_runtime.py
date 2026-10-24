@@ -105,7 +105,7 @@ class WorkflowReviewRepair:
 
     def _review_payload(self, target, row):
         from lib.contexts.datasets.contracts import preferred_training_record
-        if (target == "sft" and self.recipe.get("preference_design_version") in {1, 2}
+        if (target == "sft" and self.recipe.get("preference_design_version") in {1, 2, 3}
                 and row.get("_complete_preference_response") is True):
             return {key: deepcopy(row[key]) for key in ("messages", "tools") if key in row and row[key]}
         if target == "rlaif":
@@ -605,13 +605,13 @@ class WorkflowReviewRepair:
         return self._claim_refutation_release(row, check)
 
     def _review_score(self, target, row, evidence, key, instruction):
-        if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}:
+        if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2, 3}:
             from lib.bootstrap.automatic_review import preference_assessment
             selected, check, _ = preference_assessment(self).execute(row, evidence, instruction=instruction)
             # Pair reviews now own two separately bound response audits.
             # An old top-level audit must not judge a newly repaired pair.
             row.pop("claim_review", None)
-            for field in ("preference", "preference_assessment", "learner_context_check"):
+            for field in ("preference", "preference_assessment", "learner_context_check", "preference_review_failures"):
                 row.pop(field, None)
                 if field in selected:
                     row[field] = deepcopy(selected[field])
@@ -833,7 +833,7 @@ class WorkflowReviewRepair:
         payload = self._review_payload(target, row)
         rules = {"instruction": _authored_repair_rules(self.recipe)} if _authored_cot(target, row) else {}
         if target in PREFERENCE_TARGETS and self.recipe.get("claim_review_transport_version") == 1:
-            if self.recipe.get("preference_design_version") in {1, 2}:
+            if self.recipe.get("preference_design_version") in {1, 2, 3}:
                 from ..domain.preference_candidates import contrastive_repair_contract
                 contract = contrastive_repair_contract(self.recipe.get("preference_design"),
                     version=self.recipe["preference_design_version"])
@@ -884,10 +884,19 @@ class WorkflowReviewRepair:
              "qa_contract": row.get("qa_contract"),
              "generation_style": current_style,
              **_authored_review_audit(target, row)}, evidence)
+        if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") == 3:
+            from .preference_style import preference_repair_requirements
+            from ..domain.reviewed_failure import validate_reviewed_failure_pair
+            data["response_requirements"] = preference_repair_requirements(self, row)
+            if validate_reviewed_failure_pair(row):
+                data["preference_negative_source"] = {"kind": "reviewed_failure"}
+                # Actual failures retain their full body. Synthetic shortness
+                # and drift are not requirements for these observed drafts.
+                rules["instruction"] = "已认证真实失败稿：rejected 必须逐字保留完整回答和推理；只修改 chosen，遵守 response_requirements。"
         if self.recipe.get("claim_repair_feedback_version") == 1:
             from ..domain.claim_repair_feedback import claim_repair_feedback
             feedback = claim_repair_feedback(payload, evidence, row.get("claim_review"))
-            if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}:
+            if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2, 3}:
                 from ..domain.preference_candidates import response_projection
                 assessment = row.get("preference_assessment", {})
                 data["preference_design"] = self.recipe["preference_design"]
@@ -897,7 +906,8 @@ class WorkflowReviewRepair:
                 if responses:
                     projection = response_projection(row, row["chosen"])
                     feedback = claim_repair_feedback(self._review_payload("sft", projection), evidence,
-                        responses[0].get("claim_review"))
+                        responses[0].get("claim_review"),
+                        include_quality_feedback=self.recipe.get("preference_design_version") == 3)
                     if feedback:
                         feedback["scope"] = "chosen"
             if feedback is not None:
@@ -970,9 +980,21 @@ class WorkflowReviewRepair:
                 updated["reasoning_revision_audits"] = [*deepcopy(row.get("reasoning_revision_audits", [])), *audits]
         if issue := (_payload_issue(target, updated) or _row_training_surface_issue(target, updated, self.recipe)):
             return row, issue
-        if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}:
+        if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2, 3}:
+            if self.recipe.get("preference_design_version") == 3 and row.get("preference_negative_source"):
+                from ..domain.reviewed_failure import validate_reviewed_failure_pair
+                try:
+                    validate_reviewed_failure_pair(updated)
+                except ValueError:
+                    return row, "reviewed_failure_body_or_task_changed"
             from ..domain.preference_candidates import preserve_preference_response_history
+            reused_failure = False
+            if self.recipe.get("preference_design_version") == 3 and self.recipe["preference_design"].get("reuse_reviewed_failures"):
+                from ..domain.reviewed_failure import reuse_failed_positive
+                reused_failure = reuse_failed_positive(updated)
             preserve_preference_response_history(row, updated)
+            if reused_failure:
+                updated["preference_response_origins"]["rejected"] = "reviewed_failure_preserved"
         if evidence["source_kind"] == "document":
             spans = _evidence_quote_spans(evidence, value.get("quotes", []))
             if spans is None:

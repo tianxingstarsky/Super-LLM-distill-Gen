@@ -10,7 +10,7 @@ class ReviewPreferenceView:
 
     def execute(self, item):
         target = item["target"]
-        if (target not in PREFERENCE_TARGETS or self._recipe.get("preference_design_version") not in {1, 2}
+        if (target not in PREFERENCE_TARGETS or self._recipe.get("preference_design_version") not in {1, 2, 3}
                 or self._recipe["review_repair"]["mode"] != "auto"):
             return self._reviewer.execute(item)
         neutral = {**deepcopy(item), "target": "dpo"}

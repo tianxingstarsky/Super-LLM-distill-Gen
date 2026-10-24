@@ -14,10 +14,12 @@ st.json(preference_design_snapshot('fixture'))
 '''
 
 
-def test_default_off_topic_and_opposite_choice_survive_node_close_and_reopen():
+def test_default_drift_and_failure_reuse_survive_node_close_and_reopen():
     app=AppTest.from_string(SCRIPT).run()
     assert not app.exception
-    assert app.radio(key='workflow-preference-mode:fixture').value=='off_topic_short'
+    assert app.radio(key='workflow-preference-mode:fixture').value=='associative_drift_short'
+    assert app.checkbox(key='workflow-preference-reuse-failures:fixture').value is True
+    app.checkbox(key='workflow-preference-reuse-failures:fixture').uncheck().run()
     app.radio(key='workflow-preference-mode:fixture').set_value('opposite_short').run()
     app.number_input(key='workflow-preference-negative-chars:fixture').set_value(100).run()
     app.number_input(key='workflow-preference-negative-ratio:fixture').set_value(15).run()
@@ -25,6 +27,7 @@ def test_default_off_topic_and_opposite_choice_survive_node_close_and_reopen():
     app.checkbox[0].check().run()
     assert not app.exception
     assert app.radio(key='workflow-preference-mode:fixture').value=='opposite_short'
+    assert app.checkbox(key='workflow-preference-reuse-failures:fixture').value is False
     assert app.number_input(key='workflow-preference-negative-chars:fixture').value==100
     assert app.number_input(key='workflow-preference-negative-ratio:fixture').value==15
 

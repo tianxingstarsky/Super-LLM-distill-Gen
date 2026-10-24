@@ -239,5 +239,5 @@ def test_all_old_review_repair_snapshots_remain_byte_identical():
     for version, digest in expected.items():
         assert sha256(get("workflow.review_repair", version=version).template.encode()).hexdigest() == digest
     assert render(get("workflow.review_repair", "1.7.0")) == REVIEW_REPAIR_V1_7
-    assert get("workflow.review_repair").version == "1.15.0"
+    assert get("workflow.review_repair").version == "1.16.0"
     assert render(get("workflow.review_repair", "1.8.0")) == REVIEW_REPAIR_V1_8
