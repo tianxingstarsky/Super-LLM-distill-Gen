@@ -9,6 +9,7 @@
 | `execution_ports.py` | 执行用例需要的会话和阶段端口，以及可重复遍历的记录批次合同 |
 | `generate_sft.py` / `generate_directed_sft.py` | 文档和导入对话的 SFT，以及指导员指定问题的回答生成；保留原证据约束和尝试键 |
 | `generate_cot.py` | 原生推理保留、风格化生成、原生前缀回答和失败收据恢复 |
+| `generate_preference.py` | 按节点冻结的负例设计生成非空短推理对照；原始问题和正例保持原样，独立质量判定归审核域 |
 | `trim_reasoning.py` / `generation_ports.py` | 推理修剪、交付投影及节点算法消费的来源/请求/存储端口 |
 | `request_node_model.py` / `model_request_ports.py` | 请求校验、角色选择、检查点重用、完整响应与流式结束状态 |
 | `generate_dialogue.py` / `dialogue_ports.py` | 多轮资料准备、原样导入评审、分角色逐轮生成和完整对话评审 |

@@ -103,6 +103,10 @@ class AuthenticatedRepairAdapter:
     def __init__(self, runtime):
         self._runtime = runtime
 
+    @property
+    def run_id(self):
+        return self._runtime.state["id"]
+
     def authenticate(self, inputs):
         from lib.infrastructure.human_revision import verified_revision_batch, verified_revision_parent
         from ..domain.candidate_content import candidate_digest as digest

@@ -22,3 +22,8 @@ def cot_generator(runtime):
 
 def reasoning_trimmer(runtime):
     return TrimReasoning(StreamingReasoningAdapter(runtime), runtime.recipe)
+
+
+def preference_generator(runtime):
+    from lib.contexts.workflows.application.generate_preference import GeneratePreferencePair
+    return GeneratePreferencePair(CheckpointedGenerationAdapter(runtime), runtime.recipe)

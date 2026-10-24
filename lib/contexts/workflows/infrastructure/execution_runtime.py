@@ -68,7 +68,8 @@ class FilesystemRunSession:
                                           claim_review_wire_schema_version=runtime.recipe.get("claim_review_wire_schema_version"),
                                           claim_review_focus_version=runtime.recipe.get("claim_review_focus_version"),
                                           claim_review_condition_contract_version=runtime.recipe.get("claim_review_condition_contract_version"),
-                                          reasoning_depth_contract_version=runtime.recipe.get("reasoning_depth_contract_version"))
+                                          reasoning_depth_contract_version=runtime.recipe.get("reasoning_depth_contract_version"),
+                                          preference_design_prompt_version=runtime.recipe.get("preference_design_prompt_version"))
         else:
             if not isinstance(runtime.recipe.get("prompts"), dict):
                 raise ValueError("prompts_changed_create_new_run")

@@ -34,7 +34,7 @@ PROMPT_LABELS = {
     "workflow.multiturn_user": "下一轮提问",
     "workflow.multiturn_assistant": "本轮回答",
     "workflow.multiturn_consistency": "整段一致性核验",
-    "workflow.alternative": "独立偏好候选",
+    "workflow.alternative": "短推理负例生成",
     "workflow.judge": "偏好一致性复核",
     "workflow.trim": "推理修剪执行",
     "workflow.trim_check": "语义保留核验",
@@ -51,6 +51,7 @@ PROMPT_LABELS = {
     "workflow.sft_directed_check": "问答规则与线索核验",
     "workflow.multiturn_directed_check": "整段问答规则核验",
     "workflow.preference_directed_check": "偏好优选契约检查",
+    "workflow.preference_design_check": "负例类型核验",
     "workflow.cot_directed_check": "CoT 问答契约检查",
     "workflow.trim_directed_check": "修剪后问答契约检查",
 }
@@ -190,6 +191,10 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
             else "文档资料" if recipe.get("sources") else "开放需求")
     active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"),
                                    package_review=recipe.get("package_review"), qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"))
+    legacy_design = (node == "preference" and recipe.get("preference_design_version") in {1, 2}
+                     and recipe.get("preference_design_prompt_version") is None)
+    if legacy_design:
+        active = (*active, "workflow.preference_directed_check")
     prompts = {key: pinned[key] for key in active if key in pinned}
     if not prompts:
         return
@@ -199,8 +204,10 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
     st.caption("本次任务已固定的提示词；复制为新草稿后可以修改。")
     prompt_id = st.selectbox("处理步骤", list(prompts),
                             key=f"workflow-run-prompt-selection:{run_id}:{node}",
-                            format_func=lambda value: _prompt_label(value, node, language,
-                                recipe.get("version", 0) >= 19 and recipe.get("source_cleaning") is True))
+                            format_func=lambda value: (translate_label("负例类型核验", language)
+                                if legacy_design and value == "workflow.preference_directed_check" else
+                                _prompt_label(value, node, language,
+                                    recipe.get("version", 0) >= 19 and recipe.get("source_cleaning") is True)))
     st.text_area("提示词正文", value=prompts[prompt_id], height=164, disabled=True,
                  key=f"workflow-run-prompt-body:{run_id}:{node}:{prompt_id}")
     from lib.presentation.streamlit.workflow_experience_controls import render_pinned_experience

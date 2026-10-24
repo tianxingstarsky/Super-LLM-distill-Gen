@@ -12,3 +12,6 @@ from .application.review_collections import ReviewGeneratedCollections
 from .application.execute_repair import ExecuteRepairBranch
 from .application.rework_collection import ReviewReworkApplication
 from .application.review_claim_windows import ReviewClaimWindows
+from .application.authorize_format_view import AuthorizeTrainingFormatView
+from .application.assess_preference_pair import AssessPreferencePair
+from .application.review_preference_view import ReviewPreferenceView

@@ -11,6 +11,9 @@ class ExecuteRepairBranch:
     def execute(self):
         inputs = validate_repair_inputs(self.recipe["repair_inputs"], self.recipe["review_repair"])
         self._port.authenticate(inputs)
+        if self.recipe.get("training_format_lineage_version") == 1:
+            from ..domain.training_lineage import validate_format_view_selections
+            validate_format_view_selections(inputs, self._port.run_id)
         self._port.prepare(inputs)
         reviewed = self._port.review(inputs)
         counts = self._port.publish(reviewed)

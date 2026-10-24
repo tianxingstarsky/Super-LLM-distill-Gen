@@ -44,6 +44,7 @@ VERSION_21_NODE_PROMPT_IDS = {**VERSION_20_NODE_PROMPT_IDS,
 VERSION_22_NODE_PROMPT_IDS = {**VERSION_21_NODE_PROMPT_IDS,
                   "multiturn": (*VERSION_21_NODE_PROMPT_IDS["multiturn"], "workflow.style_check")}
 NODE_PROMPT_IDS = {**VERSION_22_NODE_PROMPT_IDS,
+                  "preference": (*VERSION_22_NODE_PROMPT_IDS["preference"], "workflow.preference_design_check"),
                   "review": (*VERSION_22_NODE_PROMPT_IDS["review"], "workflow.learner_context_check",
                              "workflow.review_reference")}
 
@@ -101,7 +102,11 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
                    ("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check")
                    if styled else ("workflow.rationale_check",))
         return (*prompts, "workflow.cot_directed_check", *human_prompt) if directed else prompts
-    if stage in {"preference", "trim"}:
+    if stage == "preference":
+        base = VERSION_16_NODE_PROMPT_IDS[stage] if directed else LEGACY_NODE_PROMPT_IDS[stage]
+        design = ("workflow.preference_design_check",) if review_repair is not None else ()
+        return (*base, *design, *human_prompt)
+    if stage == "trim":
         return (*VERSION_16_NODE_PROMPT_IDS[stage], *human_prompt) if directed else LEGACY_NODE_PROMPT_IDS[stage]
     if stage == "director":
         return NODE_PROMPT_IDS[stage] if separated else VERSION_19_NODE_PROMPT_IDS[stage]
@@ -133,7 +138,8 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
                     claim_refutation_release_version=None, claim_reference_policy_version=None,
                     claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                     claim_review_wire_schema_version=None, claim_review_focus_version=None,
-                    claim_review_condition_contract_version=None, reasoning_depth_contract_version=None) -> dict:
+                    claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
+                    preference_design_prompt_version=None) -> dict:
     if claim_review_protocol_version is not None and (
             type(claim_review_protocol_version) is not int or claim_review_protocol_version not in {1, 2}):
         raise ValueError("invalid_claim_review_protocol_version")
@@ -171,6 +177,10 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
         catalog = {**catalog, "review": (*catalog["review"], "workflow.learner_context_check")}
     if (claim_review_protocol_version == 2 or claim_review_adversarial_protocol_version == 1) and "review" in catalog:
         catalog = {**catalog, "review": (*catalog["review"], "workflow.review_reference")}
+    if preference_design_prompt_version is not None:
+        if type(preference_design_prompt_version) is not int or preference_design_prompt_version != 1:
+            raise ValueError("invalid_preference_design_prompt_version")
+        catalog = {**catalog, "preference": (*catalog["preference"], "workflow.preference_design_check")}
     return catalog
 
 
@@ -180,13 +190,27 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                          claim_review_wire_schema_version=None, claim_review_focus_version=None,
                          claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
-                         claim_review_transport_version=None) -> dict:
+                         claim_review_transport_version=None, claim_repair_feedback_version=None,
+                         preference_design_version=None, preference_design_prompt_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
+    if preference_design_version is not None and (type(preference_design_version) is not int or preference_design_version not in {1, 2}):
+        raise ValueError("invalid_preference_design_version")
     if claim_review_transport_version is not None and (
             type(claim_review_transport_version) is not int or claim_review_transport_version != 1):
         raise ValueError("invalid_claim_review_transport_version")
+    if claim_repair_feedback_version is not None and (
+            type(claim_repair_feedback_version) is not int or claim_repair_feedback_version != 1):
+        raise ValueError("invalid_claim_repair_feedback_version")
     def default_body(prompt_id):
+        if prompt_id == "workflow.alternative":
+            return render(get(prompt_id, version="1.4.0" if preference_design_version == 2 else
+                "1.3.0" if preference_design_version == 1 else "1.1.0"))
+        if prompt_id == "workflow.preference_directed_check":
+            if preference_design_prompt_version == 1:
+                return render(get(prompt_id, version="1.1.0"))
+            return render(get(prompt_id, version="2.2.0" if preference_design_version == 2 else
+                "2.1.0" if preference_design_version == 1 else "1.1.0"))
         # The same editable node has two wire contracts. A marker, rather than
         # the registry's latest entry, selects the new claim-level contract.
         # Existing catalogs retain the previous aggregate body verbatim.
@@ -194,7 +218,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
             if claim_review_adversarial_protocol_version == 1:
                 if claim_review_condition_contract_version == 1:
                     if claim_review_transport_version == 1:
-                        return render(get(prompt_id, version="1.21.0"))
+                        return render(get(prompt_id, version="1.22.0"))
                     return render(get(prompt_id, version="1.20.0" if reasoning_depth_contract_version == 1 else "1.19.0"))
                 return render(get(prompt_id, version="1.18.0"))
             version = {1: "1.12.0", 2: ("1.17.0" if claim_review_anchor_protocol_version == 1 else
@@ -206,10 +230,14 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
         if prompt_id == "workflow.review_reference":
             if claim_review_adversarial_protocol_version == 1:
                 if claim_review_condition_contract_version == 1:
-                    return render(get(prompt_id, version="2.1.0"))
+                    return render(get(prompt_id, version="2.2.0"))
                 return render(get(prompt_id, version="2.0.1" if claim_review_focus_version == 1 else "2.0.0"))
             version = "1.0.1" if claim_review_format_feedback_version in {1, 2} else "1.0.0"
             return render(get(prompt_id, version=version))
+        if prompt_id == "workflow.review_repair":
+            return render(get(prompt_id, version="1.15.0" if preference_design_version == 2 else
+                "1.14.0" if preference_design_version == 1 else
+                "1.12.0" if claim_repair_feedback_version == 1 else "1.11.0"))
         return builtin_node_prompt(prompt_id)
     return {stage: {prompt_id: overrides.get(stage, {}).get(prompt_id, default_body(prompt_id))
                     for prompt_id in prompt_ids}
@@ -218,7 +246,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                 claim_refutation_release_version, claim_reference_policy_version,
                 claim_review_anchor_protocol_version, claim_review_adversarial_protocol_version,
                 claim_review_wire_schema_version, claim_review_focus_version,
-                claim_review_condition_contract_version, reasoning_depth_contract_version).items()}
+                claim_review_condition_contract_version, reasoning_depth_contract_version,
+                preference_design_prompt_version).items()}
 
 
 def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11, learner_context_review_version=None,
@@ -226,7 +255,8 @@ def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: i
                                  claim_refutation_release_version=None, claim_reference_policy_version=None,
                                  claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                                  claim_review_wire_schema_version=None, claim_review_focus_version=None,
-                                 claim_review_condition_contract_version=None, reasoning_depth_contract_version=None) -> dict:
+                                 claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
+                                 preference_design_prompt_version=None) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
     templates = validate_node_prompts(value)
     catalog = _prompt_catalog(recipe_version, learner_context_review_version, claim_review_protocol_version,
@@ -234,7 +264,8 @@ def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: i
                               claim_reference_policy_version, claim_review_anchor_protocol_version,
                               claim_review_adversarial_protocol_version,
                               claim_review_wire_schema_version, claim_review_focus_version,
-                              claim_review_condition_contract_version, reasoning_depth_contract_version)
+                              claim_review_condition_contract_version, reasoning_depth_contract_version,
+                              preference_design_prompt_version)
     if (set(templates) != set(catalog)
             or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):

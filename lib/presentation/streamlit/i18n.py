@@ -9,6 +9,18 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "下载本次固定参数、节点提示词与返工原稿。": "Download this run's frozen parameters, node prompts, and repair inputs.",
+    "下载完整配方 JSON": "Download complete recipe JSON",
+    "负例设计": "Negative response design",
+    "负例类型": "Negative response type",
+    "答非所问＋短推理": "Off topic + short rationale",
+    "相反结论＋短推理": "Opposite conclusion + short rationale",
+    "负例推理字符上限": "Maximum negative rationale characters",
+    "负例与正例推理长度比上限（%）": "Maximum negative-to-positive rationale length (%)",
+    "正例保留充分推导，负例使用所选偏差与极短推理。双方独立评分后，共用一份结果导出 DPO、ORPO 和 RLAIF。": "Keep a thorough rationale for the positive response. Use the selected flaw and a short rationale for the negative. Score each response independently, then export the same verified pair as DPO, ORPO and RLAIF.",
+    "短推理仍保留 reasoning_content。生成与负例类型核验模板可在本节点的提示词中修改；正确性分差要求保持不变。": "Short rationales keep reasoning_content. Edit generation and negative-type checks in this node's prompts. The correctness score gap stays unchanged.",
+    "短推理负例生成": "Short-rationale negative generation",
+    "负例类型核验": "Negative type verification",
     "查看本轮报告": "View this round's report",
     "导出本轮结果": "Export this round's results",
     "本任务已有人工审核版本，可先下载审核结果。下方自动质检包保留审核前的候选。": "A human-reviewed version is available for this task. Download it here. The automatic package below keeps the candidates from before human review.",
@@ -3983,7 +3995,8 @@ def install_streamlit_localization() -> None:
     """Translate static labels passed through Streamlit's shared renderer."""
     from streamlit.delta_generator import DeltaGenerator
 
-    if getattr(DeltaGenerator, "_shujian_localization_installed", False):
+    if (getattr(DeltaGenerator, "_shujian_localization_installed", False)
+            and getattr(DeltaGenerator, "_shujian_translation_scope", None) is ZH_EN):
         return
 
     label_methods = {
@@ -4048,8 +4061,12 @@ def install_streamlit_localization() -> None:
     for target in (DeltaGenerator, st):
         for name in sorted(methods):
             original = getattr(target, name, None)
-            if original is None or getattr(original, "_shujian_i18n_wrapper", False):
+            if original is None:
                 continue
+            # A Streamlit source reload replaces this module's dictionary.
+            # Replace our old closure instead of stacking wrappers around it.
+            while getattr(original, "_shujian_i18n_wrapper", False) and hasattr(original, "__wrapped__"):
+                original = original.__wrapped__
 
             def make_wrapper(method_name: str, method: Any, is_class_method: bool):
                 if is_class_method:
@@ -4066,6 +4083,9 @@ def install_streamlit_localization() -> None:
                 return localized
 
             setattr(target, name, make_wrapper(name, original, target is DeltaGenerator))
+
+    DeltaGenerator._shujian_localization_installed = True
+    DeltaGenerator._shujian_translation_scope = ZH_EN
 
 ZH_EN.update({
     "系统网络（使用本机代理设置）": "System network (use local proxy settings)",

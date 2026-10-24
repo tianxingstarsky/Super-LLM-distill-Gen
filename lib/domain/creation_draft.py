@@ -27,6 +27,8 @@ NUMBER_FIELDS = {
     'workflow-director-weight': (0, 100),
     'workflow-review-repair-rounds': (0, 5),
     'workflow-review-repair-threshold': (0, 100),
+    'workflow-preference-negative-chars': (20, 1000),
+    'workflow-preference-negative-ratio': (5, 50),
 }
 DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT, 100),
                   'workflow-package-review-escalation': (0, 100),
@@ -57,6 +59,7 @@ ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-package-review-mode': frozenset({'sample', 'all'}),
                'workflow-review-repair-mode': frozenset({'auto', 'human'})}
 ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model', 'vision', 'docling'}),
+                    'workflow-preference-mode': frozenset({'off_topic_short', 'opposite_short'}),
                     'workflow-cpt-processing-mode': frozenset({'native', 'model'}),
                     'workflow-cpt-review-mode': frozenset({'text', 'vision'}),
                     'workflow-agent-mode': frozenset({'local', 'isolated'}),

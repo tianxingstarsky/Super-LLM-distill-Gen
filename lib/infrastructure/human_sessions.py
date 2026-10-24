@@ -214,11 +214,17 @@ class FilesystemHumanSessionDriver:
                 from lib.prompts import registry_versions, render
                 registered = registry_versions()
                 review_templates = (inherited.get("node_prompts") or {}).get("review", {})
-                for prompt_id in ("workflow.review_reference", "workflow.review_score"):
+                for prompt_id in ("workflow.review_reference", "workflow.review_score", "workflow.review_repair"):
                     text = review_templates.get(prompt_id)
                     if isinstance(text, str) and any(text == render(spec)
                             for spec in registered.get(prompt_id, {}).values()):
                         review_templates.pop(prompt_id)
+                preference_templates = (inherited.get("node_prompts") or {}).get("preference", {})
+                for prompt_id in ("workflow.alternative", "workflow.preference_directed_check", "workflow.preference_design_check"):
+                    text = preference_templates.get(prompt_id)
+                    if isinstance(text, str) and any(text == render(spec)
+                            for spec in registered.get(prompt_id, {}).values()):
+                        preference_templates.pop(prompt_id)
             if parent.get("agent_experience_version") == 1:
                 from lib.domain.agent_experience import validate_agent_experience_snapshot
                 experience = validate_agent_experience_snapshot(parent.get("agent_experience"))
@@ -239,12 +245,16 @@ class FilesystemHumanSessionDriver:
                     "planning_mode": "adaptive", "human_augmentation": {"enabled": False}}
         blueprint["qa_director"] = validate_qa_director(director)
         fields = set(inspect.signature(validate_creation).parameters)
-        targets, node_models = validate_creation(**{key: value for key, value in blueprint.items() if key in fields})
+        validation = {key: value for key, value in blueprint.items() if key in fields}
+        validation["preparing_review_session"] = bool(review_only and parent is not None)
+        targets, node_models = validate_creation(**validation)
         blueprint["targets"], blueprint["node_models"] = targets, node_models
         from lib.domain.agent_experience import validate_agent_experience
         blueprint["agent_experience"] = validate_agent_experience(blueprint.get("agent_experience"))
         blueprint["document_parser"] = validate_document_parser(blueprint.get("document_parser"))
         node_prompts = blueprint.get("node_prompts") or {}
+        from lib.contexts.workflows.contracts import preference_design_requested
+        contrastive_enabled = preference_design_requested(blueprint.get("preference_design"), node_prompts)
         # Keep historical session catalogs stable, but never discard a parent's
         # v22 templates or a newly configured multiturn style review.
         prompt_version = (22 if (parent or {}).get("version", 0) >= 22
@@ -254,7 +264,9 @@ class FilesystemHumanSessionDriver:
             claim_review_protocol_version=2, claim_review_format_feedback_version=2,
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
-            claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1)
+            claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1,
+            claim_repair_feedback_version=1, preference_design_version=2 if contrastive_enabled else None,
+            preference_design_prompt_version=1 if contrastive_enabled else None)
         blueprint.setdefault("name", "人工问答增强")
         blueprint["name"] = str(blueprint["name"])[:100]
         if human and human.get("enabled"):

@@ -59,6 +59,7 @@ def test_every_registered_node_prompt_maps_to_the_processing_role():
     assert experience_scope("workflow.cpt_clean") == "cpt"
     assert experience_scope("workflow.review_reference") == "review"
     assert experience_scope("workflow.learner_context_check") == "review"
+    assert experience_scope("workflow.preference_design_check") == "review"
     for unknown in (None, 1, [], "workflow.unknown", "cot", ""):
         assert experience_scope(unknown) is None
 

@@ -64,10 +64,22 @@ def test_preference_outputs_and_rlaif_review_fix_are_on_actual_nodes(tmp_path, m
     assert not app.exception
     nodes = canvas(app, f"setup-canvas:{workspace}")["nodes"]
     assert next(node for node in nodes if node["id"] == "preference")["label"] == "RLAIF · ORPO"
+    assert app.radio(key=f"workflow-preference-mode:{workspace}").value == "off_topic_short"
+    assert app.radio(key=f"workflow-preference-mode:{workspace}").label == translate_label("负例类型", language)
+    assert app.number_input(key=f"workflow-preference-negative-chars:{workspace}").value == 160
+    assert app.number_input(key=f"workflow-preference-negative-ratio:{workspace}").value == 25
+    # Format filenames and field descriptions live at packaging. The creation
+    # node now owns the editable negative design instead of repeating outputs.
+    app.session_state[component_key(app, f"setup-canvas:{workspace}")] = {"node": "package", "serial": "outputs"}
+    app.run()
+    assert not app.exception
     output = next(str(item.value) for item in app.get("html") if 'class="df-preference-outputs"' in str(item.value))
     assert "orpo.jsonl" in output and "rlaif.jsonl" in output and "dpo.jsonl" not in output
     if language == "en":
         assert not re.search(r"[\u4e00-\u9fff]", output)
+    app.session_state[component_key(app, f"setup-canvas:{workspace}")] = {"node": "preference", "serial": "back-to-design"}
+    app.run()
+    assert not app.exception
     app.button(key=f"preference-open-review:{workspace}").click().run()
     assert not app.exception
     assert canvas(app, f"setup-canvas:{workspace}")["selected"] == "review"

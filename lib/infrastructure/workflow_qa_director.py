@@ -131,33 +131,7 @@ def _candidate_controls(config, offset, design=None):
 from lib.contexts.workflows.domain.generation import learner_prompt
 
 
-def actual_qa_input_messages(row, target=None):
-    """Project exactly the public training input, with private reasoning removed.
-
-    Single-turn SFT and its CoT projection produce the same list. Multi-turn
-    input retains all actual preceding answers and user constraints; an opening
-    question alone cannot identify that complete task.
-    """
-    if target == "cot" or (target is None and row.get("question") is not None
-                           and row.get("answer") is not None and row.get("reasoning") is not None):
-        question = row.get("question")
-        messages = question if isinstance(question, list) else [{"role": "user", "content": question}]
-    elif target in {"dpo", "orpo", "rlaif"} or (target is None and isinstance(row.get("prompt"), list)):
-        messages = row.get("prompt")
-    else:
-        original = row.get("messages")
-        messages = original[:-1] if isinstance(original, list) and original else None
-    if (not isinstance(messages, list) or not messages
-            or any(not isinstance(message, dict) for message in messages)
-            or not any(message.get("role") == "user" for message in messages)):
-        return None
-    private = {"reasoning_content", "reasoning", "thinking", "reasoning_summary", "reasoning_details", "thinking_blocks"}
-    return [{name: value for name, value in message.items() if name not in private} for message in messages]
-
-
-def actual_qa_input_identity(row, target=None):
-    messages = actual_qa_input_messages(row, target)
-    return _digest(messages) if messages is not None else None
+from lib.contexts.workflows.contracts import actual_qa_input_identity, actual_qa_input_messages
 
 
 def _actual_question_summary(question):
@@ -496,7 +470,7 @@ class WorkflowQADirector:
                             "duplicate_scope": "current_publication"}
             duplicate = history.duplicate_actual(actual, namespace=namespace)
             if (duplicate and duplicate.get("id") != self.state["id"] + ":" + row["id"]
-                    and not self.human_revision_duplicate_allowed(c, duplicate)):
+                    and not self.qa_revision_duplicate_allowed(row, target, duplicate)):
                 return duplicate
             if self.qa_actual_only(namespace):
                 return None
@@ -505,7 +479,15 @@ class WorkflowQADirector:
             dialogue_design=self.qa_identity_design(c),
             namespace=namespace, learner_task_dedup=self.qa_core_dedup(namespace))
         return (duplicate if duplicate and duplicate.get("run_id") != self.state["id"]
-                and not self.human_revision_duplicate_allowed(c, duplicate) else None)
+                and not self.qa_revision_duplicate_allowed(row, target, duplicate) else None)
+
+    def qa_revision_duplicate_allowed(self, row, target, duplicate):
+        if self.human_revision_duplicate_allowed(row["qa_contract"], duplicate):
+            return True
+        if self.recipe.get("training_format_lineage_version") == 1:
+            from lib.bootstrap.automatic_review import training_format_lineage
+            return training_format_lineage(self).execute(row, target, duplicate)
+        return False
 
     def human_revision_duplicate_allowed(self, contract, duplicate):
         """Only the exact selected ancestor may have a separately saved version.
@@ -1471,5 +1453,5 @@ class WorkflowQADirector:
                                 duplicate = history.duplicate(contract["question"], visible_context=contract["visible_context"],
                                     answer_policy=contract["answer_policy"], qa_type=contract["qa_type"], namespace=namespace,
                                     dialogue_design=self.qa_identity_design(contract), learner_task_dedup=self.qa_core_dedup(namespace))
-                            if not (duplicate and self.human_revision_duplicate_allowed(row["qa_contract"], duplicate)):
+                            if not (duplicate and self.qa_revision_duplicate_allowed(row, target, duplicate)):
                                 raise ValueError("qa_publication_history_conflict")

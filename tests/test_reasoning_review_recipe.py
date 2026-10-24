@@ -9,7 +9,7 @@ from lib.infrastructure import training_workflow as engine
 
 def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     run_id = engine.create_run(tmp_path, brief="解释设备检查的先决条件。", targets=["sft"],
-                               reasoning_required=True, review_repair={"mode": "auto"})
+                               reasoning_required=True, review_repair={"mode": "auto"}, preference_design={})
     recipe = engine.read_json(engine.run_path(tmp_path, run_id) / "recipe.json")
     assert recipe["review_context_protocol_version"] == 2
     assert recipe["turn_review_protocol_version"] == 1
@@ -28,11 +28,13 @@ def test_new_recipe_freezes_reasoning_review_contracts(tmp_path):
     assert recipe["claim_review_wire_schema_version"] == 1
     assert recipe["claim_review_focus_version"] == 1
     assert recipe["reasoning_depth_contract_version"] == 1
-    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.21.0"
+    assert recipe["prompts"]["workflow.review_score"]["version"] == "1.22.0"
     assert recipe["claim_review_transport_version"] == 1
-    assert recipe["prompts"]["workflow.review_reference"]["version"] == "2.1.0"
+    assert recipe["prompts"]["workflow.review_reference"]["version"] == "2.2.0"
     assert "workflow.review_reference" in recipe["node_prompt_templates"]["review"]
-    assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.11.0"
+    assert recipe["prompts"]["workflow.review_repair"]["version"] == "1.15.0"
+    assert recipe["claim_repair_feedback_version"] == 1
+    assert recipe["training_format_lineage_version"] == 1
     assert recipe["authored_reasoning_warmup_version"] == 1
     assert recipe["reasoning_distillation_audit_version"] == 1
 

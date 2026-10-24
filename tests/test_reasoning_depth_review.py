@@ -168,7 +168,7 @@ def test_real_claim_wire_gets_current_depth_and_complete_rubric_in_two_existing_
     client, row = OfflineBlindClient(), controlled(sample(), depth)
     worker = workflow(tmp_path, client, depth=depth)
     assert worker.recipe["reasoning_depth_contract_version"] == 1
-    assert worker.recipe["prompts"]["workflow.review_score"]["version"] == "1.21.0"
+    assert worker.recipe["prompts"]["workflow.review_score"]["version"] == "1.22.0"
     original = deepcopy(row)
     result = worker._review_claim_score("sft", row, evidence(), ["candidate"])
     assert accepted(result) and len(client.calls) == 2

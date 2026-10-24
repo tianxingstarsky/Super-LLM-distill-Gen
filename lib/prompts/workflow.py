@@ -924,3 +924,125 @@ from lib.prompts.workflow_review_formats import REVIEW_FORMAT_DISPATCH_BODY
 REVIEW_SCORE_V1_20 = REVIEW_SCORE
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.21.0", template=spec(
     "review_score", "区分逐句与偏好评分合同，保留完整推理和严格格式", REVIEW_FORMAT_DISPATCH_BODY).template)
+
+REVIEW_REPAIR_V1_11 = REVIEW_REPAIR
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.12.0", template=spec(
+    "review_repair", "依据逐句争议和真实条件修正完整推理", render(REVIEW_REPAIR_V1_11) + '\n'
+    'claim_repair_feedback 给出已绑定当前正文和来源的争议句、字段位置、评审意见和关联原句。'
+    '程序只验证引文出处，不证明评语正确；insufficient 表示缺少支持，不能自行断言它为真或为假。'
+    '先对照完整任务、来源和所有关联条件判断问题，再修正确实存在的推导错误或过强表述。'
+    '尤其区分“算法选用某生成顺序”和“所有任务在逻辑上必须依赖某输入”：无输入任务、例外、否定和可选条件必须在答案与推理中一致。'
+    '只能使用原任务已经给定的条件，不能为了证明候选正确而补出假设；不要将原来的条件句改成无条件结论。'
+    '保留并修正完整推理中的任务分析、推导、反例与结论，不能删除争议推理来绕过核验，也不应改成固定编号的思考步骤。'
+    '评审单元编号、评语、生成规则不进入训练正文。无法在既有条件内修正时 uncertain=true，交还复核。').template)
+
+ALTERNATIVE_V1_1 = ALTERNATIVE
+ALTERNATIVE = _reasoning_spec_replace(ALTERNATIVE, version="1.2.0", template=spec(
+    "alternative", "同一问题的相反答案与极短推理负例",
+    'contrastive_design 指定 opposite_short 模式。reference_response 是应当先核对的正例，不是自动为真。'
+    '保持原问题、全部上下文、角色和工具事实；针对同一核心结论给出完全相反的回答或行动建议。'
+    '例如正确做法是先判重后写出，对照回答就主张先写出再判重；不能只省略细节、换语气或添加无关错误。'
+    '在 reasoning 中用一小段非空解释支持该相反判断，遵守配置的字符上限和相对长度上限。'
+    '这是明确要求的对照样本，不要擅自把它修回正确结论，不输出“负例”“按规则故意出错”等制作说明。'
+    '不要生成残缺 JSON、乱码、工具伪造或半截答案。推理短，回答仍应完整。'
+    '仅返回 JSON：{{"answer":"完整的相反回答","reasoning":"极短且非空的解释"}}').template)
+
+PREFERENCE_DIRECTED_CHECK_V1_1 = PREFERENCE_DIRECTED_CHECK
+PREFERENCE_DIRECTED_CHECK = _reasoning_spec_replace(PREFERENCE_DIRECTED_CHECK, version="2.0.0", template=spec(
+    "preference_directed_check", "核对同一问题的相反结论，绑定实际原句",
+    '只审查偏好设计关系，不代替独立质量打分。阅读原问题、来源和双方完整正文。'
+    'same_task 表示双方是否回答同一个问题且未修改条件；opposite 表示 rejected 对该问题的核心判断、结论或行动与正确的 chosen 完全相反。'
+    '仅有表达差异、字数不同、缺少内容、互不相干的错误或新加条件，都不能判为相反。'
+    '若 chosen 本身错误、无法确认正确方向，opposite=false，不可为了满足设计替它补条件。'
+    'chosen_claim 和 rejected_claim 分别逐字引用双方回答中的核心结论；不得引用推理或自行概括代替。'
+    '仅返回 JSON：{{"same_task":true,"opposite":true,"chosen_claim":"正例回答原句",'
+    '"rejected_claim":"负例回答原句","reason":"解释两句是否真正相反及对应条件"}}').template)
+
+REVIEW_REPAIR_V1_12 = REVIEW_REPAIR
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.13.0", template=spec(
+    "review_repair", "充分推导正例并保持明确的对照设计", render(REVIEW_REPAIR_V1_12) + '\n'
+    '若提供 preference_design，按其中的 opposite_short 模式处理正负例，不把负例当成需要改正确的助手答复。'
+    '正例的解释要有任务判断、可检验的拟结论以及支持结论的实际草稿或推导；根据任务核查边界、反例、数据流或数量关系。'
+    '自我核查需要回答具体疑点，发现反例后修订原结论；不能仅加“我再检查一下”“应该没问题”等空话。'
+    '不要套固定编号、固定开场或固定推理长度。短缺的必要推导要补足，重复和纯翻译不算有效推导。').template)
+
+ALTERNATIVE_V1_2 = ALTERNATIVE
+ALTERNATIVE = _reasoning_spec_replace(ALTERNATIVE, version="1.3.0", template=spec(
+    "alternative", "按节点选择生成答非所问或相反结论负例",
+    'contrastive_design 指定负例类型。保持 prompt 中每条原始消息、条件和工具事实。reference_response 供理解原任务，仍需核对。'
+    'off_topic_short：负例要自然地回答另一个无关问题，不回答或解决当前问题。比如用户要 CSV 合并脚本，'
+    '回答却直接讲园艺养护。不能只用错误答案、部分作答、拒答、含糊或多余段落代替真正答非所问。'
+    'opposite_short：负例针对同一核心问题给出与正确结论完全相反的判断或行动建议，不能只是详略或表达不同。'
+    '两种模式的 reasoning 都必须是一小段非空解释，支持负例自己的实际回答，遵守指定字符与相对长度上限。'
+    '不把正负标签、生成过程或这些规则写进 answer 或 reasoning。不改原问题，不加条件，不造工具结果，不输出乱码或半截答案。'
+    '仅返回 JSON：{{"answer":"负例的完整回答","reasoning":"极短且非空的解释"}}').template)
+
+PREFERENCE_DIRECTED_CHECK_V2_0 = PREFERENCE_DIRECTED_CHECK
+PREFERENCE_DIRECTED_CHECK = _reasoning_spec_replace(PREFERENCE_DIRECTED_CHECK, version="2.1.0", template=spec(
+    "preference_directed_check", "区分答非所问和相反结论，绑定实际原句",
+    '这是独立的设计关系核验，不代替匿名质量评分。阅读原问题、来源和双方完整正文。'
+    'same_task 表示 rejected 是否实际回答当前问题；off_topic 表示它自然回答了一个不同且无关的问题，'
+    '而不只是答错、少答、拒答、含糊或多加无关内容。opposite 表示双方在同一问题同一条件下给出完全相反的核心结论。'
+    'off_topic=true 时 same_task=false 且 opposite=false；opposite=true 时 same_task=true 且 off_topic=false。'
+    '不能为候选补条件。chosen 错误或正确方向无法确认时不得认可设计。'
+    'chosen_claim 与 rejected_claim 必须逐字引用各自回答中的关键原句，不引用推理，也不自行改写。'
+    '仅返回 JSON：{{"same_task":false,"opposite":false,"off_topic":true,"chosen_claim":"正例回答原句",'
+    '"rejected_claim":"负例回答原句","reason":"说明它实际在回答什么问题以及是否满足所选类型"}}').template)
+
+REVIEW_REPAIR_V1_13 = REVIEW_REPAIR
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.14.0", template=spec(
+    "review_repair", "充分推导正例，按所选负例类型修正对照", render(REVIEW_REPAIR_V1_12) + '\n'
+    'preference_design 若存在，以它指定的负例类型为准。off_topic_short 的 rejected 要自然回答另一个无关问题，'
+    '不能只答错当前题、拒答或遗漏内容。opposite_short 则对同一核心问题给出完全相反结论。两种模式都保留极短非空推理。'
+    'chosen 必须正确而充分。必要推导要写出来，包括可检验的拟结论、实际草稿或论证，以及适合任务的边界、反例、数据流或数量核查。'
+    '具体疑点要实际验证并据此修订拟结论，不以空泛自问、纯翻译、重复或统一编号步骤充数。'
+    '保持原始问题和工具事实，不把负例修成正例，不将设计规则、审核或返工过程写进训练正文。').template)
+
+ALTERNATIVE_V1_3 = ALTERNATIVE
+ALTERNATIVE = _reasoning_spec_replace(ALTERNATIVE, version="1.4.0", template=spec(
+    "alternative", "自然偏题或相反结论，并写负例自身的极短解释",
+    '按 contrastive_design 选择类型，原始 prompt、条件及工具事实保持原样。'
+    'off_topic_short：选一个与原题无关的主题，直接自然地回答那个主题，不能仍解决原题、部分作答、拒答或仅给错答案。'
+    '主题自行变化，不固定复用某个例子。opposite_short：回答原题，但核心结论或行动与正确结论完全相反。'
+    'reasoning 必须短而非空，解释负例自己的实际回答。例如谈某种养护方法时说明该方法的一个理由，'
+    '而不是说自己为什么偏离原题。禁止“回应了某话题”“未涉及原问题”“故意答非所问”等样本点评和制作说明。'
+    '按配置的字符及相对长度上限写推理；回答保持完整，不用乱码、截断或虚构工具结果来制造偏差。'
+    '仅返回 JSON：{{"answer":"负例的完整回答","reasoning":"支持负例自身回答的极短解释"}}').template)
+
+PREFERENCE_DIRECTED_CHECK_V2_1 = PREFERENCE_DIRECTED_CHECK
+PREFERENCE_DIRECTED_CHECK = _reasoning_spec_replace(PREFERENCE_DIRECTED_CHECK, version="2.2.0", template=spec(
+    "preference_directed_check", "核验负例类型和推理中的制作意图泄漏",
+    '独立核验设计，不替代匿名质量评分。阅读原题、来源和双方完整回答及推理，不替候选补条件。'
+    'same_task 表示 rejected 是否实际回答当前题；off_topic 表示自然回答另一无关问题，不能是少答、拒答、含糊或只是答错。'
+    'opposite 表示在原问题原条件下给出与正确 chosen 完全相反的核心结论。off_topic=true 时另外两项必须 false；'
+    'opposite=true 时 same_task=true 且 off_topic=false。chosen 错误或方向无法确认时不认可设计。'
+    'rationale_supports_answer 表示负例推理是否自然解释它自己的回答，而不是点评“未涉及原问题”“正在答非所问”或泄漏制作规则。'
+    '推理可以很短且错误，但不能是对训练样本的旁白；有这种旁白时此项必须 false。'
+    'chosen_claim、rejected_claim 逐字引用各自回答原句；rationale_quote 逐字引用负例推理中的关键原句，不概括、不编造。'
+    '仅返回 JSON：{{"same_task":false,"opposite":false,"off_topic":true,"rationale_supports_answer":true,'
+    '"chosen_claim":"正例回答原句","rejected_claim":"负例回答原句","rationale_quote":"负例推理原句",'
+    '"reason":"说明实际偏差类型，以及推理是在支持回答还是点评制作意图"}}').template)
+
+REVIEW_REPAIR_V1_14 = REVIEW_REPAIR
+REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.15.0", template=spec(
+    "review_repair", "修正充分推导与自然短推理，去除制作旁白", render(REVIEW_REPAIR_V1_14) + '\n'
+    '若负例推理评论它自己答非所问、没有涉及原问题、按规则生成负例，这属于制作意图泄漏。'
+    '保留并重写该字段，使其自然支持负例自己正在给出的回答，不叙述样本制作、评分或修正过程。').template)
+
+# Keep QA adherence and contrastive design as separate editable contracts.
+# Retain 2.x for already frozen experimental recipes; new recipes use the
+# explicit design asset rather than changing the meaning of an existing id.
+PREFERENCE_DESIGN_CHECK = _reasoning_spec_replace(PREFERENCE_DIRECTED_CHECK,
+    id="workflow.preference_design_check", version="1.0.0")
+PREFERENCE_DIRECTED_CHECK_V2_2 = PREFERENCE_DIRECTED_CHECK
+PREFERENCE_DIRECTED_CHECK = _reasoning_spec_replace(PREFERENCE_DIRECTED_CHECK_V1_1, version="3.0.0")
+
+from lib.prompts.workflow_adversarial_review import EXPLICIT_SCENARIO_SCOPE
+REVIEW_REFERENCE_V2_1 = REVIEW_REFERENCE
+REVIEW_SCORE_V1_21 = REVIEW_SCORE
+REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.2.0", template=spec(
+    "review_reference", "登记真实条件并保持原文明示算例的作用域",
+    render(REVIEW_REFERENCE_V2_1) + EXPLICIT_SCENARIO_SCOPE).template)
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.22.0", template=spec(
+    "review_score", "逐句核验实际承诺，区分原文算例与新增条件",
+    render(REVIEW_SCORE_V1_21) + EXPLICIT_SCENARIO_SCOPE).template)

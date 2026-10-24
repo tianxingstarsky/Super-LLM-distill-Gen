@@ -232,6 +232,10 @@ def test_aggregate_preference_score_uses_its_own_strict_contract_and_preserves_b
             return json.dumps(response)
     client = AggregateClient()
     worker = flow(tmp_path, client)
+    # Exercise the retained aggregate preference protocol. New contrastive
+    # recipes review anonymous complete responses with the claim reviewer;
+    # that distinct path is covered by test_contrastive_preference.
+    worker.recipe.pop("preference_design_version", None)
     # A standalone rejected-response score uses aggregate format even though
     # the same node also owns the protocol-four condition reviewer.
     row = {"id": "preference-sample", "prompt": [{"role": "user", "content": "How should I inspect?"}],

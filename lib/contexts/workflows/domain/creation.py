@@ -15,6 +15,7 @@ from lib.domain.human_augmentation import HUMAN_QA_TARGETS
 from lib.contexts.review.contracts import validate_review_repair, validate_repair_inputs
 from lib.contexts.workflows.domain.graph import SOURCE_QA_TARGETS, uses_shared_source_cleaning
 from lib.domain.agent_experience import validate_agent_experience
+from .preference_design import validate_preference_design
 
 
 def validate_generation_review(targets, review_repair, repair_inputs):
@@ -37,7 +38,10 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
                       node_prompts=None, package_review=None, qa_director=None, production=None,
                       cpt_processing=None, review_repair=None, repair_inputs=None, agent_experience=None,
-                      reasoning_required=False):
+                      reasoning_required=False, preference_design=None, preparing_review_session=False):
+    if type(preparing_review_session) is not bool:
+        raise ValueError("invalid_review_session_phase")
+    validate_preference_design(preference_design)
     if type(reasoning_required) is not bool:
         raise ValueError("invalid_reasoning_required")
     target_error = "请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话"
@@ -68,7 +72,8 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     review_config = validate_review_repair(review_repair)
     repair_rows = validate_repair_inputs(repair_inputs, review_config)
     if (review_config or {}).get("reference_sources"):
-        if not repair_rows or not sources or any(PurePath(str(source)).suffix.lower() not in {".txt", ".md"} for source in sources):
+        if (not repair_rows and not preparing_review_session or not sources
+                or any(PurePath(str(source)).suffix.lower() not in {".txt", ".md"} for source in sources)):
             raise ValueError("review_reference_sources_require_repair_and_parsed_text")
     if repair_rows and set(row["target"] for row in repair_rows) - set(targets):
         raise ValueError("review_repair_target_mismatch")

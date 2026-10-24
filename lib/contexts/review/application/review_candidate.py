@@ -11,6 +11,7 @@ from ..domain.repair import validate_review_repair
 from ..domain.candidate_content import (_manual_patch, _payload_issue, _immutable_tool_facts,
     candidate_digest as digest)
 from ..domain.automatic_rules import _authored_warmup_requirements
+from ..domain.training_lineage import repaired_candidate_identity
 from lib.domain.workflow_quality import canonical, accepted
 from lib.contexts.workflows.contracts import PREFERENCE_TARGETS, preference_score_issue, rlaif_feedback_issue
 
@@ -55,7 +56,9 @@ class ReviewCandidate:
         row = _manual_patch(target, original, item)
         if item.get("revision_context"):
             row["revision_context"] = deepcopy(item["revision_context"])
-            row["id"] = digest([self._port.run_id, target, item["revision_context"]["candidate_id"]])
+            row["id"] = repaired_candidate_identity(self._port.run_id, target, row, item["revision_context"],
+                format_lineage=(self.recipe.get("training_format_lineage_version") == 1
+                                and self._port.authenticated_revision))
             if row.get("qa_contract"):
                 row["qa_contract"] = deepcopy(row["qa_contract"])
                 row["qa_contract"]["revision_context"] = deepcopy(item["revision_context"])
@@ -129,16 +132,28 @@ class ReviewCandidate:
         # has made no progress; another paid score cannot add new evidence.
         scored_candidates = {}
         score_fields = ("preference", "rlaif", "learner_context_check")
+        contrastive = target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}
+        if contrastive:
+            score_fields += ("preference_assessment",)
         if self.recipe.get("claim_review_protocol_version") in {1, 2}:
             score_fields += ("claim_review", "reasoning_assessment_method", "reasoning_assessment_reference")
             if self.recipe.get("claim_refutation_release_version") == 1:
                 score_fields += ("claim_release_decision",)
         elif audit_enabled:
             score_fields += ("reasoning_assessment_method", "reasoning_assessment_reference")
-        force_repair = bool(item.get("revision_context")) and config["max_rounds"] > 0
+        force_repair = bool(item.get("revision_context")) and config["max_rounds"] > 0 and not contrastive
+        if self.recipe.get("review_reference_reassessment_version") == 1 and config.get("reference_sources"):
+            # Newly supplied verified facts may resolve an old uncertainty
+            # without changing a single character of the training record.
+            force_repair = False
+        pair_scope = (digest({"candidate": self._port.payload(target, row), "evidence": evidence,
+            "instruction": instruction, "design": self.recipe.get("preference_design"),
+            "requirements": (row.get("revision_context") or {}).get("design_requirements", {})}) if contrastive else None)
         candidate_limit = config["max_rounds"] if force_repair else config["max_rounds"] + 1
         for attempt in range(candidate_limit):
             key = [row["id"], target, "review_repair", attempt]
+            if contrastive:
+                key = [row["id"], "shared_preference_v1", pair_scope, attempt]
             if force_repair or attempt:
                 row, issue = self._port.repair(target, row, evidence, key,
                     check or original.get("review_repair", {}).get("verdict") or original.get("judge")
@@ -199,8 +214,9 @@ class ReviewCandidate:
             receipt.update(score=score, verdict=deepcopy(check), reason=check["reason"])
             force_repair = False
             if (self.recipe.get("claim_review_condition_contract_version") == 1
-                    and any(entry.get("review", {}).get("condition_guard", {}).get("needs_review")
-                        for entry in row.get("claim_review", {}).get("assessments", []))):
+                    and (any(entry.get("review", {}).get("condition_guard", {}).get("needs_review")
+                        for entry in row.get("claim_review", {}).get("assessments", []))
+                        or contrastive and row.get("preference_assessment", {}).get("stop_reason") == "condition_support_pending_review")):
                 # Missing support is not an error verdict. Keep the body
                 # and raw scores; don't pay for speculative auto-rewrites.
                 receipt.update(status="waiting_manual_review", reason="condition_support_pending_review",

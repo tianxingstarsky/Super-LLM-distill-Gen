@@ -304,6 +304,7 @@ _PROMPT_SCOPES = {
         "workflow.review_reference", "workflow.learner_context_check",
         "workflow.multiturn_consistency", "workflow.human_augmentation_check",
         "workflow.sft_directed_check", "workflow.multiturn_directed_check", "workflow.preference_directed_check",
+        "workflow.preference_design_check",
         "workflow.cot_directed_check", "workflow.trim_directed_check", "workflow.trim_check", "workflow.trim_rules_check",
     )},
 }

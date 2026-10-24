@@ -105,6 +105,9 @@ class WorkflowReviewRepair:
 
     def _review_payload(self, target, row):
         from lib.contexts.datasets.contracts import preferred_training_record
+        if (target == "sft" and self.recipe.get("preference_design_version") in {1, 2}
+                and row.get("_complete_preference_response") is True):
+            return {key: deepcopy(row[key]) for key in ("messages", "tools") if key in row and row[key]}
         if target == "rlaif":
             payload = {key: row[key] for key in ("prompt", "chosen", "rejected")}
             if row.get("tools"):
@@ -403,7 +406,7 @@ class WorkflowReviewRepair:
                 feedback["instruction"] = ("Return the complete current protocol-4 phase contract. Copy only request.scope.scope_sha256 "
                     "as scope_sha256; use only current target_units unit_id values and actual challenge issue ids. "
                     "Do not return scope, field, candidate quote, or a different phase's fields.")
-            if transport_version == 1:
+            if transport_version == 1 and request.get("claim_review_protocol_version") == 4:
                 if "review_window" in request:
                     feedback["instruction"] = feedback["instruction"].replace(
                         "request.scope.scope_sha256", "request.review_window.sha256")
@@ -414,6 +417,11 @@ class WorkflowReviewRepair:
                     "declare insufficient support; never paraphrase a quotation or invent a supporting condition. "
                     "Resubmit the complete window, including the unchanged verdict contract and all units.")
             if boundaries is not None and previous_error is not None:
+                if self.recipe.get("claim_context_quote_feedback_version") == 1:
+                    feedback["instruction"] += ("\nactual_context_verbatim is the exact existing referenced message, not a proposed rewrite. "
+                        "Copy a true contiguous substring when quoting. A paraphrase is not a quotation. "
+                        "Keep candidate reasoning/code references in candidate premises; never invent a context quotation. "
+                        "If evidence is missing, keep it insufficient. Every original validator still applies.")
                 feedback["instruction"] += "\nSchema-only diagnostic: " + canonical({
                     "error_code": previous_error, **boundaries, **previous_detail})
             data = request if attempt == 1 else {**request, "format_repair": feedback}
@@ -435,6 +443,9 @@ class WorkflowReviewRepair:
                 if transport_version == 1 and request.get("claim_review_protocol_version") == 4:
                     from ..domain.wire_schema import review_wire_diagnostics
                     previous_detail.update(review_wire_diagnostics(raw, request))
+                    if self.recipe.get("claim_context_quote_feedback_version") == 1:
+                        from ..domain.context_quote_feedback import context_quote_feedback
+                        previous_detail.update(context_quote_feedback(raw, request))
                 audit["schema_failures"].append({"phase": phase, "message_index": request["scope"]["message_index"],
                     "attempt": attempt, "code": previous_error, "checkpoint": reference})
                 audit["status"] = "invalid_after_retry" if attempt == 2 else "format_retry_pending"
@@ -594,6 +605,17 @@ class WorkflowReviewRepair:
         return self._claim_refutation_release(row, check)
 
     def _review_score(self, target, row, evidence, key, instruction):
+        if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}:
+            from lib.bootstrap.automatic_review import preference_assessment
+            selected, check, _ = preference_assessment(self).execute(row, evidence, instruction=instruction)
+            # Pair reviews now own two separately bound response audits.
+            # An old top-level audit must not judge a newly repaired pair.
+            row.pop("claim_review", None)
+            for field in ("preference", "preference_assessment", "learner_context_check"):
+                row.pop(field, None)
+                if field in selected:
+                    row[field] = deepcopy(selected[field])
+            return check
         self.state["stages"]["review"]["phase"] = "scoring"
         self.save(force=False)
         claim_version = self.recipe.get("claim_review_protocol_version")
@@ -811,8 +833,14 @@ class WorkflowReviewRepair:
         payload = self._review_payload(target, row)
         rules = {"instruction": _authored_repair_rules(self.recipe)} if _authored_cot(target, row) else {}
         if target in PREFERENCE_TARGETS and self.recipe.get("claim_review_transport_version") == 1:
-            from ..domain.preference_feedback import PREFERENCE_REPAIR_CONTRACT
-            rules["instruction"] = rules.get("instruction", "") + PREFERENCE_REPAIR_CONTRACT
+            if self.recipe.get("preference_design_version") in {1, 2}:
+                from ..domain.preference_candidates import contrastive_repair_contract
+                contract = contrastive_repair_contract(self.recipe.get("preference_design"),
+                    version=self.recipe["preference_design_version"])
+            else:
+                from ..domain.preference_feedback import PREFERENCE_REPAIR_CONTRACT
+                contract = PREFERENCE_REPAIR_CONTRACT
+            rules["instruction"] = rules.get("instruction", "") + contract
         language_requirements = _authored_reasoning_language_requirements(self.recipe, target, row)
         current_style = _current_review_generation_style(self, target, row, language_requirements)
         _validate_reasoning_depth_input_control(self, target, row, current_style)
@@ -856,6 +884,24 @@ class WorkflowReviewRepair:
              "qa_contract": row.get("qa_contract"),
              "generation_style": current_style,
              **_authored_review_audit(target, row)}, evidence)
+        if self.recipe.get("claim_repair_feedback_version") == 1:
+            from ..domain.claim_repair_feedback import claim_repair_feedback
+            feedback = claim_repair_feedback(payload, evidence, row.get("claim_review"))
+            if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}:
+                from ..domain.preference_candidates import response_projection
+                assessment = row.get("preference_assessment", {})
+                data["preference_design"] = self.recipe["preference_design"]
+                data["preference_design_feedback"] = {name: deepcopy(assessment[name])
+                    for name in ("design_issue", "contrast") if name in assessment}
+                responses = assessment.get("responses", [])
+                if responses:
+                    projection = response_projection(row, row["chosen"])
+                    feedback = claim_repair_feedback(self._review_payload("sft", projection), evidence,
+                        responses[0].get("claim_review"))
+                    if feedback:
+                        feedback["scope"] = "chosen"
+            if feedback is not None:
+                data["claim_repair_feedback"] = feedback
         warmup_scope = _authored_reasoning_warmup_scope(self.recipe, target, row)
         if warmup_scope:
             data["authored_reasoning_warmup"] = warmup_scope
@@ -924,6 +970,9 @@ class WorkflowReviewRepair:
                 updated["reasoning_revision_audits"] = [*deepcopy(row.get("reasoning_revision_audits", [])), *audits]
         if issue := (_payload_issue(target, updated) or _row_training_surface_issue(target, updated, self.recipe)):
             return row, issue
+        if target in PREFERENCE_TARGETS and self.recipe.get("preference_design_version") in {1, 2}:
+            from ..domain.preference_candidates import preserve_preference_response_history
+            preserve_preference_response_history(row, updated)
         if evidence["source_kind"] == "document":
             spans = _evidence_quote_spans(evidence, value.get("quotes", []))
             if spans is None:

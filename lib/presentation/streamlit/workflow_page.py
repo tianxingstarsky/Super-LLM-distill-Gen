@@ -53,6 +53,7 @@ from lib.presentation.streamlit.docling_settings import docling_snapshot, doclin
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas, node_display_label
 from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 from lib.presentation.streamlit.workflow_cpt_settings import cpt_processing_snapshot, render_cpt_settings, cpt_vision_unconfirmed
+from lib.presentation.streamlit.workflow_preference_settings import render_preference_settings, preference_design_snapshot
 from lib.presentation.streamlit.workflow_generation_settings import (
     STYLE_LABELS, TRIM_LABELS, generation_snapshot, generation_issues, generation_summary, reasoning_route_description,
     render_generation_settings, render_trim_toggle, render_trim_settings, trim_snapshot, trim_has_issue,
@@ -1281,7 +1282,8 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                               "训练目标": [TARGET_LABELS.get(target, target.upper()) for target in recipe.get("targets", [])],
                               "任务数": recipe.get("tasks"), "处理上限": recipe.get("max_units")}))
         with st.expander("技术详情：完整配方 JSON"):
-            st.json(recipe)
+            from lib.presentation.streamlit.workflow_recipe_controls import render_recipe_download
+            render_recipe_download(recipe, run_id)
 
     reveal = st.session_state.get(reveal_key)
     if isinstance(reveal, dict) and reveal.get("node") == selected_stage:
@@ -1854,9 +1856,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             with settings_tab:
                 if selected_node in {"preference", "review", "package"} and selected_preferences(targets):
                     st.caption(preference_route(selected_node, review_repair))
-                    if selected_node != "review":
+                    if selected_node == "package":
                         st.html(preference_details_html(targets, language=st.session_state.get("ui_language", "zh")))
                     if selected_node == "preference":
+                        render_preference_settings(ws, save_field=_save_draft_value)
                         st.button("配置评分与修正 →", key=f"preference-open-review:{ws}", width="stretch",
                                   on_click=_select_setup_node, args=(selection_key, "review"))
                     if selected_node == "package":
@@ -2372,6 +2375,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         qa_director=qa_director,
                                         package_review={"enabled": False} if cpt_only else package_review,
                                         cpt_processing=cpt_processing, review_repair=None if cpt_only else review_repair,
+                                        preference_design=preference_design_snapshot(ws) if selected_preferences(targets) else None,
                                         node_prompts=node_prompts,
                                         agent_experience=agent_experience,
                                         reasoning_trim=reasoning_trim,

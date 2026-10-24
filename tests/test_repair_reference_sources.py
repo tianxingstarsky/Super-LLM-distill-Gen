@@ -99,3 +99,18 @@ def test_reference_configuration_does_not_start_new_generation():
     value["repair_inputs"] = None
     with pytest.raises(ValueError):
         validate_creation(**value, sources=["source.txt"])
+
+
+def test_review_session_can_prepare_pinned_references_before_user_selects_parent_candidates():
+    value=options();value['review_repair']={'mode':'auto','max_rounds':1,'reference_sources':True}
+    value['repair_inputs']=None;value['node_generation']={}
+    assert validate_creation(**value,sources=['source.txt'],preparing_review_session=True)[0]==['cot']
+    # Execution still requires concrete authenticated selections. This flag
+    # is not accepted by create_run or the public run application.
+    with pytest.raises(ValueError,match='review_reference_sources_require_repair_and_parsed_text'):
+        validate_creation(**value,sources=['source.txt'])
+    with pytest.raises(ValueError,match='review_reference_sources_require_repair_and_parsed_text'):
+        validate_creation(**value,sources=['source.pdf'],preparing_review_session=True)
+    native=options();native['review_repair']['reference_sources']=True;native['repair_inputs']=None
+    with pytest.raises(ValueError,match='native_regeneration_requires_authenticated_cot_repair'):
+        validate_creation(**native,sources=['source.txt'],preparing_review_session=True)

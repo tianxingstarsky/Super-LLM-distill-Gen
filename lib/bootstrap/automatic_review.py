@@ -4,7 +4,8 @@ from lib.contexts.review.infrastructure.automatic_adapter import CheckpointedRev
 
 
 def automatic_review(runtime):
-    return ReviewCandidate(CheckpointedReviewAdapter(runtime), runtime.recipe)
+    from lib.contexts.review.api import ReviewPreferenceView
+    return ReviewPreferenceView(ReviewCandidate(CheckpointedReviewAdapter(runtime), runtime.recipe), runtime.recipe)
 
 
 def review_collections(runtime):
@@ -23,3 +24,15 @@ def claim_windows(runtime, **options):
     from lib.contexts.review.api import ReviewClaimWindows
     from lib.contexts.review.infrastructure.claim_window_adapter import CheckpointedClaimWindowAdapter
     return ReviewClaimWindows(CheckpointedClaimWindowAdapter(runtime, **options))
+
+
+def training_format_lineage(runtime):
+    from lib.contexts.review.api import AuthorizeTrainingFormatView
+    from lib.contexts.review.infrastructure.format_lineage import SealedFormatLineageAdapter
+    return AuthorizeTrainingFormatView(SealedFormatLineageAdapter(runtime))
+
+
+def preference_assessment(runtime):
+    from lib.contexts.review.api import AssessPreferencePair
+    from lib.contexts.review.infrastructure.preference_assessment import CheckpointedPreferenceAssessmentAdapter
+    return AssessPreferencePair(CheckpointedPreferenceAssessmentAdapter(runtime), runtime.recipe)
