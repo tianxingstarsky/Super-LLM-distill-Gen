@@ -20,6 +20,8 @@ from lib.presentation.streamlit.model_scheduling_controls import render_run_sche
 from lib.domain.human_round_projection import project_feedback_branch
 from lib.domain.workflow_targets import TRAINING_FIELDS, training_record
 from lib.presentation.streamlit.review_navigation import return_to_task
+from lib.presentation.streamlit.selection_labels import unique_choice_labels
+from lib.domain.workflow_delivery import has_deliverable_results
 
 
 WORKSPACE_STYLE = """<style>
@@ -228,9 +230,11 @@ def _render_rework_collection(application, session, context, begin, *, active):
     if not available and status not in {"pending", "needs_revision", "all"}:
         return
     with st.form(f"rework-batch:{context}:{status}:{offset}"):
+        choice_labels = unique_choice_labels({identity: str(row["target"]).upper() + " · " +
+            str(row.get("preview") or row.get("question_preview") or row.get("answer_preview")
+                or row.get("question") or row["candidate_id"])[:90] for identity, row in available.items()})
         selected = st.multiselect("本页返工结果", list(available),
-            format_func=lambda value: UntranslatedText(str(available[value]["target"]).upper() + " · " +
-                str(available[value].get("preview") or available[value].get("question_preview") or available[value].get("answer_preview") or available[value].get("question") or available[value]["candidate_id"])[:90]))
+            format_func=lambda value: UntranslatedText(choice_labels[value]))
         instruction = st.text_area("本批共同修正要求（可选）", max_chars=6000, height=90,
             help="补充本批统一要求。每条已保存的问题意见仍会分别送给修正模型。")
         st.caption("AI 批量返工只修正已保存的候选并重新评分，每批最多 200 条。其余问题保留；人工评分仍在结果审查中逐条提交。")
@@ -475,6 +479,13 @@ def _live_workflow(workflows, backends, session, round_row, context, human_appli
         render_stream_output(workflows, run_id, selected, reader_height=240)
 
 
+def _open_round_report(run_id, target):
+    return_to_task(run_id)
+    st.session_state[f"workflow-result-view:{run_id}"] = "样本报告"
+    st.session_state[f"workflow-report-target:{run_id}"] = target
+    st.session_state[f"task-center-focus:{st.session_state.get('ws', 'default')}"] = True
+
+
 def render_human_workspace(application, workflows, begin, workspace, *, session_id=None, backend_application=None, navigate=None):
     st.html(WORKSPACE_STYLE)
     try:
@@ -513,8 +524,9 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
             if session_id not in choices:
                 choices.insert(0, session_id)
             names = {row["id"]: row.get("name", row["id"][:8]) for row in rows}
+            history_labels = unique_choice_labels({value: names.get(value, session.get("name", "")) for value in choices})
             selected_session = st.selectbox("历史工作", choices, index=choices.index(session_id),
-                format_func=lambda value: UntranslatedText(names.get(value, session.get("name", ""))), key=f"human-history:{session_id}")
+                format_func=lambda value: UntranslatedText(history_labels[value]), key=f"human-history:{session_id}")
             if selected_session != session_id:
                 st.session_state[f"human-selected:{workspace}"] = selected_session
                 st.query_params["human"] = selected_session
@@ -610,8 +622,19 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
                 translate_label("人工评分与修正" if row.get("kind") == "manual_review" else
                     "候选修正" if row.get("kind") == "revision" else "问答增强", language) for index, row in enumerate(rounds)}
             selected_round = st.selectbox("结果版本", round_ids, format_func=round_labels.__getitem__, key=selected_round_key)
-            targets = list(session["blueprint"]["targets"])
-            target = st.segmented_control("结果类型", targets, default=targets[0], key=f"human-target:{context}:{selected_round}") or targets[0]
+            selected_round_row = next(row for row in rounds if row["id"] == selected_round)
+            targets = list((selected_round_row.get("state") or {}).get("targets") or session["blueprint"]["targets"])
+            target_key = f"human-target:{context}:{selected_round}"
+            if st.session_state.get(target_key) not in targets:
+                st.session_state[target_key] = targets[0]
+            target = st.segmented_control("结果类型", targets, default=targets[0], key=target_key) or targets[0]
+            if has_deliverable_results(selected_round_row.get("state", {})) and not selected_round_row.get("active"):
+                from lib.presentation.streamlit.review_navigation import open_package
+                report_action, export_action = st.columns(2, gap="small")
+                report_action.button("查看本轮报告", key=f"human-report:{context}:{selected_round}", width="stretch",
+                    on_click=_open_round_report, args=(selected_round_row["run_id"], target))
+                export_action.button("导出本轮结果", key=f"human-export:{context}:{selected_round}", width="stretch",
+                    on_click=open_package, args=(selected_round_row["run_id"], target))
             offset_key = f"human-offset:{context}:{selected_round}:{target}"
             offset = st.session_state.get(offset_key, 0)
             try:
@@ -632,8 +655,10 @@ def render_human_workspace(application, workflows, begin, workspace, *, session_
                 st.button("下一组结果", key=f"human-next:{context}:{selected_round}:{target}", disabled=not result["has_more"],
                     on_click=st.session_state.update, args=({offset_key: offset + 10},), width="stretch")
             by_id = {row["candidate_id"]: row for row in candidates}
+            candidate_labels = unique_choice_labels({identity: str(row.get("question", identity))[:90]
+                                                     for identity, row in by_id.items()})
             selected_id = st.selectbox("选择结果", list(by_id), key=f"human-result:{context}:{selected_round}:{target}:{offset}",
-                format_func=lambda value: UntranslatedText(str(by_id[value].get("question", value))[:90]))
+                format_func=lambda value: UntranslatedText(candidate_labels[value]))
             row = by_id[selected_id]
             st.session_state[f"human-branch-result:{context}"] = row
             try:

@@ -93,12 +93,17 @@ def render_delivery_goal(workspace, targets, source_mode, labels, number_input, 
              if synthetic else st.session_state.get(count_key, draft.get(count_key, 1000)))
     overrides = st.session_state.get(f"workflow-production-goals:{workspace}", {})
     goals = {target: int(overrides.get(target, count)) for target in synthetic}
+    active_overrides = {target: goals[target] for target in synthetic if target in overrides}
+    if active_overrides:
+        language = st.session_state.get("ui_language", "zh")
+        st.info("已启用单独上限，实际按下方各类数量执行。")
+        st.caption(" · ".join(f"{translate_label(labels[target], language)} {value:,}"
+                              for target, value in active_overrides.items()))
+        st.button("统一使用上方数量", key=f"production-goals-reset:{workspace}",
+                  on_click=_reset_goals, args=(workspace, save), width="stretch")
     if len(synthetic) > 1 or any(target in overrides for target in synthetic):
-        with st.expander("分别设置各类上限"):
+        with st.expander("分别设置各类上限", expanded=bool(active_overrides)):
             language = st.session_state.get("ui_language", "zh")
-            if overrides:
-                st.button("统一使用上方数量", key=f"production-goals-reset:{workspace}",
-                          on_click=_reset_goals, args=(workspace, save))
             for target in synthetic:
                 widget_key = f"production-goal-editor:{workspace}:{target}"
                 st.session_state[widget_key] = int(overrides.get(target, count))
@@ -169,6 +174,8 @@ def render_delivery_progress(state):
         st.caption(translate_label("本机算术题生成空间已用尽，本分支正常停止，不会补入重复题。已生成结果保留，可继续后续步骤或导出。", language))
     if not isinstance(production, dict):
         return
+    inputs = state.get("input_summary", {})
+    no_usable_input = bool(inputs.get("units") and not inputs.get("ready") and inputs.get("quarantined"))
     goals = production.get("goals", {})
     if goals:
         soft = production.get("version", 1) >= 2
@@ -178,10 +185,12 @@ def render_delivery_progress(state):
             label = f"{target.upper()} · {eligible:,} / {goal:,}"
             reason = progress.get("stop_reason")
             if reason:
-                label += " · " + translate_label(STOP_LABELS.get(reason, "待处理"), language)
+                stop_label = ("没有可用输入" if no_usable_input and reason == "source_coverage_complete"
+                              else STOP_LABELS.get(reason, "待处理"))
+                label += " · " + translate_label(stop_label, language)
             st.progress(min(1.0, eligible / goal), text=label)
     reason = production.get("stop_reason")
-    if reason in STOP_LABELS and reason not in {"goal_reached", "expectation_reached", "arithmetic_space_exhausted"}:
+    if reason in STOP_LABELS and reason not in {"goal_reached", "expectation_reached", "arithmetic_space_exhausted"} and not no_usable_input:
         message = translate_label(STOP_LABELS[reason], language)
         (st.caption if state.get("status") == "completed" else st.warning)(message)
     elif state.get("status") == "running":

@@ -53,6 +53,20 @@ def test_delivery_progress_does_not_duplicate_internal_request_error_codes():
     assert "10 / 100" in ui.get("progress")[0].proto.text
 
 
+def test_empty_input_is_not_described_as_successful_source_coverage():
+    def screen():
+        from lib.presentation.streamlit.workflow_production_settings import render_delivery_progress
+        render_delivery_progress({"status": "needs_attention",
+            "input_summary": {"units": 2, "ready": 0, "quarantined": 2},
+            "production": {"version": 2, "stop_reason": "source_coverage_complete", "goals": {
+                "sft": {"goal": 2, "eligible": 0, "stop_reason": "source_coverage_complete"}}}})
+    ui = AppTest.from_function(screen).run()
+    assert not ui.exception
+    assert "没有可用输入" in ui.get("progress")[0].proto.text
+    assert "当前素材已覆盖" not in ui.get("progress")[0].proto.text
+    assert not ui.warning  # The run header supplies the actionable warning once.
+
+
 def test_source_scope_keeps_million_capacity_without_a_fixed_candidate_mode():
     ui = AppTest.from_string(SCRIPT).run()
     ui.number_input(key="workflow-max-units:fixture").set_value(800000).run()
@@ -95,6 +109,21 @@ def test_existing_single_target_override_stays_visible_when_other_targets_remove
     assert not ui.exception
     assert ui.session_state["fixture-production"]["goals"] == {"sft": 500}
     assert any(item.key == "production-goal-editor:fixture:sft" for item in ui.number_input)
+
+
+def test_saved_individual_limit_is_explicit_before_starting_a_small_task(tmp_path):
+    creation_draft_application(tmp_path).replace({"workflow-count:fixture": 2,
+        "workflow-production-goals:fixture": {"sft": 1000}})
+    ui = AppTest.from_function(production_screen, args=(str(tmp_path),)).run()
+    assert not ui.exception
+    assert ui.session_state["fixture-production"]["goals"]["sft"] == 1000
+    assert any("已启用单独上限" in item.value for item in ui.info)
+    override = next(item for item in ui.expander if item.label == "分别设置各类上限")
+    assert override.proto.expanded
+    ui.button(key="production-goals-reset:fixture").click().run()
+    assert not ui.exception
+    assert ui.session_state["fixture-production"]["goals"] == {"sft": 2, "dpo": 2}
+    assert not any("已启用单独上限" in item.value for item in ui.info)
 
 
 def test_legacy_copied_candidate_draft_creates_a_quality_stopping_new_run(tmp_path):

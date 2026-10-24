@@ -9,6 +9,16 @@ from typing import Any
 
 
 ZH_EN: dict[str, str] = {
+    "查看本轮报告": "View this round's report",
+    "导出本轮结果": "Export this round's results",
+    "本任务已有人工审核版本，可先下载审核结果。下方自动质检包保留审核前的候选。": "A human-reviewed version is available for this task. Download it here. The automatic package below keeps the candidates from before human review.",
+    "没有可用输入": "No usable input",
+    "工作流内部处理出错，已保留断点。请查看所选节点的运行日志，修复后重试。": "A workflow processing error occurred. Check the selected node's log, fix the issue, then resume from the saved checkpoint.",
+    "指导员统计不完整，已停止打包。请保留任务与断点，检查指导员运行记录后重试。": "Director statistics are incomplete. Packaging stopped. Keep the task and checkpoints, check the director log, then retry.",
+    "没有可用的资料正文，生成未执行。请查看输入隔离记录，再复制配置调整来源或解析方式。": "No usable source text is available. Generation did not run. Check the quarantined inputs, then copy the settings to change the source or parser.",
+    "上一个节点": "Previous node",
+    "下一个节点": "Next node",
+    "已启用单独上限，实际按下方各类数量执行。": "Individual limits are active. The quantities below will be used.",
     "导入对话保留原有问题与轮次，无需配置对话指导员。": "Imported conversations keep their original questions and turns. No dialogue director is needed.",
     "重新选入本次资料": "Select for this task again",
     "会话已保存在资料缓存中，目前未全部选中。可以重新加入本次任务，无需重新上传。": "The conversations are cached, but some are not selected. Add them to this task again without uploading.",

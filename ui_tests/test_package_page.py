@@ -16,6 +16,28 @@ from streamlit.testing.v1 import AppTest
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_current_human_release_is_shown_before_the_original_candidate_package():
+    from tests.test_review_navigation import PACKAGE_SCRIPT
+    script = PACKAGE_SCRIPT.replace("def list_releases(self): return []", '''def list_releases(self):
+        return [dict(id=identity, name='approved-v0001', kind='review', run_id=run,
+                     path='/local/' + identity, created_at='2026-10-24', verified=True,
+                     target='orpo', counts=dict(approved=1, rejected=1), unverified_files=[],
+                     files=[dict(name='review.json',path='/local/review.json',bytes=100,sha256='a'*64),
+                            dict(name='orpo.jsonl',path='/local/orpo.jsonl',bytes=20,sha256='b'*64)])
+                for identity,run in [('chosen-release','chosen-run'),('other-release','other-run')]]
+    def release_file(self, release_id, filename): return b'{}' ''')
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    picker = ui.selectbox(key="package-release:fixture")
+    assert picker.value == "chosen-release"
+    assert len(set(picker.options)) == 2
+    assert ui.selectbox(key="package-release-file:fixture:chosen-release").value == "orpo.jsonl"
+    assert any("自动质检包保留审核前的候选" in item.value for item in ui.info)
+    markup = "\n".join(str(item.value) for item in ui.get("html"))
+    assert markup.index("已有本地发布版本") < markup.index("交付包与所含文件")
+    assert any(item.label == "校验并下载文件" for item in ui.download_button)
+
+
 def wait_for_package(app, run_id):
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:

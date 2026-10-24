@@ -121,10 +121,13 @@ class FilesystemRunSession:
             if request_failure is not None:
                 runtime.state["request_failure"] = request_failure
         if runtime.production_enabled():
-            code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]+", str(error)) else failure["code"]
+            # The request classifier's fallback is not evidence of an API
+            # failure. Keep internal exceptions distinguishable in the UI.
+            if not isinstance(error, ValueError) and failure["code"] != "model_request_failed":
+                code = failure["code"]
             if "production" in runtime.state:
                 runtime.state["production"].update(status="paused", stop_reason=code)
-                if failure["code"] not in {"checkpoint_integrity_error", "source_snapshot_changed",
+                if code not in {"checkpoint_integrity_error", "source_snapshot_changed",
                                            "recipe_changed_create_new_run", "production_round_integrity_error",
                                            "production_review_integrity_error"}:
                     runtime._production_partial_export("paused", code)

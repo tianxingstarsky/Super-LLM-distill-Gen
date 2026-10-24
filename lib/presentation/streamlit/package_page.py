@@ -14,6 +14,7 @@ from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
 from lib.presentation.streamlit.sample_preview import render_sample_preview
 from lib.presentation.streamlit.package_style import PACKAGE_STYLE
 from lib.presentation.streamlit.shared import page_header
+from lib.presentation.streamlit.selection_labels import unique_choice_labels
 from lib.presentation.streamlit.i18n import UntranslatedText
 from lib.presentation.streamlit.workflow_package_review_report import package_review_report_html
 from lib.presentation.streamlit.review_navigation import (
@@ -173,12 +174,15 @@ def _render_releases(application: DatasetApplication, releases: list[dict]) -> N
         st.html(_heading("◈", "已有本地发布版本",
                          f"本机找到 {len(releases)} 个版本目录 · {verified} 个版本通过文件校验"))
         labels = {row["id"]: row for row in releases}
+        english = st.session_state.get("ui_language") == "en"
+        choice_labels = unique_choice_labels({key:
+            (("Human reviewed · " if english else "人工审核 · ") if row["kind"] == "review"
+             else ("Previous export · " if english else "历史导出 · "))
+            + row["name"] + ("" if row["verified"] else " · Needs checking" if english else " · 需检查")
+            for key, row in labels.items()})
         release_id = st.selectbox(
             "选择本地发布版本", list(labels), key=f"package-release:{st.session_state['ws']}",
-            format_func=lambda key: (
-                ("人工审核 · " if labels[key]["kind"] == "review" else "历史导出 · ")
-                + labels[key]["name"] + ("" if labels[key]["verified"] else " · 需检查")
-            ),
+            format_func=lambda key: UntranslatedText(choice_labels[key]),
         )
         release = labels[release_id]
         kind = "人工审核发布" if release["kind"] == "review" else "历史导出发布"
@@ -485,6 +489,20 @@ def render_package_page(application: DatasetApplication) -> None:
     if package:
         st.session_state[package_key] = package
 
+    reviewed = [row for row in releases if row.get("run_id") == run_id and row.get("kind") == "review"]
+    if reviewed:
+        preferred = max(reviewed, key=lambda row: (str(row.get("created_at", "")), row["id"]))
+        signature_key = f"package-reviewed-focus:{st.session_state['ws']}"
+        signature = (run_id, preferred["id"])
+        if st.session_state.get(signature_key) != signature:
+            st.session_state[f"package-release:{st.session_state['ws']}"] = preferred["id"]
+            filename = str(preferred.get("target", "")) + ".jsonl"
+            if any(row["name"] == filename for row in preferred.get("files", [])):
+                st.session_state[f"package-release-file:{st.session_state['ws']}:{preferred['id']}"] = filename
+            st.session_state[signature_key] = signature
+        st.info("本任务已有人工审核版本，可先下载审核结果。下方自动质检包保留审核前的候选。")
+        _render_releases(application, releases)
+
     left, right = st.columns([1.88, 1], gap="large")
     with left:
         with st.container(border=True):
@@ -593,4 +611,5 @@ def render_package_page(application: DatasetApplication) -> None:
                         + _safe(recent.get("name", "未命名任务")) + '">' + _safe(recent.get("name", "未命名任务"))
                         + '</strong>' + _badge(str(recent.get("status", "completed"))) + '<small>'
                         + _safe(targets) + ' · ' + _safe(_stamp(recent.get("updated_at"))) + '</small></div>')
-    _render_releases(application, releases)
+    if not reviewed:
+        _render_releases(application, releases)

@@ -74,6 +74,7 @@ WORKBENCH_STYLE = """<style>
 .st-key-workbench-node-header button:hover {background:linear-gradient(180deg,#fff,#e8f3ff);border-color:#a8c8ee;color:#185fad;
   box-shadow:inset 0 1px 0 #fff,0 4px 9px #3d78b21a;transform:translateY(-1px)}
 .st-key-workbench-node-header button:active {transform:translateY(1px);box-shadow:inset 0 2px 4px #315e8b14}
+.st-key-workbench-node-navigation button {min-height:30px;font-size:12px;padding:3px 9px}
 .st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab-list"],[role="tablist"]) {gap:24px}
 .st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab"],[role="tab"]) {font-size:14px;height:42px;font-weight:550}
 .st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab-panel"],[role="tabpanel"]) {padding-top:16px}

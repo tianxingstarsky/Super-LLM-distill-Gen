@@ -164,3 +164,27 @@ def test_mixed_or_unconfirmed_json_does_not_skip_document_guidance(tmp_path):
     ui.multiselect(key="workflow-sources:fixture:Agent 上下文").set_value([str(recorded)]).run()
     assert not ui.exception
     assert not any(button.key == "fixture-node:director" for button in ui.button)
+
+
+def test_adjacent_node_controls_keep_the_draft_and_stop_at_graph_boundaries(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("The corpus is reused by the dialogue generator.", encoding="utf-8")
+    ui = AppTest.from_string(_script(source)).run()
+    ui.selectbox(key=PRESET).set_value("自选目标").run()
+    ui.pills(key="workflow-targets:fixture:自选目标").set_value(["cpt", "sft"]).run()
+    ui.multiselect(key="workflow-sources:fixture:文档资料").set_value([str(source)]).run()
+    ui.text_input(key="workflow-name:fixture").set_value("Keep my task name").run()
+    ui.button(key="fixture-node:ingest").click().run()
+    bindings = deepcopy(ui.session_state["workflow-node-bindings:fixture"])
+    assert ui.button(key="workflow-previous-config:fixture").disabled
+    ui.button(key="workflow-next-config:fixture").click().run()
+    assert not ui.exception
+    assert ui.session_state["workflow-setup-node:fixture"] == "cpt"
+    assert ui.session_state["canvas-open:setup-canvas:fixture"]
+    ui.button(key="workflow-previous-config:fixture").click().run()
+    assert ui.session_state["workflow-setup-node:fixture"] == "ingest"
+    assert ui.session_state["workflow-node-bindings:fixture"] == bindings
+    assert ui.text_input(key="workflow-name:fixture").value == "Keep my task name"
+    ui.button(key="fixture-node:package").click().run()
+    assert not ui.exception
+    assert ui.button(key="workflow-next-config:fixture").disabled

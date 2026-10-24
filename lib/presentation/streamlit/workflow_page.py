@@ -160,6 +160,8 @@ def _save_sft_output_style(workspace: str) -> None:
 
 
 def _workflow_error(error) -> str:
+    if str(error) in {"KeyError", "TypeError", "AttributeError", "AssertionError"}:
+        return "工作流内部处理出错，已保留断点。请查看所选节点的运行日志，修复后重试。"
     if str(error) in REASONING_ERRORS:
         return REASONING_ERRORS[str(error)]
     if str(error) in DOCLING_ERRORS:
@@ -219,6 +221,7 @@ def _workflow_error(error) -> str:
         "service_timeout": "模型请求超时，已保留断点。",
         "service_connection_failed": "模型连接失败，已保留断点。",
         "model_request_failed": "模型调用未能完成，请检查服务后从断点继续。",
+        "director_audit_incomplete": "指导员统计不完整，已停止打包。请保留任务与断点，检查指导员运行记录后重试。",
         "model_request_queue_timeout": "等待模型共享额度超时，已保留断点。请在节点检查并发上限、排队时长和其他运行任务后继续。",
         "invalid_model_scheduler_state": "共享调度记录无法读取，已停止后续请求。请检查本机存储后从断点继续。",
         "human_augmentation_requires_director": "人工增强的生成流程需要指导模型，请检查工作流中的对话指导员配置。",
@@ -942,7 +945,10 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
     elif status == "completed":
         st.success("生产已结束，按实际合格数量交付；训练文件与质量报告已生成。")
     elif status == "needs_attention":
-        if (state.get("production") or {}).get("version", 1) >= 2:
+        inputs = state.get("input_summary", {})
+        if inputs.get("units") and not inputs.get("ready") and inputs.get("quarantined"):
+            st.warning("没有可用的资料正文，生成未执行。请查看输入隔离记录，再复制配置调整来源或解析方式。")
+        elif (state.get("production") or {}).get("version", 1) >= 2:
             st.warning("本次生产有未完成的处理，请查看停止原因与质量报告；已合格结果仍可导出。")
         elif state.get("production"):
             st.warning("运行已结束，部分合格目标尚未达到。已合格结果可导出；调整配置后可创建新任务。")
@@ -1243,16 +1249,15 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
         else:
             st.caption("最终质量汇总在评分与打包完成后出现；已保存的阶段结果可在上方持续查看。")
         if summary.get("quarantined"):
-            with st.expander(f"输入隔离记录 · {summary['quarantined']}"):
-                if st.toggle("加载隔离记录", key=f"load-inputs:{run_id}"):
-                    try:
-                        rejected = [{"ID": u["id"], "定位": u.get("location", ""), "原因": u.get("reason")}
-                                    for u in application.quarantined_inputs(run_id, limit=100)]
-                    except (OSError, ValueError, KeyError):
-                        st.error("无法读取输入隔离记录，请检查本次任务文件。")
-                    else:
-                        st.caption("最多显示前 100 条；完整记录保留在本次产物中。")
-                        st.dataframe(rejected, hide_index=True)
+            with st.expander(f"输入隔离记录 · {summary['quarantined']}", expanded=not summary.get("ready")):
+                try:
+                    rejected = [{"ID": u["id"], "定位": u.get("location", ""), "原因": _workflow_error(u.get("reason", ""))}
+                                for u in application.quarantined_inputs(run_id, limit=100)]
+                except (OSError, ValueError, KeyError):
+                    st.error("无法读取输入隔离记录，请检查本次任务文件。")
+                else:
+                    st.caption("最多显示前 100 条；完整记录保留在本次产物中。")
+                    st.dataframe(rejected, hide_index=True)
     with tabs[1]:
         selected_events = [event for event in state.get("events", []) if event.get("stage") == selected_stage]
         st.html('<div class="df-run-section"><div><strong>运行日志</strong>'
@@ -1827,6 +1832,17 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.button("✕", key=f"workflow-close-config:{ws}", help="收起节点配置",
                               on_click=st.session_state.update,
                               args=({f"canvas-open:setup-canvas:{ws}": False},), width="stretch")
+                with st.container(key="workbench-node-navigation"):
+                    node_index = graph_nodes.index(selected_node)
+                    previous_node, next_node = st.columns(2, gap="small")
+                    previous_node.button("上一个节点", icon=":material/arrow_back:",
+                        key=f"workflow-previous-config:{ws}", width="stretch", disabled=node_index == 0,
+                        on_click=_select_setup_node,
+                        args=(selection_key, graph_nodes[max(0, node_index - 1)]))
+                    next_node.button("下一个节点", icon=":material/arrow_forward:",
+                        key=f"workflow-next-config:{ws}", width="stretch", disabled=node_index == len(graph_nodes) - 1,
+                        on_click=_select_setup_node,
+                        args=(selection_key, graph_nodes[min(len(graph_nodes) - 1, node_index + 1)]))
             route = reasoning_route_description(selected_node, targets)
             if route:
                 st.caption(route)

@@ -7,6 +7,8 @@
 - `FilesystemRunSession`：运行锁、最新状态、快照核验、持久化结果、已过滤错误。
 - `CheckpointedBatchRuntime`：输入记录、磁盘候选、单阶段执行、最终打包及完成事实。
 
+生产失败保留明确的内部异常类型或业务错误码；只有已分类的模型请求错误才展示为服务故障。输入全部隔离的任务仍封存零产物报告，不补造指导员执行记录。回归见 `tests/test_director_delivery_audit.py`。
+
 它们连接旧 `TrainingWorkflowRuntime`，不决定普通批次的阶段顺序。该顺序属于 application。存储文件格式、恢复检查点和部分交付策略必须兼容历史任务。
 
 | 文件 | 责任 |

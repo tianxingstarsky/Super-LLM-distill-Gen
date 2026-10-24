@@ -303,3 +303,27 @@ def test_package_review_revalidates_artifacts_after_rendering_before_navigation(
     ui.button(key="package-review:chosen-run").click().run()
     assert not ui.exception and ui.error
     assert "preference-review-run:orpo" not in ui.session_state
+
+
+@pytest.mark.parametrize("target", ["sft", "cpt", "dpo", "orpo", "rlaif"])
+def test_review_return_button_restores_the_exact_report_context(target):
+    script = '''
+import streamlit as st
+from lib.presentation.streamlit.review_navigation import render_review_task_return
+st.session_state.setdefault('ws', 'fixture')
+st.session_state.setdefault('nav', '人工审核')
+st.session_state.setdefault('task-return:fixture:review:chosen:TARGET', {
+    'run_id': 'chosen', 'target': 'TARGET', 'view': '样本报告', 'limit': 12, 'page': 3})
+render_review_task_return('unrelated', 'TARGET')
+render_review_task_return('chosen', 'TARGET')
+'''.replace('TARGET', target)
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    assert len(ui.button) == 1
+    ui.button(key=f"review-return-task:fixture:chosen:{target}").click().run()
+    assert not ui.exception
+    assert ui.session_state["nav"] == "任务管理"
+    assert ui.session_state["workflow-open-run"] == {"workspace": "fixture", "run_id": "chosen"}
+    assert ui.session_state["workflow-result-view:chosen"] == "样本报告"
+    assert ui.session_state["workflow-report-target:chosen"] == target
+    assert ui.session_state["workflow-report-page:chosen"] == 3

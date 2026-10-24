@@ -11,6 +11,7 @@ from lib.contexts.review.api import CorpusReviewApplication
 from lib.presentation.streamlit.shared import page_header, review_empty_state
 from lib.presentation.streamlit.review_queue_controls import PAGE_SIZE, review_queue_controls
 from lib.presentation.streamlit.review_release_controls import render_active_release, render_review_release
+from lib.presentation.streamlit.review_navigation import render_review_task_return
 
 
 _DECISIONS = {"approved": "已通过", "rejected": "已退回", "skipped": "已跳过", "pending": "待审核"}
@@ -78,6 +79,7 @@ def render_corpus_review(application: CorpusReviewApplication, *, show_header: b
     labels = {row["id"]: row for row in runs}
     run_id = st.selectbox("CPT 工作流", list(labels), key="corpus-review-run",
                           format_func=lambda key: f"{labels[key]['name']} · {labels[key]['sample_count']} 条 · {key[:8]}")
+    render_review_task_return(run_id, "cpt")
     if render_active_release(application, run_id, widgets=st):
         return
     overview = application.queue(run_id, limit=1)

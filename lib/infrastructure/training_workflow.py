@@ -58,6 +58,7 @@ from lib.infrastructure.json_stream import iter_json_records, iter_source_json_r
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.generation_settings_file import preference_snapshot
 from lib.contexts.datasets.contracts import preferred_training_record
+from lib.contexts.workflows.contracts import director_delivery_audit
 from lib.infrastructure.brave_web_research import (
     search as search_web, validate_search_document, validate_search_topic_document,
 )
@@ -1709,7 +1710,8 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                     for key in ("enabled", "text_sha256", "origin")}
                     for scope, guidance in experience["scopes"].items()}}
         if self.recipe.get("qa_director", {}).get("enabled"):
-            report["qa_director"] = deepcopy(self.state.get("qa_director", {}))
+            report["qa_director"] = director_delivery_audit(
+                self.state.get("qa_director", {}), self.recipe["qa_director"]["type_weights"])
             report["qa_director"].update(
                 question_rules_sha256=digest(self.recipe["qa_director"]["question_rules"]),
                 answer_rules_sha256=digest(self.recipe["qa_director"]["answer_rules"]),

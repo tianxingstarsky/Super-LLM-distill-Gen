@@ -59,6 +59,19 @@ def return_to_task(run_id: str, *, destination: str | None = None, navigate=None
     st.session_state["workflow-open-run"] = {"workspace": workspace, "run_id": run_id}
 
 
+def render_review_task_return(run_id: str, target: str) -> None:
+    """Show a return action only for this queue's recorded task handoff."""
+    workspace = st.session_state.get("ws", "default")
+    destination = "review:" + run_id + ":" + target
+    saved = st.session_state.get(f"task-return:{workspace}:{destination}", {})
+    if saved.get("run_id") != run_id or saved.get("target") != target:
+        return
+    st.button("返回当前任务", icon=":material/arrow_back:",
+              key=f"review-return-task:{workspace}:{run_id}:{target}",
+              on_click=return_to_task, args=(run_id,), kwargs={"destination": destination},
+              help="返回此任务，保留报告或运行视图。")
+
+
 def open_verified_correction(application, human_application, run_id: str, target: str,
                              *, from_fragment: bool = False) -> None:
     """Open a preserved candidate collection only after rechecking this run."""

@@ -721,6 +721,30 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     assert (ws.out(name) / "workflows" / run_id / "cancel.json").exists()
 
 
+def test_zero_usable_inputs_show_reasons_without_an_extra_load_toggle(tmp_path, monkeypatch):
+    ws, name, source = setup_workspace(tmp_path, monkeypatch)
+    run_id = create_run(ws.out(name), sources=[source], targets=["cpt"])
+    from lib.infrastructure.training_workflow import atomic_json, read_json, run_path
+    folder = run_path(ws.out(name), run_id)
+    state = read_json(folder / "state.json")
+    state.update(status="needs_attention", input_summary={"units": 1, "ready": 0, "quarantined": 1})
+    state["stages"]["ingest"].update(status="completed", done=1, total=1)
+    atomic_json(folder / "state.json", state)
+    atomic_json(folder / "input_records.json", [{"id": "uncertain", "status": "quarantined",
+                                                "reason": "document_parse_uncertain"}])
+    app = AppTest.from_file(str(ROOT / "lib/webapp.py"), default_timeout=15)
+    app.session_state["ws"] = name
+    app.session_state["nav"] = "自动工作流"
+    app.run()
+    app.sidebar.button(key=f"sidebar-task:{name}:{run_id}").click().run()
+    assert not app.exception
+    assert any("没有可用的资料正文，生成未执行" in item.value for item in app.warning)
+    assert not any(item.key == f"load-inputs:{run_id}" for item in app.toggle)
+    isolation = next(item for item in app.expander if item.label == "输入隔离记录 · 1")
+    assert isolation.proto.expanded
+    assert any("模型无法确定该段的完整内容" in str(item.value) for item in app.dataframe)
+
+
 def test_run_inspector_distinguishes_reused_units_in_english(tmp_path, monkeypatch):
     ws, name, source = setup_workspace(tmp_path, monkeypatch)
     run_id = create_run(ws.out(name), sources=[source], targets=["cpt"])

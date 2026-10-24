@@ -312,6 +312,56 @@ def context(session_id):
     return f"human:{WORKSPACE}:{session_id}"
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_same_named_workspaces_do_not_switch_when_an_unrelated_control_submits(tmp_path, language):
+    first = create_workspace(tmp_path, name="人工问答增强")
+    second = create_workspace(tmp_path, name="人工问答增强")
+    ui = studio(tmp_path, first, language=language)
+    history = ui.selectbox(key=f"human-history:{first}")
+    assert len(set(history.options)) == 2
+    assert history.value == first
+    ui.button(key=f"human-refresh:{context(first)}").click().run()
+    ui.segmented_control(key=f"human-result-view:{context(first)}").set_value("issues").run()
+    assert not ui.exception and not ui.error
+    assert ui.selectbox(key=f"human-history:{first}").value == first
+    assert ui.session_state[f"human-selected:{WORKSPACE}"] == first
+    assert ui.session_state["fixture-begin-calls"] == []
+    assert second != first
+
+
+def test_repair_result_selector_uses_this_rounds_targets_instead_of_parent_blueprint(tmp_path, monkeypatch):
+    from lib.application.human_augmentation_service import HumanAugmentationApplication
+    session_id = create_workspace(tmp_path, draft={"enabled": True, "seeds": [
+        {"question": "When should the pump stop?", "answer": "Stop if its seal leaks."}]})
+    ui = studio(tmp_path, session_id)
+    ui.button(key=f"human-generate:{context(session_id)}").click().run()
+    round_row, _ = complete_round(tmp_path, session_id)
+    original = HumanAugmentationApplication.session
+
+    def inherited_blueprint(self, identifier):
+        session = original(self, identifier)
+        session["blueprint"]["targets"] = ["cpt", "sft"]
+        return session
+
+    monkeypatch.setattr(HumanAugmentationApplication, "session", inherited_blueprint)
+    key = f"human-target:{context(session_id)}:{round_row['id']}"
+    ui.session_state[key] = "cpt"
+    ui.run()
+    assert not ui.exception and not ui.error
+    assert ui.segmented_control(key=key).options == ["sft"]
+    assert ui.segmented_control(key=key).value == "sft"
+    assert any("pump" in str(item.value).lower() for item in ui.get("html"))
+    ui.button(key=f"human-report:{context(session_id)}:{round_row['id']}").click().run()
+    assert not ui.exception
+    assert ui.session_state["workflow-open-run"]["run_id"] == round_row["run_id"]
+    assert ui.session_state[f"workflow-result-view:{round_row['run_id']}"] == "样本报告"
+    assert ui.session_state[f"workflow-report-target:{round_row['run_id']}"] == "sft"
+    ui.button(key=f"human-export:{context(session_id)}:{round_row['id']}").click().run()
+    assert not ui.exception
+    assert ui.session_state[f"package-run:{WORKSPACE}"] == round_row["run_id"]
+    assert ui.session_state[f"package-target:{WORKSPACE}:{round_row['run_id']}"] == "sft"
+
+
 def design_key(session_id, index, field):
     return f"human-seed:{context(session_id)}:{index}:{field}"
 

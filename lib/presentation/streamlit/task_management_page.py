@@ -390,7 +390,7 @@ def render_task_management(application: WorkflowApplication, workspace_id: str,
 
         def quick_label(identifier):
             if identifier is None:
-                return translate("选择任务", language)
+                return translate("进行中与待处理", language)
             if identifier in {"group:attention", "group:active"}:
                 return translate("查看全部待处理任务" if identifier == "group:attention"
                                  else "查看全部未结束任务", language)
