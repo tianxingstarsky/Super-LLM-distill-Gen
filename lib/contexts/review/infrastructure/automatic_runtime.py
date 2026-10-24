@@ -217,7 +217,7 @@ class WorkflowReviewRepair:
         refuted = []
         for item in audit["assessments"]:
             review = item["review"]
-            actual_claims = (review["normalized_response"] if audit["version"] in {3, 4} else review["raw_response"])
+            actual_claims = (review["normalized_response"] if audit["version"] in {3, 4, 5} else review["raw_response"])
             for claim in actual_claims["claim_checks"]:
                 if claim["status"] == "refuted":
                     refuted.append({"message_index": review["request"]["scope"]["message_index"],
@@ -335,6 +335,9 @@ class WorkflowReviewRepair:
         if format_version is not None and (type(format_version) is not int or format_version not in {1, 2}):
             raise ValueError("invalid_claim_review_format_feedback_version")
         boundaries = _claim_format_boundaries(request, phase) if format_version in {1, 2} else None
+        if boundaries is not None and "review_window" in request:
+            boundaries["current_target_unit_ids"] = request["review_window"]["unit_ids"]
+            boundaries["response_scope_sha256"] = request["review_window"]["sha256"]
         schema_version = self.recipe.get("claim_review_wire_schema_version")
         focus_version = self.recipe.get("claim_review_focus_version")
         for name, setting in (("claim_review_wire_schema_version", schema_version),
@@ -343,9 +346,15 @@ class WorkflowReviewRepair:
                 raise ValueError("invalid_" + name)
         wire_metadata = {}
         condition_contract = request.get("condition_contract_version") == 1
+        transport_version = self.recipe.get("claim_review_transport_version")
+        if transport_version is not None and (type(transport_version) is not int or transport_version != 1):
+            raise ValueError("invalid_claim_review_transport_version")
         if condition_contract:
             instruction = (_CONDITION_INVENTORY_WIRE_PROTOCOL if phase == "claim_challenge"
                            else _CONDITION_ADJUDICATION_WIRE_PROTOCOL)
+            if transport_version == 1:
+                from .review_protocol import CONDITION_REVIEW_COMPLETE_WIRE_PROTOCOL
+                instruction += CONDITION_REVIEW_COMPLETE_WIRE_PROTOCOL
         if request.get("claim_review_protocol_version") == 4:
             if schema_version == 1 or condition_contract:
                 from lib.infrastructure.claim_review_wire_schema import claim_review_wire_schema_metadata
@@ -368,6 +377,9 @@ class WorkflowReviewRepair:
                 boundary_note = ("\n以下仅说明实际messages索引与本次候选单元id；context证据只能使用合法实际索引。"
                     "仅复制request.scope.scope_sha256为返回的scope_sha256，不返回整个scope；候选评审只引用本次unit_id，不抄quote。\n")
             call_instruction += boundary_note + canonical(boundaries)
+            if "review_window" in request:
+                call_instruction += ("\n本次为有界返回窗口。上面的scope复制说明以review_window.sha256为准；"
+                    "仅current_target_unit_ids需要本次返回，完整target_units仍供通读与条件引用。\n")
         if wire_metadata:
             call_instruction += ("\n以下为本次实际输入派生的JSON传输元数据。response_json_schema是完整返回格式说明，"
                 "不表示上游已启用json_schema；仍使用现有json_object传输。source_path是相对source_evidence内部的键/整数索引数组，"
@@ -391,6 +403,16 @@ class WorkflowReviewRepair:
                 feedback["instruction"] = ("Return the complete current protocol-4 phase contract. Copy only request.scope.scope_sha256 "
                     "as scope_sha256; use only current target_units unit_id values and actual challenge issue ids. "
                     "Do not return scope, field, candidate quote, or a different phase's fields.")
+            if transport_version == 1:
+                if "review_window" in request:
+                    feedback["instruction"] = feedback["instruction"].replace(
+                        "request.scope.scope_sha256", "request.review_window.sha256")
+                feedback["instruction"] += (
+                    " Source-reference diagnostics only locate exact existing quotations. "
+                    "For quote_at_other_source_path, inspect the named response item and choose an actual "
+                    "exact_quote_source_paths location. For quote_not_in_source, cite real source text or "
+                    "declare insufficient support; never paraphrase a quotation or invent a supporting condition. "
+                    "Resubmit the complete window, including the unchanged verdict contract and all units.")
             if boundaries is not None and previous_error is not None:
                 feedback["instruction"] += "\nSchema-only diagnostic: " + canonical({
                     "error_code": previous_error, **boundaries, **previous_detail})
@@ -410,6 +432,9 @@ class WorkflowReviewRepair:
                     previous_detail = _claim_format_quote_diagnostic(raw, request, phase,
                         quote_matching_version=self.recipe.get("claim_review_quote_matching_version"),
                         error_code=previous_error)
+                if transport_version == 1 and request.get("claim_review_protocol_version") == 4:
+                    from ..domain.wire_schema import review_wire_diagnostics
+                    previous_detail.update(review_wire_diagnostics(raw, request))
                 audit["schema_failures"].append({"phase": phase, "message_index": request["scope"]["message_index"],
                     "attempt": attempt, "code": previous_error, "checkpoint": reference})
                 audit["status"] = "invalid_after_retry" if attempt == 2 else "format_retry_pending"
@@ -434,41 +459,64 @@ class WorkflowReviewRepair:
         inputs = challenge_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
             condition_contract_version=condition_version)
+        transport_version = self.recipe.get("claim_review_transport_version")
+        if transport_version is not None and (type(transport_version) is not int or transport_version != 1):
+            raise ValueError("invalid_claim_review_transport_version")
+        if transport_version == 1 and condition_version == 1:
+            from ..domain.claim_windows import plan_review_windows
+            windowed = any(len(plan_review_windows(request)) > 1 for request in inputs)
+        else:
+            windowed = False
         audit = {"version": 4, "method": "adversarial_anchored_claim_review",
             "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
             "source_evidence_sha256": inputs[0]["scope"]["source_evidence_sha256"],
             "status": "pending", "challenge_reviews": [], "assessments": [], "schema_failures": []}
         row["claim_review"] = audit
+        if windowed:
+            audit.update(version=5, method="windowed_condition_claim_review", window_failures=[])
         role = "jev" if self.recipe.get("package_review", {}).get("enabled") else "generation"
         challenges = []
         for request in inputs:
             call_key = ["claim_challenge", target, request["scope"]["scope_sha256"]]
-            receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_reference",
-                base_key=call_key, role=role, validator=validate_challenge_review, audit=audit,
-                phase="claim_challenge", instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL)
+            if windowed:
+                from lib.bootstrap.automatic_review import claim_windows
+                receipt, record = claim_windows(self, role=role, audit=audit, phase="claim_challenge",
+                    instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL).execute(request)
+            else:
+                receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_reference",
+                    base_key=call_key, role=role, validator=validate_challenge_review, audit=audit,
+                    phase="claim_challenge", instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL)
+                record = {"review": deepcopy(receipt), "checkpoint": checkpoint}
             challenges.append(receipt)
-            audit["challenge_reviews"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
+            audit["challenge_reviews"].append(record)
         requests = adversarial_claim_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
             challenge_reviews=challenges, condition_contract_version=condition_version)
         receipts = []
         for request in requests:
             call_key = [*key, "claim_adjudication", request["scope"]["message_index"], request["scope"]["scope_sha256"]]
-            receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_score",
-                base_key=call_key, role=role, validator=validate_adversarial_claim_review, audit=audit,
-                phase="claim_adjudication", instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL)
+            if windowed:
+                receipt, record = claim_windows(self, role=role, audit=audit, phase="claim_adjudication",
+                    instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL).execute(request)
+            else:
+                receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_score",
+                    base_key=call_key, role=role, validator=validate_adversarial_claim_review, audit=audit,
+                    phase="claim_adjudication", instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL)
+                record = {"review": deepcopy(receipt), "checkpoint": checkpoint}
             receipts.append(receipt)
-            audit["assessments"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
+            audit["assessments"].append(record)
         check = merge_adversarial_claim_reviews(payload, receipts)
         audit.update(status="complete", derived_verdict=deepcopy(check))
         row["reasoning_assessment_method"] = "llm_claim_review"
-        row["reasoning_assessment_reference"] = {"kind": "llm_claim_review", "version": 4,
+        references = lambda collection: [deepcopy(window["checkpoint"]) for record in collection
+            for window in (record["windows"] if windowed else [record])]
+        row["reasoning_assessment_reference"] = {"kind": "llm_claim_review", "version": audit["version"],
             "scope": ("literal_condition_inventory_then_anchored_review_not_truth_certification"
                 if condition_version == 1 else "candidate_aware_challenge_then_anchored_adjudication_not_truth_certification"),
             "candidate_sha256": digest(payload), "source_input_sha256": digest(evidence),
             "source_evidence_sha256": audit["source_evidence_sha256"],
-            "challenge_checkpoints": [deepcopy(item["checkpoint"]) for item in audit["challenge_reviews"]],
-            "checkpoints": [deepcopy(item["checkpoint"]) for item in audit["assessments"]]}
+            "challenge_checkpoints": references(audit["challenge_reviews"]),
+            "checkpoints": references(audit["assessments"])}
         return self._claim_refutation_release(row, check)
 
     def _review_blind_claim_score(self, target, row, evidence, key, *, instruction=""):
@@ -598,6 +646,10 @@ class WorkflowReviewRepair:
         def assessed(call_key, call_data):
             rules = ({"instruction": _authored_review_rules(self.recipe)}
                      if _authored_cot(target, row) and not call_data.get("learner_context_only") else {})
+            reliable_transport = self.recipe.get("claim_review_transport_version") == 1
+            if reliable_transport:
+                from .review_protocol import AGGREGATE_REVIEW_COMPLETE_WIRE_PROTOCOL
+                rules["instruction"] = rules.get("instruction", "") + AGGREGATE_REVIEW_COMPLETE_WIRE_PROTOCOL
             if not call_data.get("learner_context_only") and language_requirements:
                 rules["instruction"] = "\n".join(filter(None, (
                     rules.get("instruction"), _authored_reasoning_language_review_rules(language_requirements))))
@@ -647,14 +699,44 @@ class WorkflowReviewRepair:
                                 "key": deepcopy(current_key), "checkpoint_sha256": hashlib.sha256(
                                     canonical(["call", current_key]).encode("utf-8")).hexdigest()}
                         return result
-            value = self.ask(call_key, role, "workflow.review_score",
-                             project_review_request(self.recipe, call_data, phase="review"),
-                             allow_reasoning_fallback=False, **rules)
-            try:
-                result = verdict(value)
-            except ValueError:
-                self.invalidate_checkpoint(["call", call_key])
-                raise
+            if reliable_transport:
+                from jsonschema import Draft202012Validator
+                from ..domain.wire_schema import review_grade_schema, schema_diagnostics
+                failures, diagnostic = [], None
+                for format_attempt in (1, 2):
+                    actual_key = call_key if format_attempt == 1 else [*call_key, "aggregate_format_repair", 1]
+                    request = call_data if diagnostic is None else {**call_data, "format_repair": {
+                        "code": "invalid_aggregate_review_response",
+                        "instruction": "Return the complete score contract; judge the original candidate. Schema-only diagnostic: "
+                                       + canonical(diagnostic)}}
+                    value = self.ask(actual_key, role, "workflow.review_score",
+                        project_review_request(self.recipe, request, phase="review"),
+                        allow_reasoning_fallback=False, **rules)
+                    try:
+                        if not Draft202012Validator(review_grade_schema()).is_valid(value):
+                            raise ValueError("invalid_aggregate_review_response")
+                        result = verdict(value)
+                    except ValueError:
+                        diagnostic = schema_diagnostics(value, review_grade_schema())
+                        failures.append({"attempt": format_attempt, "response_sha256": hashlib.sha256(
+                            canonical(value).encode("utf-8")).hexdigest(), "diagnostic": diagnostic})
+                        if format_attempt == 2:
+                            raise
+                    else:
+                        if failures:
+                            row.setdefault("aggregate_review_retries", []).append({"key": deepcopy(actual_key),
+                                "attempts": format_attempt, "status": "schema_valid", "schema_failures": failures})
+                        call_key = actual_key
+                        break
+            else:
+                value = self.ask(call_key, role, "workflow.review_score",
+                                 project_review_request(self.recipe, call_data, phase="review"),
+                                 allow_reasoning_fallback=False, **rules)
+                try:
+                    result = verdict(value)
+                except ValueError:
+                    self.invalidate_checkpoint(["call", call_key])
+                    raise
             if self.recipe.get("reasoning_distillation_audit_version") == 1:
                 row["reasoning_assessment_reference"] = {"kind": "llm_review", "stage": "review",
                     "key": deepcopy(call_key), "checkpoint_sha256": hashlib.sha256(
@@ -685,6 +767,11 @@ class WorkflowReviewRepair:
                     "rejected_feedback": rejected_check["reason"], "judge": "jev",
                     "judge_role": role, "review_node": "review",
                     "chosen_dimensions": check["scores"], "rejected_dimensions": rejected_check["scores"]}
+            if self.recipe.get("claim_review_transport_version") == 1:
+                from ..domain.preference_feedback import preference_release_feedback
+                check = preference_release_feedback(row, check)
+                if not accepted(check):
+                    return check
         from lib.domain.learner_context import learner_contract, learner_messages, prompt_at_least
         if (row.get("qa_contract") and accepted(check)
                 and prompt_at_least(self.recipe, "workflow.review_score", (1, 1, 0))):
@@ -723,6 +810,9 @@ class WorkflowReviewRepair:
         from lib.infrastructure.workflow_store import digest
         payload = self._review_payload(target, row)
         rules = {"instruction": _authored_repair_rules(self.recipe)} if _authored_cot(target, row) else {}
+        if target in PREFERENCE_TARGETS and self.recipe.get("claim_review_transport_version") == 1:
+            from ..domain.preference_feedback import PREFERENCE_REPAIR_CONTRACT
+            rules["instruction"] = rules.get("instruction", "") + PREFERENCE_REPAIR_CONTRACT
         language_requirements = _authored_reasoning_language_requirements(self.recipe, target, row)
         current_style = _current_review_generation_style(self, target, row, language_requirements)
         _validate_reasoning_depth_input_control(self, target, row, current_style)
@@ -808,6 +898,10 @@ class WorkflowReviewRepair:
                 and canonical(_automatic_repair_task(target, updated)) != canonical(_automatic_repair_task(target, row))):
             return row, "review_repair_learner_task_changed"
         preserve_provider_reasoning(target, row, updated, origin="prompt_revision")
+        if target in PREFERENCE_TARGETS and self.recipe.get("claim_review_transport_version") == 1:
+            from ..domain.preference_feedback import preference_reasoning_issue
+            if issue := preference_reasoning_issue(row, updated):
+                return row, issue
         if reasoning_revision and target in {"sft", "multiturn", "agent"}:
             from lib.domain.turn_review import reasoning_text
             if any(not reasoning_text(updated["messages"][index]) for index in required_reasoning):

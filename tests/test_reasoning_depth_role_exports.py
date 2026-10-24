@@ -68,6 +68,9 @@ def test_new_review_rubric_is_versioned_and_user_overrides_stay_literal():
     assert legacy["review"]["workflow.review_score"] == render(get("workflow.review_score", version="1.19.0"))
     fresh = snapshot_node_prompts(None, reasoning_depth_contract_version=1, **flags)
     assert fresh["review"]["workflow.review_score"] == render(get("workflow.review_score", version="1.20.0"))
+    reliable = snapshot_node_prompts(None, reasoning_depth_contract_version=1,
+        claim_review_transport_version=1, **flags)
+    assert reliable["review"]["workflow.review_score"] == render(get("workflow.review_score", version="1.21.0"))
     custom = "自定义评分契约，保持原样。"
     assert snapshot_node_prompts({"review": {"workflow.review_score": custom}},
         reasoning_depth_contract_version=1, **flags)["review"]["workflow.review_score"] == custom

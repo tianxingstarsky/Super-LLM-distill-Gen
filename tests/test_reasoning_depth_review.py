@@ -160,6 +160,7 @@ def test_new_default_adds_depth_rubric_without_mutating_historical_condition_tem
                      "不能为了表达", "原生文本和摘要", "insufficient等待复核", "不新增模型调用"):
         assert boundary in CONDITION_DEPTH_ADJUDICATION_BODY
     assert render(get("workflow.review_score", "1.19.0")) == CONDITION_ADJUDICATION_BODY
+    assert render(get("workflow.review_score", "1.20.0")) == CONDITION_DEPTH_ADJUDICATION_BODY
 
 
 @pytest.mark.parametrize("depth", ["quick", "standard", "deep", "mixed"])
@@ -167,7 +168,7 @@ def test_real_claim_wire_gets_current_depth_and_complete_rubric_in_two_existing_
     client, row = OfflineBlindClient(), controlled(sample(), depth)
     worker = workflow(tmp_path, client, depth=depth)
     assert worker.recipe["reasoning_depth_contract_version"] == 1
-    assert worker.recipe["prompts"]["workflow.review_score"]["version"] == "1.20.0"
+    assert worker.recipe["prompts"]["workflow.review_score"]["version"] == "1.21.0"
     original = deepcopy(row)
     result = worker._review_claim_score("sft", row, evidence(), ["candidate"])
     assert accepted(result) and len(client.calls) == 2

@@ -125,6 +125,32 @@ _CONDITION_ADJUDICATION_WIRE_PROTOCOL = (
     "新增假设不能证明原句，无法核清用insufficient。严格使用response_json_schema。")
 
 
+CONDITION_REVIEW_COMPLETE_WIRE_PROTOCOL = (
+    "\n完整传输合同（不改变本节点评审标准）：返回一个JSON对象，不能省字段或把分数平铺。"
+    "裁决verdict必须且仅有keep、grounded、reasoning_valid（布尔），correctness（1到5整数），"
+    "scores（对象且仅含correctness、reasoning、grounding、instruction、safety五项1到5整数），reason（非空文字）。"
+    "不要使用answer_correct、leakage_free、critical_error或平铺的instruction/reasoning等替代字段。"
+    "它们属于不同协议；语义上都正确也不能替代完整格式。basis必须含kind、evidence数组、derivation。"
+    "condition_ledger与claim_checks中的每项都必须有premises数组，无需额外条件时用空数组，不捏造条件。"
+    "若存在review_window，完整messages、target_fields、target_units和source_evidence仍可通读，"
+    "但本次只返回review_window.unit_ids中每项一次；scope_sha256复制review_window.sha256。"
+    "其它unit可作为条件或指代的原文锚点，不能以本次未评审为理由忽略相关上下文。"
+    "condition_ledger_view若存在，challenge_review仅是当前窗口的条件登记视图，完整登记另存审计；"
+    "其余登记未重复发送不表示其余原文不可见。登记是可错的提示，不是来源事实；仍独立核对完整原文。"
+    "登记阶段仍只返回phase、scope_sha256、issues=[]、condition_ledger、limitations和协议整数4，不能返回verdict。"
+    "裁决阶段不返回phase或condition_ledger，challenge_checks=[]。格式反馈仅说明必填字段、类型、路径，"
+    "没有提供事实条件或预设分数；仍须独立判断原文。不要重复抄写整段资料或候选，保留判断必要的实际依据。\n")
+
+
+AGGREGATE_REVIEW_COMPLETE_WIRE_PROTOCOL = (
+    "\n本次是普通候选/偏好评分，不是逐句协议4。仅返回评分对象：keep、grounded、reasoning_valid为布尔，"
+    "correctness为1到5整数，scores对象必须且仅有correctness、reasoning、grounding、instruction、safety五项1到5整数，"
+    "reason为具体非空理由。不返回verdict包装、claim_checks、condition_ledger或scope_sha256。"
+    "偏好候选核验chosen的质量、prompt的真实条件、chosen/rejected的实际差异；拒绝回答是刻意负例，"
+    "不能要求它本身正确才认可整对数据。单独rejected_score按实际质量打分，低分不算格式错误。"
+    "输入未提供supervised_assistant_turns时不返回turn_verdicts；提供时按列出的索引与哈希逐项返回。\n")
+
+
 def _claim_format_boundaries(request, phase):
     """Describe literal input paths/indices without echoing any text value."""
     messages = request["messages"]

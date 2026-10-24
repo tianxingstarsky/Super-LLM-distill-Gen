@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pathlib
+import os
 import py_compile
 import subprocess
 import sys
@@ -31,7 +32,8 @@ def test_console_command_wired_in_cli():
     # 命令表与插件交叉校验不受影响（console 不作为 dataforge 工具命令）
     df_help = subprocess.run(
         [sys.executable, "-m", "lib.cli", "-h"], cwd=str(ROOT),
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     ).stdout
     assert "console" in df_help
 
@@ -46,7 +48,8 @@ def test_command_registry_single_source_of_truth():
     # CLI 子命令（去本地 UI 启动器 console）必须都被注册表覆盖
     df_help = subprocess.run(
         [sys.executable, "-m", "lib.cli", "-h"], cwd=str(ROOT),
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     ).stdout
     block = df_help.split("usage:", 1)[-1].split(chr(10) * 2, 1)[0]
     import re as _re

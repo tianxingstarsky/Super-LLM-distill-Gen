@@ -31,3 +31,13 @@ class ModelQueueTimeout(RuntimeError):
 
 class ModelStreamError(ValueError):
     """A static, safe failure code: partial text must never become a sample."""
+
+
+class ModelOutputLimitError(ModelStreamError):
+    """Explicit provider output-token limit; not a transient connection error."""
+    code = "model_output_limit"
+
+    def __init__(self):
+        # Keep the historical display string for old stream consumers while
+        # new schedulers can distinguish this explicit terminal condition.
+        super().__init__("model_stream_incomplete")

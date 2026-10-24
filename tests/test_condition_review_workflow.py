@@ -84,7 +84,7 @@ def test_factory_sends_two_condition_contexts_per_turn_and_preserves_full_source
     workflow = flow(tmp_path, client)
     assert workflow.recipe["claim_review_condition_contract_version"] == 1
     assert workflow.recipe["prompts"]["workflow.review_reference"]["version"] == "2.1.0"
-    assert workflow.recipe["prompts"]["workflow.review_score"]["version"] == "1.20.0"
+    assert workflow.recipe["prompts"]["workflow.review_score"]["version"] == "1.21.0"
     check = workflow._review_claim_score("multiturn", row, evidence(), ["candidate"])
     assert accepted(check) and len(client.calls) == 4
     assert row["messages"] == original

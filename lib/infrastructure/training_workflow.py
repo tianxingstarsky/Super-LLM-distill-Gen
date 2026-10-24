@@ -275,7 +275,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
         claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
         claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
-        claim_review_condition_contract_version=1, reasoning_depth_contract_version=1)
+        claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -398,7 +398,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
-            claim_review_condition_contract_version=1, reasoning_depth_contract_version=1)
+            claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -444,6 +444,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_review_wire_schema_version": 1,
               "claim_review_focus_version": 1,
               "claim_review_condition_contract_version": 1,
+              "claim_review_transport_version": 1,
               "claim_review_revision_instruction_version": 1,
               "reasoning_revision_protocol_version": 1,
               "multiturn_terminal_review_version": 1,

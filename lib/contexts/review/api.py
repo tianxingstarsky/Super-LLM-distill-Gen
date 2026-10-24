@@ -11,3 +11,4 @@ from .application.review_candidate import ReviewCandidate
 from .application.review_collections import ReviewGeneratedCollections
 from .application.execute_repair import ExecuteRepairBranch
 from .application.rework_collection import ReviewReworkApplication
+from .application.review_claim_windows import ReviewClaimWindows

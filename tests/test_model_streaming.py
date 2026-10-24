@@ -122,6 +122,32 @@ def test_output_limit_is_not_a_success_even_with_valid_json(api):
 
 
 @pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
+def test_explicit_output_limit_is_typed_and_never_retried_as_a_connection_failure(api):
+    from lib.contexts.models.contracts import ModelOutputLimitError
+    from lib.model_request_reliability import classify_request_error
+    calls = []
+    data = fixture(api)
+    if api == "chat":
+        data = data.replace(b'"finish_reason":"stop"', b'"finish_reason":"length"')
+    elif api == "responses":
+        data = data.replace(b"response.completed", b"response.incomplete").replace(
+            b'"status":"completed"', b'"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}')
+    else:
+        data = data.replace(b'"stop_reason":"end_turn"', b'"stop_reason":"max_tokens"')
+    def handle(request):
+        calls.append(request)
+        return sse_response(data)
+    client = sdk_client(api, handle)
+    try:
+        with pytest.raises(ModelOutputLimitError) as caught:
+            chat_json(client, MESSAGES, on_stream=lambda event: None)
+        assert classify_request_error(caught.value) == {"kind": "invalid", "code": "model_output_limit"}
+        assert len(calls) == 1
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
 def test_explicit_pre_stream_rejection_falls_back_and_remembers_capability(api):
     calls, events = [], []
     full = {"chat": {"id": "chat-test", "object": "chat.completion", "created": 1, "model": "writer",

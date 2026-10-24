@@ -919,3 +919,8 @@ from lib.prompts.workflow_adversarial_review import CONDITION_DEPTH_ADJUDICATION
 REVIEW_SCORE_V1_19 = REVIEW_SCORE
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.20.0", template=spec(
     "review_score", "按任务核验必要推导，保留原句条件与未决项", CONDITION_DEPTH_ADJUDICATION_BODY).template)
+
+from lib.prompts.workflow_review_formats import REVIEW_FORMAT_DISPATCH_BODY
+REVIEW_SCORE_V1_20 = REVIEW_SCORE
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.21.0", template=spec(
+    "review_score", "区分逐句与偏好评分合同，保留完整推理和严格格式", REVIEW_FORMAT_DISPATCH_BODY).template)

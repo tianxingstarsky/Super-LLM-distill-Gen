@@ -1,0 +1,14 @@
+"""Editable review rubric with explicit request-family output contracts."""
+from .workflow_adversarial_review import CONDITION_DEPTH_ADJUDICATION_BODY
+
+
+REVIEW_FORMAT_DISPATCH_BODY = """先识别本次传输合同。不要把不同节点的JSON返回格式混在一起。
+
+若输入claim_review_protocol_version=4且phase=claim_adjudication，按下文逐句条件评审；有review_window时只返回它列出的单位，但通读全部原文与前文。verdict必须且仅有keep、grounded、reasoning_valid三个布尔值，correctness为1到5整数，scores对象包含correctness、reasoning、grounding、instruction、safety五项1到5整数，reason为具体非空理由。禁止把scores平铺或用answer_correct等字段替代。
+
+若输入是target/candidate/source_evidence而没有上述逐句协议，本次是普通候选或偏好评分。沿相同的原文真实性、前提和逻辑原则审查，但只返回keep、grounded、reasoning_valid、correctness、scores、reason这六个字段，不加verdict包装或claim_checks。若明确提供supervised_assistant_turns，再按列出的message_index/content_sha256给每个监督轮返回turn_verdicts（完整六项评分加leakage_free与critical_error），不能遗漏先前助手轮。
+
+偏好任务检查chosen是否正确且优于rejected；rejected故意保留的缺陷不应成为整对数据必须失败的原因。若本次assessment说明单独评分rejected，则如实给负例打分，不为迎合放行而补条件或抬分。格式重试只纠正输出合同，不修改候选、来源或判定标准。
+
+以下是逐句评审的内容标准。普通评分使用相同的真实性原则，其返回格式以本次合同为准。
+""" + CONDITION_DEPTH_ADJUDICATION_BODY

@@ -179,9 +179,13 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          claim_refutation_release_version=None, claim_reference_policy_version=None,
                          claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                          claim_review_wire_schema_version=None, claim_review_focus_version=None,
-                         claim_review_condition_contract_version=None, reasoning_depth_contract_version=None) -> dict:
+                         claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
+                         claim_review_transport_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
+    if claim_review_transport_version is not None and (
+            type(claim_review_transport_version) is not int or claim_review_transport_version != 1):
+        raise ValueError("invalid_claim_review_transport_version")
     def default_body(prompt_id):
         # The same editable node has two wire contracts. A marker, rather than
         # the registry's latest entry, selects the new claim-level contract.
@@ -189,6 +193,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
         if prompt_id == "workflow.review_score":
             if claim_review_adversarial_protocol_version == 1:
                 if claim_review_condition_contract_version == 1:
+                    if claim_review_transport_version == 1:
+                        return render(get(prompt_id, version="1.21.0"))
                     return render(get(prompt_id, version="1.20.0" if reasoning_depth_contract_version == 1 else "1.19.0"))
                 return render(get(prompt_id, version="1.18.0"))
             version = {1: "1.12.0", 2: ("1.17.0" if claim_review_anchor_protocol_version == 1 else

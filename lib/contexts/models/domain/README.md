@@ -1,5 +1,7 @@
 # 模型规则
 
+显式输出 token 上限使用 `ModelOutputLimitError`，区别于连接中断和没有正常结束的响应。该错误不自动重复同一请求；需要更小工作单元的用例可以据此有界拆分。原始部分输出仍只能作为诊断，不能成为训练记录。
+
 `configuration.py` 定义服务配置；`capabilities.py` 定义能力证据；`reasoning.py` 定义推理参数；`network.py` 和 `scheduling.py` 定义网络、并发限制；`api_format.py` 定义支持的协议名称。
 
 规则只处理数据。请求序列化属于协议适配器，联网探测属于基础设施。人工设置上下文窗口不等于已经验证上游支持该长度。

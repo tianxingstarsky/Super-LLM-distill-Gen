@@ -1,5 +1,7 @@
 # 审核规则
 
+窗口请求中的条件登记仅是提示，不是事实来源。`project_review_window_hints` 在模型可见视图中只携带当前窗口的登记，保留完整原文、推理、全部单元锚点与来源，并用 `condition_ledger_view` 标明完整登记的哈希。完整登记与引用验证仍保留在原始请求/审计中，避免每个窗口重复携带全部长登记而误触上下文上限。此投影不修改输出上限或上下文预检。
+
 `sft_review.py`、`corpus_review.py`、`preference_review.py` 定义各类内容的可审核形式与决定规则。`review_queue.py` 和 `review_audit.py` 定义队列、身份与审计合同。
 
 这里不能读取样本文件、创建版本或调用评分模型。规则必须可用普通 Python 值验证。保留多轮消息、推理与证据对应关系，不通过删字段让审核通过。
@@ -10,7 +12,13 @@
 | `candidate_content.py` | 可编辑内容、不可变工具事实、训练表面校验及原生推理谱系 |
 | `reasoning_history.py` | 原生 prefill 的历史证据随实际内容变化退休，保留原文审计 |
 | `automatic_rules.py` | 已冻结配方中的语言、推理和知识运用要求 |
+| `wire_schema.py` | 完整 JSON Schema、普通评分合同与不回显原文的字段诊断；旧 schema 路径只转发 |
+| `source_reference_diagnostics` | 为无效引用指出引文逐字存在的真实资料路径；不替换引用、不做模糊匹配，重试仍须重新通过原校验 |
+| `claim_windows.py` | 原文不变的评审窗口、引用绑定、全量覆盖与保守汇总；原始窗口响应和程序组装结果分别保存 |
+| `preference_feedback.py` | 保留正负例原始评分；把既有分差阻断原因明确反馈给修正，原问题不变，两侧已有推理字段禁止丢失 |
 
 规则文本和版本分支沿用旧任务合同。这里的 `candidate_digest` 与既有 canonical JSON 哈希完全一致，不能换序列化算法来“统一”旧缓存。
 
 维护者修改决定语义时，同时覆盖来源变化、无效决定和并发冲突测试；存储锁实现属于 infrastructure。
+
+`claim_review_transport_version=1` 仅在新配方启用。窗口保留全部候选、推理、可见历史与来源，只限制每次返回的判断范围；跨窗口条件仍可逐字引用。汇总必须重新通过原有完整条件合同，缺项、重复项、伪造引用和未决内容不能放行。审计 v5 保存窗口原始响应及其真实检查点，`assembled_response` 明确是程序汇总，不伪称单次上游响应。历史审计 v1–v4 不改写。验证见 `test_claim_review_windows.py`。

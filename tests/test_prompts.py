@@ -113,7 +113,8 @@ def test_precise_fact_review_preserves_old_prompt_snapshots():
 
 def test_latest_review_protocol_preserves_literal_scope_and_refuses_invented_support():
     current = get("workflow.review_score")
-    assert current.version == "1.20.0"
+    assert current.version == "1.21.0"
+    assert get("workflow.review_score", version="1.20.0").version == "1.20.0"
     text = render(current)
     for constraint in (
         "保持原句的主体、动作、对象、时点、范围、否定、量词和必要/充分条件",

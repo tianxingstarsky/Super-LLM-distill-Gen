@@ -14,6 +14,8 @@ import re
 import threading
 import time
 
+from lib.contexts.models.domain.request_errors import ModelOutputLimitError
+
 
 MAX_RETRY_DELAY_SECONDS = 60.0
 MAX_SHARED_SERVICES = 256
@@ -226,6 +228,8 @@ class RequestDiagnostics:
 
 def classify_request_error(error: Exception) -> dict[str, str]:
     """Classify from types/status/known codes, never interpolate provider text."""
+    if isinstance(error, ModelOutputLimitError):
+        return {"kind": "invalid", "code": "model_output_limit"}
     if isinstance(error, (ModelRequestError, ModelJSONError)):
         return {"kind": error.kind, "code": error.code}
     if type(error).__name__ == "ModelQueueTimeout":

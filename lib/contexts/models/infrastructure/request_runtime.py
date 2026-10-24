@@ -640,7 +640,9 @@ class ChatClient:
     @staticmethod
     def _full_result(result, on_stream, stop_reason, allowed, *, verify_complete=False, details=None):
         if on_stream or verify_complete:
-            from lib.model_streaming import ModelStreamError
+            from ..domain.request_errors import ModelStreamError, ModelOutputLimitError
+            if stop_reason in {"length", "max_tokens", "max_output_tokens"}:
+                raise ModelOutputLimitError()
             if stop_reason not in allowed:
                 raise ModelStreamError("model_stream_incomplete")
         if on_stream:

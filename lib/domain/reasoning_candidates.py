@@ -77,6 +77,9 @@ def _reviewed_verdict(payload, check):
 
 def _validated_claim_audit(payload, check, audit):
     """Bind derived decisions to exact raw claim responses and request keys."""
+    if isinstance(audit, dict) and audit.get("version") == 5:
+        from lib.contexts.review.contracts import validate_windowed_claim_audit
+        return validate_windowed_claim_audit(payload, check, audit)
     if isinstance(audit, dict) and audit.get("version") == 4:
         return _validated_adversarial_claim_audit(payload, check, audit)
     if isinstance(audit, dict) and audit.get("version") in (2, 3):
@@ -411,7 +414,7 @@ def assessment_from_verdict(payload: dict, check: dict, *, evidence_ref: str,
     review_gap_only = pending_review and not any(
         claim["status"] == "refuted"
         for item in claim_review["assessments"]
-        for claim in item["review"]["raw_response"]["claim_checks"])
+        for claim in item["review"]["assembled_response" if claim_review["version"] == 5 else "raw_response"]["claim_checks"])
     outcome_passed = (check["grounded"] and check["correctness"] >= 4
                       and check["scores"]["correctness"] >= 4 and check["scores"]["grounding"] >= 4)
     process_passed = check["reasoning_valid"] and check["scores"]["reasoning"] >= 4

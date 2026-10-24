@@ -15,7 +15,7 @@ from lib.model_response_details import (build_response_details, commit_response_
 StreamCallback = Callable[[dict], None]
 
 
-from lib.contexts.models.domain.request_errors import ModelStreamError
+from lib.contexts.models.domain.request_errors import ModelStreamError, ModelOutputLimitError
 
 
 class _StreamWatchdog:
@@ -157,6 +157,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                     delta_reasoning = _get(delta, "reasoning_content", "") or ""
                     finish = _get(choice, "finish_reason")
                     if finish is not None:
+                        if finish == "length":
+                            raise ModelOutputLimitError()
                         if finish != "stop":
                             raise ModelStreamError("model_stream_incomplete")
                         terminal = True
@@ -178,6 +180,9 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                         completed_details = extract_response_details(response, api_format)
                     terminal = True
                 elif kind in {"response.incomplete", "response.failed", "error"}:
+                    if (kind == "response.incomplete" and _get(_get(_get(event, "response"),
+                            "incomplete_details"), "reason") == "max_output_tokens"):
+                        raise ModelOutputLimitError()
                     raise ModelStreamError("model_stream_incomplete")
             elif api_format == "anthropic":
                 if kind == "message_start":
@@ -198,6 +203,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                 elif kind == "message_delta":
                     reason = _get(_get(event, "delta"), "stop_reason")
                     if reason is not None:
+                        if reason == "max_tokens":
+                            raise ModelOutputLimitError()
                         if reason not in {"end_turn", "stop_sequence"}:
                             raise ModelStreamError("model_stream_incomplete")
                         stopped = True

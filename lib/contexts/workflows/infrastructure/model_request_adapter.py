@@ -134,6 +134,9 @@ class CheckpointedModelRequest:
     def messages(self, client, request):
         runtime = self.runtime
         data, instruction = request.data, request.instruction
+        if runtime.recipe.get("claim_review_transport_version") == 1:
+            from lib.contexts.review.contracts import project_review_window_hints
+            data = project_review_window_hints(data)
         image, image_values = request.image, request.image_values
         prompt_id, prompt_stage = request.prompt_id, request.prompt_stage
         model_stage, role = request.model_stage, request.role
@@ -148,7 +151,7 @@ class CheckpointedModelRequest:
                      or runtime.recipe.get("claim_review_focus_version") == 1
                      or runtime.recipe.get("claim_review_condition_contract_version") == 1)
                 and isinstance(instruction, str)):
-            from lib.infrastructure.claim_review_wire_schema import CLAIM_REVIEW_DYNAMIC_WIRE_HEADER
+            from lib.contexts.review.contracts import CLAIM_REVIEW_DYNAMIC_WIRE_HEADER
             if CLAIM_REVIEW_DYNAMIC_WIRE_HEADER in instruction:
                 stable_instruction, dynamic_review_instruction = instruction.split(CLAIM_REVIEW_DYNAMIC_WIRE_HEADER, 1)
         from lib.infrastructure.workflow_node_messages import split_node_rules

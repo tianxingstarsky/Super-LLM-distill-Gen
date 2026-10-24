@@ -1,5 +1,7 @@
 # 模型配置与请求适配
 
+Chat 的 `finish_reason=length`、Anthropic 的 `max_tokens` 和 Responses 明确报告的 `max_output_tokens` 映射到显式输出上限错误；没有终止事件仍是未完成响应。流式及兼容非流式回退均不得把平衡 JSON 前缀认定为完成。对应 `test_model_streaming.py` 验证不会按断线重复请求。
+
 | 文件 | 责任 |
 | --- | --- |
 | `configuration.py` | 模型配置端口，本地服务配置读写 |
