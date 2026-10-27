@@ -21,7 +21,9 @@ class ModelJSONError(RuntimeError):
     kind = "invalid"
 
     def __init__(self, attempts: int):
-        super().__init__(f"JSON 调用失败（{attempts} 次重试后）: model_json_invalid")
+        self.attempts = attempts
+        self.retries = max(0, attempts - 1)
+        super().__init__(f"JSON 调用失败（共 {attempts} 次尝试，{self.retries} 次重试）: model_json_invalid")
 
 
 class ModelQueueTimeout(RuntimeError):

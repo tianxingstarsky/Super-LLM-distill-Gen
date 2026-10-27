@@ -639,6 +639,50 @@ from lib.prompts.workflow_prefill import RATIONAL_ONLY_BODY, NATIVE_ANSWER_BODY,
 COT_RATIONALE = spec("cot_rationale", "先撰写待核验的风格化推理", RATIONAL_ONLY_BODY)
 COT_NATIVE_ANSWER = spec("cot_native_answer", "从原生推理前缀续写答案", NATIVE_ANSWER_BODY,
     source="DeepSeek Chat Prefix Completion Beta: https://api-docs.deepseek.com/guides/chat_prefix_completion")
+from lib.prompts.workflow_native_cot import (
+    NATIVE_COT_BODY, DRAFT_CLAIM_CALIBRATION, CONCISE_COMPREHENSIVE_REASONING,
+    EVOLVE_EXPERIENCE_BODY,
+)
+from lib.prompts.workflow_reading_session import READING_SCENE, READING_USER, READING_ANSWER, READING_SCENE_V1, READING_USER_V1
+READING_SCENE_PROMPT_V1 = PromptSpec(id="workflow.reading_scene", version="1.0.0", purpose="情景故事设计",
+    source="https://adk.dev/evaluate/user-sim/", constraints=("场景虚构与资料事实分离", "只输出故事正文"), template=READING_SCENE_V1)
+READING_USER_PROMPT_V1 = PromptSpec(id="workflow.reading_user", version="1.0.0", purpose="情景用户连续发言",
+    source="https://github.com/sierra-research/tau2-bench/blob/main/src/tau2/user/user_simulator.py",
+    constraints=("只输出当前用户发言或结束信号", "看不到助手思考"), template=READING_USER_V1)
+READING_SCENE_PROMPT = PromptSpec(id="workflow.reading_scene", version="1.1.0", purpose="情景故事设计",
+    source="https://adk.dev/evaluate/user-sim/", constraints=("场景虚构与资料事实分离", "只输出故事正文"), template=READING_SCENE)
+READING_USER_PROMPT = PromptSpec(id="workflow.reading_user", version="1.1.0", purpose="情景用户连续发言",
+    source="https://github.com/sierra-research/tau2-bench/blob/main/src/tau2/user/user_simulator.py",
+    constraints=("只输出当前用户发言或结束信号", "看不到助手思考"), template=READING_USER)
+READING_ANSWER_PROMPT = PromptSpec(id="workflow.reading_answer", version="1.0.0", purpose="共享资料原生思考与回答",
+    source="https://arxiv.org/abs/2409.11500", constraints=("生成与导出上下文一致", "保留原生思考"), template=READING_ANSWER)
+READING_ANSWER_PROMPT_V1_0 = READING_ANSWER_PROMPT
+READING_ANSWER_PROMPT = _reasoning_spec_replace(READING_ANSWER_PROMPT, version="1.1.0",
+    template=READING_ANSWER_PROMPT.template + "\n" + DRAFT_CLAIM_CALIBRATION)
+READING_ANSWER_PROMPT_V1_1 = READING_ANSWER_PROMPT
+READING_ANSWER_PROMPT = _reasoning_spec_replace(READING_ANSWER_PROMPT, version="1.2.0",
+    constraints=("生成与导出上下文一致", "保留原生思考", "简洁保留必要依据与真实修正"),
+    template=READING_ANSWER_PROMPT.template + "\n" + CONCISE_COMPREHENSIVE_REASONING)
+COT_NATIVE_JOINT = spec("cot_native_joint", "引导原生思考并同次生成答案", NATIVE_COT_BODY,
+    source="DeepSeek Thinking Mode: https://api-docs.deepseek.com/guides/thinking_mode/")
+COT_NATIVE_JOINT_V1_0 = COT_NATIVE_JOINT
+COT_NATIVE_JOINT = _reasoning_spec_replace(COT_NATIVE_JOINT, version="1.1.0",
+    constraints=("保留原生思考与答案", "草稿与定稿的条件和断言一致", "不能编造来源和工具结果"),
+    template=COT_NATIVE_JOINT.template + "\n" + DRAFT_CLAIM_CALIBRATION)
+COT_NATIVE_JOINT_V1_1 = COT_NATIVE_JOINT
+COT_NATIVE_JOINT = _reasoning_spec_replace(COT_NATIVE_JOINT, version="1.2.0",
+    constraints=COT_NATIVE_JOINT.constraints + ("简洁保留必要依据与真实修正",),
+    template=COT_NATIVE_JOINT.template + "\n" + CONCISE_COMPREHENSIVE_REASONING)
+EVOLVE_EXPERIENCE = PromptSpec(id="workflow.evolve_experience", version="1.0.0",
+    purpose="从真实试错提炼用户风格与有证据的条件规则",
+    source=("ReasoningBank SUCCESSFUL_SI / FAILED_SI / PARALLEL_SI; "
+        "https://github.com/google-research/reasoning-bank/blob/"
+        "ed80611788292ea739f1effd31f16c53823b8a0d/WebArena/prompts/memory_instruction.py; "
+        "Apache-2.0; adaptation and license: docs/licenses/README.md"),
+    constraints=("仅调用一次 submit_experience_rules", "规则引用本次 episode 的逐字证据",
+        "单轨迹最多三条、多轨迹最多五条", "未知结果不冒充成功或失败", "用户偏好不冒充普遍事实"),
+    notes="仅复用经验提炼机制与提示词；证据核验、持久化与谱系由应用及领域层处理，不引入上游运行框架。",
+    template=EVOLVE_EXPERIENCE_BODY)
 COT_PREFIX_CHECK = spec("cot_prefix_check", "独立核验待注入推理前缀", PREFIX_CHECK_BODY)
 
 _AUDIT_VISIBILITY = (
@@ -1058,3 +1102,75 @@ REVIEW_REPAIR_V1_15 = REVIEW_REPAIR
 REVIEW_REPAIR = _reasoning_spec_replace(REVIEW_REPAIR, version="1.16.0", template=spec(
     "review_repair", "保持正例互译与核查，复用真实失败或构建渐进跑题对照",
     render(REVIEW_REPAIR_V1_12) + PREFERENCE_REPAIR).template)
+
+# Positive demonstrations for every authored generation route, including the
+# two-phase prefix path. Old specs remain registered for sealed checkpoints.
+from lib.prompts.workflow_reasoning_workshop import reasoning_workshop_body, REASONING_WORKSHOP_REVIEW
+SFT_STYLED_V1_6, SFT_DIRECTED_V1_10 = SFT_STYLED, SFT_DIRECTED
+SFT_ANSWER_V1_7, MULTITURN_ASSISTANT_V1_7 = SFT_ANSWER, MULTITURN_ASSISTANT
+COT_GENERATE_V1_10, COT_RATIONALE_V1_2 = COT_GENERATE, COT_RATIONALE
+COT_PREFIX_CHECK_V1_3, RATIONALE_CHECK_V1_8 = COT_PREFIX_CHECK, RATIONALE_CHECK
+
+def _workshop_spec(previous, version, *, prefix=False, review=False):
+    body = (render(previous) + "\n" + REASONING_WORKSHOP_REVIEW if review else
+            reasoning_workshop_body(render(previous), prefix=prefix))
+    return _reasoning_spec_replace(previous, version=version,
+        template=spec(previous.id.removeprefix("workflow."), previous.purpose, body).template,
+        notes=previous.notes + " 工程示范与请求接线已回归；效果须由独立真实样本评测验证。")
+
+SFT_STYLED = _workshop_spec(SFT_STYLED, "1.7.0")
+SFT_DIRECTED = _workshop_spec(SFT_DIRECTED, "1.11.0")
+SFT_ANSWER = _workshop_spec(SFT_ANSWER, "1.8.0")
+MULTITURN_ASSISTANT = _workshop_spec(MULTITURN_ASSISTANT, "1.8.0")
+COT_GENERATE = _workshop_spec(COT_GENERATE, "1.11.0")
+from lib.prompts.workflow_reasoning_workshop import COT_FINALIZATION_BODY_V1
+COT_GENERATE_V1_11 = COT_GENERATE
+COT_GENERATE = context_version(COT_GENERATE, version="1.12.0", body=COT_FINALIZATION_BODY_V1)
+COT_RATIONALE = _workshop_spec(COT_RATIONALE, "1.3.0", prefix=True)
+COT_PREFIX_CHECK = _workshop_spec(COT_PREFIX_CHECK, "1.4.0", review=True)
+RATIONALE_CHECK = _workshop_spec(RATIONALE_CHECK, "1.9.0", review=True)
+
+from lib.prompts.workflow_reasoning_checklist import SELF_CHECK, INDEPENDENT_CHECK
+COT_SELF_CHECK = spec("cot_self_check", "以正文证据逐项自检", SELF_CHECK)
+COT_SELF_CHECK_REVIEW = spec("cot_self_check_review", "独立核验规则覆盖和实质证据", INDEPENDENT_CHECK)
+
+from lib.prompts.workflow_reasoning_claims import CLAIM_SELF_CHECK, CLAIM_REVIEW
+COT_CLAIM_CHECK = spec("cot_claim_check", "逐个核对数值单位与结论前提", CLAIM_SELF_CHECK)
+COT_CLAIM_REVIEW = spec("cot_claim_review", "独立复算并反驳过强主张", CLAIM_REVIEW)
+from lib.prompts.workflow_reasoning_claims import CLAIM_SCHEMA
+COT_CLAIM_CHECK_V1_0, COT_CLAIM_REVIEW_V1_0 = COT_CLAIM_CHECK, COT_CLAIM_REVIEW
+COT_CLAIM_CHECK = _reasoning_spec_replace(COT_CLAIM_CHECK, version="1.1.0",
+    template=spec("cot_claim_check", COT_CLAIM_CHECK.purpose, CLAIM_SELF_CHECK + CLAIM_SCHEMA).template)
+COT_CLAIM_REVIEW = _reasoning_spec_replace(COT_CLAIM_REVIEW, version="1.1.0",
+    template=spec("cot_claim_review", COT_CLAIM_REVIEW.purpose, CLAIM_REVIEW + CLAIM_SCHEMA).template)
+from lib.prompts.workflow_reasoning_claims import claim_protocol_v12
+COT_CLAIM_CHECK_V1_1, COT_CLAIM_REVIEW_V1_1 = COT_CLAIM_CHECK, COT_CLAIM_REVIEW
+COT_CLAIM_CHECK = _reasoning_spec_replace(COT_CLAIM_CHECK, version="1.2.0",
+    template=spec("cot_claim_check", COT_CLAIM_CHECK.purpose, claim_protocol_v12(CLAIM_SELF_CHECK)).template)
+COT_CLAIM_REVIEW = _reasoning_spec_replace(COT_CLAIM_REVIEW, version="1.2.0",
+    template=spec("cot_claim_review", COT_CLAIM_REVIEW.purpose, claim_protocol_v12(CLAIM_REVIEW)).template)
+
+from lib.prompts.workflow_reasoning_agent import REASONING_AGENT
+COT_CHECK_AGENT = spec("cot_check_agent", "按疑点选择工具并逐项保存核查证据", REASONING_AGENT)
+COT_CHECK_AGENT_V1_0 = COT_CHECK_AGENT
+from lib.prompts.workflow_reasoning_agent_recovery import REASONING_AGENT_RECOVERY, REASONING_AGENT_RECOVERY_V1_1
+COT_CHECK_AGENT_V1_1 = _reasoning_spec_replace(COT_CHECK_AGENT, version="1.1.0",
+    template=spec("cot_check_agent", COT_CHECK_AGENT.purpose, REASONING_AGENT_RECOVERY_V1_1).template)
+COT_CHECK_AGENT = _reasoning_spec_replace(COT_CHECK_AGENT, version="1.2.0",
+    template=spec("cot_check_agent", COT_CHECK_AGENT.purpose, REASONING_AGENT_RECOVERY).template)
+COT_CHECK_AGENT_V1_2 = COT_CHECK_AGENT
+from lib.prompts.workflow_reasoning_environment import REASONING_ENVIRONMENT
+COT_CHECK_AGENT = _reasoning_spec_replace(COT_CHECK_AGENT, version="1.3.0",
+    template=spec("cot_check_agent", COT_CHECK_AGENT.purpose, REASONING_ENVIRONMENT).template)
+COT_CHECK_AGENT_V1_3 = COT_CHECK_AGENT
+from lib.prompts.workflow_semantic_review import SEMANTIC_REVIEW
+COT_CHECK_AGENT = _reasoning_spec_replace(COT_CHECK_AGENT, version="1.4.0",
+    template=spec("cot_check_agent", COT_CHECK_AGENT.purpose, SEMANTIC_REVIEW).template)
+COT_CHECK_AGENT_V1_4 = COT_CHECK_AGENT
+from lib.prompts.workflow_evidence_review import EVIDENCE_REVIEW
+COT_CHECK_AGENT = _reasoning_spec_replace(COT_CHECK_AGENT, version="1.5.0",
+    template=spec("cot_check_agent", COT_CHECK_AGENT.purpose, EVIDENCE_REVIEW).template)
+COT_CHECK_AGENT_V1_5 = COT_CHECK_AGENT
+from lib.prompts.workflow_obligation_review import OBLIGATION_REVIEW
+COT_CHECK_AGENT = _reasoning_spec_replace(COT_CHECK_AGENT, version="1.6.0",
+    template=spec("cot_check_agent", COT_CHECK_AGENT.purpose, OBLIGATION_REVIEW).template)

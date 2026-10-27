@@ -57,6 +57,43 @@ def opened(language="zh"):
     return app
 
 
+def initial_choice_screen():
+    import streamlit as st
+    from lib.presentation.streamlit.workflow_report_panel import render_run_report_choice
+    class Application:
+        reports = object()
+        def state(self, run_id):
+            return {"status": st.session_state.get("status", "completed")}
+        def is_active(self, run_id):
+            return st.session_state.get("active", False)
+    if st.toggle("Away", key="away"):
+        st.caption("Another page")
+    else:
+        render_run_report_choice(Application(), "run-a")
+
+
+def test_completed_run_opens_report_but_explicit_process_choice_survives_navigation():
+    app = AppTest.from_function(initial_choice_screen).run()
+    assert not app.exception
+    assert app.segmented_control(key="workflow-result-view:run-a").value == "样本报告"
+    app.segmented_control(key="workflow-result-view:run-a").set_value("运行过程").run()
+    app.toggle(key="away").set_value(True).run()
+    app.run()  # Simulate widget cleanup while the report is unmounted.
+    app.toggle(key="away").set_value(False).run()
+    assert not app.exception
+    assert app.segmented_control(key="workflow-result-view:run-a").value == "运行过程"
+
+
+def test_active_or_failed_tasks_keep_process_as_initial_view():
+    for state in ({"status": "running"}, {"status": "needs_attention"}, {"status": "failed"}, {"active": True}):
+        app = AppTest.from_function(initial_choice_screen)
+        for key, value in state.items():
+            app.session_state[key] = value
+        app.run()
+        assert not app.exception
+        assert app.segmented_control(key="workflow-result-view:run-a").value == "运行过程"
+
+
 def test_report_expands_reading_and_restores_original_focus_on_return():
     app = opened()
     assert app.session_state["task-center-focus:fixture"] is True

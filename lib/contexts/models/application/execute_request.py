@@ -1,5 +1,6 @@
 """Bounded text request execution independent of SDK, clocks and storage."""
 from __future__ import annotations
+from .retry_port import RetryDirective, RetryPort
 from contextlib import ExitStack
 from typing import Any, Dict, List
 from .request_ports import ModelRequestPort, StreamCallback
@@ -7,8 +8,9 @@ from ..domain.request_errors import BudgetExceeded, ModelQueueTimeout, ModelRequ
 
 
 class ExecuteModelRequest:
-    def __init__(self, port: ModelRequestPort):
+    def __init__(self, port: ModelRequestPort, *, retry: RetryPort):
         self.port = port
+        self.retry = retry
 
     def execute(
         self,
@@ -54,8 +56,8 @@ class ExecuteModelRequest:
             except Exception as error:
                 callback_error = error
                 raise
-        attempts = 0
-        while attempts < retries:
+        def attempt_request(attempt):
+            nonlocal last_err
             attempt_details = {}
             reservations = []
             admission = ExitStack()
@@ -102,23 +104,23 @@ class ExecuteModelRequest:
                 # it within the existing admission/budget/attempt bounds.
                 last_err = error
                 failure = port.classify_error(error)
-                delay = port.retry_delay(error, attempts)
+                delay = port.retry_delay(error, attempt)
             except Exception as e:  # noqa: BLE001
                 if e is callback_error or e is cancel_error:
                     raise
                 if isinstance(e, ModelQueueTimeout):
-                    raise ModelRequestError(e.code, e.kind, attempts) from None
+                    raise ModelRequestError(e.code, e.kind, attempt) from None
                 definite_rejection = port.rejected_before_generation(e)
                 # 分层降级 L1→L3：json_mode 被 API 拒绝（不支持 response_format）
                 # → 记录能力探测结果，同次循环降级重试（不消耗用户配置的重试次数）
                 if (reasoning_prefix is None and port.api_format != "anthropic" and json_mode
                         and port.json_supported is not False and port.is_format_unsupported(e)):
                     port.json_supported = False
-                    continue
+                    return RetryDirective(error=e, counted=False)
                 last_err = e
                 failure = port.classify_error(e)
                 if failure["kind"] == "transient":
-                    delay = port.retry_delay(e, attempts)
+                    delay = port.retry_delay(e, attempt)
                     if failure["code"] in {"service_rate_limited", "service_unavailable"}:
                         # Publish the shared cooldown before releasing this slot.
                         port.defer(delay)
@@ -131,16 +133,14 @@ class ExecuteModelRequest:
                                          if request_started and not definite_rejection else 0.0)
                 finally:
                     admission.close()
-            attempts += 1
             if failure is None:
                 failure = {"kind": "invalid", "code": "model_visible_output_missing"}
-            if failure["kind"] != "transient":
-                break
-            delay = port.retry_delay(last_err, attempts - 1) if delay is None else delay
-            if attempts >= retries:
-                break
-            if failure["code"] not in {"service_rate_limited", "service_unavailable"}:
-                port.wait_retry(delay, check_cancel)
-        # Provider error messages may echo credentials or source material.
-        raise ModelRequestError(failure["code"], failure["kind"], attempts,
-            diagnostics=getattr(last_err, "request_diagnostics", None)) from None
+            retryable = failure["kind"] == "transient"
+            if retryable and delay is None:
+                delay = port.retry_delay(last_err, attempt)
+            return RetryDirective(ModelRequestError(failure["code"], failure["kind"], attempt + 1,
+                diagnostics=getattr(last_err, "request_diagnostics", None)), retryable=retryable,
+                delay=0.0 if failure["code"] in {"service_rate_limited", "service_unavailable"} else (delay or 0.0))
+
+        return self.retry.run(attempt_request, attempts=retries,
+                              wait=lambda delay: port.wait_retry(delay, check_cancel) if delay else None)

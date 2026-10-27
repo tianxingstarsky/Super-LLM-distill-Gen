@@ -358,8 +358,10 @@ def test_system_sources_are_not_native_reasoning_and_prefix_remains_real_beta_wi
         path, sent = captured[0]
         assert path == "/beta/chat/completions"
         assert sent["messages"][:-1] == messages
-        assert sent["messages"][-1] == {"role": "assistant", "content": "", "prefix": True,
+        assert sent["messages"][-1] == {"role": "assistant", "content": "\n", "prefix": True,
                                        "reasoning_content": "AUTHORED PREFIX."}
+        assert details["reasoning_prefill"]["version"] == 2
+        assert details["reasoning_prefill"]["visible_prefix"] == "\n"
         assert all("reasoning_content" not in item for item in sent["messages"][:-1])
         assert details["reasoning_content"] == "Provider continuation."
     finally:

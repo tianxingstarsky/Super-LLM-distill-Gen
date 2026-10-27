@@ -1,6 +1,7 @@
 """Ephemeral node-call policy; no new task or checkpoint representation."""
 from dataclasses import dataclass
 from typing import Any
+from .reading_session import READING_PROMPTS
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class NodeModelRequest:
     capture: bool = False
     reasoning_prefix: Any = None
     native_request_attempts: int | None = None
+    structured_response_attempts: int | None = None
 
     @property
     def image_values(self):
@@ -28,9 +30,13 @@ class NodeModelRequest:
                 or any(not isinstance(value, str) or not value for value in images)):
             raise ValueError("invalid_document_images")
         attempts = self.native_request_attempts
-        if attempts is not None and (self.prompt_id != "workflow.cot_native_answer"
+        if attempts is not None and (self.prompt_id not in {"workflow.cot_native_answer", "workflow.cot_native_joint", *READING_PROMPTS}
                 or type(attempts) is not int or not 1 <= attempts <= 10):
             raise ValueError("invalid_model_request_attempts")
+        attempts = self.structured_response_attempts
+        if attempts is not None and (self.prompt_id in {"workflow.cot_native_answer", "workflow.cot_native_joint", *READING_PROMPTS}
+                or type(attempts) is not int or not 1 <= attempts <= 10):
+            raise ValueError("invalid_structured_response_attempts")
 
 
 def request_role(recipe, stage, role):

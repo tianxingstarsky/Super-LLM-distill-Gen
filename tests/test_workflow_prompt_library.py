@@ -122,6 +122,39 @@ def test_style_and_cleanup_templates_restore_their_own_fields(tmp_path):
     assert not ui.exception
 
 
+def test_exploratory_style_can_be_edited_saved_and_reused_without_preset_duplication(tmp_path):
+    from lib.domain.workflow_generation import STYLE_PRESETS, style_for_sample
+
+    ui = workbench(tmp_path)
+    ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["cot"]).run()
+    ui.button(key="fixture-node:cot").click().run()
+    ui.toggle(key="workflow-generation-enabled:fixture:cot").set_value(True).run()
+    style_key = "workflow-generation-style:fixture:cot"
+    instruction_key = "workflow-generation-instruction:fixture:cot"
+    ui.selectbox(key=style_key).set_value("exploratory").run()
+    addition = "保留用户指定的术语。"
+    ui.text_area(key=instruction_key).set_value(addition).run()
+    ui.button(key="workflow-generation-edit-preset:fixture:cot").click().run()
+    expected = STYLE_PRESETS["exploratory"] + "\n\n" + addition
+    assert ui.selectbox(key=style_key).value == "custom"
+    assert ui.text_area(key=instruction_key).value == expected
+    revised = expected.replace("情境：用户只问", "短问题示范：用户只问")
+    ui.text_area(key=instruction_key).set_value(revised).run()
+    scope = "generation:cot"
+    ui.text_input(key=library_key(scope, "name")).set_value("我的审慎探索").run()
+    ui.button(key=library_key(scope, "save")).click().run()
+    library = prompt_library_application(root=tmp_path)
+    saved, = library.list_templates(scope)
+    payload = library.get_template(saved["id"], scope)["payload"]
+    assert style_for_sample(payload, "next-task")["instruction"] == revised
+    ui.button(key=library_key(scope, "restore")).click().run()
+    assert ui.text_area(key=instruction_key).value == ""
+    ui.selectbox(key=library_key(scope, "selection")).set_value(saved["id"]).run()
+    assert ui.text_area(key=instruction_key).value == revised
+    assert ui.toggle(key="workflow-generation-enabled:fixture:cot").value is True
+    assert not ui.exception
+
+
 def test_english_controls_keep_user_template_names_literal(tmp_path):
     library = prompt_library_application(root=tmp_path)
     scope = "node:sft:workflow.sft"

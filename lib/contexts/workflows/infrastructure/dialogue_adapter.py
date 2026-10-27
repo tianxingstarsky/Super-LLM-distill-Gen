@@ -43,6 +43,9 @@ class CheckpointedDialogueAdapter:
         from lib.infrastructure.workflow_qa_director import learner_prompt
         return learner_prompt(contract)
 
+    def prompt_text(self, prompt_id):
+        return self._runtime.prompt_text(prompt_id)
+
     def generation_style(self, *args, **kwargs):
         return self._runtime.generation_style(*args, **kwargs)
 

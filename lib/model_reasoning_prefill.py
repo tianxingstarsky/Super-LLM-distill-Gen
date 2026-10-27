@@ -64,10 +64,15 @@ def prepare_reasoning_prefill(messages, reasoning_prefix, *, api_format,
         # Callers must choose an explicitly labelled source transport before
         # building the request; this boundary never drops or rewrites tools.
         raise ValueError("model_reasoning_prefill_tools_unsupported")
-    prepared = [*deepcopy(messages), {"role": "assistant", "content": "",
+    # A nonempty visible prefix selects the answer continuation boundary.
+    # The official beta currently returns reasoning-only EOS for an empty
+    # content prefix on some V4.1-Flash requests. Whitespace adds no answer
+    # claim and leaves the authored reasoning bytes untouched.
+    prepared = [*deepcopy(messages), {"role": "assistant", "content": "\n",
         "prefix": True, "reasoning_content": reasoning_prefix}]
-    return prepared, {"reasoning_prefill": {"version": 1,
+    return prepared, {"reasoning_prefill": {"version": 2,
         "transport": "deepseek_chat_beta",
+        "visible_prefix": "\n",
         "prefix_sha256": hashlib.sha256(prefix_bytes).hexdigest(),
         "prefix_utf8_bytes": len(prefix_bytes),
         "response_reasoning": "provider_continuation"}}

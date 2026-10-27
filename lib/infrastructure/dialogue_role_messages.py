@@ -355,7 +355,10 @@ def authored_role_messages(system, memory_context, data, *, transport="tool",
     messages = [message for message in messages if message.get("role") not in {"system", "developer"}]
 
     if role_projection_version >= 2:
-        system += _AUTHORED_ROLE_SCOPE_V2 + _AUTHORED_PHASES_V2[phase]
+        system += _AUTHORED_ROLE_SCOPE_V2 + (
+            "\n本次只改写 style_transfer.original 中已有推理的风格，保留有效论证和条件。"
+            "原答案由程序逐字保留，不另设答案生成阶段；旧稿不是已核实事实，不为支持旧答案补造前提。"
+            if data.get("style_transfer") else _AUTHORED_PHASES_V2[phase])
     else:
         system += (
         "\n实际 learner 用户/助手/工具消息是本轮任务，保持其角色和可见性。"
@@ -401,7 +404,7 @@ def authored_role_messages(system, memory_context, data, *, transport="tool",
         # by source_memory_messages is removed before real turns are appended.
         prefix = [message for message in prefix if message.get("role") != "user"]
     dispatch = {key: deepcopy(data[key]) for key in (
-        "reference_answer", "feedback", "removed_patterns", "retry_code", "original_reasoning", "final_answer")
+        "reference_answer", "feedback", "removed_patterns", "retry_code", "original_reasoning", "final_answer", "style_transfer")
         if data.get(key) is not None}
     if data.get("reasoning") is not None:
         dispatch["candidate_reasoning"] = deepcopy(data["reasoning"])

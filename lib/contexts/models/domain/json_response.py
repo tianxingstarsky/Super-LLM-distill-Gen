@@ -4,6 +4,15 @@ import json
 from typing import Any, Dict
 
 
+class JSONResponseDecodeError(ValueError):
+    """A syntax failure, distinct from adapter bugs or receipt-save failures."""
+
+    def __init__(self, error: json.JSONDecodeError):
+        self.position, self.line, self.column = error.pos, error.lineno, error.colno
+        self.reason = error.msg
+        super().__init__("JSON 解析失败")
+
+
 def parse_json_robust(output: str) -> Dict[str, Any]:
     """Decode a complete value before considering an external code fence."""
     text = output.strip()
@@ -11,8 +20,8 @@ def parse_json_robust(output: str) -> Dict[str, Any]:
         # A document or answer can legitimately contain Markdown code fences.
         # Removing those first would corrupt an otherwise valid JSON response.
         return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as error:
+        last_error = error
     fence = text.find("```")
     first_object = text.find("{")
     if fence >= 0 and (first_object < 0 or fence < first_object):
@@ -26,33 +35,15 @@ def parse_json_robust(output: str) -> Dict[str, Any]:
             text = text.split("\n", 1)[1].strip()
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    # 平衡扫描取首个完整对象
+    except json.JSONDecodeError as error:
+        last_error = error
+    # Delegate string escaping and nested-object boundaries to CPython's JSON
+    # decoder. Legacy prose/fence envelopes remain supported without JSON repair.
     start = text.find("{")
     if start >= 0:
-        depth = 0
-        in_str = False
-        escaped = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if in_str:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_str = False
-            elif ch == '"':
-                in_str = True
-            else:
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            return json.loads(text[start : i + 1])
-                        except json.JSONDecodeError:
-                            break
-    raise ValueError("JSON 解析失败")
+        try:
+            value, _ = json.JSONDecoder().raw_decode(text[start:])
+            return value
+        except json.JSONDecodeError as error:
+            last_error = error
+    raise JSONResponseDecodeError(last_error) from None

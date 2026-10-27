@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTEXTS = ROOT / "lib/contexts"
-FRAMEWORKS = {"streamlit", "openai", "anthropic", "requests", "httpx", "sqlite3", "subprocess", "docling"}
+FRAMEWORKS = {"streamlit", "openai", "anthropic", "requests", "httpx", "sqlite3", "subprocess", "docling", "langfuse", "tenacity"}
 
 
 def dependencies(text: str, module: str) -> set[str]:
@@ -166,6 +166,10 @@ def test_composition_uses_separate_adapters_and_narrow_use_cases(tmp_path):
 
 
 @pytest.mark.parametrize("old,new", [
+    ("lib.domain.dataset_assets", "lib.contexts.datasets.domain.assets"),
+    ("lib.application.asset_catalog_service", "lib.contexts.datasets.application.asset_catalog"),
+    ("lib.application.asset_catalog_ports", "lib.contexts.datasets.application.asset_catalog_ports"),
+    ("lib.infrastructure.asset_catalog_driver", "lib.contexts.datasets.infrastructure.asset_catalog"),
     ("lib.domain.sample_distribution", "lib.contexts.datasets.domain.distribution"),
     ("lib.domain.workflow_targets", "lib.contexts.workflows.domain.targets"),
     ("lib.domain.sft_review", "lib.contexts.review.domain.sft_review"),
@@ -313,6 +317,15 @@ from tests.test_node_request_application import (
     test_node_request_reuses_captured_checkpoint_without_new_model_call,
     test_node_request_routes_generation_check_but_keeps_review_role,
 )
+# Exercise request policy with a scripted port, independently of the external
+# retry engine. The real Tenacity path is tested in model/runtime regression.
+import tests.test_model_request_use_cases as request_tests
+from lib.contexts.models.application.retry_port import RetryDirective
+class TwoAttempts:
+    def run(self, action, *, attempts, wait):
+        first = action(0)
+        return action(int(first.counted)) if isinstance(first, RetryDirective) else first
+request_tests.TenacityRetry = TwoAttempts
 from tests.test_model_request_use_cases import (
     test_rate_limit_defers_before_releasing_slot_and_retries_with_clean_reservation,
     test_json_capability_rejection_does_not_consume_retry_or_reuse_live_reservation,

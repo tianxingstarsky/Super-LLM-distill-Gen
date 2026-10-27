@@ -34,7 +34,7 @@ def setup_workflow(tmp_path, monkeypatch, *, legacy_json=False):
         sent.append(deepcopy(kwargs))
         last = kwargs["messages"][-1]
         if last.get("prefix"):
-            assert last == {"role": "assistant", "content": "", "prefix": True, "reasoning_content": PREFIX}
+            assert last == {"role": "assistant", "content": "\n", "prefix": True, "reasoning_content": PREFIX}
             if failures[0]:
                 failures[0] = False
                 raise ValueError("model_reasoning_prefill_rejected")

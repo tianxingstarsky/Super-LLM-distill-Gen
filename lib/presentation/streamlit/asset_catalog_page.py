@@ -4,15 +4,26 @@ import hashlib
 from pathlib import PurePosixPath
 import streamlit as st
 from filelock import Timeout
-from lib.application.asset_catalog_service import AssetCatalogApplication
+from lib.contexts.datasets.api import AssetCatalogApplication
 from lib.presentation.streamlit.shared import page_header, section_heading
 from lib.presentation.streamlit.i18n import translate
-from lib.domain.dataset_assets import generation_source_mode
+from lib.contexts.datasets.contracts import (
+    DIRECT_DOWNLOAD_LIMIT_BYTES, TRAINING_CATEGORIES, generation_source_mode,
+)
 from lib.presentation.file_sizes import format_file_size as _asset_size
 
 
 def _move_page(key: str, delta: int):
     st.session_state[key] += delta
+
+
+def _change_runtime_scope(workspace_id: str):
+    category_key = f"asset-category:{workspace_id}"
+    category = st.session_state.get(category_key, "常用文件")
+    if st.session_state.get(f"asset-runtime:{workspace_id}") and category == "常用文件":
+        st.session_state[category_key] = "全部文件"
+    elif not st.session_state.get(f"asset-runtime:{workspace_id}") and category == "全部文件":
+        st.session_state[category_key] = "常用文件"
 
 
 def _asset_folder(asset, language):
@@ -23,7 +34,11 @@ def _asset_folder(asset, language):
     # Show nearby folders so a shared, long run prefix does not hide the
     # distinction between artifacts and stage results. Full paths stay in details.
     nearby = [part if len(part) <= 18 else part[:8] + "…" for part in parts[-2:]]
-    folder = "/".join((["…"] if len(parts) > 2 else []) + nearby)
+    if asset.run_id:
+        nearby = [part if len(part) <= 18 else part[:8] + "…" for part in parts[2:]]
+        folder = f"#{asset.run_id[:8]} / " + "/".join(nearby)
+    else:
+        folder = "/".join((["…"] if len(parts) > 2 else []) + nearby)
     return f"{origin} / {folder}"
 
 
@@ -61,12 +76,13 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
     if show_title:
         page_header("数据管理", "浏览来源、对话样本、偏好数据和工作流产物。", "DATA LIBRARY", art_kind="library")
     from datetime import datetime
-    from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES, TRAINING_CATEGORIES
     from lib.presentation.streamlit.data_management_style import DATA_MANAGEMENT_STYLE
     st.html(DATA_MANAGEMENT_STYLE)
     if message := st.session_state.get(f"asset-handoff-error:{workspace_id}"):
         st.error(message)
-    inventory = catalog.inventory(workspace_id)
+    include_runtime = st.session_state.get(f"asset-runtime:{workspace_id}", False)
+    inventory = (catalog.inventory(workspace_id) if include_runtime else
+                 getattr(catalog, "library_inventory", catalog.inventory)(workspace_id))
     categories = catalog.categories(inventory)
     source_count = categories.get("来源文件", 0)
     output_count = len(inventory.assets) - source_count
@@ -84,8 +100,11 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
         '</div>'
     )
     if inventory.truncated:
-        st.caption("文件扫描已达到安全上限，计数为当前已列出的数量；其余文件可从本机缓存目录查看。")
+        st.caption("当前范围的文件列表已达到上限，搜索仅覆盖已列出的文件。任务报告与输出打包仍可按任务查看完整结果。")
     if not inventory.assets:
+        st.toggle("包含运行记录", key=f"asset-runtime:{workspace_id}",
+                  on_change=_change_runtime_scope, args=(workspace_id,),
+                  help="默认浏览资料与训练产物；开启后可查看检查点、阶段记录与日志，不会修改文件。")
         with st.container(key="asset-empty"):
             st.html('<div class="df-data-empty"><span aria-hidden="true">▤</span><div>'
                     '<strong>还没有来源或生成文件</strong>'
@@ -94,16 +113,23 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
                 st.button("导入资料", key=f"asset-import:{workspace_id}", type="primary",
                           on_click=on_import_sources)
         return
-    controls = st.columns([1.4, 1, .55] if on_import_sources is not None else [1.4, 1],
+    controls = st.columns([1.1, 1.3, .7, .55] if on_import_sources is not None else [1.1, 1.3, .7],
                           vertical_alignment="bottom")
     filter_col, search_col = controls[:2]
     with filter_col:
+        category_key = f"asset-category:{workspace_id}"
+        if st.session_state.get(category_key, "常用文件") not in category_names:
+            st.session_state[category_key] = "常用文件"
         category = st.selectbox("文件分类", category_names, key=f"asset-category:{workspace_id}")
     with search_col:
         search = st.text_input("搜索文件", placeholder="按文件名或路径筛选…",
                                key=f"asset-search:{workspace_id}")
+    with controls[2]:
+        st.toggle("包含运行记录", key=f"asset-runtime:{workspace_id}",
+                  on_change=_change_runtime_scope, args=(workspace_id,),
+                  help="默认浏览资料与训练产物；开启后可查看检查点、阶段记录与日志，不会修改文件。")
     if on_import_sources is not None:
-        controls[2].button("导入资料", key=f"asset-import:{workspace_id}", width="stretch",
+        controls[3].button("导入资料", key=f"asset-import:{workspace_id}", width="stretch",
                            on_click=on_import_sources)
     filtered = catalog.select(inventory, category, search)
     if not filtered:
@@ -131,6 +157,7 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
     list_col, detail_col = st.columns([1.55, 1], gap="large")
     with list_col, st.container(border=True, key="asset-directory"):
         section_heading("文件目录", "点击文件行，查看详情或继续生成。", "▤")
+        st.caption("来源文件优先；生成产物按最近修改排序。")
         if not filtered:
             st.html('<div class="df-empty-state"><span class="df-empty-state-icon">▤</span><strong>没有匹配的文件</strong><p>清除搜索词，或切换文件分类。</p></div>')
         else:
@@ -180,6 +207,11 @@ def render_asset_catalog(catalog: AssetCatalogApplication, workspace_id: str, sh
                 '</dl><div class="df-data-file-location"><span>位置</span>'
                 f'<strong data-user-content>{display_path}</strong></div>'
             )
+            if selected.run_id:
+                from lib.presentation.streamlit.review_navigation import return_to_task
+                st.button("查看所属任务", key=f"asset-task:{workspace_id}:{selected.id}",
+                          on_click=return_to_task, args=(selected.run_id,), width="stretch",
+                          help=selected.run_id)
             try:
                 generation_source_mode(selected)
             except ValueError:

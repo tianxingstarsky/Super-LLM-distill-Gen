@@ -34,13 +34,15 @@ class GenerateProductionBatch:
             collections["cpt"] = self._port.cpt_records(source_rows if self.recipe["sources"] else generated)
         if "agent" in selected:
             collections["agent"] = self._port.run_stage("agent", source_rows)
+        from ..domain.reading_session import reading_session_enabled
+        reading = reading_session_enabled(self.recipe)
         directed = (self._port.directed_dialogues(generated, needs_sft=needs_sft,
-                    needs_multiturn="multiturn" in selected)
-                    if self.recipe.get("qa_director", {}).get("enabled") and (needs_sft or "multiturn" in selected) else None)
+                    needs_multiturn="multiturn" in selected and not reading)
+                    if self.recipe.get("qa_director", {}).get("enabled") and (needs_sft or "multiturn" in selected and not reading) else None)
         if needs_sft:
             collections["sft"] = directed["sft"] if directed is not None else self._port.run_stage("sft", generated)
         if "multiturn" in selected:
-            collections["multiturn"] = directed["multiturn"] if directed is not None else self._port.run_stage("multiturn", generated)
+            collections["multiturn"] = directed["multiturn"] if directed is not None and not reading else self._port.run_stage("multiturn", generated)
         if selected & PREFERENCE_TARGETS:
             rows = self._port.eligible_records("sft", collections["sft"])
             pairs = self._port.run_stage("preference", rows)

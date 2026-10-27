@@ -656,13 +656,14 @@ class ChatClient:
         return result
 
     def tool_turn(self, messages, tools, *, max_tokens=1024, temperature=0.7, retries=3,
-                  response_details=None, on_stream=None, tool_choice="auto"):
+                  response_details=None, on_stream=None, tool_choice="auto", recover_arguments=False, strict=False):
         """One admitted function-calling turn; callers execute and record tools."""
         from lib.model_tool_calls import tool_turn
         return tool_turn(self, messages, tools, max_tokens=max_tokens,
                          temperature=temperature, retries=retries,
                          response_details=response_details, on_stream=on_stream,
-                         tool_choice=tool_choice)
+                         tool_choice=tool_choice, **({"recover_arguments": True} if recover_arguments else {}),
+                         **({"strict": True} if strict else {}))
 
     def chat(
         self,
@@ -886,6 +887,11 @@ def load_backend(
     scheduler = SharedModelScheduler(root, model_pool_identity(b.get("base_url", ""), api_key, model))
     scheduler.synchronize(model)
     client.scheduler = scheduler
+    from lib.monitor import _langfuse_config
+    try:
+        client.observation_config = _langfuse_config(root)
+    except Exception:
+        client.observation_config = None
     # A declared lack of tool support uses a labelled internal memory message.
     # Unknown capabilities try the real protocol; errors are never disguised as
     # successful tool use, nor silently rewritten into a user-supplied document.

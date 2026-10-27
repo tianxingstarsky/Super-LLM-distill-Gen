@@ -190,6 +190,13 @@ class WorkflowSourceLibrary:
                         valid=lambda part: isinstance(part.get("record"), dict),
                         check_cancel=self.check_cancel, on_status=status):
                     index, row = part["location"], part["record"]
+                    if self.recipe.get("external_reasoning_import_version") == 1:
+                        from lib.contexts.datasets.contracts import adapt_reasoning_record
+                        try:
+                            row = adapt_reasoning_record(row) or row
+                        except ValueError as error:
+                            yield unit(index, status="quarantined", reason=str(error))
+                            continue
                     if not isinstance(row, dict):
                         yield unit(index, status="quarantined", reason="invalid_json_record")
                     elif isinstance(row.get("text"), str) and not (row.get("messages") or row.get("conversations")):
@@ -211,7 +218,8 @@ class WorkflowSourceLibrary:
                             yield unit(index, kind="conversation", messages=sample["messages"],
                                 tools=sample.get("tools", []),
                                 tool_snapshots=sample.get("tool_snapshots") if "agent" in self.recipe["targets"] else None,
-                                verification_status=sample.get("verification_status"), status="ready")
+                                verification_status=sample.get("verification_status"), status="ready",
+                                **({"reasoning_import": sample["reasoning_import"]} if "reasoning_import" in sample else {}))
                         except (ValueError, TypeError, KeyError, AttributeError):
                             yield unit(index, status="quarantined", reason="invalid_or_incomplete_conversation")
                 return

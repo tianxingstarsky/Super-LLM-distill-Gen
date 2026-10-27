@@ -9,10 +9,21 @@
 |---|---|---|---|---|
 | Magpie | components/magpie | MIT | b734a36818e4ba7ef7f0f582fc55f7e860407d26 | https://github.com/magpie-align/magpie |
 | OpenCUA | components/opencua | MIT | dfc91ba89f700d10f26ec50362d308571482ab8b | https://github.com/xlang-ai/OpenCUA |
-| deepseek-harness | components/deepseek-harness | MIT | 76fda729799fe9b3848dbe2c211d4b231032b81e | https://github.com/deepseek-ai/deepseek-harness |
 
 说明：submodule 内源代码一律不改动；本项目仅通过适配层（lib/adapters）调用其脚本、模板与数据格式。
 唯一例外见 PATCHES.md（OpenCUA cot-generator 新增 deepseek 端点路由的最小补丁，可 git apply 复现）。
+
+DeepSeek Harness 通过独立插件适配。`components/deepseek-harness/` 仅可作为被忽略的本地开发 checkout，不属于本仓库内置或分发的 submodule。上游为 https://github.com/deepseek-ai/deepseek-harness ，许可证 MIT；插件合同及兼容性独立维护。
+
+## Adapted Experience Prompts
+
+- ReasoningBank — Copyright 2026 Google LLC, Apache License 2.0.
+  The experience proposal prompt adapts a small set of memory extraction prompts.
+  Fixed upstream commit: ed80611788292ea739f1effd31f16c53823b8a0d.
+  Source: https://github.com/google-research/reasoning-bank
+  Attribution and modification details: docs/licenses/README.md.
+  Full license: docs/licenses/reasoning-bank-APACHE-2.0.txt.
+  Its agent runtime is not included.
 
 ## pip 依赖（声明于 pyproject.toml / requirements）
 

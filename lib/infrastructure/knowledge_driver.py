@@ -14,8 +14,6 @@ import stat
 import tempfile
 import uuid
 import zipfile
-from urllib.parse import quote
-from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 from filelock import FileLock
 
@@ -28,33 +26,7 @@ from lib.io_utils import atomic_json
 from lib.infrastructure.web_research_connection import _protect, _read_descriptor
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-def _request_json(url: str, *, body=None, api_key="", bearer=False) -> dict:
-    headers = {"Accept": "application/json"}
-    if api_key:
-        headers["Authorization" if bearer else "api-key"] = "Bearer " + api_key if bearer else api_key
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    try:
-        with build_opener(_NoRedirect()).open(Request(url, data=data, headers=headers), timeout=30) as response:
-            raw = response.read(4 * 1024 * 1024 + 1)
-            if len(raw) > 4 * 1024 * 1024:
-                raise ValueError("knowledge_response_too_large")
-            result = json.loads(raw)
-            if not isinstance(result, dict):
-                raise ValueError("knowledge_response_invalid")
-            return result
-    except Exception as error:
-        # Provider bodies/URLs may contain sensitive material. Keep them out of UI/logs.
-        if isinstance(error, ValueError) and str(error).startswith("knowledge_"):
-            raise
-        raise ValueError("knowledge_connection_unavailable") from None
+from lib.contexts.documents.infrastructure.knowledge_transport import collection_info, query_points, embed_query
 
 
 class FilesystemKnowledgeDriver:
@@ -231,7 +203,7 @@ class FilesystemKnowledgeDriver:
             os.chmod(self.config_path, 0o600)
 
     def _collection(self, config):
-        info = _request_json(config["url"] + "/collections/" + quote(config["collection"], safe=""), api_key=config["api_key"])
+        info = collection_info(config)
         try:
             vectors = info["result"]["config"]["params"]["vectors"]
             vector = vectors[config["vector_name"]] if config["vector_name"] else vectors
@@ -266,15 +238,12 @@ class FilesystemKnowledgeDriver:
             if not config:
                 raise ValueError("knowledge_connection_required")
             dimensions = self._collection(config)
-            embedding = _request_json(config["embedding_url"] + "/embeddings", body={"model": config["embedding_model"], "input": query}, api_key=config["embedding_key"], bearer=True)
+            embedding = embed_query(config, query)
             try:
                 vector = validate_vector(embedding["data"][0]["embedding"], dimensions)
             except (KeyError, IndexError, TypeError):
                 raise ValueError("knowledge_embedding_response_invalid") from None
-            body = {"query": vector, "limit": limit, "with_payload": True, "with_vector": False}
-            if config["vector_name"]:
-                body["using"] = config["vector_name"]
-            response = _request_json(config["url"] + "/collections/" + quote(config["collection"], safe="") + "/points/query", body=body, api_key=config["api_key"])
+            response = query_points(config, vector, limit)
             try:
                 points = response["result"]["points"]
                 if not isinstance(points, list) or len(points) > limit:

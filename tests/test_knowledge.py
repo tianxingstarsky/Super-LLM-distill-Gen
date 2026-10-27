@@ -10,7 +10,7 @@ from lib.application.knowledge_service import KnowledgeApplication
 from lib.bootstrap.knowledge import knowledge_application
 from lib.bootstrap.local_inputs import local_input_application
 from lib.domain.knowledge import validate_connection, validate_vector
-from lib.infrastructure.knowledge_driver import FilesystemKnowledgeDriver, _request_json
+from lib.infrastructure.knowledge_driver import FilesystemKnowledgeDriver
 
 
 def local_sources(root):
@@ -77,7 +77,10 @@ def qdrant_server(*, dimensions=3, vector=None, error=False):
             pass
         def do_GET(self):
             calls.append(("GET", self.path, dict(self.headers), None))
-            body = {"result": {"config": {"params": {"vectors": {"dense": {"size": dimensions}}}}}}
+            body = {"result": {"status": "green", "optimizer_status": "ok", "segments_count": 1,
+                "payload_schema": {}, "config": {"params": {"vectors": {"dense": {"size": dimensions, "distance": "Cosine"}}},
+                "hnsw_config": {"m": 16, "ef_construct": 100, "full_scan_threshold": 10000},
+                "optimizer_config": {"default_segment_number": 1, "flush_interval_sec": 5}}}, "status": "ok", "time": 0.001}
             self.send_response(401 if error else 200)
             self.end_headers()
             self.wfile.write(json.dumps(body).encode())
@@ -87,7 +90,7 @@ def qdrant_server(*, dimensions=3, vector=None, error=False):
             if self.path == "/v1/embeddings":
                 result = {"data": [{"embedding": [0.1, 0.2, 0.3] if vector is None else vector}]}
             else:
-                result = {"result": {"points": [{"id": 42, "score": .87, "payload": {"content": {"text": "Verified manual excerpt."}, "metadata": {"source": "manual.pdf"}}}]}}
+                result = {"result": {"points": [{"id": 42, "version": 1, "score": .87, "payload": {"content": {"text": "Verified manual excerpt."}, "metadata": {"source": "manual.pdf"}}}]}}
             self.send_response(200)
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
@@ -117,11 +120,11 @@ def test_qdrant_sends_real_query_vector_and_named_vector(tmp_path):
         assert application.check_connection()["dimensions"] == 3
         result = application.retrieve("qdrant", "manual operation", 4)
         assert calls[-2][1] == "/v1/embeddings"
-        assert calls[-2][3] == {"model": "same-index-model", "input": "manual operation"}
-        assert calls[-2][2]["Authorization"] == "Bearer embedding-private-key"
+        assert calls[-2][3] == {"model": "same-index-model", "input": "manual operation", "encoding_format": "float"}
+        assert {key.lower(): value for key, value in calls[-2][2].items()}["authorization"] == "Bearer embedding-private-key"
         assert calls[-1][1] == "/collections/manuals/points/query"
-        assert calls[-1][3] == {"query": [.1, .2, .3], "limit": 4, "with_payload": True, "with_vector": False, "using": "dense"}
-        assert calls[-1][2]["Api-Key"] == "qdrant-private-key"
+        assert calls[-1][3] == {"query": {"nearest": [.1, .2, .3]}, "limit": 4, "with_payload": True, "with_vector": False, "using": "dense"}
+        assert {key.lower(): value for key, value in calls[-1][2].items()}["api-key"] == "qdrant-private-key"
         assert result["hits"][0]["source"] == "manual.pdf"
         assert result["hits"][0]["location"] == "qdrant:point:42"
         assert "private-key" not in json.dumps(result)

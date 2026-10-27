@@ -14,7 +14,12 @@ import re
 import threading
 import time
 
-from lib.contexts.models.domain.request_errors import ModelOutputLimitError
+from lib.contexts.models.domain.request_errors import (
+    BudgetExceeded, ModelQueueTimeout, ModelStreamError, ModelOutputLimitError,
+)
+from lib.contexts.models.infrastructure.provider_failures import (
+    provider_failure_kind, response_headers,
+)
 
 
 MAX_RETRY_DELAY_SECONDS = 60.0
@@ -227,14 +232,23 @@ class RequestDiagnostics:
 
 
 def classify_request_error(error: Exception) -> dict[str, str]:
+    failure = _classify_request_error(error)
+    # SDK retries are disabled because admission and settlement are ours. Keep
+    # their upstream veto, without allowing a hint to override fatal policies.
+    if failure["kind"] == "transient" and response_headers(error).get("x-should-retry") == "false":
+        return {**failure, "kind": "fatal"}
+    return failure
+
+
+def _classify_request_error(error: Exception) -> dict[str, str]:
     """Classify from types/status/known codes, never interpolate provider text."""
     if isinstance(error, ModelOutputLimitError):
         return {"kind": "invalid", "code": "model_output_limit"}
     if isinstance(error, (ModelRequestError, ModelJSONError)):
         return {"kind": error.kind, "code": error.code}
-    if type(error).__name__ == "ModelQueueTimeout":
+    if isinstance(error, ModelQueueTimeout):
         return {"kind": "transient", "code": "model_request_queue_timeout"}
-    if type(error).__name__ == "BudgetExceeded":
+    if isinstance(error, BudgetExceeded):
         return {"kind": "fatal", "code": "budget_exhausted"}
     status = _status(error)
     # Quota depletion will not be cured by rapidly retrying a 429. Read only
@@ -261,28 +275,29 @@ def classify_request_error(error: Exception) -> dict[str, str]:
     if code is not None:
         kind, failure_code = _PROVIDER_CODE_FAILURES[code]
         return {"kind": kind, "code": failure_code}
-    names = {item.__name__ for item in type(error).__mro__}
-    if names & {"TimeoutError", "TimeoutException", "APITimeoutError", "ReadTimeout", "ConnectTimeout"}:
+    provider_kind = provider_failure_kind(error)
+    if provider_kind == "timeout":
         return {"kind": "transient", "code": "service_timeout"}
-    if names & {"ConnectionError", "APIConnectionError", "NetworkError", "ConnectError", "ReadError",
-                "WriteError", "RemoteProtocolError", "ProxyError"}:
+    if provider_kind == "connection":
         return {"kind": "transient", "code": "service_connection_failed"}
-    if names & {"ModelStreamError"}:
+    if isinstance(error, ModelStreamError):
         if str(error) in {"model_stream_idle_timeout", "model_stream_interrupted"}:
             if str(error) == "model_stream_interrupted":
                 # HTTP 200 can still contain an API SSE error. The SDK retains
                 # its structured code in APIError; it is not a broken socket.
                 for cause in list(_exception_chain(error))[1:]:
-                    cause_names = {item.__name__ for item in type(cause).__mro__}
-                    if "APIError" in cause_names and "APIConnectionError" not in cause_names:
+                    cause_kind = provider_failure_kind(cause)
+                    if cause_kind == "api":
                         return classify_request_error(cause)
-                    if cause_names & {"StreamClosed", "StreamConsumed", "ResponseNotRead", "RequestNotRead"}:
+                    if cause_kind == "stream_state":
                         return {"kind": "fatal", "code": "model_stream_state_error"}
                     if type(cause) in {RuntimeError, TypeError, ValueError, AssertionError, KeyError}:
                         return {"kind": "fatal", "code": "model_stream_state_error"}
             return {"kind": "transient", "code": str(error)}
         return {"kind": "invalid", "code": "model_stream_invalid"}
-    if "APIError" in names:
+    if provider_kind == "stream_state":
+        return {"kind": "fatal", "code": "model_stream_state_error"}
+    if provider_kind == "api":
         # Unknown provider SSE errors need inspection; do not pay repeatedly
         # for a permanent error whose text is intentionally not retained.
         return {"kind": "fatal", "code": "service_stream_error"}
@@ -302,13 +317,16 @@ def rejected_before_generation(error: Exception) -> bool:
 
 
 def retry_delay(error: Exception, attempt: int) -> float:
-    """Bound Retry-After (seconds or HTTP date), then exponential full jitter."""
-    headers = getattr(getattr(error, "response", None), "headers", None)
-    if headers is None:
-        headers = getattr(error, "headers", None)
-    value = headers.get("retry-after") if hasattr(headers, "get") else None
-    if value is None and hasattr(headers, "get"):
-        value = headers.get("Retry-After")
+    """Honor SDK millisecond/HTTP Retry-After hints, then bounded equal jitter."""
+    headers = response_headers(error)
+    try:
+        delay = float(headers.get("retry-after-ms")) / 1000
+    except (TypeError, ValueError, OverflowError):
+        pass
+    else:
+        if math.isfinite(delay) and delay >= 0:
+            return min(MAX_RETRY_DELAY_SECONDS, delay)
+    value = headers.get("retry-after")
     if value is not None:
         try:
             delay = float(value)
@@ -322,8 +340,11 @@ def retry_delay(error: Exception, attempt: int) -> float:
                 delay = -1.0
         if math.isfinite(delay) and delay >= 0:
             return min(MAX_RETRY_DELAY_SECONDS, delay)
-    ceiling = min(30.0, .5 * (2 ** min(max(0, attempt), 6)))
-    return random.uniform(ceiling / 2, ceiling)
+    from types import SimpleNamespace
+    from tenacity import wait_exponential, wait_random_exponential
+    state = SimpleNamespace(attempt_number=min(max(0, attempt), 6) + 1)
+    ceiling = wait_exponential(multiplier=.5, max=30)(state)
+    return wait_random_exponential(multiplier=.5, min=ceiling / 2, max=30)(state)
 
 
 def cancelable_wait(seconds: float, cancel_check) -> None:

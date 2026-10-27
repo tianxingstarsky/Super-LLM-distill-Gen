@@ -85,7 +85,8 @@ def test_legacy_module_compat():
 def test_configured_explanation_length_does_not_conflict_with_short_default():
     from lib.prompts import workflow
     current = get("workflow.cot_generate")
-    assert current.version == "1.10.0"
+    assert current.version == "1.12.0"
+    assert get("workflow.cot_generate", version="1.11.0") == workflow.COT_GENERATE_V1_11
     assert "用户未配置篇幅时直接可解的问题可以很短" in current.template
     assert "用户明确配置篇幅时核对实际正文与有效信息量" in current.template
     assert "具体版本行为、阈值、CLI开关、SQL字段和锁类型" in current.template
@@ -126,7 +127,7 @@ def test_latest_review_protocol_preserves_literal_scope_and_refuses_invented_sup
         "不伪造工具核验",
     ):
         assert constraint in text
-    for name, version in (("rationale_check", "1.8.0"), ("package_review", "1.4.0")):
+    for name, version in (("rationale_check", "1.9.0"), ("package_review", "1.4.0")):
         spec = get("workflow." + name)
         assert spec.version == version
         assert "没有依据的精确细节应省略或明确保留不确定性" in render(spec)
@@ -151,7 +152,7 @@ def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_s
 def test_user_hypotheses_do_not_become_asserted_beliefs_and_previous_snapshots_remain_registered():
     from lib.prompts import workflow
     for name, new_version, old_version, previous in (
-        ("cot_generate", "1.10.0", "1.6.0", workflow.COT_GENERATE_V1_6),
+        ("cot_generate", "1.12.0", "1.6.0", workflow.COT_GENERATE_V1_6),
         ("review_repair", "1.16.0", "1.4.0", workflow.REVIEW_REPAIR_V1_4),
     ):
         assert get("workflow." + name).version == new_version

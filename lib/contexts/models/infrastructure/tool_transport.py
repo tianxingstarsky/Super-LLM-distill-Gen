@@ -25,6 +25,7 @@ from lib.model_request_reliability import (
 )
 from lib.model_response_details import commit_response_details, extract_response_details
 from lib.model_streaming import ModelStreamError
+from ..domain.request_errors import ModelOutputLimitError
 
 
 MAX_TOOLS = 128
@@ -305,7 +306,7 @@ def _request(client, kwargs):
     raise ValueError("model_tool_parameter_negotiation_failed")
 
 
-def _assistant(response, api, names):
+def _assistant(response, api, names, *, recover_arguments=False):
     if api == "chat":
         choices = _get(response, "choices", [])
         if len(choices) != 1:
@@ -315,6 +316,31 @@ def _assistant(response, api, names):
         if not isinstance(raw, dict) or not isinstance(raw.get("content", "") or "", str):
             raise ValueError("invalid_model_tool_response")
         result = {"role": "assistant", "content": raw.get("content") or "", "tool_calls": raw.get("tool_calls") or []}
+        if _get(choice, "finish_reason") == "length":
+            raise ModelOutputLimitError()
+        if recover_arguments:
+            # Preserve malformed raw arguments for the caller's tool-error feedback.
+            # A JSON envelope makes the rejected call replayable; it is never executed.
+            result["tool_calls"] = deepcopy(result["tool_calls"])
+            for call in result["tool_calls"]:
+                if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+                    raise ValueError("invalid_model_tool_call")
+                probe = deepcopy(call)
+                original = probe["function"].get("arguments")
+                if not isinstance(original, str):
+                    raise ValueError("invalid_model_tool_arguments")
+                probe["function"]["arguments"] = "{}"
+                _calls({"tool_calls": [probe]})
+                try:
+                    parsed = json.loads(original)
+                    if not isinstance(parsed, dict):
+                        raise ValueError("tool arguments must be an object")
+                except ValueError as error:
+                    result.setdefault("tool_argument_errors", []).append({"call_id": call["id"],
+                        "original_arguments": original, "error": str(error),
+                        "line": getattr(error, "lineno", None), "column": getattr(error, "colno", None),
+                        "position": getattr(error, "pos", None)})
+                    call["function"]["arguments"] = _json({"__invalid_tool_arguments__": original})
         _calls(result)
         if _get(choice, "finish_reason") != ("tool_calls" if result["tool_calls"] else "stop"):
             raise ModelStreamError("model_stream_incomplete")
@@ -349,9 +375,10 @@ def _assistant(response, api, names):
 
 
 def tool_turn(client, messages, tools, *, max_tokens=1024, temperature=0.7, retries=3,
-              response_details=None, on_stream=None, tool_choice="auto"):
+              response_details=None, on_stream=None, tool_choice="auto", recover_arguments=False, strict=False):
     """Compatibility entry for the admitted function-calling application use case."""
     from lib.bootstrap.model_requests import tool_turn_request
     return tool_turn_request(client).execute(messages, tools, max_tokens=max_tokens,
         temperature=temperature, retries=retries, response_details=response_details,
-        on_stream=on_stream, tool_choice=tool_choice)
+        on_stream=on_stream, tool_choice=tool_choice, recover_arguments=recover_arguments,
+        **({"strict": True} if strict else {}))

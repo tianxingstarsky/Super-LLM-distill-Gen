@@ -106,7 +106,11 @@ def test_regeneration_preserves_exact_question_has_new_prefix_receipt_and_never_
         learner = request["messages"][-2] if request["messages"][-1].get("prefix") else request["messages"][-1]
         assert learner == original["question"][-1]
         assert TEXT not in learner["content"] and "EDITORIAL_FEEDBACK" not in learner["content"]
-    assert sent[-1]["messages"][-1] == {"role": "assistant", "content": "", "prefix": True, "reasoning_content": PREFIX}
+    # The shared SDK fixture already requires the v2 visible continuation
+    # boundary. Keep the exact wire/receipt assertions aligned with that contract.
+    assert sent[-1]["messages"][-1] == {"role": "assistant", "content": "\n", "prefix": True, "reasoning_content": PREFIX}
+    assert row["reasoning_prefill"]["version"] == 2
+    assert row["reasoning_prefill"]["visible_prefix"] == "\n"
     assert item["record"] == original
     if not missing:
         assert row["reasoning_prefill_history"][0]["reasoning_prefill"]["prefix_sha256"] == "old-prefix"

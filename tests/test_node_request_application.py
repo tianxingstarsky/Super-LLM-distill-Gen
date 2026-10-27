@@ -60,6 +60,8 @@ def test_node_request_routes_generation_check_but_keeps_review_role():
     ({"image": [""]}, "invalid_document_images"),
     ({"image": ["image"] * 9}, "invalid_document_images"),
     ({"native_request_attempts": 2}, "invalid_model_request_attempts"),
+    ({"structured_response_attempts": 0}, "invalid_structured_response_attempts"),
+    ({"structured_response_attempts": True}, "invalid_structured_response_attempts"),
 ])
 def test_invalid_request_never_enters_checkpoint_or_client(options, reason):
     port = MemoryRequestPort()

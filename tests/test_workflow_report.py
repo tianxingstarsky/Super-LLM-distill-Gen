@@ -164,6 +164,20 @@ def test_reading_title_uses_literal_legacy_utterance_without_changing_training_b
     assert row == original
 
 
+def test_style_transfer_original_is_separate_escaped_and_not_exported(tmp_path):
+    original = {"reasoning": "Original <script>alert(1)</script> trace", "answer": "Real answer 0."}
+    row = cot(style_transfer={"version": 1, "original": original, "answer_preserved": True,
+                              "semantic_status": "model_assessed"}, judge={"keep": True, "reason": "Compared both versions"})
+    app, run, _, _ = fixture_run(tmp_path, [row])
+    page = ready_page(app)
+    assert page["rows"][0]["style_transfer"]["original"] == original
+    assert page["rows"][0]["reviews"]["fact"]
+    document = app.html(RID, "cot", language="en")
+    assert "Original before style transfer" in document
+    assert "&lt;script&gt;" in document and "<script>" not in document
+    assert "Original <script>" not in (run / "artifacts/cot.jsonl").read_text(encoding="utf-8")
+
+
 def test_unfinished_live_index_counts_are_explicit_lower_bounds():
     overview = {"run_id": RID, "name": "Real work", "status": "failed", "finalized": False,
                 "updated_at": "now", "sources": [], "stages": []}

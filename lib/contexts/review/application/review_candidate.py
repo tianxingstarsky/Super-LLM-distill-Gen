@@ -155,9 +155,10 @@ class ReviewCandidate:
             if contrastive:
                 key = [row["id"], "shared_preference_v1", pair_scope, attempt]
             if force_repair or attempt:
+                from lib.contexts.workflows.contracts import investigation_feedback
                 row, issue = self._port.repair(target, row, evidence, key,
-                    check or original.get("review_repair", {}).get("verdict") or original.get("judge")
-                        or {"reason": instruction or original.get("reason", "")}, instruction)
+                    investigation_feedback(check or original.get("review_repair", {}).get("verdict") or original.get("judge")
+                        or {"reason": instruction or original.get("reason", "")}), instruction)
                 receipt = row["review_repair"]
                 receipt["attempts"] += 1
                 if issue:
@@ -180,6 +181,20 @@ class ReviewCandidate:
                 row.update(status="quarantined", reason="review_repair_exhausted")
                 break
             check = self._port.score(target, row, evidence, key, instruction)
+            checklist_config = self.recipe.get("node_generation", {}).get("cot", {}).get("self_check")
+            if target == "cot" and checklist_config and checklist_config["version"] != 7 and accepted(check):
+                from lib.contexts.workflows.contracts import checklist_bound_to_record
+                saved = row.get("reasoning_checklist")
+                if (not isinstance(saved, dict) or not checklist_bound_to_record(row, saved)
+                        or saved.get("version") != checklist_config["version"]
+                        or saved.get("rules") != checklist_config["rules"] or self._port.authenticated_revision):
+                    saved = self._port.check_reasoning(row, evidence, key, checklist_config)
+                    row["reasoning_checklist"] = deepcopy(saved)
+                if not saved.get("passed"):
+                    # Preserve the raw model score and verdict. The combined
+                    # admission decision fails on a separate, evidenced rule.
+                    check = {**check, "quality_verdict": deepcopy(check), "keep": False,
+                        "reason": "reasoning_checklist_failed", "reasoning_checklist": deepcopy(saved)}
             if audit_enabled:
                 from lib.domain.reasoning_candidates import assessment_from_verdict
                 payload = deepcopy(self._port.payload(target, row))
@@ -212,6 +227,19 @@ class ReviewCandidate:
                    if self.recipe.get("claim_refutation_release_version") == 1
                    and "claim_release_decision" in row else {})})
             receipt.update(score=score, verdict=deepcopy(check), reason=check["reason"])
+            # Only the investigation used by this decision may pause repair.
+            # An older incomplete audit cannot mask a newly established defect.
+            investigation = check.get("reasoning_checklist", {})
+            if (target == "cot" and investigation.get("version") in (3, 4, 5, 6)
+                    and not investigation.get("passed")
+                    and investigation.get("issue") != "reasoning_agent_found_gap"):
+                # Incomplete investigation is not evidence that the candidate is wrong.
+                # Keep the original body and paid evidence instead of buying a rewrite.
+                receipt.update(status="waiting_manual_review", reason="reasoning_agent_incomplete",
+                               stop_reason="reasoning_agent_incomplete")
+                receipt["history"][-1]["status"] = "waiting_manual_review"
+                row.update(status="quarantined", reason="reasoning_agent_incomplete")
+                break
             force_repair = False
             if (self.recipe.get("claim_review_condition_contract_version") == 1
                     and (any(entry.get("review", {}).get("condition_guard", {}).get("needs_review")

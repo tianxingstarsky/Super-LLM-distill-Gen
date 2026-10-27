@@ -188,3 +188,21 @@ def test_adjacent_node_controls_keep_the_draft_and_stop_at_graph_boundaries(tmp_
     ui.button(key="fixture-node:package").click().run()
     assert not ui.exception
     assert ui.button(key="workflow-next-node:fixture").disabled
+
+
+def test_cot_mode_link_opens_prompt_controls_without_enabling_authoring(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("A source for reasoning configuration.", encoding="utf-8")
+    ui = AppTest.from_string(_script(source)).run()
+    ui.selectbox(key=PRESET).set_value("自选目标").run()
+    ui.pills(key="workflow-targets:fixture:自选目标").set_value(["cot"]).run()
+    bindings = deepcopy(ui.session_state["workflow-node-bindings:fixture"])
+    ui.button(key="workflow-cot-mode:fixture").click().run()
+    assert not ui.exception
+    assert ui.session_state["workflow-setup-node:fixture"] == "cot"
+    assert ui.session_state["workflow-node-tabs:fixture:cot"] == "提示词与风格"
+    assert not ui.toggle(key="workflow-generation-enabled:fixture:cot").value
+    assert ui.session_state["workflow-node-bindings:fixture"] == bindings
+    ui.toggle(key="workflow-generation-enabled:fixture:cot").set_value(True).run()
+    assert not ui.exception
+    assert not any(button.key == "workflow-cot-mode:fixture" for button in ui.button)

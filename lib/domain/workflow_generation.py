@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 
 from lib.domain.workflow_quality import text_issue
+from lib.contexts.workflows.contracts import EXPLORATORY_STYLE_V1
 from lib.domain.reasoning_depth import (
     validate_reasoning_depth, resolve_reasoning_depth, reasoning_depth_instruction,
 )
@@ -16,6 +17,7 @@ STYLE_PRESETS = {
     "structured": "采用条理清晰的教学风格，按适当步骤解释依据与推导，再给出明确答案。",
     "skeptical": "采用审慎核验风格，检查前提、证据和边界条件，明确不确定性后给出答案。",
     "reflective": "采用反思校验风格，检查方案中的关键假设与可能错误，给出经核验的解释和结论。",
+    "exploratory": EXPLORATORY_STYLE_V1,
 }
 GENERATION_STYLES = (*STYLE_PRESETS, "mixed", "custom")
 REASONING_LANGUAGES = ("auto", "zh", "en", "zh_en")
@@ -24,7 +26,7 @@ REASONING_LANGUAGE_CONTRACT_VERSION = 3
 _MIXED_STYLES = ("concise", "structured", "skeptical", "reflective")
 
 
-def reasoning_language_instruction(value: str = "auto", *, version: int = 1) -> str:
+def reasoning_language_instruction(value: str = "auto", *, version: int = 1, native: bool = False) -> str:
     """Describe authored reasoning, retaining the contract of frozen recipes."""
     if (not isinstance(value, str) or value not in REASONING_LANGUAGES
             or type(version) is not int or version not in {1, 2, 3}):
@@ -90,7 +92,9 @@ def reasoning_language_instruction(value: str = "auto", *, version: int = 1) -> 
     return (
         "显式推理语言要求：" + expression
         + "最终答案跟随当前用户的语言与明确要求，不因推理语言设置而强制双语。"
-        "语言要求只控制新撰写的显式推理，不修改或冒称上游原生推理；"
+        + ("这些语言要求用于引导本次原生思考，原始通道逐字保存，不在答案中另写一份推理；" if native else
+           "语言要求只控制新撰写的显式推理，不修改或冒称上游原生推理；")
+        +
         "事实正确、证据范围和用户任务优先于语言表现。"
         "不在答案或推理正文复述这些配置、角色指令、内部审核或生成流程。"
     )
@@ -105,7 +109,7 @@ def validate_node_generation(value: dict | None) -> dict:
     normalized = {}
     for stage, config in value.items():
         if (stage not in {"sft", "cot", "multiturn"} or not isinstance(config, dict)
-                or set(config) - {"enabled", "style", "instruction", "answer_mode", "reasoning_language", "reasoning_depth"}):
+                or set(config) - {"enabled", "style", "instruction", "answer_mode", "reasoning_language", "reasoning_depth", "self_check", "source_lookup", "review_policy", "reading_session"}):
             raise ValueError("invalid_node_generation")
         enabled = config.get("enabled", True)
         style = config.get("style", "default")
@@ -117,6 +121,20 @@ def validate_node_generation(value: dict | None) -> dict:
                 or (enabled and style == "custom" and not instruction.strip())):
             raise ValueError("invalid_node_generation")
         normalized[stage] = {"enabled": enabled, "style": style, "instruction": instruction.strip()}
+        if "reading_session" in config:
+            if stage != "multiturn" or type(config["reading_session"]) is not bool or (config["reading_session"] and not enabled):
+                raise ValueError("invalid_reading_session")
+            normalized[stage]["reading_session"] = config["reading_session"]
+        if "self_check" in config:
+            from lib.contexts.workflows.contracts import validate_reasoning_checklist
+            if stage != "cot":
+                raise ValueError("invalid_reasoning_checklist")
+            normalized[stage]["self_check"] = validate_reasoning_checklist(config["self_check"])
+        if "source_lookup" in config:
+            from lib.contexts.workflows.contracts import validate_source_lookup
+            if stage != "cot" or not enabled or config.get("self_check", {}).get("version") != 7:
+                raise ValueError("invalid_generation_source_lookup")
+            normalized[stage]["source_lookup"] = validate_source_lookup(config["source_lookup"])
         if "reasoning_language" in config:
             reasoning_language_instruction(config["reasoning_language"])
             normalized[stage]["reasoning_language"] = config["reasoning_language"]
@@ -127,10 +145,19 @@ def validate_node_generation(value: dict | None) -> dict:
                 raise ValueError("invalid_node_generation") from error
         if "answer_mode" in config:
             mode = config["answer_mode"]
-            if (stage != "cot" or not isinstance(mode, str) or mode not in {"joint", "native_prefill"}
-                    or (mode == "native_prefill" and not enabled)):
+            if (stage != "cot" or not isinstance(mode, str) or mode not in {"joint", "native_joint", "native_prefill", "draft_then_finalize", "faithful_restyle"}
+                    or (mode != "joint" and not enabled)):
                 raise ValueError("invalid_cot_answer_mode")
             normalized[stage]["answer_mode"] = mode
+            if mode == "native_joint" and (config.get("source_lookup") is not None
+                    or config.get("self_check", {}).get("version", 7) != 7):
+                raise ValueError("native_cot_requires_generation_reflection_without_source_tools")
+        if "review_policy" in config:
+            from lib.contexts.workflows.contracts import validate_cot_review_policy
+            if (stage != "cot" or not enabled or config.get("answer_mode") not in {"faithful_restyle", "native_joint"}
+                    or config.get("self_check", {}).get("version") != 7):
+                raise ValueError("invalid_cot_review_policy")
+            normalized[stage]["review_policy"] = validate_cot_review_policy(config["review_policy"])
     return normalized
 
 
@@ -145,7 +172,7 @@ def style_for_sample(config: dict | None, sample_id: str, *, reasoning_language_
     # Answer transport belongs to the CoT stage, not the text style itself.
     # Creation validates its scope; neutral style selection can serve either node.
     style_config = ({} if config is None else
-                    {key: value for key, value in config.items() if key != "answer_mode"}
+                    {key: value for key, value in config.items() if key not in {"answer_mode", "self_check", "source_lookup", "review_policy", "reading_session"}}
                     if isinstance(config, dict) else config)
     node = validate_node_generation({"sft": style_config})["sft"]
     style = node["style"]
@@ -158,7 +185,8 @@ def style_for_sample(config: dict | None, sample_id: str, *, reasoning_language_
     if node["enabled"] and language != "auto":
         result["reasoning_language"] = language
         result["instruction"] = "\n".join(part for part in (
-            instruction, reasoning_language_instruction(language, version=reasoning_language_version)) if part)
+            instruction, reasoning_language_instruction(language, version=reasoning_language_version,
+                native=bool(config and config.get("answer_mode") == "native_joint"))) if part)
     if reasoning_depth_version == 1 and node["enabled"] and "reasoning_depth" in node:
         depth = resolve_reasoning_depth(node["reasoning_depth"], sample_id, version=reasoning_depth_version)
         result["reasoning_depth"] = depth

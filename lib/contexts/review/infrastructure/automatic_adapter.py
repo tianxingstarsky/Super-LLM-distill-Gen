@@ -34,6 +34,16 @@ class CheckpointedReviewAdapter:
     def score(self, *args, **kwargs):
         return self._runtime._review_score(*args, **kwargs)
 
+    def check_reasoning(self, record, evidence, key, config):
+        from lib.bootstrap.reasoning_checklist import reasoning_checklist
+        reasoning = record.get("reasoning", "")
+        if isinstance(reasoning, list):
+            reasoning = "\n\n".join(reasoning)
+        return reasoning_checklist(self._runtime, config).execute([*key, "revised_checklist_v1"],
+            {"prompt": record.get("question"), "source": evidence,
+             "generation_style": record.get("generation_style")},
+            {"reasoning": reasoning, "answer": record.get("answer", "")}, phase="final")
+
     def independent_cot_assessment(self, *args, **kwargs):
         return self._runtime.independent_cot_assessment(*args, **kwargs)
 

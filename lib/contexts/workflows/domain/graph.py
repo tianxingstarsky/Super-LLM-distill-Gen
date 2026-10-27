@@ -50,7 +50,7 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
                     package_review=None, recipe_version=16,
                     repair_only=False, source_cleaning=None,
                     review_repair=None, arithmetic_seed_protocol_version=0,
-                    cpt_review_policy_version=0
+                    cpt_review_policy_version=0, node_generation=None
                     ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
@@ -74,8 +74,11 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
         active.add("cpt")
     # The canvas also renders incomplete editable drafts. Creation performs
     # full validation; dependencies only depend on the explicit switch.
+    from .reading_session import reading_session_enabled
+    reading = reading_session_enabled({"node_generation": node_generation or {}})
+    directed_stages = {"sft"} if reading else {"sft", "multiturn"}
     directed = (qa_director.get("enabled") is True if isinstance(qa_director, dict)
-                else bool(qa_director)) and bool(active.intersection({"sft", "multiturn"}))
+                else bool(qa_director)) and bool(active.intersection(directed_stages))
     if directed:
         active.add("director")
     trimmed_outputs = selected.intersection({"sft", "cot"}) if reasoning_trim else set()
@@ -102,7 +105,7 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     generation_source = "cpt" if shared_cleaning else "ingest"
     if directed:
         edges.append((generation_source, "director"))
-    edges.extend(("director" if directed and key in {"sft", "multiturn"}
+    edges.extend(("director" if directed and key in directed_stages
                   else generation_source if key in {"sft", "multiturn"} else "ingest", key)
                  for key in BASE_STAGES if key in active and not (independent_math and key == "gsm8k"))
     edges.extend(("sft", key) for key in DERIVED_STAGES if key in active)

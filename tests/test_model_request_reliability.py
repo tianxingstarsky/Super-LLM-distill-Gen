@@ -83,6 +83,43 @@ def test_retry_after_is_bounded_and_accepts_http_date(monkeypatch):
     assert reliability.retry_delay(ProviderError(429, headers={"retry-after": "invalid"}), 500) == 30
 
 
+def test_sdk_wait_headers_use_milliseconds_and_case_insensitive_names():
+    import httpx2
+    import openai
+
+    request = httpx2.Request("POST", "https://offline.invalid/v1/chat/completions")
+    response = httpx2.Response(429, request=request,
+        headers={"Retry-After-Ms": "2500", "Retry-After": "9"})
+    error = openai.RateLimitError("offline", response=response, body={})
+    assert reliability.retry_delay(error, 0) == 2.5
+    response.headers["retry-after-ms"] = "NaN"
+    assert reliability.retry_delay(error, 0) == 9
+    response.headers["retry-after-ms"] = "100000"
+    assert reliability.retry_delay(error, 0) == reliability.MAX_RETRY_DELAY_SECONDS
+
+
+def test_failure_classification_uses_sdk_types_not_lookalike_names():
+    import anthropic
+    import httpx
+    import httpx2
+    import openai
+    from lib.contexts.models.domain.request_errors import ModelQueueTimeout
+
+    request = httpx2.Request("POST", "https://offline.invalid/v1/chat/completions")
+    for sdk in (openai, anthropic):
+        assert reliability.classify_request_error(sdk.APITimeoutError(request))["code"] == "service_timeout"
+        assert reliability.classify_request_error(sdk.APIConnectionError(request=request))["code"] == "service_connection_failed"
+    for http in (httpx, httpx2):
+        assert reliability.classify_request_error(http.ReadTimeout("offline"))["code"] == "service_timeout"
+        assert reliability.classify_request_error(http.StreamConsumed())["kind"] == "fatal"
+    class QueueExpired(ModelQueueTimeout):
+        pass
+    assert reliability.classify_request_error(QueueExpired())["code"] == "model_request_queue_timeout"
+    for name in ("APIConnectionError", "ReadTimeout", "ModelQueueTimeout", "ModelStreamError"):
+        unrelated = type(name, (RuntimeError,), {})("local bug")
+        assert reliability.classify_request_error(unrelated) == {"kind": "fatal", "code": "model_request_failed"}
+
+
 def test_success_settles_global_and_task_once(tmp_path):
     item = client(tmp_path)
     item._request = lambda *a, **kw: ("ok", 1, 1)

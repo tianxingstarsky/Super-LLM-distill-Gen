@@ -13,7 +13,7 @@ import hashlib
 from lib.domain.workflow_quality import canonical
 
 
-AGENT_EXPERIENCE_VERSION = 3
+AGENT_EXPERIENCE_VERSION = 4
 MAX_EXPERIENCE_BYTES = 32 * 1024
 EXPERIENCE_SCOPES = ("director", "question", "answer", "reasoning", "review", "cpt")
 EXPERIENCE_KIND = "procedural_guidance_not_evidence"
@@ -288,7 +288,17 @@ _TEXT_VERSIONS = {1: {
     "reasoning": _REASONING_V3, "review": _REVIEW_V3, "cpt": _CPT_V1,
 }}
 
+INITIAL_STYLE_V1 = """简洁全面 · 初始 v1
+围绕用户当前要解决的问题，用最少但足够的思考完成判断。保留影响答案的依据、推导和条件，省略重复复述、无贡献试探和反复撰写完整答案。
+有相关依据时兼顾支持与反证，比较可行方案的收益和代价；发现冲突或疏漏就修正判断，并把修正带进最终答案。没有实际反例或错误时不编造负例、失败和反转。
+证据支持到哪里，结论就说到哪里。区分事实、假设与建议，未知的条件保留未知；可靠结论直接说明，不用模糊词掩饰错误关系。
+思考中的“我”是负责回答的助手，“用户”提出需求，“工具”提供实际观察。沿用真实历史，历史助手也可能出错。审美和架构建议须结合用户偏好、约束和实际结果；一次好恶不升级为普遍规则。
+没有固定步骤、标题、开头、字数或正负样本配额；简单问题可以很短，复杂问题保留必要依赖。风格服务于当前任务，不覆盖用户的语言、资料范围和输出要求。"""
+_TEXT_VERSIONS[4] = {**_TEXT_VERSIONS[3], "reasoning": _SOURCE_NOTE + "\n" + INITIAL_STYLE_V1}
+
 _PROMPT_SCOPES = {
+    "workflow.reading_scene": "director", "workflow.reading_user": "question",
+    "workflow.cot_native_joint": "reasoning", "workflow.reading_answer": "reasoning",
     "workflow.plan": "director", "workflow.qa_director": "director",
     "workflow.question_user": "question", "workflow.multiturn_user": "question",
     "workflow.sft": "answer", "workflow.sft_styled": "answer", "workflow.sft_directed": "answer",
@@ -300,6 +310,9 @@ _PROMPT_SCOPES = {
     **{prompt: "review" for prompt in (
         "workflow.question_brief_check", "workflow.question_fit", "workflow.jev_score", "workflow.judge",
         "workflow.style_check", "workflow.rationale_check", "workflow.cot_prefix_check",
+        "workflow.cot_self_check", "workflow.cot_self_check_review",
+        "workflow.cot_claim_check", "workflow.cot_claim_review",
+        "workflow.cot_check_agent",
         "workflow.package_review", "workflow.review_score", "workflow.review_repair",
         "workflow.review_reference", "workflow.learner_context_check",
         "workflow.multiturn_consistency", "workflow.human_augmentation_check",

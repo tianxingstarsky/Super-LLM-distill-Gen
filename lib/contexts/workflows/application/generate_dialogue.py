@@ -20,6 +20,9 @@ class GenerateMultiturnDialogue:
         self.recipe = recipe
 
     def execute(self, unit):
+        from ..domain.reading_session import reading_session_enabled
+        if reading_session_enabled(self.recipe):
+            return self._reading_session(unit)
         # New snapshots use this node's authored style, falling back to SFT.
         # Imported dialogue and frozen older requests remain literal.
         style_node = "multiturn" if "multiturn" in self.recipe.get("node_generation", {}) else "sft"
@@ -34,6 +37,101 @@ class GenerateMultiturnDialogue:
                        for message in row.get("messages", [])):
                     row["reasoning_origin"] = "prompt_styled_generation"
         return rows
+
+    def _reading_session(self, unit):
+        """One private scenario, then isolated user/answer histories with resume keys."""
+        from ..domain.reading_session import (END_DIALOGUE, reading_source, reading_context,
+            simulator_messages, utterance_advisories)
+        from ..domain.native_cot import native_instruction_leakage
+        from ..domain.authored_task_contract import compile_task_contract, task_surface_receipt
+        if unit.get("kind") != "document":
+            return [self._port.reject(unit, "reading_session_requires_document")]
+        style = self._port.generation_style("multiturn", unit["id"])
+        prepared = self._port.prepare_source(unit, style)
+        try:
+            source = reading_source(unit, prepared)
+        except ValueError as error:
+            return [self._port.reject(unit, str(error))]
+        from ..domain.public_experience import public_experience_text
+        public_rules = self._port.prompt_text("workflow.reading_answer")
+        if experience := public_experience_text(self.recipe):
+            public_rules += "\n\n" + experience
+        messages = reading_context(public_rules, source,
+                                   (style or {}).get("instruction", ""))
+        scene_task = {"material": source, "brief": self.recipe.get("brief", "")}
+        if experience := public_experience_text(self.recipe, "director"):
+            scene_task["experience"] = experience
+        scene_response = self._port.request([unit["id"], "reading_scene_v1", digest(scene_task)],
+            "generation", "workflow.reading_scene", scene_task,
+            capture_response_details=True, allow_reasoning_fallback=False, native_request_attempts=1)
+        scene = scene_response.get("answer", "")
+        if text_issue(scene):
+            return [self._port.reject(unit, "reading_session_invalid_scene")]
+        turns, actor_receipts, issues = [], [], []
+        end_reason = "turn_limit"
+        user_template = self._port.prompt_text("workflow.reading_user")
+        if experience := public_experience_text(self.recipe, "question"):
+            user_template += "\n\n" + experience
+        for turn in range(self.recipe.get("conversation_turns", 3)):
+            user_task = {"messages": simulator_messages(user_template, scene, source, messages,
+                protocol_version=self.recipe.get("reading_actor_protocol_version", 1))}
+            user_response = self._port.request([unit["id"], "reading_user_v1", turn, digest(user_task)],
+                "generation", "workflow.reading_user", user_task,
+                capture_response_details=True, allow_reasoning_fallback=False, native_request_attempts=1)
+            utterance = user_response.get("answer", "")
+            actor_receipts.append({"turn": turn + 1, "response": deepcopy(dict(user_response)),
+                "call": getattr(user_response, "response_details", {}).get("checkpoint")})
+            if utterance.strip() == END_DIALOGUE:
+                end_reason = "user_goal_complete"
+                if not turns:
+                    issues.append("reading_session_empty_dialogue")
+                break
+            if text_issue(utterance):
+                issues.append("reading_session_invalid_user_message")
+                break
+            messages.append({"role": "user", "content": utterance})
+            # The answering model receives no scenario, rubric, desired answer,
+            # private actor reasoning or retrospective review feedback.
+            answer_task = {"messages": without_source_reasoning(messages)}
+            response = self._port.request([unit["id"], "reading_answer_v1", turn, digest(answer_task)],
+                "generation", "workflow.reading_answer", answer_task,
+                capture_response_details=True, allow_reasoning_fallback=False, native_request_attempts=1)
+            answer, reasoning = response.get("answer", ""), response.get("reasoning", "")
+            local_issues = []
+            if text_issue(answer) or text_issue(reasoning):
+                local_issues.append("reading_session_missing_native_output")
+            leakage = native_instruction_leakage(reasoning, messages, public_task_rules=True)
+            if leakage:
+                local_issues.append("native_generation_instruction_leakage")
+            task = {"prompt": messages}
+            delivery = task_surface_receipt(task, {"answer": answer, "reasoning": reasoning}, compile_task_contract(task))
+            if not delivery["observable_passed"]:
+                local_issues.append("cot_task_delivery_mismatch")
+            messages.append({"role": "assistant", "content": answer, "reasoning_content": reasoning})
+            turns.append({"turn": turn + 1, "issues": local_issues, "leakage_evidence": leakage,
+                "utterance_advisories": utterance_advisories(utterance), "task_delivery": delivery,
+                "semantic_status": "not_assessed", "reasoning_origin": "provider_reasoning",
+                "call": getattr(response, "response_details", {}).get("checkpoint"),
+                "request_messages_sha256": digest(answer_task["messages"])})
+            if local_issues:
+                issues.extend(local_issues)
+                end_reason = "local_defect"
+                break
+        row = {"id": unit["id"], "source_id": unit["source_id"], "source_name": unit.get("source_name"),
+            "status": "eligible", "messages": messages, "tools": [], "source_context": deepcopy(unit),
+            "synthetic": True, "turn_count": len(turns), "reasoning_origin": "provider_reasoning",
+            "evidence_level": "source_text_not_independently_verified", "fact_verification": "not_independently_verified",
+            "generation_style": style, "generation_check": "public_context_and_native_channels",
+            "reading_session": {"version": 1, "source_sha256": digest(source), "public_context_sha256": digest(messages[0]),
+                "semantic_status": "not_assessed", "end_reason": end_reason, "turns": turns,
+                "scenario": scene, "user_simulation": actor_receipts,
+                "visibility": "rules_and_material_exported_scene_private", "issues": issues}}
+        from lib.domain.training_surface import training_record_surface_issue
+        if surface_issue := training_record_surface_issue("multiturn", row, protocol_version=2):
+            issues.append(surface_issue)
+        if issues:
+            row.update(self._port.reject(unit, issues[0]))
+        return [row]
 
     def generate(self, unit, *, style=None):
         """Build or conservatively assess a complete multi-turn conversation.

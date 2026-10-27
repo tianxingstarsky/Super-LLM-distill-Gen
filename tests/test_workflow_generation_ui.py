@@ -188,6 +188,18 @@ def test_import_style_saves_custom_utf8_instructions_for_one_node_only(monkeypat
     assert len(saved) == 2
 
 
+def test_editing_preset_does_not_truncate_existing_user_instruction(monkeypatch):
+    state = {"workflow-generation-style:w:cot": "exploratory",
+             "workflow-generation-instruction:w:cot": "额外要求" * 900}
+    monkeypatch.setattr(settings, "st", SimpleNamespace(session_state=state))
+    saved = []
+    settings._edit_style_preset("w", "cot", lambda *args: saved.append(args))
+    assert state["workflow-generation-style:w:cot"] == "exploratory"
+    assert state["workflow-generation-instruction:w:cot"] == "额外要求" * 900
+    assert "4,000" in state["workflow-generation-edit-error:w:cot"]
+    assert not saved
+
+
 def test_reusing_recipe_preserves_generation_toggle_and_trim_template_body():
     recipe = {"sources": [], "targets": ["cot"], "brief": "Generate examples.",
               "node_generation": {"sft": {"enabled": False, "style": "custom", "instruction": ""},
@@ -228,9 +240,11 @@ def test_workbench_submits_active_node_styles_and_optional_trim_with_body():
     ui.button(key="workflow-create:fixture").click().run()
     assert not ui.exception
     created = ui.session_state["fixture-created"]
+    from lib.contexts.workflows.contracts import default_integrated_reflection
     assert created["node_generation"] == {
         "sft": {"enabled": False, "style": "default", "instruction": ""},
-        "cot": {"enabled": True, "style": "skeptical", "instruction": "Check assumptions.", "answer_mode": "joint"},
+        "cot": {"enabled": True, "style": "skeptical", "instruction": "Check assumptions.", "answer_mode": "joint",
+                "self_check": default_integrated_reflection()},
     }
     assert created["reasoning_trim"] == {
         "enabled": True, "template": "custom", "instruction": "",

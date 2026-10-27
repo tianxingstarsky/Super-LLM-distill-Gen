@@ -37,7 +37,7 @@ One minute from your first source to a visible workflow. See the real workbench,
 One place to start, follow, and refine your work. The home screen brings new tasks and recent activity together. The interface is available in English and Chinese.
 
 <p align="center">
-  <img src="screenshots/homepage.jpg" width="1200" alt="The ShuJian Cube home screen with creation shortcuts and recent work" />
+  <img src="screenshots/homepage.png" width="1200" alt="The ShuJian Cube home screen with creation shortcuts and recent work" />
 </p>
 
 | Bring your own sources | Stay close to the process | Build at your own pace |
@@ -69,6 +69,14 @@ Scanned documents can use a model with confirmed image support. Choose it in the
 ## Choose your data
 
 Select one goal or combine several. Create CPT text, SFT instructions, DPO or ORPO preference pairs, and RLAIF feedback. You can also create agent traces, multi-turn conversations, visible CoT examples, and GSM8K-style arithmetic examples.
+
+## Read, reflect, and keep your own style
+
+Create reading conversations from your documents. Keep the model's native thinking and its answer together. Inspect each turn in the saved results.
+
+Start with the initial style, or save your own version. Import DSH conversations to draft lessons from past attempts. Check the proposed rules before adopting them. Restore an earlier version whenever you need it.
+
+This build is intended for a limited preview. Generated examples and proposed rules still need quality checks. See the [preview readiness notes](docs/release-readiness-2026-10-27.md) for the latest local results and open work.
 
 <p align="center">
   <img src="assets/showcase/data-goals.svg" width="1200" alt="Nine supported goals: CPT, SFT, DPO, ORPO, RLAIF, Agent, Multi-turn, CoT, and GSM8K" />

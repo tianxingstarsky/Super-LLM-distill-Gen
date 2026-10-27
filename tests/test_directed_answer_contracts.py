@@ -158,11 +158,14 @@ def test_historical_answer_contract_is_complete(prompt_id, version, body):
     ("workflow.sft_directed", "1.10.0", SFT_DIRECTED_V1_8),
     ("workflow.sft_answer", "1.7.0", SFT_ANSWER_V1_5),
 ])
-def test_latest_answer_contract_adds_the_versioned_warmup_and_claim_scope(prompt_id, version, previous):
+def test_released_answer_contract_retains_warmup_and_new_default_adds_workshop(prompt_id, version, previous):
     from lib.prompts.workflow_reasoning import warmup_generation_body, claim_scope_body
+    from lib.prompts.workflow_reasoning_workshop import reasoning_workshop_body
     expected = claim_scope_body(warmup_generation_body(previous), phase="generation")
-    assert get(prompt_id).version == version
-    assert render(get(prompt_id)) == expected
+    assert render(get(prompt_id, version)) == expected
+    current_version = {"workflow.sft_directed": "1.11.0", "workflow.sft_answer": "1.8.0"}[prompt_id]
+    assert get(prompt_id).version == current_version
+    assert render(get(prompt_id)) == reasoning_workshop_body(expected)
 
 
 @pytest.mark.parametrize("prompt_id,version,expected", [

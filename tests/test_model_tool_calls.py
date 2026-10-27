@@ -199,6 +199,36 @@ def test_incomplete_or_unexecutable_calls_never_escape_to_executor(api, broken):
         client.client.close()
 
 
+@pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
+def test_incomplete_tool_response_preserves_diagnostics_without_completion_or_retry(api):
+    data = reply(api)
+    if api == "chat":
+        data["choices"][0]["finish_reason"] = "length"
+    elif api == "responses":
+        data["status"] = "incomplete"
+    else:
+        data["stop_reason"] = "max_tokens"
+    calls, events, details = [], [], {"old_success": "must not survive"}
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, json=data)
+    client = sdk_client(api, handle)
+    try:
+        with pytest.raises(ValueError, match="model_stream_incomplete"):
+            client.tool_turn(MESSAGES, TOOLS, response_details=details, on_stream=events.append)
+        assert len(calls) == 1 and client.usage["calls"] == 1
+        assert set(details) == {"incomplete_response"}
+        partial = details["incomplete_response"]
+        assert partial["status"] == "incomplete"
+        raw = partial["details"]["incomplete_provider_response"]
+        assert raw["id"] == data["id"] and "source_read" in json.dumps(raw)
+        assert any(e["type"] == "delta" and e.get("incomplete") for e in events)
+        assert not any(e["type"] == "response_completed" for e in events)
+        assert all("tool_calls" not in event for event in events)
+    finally:
+        client.client.close()
+
+
 @pytest.mark.parametrize("api", ["responses", "anthropic"])
 def test_tampered_or_cross_protocol_opaque_history_rejected_before_admission(api):
     client = sdk_client(api, lambda request: httpx.Response(200, json=reply(api)))

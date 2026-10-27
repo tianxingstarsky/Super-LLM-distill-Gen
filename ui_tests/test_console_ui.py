@@ -231,6 +231,12 @@ def test_data_library_prioritizes_real_source_and_cpt_over_workflow_evidence(tmp
 
     next(item for item in view.selectbox if item.label == "文件分类").set_value("全部文件").run()
     assert not view.exception
+    # The default library scope excludes execution evidence even with no
+    # category filter. Opening the explicit runtime scope restores those files.
+    files = next(item.value for item in view.dataframe if "文件名" in item.value)
+    assert "0000.txt" not in list(files["文件名"])
+    view.toggle(key=f"asset-runtime:{ws.DEFAULT}").set_value(True).run()
+    assert not view.exception
     files = next(item.value for item in view.dataframe if "文件名" in item.value)
     file_list = list(files["文件名"])
     assert file_list.index("guide.txt") < file_list.index("0000.txt")

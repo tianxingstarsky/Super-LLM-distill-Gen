@@ -4,8 +4,22 @@ from ..domain.generation import EmptyVisibleAnswer
 
 
 class CheckpointedGenerationAdapter:
-    def __init__(self, runtime):
+    def __init__(self, runtime, source_lookup=None):
         self._runtime = runtime
+        self._source_lookup = source_lookup
+
+    def generation_source_messages(self, *args):
+        return self._source_lookup.messages(*args)
+
+    def prepare_generation_context(self, context):
+        from .reasoning_agent_adapter import CheckpointedReasoningAgent
+        return CheckpointedReasoningAgent(self._runtime).prepare_reasoning_context(context, include_source_scope=True)
+
+    def generation_source_turn(self, *args, **kwargs):
+        return self._source_lookup.turn(*args, **kwargs)
+
+    def search_generation_sources(self, *args):
+        return self._source_lookup.search(*args)
 
     @property
     def current_stage(self):
@@ -45,6 +59,25 @@ class CheckpointedGenerationAdapter:
 
     def request(self, *args, **kwargs):
         return self._runtime.ask(*args, **kwargs)
+
+    def check_reasoning_cancel(self):
+        self._runtime.check_cancel()
+
+    def prepare_reasoning_context(self, context):
+        from .reasoning_agent_adapter import CheckpointedReasoningAgent
+        return CheckpointedReasoningAgent(self._runtime).prepare_reasoning_context(context)
+
+    def reasoning_progress(self, *args):
+        from .reasoning_agent_adapter import CheckpointedReasoningAgent
+        return CheckpointedReasoningAgent(self._runtime).reasoning_progress(*args)
+
+    def reasoning_tool_turn(self, *args):
+        from .reasoning_agent_adapter import CheckpointedReasoningAgent
+        return CheckpointedReasoningAgent(self._runtime).reasoning_tool_turn(*args)
+
+    def reasoning_review_identity(self):
+        from .reasoning_agent_adapter import CheckpointedReasoningAgent
+        return CheckpointedReasoningAgent(self._runtime).reasoning_review_identity()
 
     def reject(self, *args, **kwargs):
         return self._runtime.rejected(*args, **kwargs)

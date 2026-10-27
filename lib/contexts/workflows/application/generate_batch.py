@@ -41,11 +41,12 @@ class GenerateDatasetBatch:
                             collections: StageCollections) -> None:
         directed = (self._runtime.directed_dialogues(
             inputs.generation_candidates, needs_sft=plan.needs_sft,
-            needs_multiturn="multiturn" in plan.targets) if plan.director_enabled else None)
+            needs_multiturn="multiturn" in plan.targets and not plan.reading_session)
+            if plan.director_enabled and (plan.needs_sft or not plan.reading_session) else None)
         if directed is None:
             self._runtime.skip_stage("director")
         for stage, selected in (("sft", plan.needs_sft), ("multiturn", "multiturn" in plan.targets)):
-            if directed is None:
+            if directed is None or stage == "multiturn" and plan.reading_session:
                 collections[stage] = self._optional_stage(
                     stage, inputs.generation_candidates, selected=selected)
             else:

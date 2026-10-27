@@ -6,6 +6,7 @@ no-op，仅把同样的结构化记录写入当前工作区的 runs.jsonl（本�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
 import time
@@ -47,12 +48,18 @@ def trace_run(root: pathlib.Path, kind: str, payload: Dict[str, Any]) -> None:
     if not cfg:
         return
     try:
-        from langfuse import Langfuse
+        from lib.contexts.models.infrastructure.telemetry import configured_observation_client
 
-        lf = Langfuse(public_key=cfg["public_key"], secret_key=cfg["secret_key"], host=cfg["host"])
-        trace = lf.trace(name=f"df-{kind}", input=entry)
-        if payload.get("usage"):
-            trace.generation(name=kind, model=payload.get("model", ""), usage=payload["usage"])
+        lf = configured_observation_client(cfg)
+        with lf.start_as_current_observation(as_type="span", name=f"df-{kind}", input=entry) as observation:
+            observation.update(output=payload)
+            if payload.get("usage"):
+                usage = payload["usage"]
+                with lf.start_as_current_observation(as_type="generation", name=kind,
+                        model=payload.get("model", ""), usage_details={
+                            "input": usage.get("prompt_tokens", usage.get("input", 0)),
+                            "output": usage.get("completion_tokens", usage.get("output", 0))}):
+                    pass
         lf.flush()
-    except Exception:  # noqa: BLE001 —— 监控失败不影响主流程
-        pass
+    except Exception as error:  # telemetry may fail, completed business work must not
+        logging.getLogger(__name__).warning("Langfuse trace export failed (%s)", type(error).__name__)

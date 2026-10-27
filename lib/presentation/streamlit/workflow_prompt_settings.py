@@ -16,6 +16,9 @@ from lib.presentation.streamlit.prompt_library_controls import (
 
 
 PROMPT_LABELS = {
+    "workflow.reading_scene": "情景故事设计",
+    "workflow.reading_user": "情景用户连续发言",
+    "workflow.reading_answer": "共享资料原生思考与回答",
     "workflow.plan": "任务规划",
     "workflow.document_vision": "文档与图片识别",
     "workflow.document_parse": "文档文字与结构解析",
@@ -29,6 +32,11 @@ PROMPT_LABELS = {
     "workflow.cot_rationale": "风格化推理前缀生成",
     "workflow.cot_native_answer": "原生推理续写答案",
     "workflow.cot_prefix_check": "推理前缀核验",
+    "workflow.cot_self_check": "逐项证据自检",
+    "workflow.cot_self_check_review": "独立证据核查",
+    "workflow.cot_claim_check": "主张、单位与范围自检",
+    "workflow.cot_claim_review": "独立主张核验",
+    "workflow.cot_check_agent": "Agent 核查策略",
     "workflow.rationale_check": "推理正确性核验",
     "workflow.style_check": "风格符合度核验",
     "workflow.multiturn_user": "下一轮提问",
@@ -124,7 +132,9 @@ def _import_prompt(workspace: str, node: str, prompt_id: str, save_field) -> Non
     save_field(workspace, key)
 
 
-def _prompt_label(prompt_id: str, node: str, language: str, source_cleaning: bool = False) -> str:
+def _prompt_label(prompt_id: str, node: str, language: str, source_cleaning: bool = False, answer_mode=None) -> str:
+    if node == "cot" and answer_mode == "faithful_restyle" and prompt_id == "workflow.cot_rationale":
+        return "Faithful reasoning edit" if language == "en" else "推理保真改写"
     label = ({"workflow.cpt_clean": "资料清洗", "workflow.cpt_review": "资料保真核对"}.get(prompt_id)
              if node == "cpt" and source_cleaning else None)
     return translate_label(label or PROMPT_LABELS.get(prompt_id, prompt_id), language)
@@ -152,7 +162,8 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
         step, reset = st.columns([1.65, 1], gap="small", vertical_alignment="bottom")
         with step:
             prompt_id = st.selectbox("处理步骤", prompts, key=selection_key,
-                                    format_func=lambda value: _prompt_label(value, node, language, source_cleaning))
+                                    format_func=lambda value: _prompt_label(value, node, language, source_cleaning,
+                                        ((node_generation or {}).get(node) or {}).get("answer_mode")))
         body_key = _prompt_key(workspace, node, prompt_id)
         default = builtin_node_prompt(prompt_id)
         st.session_state[body_key] = _field(workspace, body_key, default)
@@ -207,7 +218,8 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
                             format_func=lambda value: (translate_label("负例类型核验", language)
                                 if legacy_design and value == "workflow.preference_directed_check" else
                                 _prompt_label(value, node, language,
-                                    recipe.get("version", 0) >= 19 and recipe.get("source_cleaning") is True)))
+                                    recipe.get("version", 0) >= 19 and recipe.get("source_cleaning") is True,
+                                    recipe.get("node_generation", {}).get(node, {}).get("answer_mode"))))
     st.text_area("提示词正文", value=prompts[prompt_id], height=164, disabled=True,
                  key=f"workflow-run-prompt-body:{run_id}:{node}:{prompt_id}")
     from lib.presentation.streamlit.workflow_experience_controls import render_pinned_experience

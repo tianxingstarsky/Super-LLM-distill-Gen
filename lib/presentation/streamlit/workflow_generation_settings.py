@@ -18,8 +18,11 @@ from lib.presentation.streamlit.prompt_library_controls import render_prompt_lib
 
 
 STYLE_LABELS = {"default": "遵循任务", "concise": "简洁工程", "structured": "分步教学",
-                "skeptical": "审慎核验", "reflective": "反思校验", "mixed": "多风格混合",
+                "skeptical": "审慎核验", "reflective": "反思校验", "exploratory": "审慎探索", "mixed": "多风格混合",
                 "custom": "自定义风格"}
+STYLE_DESCRIPTIONS = {
+    "exploratory": "从用户意图出发，随依据形成判断，针对关键疑点核查；包含四个短示范，不固定步骤或长度。",
+}
 REASONING_LANGUAGE_LABELS = {"auto": "跟随任务", "zh": "中文推理", "en": "英文推理",
                              "zh_en": "关键词句互译理解"}
 REASONING_DEPTH_LABELS = {"auto": "随任务（不控制）", "quick": "简短 · 关键依据",
@@ -58,6 +61,8 @@ def generation_snapshot(workspace: str, nodes) -> dict:
     } for node in nodes if node in {"sft", "cot", "multiturn"}}
     draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     for node, settings in configuration.items():
+        if node == "multiturn" and settings["enabled"] and _field(workspace, f"workflow-reading-session:{workspace}:{node}", False):
+            settings["reading_session"] = True
         key = f"workflow-generation-reasoning-language:{workspace}:{node}"
         language = _field(workspace, key, "auto")
         # Merely opening an old draft must not introduce a new persisted
@@ -69,6 +74,18 @@ def generation_snapshot(workspace: str, nodes) -> dict:
         # after restoring a saved template. Old recipes remain opt-in.
         if depth != "auto":
             settings["reasoning_depth"] = depth
+        if node == "cot" and settings["enabled"]:
+            from .reasoning_checklist_controls import checklist_settings
+            try:
+                checklist = checklist_settings(workspace, _field)
+                if checklist:
+                    settings["self_check"] = checklist
+                if settings.get("answer_mode") in {"faithful_restyle", "native_joint"} and (checklist or {}).get("version") == 7:
+                    settings["review_policy"] = {
+                        "mode": _field(workspace, f"workflow-generation-review-mode:{workspace}:cot", "sampled"),
+                        "sample_percent": _field(workspace, f"workflow-generation-review-percent:{workspace}:cot", 20)}
+            except ValueError:
+                settings["self_check"] = {}  # Surface through the existing creation validation.
     return configuration
 
 
@@ -87,8 +104,8 @@ def reasoning_route_description(node, targets, recipe_version=15) -> str:
     if not sft_uses_cot_output(targets, recipe_version):
         return ""
     return {
-        "sft": "先生成候选，再交给 CoT 处理；SFT 使用最终通过核验的答案，推理按训练文件格式导出。",
-        "cot": "CoT 核验通过后才生成最终 SFT；未通过的样本进入隔离，推理按 SFT 训练文件格式保留。",
+        "sft": "先生成候选，再交给 CoT 处理；SFT 使用最终结果，核验覆盖情况在报告中标明，推理按训练文件格式导出。",
+        "cot": "CoT 按节点策略处理后生成最终 SFT；不合格样本进入隔离，未抽检项单独标记，推理按训练文件格式保留。",
     }.get(node, "")
 
 
@@ -119,11 +136,25 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                               label="我的风格模板", save_label="保存风格")
         enabled = st.toggle("启用风格化生成", key=enabled_key,
                             on_change=save_field, args=(workspace, enabled_key),
-                            help=("开启后，教师按风格提示词重新撰写推理与答案；关闭后核验已有推理。" if node == "cot" else
+                            help=("开启后，可重新生成或保真改写已有推理；关闭后核验已有推理。" if node == "cot" else
                                   "开启后，教师按风格提示词撰写推理与答案；关闭后使用普通蒸馏。"))
+        if node == "multiturn":
+            reading_key = f"workflow-reading-session:{prefix}"
+            _restore_field(workspace, reading_key, False)
+            reading = st.toggle("资料阅读与情景对话", key=reading_key, disabled=not enabled,
+                on_change=save_field, args=(workspace, reading_key))
+            if enabled and reading:
+                st.caption("同一份资料连续对话，直接保留原生思考和答案；任务规则与资料一同导出。故事只给用户模拟器，助手看到实际发言后再回答。")
+                st.caption("在下方编辑场景、用户发言和回答三套提示词。轮数是上限，用户目标完成即可停止；未独立评审会明确标记。")
         style = st.selectbox("生成风格", GENERATION_STYLES, key=style_key, disabled=not enabled,
                              format_func=lambda value: translate_label(STYLE_LABELS[value], language),
                              on_change=save_field, args=(workspace, style_key))
+        if enabled and style in STYLE_PRESETS:
+            st.button("编辑这套风格", key=f"workflow-generation-edit-preset:{prefix}",
+                      on_click=_edit_style_preset, args=(workspace, node, save_field),
+                      help="将完整要求与示范载入下方编辑框，保留附加要求，并切换为自定义风格；可保存到我的风格模板。")
+        if error := st.session_state.get(f"workflow-generation-edit-error:{prefix}"):
+            st.error(error)
         language_column, depth_column = st.columns(2, gap="small")
         with language_column:
             st.selectbox("推理语言", REASONING_LANGUAGES, key=reasoning_language_key, disabled=not enabled,
@@ -141,13 +172,29 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
         if node == "cot" and enabled:
             mode_key = f"workflow-generation-answer-mode:{prefix}"
             _restore_field(workspace, mode_key, "joint")
-            mode = st.selectbox("答案生成方式", ("joint", "native_prefill"), key=mode_key,
-                format_func=lambda value: translate_label(
-                    "同次生成推理与答案" if value == "joint" else "原生推理前缀续写", language),
+            mode_labels = {"native_joint": "引导原生思考 · 同次回答", "joint": "撰写显式推理与答案", "faithful_restyle": "保真风格改写", "draft_then_finalize": "推敲后定稿（试验）", "native_prefill": "原生推理前缀续写"}
+            mode = st.selectbox("答案生成方式", tuple(mode_labels), key=mode_key,
+                format_func=lambda value: translate_label(mode_labels[value], language),
                 on_change=save_field, args=(workspace, mode_key),
-                help="原生方式先生成并核验推理，再通过 DeepSeek Chat Beta 的推理通道续写答案；使用本节点模型，增加独立请求。接口不支持时明确报错。")
+                help="原生思考直接保存一次响应的推理和答案，不再生成第二份推理。显式撰写会额外输出训练用解释；推敲后定稿和前缀续写需要多次请求。另选的评审会增加调用。")
+            if mode == "native_joint":
+                st.caption("系统提示词引导模型的原生思考；完整保留原始推理和同次答案，允许同步修正旧稿。原生思考强度在本节点模型配置中设置。")
+                st.caption("自查不等于独立评审；未抽检单独标记。若原始思考暴露提示词或存在缺陷，保留全文并隔离，不静默删改。")
+                render_cot_review_policy(workspace, save_field)
+            if mode == "draft_then_finalize":
+                st.caption("保留完整草稿与定稿对照；训练文件使用定稿。两个阶段的提示词都可在本节点编辑，自检不等于独立评审通过。")
+                st.caption("试验模式：已有真实样本显示，定稿可能继承错误或新增过强结论。使用前需检查结果，不默认开启。")
             if mode == "native_prefill":
                 st.caption("修饰前缀、上游原生续写和答案分别保存；不宣称修饰文字是模型自发的内部思考。")
+            if mode == "faithful_restyle":
+                st.caption("需要已有完整推理。原答案和原稿保留；已拒绝的原稿先修正内容，不再付费润色。支持 NeMo / OpenThoughts 导入，风格与提示词仍在本节点编辑。")
+                if _field(workspace, f"workflow-cot-checklist-version:{workspace}", None) in (None, 7):
+                    render_cot_review_policy(workspace, save_field)
+                else:
+                    st.caption("此草稿保留逐项核查。切换为生成中推敲后，可使用内容抽检。")
+            from .reasoning_checklist_controls import render_reasoning_checklist
+            render_reasoning_checklist(workspace, field=_field, restore=_restore_field,
+                save_field=save_field, prompt_library=prompt_library)
         if enabled:
             st.file_uploader("导入风格要求", type=["txt", "md"], max_upload_size=1,
                              key=f"workflow-generation-upload:{prefix}",
@@ -155,12 +202,13 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                              help="UTF-8 文本，最多 64 KiB / 4,000 字符；导入后切换为自定义风格，可继续编辑。")
             if error := st.session_state.get(f"workflow-generation-upload-error:{prefix}"):
                 st.error(error)
-        st.text_area("风格要求", key=instruction_key, height=95, disabled=not enabled,
+        st.text_area("风格要求", key=instruction_key,
+                     height=260 if len(st.session_state[instruction_key]) > 500 else 95, disabled=not enabled,
                      max_chars=MAX_GENERATION_INSTRUCTION_CHARS,
                      placeholder="例如：按当前问题组织解释，保留关键依据，不套固定编号和思考流程。",
                      help="只控制表达要求；生成与核验指令在节点提示词中编辑。自定义风格开启时必须填写。",
                      on_change=save_field, args=(workspace, instruction_key))
-        description = (STYLE_PRESETS.get(style) or (
+        description = (STYLE_DESCRIPTIONS.get(style) or STYLE_PRESETS.get(style) or (
             "按样本稳定轮换简洁、教学、核验和反思风格，重试时保持一致。" if style == "mixed"
             else "根据附加指令组织推理与答案。"))
         status = "提示词驱动" if enabled else "已有推理核验" if node == "cot" else "普通蒸馏"
@@ -171,8 +219,52 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                 '</strong><span>' + html.escape(translate(STYLE_LABELS[style], language)) + '</span></div>'
                 '<p>' + html.escape(translate(description if enabled else inactive_description, language)) + '</p></div>')
         if enabled:
-            st.caption("正文按任务自然组织，不套固定步骤；必要推导须写进正文，审计记录不能代替解释。推理规范可在节点提示词编辑。" if node == "cot" else
+            st.caption("一次回复保留模型原生思考与答案。生成完成不代表独立评审通过。" if node == "multiturn" and st.session_state.get(f"workflow-reading-session:{prefix}") else
+                       "正文按任务自然组织，不套固定步骤；必要推导须写进正文，审计记录不能代替解释。推理规范可在节点提示词编辑。" if node == "cot" else
                        "教师根据提示词生成显式推理与答案，正确性与风格分别检查。")
+
+
+def render_cot_review_policy(workspace, save_field):
+    """Keep coverage and cost choices beside the node's editing mode."""
+    en = st.session_state.get("ui_language", "zh") == "en"
+    mode_key = f"workflow-generation-review-mode:{workspace}:cot"
+    rate_key = f"workflow-generation-review-percent:{workspace}:cot"
+    _restore_field(workspace, mode_key, "sampled")
+    _restore_field(workspace, rate_key, 20)
+    mode = st.selectbox("Content review" if en else "内容核验", ("sampled", "strict"), key=mode_key,
+        format_func=lambda value: ({"sampled": "Sample · lower cost", "strict": "Every sample · strict"} if en else
+                                  {"sampled": "抽样核验 · 降低成本", "strict": "逐条核验 · 严格模式"})[value],
+        on_change=save_field, args=(workspace, mode_key))
+    if mode == "sampled":
+        st.number_input("Review coverage (%)" if en else "内容抽检比例（%）", min_value=1, max_value=100,
+            key=rate_key, step=1, on_change=save_field, args=(workspace, rate_key))
+        st.caption(("Every record keeps local checks and its full reasoning. Unselected records are marked as not semantically reviewed. "
+                    "Selection is stable across retries; small batches may contain no reviewed records. Style polish is advisory; factual errors and explicit task requirements still matter."
+                    if en else "每条保留本地检查和完整推理；未抽中项标为未做语义核验。重试不重新抽签，小批次可能没有抽中项。表达润色作为建议，事实与明确任务要求仍须成立。"))
+    else:
+        st.caption("One full content review for every edited record." if en else "每条改写结果都做完整内容核验，保留原严格要求。")
+    st.caption("JEV and later review nodes use their own settings and may add calls." if en else
+               "后续 JEV、评分修正节点仍按各自配置执行，会另有调用。")
+
+
+def _edit_style_preset(workspace: str, node: str, save_field) -> None:
+    """Materialize a selected preset using the existing personal-template fields."""
+    prefix = f"{workspace}:{node}"
+    style_key = f"workflow-generation-style:{prefix}"
+    instruction_key = f"workflow-generation-instruction:{prefix}"
+    error_key = f"workflow-generation-edit-error:{prefix}"
+    st.session_state.pop(error_key, None)
+    preset = STYLE_PRESETS.get(_field(workspace, style_key, "default"))
+    if preset is None:
+        return
+    instruction = "\n\n".join(part for part in (preset, _field(workspace, instruction_key, "")) if part)
+    if len(instruction) > MAX_GENERATION_INSTRUCTION_CHARS:
+        st.session_state[error_key] = "合并后超过 4,000 字符，请先精简附加要求；当前内容已保留。"
+        return
+    st.session_state[instruction_key] = instruction
+    st.session_state[style_key] = "custom"
+    save_field(workspace, instruction_key)
+    save_field(workspace, style_key)
 
 
 def _import_generation_instruction(workspace: str, node: str, save_field) -> None:

@@ -39,7 +39,7 @@ def client_for(handler, base_url="https://api.deepseek.com/v1"):
 
 
 def metadata(prefix=PREFIX):
-    return {"version": 1, "transport": "deepseek_chat_beta",
+    return {"version": 2, "transport": "deepseek_chat_beta", "visible_prefix": "\n",
         "prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
         "prefix_utf8_bytes": len(prefix.encode("utf-8")),
         "response_reasoning": "provider_continuation"}
@@ -52,7 +52,7 @@ def test_explicit_official_route_appends_exact_prefix_without_mutation(path):
         base_url="https://api.deepseek.com" + path)
     assert messages == MESSAGES
     assert prepared[:-1] == messages
-    assert prepared[-1] == {"role": "assistant", "content": "", "prefix": True,
+    assert prepared[-1] == {"role": "assistant", "content": "\n", "prefix": True,
                             "reasoning_content": PREFIX}
     assert details == {"reasoning_prefill": metadata()}
 
@@ -272,7 +272,7 @@ def test_beta_prefix_excludes_json_format_and_preserves_ordinary_capability(ordi
         assert chat_json(client, MESSAGES, reasoning_prefix=PREFIX) == {"answer": "ok"}
         assert len(calls) == 1
         assert "response_format" not in calls[0]
-        assert calls[0]["messages"][-1] == {"role": "assistant", "content": "",
+        assert calls[0]["messages"][-1] == {"role": "assistant", "content": "\n",
             "prefix": True, "reasoning_content": PREFIX}
         assert client.json_supported is ordinary_json_capability
     finally:

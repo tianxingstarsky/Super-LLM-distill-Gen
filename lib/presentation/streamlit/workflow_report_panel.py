@@ -23,6 +23,7 @@ def _view_key(run_id: str) -> str:
 
 def _switch_view(run_id: str, *, embedded: bool) -> None:
     """Expand report reading without a new route or changing the selected run."""
+    st.session_state[f"workflow-result-view-memory:{run_id}"] = st.session_state.get(_view_key(run_id))
     if embedded:
         workspace = st.session_state.get("ws")
         if workspace:
@@ -47,9 +48,24 @@ def render_run_report_choice(application, run_id: str, *, embedded: bool = False
     key = _view_key(run_id)
     if key in st.session_state and st.session_state[key] not in VIEW_OPTIONS:
         st.session_state.pop(key)
-    mode = st.segmented_control("任务视图", VIEW_OPTIONS, default="运行过程", key=key,
+    initial = st.session_state.get(f"workflow-result-view-memory:{run_id}", "运行过程")
+    if initial not in VIEW_OPTIONS:
+        initial = "运行过程"
+    if key not in st.session_state and f"workflow-result-view-memory:{run_id}" not in st.session_state:
+        read_state = getattr(application, "state", None)
+        if callable(read_state):
+            try:
+                state = read_state(run_id)
+                active = getattr(application, "is_active", None)
+                if (state.get("status") == "completed" and has_deliverable_results(state)
+                        and not (callable(active) and active(run_id))):
+                    initial = "样本报告"
+            except (OSError, ValueError, TypeError, KeyError):
+                pass  # The process view presents the existing read-error actions.
+    mode = st.segmented_control("任务视图", VIEW_OPTIONS, default=initial, key=key,
                                 label_visibility="collapsed", width="stretch",
                                 on_change=_switch_view, args=(run_id,), kwargs={"embedded": embedded})
+    st.session_state[f"workflow-result-view-memory:{run_id}"] = mode
     return mode == "样本报告"
 
 

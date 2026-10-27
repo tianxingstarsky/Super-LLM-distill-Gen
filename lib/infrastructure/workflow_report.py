@@ -597,6 +597,16 @@ def render_report_html(overview: dict, page: dict, *, language: str = "zh") -> s
             '<p class="empty">' + _escape(labels["empty"]) + '</p>' + _body_html(
                 {key: value for key, value in row["record"].items() if key in {"question", "messages", "prompt"}}, labels))
         checks = []
+        transfer = row.get("style_transfer")
+        if isinstance(transfer, dict) and isinstance(transfer.get("original"), dict):
+            original = transfer["original"]
+            title = ("风格改写前的原稿 · 对照用，不代表事实已核验" if language == "zh" else
+                     "Original before style transfer · Comparison only, not verified facts")
+            content += ('<details class="metadata"><summary>' + _escape(title) + '</summary>'
+                + '<h4>' + _escape("原推理" if language == "zh" else "Original reasoning") + '</h4><pre>'
+                + _escape(original.get("reasoning", "")) + '</pre><h4>'
+                + _escape("程序保留的原答案" if language == "zh" else "Original answer retained by the program")
+                + '</h4><pre>' + _escape(original.get("answer", "")) + '</pre></details>')
         for kind, evidence in row["reviews"].items():
             if not evidence:
                 continue
@@ -613,6 +623,12 @@ def render_report_html(overview: dict, page: dict, *, language: str = "zh") -> s
         record_id = str(row.get("id") or "")
         state_badge = ("" if formal and row.get("released") and row["status"] == "eligible" else '<span class="badge">' + _escape(labels["node_passed"] if row["status"] == "eligible" else _status(row["status"], labels)) + '</span>')
         reason = ('<div class="reason"><b>' + _escape(labels["reason"]) + '</b> ' + _escape(row["reason"]) + '</div>') if row.get("reason") else ''
+        review_policy = row.get("provenance", {}).get("cot_review_policy", {})
+        if review_policy.get("semantic_status") == "not_assessed":
+            reason += '<div class="notice">' + _escape(
+                "Not selected for CoT content review. Local checks only at this node; eligibility is not a semantic pass. See any later reviews below."
+                if language == "en" else
+                "本条未抽中 CoT 内容核验，此节点仅做本地检查；可导出不代表语义评审通过。后续审核证据见下方。") + '</div>'
         cards.append('<article class="sample"><header><div><span class="number">' + _escape(str(row["position"] + 1).zfill(2)) + '</span><div><h3>' + _escape(title) + '</h3><small class="sample-id" title="' + _escape(record_id) + '">' + _escape(record_id[:12]) + '</small></div></div><div class="badges"><span class="badge">' + _escape(page["target"].upper()) + '</span><span class="badge ' + ('good' if formal and row.get("released") else 'warn') + '">' + _escape(badge) + '</span>' + state_badge + '</div></header><div class="sample-body">' + reason + content + '<div class="review-block"><h4>' + _escape(labels["audit"]) + '</h4>' + audits + '</div><details class="metadata"><summary>' + _escape(labels["provenance"]) + '</summary><pre>' + _escape(json.dumps(row["provenance"], ensure_ascii=False, indent=2)) + '</pre></details>' + ('<details class="metadata"><summary>' + _escape(labels["body"]) + ' · SHA256 ' + _escape(row["training_body_sha256"][:12]) + '</summary><code class="body-hash">' + _escape(row["training_body_sha256"]) + '</code><pre>' + _escape(json.dumps(body, ensure_ascii=False, indent=2)) + '</pre></details>' if body is not None else '') + '</div></article>')
     metrics = ''.join('<div class="metric"><span>' + _escape(labels[key]) + '</span><strong>'
         + _escape(("≥ " if key == "quarantined" and not formal and summary.get("indexing")

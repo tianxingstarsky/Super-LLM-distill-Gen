@@ -527,6 +527,11 @@ def test_director_reserves_output_and_rule_bytes_before_sending_large_chinese_ba
     context_limit = 150_000
     run_id = engine.create_run(output, sources=[source], targets=["sft"], sample_count=20,
         node_models={"director": {"generation": {"backend": "openai", "model": "gpt-4o-mini",
+            "context_window_tokens": context_limit, "max_output_tokens": 32768}},
+            # This probe targets director batch splitting. The downstream
+            # answerer must also fit the same unchanged 60KB user rules; its
+            # default 131072 capacity cannot fit the expanded frozen template.
+            "sft": {"generation": {"backend": "openai", "model": "gpt-4o-mini",
             "context_window_tokens": context_limit, "max_output_tokens": 32768}}},
         qa_director=config(batch_size=20, question_rules="问题规则。" * 2000, answer_rules="回答规则。" * 2000))
     writer = Writer(fail_batch=0)
@@ -553,3 +558,17 @@ def test_director_reserves_output_and_rule_bytes_before_sending_large_chinese_ba
         assert not any(message["role"] == "tool" or message.get("tool_calls") for message in messages)
     assert all(candidate_material(candidate, materials) is not None for candidate in data["candidates"])
     assert all("teacher_evidence" not in candidate for candidate in data["candidates"])
+
+
+def test_large_rules_fail_before_request_if_downstream_capacity_cannot_fit(tmp_path):
+    source = tmp_path / "long.txt"
+    source.write_text(SOURCE * 2000, encoding="utf-8")
+    output = tmp_path / "out"
+    run_id = engine.create_run(output, sources=[source], targets=["sft"], sample_count=20,
+        node_models={"director": {"generation": {"backend": "openai", "model": "gpt-4o-mini",
+            "context_window_tokens": 150_000, "max_output_tokens": 32768}}},
+        qa_director=config(batch_size=20, question_rules="问题规则。" * 2000, answer_rules="回答规则。" * 2000))
+    writer = Writer(fail_batch=0)
+    state = engine.Workflow(output, run_id, tmp_path, generator=writer, jev=Reviewer()).execute()
+    assert state["status"] == "failed" and state["error"] == "source_context_model_capacity_too_small"
+    assert writer.calls == []  # Never clip rules or evidence to force admission.

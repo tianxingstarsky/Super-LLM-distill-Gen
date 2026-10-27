@@ -100,7 +100,7 @@ COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
 HUMAN_AUGMENTATION_RECIPE_VERSION = 17
 REVIEW_REPAIR_RECIPE_VERSION = 18
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22})
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -274,6 +274,33 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if ("multiturn" in targets and multi_style.get("enabled", bool(multi_style))
             or "workflow.style_check" in node_prompts.get("multiturn", {})):
         recipe_version = 22
+    if (node_generation.get("cot", {}).get("self_check") or any(
+            pid in {"workflow.cot_self_check", "workflow.cot_self_check_review"}
+            for pid in node_prompts.get("cot", {}))):
+        recipe_version = 23
+    if (node_generation.get("cot", {}).get("self_check", {}).get("version") == 2 or any(
+            pid in {"workflow.cot_claim_check", "workflow.cot_claim_review"} for pid in node_prompts.get("cot", {}))):
+        recipe_version = 24
+    if (node_generation.get("cot", {}).get("self_check", {}).get("version") == 3
+            or "workflow.cot_check_agent" in node_prompts.get("cot", {})):
+        recipe_version = 25
+    if node_generation.get("cot", {}).get("self_check", {}).get("version") == 4:
+        recipe_version = 26
+    if node_generation.get("cot", {}).get("self_check", {}).get("version") == 5:
+        recipe_version = 27
+    if node_generation.get("cot", {}).get("self_check", {}).get("version") == 6:
+        recipe_version = 28
+    if node_generation.get("cot", {}).get("self_check", {}).get("evidence_policy") == 1:
+        recipe_version = 29
+    if node_generation.get("cot", {}).get("self_check", {}).get("evidence_policy") == 2:
+        recipe_version = 32
+        node_generation["cot"]["self_check"]["batch_submission_version"] = 1
+    if node_generation.get("cot", {}).get("self_check", {}).get("version") == 7:
+        recipe_version = 35
+    if node_generation.get("cot", {}).get("answer_mode") == "native_joint":
+        recipe_version = 40
+    if node_generation.get("multiturn", {}).get("reading_session"):
+        recipe_version = 41
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
         learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
         claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
@@ -377,6 +404,12 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         endpoint_pins = {stage: {role: snapshot_backend_endpoint(
             Path(settings_root), binding["backend"], binding["model"])
             for role, binding in roles.items()} for stage, roles in node_models.items()}
+    author_endpoint = (endpoint_pins or {}).get("cot", {}).get("generation", {})
+    if (recipe_version == 35 and author_endpoint.get("endpoint_origin") == "https://api.deepseek.com"
+            and author_endpoint.get("api_format") == "chat"):
+        # Freeze only the provider/protocol whose strict grammar is supported.
+        # Historical runs and other providers retain their existing transport.
+        recipe_version = 39
     path = run_path(output, run_id)
     (path / "inputs").mkdir(parents=True, exist_ok=False)
     evaluation_references = snapshot_evaluation_sources(
@@ -423,14 +456,23 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"arithmetic_seed_protocol_version": 1, "arithmetic_registry_version": 1}
                  if "gsm8k" in targets and not repair_inputs else {}),
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
+              "external_reasoning_import_version": 1,
               **({"source_cleaning": True, "source_context_pack_version": 1,
                   "source_line_protocol_version": 1, "source_context_capacity_version": 2,
                   "source_context_scope_version": 1} if source_cleaning else {}),
               "source_memory_protocol_version": 2,
               "provider_reasoning_capture_version": 1,
               "authored_reasoning_protocol_version": 1,
+              **({"authored_trace_transport_version": 1} if recipe_version >= 31 else {}),
+              **({"authored_stage_contract_version": 1} if recipe_version >= 34 else {}),
+              **({"reflection_guidance_placement_version": 1} if recipe_version >= 35 else {}),
+              **({"authored_submission_version": 1} if recipe_version >= 36 else {}),
+              **({"authored_local_edit_version": 1} if recipe_version >= 36 else {}),
+              **({"cot_style_transfer_version": 2} if recipe_version >= 36 else {}),
+              **({"authored_task_contract_version": 3} if recipe_version >= 39 else {}),
               "authored_reasoning_warmup_version": 1,
               "reasoning_depth_contract_version": 1,
+              "native_prefix_review_style_version": 1,
               "authored_repair_instruction_protocol_version": 2,
               "reasoning_distillation_audit_version": 1,
               "style_verdict_protocol_version": 2,
@@ -497,6 +539,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"document_parser_signature": document_parser_signature}
                  if document_parser_signature is not None else {}),
               "node_generation": node_generation,
+              **({"native_experience_version": 1} if (node_generation.get("multiturn", {}).get("reading_session")
+                  or node_generation.get("cot", {}).get("answer_mode") == "native_joint") else {}),
+              **({"reading_actor_protocol_version": 2} if node_generation.get("multiturn", {}).get("reading_session") else {}),
               "node_prompts": node_prompts,
               "node_prompt_templates": node_prompt_templates,
               "node_prompt_system": node_prompt_system,
@@ -642,13 +687,15 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
 
     def ask(self, key, role, prompt_id, data, *, image=None, instruction=None,
             allow_reasoning_fallback=True, model_stage=None, prompt_stage=None,
-            capture_response_details=False, reasoning_prefix=None, native_request_attempts=None):
+            capture_response_details=False, reasoning_prefix=None, native_request_attempts=None,
+            structured_response_attempts=None):
         from lib.bootstrap.workflow_requests import workflow_model_request
         return workflow_model_request(self, globals()).execute(key, role, prompt_id, data,
             image=image, instruction=instruction, allow_reasoning_fallback=allow_reasoning_fallback,
             model_stage=model_stage, prompt_stage=prompt_stage,
             capture_response_details=capture_response_details, reasoning_prefix=reasoning_prefix,
-            native_request_attempts=native_request_attempts)
+            native_request_attempts=native_request_attempts,
+            structured_response_attempts=structured_response_attempts)
 
     def stage_items(self, stage, items, action, *, stream_sources=False, finalize=True):
         from lib.infrastructure.workflow_stage_order import StageResultOrder

@@ -83,6 +83,98 @@ def test_selection_preserves_source_mapping_and_original_record_order():
     assert len(port.saved) == 1
 
 
+def test_evolution_reads_full_failure_trajectory_without_granting_training_eligibility():
+    original = tool_record()
+    original["messages"][2].update(content="The first attempt failed.", is_error=True)
+    original["messages"][-1]["reasoning_content"] = "记录完整的失败与反思。" * 800
+    port = MemoryPort([original])
+    app = ImportConversations(port)
+    preview = app.preview("failed-session.jsonl", b"original DSH source")
+    assert preview["conversations"][0]["preview_truncated"]
+    with pytest.raises(ValueError, match="training_ineligible"):
+        app.confirm(preview["import_id"], target="sft")
+    sources = app.evolution_sources(preview["import_id"])
+    assert sources["purpose"] == "experience_evolution_not_training"
+    assert sources["source_name"] == "failed-session.jsonl"
+    assert sources["source_sha256"] == import_digest(b"original DSH source")
+    assert sources["records"] == [original]
+    assert sources["selected_ids"] == [original["id"]]
+    assert not port.saved and port.output == normalized([original])
+    assert sources["records"][0]["messages"][-1]["reasoning_content"] == original["messages"][-1]["reasoning_content"]
+
+
+def test_evolution_bounds_whole_records_reports_skips_and_rejects_unknown_ids():
+    records = [record("large"), record("first"), record("second")]
+    records[0]["messages"][1]["content"] = "长" * 5000
+    port = MemoryPort(records)
+    app = ImportConversations(port)
+    app.preview("session.jsonl", b"source")
+    sources = app.evolution_sources("memory-import", ["second", "large", "first"], max_records=1, max_chars=1000)
+    assert sources["records"] == [records[1]]
+    assert sources["selected_ids"] == ["first"]
+    assert sources["requested_ids"] == ["second", "large", "first"]
+    assert sources["counts"] == {"total_records": 3, "matched_records": 3, "selected_records": 1,
+        "selected_chars": len(json.dumps([records[1]], ensure_ascii=False, separators=(",", ":"))), "skipped_records": 2}
+    assert [(item["id"], item["reason"]) for item in sources["skipped"]] == [
+        ("large", "record_char_limit"), ("second", "record_count_limit")]
+    combined_chars = sum(len(json.dumps(row, ensure_ascii=False, separators=(",", ":"))) for row in records[1:])
+    cumulative = app.evolution_sources("memory-import", ["first", "second"], max_chars=combined_chars - 1)
+    assert cumulative["records"] == [records[1]]
+    assert cumulative["skipped"][0]["reason"] == "selection_char_limit"
+    exact_chars = len(json.dumps(records[1:], ensure_ascii=False, separators=(",", ":")))
+    exact = app.evolution_sources("memory-import", ["first", "second"], max_chars=exact_chars)
+    assert exact["records"] == records[1:] and exact["counts"]["selected_chars"] == exact_chars
+    missing_bracket = app.evolution_sources("memory-import", ["first", "second"], max_chars=exact_chars - 1)
+    assert missing_bracket["records"] == [records[1]]
+    with pytest.raises(ValueError, match="unknown_selection"):
+        app.evolution_sources("memory-import", ["first", "missing"], max_records=1)
+    with pytest.raises(ValueError, match="no_record_fits_limits"):
+        app.evolution_sources("memory-import", ["large"], max_chars=1000)
+    assert not port.saved and port.output == normalized(records)
+
+
+def test_evolution_cursor_visits_distinct_complete_batches_and_rejects_unknown_cursor():
+    records = [record(str(index)) for index in range(19)]
+    port = MemoryPort(records)
+    app = ImportConversations(port)
+    app.preview("many-sessions.jsonl", b"source")
+    first = app.evolution_sources("memory-import")
+    second = app.evolution_sources("memory-import", after_id=first["next_after_id"])
+    last = app.evolution_sources("memory-import", after_id=second["next_after_id"])
+    assert first["records"] == records[:8] and first["after_id"] is None
+    assert second["records"] == records[8:16] and second["position"]["after_index"] == 8
+    assert last["records"] == records[16:] and last["next_after_id"] is None
+    assert set(first["selected_ids"]).isdisjoint(second["selected_ids"])
+    assert second["position"]["first_selected_index"] == 9
+    with pytest.raises(ValueError, match="unknown_evolution_cursor"):
+        app.evolution_sources("memory-import", after_id="not-a-record")
+    with pytest.raises(ValueError, match="unknown_selection"):
+        app.evolution_sources("memory-import", ["missing"], after_id="7")
+    # A record exceeding the remaining budget must be the next batch's first
+    # candidate, rather than being lost behind a later, smaller selected row.
+    records = [record("first"), record("larger"), record("small")]
+    records[1]["messages"][1]["content"] = "x" * 200
+    port = MemoryPort(records)
+    app = ImportConversations(port)
+    app.preview("budget.jsonl", b"source")
+    budget = len(json.dumps(records[:2], ensure_ascii=False, separators=(",", ":"))) - 1
+    first = app.evolution_sources("memory-import", max_chars=budget)
+    second = app.evolution_sources("memory-import", max_chars=budget, after_id=first["next_after_id"])
+    assert first["selected_ids"] == ["first"] and second["selected_ids"][0] == "larger"
+    assert not port.saved and port.output == normalized(records)
+
+
+@pytest.mark.parametrize("options", [{"max_records": 0}, {"max_records": True}, {"max_records": 101},
+    {"max_chars": 0}, {"max_chars": False}, {"max_chars": 1000001}, {"selected_ids": []},
+    {"selected_ids": ["x", "x"]}, {"selected_ids": [None]}])
+def test_evolution_rejects_invalid_limits_or_selection_before_loading(options):
+    class UnreadablePort:
+        def load(self, import_id):
+            pytest.fail("Invalid bounds must be rejected before reading staged content.")
+    with pytest.raises(ValueError, match="conversation_import_invalid_(evolution_limits|selection)"):
+        ImportConversations(UnreadablePort()).evolution_sources("import", **options)
+
+
 @pytest.mark.parametrize("name", ["../session.jsonl", "NUL.jsonl", "CON", "..", "bad?.jsonl", "bad.jsonl ", "数" * 100 + ".jsonl"])
 def test_unsafe_names_fail_before_converter(name):
     port = MemoryPort([record()])
@@ -189,6 +281,8 @@ def test_staged_content_or_identity_tampering_is_rejected_before_source_store(tm
     (directory / "normalized.jsonl").write_bytes(original.replace(b"Disconnect", b"Connect"))
     with pytest.raises(ValueError, match="receipt_mismatch"):
         app.confirm(preview["import_id"])
+    with pytest.raises(ValueError, match="receipt_mismatch"):
+        app.evolution_sources(preview["import_id"])
     (directory / "normalized.jsonl").write_bytes(original)
     metadata = json.loads((directory / "ready.json").read_text())
     metadata["source_sha256"] = "0" * 64

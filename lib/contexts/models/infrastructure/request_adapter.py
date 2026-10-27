@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from . import request_runtime
+from .telemetry import observe_request, observation_update
 
 
 class ClientRequestAdmission:
@@ -10,6 +11,7 @@ class ClientRequestAdmission:
     def __init__(self, client, runtime):
         self.client = client
         self.runtime = runtime
+        self._observation = None
 
     @property
     def api_format(self):
@@ -23,11 +25,15 @@ class ClientRequestAdmission:
     def admit(self, check_cancel, on_wait):
         if self.client.scheduler is not None:
             with self.client.scheduler.acquire(cancel_check=check_cancel, on_wait=on_wait):
-                yield
+                with observe_request(self.client) as observation:
+                    self._observation = observation
+                    yield
         else:
             self.runtime.SERVICE_COOLDOWNS.wait(self.client._service_identity,
                 **({"cancel_check": check_cancel} if self.client.cancel_check else {}))
-            yield
+            with observe_request(self.client) as observation:
+                self._observation = observation
+                yield
 
     def budget_guards(self):
         return self.client._budgets()
@@ -36,6 +42,7 @@ class ClientRequestAdmission:
         return self.client._settle_all(reservations, amount)
 
     def account_usage(self, prompt_tokens, completion_tokens, reservations, reservation_usd):
+        observation_update(self._observation, usage_details={"input": prompt_tokens, "output": completion_tokens})
         self.client.usage["calls"] += 1
         self.client.usage["prompt_tokens"] += prompt_tokens
         self.client.usage["completion_tokens"] += completion_tokens
@@ -59,6 +66,7 @@ class ClientRequestAdmission:
 
     def commit_details(self, target, details):
         self.runtime.commit_response_details(target, details)
+        observation_update(self._observation, output=details)
 
     def classify_error(self, error):
         return self.runtime.classify_request_error(error)

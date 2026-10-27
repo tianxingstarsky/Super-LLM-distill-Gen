@@ -16,7 +16,7 @@ def mock_llm_server():
     yield
 
 
-@pytest.mark.parametrize("mode", ["joint", "native_prefill"])
+@pytest.mark.parametrize("mode", ["joint", "native_prefill", "draft_then_finalize", "faithful_restyle"])
 def test_cot_answer_mode_survives_restart_and_named_restore(tmp_path, mode):
     values = {"workflow-generation-enabled:default:cot": True,
               "workflow-generation-style:default:cot": "reflective",
@@ -30,7 +30,7 @@ def test_cot_answer_mode_survives_restart_and_named_restore(tmp_path, mode):
     assert creation_draft_application(tmp_path).restore_snapshot(snapshot) == values
 
 
-@pytest.mark.parametrize("mode", ["joint", "native_prefill"])
+@pytest.mark.parametrize("mode", ["joint", "native_prefill", "draft_then_finalize", "faithful_restyle"])
 def test_reusing_a_recipe_persists_the_original_answer_mode(tmp_path, mode):
     from copy import deepcopy
     from lib.presentation.streamlit.workflow_reuse import recipe_to_draft
@@ -104,7 +104,7 @@ def test_real_widget_autosave_restores_native_selection_and_prompt_labels(tmp_pa
     options = ui.selectbox(key="workflow-node-prompt-selection:fixture:cot").options
     assert PROMPT_LABELS["workflow.cot_rationale"] in options
     assert PROMPT_LABELS["workflow.cot_native_answer"] in options
-    assert PROMPT_LABELS["workflow.cot_prefix_check"] in options
+    assert PROMPT_LABELS["workflow.cot_prefix_check"] not in options
     assert not any(option.startswith("workflow.") for option in options)
     fresh = AppTest.from_string(script).run()
     fresh.button(key="fixture-node:cot").click().run()

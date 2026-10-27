@@ -84,3 +84,61 @@ def test_english_directory_translates_origin_prefixes_without_changing_chinese_p
     assert table["文件名"].tolist() == ["首页.txt", "样本.jsonl"]
     assert table["来源 / 目录"].tolist() == [
         "来源 / uploads/用户资料", "产物 / exports/生成结果"]
+
+
+def scoped_catalog_screen():
+    import streamlit as st
+    from lib.contexts.datasets.api import AssetCatalogApplication
+    from lib.contexts.datasets.contracts import Asset, AssetInventory
+    from lib.presentation.streamlit.asset_catalog_page import render_asset_catalog
+    from lib.presentation.streamlit.i18n import install_streamlit_localization
+
+    st.session_state.setdefault("ui_language", "en")
+    st.session_state.setdefault("ws", "test")
+    install_streamlit_localization()
+    run_id = "a" * 32
+    final = Asset("output/workflows/" + run_id + "/artifacts/sft.jsonl", "output",
+                  "workflows/" + run_id + "/artifacts/sft.jsonl", "样本", 5, 0)
+    checkpoint = Asset("output/workflows/" + run_id + "/checkpoints/sft.json", "output",
+                       "workflows/" + run_id + "/checkpoints/sft.json", "运行记录", 5, 0)
+
+    class Driver:
+        def library_inventory(self, workspace_id):
+            return AssetInventory((final,))
+
+        def inventory(self, workspace_id):
+            return AssetInventory((final, checkpoint))
+
+        def download(self, workspace_id, asset):
+            return b"hello"
+
+        def excerpt(self, workspace_id, asset):
+            return asset.name, ""
+
+    render_asset_catalog(AssetCatalogApplication(Driver()), "test", show_title=False)
+
+
+def test_runtime_scope_reset_and_exact_task_handoff():
+    app = AppTest.from_function(scoped_catalog_screen).run()
+    assert not app.exception
+    assert app.dataframe[0].value["File name"].tolist() == ["sft.jsonl"]
+    assert "#aaaaaaaa / artifacts" in app.dataframe[0].value["Source / folder"][0]
+    assert app.toggle[0].label == "Include run records"
+    app.toggle[0].set_value(True).run()
+    assert app.selectbox(key="asset-category:test").value == "全部文件"
+    assert set(app.dataframe[0].value["File name"]) == {"sft.jsonl", "sft.json"}
+    app.selectbox(key="asset-category:test").set_value("运行记录").run()
+    assert not app.exception
+    assert app.dataframe[0].value["File name"].tolist() == ["sft.json"]
+
+    # Returning to the library removes the runtime-only category and selection.
+    app.toggle[0].set_value(False).run()
+    assert not app.exception
+    assert app.selectbox(key="asset-category:test").value == "常用文件"
+    assert app.dataframe[0].value["File name"].tolist() == ["sft.jsonl"]
+    assert app.code[0].value == "sft.jsonl"
+    task_button = next(button for button in app.button if button.label == "Open source task")
+    task_button.click().run()
+    assert not app.exception
+    assert app.session_state["nav"] == "任务管理"
+    assert app.session_state["workflow-open-run"] == {"workspace": "test", "run_id": "a" * 32}

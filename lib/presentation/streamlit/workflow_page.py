@@ -191,6 +191,7 @@ def _workflow_error(error) -> str:
         "manual_rlaif_change_requires_ai_review": "修改后的 RLAIF 候选需要 AI 重新评分，不能沿用原来的 AI 标签。请切换自动评分与修正。",
         "manual_review_required": "等待人工评分与修正。",
         "condition_support_pending_review": "评审依据尚未核清，原稿已保留。请先复核条件与来源，再决定是否修正。",
+        "reasoning_agent_incomplete": "核查会话尚未完成，正文与已取得的证据已保留。请打开样本报告检查未完成项，再补充来源或核查指令；尚不判定正文有误。",
         "manual_review_score_required": "请填写人工评分，再提交内容修正。",
         "manual_review_rejected": "人工评分或结论未达到通过要求，此版本保留在待处理结果中。",
         "manual_review_patch_target_mismatch": "修正内容与当前训练类型不一致，请保留该类型要求的字段。",
@@ -886,6 +887,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
         attempt = int(state.get("attempt", 0))
         reasoning_trim_enabled = bool((recipe.get("reasoning_trim") or {}).get("enabled"))
         graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
+                                         node_generation=recipe.get("node_generation"),
                                          qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
                                          recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
                                          source_cleaning=recipe.get("source_cleaning", False), review_repair=recipe.get("review_repair"),
@@ -1297,7 +1299,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
 def _save_draft_value(workspace, key):
     draft_key = f"workflow-form-draft:{workspace}"
     previous = st.session_state.get(draft_key, {})
-    if st.session_state[key] is None:
+    if st.session_state[key] is None and not key.startswith("workflow-agent-experience-parent:"):
         st.session_state[key] = previous[key]
         return
     if (key in previous and previous[key] == st.session_state[key]
@@ -1726,6 +1728,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         source_cleaning = uses_shared_source_cleaning(targets, source_mode=source_mode)
         draft_recipe_version = 20 if qa_director.get("question_separation") is True else 19
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
+                                                   node_generation=generation_snapshot(ws, ["multiturn"]),
                                                    qa_director=qa_director, package_review=package_review, recipe_version=draft_recipe_version,
                                                    source_cleaning=source_cleaning, review_repair=review_repair,
                                                    arithmetic_seed_protocol_version=1, cpt_review_policy_version=1)
@@ -1738,7 +1741,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if "agent" in targets:
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
-            st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
+            if generation_snapshot(ws, ["multiturn"]).get("multiturn", {}).get("reading_session"):
+                st.caption("阅读对话复用同一份资料和历史；独立评审结果与生成状态分开记录。")
+            else:
+                st.caption("多轮目标逐轮及整段评审；合成内容会标记证据等级。")
         if qa_director["enabled"] and source_mode == "Agent 上下文":
             st.caption("已有完整对话保留原文并绕过指导员；指导员只设计文档与开放需求生成的新互动。")
     model_issues = []
@@ -2044,6 +2050,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                 help="选择文件或拖入此处。单文件最多 50 MiB，本次来源合计最多 200 MiB。",
                                                 key=f"workflow-upload:{ws}:{source_mode}", **upload_options)
                         st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
+                        if source_mode == "Agent 上下文":
+                            st.caption("也可导入 NeMo 的 problem / generation 结果及 OpenThoughts 的带推理对话 JSON / JSONL；只拆分明确的推理标记，缺失推理不会补造。")
                 if input_cache is not None:
                     # The callback already persisted and selected these uploads.
                     uploaded = []
@@ -2288,6 +2296,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                            "CPT 清洗后直接打包；基础检查和所选清洗核对方式仍然生效。" if cpt_only else
                            "独立生成模板算术题，再按配置评审并导出。" if arithmetic_only else
                            "先解析来源，再生成所选目标并执行质检；结束后可进入人工审核或输出打包。")
+                if "cot" in targets and not node_generation.get("cot", {}).get("enabled"):
+                    st.button("CoT 当前只核验已有推理 · 配置增强", key=f"workflow-cot-mode:{ws}",
+                              icon=":material/tune:", on_click=_select_setup_node,
+                              args=(f"workflow-setup-node:{ws}", "cot", "prompts"),
+                              help="当前不会重新撰写增强解释。点击进入 CoT 节点，可开启风格化生成并设置推理深度、语言和完整模板。")
             with action_col:
                 source_missing = (not brief.strip() if source_mode == "开放需求"
                                   else not (selected or uploaded)) and not human_source_compatible and not arithmetic_only

@@ -379,18 +379,21 @@ def test_trim_does_not_rewrite_preference_pair_evidence(tmp_path):
     assert engine.read_json(path / "artifacts/quality.json")["reasoning_trim"]["applied_targets"] == ["sft"]
 
 
-def test_recipe_pins_style_and_trim_instructions_before_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("preset", ["structured", "exploratory"])
+def test_recipe_pins_style_and_trim_instructions_before_execution(tmp_path, monkeypatch, preset):
     from lib.domain import workflow_generation, reasoning_trim
-    config = {"sft": {"style": "structured", "instruction": "固定附加要求"}}
+    config = {"sft": {"style": preset, "instruction": "固定附加要求"}}
+    original_style = workflow_generation.STYLE_PRESETS[preset]
     trim = {"enabled": True, "template": "leakage"}
     output, rid, path = run(tmp_path, targets=["sft"], node_generation=config, reasoning_trim=trim)
     config["sft"]["instruction"] = "外部改动"
     trim["template"] = "concise"
-    monkeypatch.setitem(workflow_generation.STYLE_PRESETS, "structured", "CHANGED_STYLE_SENTINEL")
+    monkeypatch.setitem(workflow_generation.STYLE_PRESETS, preset, "CHANGED_STYLE_SENTINEL")
     monkeypatch.setitem(reasoning_trim.TRIM_TEMPLATES, "leakage", "CHANGED_TRIM_SENTINEL")
     generator = Generator()
     assert engine.Workflow(output, rid, tmp_path, generator=generator, jev=Reviewer()).execute()["status"] == "completed"
     assert "固定附加要求" in generator.calls[0][0]["content"]
+    assert generator.calls[0][0]["content"].count(original_style) == 1
     assert "node_task_instructions" not in model_task_data(generator.calls[0])
     assert "CHANGED_STYLE_SENTINEL" not in str(generator.calls[0])
     assert "CHANGED_TRIM_SENTINEL" not in str(generator.calls[-1])

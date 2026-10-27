@@ -20,13 +20,13 @@ def mock_llm_server():
 
 def test_builtin_experience_keeps_rich_conditional_examples_and_truthful_provenance():
     for scope in EXPERIENCE_SCOPES:
-        text = default_experience_text(scope)
+        text = default_experience_text(scope, version=3)
         assert 4096 < len(text.encode("utf-8")) < MAX_EXPERIENCE_BYTES
         assert "好例：" in text and "坏例：" in text
         assert "条件经验：" in text and ("失败回顾" in text or "失败反馈" in text)
         assert "Codex 编码助手" in text and "不是专家签署" in text
         assert "不是教师知识" in text and "不能逐字复制" in text
-    assert "不规定训练答案或推理的标题、步骤、顺序" in default_experience_text("reasoning")
+    assert "不规定训练答案或推理的标题、步骤、顺序" in default_experience_text("reasoning", version=3)
     assert "模糊输入用于练习澄清" in default_experience_text("question")
     assert "不设固定比例" in default_experience_text("director")
     assert "实际可见消息明确断言" in default_experience_text("answer")
@@ -116,7 +116,7 @@ def test_invalid_scope_cannot_restore_or_export_a_different_roles_text(scope):
         experience_prompt_payload(scope)
 
 
-@pytest.mark.parametrize("version", [True, "1", 1.0, 0, 4, None])
+@pytest.mark.parametrize("version", [True, "1", 1.0, 0, 5, None])
 def test_default_version_must_be_a_known_immutable_integer(version):
     with pytest.raises(ValueError, match="invalid_agent_experience_version"):
         default_experience_text("director", version=version)
@@ -136,7 +136,7 @@ def test_text_limit_counts_exact_utf8_bytes_instead_of_character_count(text):
 
 def test_complete_snapshot_pins_version_raw_text_and_enabled_flags():
     pack = snapshot_agent_experience()
-    assert pack["version"] == AGENT_EXPERIENCE_VERSION == 3
+    assert pack["version"] == AGENT_EXPERIENCE_VERSION == 4
     assert pack["kind"] == EXPERIENCE_KIND
     assert set(pack["scopes"]) == set(EXPERIENCE_SCOPES)
     for scope, config in pack["scopes"].items():
@@ -186,7 +186,7 @@ def test_v2_conditions_do_not_force_unknown_inputs_into_diagnosis_or_examples_in
     assert "不能断言它“只能说明某个操作失败”" in default_experience_text("answer")
     assert "对象还未知时，不进入后续诊断阶段" in default_experience_text("answer")
     assert "不能因首句短就惩罚有用长答" in default_experience_text("review")
-    assert "把实例属性升级为方法的必要条件" in default_experience_text("reasoning")
+    assert "把实例属性升级为方法的必要条件" in default_experience_text("reasoning", version=3)
 
 
 def test_version_three_is_frozen_and_prior_versions_keep_literal_snapshots():
@@ -196,7 +196,7 @@ def test_version_three_is_frozen_and_prior_versions_keep_literal_snapshots():
         3: "dc50cb269a9c78f124b2254e952487cbbf35a4bb689ada0c22d15d3ade421f00",
     }
     packs = {version: snapshot_agent_experience(version=version) for version in hashes}
-    assert snapshot_agent_experience() == packs[3]
+    assert snapshot_agent_experience()["version"] == 4
     for version, expected_sha in hashes.items():
         assert packs[version]["sha256"] == expected_sha
         assert validate_agent_experience_snapshot(packs[version]) == packs[version]
@@ -209,9 +209,26 @@ def test_version_three_is_frozen_and_prior_versions_keep_literal_snapshots():
     # Custom or reused v2 bodies remain literal under the new version marker.
     reused = snapshot_agent_experience({scope: {key: value[key] for key in ("enabled", "text")}
                                        for scope, value in packs[2]["scopes"].items()})
-    assert reused["version"] == 3
+    assert reused["version"] == AGENT_EXPERIENCE_VERSION
     for scope in EXPERIENCE_SCOPES:
         assert reused["scopes"][scope]["text"] == packs[2]["scopes"][scope]["text"]
+
+
+def test_version_four_is_compact_and_preserves_other_roles_and_old_bodies():
+    prior = snapshot_agent_experience(version=3)
+    current = snapshot_agent_experience(version=4)
+    assert current == snapshot_agent_experience()
+    assert validate_agent_experience_snapshot(current) == current
+    text = current["scopes"]["reasoning"]["text"]
+    assert len(text.encode("utf8")) < len(prior["scopes"]["reasoning"]["text"].encode("utf8"))
+    for requirement in ("最少但足够", "支持与反证", "发现冲突或疏漏就修正判断", "修正带进最终答案",
+                        "不编造负例、失败和反转", "没有固定步骤", "一次好恶不升级为普遍规则"):
+        assert requirement in text
+    for scope in set(EXPERIENCE_SCOPES) - {"reasoning"}:
+        assert current["scopes"][scope] == prior["scopes"][scope]
+    reused = snapshot_agent_experience({"reasoning": {"text": prior["scopes"]["reasoning"]["text"]}})
+    assert reused["scopes"]["reasoning"]["text"] == prior["scopes"]["reasoning"]["text"]
+    assert reused["scopes"]["reasoning"]["origin"] == "custom"
 
 
 @pytest.mark.parametrize("scope", ["answer", "reasoning", "review"])

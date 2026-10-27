@@ -36,7 +36,7 @@ def validate_prompt_template_name(name: str) -> str:
 def validate_prompt_scope(scope: str) -> str:
     if not isinstance(scope, str):
         raise ValueError("prompt_library_invalid_scope")
-    if scope in {"director.rules", "trim.rules", "generation:sft", "generation:cot", "generation:multiturn"}:
+    if scope in {"director.rules", "trim.rules", "generation:sft", "generation:cot", "generation:multiturn", "reasoning.checklist"}:
         return scope
     if scope.startswith("experience:"):
         try:
@@ -57,6 +57,12 @@ def validate_prompt_payload(scope: str, payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("prompt_library_invalid_payload")
     try:
+        if scope == "reasoning.checklist":
+            from lib.contexts.workflows.contracts import checklist_from_text
+            if set(payload) != {"text"}:
+                raise ValueError("invalid_fields")
+            checklist_from_text(payload["text"])
+            return dict(payload)
         if scope.startswith("experience:"):
             if set(payload) != {"enabled", "text"}:
                 raise ValueError("invalid_fields")

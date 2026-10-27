@@ -1,13 +1,17 @@
 """Structured response attempts do not retry authentication or cancellation."""
 from __future__ import annotations
+from .retry_port import RetryDirective, RetryPort
 from typing import Any, Dict, List
+import json
 from .request_ports import JSONResponsePort, StreamCallback
 from ..domain.request_errors import ModelJSONError, ModelRequestError
+from ..domain.json_response import JSONResponseDecodeError
 
 
 class RequestJSONResponse:
-    def __init__(self, port: JSONResponsePort):
+    def __init__(self, port: JSONResponsePort, *, retry: RetryPort):
         self.port = port
+        self.retry = retry
 
     def execute(
         self,
@@ -31,8 +35,10 @@ class RequestJSONResponse:
             raise ValueError("max_tokens must be a positive integer")
         if type(retries) is not int or not 1 <= retries <= 10:
             raise ValueError("invalid_model_json_attempts")
-        last_err: Exception | None = None
-        for attempt in range(retries):
+        request_messages = messages
+        previous_invalid_output = None
+        def attempt_request(attempt):
+            nonlocal request_messages, previous_invalid_output
             attempt_details = {}
             temp = temperature if attempt == 0 else min(temperature, 0.3)
             callback_error = None
@@ -44,7 +50,7 @@ class RequestJSONResponse:
                     callback_error = error
                     raise
             try:
-                out = self.port.chat(messages, max_tokens=max_tokens, temperature=temp,
+                out = self.port.chat(request_messages, max_tokens=max_tokens, temperature=temp,
                                   thinking=thinking, json_mode=True,
                                   **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
                                   **({"response_details": attempt_details} if response_details is not None else {}),
@@ -61,12 +67,31 @@ class RequestJSONResponse:
                 # A completed reasoning-only answer cannot fulfill the JSON task.
                 # Retry only this safe code; never retry auth/network/cancellation
                 # here or copy the hidden reasoning into the visible JSON body.
-                last_err = error
-                continue
+                return RetryDirective(ModelJSONError(attempt + 1))
             try:
                 result = self.port.parse_json(out)
-                self.port.commit_details(response_details, attempt_details)
-                return result
-            except Exception as e:  # noqa: BLE001
-                last_err = e
-        raise ModelJSONError(retries) from None
+            except (JSONResponseDecodeError, json.JSONDecodeError) as error:
+                if out == previous_invalid_output:
+                    # Identical invalid bytes after precise feedback are no
+                    # progress. Do not purchase a third blind resampling.
+                    raise ModelJSONError(attempt + 1) from None
+                previous_invalid_output = out
+                diagnostic = ({"line": error.lineno, "column": error.colno, "reason": error.msg}
+                              if isinstance(error, json.JSONDecodeError) else
+                              {"line": error.line, "column": error.column, "reason": error.reason})
+                # Rebuild from the original context, not an ever-growing retry
+                # conversation. Never replace a learner/source/system role or
+                # turn private provider reasoning into visible model output.
+                request_messages = [*messages, {"role": "assistant", "content": out},
+                    {"role": "system", "content": (
+                        "JSON transport validation failed: " + json.dumps(diagnostic, ensure_ascii=False)
+                        + ". Correct the visible JSON syntax in the preceding response. "
+                        "Return the complete JSON value, retaining all content, reasoning, numbers and claims. "
+                        "Do not add premises, change quality decisions, summarize or omit fields. "
+                        "This is parser feedback, not a new learner task or a semantic verdict.")}]
+                return RetryDirective(ModelJSONError(attempt + 1))
+            # Publication errors are program/storage failures, not invalid
+            # model JSON. They must never purchase another model response.
+            self.port.commit_details(response_details, attempt_details)
+            return result
+        return self.retry.run(attempt_request, attempts=retries, wait=lambda delay: None)

@@ -37,10 +37,11 @@ class GenerateSft:
             # rather than pay to grade a draft it is forbidden to consume.
             if issue := conversation_issue(history):
                 return [self._port.reject(unit, issue)]
+            restyle = self.recipe.get("node_generation", {}).get("cot", {}).get("answer_mode") == "faithful_restyle"
             return [{"id": unit["id"], "source_id": unit["source_id"], "status": "eligible",
-                     "messages": without_source_reasoning(history), "tools": unit.get("tools", []),
+                     "messages": deepcopy(history) if restyle else without_source_reasoning(history), "tools": unit.get("tools", []),
                      "quotes": [], "source_context": deepcopy(unit),
-                     "generation_check": "learner_structure_only_for_independent_cot",
+                     "generation_check": "learner_structure_only_for_restyle" if restyle else "learner_structure_only_for_independent_cot",
                      "reasoning_origin": "unassessed_input_not_training_output",
                      "evidence_level": "recorded_context_unassessed"}]
         context = {"source": {**unit, "messages": [

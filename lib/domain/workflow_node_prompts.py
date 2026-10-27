@@ -43,7 +43,15 @@ VERSION_21_NODE_PROMPT_IDS = {**VERSION_20_NODE_PROMPT_IDS,
                   "cot": (*VERSION_20_NODE_PROMPT_IDS["cot"], "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check")}
 VERSION_22_NODE_PROMPT_IDS = {**VERSION_21_NODE_PROMPT_IDS,
                   "multiturn": (*VERSION_21_NODE_PROMPT_IDS["multiturn"], "workflow.style_check")}
-NODE_PROMPT_IDS = {**VERSION_22_NODE_PROMPT_IDS,
+VERSION_23_NODE_PROMPT_IDS = {**VERSION_22_NODE_PROMPT_IDS,
+                  "cot": (*VERSION_22_NODE_PROMPT_IDS["cot"], "workflow.cot_self_check", "workflow.cot_self_check_review")}
+VERSION_24_NODE_PROMPT_IDS = {**VERSION_23_NODE_PROMPT_IDS,
+                  "cot": (*VERSION_23_NODE_PROMPT_IDS["cot"], "workflow.cot_claim_check", "workflow.cot_claim_review")}
+VERSION_25_NODE_PROMPT_IDS = {**VERSION_24_NODE_PROMPT_IDS,
+                  "cot": (*VERSION_24_NODE_PROMPT_IDS["cot"], "workflow.cot_check_agent")}
+NODE_PROMPT_IDS = {**VERSION_25_NODE_PROMPT_IDS,
+                  "multiturn": (*VERSION_25_NODE_PROMPT_IDS["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer"),
+                  "cot": (*VERSION_25_NODE_PROMPT_IDS["cot"], "workflow.cot_native_joint"),
                   "preference": (*VERSION_22_NODE_PROMPT_IDS["preference"], "workflow.preference_design_check"),
                   "review": (*VERSION_22_NODE_PROMPT_IDS["review"], "workflow.learner_context_check",
                              "workflow.review_reference")}
@@ -93,14 +101,37 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
                 if styled else ("workflow.sft", "workflow.jev_score"))
     if stage == "multiturn":
         multi_style = (node_generation or {}).get("multiturn", (node_generation or {}).get("sft")) or {}
+        if multi_style.get("enabled") and multi_style.get("reading_session"):
+            return ("workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")
         styled = bool(multi_style and multi_style.get("enabled", True))
         base = ((*VERSION_16_NODE_PROMPT_IDS[stage], *human_prompt) if directed else LEGACY_NODE_PROMPT_IDS[stage])
         return (*base, "workflow.style_check") if styled else base
     if stage == "cot":
+        if styled and config.get("answer_mode") == "native_joint":
+            return (("workflow.cot_native_joint", "workflow.rationale_check")
+                    if config.get("review_policy") else ("workflow.cot_native_joint",))
+        if styled and config.get("answer_mode") == "faithful_restyle" and config.get("self_check", {}).get("version") == 7:
+            return ("workflow.cot_rationale", "workflow.rationale_check")
+        if (styled and config.get("answer_mode") == "draft_then_finalize"
+                and config.get("self_check", {}).get("version") == 7):
+            # Both existing, editable authoring templates are executed. The
+            # finalizer replaces the whole candidate, not just its answer.
+            return ("workflow.cot_rationale", "workflow.cot_generate")
+        if styled and config.get("self_check", {}).get("version") == 7:
+            return (("workflow.cot_rationale", "workflow.cot_native_answer")
+                    if config.get("answer_mode") == "native_prefill" else ("workflow.cot_generate",))
         prompts = (("workflow.cot_rationale", "workflow.cot_prefix_check", "workflow.cot_native_answer", "workflow.rationale_check", "workflow.style_check")
                    if styled and config.get("answer_mode") == "native_prefill" else
                    ("workflow.cot_generate", "workflow.rationale_check", "workflow.style_check")
                    if styled else ("workflow.rationale_check",))
+        if styled and config.get("answer_mode") == "draft_then_finalize":
+            prompts = ("workflow.cot_rationale", *prompts)
+        if styled and config.get("answer_mode") == "faithful_restyle":
+            prompts = tuple("workflow.cot_rationale" if prompt == "workflow.cot_generate" else prompt for prompt in prompts)
+        if styled and config.get("self_check"):
+            prompts = (*prompts, *( ("workflow.cot_check_agent",) if config["self_check"]["version"] in (3, 4, 5, 6) else
+                ("workflow.cot_claim_check", "workflow.cot_claim_review")
+                if config["self_check"]["version"] == 2 else ("workflow.cot_self_check", "workflow.cot_self_check_review")))
         return (*prompts, "workflow.cot_directed_check", *human_prompt) if directed else prompts
     if stage == "preference":
         base = VERSION_16_NODE_PROMPT_IDS[stage] if directed else LEGACY_NODE_PROMPT_IDS[stage]
@@ -172,7 +203,14 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
             VERSION_17_NODE_PROMPT_IDS if recipe_version <= 17 else
             VERSION_19_NODE_PROMPT_IDS if recipe_version <= 19 else
             VERSION_20_NODE_PROMPT_IDS if recipe_version <= 20 else
-            VERSION_21_NODE_PROMPT_IDS if recipe_version <= 21 else VERSION_22_NODE_PROMPT_IDS)
+            VERSION_21_NODE_PROMPT_IDS if recipe_version <= 21 else
+            VERSION_22_NODE_PROMPT_IDS if recipe_version <= 22 else
+            VERSION_23_NODE_PROMPT_IDS if recipe_version == 23 else
+            VERSION_24_NODE_PROMPT_IDS if recipe_version == 24 else VERSION_25_NODE_PROMPT_IDS)
+    if recipe_version >= 40:
+        catalog = {**catalog, "cot": (*catalog["cot"], "workflow.cot_native_joint")}
+    if recipe_version >= 41:
+        catalog = {**catalog, "multiturn": (*catalog["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")}
     if learner_context_review_version == 1 and "review" in catalog:
         catalog = {**catalog, "review": (*catalog["review"], "workflow.learner_context_check")}
     if (claim_review_protocol_version == 2 or claim_review_adversarial_protocol_version == 1) and "review" in catalog:
@@ -203,6 +241,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
             type(claim_repair_feedback_version) is not int or claim_repair_feedback_version != 1):
         raise ValueError("invalid_claim_repair_feedback_version")
     def default_body(prompt_id):
+        if prompt_id == "workflow.cot_check_agent":
+            return render(get(prompt_id, version="1.6.0" if recipe_version >= 30 else "1.5.0" if recipe_version >= 29 else "1.4.0" if recipe_version >= 28 else "1.3.0" if recipe_version >= 27 else "1.2.0" if recipe_version >= 26 else "1.0.0"))
         if prompt_id == "workflow.alternative":
             return render(get(prompt_id, version="1.5.0" if preference_design_version == 3 else
                 "1.4.0" if preference_design_version == 2 else

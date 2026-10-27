@@ -40,6 +40,10 @@ def _restore_experience(workspace, scope, save_field):
         key = f"workflow-agent-experience-{field}:{workspace}:{scope}"
         st.session_state[key] = value
         save_field(workspace, key)
+    parent_key = f"workflow-agent-experience-parent:{workspace}:{scope}"
+    st.session_state[parent_key] = None
+    st.session_state[f"experience-evolution:{workspace}:{scope}:parent"] = None
+    save_field(workspace, parent_key)
     st.session_state[prompt_library_key(workspace, f"experience:{scope}", "selection")] = None
 
 
@@ -68,7 +72,11 @@ def render_experience(workspace, prompt_id, *, save_field, prompt_library):
         render_prompt_library(prompt_library, workspace, f"experience:{scope}",
                               fields={"text": text_key, "enabled": enabled_key},
                               defaults={"text": default, "enabled": True}, save_field=save_field,
+                              restore_extras={f"workflow-agent-experience-parent:{workspace}:{scope}": None},
                               label="我的经验模板", save_label="保存经验")
+        from lib.presentation.streamlit.experience_evolution_controls import render_experience_evolution
+        render_experience_evolution(workspace, scope, prompt_id,
+            text_key=text_key, enabled_key=enabled_key, save_field=save_field)
         st.text_area("经验正文", key=text_key, height=300, max_chars=32768,
                      on_change=save_field, args=(workspace, text_key))
         if experience_has_issue({scope: {"text": st.session_state[text_key], "enabled": st.session_state[enabled_key]}}):

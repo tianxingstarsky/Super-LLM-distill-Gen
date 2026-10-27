@@ -1,6 +1,6 @@
 distilabel==1.5.3
-openai
-anthropic
+openai==3.7.0
+anthropic==1.11.0
 beautifulsoup4
 pypdf>=5,<7
 pypdfium2>=4.30,<6
@@ -14,8 +14,11 @@ filelock>=3.16,<4
 psutil>=5.9,<8
 PyYAML>=6,<7
 jsonschema>=4.23,<5
+math-verify[antlr4_13_2]==0.9.0
 # 审核中心已融合为单进程（SQLite+内置 HTTP，见 lib/review_center.py）；
 # 不再依赖 argilla/argilla-server/redis（旧协作栈已下线）
-langfuse
+langfuse==4.15.1
+tenacity==9.2.1
 streamlit==1.63.0
 pywebview==6.2.1; sys_platform == "win32"
+qdrant-client==1.20.0

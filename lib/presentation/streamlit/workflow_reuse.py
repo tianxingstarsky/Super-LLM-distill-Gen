@@ -194,12 +194,26 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-generation-enabled:{workspace}:{node}"] = generation["enabled"]
         values[f"workflow-generation-style:{workspace}:{node}"] = generation["style"]
         values[f"workflow-generation-instruction:{workspace}:{node}"] = generation["instruction"]
+        if node == "multiturn":
+            values[f"workflow-reading-session:{workspace}:{node}"] = generation.get("reading_session", False)
         if "reasoning_language" in generation:
             values[f"workflow-generation-reasoning-language:{workspace}:{node}"] = generation["reasoning_language"]
         if "reasoning_depth" in generation:
             values[f"workflow-generation-reasoning-depth:{workspace}:{node}"] = generation["reasoning_depth"]
         if node == "cot":
             values[f"workflow-generation-answer-mode:{workspace}:{node}"] = generation.get("answer_mode", "joint")
+            policy = generation.get("review_policy", {"mode": "strict", "sample_percent": 20})
+            values[f"workflow-generation-review-mode:{workspace}:cot"] = policy["mode"]
+            values[f"workflow-generation-review-percent:{workspace}:cot"] = policy["sample_percent"]
+            values[f"workflow-cot-checklist-enabled:{workspace}"] = bool(generation.get("self_check"))
+            if checklist := generation.get("self_check"):
+                values[f"workflow-cot-checklist-version:{workspace}"] = checklist["version"]
+                values[f"workflow-cot-style-admission:{workspace}"] = checklist.get("style_admission", "strict")
+                values[f"workflow-cot-evidence-policy:{workspace}"] = checklist.get("evidence_policy", 0)
+                values[f"workflow-cot-checklist-text:{workspace}"] = "\n".join(
+                    ("? " if r["allow_na"] else "")
+                    + ("[" + r["phases"][0] + "] " if len(r.get("phases", [])) == 1 else "")
+                    + r["requirement"] for r in checklist["rules"])
     trim = validate_reasoning_trim(recipe.get("reasoning_trim"))
     if trim is not None:
         values[f"workflow-trim-enabled:{workspace}"] = trim["enabled"]
@@ -268,6 +282,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     if review_prompt is not None:
         values[f"workflow-node-prompt:{workspace}:jev:workflow.package_review"] = review_prompt
     prompt_nodes, _ = execution_graph(recipe.get("targets", []), reasoning_trim=bool((trim or {}).get("enabled")),
+                                     node_generation=recipe.get("node_generation"),
                                      qa_director=director, package_review=package_review,
                                      recipe_version=max(18 if review_repair else 16, recipe.get("version", 16)),
                                      source_cleaning=recipe.get("source_cleaning", False), review_repair=review_repair,

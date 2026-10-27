@@ -12,6 +12,14 @@ import pytest
 
 from lib.contexts.models.api import ExecuteModelRequest, ExecuteToolTurn, RequestJSONResponse
 from lib.contexts.models.contracts import ModelQueueTimeout, ModelRequestError, ModelStreamError
+from lib.contexts.models.domain.request_errors import ModelJSONError
+from lib.contexts.models.domain.json_response import parse_json_robust, JSONResponseDecodeError
+from copy import deepcopy
+
+
+def TenacityRetry():
+    from lib.contexts.models.infrastructure.retry import TenacityRetry as Runtime
+    return Runtime()
 
 
 class FakeFailure(RuntimeError):
@@ -116,7 +124,7 @@ class MemoryTextRequest(MemoryAdmission):
 def test_rate_limit_defers_before_releasing_slot_and_retries_with_clean_reservation():
     port = MemoryTextRequest([FakeFailure("service_rate_limited", rejected=True), "answer"])
     details = {"old": "stale"}
-    assert ExecuteModelRequest(port).execute([{"role": "user", "content": "q"}], response_details=details) == "answer"
+    assert ExecuteModelRequest(port, retry=TenacityRetry()).execute([{"role": "user", "content": "q"}], response_details=details) == "answer"
     assert port.events == ["admit", ("reserve", .5), ("defer", .25), ("settle", 0), "release",
                            "admit", ("reserve", .5), ("usage", 100, 50), ("settle", .15), "release"]
     assert details == {"reasoning_content": "完整思考", "completed": True}
@@ -125,7 +133,7 @@ def test_rate_limit_defers_before_releasing_slot_and_retries_with_clean_reservat
 
 def test_json_capability_rejection_does_not_consume_retry_or_reuse_live_reservation():
     port = MemoryTextRequest([FakeFailure("rejected", kind="fatal", rejected=True, format_rejected=True), "{}"])
-    assert ExecuteModelRequest(port).execute([], json_mode=True, retries=1) == "{}"
+    assert ExecuteModelRequest(port, retry=TenacityRetry()).execute([], json_mode=True, retries=1) == "{}"
     assert port.json_supported is False
     assert len(port.calls) == 2
     assert port.events.count("admit") == port.events.count("release") == 2
@@ -134,7 +142,7 @@ def test_json_capability_rejection_does_not_consume_retry_or_reuse_live_reservat
 
 def test_interrupted_stream_books_unknown_usage_and_waits_after_slot_release():
     port = MemoryTextRequest([ModelStreamError("model_stream_interrupted"), "complete"])
-    assert ExecuteModelRequest(port).execute([]) == "complete"
+    assert ExecuteModelRequest(port, retry=TenacityRetry()).execute([]) == "complete"
     assert port.events[:6] == ["admit", ("reserve", .5), ("settle", .5), "release", ("wait", .25), "admit"]
 
 
@@ -143,7 +151,7 @@ def test_cancellation_and_callback_failures_never_retry_or_publish_details():
     cancelled = RuntimeError("stop now")
     port.cancel_check = lambda: (_ for _ in ()).throw(cancelled)
     with pytest.raises(RuntimeError) as observed:
-        ExecuteModelRequest(port).execute([])
+        ExecuteModelRequest(port, retry=TenacityRetry()).execute([])
     assert observed.value is cancelled
     assert port.events == [] and port.calls == []
 
@@ -154,7 +162,7 @@ def test_cancellation_and_callback_failures_never_retry_or_publish_details():
         if event["type"] == "delta":
             raise callback_failure
     with pytest.raises(ValueError) as observed:
-        ExecuteModelRequest(port).execute([], response_details=details, on_stream=callback)
+        ExecuteModelRequest(port, retry=TenacityRetry()).execute([], response_details=details, on_stream=callback)
     assert observed.value is callback_failure
     assert len(port.calls) == 1
     assert details == {}
@@ -164,7 +172,7 @@ def test_cancellation_and_callback_failures_never_retry_or_publish_details():
 def test_fatal_provider_error_is_sanitized_and_queue_timeout_has_zero_sent_attempts():
     port = MemoryTextRequest([FakeFailure("service_authentication_failed", kind="fatal", rejected=True)])
     with pytest.raises(ModelRequestError) as observed:
-        ExecuteModelRequest(port).execute([])
+        ExecuteModelRequest(port, retry=TenacityRetry()).execute([])
     assert observed.value.code == "service_authentication_failed"
     assert observed.value.attempts == 1
     assert "provider text" not in str(observed.value)
@@ -177,7 +185,7 @@ def test_fatal_provider_error_is_sanitized_and_queue_timeout_has_zero_sent_attem
     port = MemoryTextRequest([])
     port.admit = timeout
     with pytest.raises(ModelRequestError) as observed:
-        ExecuteModelRequest(port).execute([])
+        ExecuteModelRequest(port, retry=TenacityRetry()).execute([])
     assert observed.value.attempts == 0
     assert port.events == [] and port.calls == []
 
@@ -186,9 +194,11 @@ class MemoryJSONRequest:
     def __init__(self, outcomes):
         self.outcomes = iter(outcomes)
         self.calls = []
+        self.messages = []
 
     def chat(self, messages, **options):
         self.calls.append(options)
+        self.messages.append(deepcopy(messages))
         outcome = next(self.outcomes)
         if "response_details" in options:
             options["response_details"]["attempt"] = len(self.calls)
@@ -208,13 +218,54 @@ class MemoryJSONRequest:
 def test_json_retries_only_invalid_body_and_publishes_only_successful_attempt_details():
     port = MemoryJSONRequest(["bad json", '{"answer":"ok"}'])
     details = {"stale": True}
-    assert RequestJSONResponse(port).execute([], temperature=.8, response_details=details) == {"answer": "ok"}
+    assert RequestJSONResponse(port, retry=TenacityRetry()).execute([], temperature=.8, response_details=details) == {"answer": "ok"}
     assert details == {"attempt": 2}
     assert [call["temperature"] for call in port.calls] == [.8, .3]
     port = MemoryJSONRequest([ModelRequestError("service_authentication_failed", "fatal", 1)])
     with pytest.raises(ModelRequestError):
-        RequestJSONResponse(port).execute([])
+        RequestJSONResponse(port, retry=TenacityRetry()).execute([])
     assert len(port.calls) == 1
+
+
+def test_json_retry_includes_parser_feedback_without_changing_context_or_accumulating_history():
+    first, second = '{"answer":["first"}}', '{"answer":["second"}}'
+    port = MemoryJSONRequest([first, second, '{"answer":["third"]}'])
+    port.parse_json = parse_json_robust
+    messages = [{"role": "system", "content": "fixed rules"}, {"role": "user", "content": "real question"}]
+    original = deepcopy(messages)
+    RequestJSONResponse(port, retry=TenacityRetry()).execute(messages)
+    assert messages == original and port.messages[0] == original
+    assert port.messages[1][:-2] == original and port.messages[2][:-2] == original
+    assert port.messages[1][-2] == {"role": "assistant", "content": first}
+    assert port.messages[2][-2] == {"role": "assistant", "content": second}
+    assert port.messages[1][-1]["role"] == "system"
+    assert '"column"' in port.messages[1][-1]["content"]
+
+
+def test_identical_invalid_json_after_feedback_stops_without_third_purchase():
+    port = MemoryJSONRequest(['{"answer":', '{"answer":'])
+    with pytest.raises(ModelJSONError):
+        RequestJSONResponse(port, retry=TenacityRetry()).execute([], retries=3)
+    assert len(port.calls) == 2
+
+
+@pytest.mark.parametrize("phase", ["parse", "commit"])
+@pytest.mark.parametrize("failure", [ValueError("storage failure"), RuntimeError("adapter bug")])
+def test_non_syntax_program_errors_never_buy_another_model_response(phase, failure):
+    port = MemoryJSONRequest(['{"ok":true}'])
+    def fail(*args):
+        raise failure
+    setattr(port, "parse_json" if phase == "parse" else "commit_details", fail)
+    with pytest.raises(type(failure)) as observed:
+        RequestJSONResponse(port, retry=TenacityRetry()).execute([])
+    assert observed.value is failure and len(port.calls) == 1
+
+
+def test_json_decode_error_has_machine_readable_location_without_raw_content():
+    with pytest.raises(JSONResponseDecodeError) as observed:
+        parse_json_robust('{\n"answer": ["sensitive content"}}')
+    assert observed.value.line == 2 and observed.value.column > 0
+    assert "sensitive content" not in str(observed.value)
 
 
 class MemoryToolRequest(MemoryAdmission):
@@ -241,13 +292,13 @@ def test_tool_decision_bills_invalid_response_and_never_executes_returned_tools(
     port = MemoryToolRequest([ValueError("model_unexpected_tool_call")])
     details = {"stale": True}
     with pytest.raises(ValueError, match="model_unexpected_tool_call"):
-        ExecuteToolTurn(port).execute([], [], response_details=details)
+        ExecuteToolTurn(port, retry=TenacityRetry()).execute([], [], response_details=details)
     assert port.events[-3:] == [("usage", 50, 100), ("settle", .15), "release"]
     assert details == {} and len(port.calls) == 1
     decision = {"role": "assistant", "content": "", "tool_calls": [{"id": "pending-call"}]}
     port = MemoryToolRequest([decision])
     events = []
-    assert ExecuteToolTurn(port).execute([], [], on_stream=events.append) is decision
+    assert ExecuteToolTurn(port, retry=TenacityRetry()).execute([], [], on_stream=events.append) is decision
     assert events[-1]["delivery"] == "complete_response"
     assert events[-1]["tool_calls"] == 1
 

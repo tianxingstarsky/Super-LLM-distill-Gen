@@ -6,9 +6,22 @@ import html
 from html.parser import HTMLParser
 import re
 from typing import Any
+from lib.contexts.workflows.contracts import EXPLORATORY_STYLE_V1, EXPLORATORY_STYLE_EN_V1
 
 
 ZH_EN: dict[str, str] = {
+    EXPLORATORY_STYLE_V1: EXPLORATORY_STYLE_EN_V1,
+    "审慎探索": "Careful exploration",
+    "从用户意图出发，随依据形成判断，针对关键疑点核查；包含四个短示范，不固定步骤或长度。": "Start from the user's intent, develop judgments from evidence, and check key uncertainties. Includes four short examples, with no fixed steps or length.",
+    "编辑这套风格": "Edit this style",
+    "将完整要求与示范载入下方编辑框，保留附加要求，并切换为自定义风格；可保存到我的风格模板。": "Load the full guidance and examples into the editor, keep your additions, and switch to a custom style. Save it in My style templates.",
+    "合并后超过 4,000 字符，请先精简附加要求；当前内容已保留。": "The combined text exceeds 4,000 characters. Shorten your additions first. Your current text is unchanged.",
+    "包含运行记录": "Include run records",
+    "默认浏览资料与训练产物；开启后可查看检查点、阶段记录与日志，不会修改文件。": "Browse sources and training outputs by default. Enable this to inspect checkpoints, stage records, and logs. Files stay unchanged.",
+    "当前范围的文件列表已达到上限，搜索仅覆盖已列出的文件。任务报告与输出打包仍可按任务查看完整结果。": "This file list reached its limit. Search covers listed files only. Open a task report or export page to see that task's full results.",
+    "来源文件优先；生成产物按最近修改排序。": "Sources first. Generated files are sorted by latest update.",
+    "查看所属任务": "Open source task",
+    "数据包": "Data packages",
     "下载本次固定参数、节点提示词与返工原稿。": "Download this run's frozen parameters, node prompts, and repair inputs.",
     "下载完整配方 JSON": "Download complete recipe JSON",
     "负例设计": "Negative response design",
@@ -399,6 +412,7 @@ ZH_EN: dict[str, str] = {
     "修改后的 RLAIF 候选需要 AI 重新评分，不能沿用原来的 AI 标签。请切换自动评分与修正。": "Edited RLAIF candidates need fresh AI scores. Previous AI labels cannot be reused. Switch to automatic scoring and correction.",
     "等待人工评分与修正。": "Awaiting human scoring and correction.",
     "评审依据尚未核清，原稿已保留。请先复核条件与来源，再决定是否修正。": "The review evidence is unresolved. The original is preserved. Check the conditions and sources before deciding whether to revise it.",
+    "核查会话尚未完成，正文与已取得的证据已保留。请打开样本报告检查未完成项，再补充来源或核查指令；尚不判定正文有误。": "The investigation is incomplete. The text and collected evidence are saved. Open the sample report to inspect pending items, then add sources or review instructions. This does not mean the text is wrong.",
     "待复核 · 依据尚未核清": "Pending review · evidence unresolved",
     "原稿已保留；先核对评审依据，再决定是否修正。": "The original is preserved. Check the review evidence before deciding whether to revise it.",
     " · 待复核": " · Pending review",
@@ -970,7 +984,8 @@ ZH_EN: dict[str, str] = {
     "CoT 推理核验": "CoT reasoning review",
     "导出数据流": "Export data flow",
     "先生成候选，再交给 CoT 处理；SFT 使用最终通过核验的答案，推理按训练文件格式导出。": "Generate candidates, then process them in CoT. SFT uses the final verified answers. Its export setting controls whether reasoning is included.",
-    "CoT 核验通过后才生成最终 SFT；未通过的样本进入隔离，推理按 SFT 训练文件格式保留。": "Final SFT records require CoT approval. Failed samples are quarantined. The SFT export setting controls whether reasoning is included.",
+    "CoT 按节点策略处理后生成最终 SFT；不合格样本进入隔离，未抽检项单独标记，推理按训练文件格式保留。": "CoT follows the node policy before final SFT output. Failed records are quarantined. Unreviewed records are labeled separately. The training format controls reasoning export.",
+    "先生成候选，再交给 CoT 处理；SFT 使用最终结果，核验覆盖情况在报告中标明，推理按训练文件格式导出。": "Candidates go to CoT before final SFT output. The report shows review coverage. The training format controls reasoning export.",
     "开启后，教师按风格提示词重新撰写推理与答案；关闭后核验已有推理。": "When enabled, the teacher rewrites reasoning and answers using the style prompt. When disabled, it checks the existing reasoning.",
     "已有推理核验": "Review existing reasoning",
     "核验上游候选的已有推理与答案；缺少推理或未通过核验的样本进入隔离。": "Check the candidate's existing reasoning and answer. Quarantine samples with missing reasoning or failed reviews.",
@@ -4150,6 +4165,22 @@ ZH_EN.update({
     "原生推理续写答案": "Answer from native reasoning continuation",
     "推理前缀核验": "Reasoning prefix check",
     "同次生成推理与答案": "Generate reasoning and answer together",
+    "引导原生思考 · 同次回答": "Guided native thinking · one response",
+    "资料阅读与情景对话": "Document reading and scenario dialogue",
+    "情景故事设计": "Scenario story",
+    "情景用户连续发言": "Scenario user turns",
+    "共享资料原生思考与回答": "Shared-material native reasoning and answers",
+    "同一份资料连续对话，直接保留原生思考和答案；任务规则与资料一同导出。故事只给用户模拟器，助手看到实际发言后再回答。": "Continue a dialogue with the same material. Preserve native reasoning and answers, and export the task rules and material. Only the user simulator sees the story; the assistant responds to the actual messages.",
+    "在下方编辑场景、用户发言和回答三套提示词。轮数是上限，用户目标完成即可停止；未独立评审会明确标记。": "Edit the scene, user and answer prompts below. The turn limit is a maximum; the dialogue can end when the goal is met. Unreviewed results are labelled.",
+    "撰写显式推理与答案": "Author an explicit rationale and answer",
+    "原生思考直接保存一次响应的推理和答案，不再生成第二份推理。显式撰写会额外输出训练用解释；推敲后定稿和前缀续写需要多次请求。另选的评审会增加调用。": "Native mode saves the reasoning and answer from one response. Explicit authoring writes an additional rationale. Draft finalization and prefix continuation use multiple requests. Optional reviews add calls.",
+    "系统提示词引导模型的原生思考；完整保留原始推理和同次答案，允许同步修正旧稿。原生思考强度在本节点模型配置中设置。": "System instructions guide native thinking. The complete reasoning and answer are preserved, and both can correct the prior draft. Set thinking effort in this node's model settings.",
+    "自查不等于独立评审；未抽检单独标记。若原始思考暴露提示词或存在缺陷，保留全文并隔离，不静默删改。": "Self-checking is not independent approval. Unreviewed records are labeled. Native reasoning with instruction leakage or defects is preserved and quarantined.",
+    "推敲后定稿": "Draft, then finalize",
+    "推敲后定稿（试验）": "Draft, then finalize (experimental)",
+    "试验模式：已有真实样本显示，定稿可能继承错误或新增过强结论。使用前需检查结果，不默认开启。": "Experimental: a live sample retained errors and added unsupported claims. Inspect the results before use. This mode is off by default.",
+    "同次生成使用一次作者请求；推敲后定稿分草稿和定稿两次，结论模型可同步修正推理与答案。原生方式通过 DeepSeek Chat Beta 续写答案。来源检索和另选的评审会增加调用。": "Joint generation uses one authoring request. Draft and finalize uses two, so the finalizer can revise both reasoning and answer. Native mode continues through DeepSeek Chat Beta. Source lookup and optional review add calls.",
+    "保留完整草稿与定稿对照；训练文件使用定稿。两个阶段的提示词都可在本节点编辑，自检不等于独立评审通过。": "Keep both drafts for comparison. Export the final version. Edit both prompts in this node. Self-checking is not an independent review verdict.",
     "原生推理前缀续写": "Continue from a native reasoning prefix",
     "原生方式先生成并核验推理，再通过 DeepSeek Chat Beta 的推理通道续写答案；使用本节点模型，增加独立请求。接口不支持时明确报错。": "Write and check the reasoning first. Continue the answer through DeepSeek Chat Beta using this node's model. This adds separate requests. Unsupported APIs return an error.",
     "修饰前缀、上游原生续写和答案分别保存；不宣称修饰文字是模型自发的内部思考。": "Save the authored prefix, provider continuation, and answer separately. The authored text is not claimed to be the model's spontaneous internal thought.",
@@ -4216,4 +4247,22 @@ ZH_EN.update({
     "工具错误尚未解决": "Unresolved tool error",
     "附件需要专用多模态导入": "Attachments need a dedicated multimodal importer",
     "对话结构需在 DSH 中整理": "Conversation structure needs preparation in DSH"
+})
+
+ZH_EN.update({
+    "CoT 当前只核验已有推理 · 配置增强": "CoT checks existing reasoning · Configure authoring",
+    "保真风格改写": "Faithful style transfer",
+    "开启后，可重新生成或保真改写已有推理；关闭后核验已有推理。": "Enable authoring or faithful editing of existing reasoning. When disabled, validate the existing reasoning.",
+    "需要已有完整推理。只改写推理，原答案由程序保留；原稿与改稿均保存。一次改写后核验事实和推导，拒绝项保留待处理，不自动反复重写。": "Requires complete existing reasoning. Edit reasoning while the program keeps the answer unchanged. Keep both versions. Check facts and derivations after one edit; retain rejected candidates without automatic rewrite loops.",
+    "支持 NeMo 与 OpenThoughts 的推理结果导入；上游分数不代表合格，仍检查原答案和改写是否成立。节点提示词可编辑，也可保存个人风格模板。": "Import reasoning results from NeMo or OpenThoughts. Upstream scores do not certify quality. Check the original answer and the edited reasoning. Edit node prompts and save personal styles.",
+    "也可导入 NeMo 的 problem / generation 结果及 OpenThoughts 的带推理对话 JSON / JSONL；只拆分明确的推理标记，缺失推理不会补造。": "Also accepts NeMo problem / generation results and OpenThoughts reasoning conversations in JSON / JSONL. Only explicit reasoning markers are decoded. Missing reasoning is never invented.",
+    "一次回复保留模型原生思考与答案。生成完成不代表独立评审通过。": "Each reply preserves native reasoning and the answer. Generation does not imply independent review approval.",
+    "从清洗资料设计私有场景，模拟用户与回答者交替发言；公开规则和资料随完整原生对话导出。生成不代表独立评审通过。": "Build a private scenario from cleaned material, then alternate user and assistant turns. Export public rules, material and the full native dialogue. Generation does not imply review approval.",
+    "阅读对话复用同一份资料和历史；独立评审结果与生成状态分开记录。": "Reading dialogues reuse the same material and history. Review outcomes are recorded separately from generation status.",
+    "逐项证据自检": "Evidence-backed self-check",
+    "独立证据核查": "Independent evidence review",
+    "主张、单位与范围自检": "Claim, unit and scope self-check",
+    "独立主张核验": "Independent claim verification",
+    "Agent 核查策略": "Agent investigation policy",
+    "当前不会重新撰写增强解释。点击进入 CoT 节点，可开启风格化生成并设置推理深度、语言和完整模板。": "This run will not author enhanced explanations. Open the CoT node to enable styled generation and set depth, language and full templates.",
 })

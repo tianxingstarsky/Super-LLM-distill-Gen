@@ -1,5 +1,7 @@
 # 代码导航
 
+网络重试、可选追踪和知识库协议复用 Tenacity、Langfuse 和 Qdrant/OpenAI SDK。现有业务编排保持原实现；组件取舍见 [开源运行时说明](../docs/architecture/open-source-runtime-2026-10-26.md)。
+
 先按业务找代码，再看所在层。完整约定见 [架构指南](../docs/architecture.md) 和 [命名与职责](../docs/architecture/naming.md)。
 
 | 目录 | 找什么 |

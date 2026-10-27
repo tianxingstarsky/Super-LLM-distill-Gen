@@ -288,6 +288,9 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     assert app.session_state["nav"] == "任务管理"
     assert app.session_state[f"task-center-search:{name}"] == ""
     assert app.session_state[f"task-center-filter:{name}"] == "全部"
+    assert app.segmented_control(key=f"workflow-result-view:{rid}").value == "样本报告"
+    app.segmented_control(key=f"workflow-result-view:{rid}").set_value("运行过程").run()
+    assert not app.exception
     assert any("文档自动验收" in str(item.value) and 'class="df-run-summary"' in str(item.value)
                for item in app.get("html"))
     assert any("按实际合格数量交付" in item.value for item in app.success)
@@ -323,6 +326,9 @@ def test_workbench_empty_and_completed_run_visible_after_refresh(tmp_path, monke
     other.run()
     assert not other.exception
     other.sidebar.button(key=f"sidebar-task:{name}:{rid}").click().run()
+    assert not other.exception
+    assert other.segmented_control(key=f"workflow-result-view:{rid}").value == "样本报告"
+    other.segmented_control(key=f"workflow-result-view:{rid}").set_value("运行过程").run()
     assert not other.exception
     assert any("文档自动验收" in str(item.value) and 'class="df-run-summary"' in str(item.value)
                for item in other.get("html"))
@@ -594,6 +600,9 @@ def test_expanded_english_task_view_uses_full_canvas_and_localized_quality(tmp_p
     app.session_state["ui_language"] = "en"
     app.session_state[f"task-center-focus:{workspace}"] = True
     app.run()
+    assert not app.exception
+    assert app.segmented_control(key=f"workflow-result-view:{rid}").value == "样本报告"
+    app.segmented_control(key=f"workflow-result-view:{rid}").set_value("运行过程").run()
     assert not app.exception
     assert any(widget.label == "Expand workflow view" and widget.value for widget in app.toggle)
     spec = canvas(app, f"live-canvas:{rid}")

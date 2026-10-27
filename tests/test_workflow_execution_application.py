@@ -119,6 +119,27 @@ def test_director_consumes_clean_candidates_and_suppresses_duplicate_generation(
     assert runtime.published["multiturn"].name == "multiturn"
 
 
+@pytest.mark.parametrize("with_sft", [False, True])
+def test_reading_session_uses_clean_source_without_duplicate_director(with_sft):
+    from lib.contexts.workflows.application.generate_production_batch import GenerateProductionBatch
+    targets = {"multiturn", *({"sft"} if with_sft else set())}
+    runtime = MemoryBatchRuntime(targets, director=True)
+    runtime.plan = lambda: BatchGenerationPlan(frozenset(targets), True, reading_session=True)
+    GenerateDatasetBatch(runtime).execute()
+    assert runtime.events.count("multiturn") == 1
+    assert runtime.events.count("director") == int(with_sft)
+    assert "sft" not in runtime.events
+    runtime.events.clear()
+    runtime.begin = lambda: None
+    runtime.trim_reasoning = lambda collections: None
+    recipe = {"version": 41, "targets": list(targets), "qa_director": {"enabled": True},
+        "node_generation": {"multiturn": {"enabled": True, "reading_session": True}}}
+    collections = GenerateProductionBatch(runtime, recipe).execute(runtime.inputs.generation_candidates,
+        runtime.inputs.source_records, targets)
+    assert runtime.events.count("multiturn") == 1 and runtime.events.count("director") == int(with_sft)
+    assert collections["multiturn"].name == "multiturn"
+
+
 class MemoryRunSession:
     def __init__(self, *, status="pending", route="batch", error=None):
         self.state = {"status": status}

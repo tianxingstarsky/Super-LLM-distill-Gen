@@ -2,6 +2,7 @@
 from __future__ import annotations
 from copy import deepcopy
 from types import SimpleNamespace
+import pytest
 
 from lib.contexts.workflows.application.generate_sft import GenerateSft
 from lib.contexts.workflows.application.generate_directed_sft import GenerateDirectedSft
@@ -194,6 +195,50 @@ def test_native_empty_answer_receipts_prevent_repurchasing_on_resume():
     assert "native_request_attempts" not in attempts[0][1]
     assert attempts[1][1]["native_request_attempts"] == 1
     assert len(first[1]["native_answer_terminal"]["empty_response_receipts"]) == 2
+
+
+@pytest.mark.parametrize("evidence_policy", [0, 1, 2])
+def test_rejected_native_trace_retains_last_draft_without_buying_an_answer(evidence_policy):
+    from lib.contexts.workflows.domain.reasoning_checklist import default_reasoning_checklist
+    first = {"reasoning": "  第一稿：" + REASONING + "\n", "reasoning_trace": {}}
+    last = {"reasoning": "  修订稿：" + REASONING + "\n", "reasoning_trace": {
+        "task": "解释维护条件与先后关系。", "premises": [TEXT],
+        "steps": [{"basis": [TEXT], "inference": "前提需先于依赖的动作满足。", "result": ANSWER}],
+        "checks": [{"check": "检查先决条件。", "result": "先断电再检查，保留了依赖。"}], "limitations": []}}
+    port = MemoryGenerationPort([first, last])
+    port.validate_native_prefill = lambda: None
+    checklist = {**default_reasoning_checklist(), "version": 6, "evidence_policy": evidence_policy}
+    usecase = GenerateCot(port, {"node_generation": {"cot": {
+        "answer_mode": "native_prefill", "self_check": checklist}}})
+    port.generate_native_answer = usecase.generate_native_answer
+    candidate = usecase.generate_styled(conversation(), {"instruction": "解释实际前提。"})[0]
+    assert candidate["status"] == "quarantined"
+    assert candidate["reason"] == "cot_generation_failed_after_repair"
+    assert candidate["feedback"]["reasoning_protocol"] == "authored_reasoning_vacuous_step"
+    assert [c[2] for c in port.calls] == ["workflow.cot_rationale", "workflow.cot_rationale"]
+    if evidence_policy == 2:
+        assert candidate["reasoning"] == [last["reasoning"]] and candidate["answer"] == ""
+        assert candidate["feedback"]["reasoning_trace"] == last["reasoning_trace"]
+        candidate["feedback"]["reasoning_trace"]["steps"][0]["basis"].append("mutated receipt")
+        assert last["reasoning_trace"]["steps"][0]["basis"] == [TEXT]
+    else:
+        assert "reasoning" not in candidate and "reasoning_trace" not in candidate["feedback"]
+
+
+def test_native_surface_rejection_preserves_raw_draft_without_certifying_it(monkeypatch):
+    from lib.contexts.workflows.domain.reasoning_checklist import default_reasoning_checklist
+    from lib.domain import authored_reasoning, training_surface
+    rationale = {"reasoning": REASONING, "reasoning_trace": {"raw": "unmodified"}}
+    port = MemoryGenerationPort([rationale])
+    checklist = {**default_reasoning_checklist(), "version": 6, "evidence_policy": 2}
+    usecase = GenerateCot(port, {"node_generation": {"cot": {"self_check": checklist}}})
+    monkeypatch.setattr(authored_reasoning, "authored_rationale_issue", lambda candidate: None)
+    monkeypatch.setattr(training_surface, "training_surface_issue", lambda *a, **k: "hidden_source_leakage")
+    value, failure = usecase.generate_native_answer(source(), {
+        "prompt": conversation()["messages"][:-1], "source": source()}, {"instruction": "自然解释"}, None, 0)
+    assert value is None and failure["training_surface"] == "hidden_source_leakage"
+    assert failure["reasoning"] == REASONING and failure["reasoning_trace"] == rationale["reasoning_trace"]
+    assert len(port.calls) == 1  # No quality review or native-answer request.
 
 
 def test_trim_preserves_answers_and_original_reasoning_through_memory_port():

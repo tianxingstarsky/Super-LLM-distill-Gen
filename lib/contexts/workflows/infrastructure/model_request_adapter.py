@@ -4,6 +4,7 @@ import re
 import threading
 from lib.domain.document_parser import validate_document_parser
 from lib.domain.workflow_quality import text_issue
+from ..domain.reading_session import READING_PROMPTS, reading_request_messages
 
 
 class CheckpointedModelRequest:
@@ -134,6 +135,19 @@ class CheckpointedModelRequest:
     def messages(self, client, request):
         runtime = self.runtime
         data, instruction = request.data, request.instruction
+        if request.prompt_id in READING_PROMPTS:
+            return reading_request_messages(request.prompt_id, runtime.prompt_text(request.prompt_id, stage=request.prompt_stage), data, instruction)
+        if request.prompt_id == "workflow.cot_native_joint":
+            from .native_cot_messages import native_cot_messages
+            return native_cot_messages(runtime.prompt_text(request.prompt_id, stage=request.prompt_stage), data, instruction)
+        from ..domain.authored_task_contract import (
+            task_contract_enabled, compile_task_contract, project_task_context, task_contract_instruction,
+        )
+        task_contract = None
+        if (task_contract_enabled(self.recipe) and request.prompt_id in {
+                "workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer"}):
+            task_contract = compile_task_contract(data)
+            data = project_task_context(data, task_contract)
         if runtime.recipe.get("claim_review_transport_version") == 1:
             from lib.contexts.review.contracts import project_review_window_hints
             data = project_review_window_hints(data)
@@ -252,10 +266,57 @@ class CheckpointedModelRequest:
                 source_memory_protocol_version=memory_version if memory_version in {1, 2} else None)
             if authored_messages is not None:
                 request_messages = authored_messages
+                if (type(runtime.recipe.get("authored_stage_contract_version")) is int
+                        and runtime.recipe["authored_stage_contract_version"] == 1
+                        and prompt_id in {"workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer"}):
+                    from ..domain.authored_stage_contract import authored_stage_contract
+                    # Preserve the reusable source prefix and every actual
+                    # learner turn. This is a production system instruction,
+                    # not a new user request or a fabricated assistant draft.
+                    from ..domain.authored_submission import strict_submission_enabled, submission_instruction
+                    from ..domain.cot_style_transfer import style_edit_base, style_edit_instruction
+                    edit_base = style_edit_base(runtime.recipe, request.data) if prompt_id == "workflow.cot_rationale" else None
+                    stage_contract = (submission_instruction(answer_required=prompt_id == "workflow.cot_generate",
+                        local_edit=runtime.recipe.get("authored_local_edit_version") == 1)
+                        if strict_submission_enabled(runtime.recipe) and prompt_id != "workflow.cot_native_answer"
+                        else authored_stage_contract(prompt_id))
+                    if edit_base is not None:
+                        stage_contract = style_edit_instruction(edit_base)
+                    request_messages = [*request_messages, {"role": "system", "content": stage_contract}]
             if prompt_id == "workflow.cot_native_answer":
                 with runtime._lock:
                     runtime.state.setdefault("source_memory_transports", {})[
                         f"{model_stage or runtime.stage}.{role}.native_answer"] = transport
+        from ..domain.integrated_reflection import trailing_reflection_enabled, reflection_for_prompt
+        if trailing_reflection_enabled(runtime.recipe) and prompt_id in {
+                "workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer"}:
+            guidance = reflection_for_prompt(runtime.recipe["node_generation"]["cot"]["self_check"], prompt_id)
+            if guidance:
+                request_messages = [*request_messages, {"role": "system", "content": guidance}]
+        if task_contract is not None:
+            # Both stages get the actual delivery constraints. A bilingual
+            # rationale does not authorize a different answer language.
+            if runtime.recipe.get("authored_task_contract_version") in (2, 3):
+                # Delivery constraints belong to the primary system contract;
+                # they must not depend on being inferred from a frozen prefix.
+                request_messages[0] = {**request_messages[0], "content":
+                    task_contract_instruction(task_contract, version=2, phase=prompt_id)
+                    + "\n" + request_messages[0]["content"]}
+            else:
+                request_messages = [*request_messages, {"role": "system",
+                    "content": task_contract_instruction(task_contract)}]
+            if (runtime.recipe.get("authored_task_contract_version") == 3
+                    and prompt_id in {"workflow.cot_native_answer", "workflow.cot_generate"}):
+                from ..domain.authored_task_contract import answer_language_instruction
+                delivery_instruction = answer_language_instruction(task_contract)
+                if delivery_instruction:
+                    request_messages.append({"role": "system", "content": delivery_instruction})
+        from ..domain.cot_style_transfer import style_edit_base, style_edit_instruction
+        edit_base = style_edit_base(runtime.recipe, request.data) if prompt_id == "workflow.cot_rationale" else None
+        if edit_base is not None:
+            edit_instruction = style_edit_instruction(edit_base)
+            if not any(m.get("role") == "system" and m.get("content") == edit_instruction for m in request_messages):
+                request_messages.append({"role": "system", "content": edit_instruction})
         return request_messages
 
     def invoke(self, request):
@@ -295,7 +356,47 @@ class CheckpointedModelRequest:
                     "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.cot_prefix_check",
                     "workflow.trim", "workflow.trim_check", "workflow.trim_rules_check"})
                 response_details = {}
-                if prompt_id == "workflow.cot_native_answer":
+                from ..domain.authored_submission import strict_submission_enabled, authored_submission_tool, assemble_authored_submission
+                if strict_submission_enabled(runtime.recipe) and prompt_id in {"workflow.cot_generate", "workflow.cot_rationale"}:
+                    answer_required = prompt_id == "workflow.cot_generate"
+                    from ..domain.cot_style_transfer import style_edit_base, style_edit_tool
+                    edit_base = style_edit_base(runtime.recipe, request.data) if not answer_required else None
+                    submission_tools = [authored_submission_tool(answer_required=answer_required)]
+                    if edit_base is not None:
+                        submission_tools = [style_edit_tool()]
+                    elif runtime.recipe.get("authored_local_edit_version") == 1:
+                        from ..domain.authored_edits import authored_edit_tool
+                        submission_tools.append(authored_edit_tool(answer_required=answer_required))
+                    def submit():
+                        from .authored_edit_adapter import author_session
+                        details = {}
+                        session = author_session(client, binding, request_messages, submission_tools,
+                            stage=model_stage or runtime.stage, role=role, max_tokens=binding.get("max_output_tokens"))
+                        assistant = client.tool_turn(request_messages,
+                            submission_tools, strict=True,
+                            max_tokens=binding.get("max_output_tokens"), temperature=0.2,
+                            retries=request.structured_response_attempts or 1,
+                            response_details=details, **streaming)
+                        return {"assistant": assistant, "response_details": details, "author_session": session,
+                                **({"edit_base": edit_base} if edit_base is not None else {})}
+                    # Persist the provider submission before local projection.
+                    # An invalid field must not repurchase an entire rationale on resume.
+                    submission = runtime.checkpoint(["authored_submission_v1", key], submit)
+                    response_details.update(submission["response_details"])
+                    if edit_base is not None:
+                        from ..domain.authored_edits import apply_authored_edits
+                        value, patch = apply_authored_edits(edit_base, submission["assistant"], answer_required=False)
+                        response_details["style_transfer_patch"] = patch
+                    else:
+                        value = assemble_authored_submission(submission["assistant"], answer_required=answer_required)
+                elif prompt_id == "workflow.cot_native_joint" or prompt_id in READING_PROMPTS:
+                    if getattr(client, "reasoning", {}).get("mode") == "disabled":
+                        raise ValueError("native_cot_thinking_disabled")
+                    visible = client.chat(request_messages, max_tokens=binding.get("max_output_tokens"),
+                        allow_reasoning_fallback=False, response_details=response_details,
+                        retries=native_request_attempts or 1, **streaming)
+                    value = {"answer": visible, "reasoning": response_details.get("reasoning_content", "")}
+                elif prompt_id == "workflow.cot_native_answer":
                     # Prefix completion returns the real visible answer,
                     # not a model-owned JSON envelope. No text is invented
                     # or decoded from native reasoning to fill an answer.
@@ -322,6 +423,8 @@ class CheckpointedModelRequest:
                 else:
                     value = chat_json(client, request_messages,
                         max_tokens=binding.get("max_output_tokens"), **streaming,
+                        **({"retries": request.structured_response_attempts}
+                           if request.structured_response_attempts is not None else {}),
                         **({"response_details": response_details} if capture and isinstance(client, ChatClient) else {}),
                         **({"reasoning_prefix": reasoning_prefix} if reasoning_prefix is not None else {}),
                         **({"allow_reasoning_fallback": False} if visible_only else {}))

@@ -62,6 +62,8 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
     }
     if node == "preference":
         description = preference_route(node, review_repair)
+    elif node == "multiturn" and (node_generation or {}).get("multiturn", {}).get("reading_session"):
+        description = "从清洗资料设计私有场景，模拟用户与回答者交替发言；公开规则和资料随完整原生对话导出。生成不代表独立评审通过。"
     elif node == "director" and (recipe_version or 0) >= 20:
         description = "指导员设计角色与沟通目标；有线索提问直接发出，无线索提问交给独立模型。回答模型在 SFT / 多轮节点配置。"
     elif node == "sft" and (recipe_version or 0) >= 20:
@@ -204,7 +206,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                   repair_only=repair_only, source_cleaning=source_cleaning,
                                   review_repair=review_repair,
                                   arithmetic_seed_protocol_version=arithmetic_seed_protocol_version,
-                                  cpt_review_policy_version=cpt_review_policy_version)
+                                  cpt_review_policy_version=cpt_review_policy_version, node_generation=node_generation)
     shared_cleaning = (recipe_version >= 19 and source_cleaning is True
                        and any(a == "cpt" and b in {"director", "sft", "multiturn"} for a, b in edges))
     independent_arithmetic = (arithmetic_seed_protocol_version == 1 and "gsm8k" in nodes

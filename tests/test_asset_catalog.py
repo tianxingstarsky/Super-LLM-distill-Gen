@@ -121,6 +121,65 @@ def test_output_classification(filename: str, expected: str):
     assert output_category(filename) == expected
 
 
+def test_library_scan_does_not_spend_delivery_limit_on_checkpoints(tmp_path, monkeypatch):
+    workspace, _, name = _workspace(tmp_path, monkeypatch)
+    output = workspace.out(name)
+    runs = ["a" * 32, "b" * 32, "c" * 32]
+    for run_id in runs:
+        artifacts = output / "workflows" / run_id / "artifacts"
+        artifacts.mkdir(parents=True)
+        (artifacts / "sft.jsonl").write_text('{"messages":[]}\n', encoding="utf-8")
+        checkpoints = artifacts.parent / "checkpoints"
+        checkpoints.mkdir()
+        for index in range(8):
+            (checkpoints / f"sft-{index}.json").write_text('{}', encoding="utf-8")
+    monkeypatch.setattr("lib.infrastructure.asset_catalog_driver.MAX_OUTPUT_ASSETS", 5)
+    monkeypatch.setattr("lib.infrastructure.asset_catalog_driver.MAX_SCAN_ENTRIES", 6)
+    driver = FilesystemAssetCatalogDriver()
+    assert driver.inventory(name).truncated
+    import os
+    original_walk = os.walk
+    def guarded_walk(*args, **kwargs):
+        for current, directories, files in original_walk(*args, **kwargs):
+            assert "checkpoints" not in str(current)
+            yield current, directories, files
+    monkeypatch.setattr("lib.infrastructure.asset_catalog_driver.os.walk", guarded_walk)
+    inventory = driver.library_inventory(name)
+    assert not inventory.truncated
+    assert {asset.run_id for asset in inventory.assets} == set(runs)
+    assert [asset.name for asset in inventory.assets] == ["sft.jsonl"] * 3
+
+
+def test_output_limit_is_only_partial_when_an_additional_file_exists(tmp_path, monkeypatch):
+    workspace, _, name = _workspace(tmp_path, monkeypatch)
+    output = workspace.out(name)
+    output.mkdir(parents=True)
+    for name_part in ("sft", "cpt"):
+        (output / f"{name_part}.jsonl").write_text('{}\n', encoding="utf-8")
+    monkeypatch.setattr("lib.infrastructure.asset_catalog_driver.MAX_OUTPUT_ASSETS", 2)
+    driver = FilesystemAssetCatalogDriver()
+    assert not driver.library_inventory(name).truncated
+    (output / "dpo.jsonl").write_text('{}\n', encoding="utf-8")
+    assert driver.library_inventory(name).truncated
+
+
+@pytest.mark.parametrize("folder", ["checkpoints", "streams", "stage-results", "production"])
+def test_runtime_records_never_count_as_delivered_training_files(folder):
+    from lib.domain.dataset_assets import Asset, common_asset
+    relative = f"workflows/{'a' * 32}/{folder}/sft.jsonl"
+    category = output_category(relative)
+    assert category == "运行记录"
+    assert not common_asset(Asset("output/" + relative, "output", relative, category, 10, 0))
+
+
+def test_recent_output_order_keeps_original_sources_first():
+    from lib.domain.dataset_assets import Asset, AssetInventory
+    old = Asset("output/old-sft.jsonl", "output", "old-sft.jsonl", "样本", 10, 1)
+    new = Asset("output/new-sft.jsonl", "output", "new-sft.jsonl", "样本", 10, 2)
+    source = Asset("source/guide.md", "source", "guide.md", "来源文件", 10, 0)
+    assert AssetCatalogApplication.select(AssetInventory((old, new, source)), "常用文件") == [source, new, old]
+
+
 @pytest.mark.parametrize("suffix,mode", [
     (".md", "文档资料"), (".txt", "文档资料"), (".pdf", "文档资料"), (".docx", "文档资料"),
     (".PNG", "文档资料"), (".jpg", "文档资料"), (".JPEG", "文档资料"), (".webp", "文档资料"),

@@ -38,6 +38,27 @@ def test_stream_classification_separates_transport_from_content(code, kind):
 
 
 @pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
+@pytest.mark.parametrize("status,hint,code", [
+    (503, "false", "service_unavailable"),
+    (402, "true", "service_quota_exhausted"),
+])
+def test_sdk_retry_hint_cannot_cause_repeated_vetoed_or_quota_requests(api, status, hint, code):
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(status, headers={"x-should-retry": hint},
+            json={"error": {"type": "server_error", "message": "offline fixture"}})
+    client = _helpers.sdk_client(api, handle)
+    try:
+        with pytest.raises(ModelRequestError) as caught:
+            client.chat([{"role": "user", "content": "Return JSON"}], retries=3)
+        assert caught.value.kind == "fatal" and caught.value.code == code
+        assert caught.value.attempts == len(calls) == 1
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
 def test_sdk_disconnect_retries_within_bound_then_returns_only_complete_attempt(api, monkeypatch):
     import lib.llm_client as llm
     monkeypatch.setattr(llm, "retry_delay", lambda *_: 0)

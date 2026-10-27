@@ -1,14 +1,5 @@
-"""Storage boundary for the data-library catalog."""
-from __future__ import annotations
+"""Compatibility import; implementation lives in ``lib.contexts.datasets.application.asset_catalog_ports``."""
+from importlib import import_module as _import_module
+import sys as _sys
 
-from typing import Protocol
-
-from lib.domain.dataset_assets import Asset, AssetInventory
-
-
-class AssetCatalogDriver(Protocol):
-    def inventory(self, workspace_id: str) -> AssetInventory: ...
-    def excerpt(self, workspace_id: str, asset: Asset) -> tuple[str, str]: ...
-    def download(self, workspace_id: str, asset: Asset) -> bytes: ...
-    def source_path_for_generation(self, workspace_id: str, asset: Asset) -> str: ...
-    def source_status(self, workspace_id: str, asset: Asset) -> dict: ...
+_sys.modules[__name__] = _import_module("lib.contexts.datasets.application.asset_catalog_ports")

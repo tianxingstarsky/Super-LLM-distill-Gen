@@ -1,5 +1,7 @@
 # 审核持久化
 
+`math_reference_adapter.py` 调用 Math-Verify 0.9.0 的等价验证，以及它的 `latex2sympy2_extended` 完整表达式解析器。禁止用面向自由文本的末答案提取器忽略冲突片段、去掉单位或猜修坏公式。工作进程有整体超时，兼容 Windows 和后台线程；不修改依赖源码。失败返回未解决，检查收据经既有任务检查点复用。验证见 `tests/test_math_reference_verification.py`。
+
 `training_review_driver.py` 复用训练内容审核的持久化流程；SFT、CPT 和偏好适配器绑定各自规则。`agent_review_driver.py` 保存 Agent 决定和审计事件；`agent_driver.py` 将运行任务视角的端口转换到该存储接口。
 
 两个 Agent 类职责不同：Adapter 适配调用合同，Driver 拥有存储行为。不要在两处复制审核规则。发布任务继续使用旧审核发布服务，保持来源校验与锁语义。

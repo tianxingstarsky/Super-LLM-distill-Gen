@@ -17,6 +17,9 @@ from lib.domain.workflow_quality import SECRET, canonical
 from lib.domain.agent_experience import default_experience_text
 
 NUMBER_FIELDS = {
+    'workflow-generation-review-percent': (1, 100),
+    'workflow-cot-checklist-version': (1, 7),
+    'workflow-cot-evidence-policy': (0, 2),
     'workflow-count': (1, MAX_PRODUCTION_GOAL), 'workflow-max-units': (1, MAX_PRODUCTION_GOAL),
     'workflow-turns': (2, 8), 'workflow-concurrency': (1, MAX_CONCURRENCY),
     'workflow-batch-size': (1, MAX_BATCH_SIZE), 'workflow-chunk-chars': (200, 20000),
@@ -48,13 +51,16 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-mat
                'workflow-human-question-requirements': 6000,
                'workflow-human-answer-requirements': 6000,
                'workflow-node-prompt': MAX_NODE_PROMPT_CHARS,
+               'workflow-cot-checklist-text': 32000,
                'workflow-agent-experience-text': 32768}
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
+               'workflow-generation-review-mode': frozenset({'sampled', 'strict'}),
+               'workflow-cot-style-admission': frozenset({'strict', 'advisory'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
                'workflow-generation-style': frozenset(GENERATION_STYLES),
                'workflow-generation-reasoning-language': frozenset(REASONING_LANGUAGES),
                'workflow-generation-reasoning-depth': frozenset({'auto', *REASONING_DEPTHS}),
-               'workflow-generation-answer-mode': frozenset({'joint', 'native_prefill'}),
+                'workflow-generation-answer-mode': frozenset({'joint', 'native_joint', 'native_prefill', 'draft_then_finalize', 'faithful_restyle'}),
                'workflow-trim-template': frozenset(TRIM_TEMPLATE_NAMES),
                'workflow-package-review-mode': frozenset({'sample', 'all'}),
                'workflow-review-repair-mode': frozenset({'auto', 'human'})}
@@ -69,13 +75,15 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-director-learning-goal': frozenset({'knowledge_application', 'document_reading', 'mixed'}),
                     'workflow-director-context-mode': frozenset({'persistent', 'batch'}),
                     'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
-BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-trim-enabled',
+BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-reading-session', 'workflow-trim-enabled',
+                  'workflow-cot-checklist-enabled',
                   'workflow-preference-reuse-failures',
                   'workflow-docling-ocr', 'workflow-docling-formula', 'workflow-docling-assist', 'workflow-docling-page-review',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
                   'workflow-human-enabled',
                   'workflow-production-enabled', 'workflow-agent-experience-enabled'}
-NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-generation-style',
+NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-reading-session', 'workflow-generation-style',
+                          'workflow-generation-review-mode', 'workflow-generation-review-percent',
                           'workflow-generation-instruction', 'workflow-generation-answer-mode',
                           'workflow-generation-reasoning-language', 'workflow-generation-reasoning-depth'}
 HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
@@ -136,16 +144,19 @@ def validate_creation_draft(values):
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:
             parts = key.split(':')
+            if field == 'workflow-reading-session' and (len(parts) != 3 or parts[2] != 'multiturn'):
+                raise ValueError('invalid_creation_draft')
             if len(parts) != 3 or not parts[1] or parts[2] not in {'sft', 'cot', 'multiturn'}:
                 raise ValueError('invalid_creation_draft')
-            if field == 'workflow-generation-answer-mode' and parts[2] != 'cot':
+            if field in {'workflow-generation-answer-mode', 'workflow-generation-review-mode',
+                         'workflow-generation-review-percent'} and parts[2] != 'cot':
                 raise ValueError('invalid_creation_draft')
         if field == 'workflow-node-prompt':
             parts = key.split(':')
             if (len(parts) != 4 or not parts[1] or parts[2] not in NODE_PROMPT_IDS
                     or parts[3] not in NODE_PROMPT_IDS[parts[2]]):
                 raise ValueError('invalid_creation_draft')
-        if field in {'workflow-agent-experience-text', 'workflow-agent-experience-enabled'}:
+        if field in {'workflow-agent-experience-text', 'workflow-agent-experience-enabled', 'workflow-agent-experience-parent'}:
             if len(parts) != 3:
                 raise ValueError('invalid_creation_draft')
             try:
@@ -158,7 +169,9 @@ def validate_creation_draft(values):
                     {'closed_book', 'grounded', 'partial', 'multi_source', 'distractor'}):
                 raise ValueError('invalid_creation_draft')
         valid = False
-        if field in BOOLEAN_FIELDS:
+        if field == 'workflow-agent-experience-parent':
+            valid = value is None or isinstance(value, str) and re.fullmatch(r'[0-9a-f]{32}', value) is not None
+        elif field in BOOLEAN_FIELDS:
             valid = type(value) is bool
         elif field in NUMBER_FIELDS:
             low, high = NUMBER_FIELDS[field]
@@ -170,6 +183,8 @@ def validate_creation_draft(values):
             valid = (isinstance(value, str) and len(value) <= TEXT_FIELDS[field]
                      and (field != 'workflow-node-prompt' or '\x00' not in value))
             if field in HUMAN_FIELDS:
+                valid = _human_text(value, TEXT_FIELDS[field])
+            if field == 'workflow-cot-checklist-text':
                 valid = _human_text(value, TEXT_FIELDS[field])
             if field == 'workflow-agent-experience-text':
                 try:

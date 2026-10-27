@@ -123,7 +123,7 @@ _SELECTED_PRIVATE_BLOCK = re.compile(
 )
 
 
-def _production_protocol_reference(sentence, visible):
+def _production_protocol_reference(sentence, visible, *, public_task_rules=False):
     """Recognize concrete generator wrappers without banning technical prose."""
     fields = list(_PRODUCTION_FIELD.finditer(sentence))
     for field in fields:
@@ -143,7 +143,20 @@ def _production_protocol_reference(sentence, visible):
         general_discussion = (_TECHNICAL_TASK.search(visible)
                               and re.search(r"系统提示|开发者提示|system\s+prompt|developer\s+prompt", visible, re.I)
                               and not re.search(r"(?:我|本次|当前)|\b(?:I|we|my|our|this)\b", sentence, re.I))
-        if not (quoted or general_discussion):
+        # "This prompt" can refer to a method in the actual visible article.
+        # Require an explicit article attribution in this same sentence; an
+        # assistant-created source or a general prompt topic grants no exception.
+        public_article_prompt = (
+            all(m.group(0).casefold() == "this prompt" for m in _PRIVATE_PROMPT_SELF.finditer(sentence))
+            and any(re.search(r"\bprompt(?:ing|ed|s)?\b", m.group("article"), re.I)
+                    for m in _VISIBLE_ARTICLE_BLOCK.finditer(visible))
+            and re.search(r"\b(?:the|this)\s+(?:passage|excerpt|article)\b", sentence, re.I)
+            and not re.search(r"\b(?:I|we|me|my|our|system|developer|hidden|internal|private|"
+                              r"requires?|instructs?|tells?|must|current\s+(?:response|task))\b", sentence, re.I)
+            and not _PRODUCTION_FIELD.search(sentence))
+        public_rule_reference = public_task_rules and not re.search(
+            r"隐藏|内部|私有|后台|开发者|\b(?:hidden|internal|private|developer)\b", sentence, re.I)
+        if not (quoted or general_discussion or public_article_prompt or public_rule_reference):
             return True
     if _OUTPUT_SCHEMA_COMMAND.search(sentence) and len(set(
             key.group(0).strip("\"'`").casefold() for key in _SCHEMA_KEYS.finditer(sentence))) >= 2:
@@ -163,11 +176,11 @@ def _text(value):
     return ""
 
 
-def _visible_text(messages):
+def _visible_text(messages, *, public_system=False):
     """Read only learner-visible input bodies; assistant/audit fields cannot grant access."""
     parts = []
     for message in messages if isinstance(messages, (list, tuple)) else ():
-        if not isinstance(message, Mapping) or message.get("role") not in {"user", "tool"}:
+        if not isinstance(message, Mapping) or message.get("role") not in ({"system", "user", "tool"} if public_system else {"user", "tool"}):
             continue
         content = message.get("content")
         if isinstance(content, str):
@@ -193,7 +206,7 @@ def _article_is_visible(visible, contract):
 
 
 def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=None, protocol_version=1,
-                           knowledge_application_voice_version=None, learning_goal=None):
+                           knowledge_application_voice_version=None, learning_goal=None, public_reading_context=False):
     """Return a stable issue code for explicit leakage in exported output text.
 
     ``contract`` is not evidence by itself: source references are allowed only
@@ -204,15 +217,15 @@ def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=N
     native provider reasoning when the caller is about to export that text;
     its provenance never grants permission to leak the production protocol.
     """
-    visible = _visible_text(visible_messages)
-    article_visible = _article_is_visible(visible, contract)
+    visible = _visible_text(visible_messages, public_system=public_reading_context)
+    article_visible = public_reading_context or _article_is_visible(visible, contract)
     from lib.domain.knowledge_voice import knowledge_voice_rules, knowledge_voice_sentence_issue
     voice_active = knowledge_application_voice_version == 3 and bool(knowledge_voice_rules(learning_goal, contract))
     for text in (_text(reasoning), _text(answer)):
         for sentence in re.split(r"[。！？!?；;\n]+|(?<=[.!?])\s+", text):
             if voice_active and (issue := knowledge_voice_sentence_issue(sentence, visible, article_visible=article_visible)):
                 return issue
-            if protocol_version == 2 and _production_protocol_reference(sentence, visible):
+            if protocol_version == 2 and _production_protocol_reference(sentence, visible, public_task_rules=public_reading_context):
                 return "training_surface_internal_process_reference"
             if _INTERNAL_FIELD.search(sentence) and _PROCESS_CUE.search(sentence):
                 return "training_surface_internal_process_reference"
@@ -227,7 +240,9 @@ def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=N
                               and not re.search(r"(?:我|本次|当前)|\b(?:I|my|this)\b", sentence, re.IGNORECASE))
                 quoted = (match.group(0).casefold() in visible.casefold()
                           and _EXPLANATION_CUE.search(sentence) and not _PROCESS_CUE.search(sentence))
-                if not (discussion or quoted):
+                public_rule_reference = public_reading_context and not re.search(
+                    r"指导员|生成|评分|开发者|\b(?:generation|scoring|developer)\b", match[0], re.I)
+                if not (discussion or quoted or public_rule_reference):
                     return "training_surface_internal_process_reference"
             for pattern, allowed in ((_PRIVATE_REFERENCE, False), (_SOURCE_REFERENCE, article_visible)):
                 if allowed:
@@ -262,6 +277,12 @@ def training_record_surface_issue(target, row, *, protocol_version=None,
     version = protocol_version if protocol_version is not None else row.get("training_surface_protocol_version")
     if version != 2:
         return None
+    public_reading_context = False
+    if row.get("reading_session") is not None:
+        from lib.contexts.workflows.contracts import has_public_reading_context
+        if not has_public_reading_context(row):
+            return "reading_session_context_mismatch"
+        public_reading_context = True
     contract = row.get("qa_contract")
     voice_options = ({"knowledge_application_voice_version": knowledge_application_voice_version,
                       "learning_goal": learning_goal} if knowledge_application_voice_version == 3 else {})
@@ -289,7 +310,8 @@ def training_record_surface_issue(target, row, *, protocol_version=None,
                 reasoning = "\n".join(_text(message.get(field))
                                       for field in ("reasoning_content", "reasoning", "thinking"))
                 issue = training_surface_issue(reasoning, message.get("content"),
-                    visible_messages=visible, contract=contract, protocol_version=2, **voice_options)
+                    visible_messages=visible, contract=contract, protocol_version=2,
+                    public_reading_context=public_reading_context, **voice_options)
                 if issue:
                     return issue
             visible.append(message)
