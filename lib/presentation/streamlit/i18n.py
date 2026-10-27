@@ -10,6 +10,16 @@ from lib.contexts.workflows.contracts import EXPLORATORY_STYLE_V1, EXPLORATORY_S
 
 
 ZH_EN: dict[str, str] = {
+    "内容核验": "Content verification",
+    "后续 JEV、评分修正节点仍按各自配置执行，会另有调用。": "Later JEV and scoring nodes follow their own settings and make separate calls.",
+    "内容抽检比例（%）": "Content sampling rate (%)",
+    "每条保留本地检查和完整推理；未抽中项标为未做语义核验。重试不重新抽签，小批次可能没有抽中项。表达润色作为建议，事实与明确任务要求仍须成立。": "Keep local checks and full reasoning for every sample. Unsampled items are marked as not semantically reviewed. Retries keep the same selection. A small batch may contain no sampled items. Style feedback is advisory. Facts and explicit task requirements must still hold.",
+    "每条改写结果都做完整内容核验，保留原严格要求。": "Fully verify every rewritten sample under the original strict requirements.",
+    "需要已有完整推理。原答案和原稿保留；已拒绝的原稿先修正内容，不再付费润色。支持 NeMo / OpenThoughts 导入，风格与提示词仍在本节点编辑。": "Requires complete existing reasoning. Keep the original answer and draft. Fix rejected content before paying for style changes. NeMo and OpenThoughts imports are supported. Edit styles and prompts in this node.",
+    "此草稿保留逐项核查。切换为生成中推敲后，可使用内容抽检。": "This draft keeps item-by-item checks. Switch to reflection during generation to enable content sampling.",
+    "抽样核验 · 降低成本": "Sampled verification · Lower cost",
+    "逐条核验 · 严格模式": "Verify every sample · Strict mode",
+    "推理保真改写": "Faithful reasoning restyle",
     EXPLORATORY_STYLE_V1: EXPLORATORY_STYLE_EN_V1,
     "审慎探索": "Careful exploration",
     "从用户意图出发，随依据形成判断，针对关键疑点核查；包含四个短示范，不固定步骤或长度。": "Start from the user's intent, develop judgments from evidence, and check key uncertainties. Includes four short examples, with no fixed steps or length.",

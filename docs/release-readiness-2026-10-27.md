@@ -70,7 +70,28 @@ personal-style workbench paths.
 
 ## Release verification
 
-The release record will list the completed core and interface regressions.
+Checks were run on Windows on 27 October 2026. No paid model requests were made
+for this release check.
+
+- The full core sweep reported 10,740 passes, four failures, and 51 skips.
+  The failures exposed missing English copy and a test that applied the current
+  prompt catalog to a frozen older recipe. The missing copy was added. The test
+  now checks the frozen scope and confirms that absent templates are rejected
+  before a model call. Production rejection was kept intact.
+- Focused translation, experience, request-contract, and DDD checks passed after
+  the fixes. The complete node-prompt file then passed all 48 cases. An unrelated
+  fixed-version assertion in the test was removed after checking the actual
+  recipe selection path. No quality checks were weakened.
+- All 233 interface tests passed.
+- The main environment skipped 50 checks that need newer Docling APIs. Their
+  six files were tested in the existing Docling 2.140.0 / Core 2.102.0 environment:
+  all 106 cases passed, with no skips. The remaining skip covers a POSIX signal
+  behavior that Windows cannot reproduce.
+- Installed dependency checks passed. A fresh local workbench was also opened
+  in a real browser. The overview, node settings, task history, and sidebar
+  collapse and reopen worked. The README image was captured from that page.
+
 Engineering checks establish the tested software contracts. They do not certify
-the semantic quality of generated examples. The latest full raw experiment and
-request receipts remain in the local, ignored operation directory.
+the semantic quality of generated examples. Existing upstream deprecation
+warnings remain. Raw test logs, experiment outputs, and request receipts stay in
+the local, ignored operation directory.

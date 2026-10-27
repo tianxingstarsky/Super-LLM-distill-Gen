@@ -128,16 +128,31 @@ def test_prompt_config_is_independent_and_literal_braces_are_not_interpolated(tm
 def test_all_allowed_steps_are_scoped_to_their_own_node(tmp_path):
     overrides = {stage: {prompt_id: f"NODE_{stage}_{prompt_id} {{literal}}"
                          for prompt_id in ids} for stage, ids in NODE_PROMPT_IDS.items()}
-    output, rid, _ = make_run(tmp_path, node_prompts=overrides,
-                              package_review={"enabled": False, "node": "jev"}, review_repair={"mode": "auto"})
+    output, rid, path = make_run(tmp_path, node_prompts=overrides,
+                                 package_review={"enabled": False, "node": "jev"}, review_repair={"mode": "auto"})
     writer = Writer()
     workflow = engine.Workflow(output, rid, tmp_path, generator=writer)
-    for stage, templates in overrides.items():
+    recipe = engine.read_json(path / "recipe.json")
+    frozen_templates = recipe["node_prompt_templates"]
+    assert {"workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer"}.isdisjoint(
+        frozen_templates["multiturn"])
+    assert "workflow.cot_native_joint" not in frozen_templates["cot"]
+    # Allowed calls belong to this immutable recipe, not today's larger catalog.
+    for stage, templates in frozen_templates.items():
         workflow.stage = stage
         for prompt_id, body in templates.items():
+            assert body == overrides[stage][prompt_id]
             workflow.ask([stage, prompt_id], "generation", prompt_id, {"source": "DATA_SENTINEL"})
             assert writer.calls[-1][0]["content"].endswith(body + experience_system(workflow.recipe, prompt_id))
             assert json.loads(writer.calls[-1][1]["content"]) == {"source": "DATA_SENTINEL"}
+    for stage, ids in NODE_PROMPT_IDS.items():
+        workflow.stage = stage
+        for prompt_id in set(ids) - set(frozen_templates.get(stage, {})):
+            calls_before = len(writer.calls)
+            with pytest.raises(ValueError, match="invalid_node_prompt_snapshot"):
+                workflow.ask([stage, prompt_id], "generation", prompt_id, {"source": "DATA_SENTINEL"})
+            assert len(writer.calls) == calls_before
+    assert engine.read_json(path / "recipe.json") == recipe
 
 
 def test_resuming_uses_pinned_builtin_and_custom_text_after_catalog_changes(tmp_path, monkeypatch):

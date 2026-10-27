@@ -1,5 +1,7 @@
 # Python 回归
 
+`test_workflow_node_prompts.py` 按任务冻结的模板范围验证节点隔离；新增模板不能进入旧配方，缺失模板的请求在模型调用前拒绝。
+
 `test_reading_session.py` 使用真实磁盘工作流和可控模型边界，验证中断恢复不重买已完成响应、用户模拟角色翻转、共享材料／规则与导出一致、助手看不到故事、原生推理逐字保存、自然停止和隐藏制作字段仍拦截。批次和生产组合在 `test_workflow_execution_application.py` 覆盖，避免旧指导员重复调用。真实线上对话另存 `reading-session-live`，离线替身不证明语义质量。
 
 `test_native_joint_cot.py` 通过真实磁盘工作流及模型边界替身验证原生双通道逐字保存、答案同步改变、未评审状态、资料范围投影与重启不重复调用。它不证明线上语义质量；真实结果另存于 `native-guided-cot-live` 实验记录。
