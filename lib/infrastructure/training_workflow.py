@@ -541,6 +541,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "node_generation": node_generation,
               **({"native_experience_version": 1} if (node_generation.get("multiturn", {}).get("reading_session")
                   or node_generation.get("cot", {}).get("answer_mode") == "native_joint") else {}),
+              **({"native_environment_version": 1}
+                 if node_generation.get("cot", {}).get("answer_mode") == "native_joint" else {}),
               **({"reading_actor_protocol_version": 2} if node_generation.get("multiturn", {}).get("reading_session") else {}),
               "node_prompts": node_prompts,
               "node_prompt_templates": node_prompt_templates,

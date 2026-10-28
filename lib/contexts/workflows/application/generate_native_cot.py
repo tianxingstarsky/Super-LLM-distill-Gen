@@ -7,7 +7,7 @@ from ..domain.generation import qa_metadata
 from ..domain.authored_task_contract import compile_task_contract, project_task_context, task_surface_receipt
 from ..domain.cot_review_policy import cot_review_plan, SAMPLED_REVIEW_INSTRUCTION
 from ..domain.integrated_reflection import integrated_reflection, reflection_instruction
-from ..domain.native_cot import native_instruction_leakage
+from ..domain.native_cot import NATIVE_EXECUTION_STATE, native_execution_state, native_instruction_leakage
 from lib.domain.workflow_quality import accepted, text_issue
 from lib.domain.training_surface import training_surface_issue
 from lib.domain.knowledge_voice import knowledge_voice_options
@@ -36,6 +36,9 @@ class GenerateNativeCot:
             task["previous_candidate"] = deepcopy(previous)
         if sample.get("native_revision_feedback"):
             task["revision_feedback"] = deepcopy(sample["native_revision_feedback"])
+        execution_state = native_execution_state(self.recipe, task, contract)
+        if execution_state is not None:
+            task[NATIVE_EXECUTION_STATE] = execution_state
         config = self.recipe["node_generation"]["cot"]
         guidance = style.get("instruction", "")
         if integrated_reflection(config.get("self_check")):
@@ -57,7 +60,11 @@ class GenerateNativeCot:
             **knowledge_voice_options(self.recipe))
         if surface:
             issues.append(surface)
-        leakage = native_instruction_leakage(reasoning, prompt)
+        environment_version = execution_state["version"] if execution_state is not None else None
+        leakage = native_instruction_leakage(reasoning, prompt, environment_version=environment_version)
+        if execution_state is not None:
+            leakage.extend(native_instruction_leakage(answer, prompt,
+                environment_version=environment_version, field="answer"))
         if leakage:
             issues.append("native_generation_instruction_leakage")
         delivery = task_surface_receipt({"prompt": prompt, "source": sample.get("source_context")},
@@ -77,6 +84,7 @@ class GenerateNativeCot:
             "native_generation": {"version": 1, "channels": ["reasoning_content", "content"],
                 "content_sha256": digest([reasoning, answer]), "raw_reasoning_preserved": True,
                 "previous_candidate": deepcopy(previous), "issues": issues, "leakage_evidence": leakage,
+                **({"execution_state": deepcopy(execution_state)} if execution_state is not None else {}),
                 "history_status": "unchanged_not_assessed" if any(m.get("role") == "assistant" for m in prompt) else "no_assistant_history"},
             **qa_metadata(sample)}
         if issues:
@@ -84,7 +92,7 @@ class GenerateNativeCot:
             plan["semantic_status"] = "not_assessed"
         elif plan["selected"]:
             check = self.port.assess([sample["id"], "native_cot_review_v1", digest([task, reasoning, answer])],
-                {k: v for k, v in task.items() if k not in {"previous_candidate", "revision_feedback"}},
+                {k: v for k, v in task.items() if k not in {"previous_candidate", "revision_feedback", NATIVE_EXECUTION_STATE}},
                 {"reasoning": reasoning, "answer": answer}, prompt_id="workflow.rationale_check",
                 allow_reasoning_fallback=False, instruction=SAMPLED_REVIEW_INSTRUCTION)
             row["judge"] = check

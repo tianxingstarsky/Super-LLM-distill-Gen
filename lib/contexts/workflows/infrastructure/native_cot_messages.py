@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 
 from ..domain.authored_task_contract import compile_task_contract, project_task_context, task_contract_instruction
+from ..domain.native_cot import NATIVE_EXECUTION_STATE
 
 
 def native_cot_messages(template, task, instruction):
@@ -19,4 +20,8 @@ def native_cot_messages(template, task, instruction):
                    "同时修正推理和答案，不保全旧结论、不把疑点当事实。\n" + json.dumps({
                        k: task[k] for k in ("previous_candidate", "revision_feedback") if k in task},
                        ensure_ascii=False) + "\n</revision_context>")
+    if NATIVE_EXECUTION_STATE in task:
+        system += ("\n<" + NATIVE_EXECUTION_STATE + ">\n"
+                   + json.dumps(task[NATIVE_EXECUTION_STATE], ensure_ascii=False, separators=(",", ":"))
+                   + "\n</" + NATIVE_EXECUTION_STATE + ">")
     return [{"role": "system", "content": system}, *deepcopy(task["prompt"])]

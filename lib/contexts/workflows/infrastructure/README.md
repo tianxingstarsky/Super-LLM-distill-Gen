@@ -6,7 +6,7 @@
 
 阅读情景路线的三类文本请求复用原生双通道传输、SDK、节点绑定与检查点；程序装配字段，不让模型包装 JSON。回答请求逐字使用应用层形成的 learner messages，不再注入私有来源或制作指令。固定的系统／资料前缀保持稳定，续聊只追加已发生的对话；缓存命中由上游实际 usage 证明，不承诺永久命中或无限上下文。验证：`test_reading_session.py`。
 
-`native_cot_messages.py` 将原生生成的规则、允许范围内的知识及不具权威性的修订稿放入系统上下文，真实对话保持原角色。`CheckpointedModelRequest` 通过既有 `ChatClient.chat` 流式接收同次 `reasoning_content` / `content`，程序装配字段；不调用 JSON 修复、严格提交工具、前缀续写或第二位作者。思考关闭时请求前拒绝；未返回推理则保留答案并隔离，不能拿答案冒充原生思考。验证：`test_native_joint_cot.py`。
+`native_cot_messages.py` 将原生生成的规则、允许范围内的知识及不具权威性的修订稿放入系统上下文，真实对话保持原角色。新配方的短执行状态置于稳定知识前缀之后，不进入 learner 消息或训练字段；缺少版本标记的任务保留原消息。`CheckpointedModelRequest` 通过既有 `ChatClient.chat` 流式接收同次 `reasoning_content` / `content`，程序装配字段；不调用 JSON 修复、严格提交工具、前缀续写或第二位作者。思考关闭时请求前拒绝；未返回推理则保留答案并隔离，不能拿答案冒充原生思考。验证：`test_native_joint_cot.py`。
 
 保真改写版本 2 在直接请求和来源检索两条路径使用 `edit_authored_candidate`。原始工具参数、编辑基稿和作者会话一并落盘；恢复不重购已完成调用。SDK/端点/并发/流式传输仍复用现有运行时。仅程序组装正文，答案不进入可编辑字段。旧任务仍提交完整正文，不自动升级。
 

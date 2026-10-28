@@ -12,7 +12,7 @@
 
 机制参考：[IBM 文档多轮对话](https://arxiv.org/abs/2409.11500) 的连续上下文与追问／澄清／纠正，[tau2 用户模拟器](https://github.com/sierra-research/tau2-bench/blob/main/src/tau2/user/user_simulator.py) 的独立场景、角色翻转与结束信号，以及 [ADK](https://adk.dev/evaluate/user-sim/) 的人物行为与目标分离。复用其机制，保留本项目检查点、调度和模型端口，未引入整套框架依赖。
 
-`native_cot.py` 定位原生通道中可直接观察到的执行提示复述，保留原文字符范围及证据，不删改推理。真实用户讨论同名术语时不按该词封禁；规则命中只是确定的泄露缺陷，未命中不代表逻辑或风格合格。验证使用原生响应中的真实缺陷片段。
+`native_cot.py` 为显式冻结 `native_environment_version=1` 的原生 CoT 推导定长字段状态：当前用户回合、资料范围、未核实历史、待修订旧稿及无工具权限；不复制原话或资料，不指定思考顺序。状态只进入请求与旁路收据，旧任务缺省不追加。它同时定位原生通道中可直接观察到的执行提示复述，保留原文字符范围及证据，不删改推理；新状态标记若进入推理或答案也隔离。真实用户讨论同名术语时不按该词封禁；未命中不代表逻辑或风格合格。验证见 `test_native_joint_cot.py`。
 
 `cot_style_transfer.py` 定义保真风格改写的原稿输入与对照收据；原答案由程序保留，缺失推理不补造，领域函数不做语义放行或 I/O。由 `GenerateCot` 调用，结果导出仍使用既有训练投影。验证见 `test_cot_style_transfer.py`。
 
