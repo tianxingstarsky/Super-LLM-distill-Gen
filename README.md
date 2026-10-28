@@ -22,6 +22,15 @@
 
 ShuJian Cube helps you turn documents, agent conversations, and open briefs into training data. Choose a goal. Follow the work. Review the results. Return to your saved tasks whenever you need them.
 
+## Download the preview
+
+[Get v0.0.1 for Windows](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1).
+The installer prepares the app for you. The first setup needs an internet
+connection. Open it from the desktop or use the browser shortcut.
+
+This is an early preview. Review generated examples before use. Read the
+[release notes](docs/release-v0.0.1.md) for the available features and limits.
+
 ## Watch the product film
 
 One minute from your first source to a visible workflow. See the real workbench, node settings, dialogue guidance, and saved data. The film has Chinese narration, music, and subtitles.

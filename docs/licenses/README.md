@@ -2,6 +2,8 @@
 
 本目录保留已复制或改编资产的上游版本、改编范围及完整许可证，供维护和分发核对；不承接运行时实现。提示词入口是 `lib/prompts/workflow.py`，本目录没有代码依赖。
 
+Windows 在线安装器随包保留 uv 的 [MIT](../../scripts/release/UV-LICENSE-MIT.txt) 和 [Apache-2.0](../../scripts/release/UV-LICENSE-APACHE.txt) 完整许可证。官方工具版本、来源与摘要在 `scripts/release/tools.json`，下载的 Python 与依赖包保留自身许可证元数据。
+
 ## ReasoningBank 经验提炼提示词
 
 - 上游：[google-research/reasoning-bank](https://github.com/google-research/reasoning-bank)。

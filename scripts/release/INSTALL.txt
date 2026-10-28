@@ -1,0 +1,27 @@
+ShuJian Cube 0.0.1 Preview - Windows x64 Online Setup
+
+The first setup needs an internet connection for application packages. A private
+Python 3.11 runtime is bundled. No existing Python or administrator account
+is needed. Model APIs are not called during installation.
+Allow about 2 GB of free space for the private environment and download cache.
+The first dependency download can take several minutes.
+
+Choose a writable local folder. Keep this folder after setup. Saved tasks,
+sources, and local model settings stay here. Uninstall keeps generated user data
+and local settings. It removes the installed program and its private runtime.
+
+The normal shortcut opens a desktop window. It requires Microsoft Edge WebView2
+Runtime. Use the Browser shortcut if WebView2 is unavailable. Both shortcuts
+open the same app and saved work.
+
+If dependency setup fails, check data\output\installation.log. Run setup again
+or use the Repair runtime shortcut. Downloaded packages are cached locally.
+
+This is an initial preview. Generated examples can be wrong. Check them before
+training or sharing. Optional local Docling models, legacy OpenCUA gui-cot, and
+the independent DSH plugin are not bundled.
+
+Python is provided through Astral's python-build-standalone distribution. uv
+licenses are included in scripts\release\UV-LICENSE-*.txt. Application notices
+are in LICENSE, NOTICE, and docs\licenses.
+The Python distribution license is kept beside the bundled python.exe.

@@ -1,0 +1,20 @@
+{
+  "uv": {
+    "version": "0.11.14",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.11.14/uv-x86_64-pc-windows-msvc.zip",
+    "sha256": "52ba5d19409aaa688a8a1a6ec8dfb6a4817230d20186e75f4006105c3e39a846"
+  },
+  "inno": {
+    "version": "6.7.3",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+    "sha256": "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
+  },
+  "python": {
+    "version": "3.11.9",
+    "provider": "Astral python-build-standalone",
+    "build": "20240814",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20240814/cpython-3.11.9%2B20240814-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "8ac54a8d711ef0d49b62a2c3521c2d0403f1b221dc9d84c5f85fe48903e82523",
+    "directory": "cpython-3.11.9-windows-x86_64-none"
+  }
+}

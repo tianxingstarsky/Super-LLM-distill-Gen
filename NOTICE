@@ -25,7 +25,21 @@ DeepSeek Harness 通过独立插件适配。`components/deepseek-harness/` 仅�
   Full license: docs/licenses/reasoning-bank-APACHE-2.0.txt.
   Its agent runtime is not included.
 
-## pip 依赖（声明于 pyproject.toml / requirements）
+## Windows Installer
+
+- uv 0.11.14 — Copyright Astral Software Inc. The Windows online installer
+  bundles the official uv executable under the MIT or Apache License 2.0.
+  Complete texts are retained in scripts/release/UV-LICENSE-MIT.txt and
+  scripts/release/UV-LICENSE-APACHE.txt. Upstream: https://github.com/astral-sh/uv.
+- Inno Setup 6.7.3 is the installer build tool. Its compiler is not bundled in
+  the application. Upstream: https://jrsoftware.org/isinfo.php.
+- The installer bundles the official Astral python-build-standalone distribution
+  of Python. Its original licenses stay in the private runtime directory.
+  Other runtime packages are downloaded during setup and retain their own
+  license metadata. Optional model weights and external git submodules are not
+  included in the installer.
+
+## pip 依赖（声明于 requirements.txt）
 
 - distilabel 1.5.3（Apache-2.0）— 管线引擎
 - 其余依赖见各包自身的许可证元数据。

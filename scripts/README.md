@@ -8,4 +8,6 @@
 
 [promo](promo/README.md) 是宣传片工具，[assets](assets/README.md) 是脚本使用的本地资产。产品业务规则不能放进这些脚本再由页面反向导入。
 
+[release](release/README.md) 从固定 Git 版本构建 Windows x64 预览安装器，记录运行时、依赖与文件校验，不承接产品业务逻辑。
+
 真实任务可能访问外部服务，执行前核对脚本配置和本次授权。日志、密钥、用户资料与模型权重不得提交。Windows 后台启动保持隐藏窗口，并明确进程所有权。

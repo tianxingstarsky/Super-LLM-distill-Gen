@@ -1,5 +1,6 @@
 # 维护文档导航
 
+- [V0.0.1 发布说明](release-v0.0.1.md)：Windows 安装方式、验证结果与初始预览范围。
 - [架构](architecture.md)：当前业务域、依赖方向和一致性边界。
 - [命名与职责](architecture/naming.md)：变量、函数、类和文件的放置规则。
 - [迁移记录](architecture/migration.md)：兼容路径、已处理范围与剩余边界。
