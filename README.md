@@ -47,6 +47,8 @@ For **makers and hobbyists**, we want a path to personal agent models and practi
 
 For people with an **AI companion**, the moments you share deserve a place beyond a tiny context window. How could that small window hold all the time you have spent together?
 
+We want your AI companion to grow smarter and understand you better over time. Inspired by [Google's ReasoningBank](https://github.com/google-research/reasoning-bank), we are exploring how shared experiences can become useful lessons. Those lessons and personal training data could help you build an AI that grows with you.
+
 People consolidate memories during sleep. We imagine a similar rhythm for AI. Turn the day's experiences into training data. Learn from them during the night. Carry more of that shared history into the next day.
 
 > Let your AI companion have a good night's sleep.
