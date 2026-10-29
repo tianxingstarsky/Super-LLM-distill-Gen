@@ -135,7 +135,7 @@ class CheckpointedModelRequest:
     def messages(self, client, request):
         runtime = self.runtime
         data, instruction = request.data, request.instruction
-        if request.prompt_id == "workflow.conversation_reasoning":
+        if request.prompt_id in {"workflow.conversation_reasoning", "workflow.conversation_reasoning_hints"}:
             from lib.domain.workflow_quality import canonical
             return [{"role": "system", "content": runtime.prompt_text(request.prompt_id, stage=request.prompt_stage)},
                     {"role": "user", "content": canonical(data)}]
@@ -393,13 +393,14 @@ class CheckpointedModelRequest:
                         response_details["style_transfer_patch"] = patch
                     else:
                         value = assemble_authored_submission(submission["assistant"], answer_required=answer_required)
-                elif prompt_id == "workflow.conversation_reasoning":
+                elif prompt_id in {"workflow.conversation_reasoning", "workflow.conversation_reasoning_hints"}:
                     # The provider writes only explanation prose. Field names,
                     # turn identity and provenance are owned by the application.
                     visible = client.chat(request_messages, max_tokens=binding.get("max_output_tokens"),
                         allow_reasoning_fallback=False, response_details=response_details,
                         retries=native_request_attempts or 1, **streaming)
-                    value = {"reasoning_content": visible}
+                    field = "reasoning_hints" if prompt_id == "workflow.conversation_reasoning_hints" else "reasoning_content"
+                    value = {field: visible}
                 elif prompt_id == "workflow.cot_native_joint" or prompt_id in READING_PROMPTS:
                     if getattr(client, "reasoning", {}).get("mode") == "disabled":
                         raise ValueError("native_cot_thinking_disabled")

@@ -11,13 +11,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1"><img src="https://img.shields.io/badge/v0.0.1-Public_preview-2563eb?style=flat-square" alt="v0.0.1 public preview" /></a>
+  <a href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.2"><img src="https://img.shields.io/badge/v0.0.2-Public_preview-2563eb?style=flat-square" alt="v0.0.2 public preview" /></a>
   <img src="https://img.shields.io/badge/Interface-English_%26_Chinese-0891b2?style=flat-square" alt="English and Chinese interface" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-7c3aed?style=flat-square" alt="Apache License 2.0" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/download/v0.0.1/ShuJian-Cube-0.0.1-Windows-x64-Setup.exe"><img src="assets/showcase/download-windows.svg" width="264" height="52" alt="Download the Windows x64 installer" /></a>
+  <a href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/download/v0.0.2/ShuJian-Cube-0.0.2-Windows-x64-Setup.exe"><img src="assets/showcase/download-windows.svg" width="264" height="52" alt="Download the Windows x64 installer" /></a>
   <a href="#see-it-in-one-minute"><img src="assets/showcase/watch-film.svg" width="190" height="52" alt="Watch the one-minute product film" /></a>
 </p>
 
@@ -28,7 +28,7 @@
   <a href="#from-source-to-sample">Workflow</a> ·
   <a href="#choose-what-you-create">Data goals</a> ·
   <a href="#get-started">Get started</a> ·
-  <a href="docs/release-v0.0.1.md">Release notes</a>
+  <a href="docs/release-v0.0.2.md">Release notes</a>
 </p>
 
 <p align="center">
@@ -146,7 +146,15 @@ Keep native thinking and the answer from the same response. Create reading conve
 
 Use the initial style or save a personal edition. DSH histories can help draft lessons from past attempts. Check the proposed rules before adopting them. Existing tasks keep the style they started with.
 
-Style proposals are a starting point. Automatic feedback and continuous experience updates are still being completed. See the [current preview notes](docs/release-v0.0.1.md) for the scope and open work.
+Style proposals are a starting point. Automatic feedback and continuous experience updates are still being completed. See the [current preview notes](docs/release-v0.0.2.md) for the scope and open work.
+
+### Missing reasoning: work in progress
+
+Imported histories may have no reasoning. Choose whether to keep them, supplement missing reasoning, or exclude affected records. Templates stay on the input node.
+
+Supplemented CoT is a synthetic explanation. It is not recovered thinking. It may disagree with the saved answer. A completed request is not a quality approval.
+
+We welcome community help with faithful reconstruction and answer repair. See the [open work in v0.0.2](docs/release-v0.0.2.md#help-improve-this-with-us) and the [Agent feature map](docs/architecture/agent-features.md).
 
 ## Add the human touch
 
@@ -159,14 +167,14 @@ Some examples are easier to design yourself. Add an image. Write a question and 
 
 ## Get started
 
-1. **[Download v0.0.1 for Windows x64](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/download/v0.0.1/ShuJian-Cube-0.0.1-Windows-x64-Setup.exe).** Run the installer.
+1. **[Download v0.0.2 for Windows x64](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/download/v0.0.2/ShuJian-Cube-0.0.2-Windows-x64-Setup.exe).** Run the installer.
 2. **Open ShuJian Cube.** Use the desktop or browser shortcut.
 3. **Bring your sources.** Choose your goals. Configure the model nodes.
 4. **Create, inspect, and export.** Keep useful samples and revisit issues later.
 
 The first setup needs an internet connection. Allow about **2 GB** of free space. The installer is about **67 MB**. Connect your own model service. Manual image Q&A needs no model connection.
 
-[Release notes](docs/release-v0.0.1.md) · [Checksums and downloads](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1) · [Report an issue](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/issues)
+[Release notes](docs/release-v0.0.2.md) · [Checksums and downloads](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.2) · [Report an issue](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/issues)
 
 ## See it in one minute
 
@@ -182,7 +190,7 @@ Real screens, visible workflows, and a closer look at the product. The film has 
 
 ## Preview and notices
 
-**v0.0.1 is an early preview.** Generated examples can be wrong. Check them before training or sharing. This release does not promise unattended million-example quality. Unreviewed samples are not approved samples.
+**v0.0.2 is an early preview.** Generated examples can be wrong. Check them before training or sharing. This release does not promise unattended million-example quality. Unreviewed samples are not approved samples.
 
 Use sources you have permission to process. Connected model services may receive the content you submit. The installer is not code signed. Its SHA256 checksums are on the release page.
 

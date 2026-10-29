@@ -18,7 +18,11 @@ exit /b 0
 
 :install_runtime
 echo.
-echo [%date% %time%] Preparing ShuJian Cube 0.0.1
+if not exist "VERSION" exit /b 3
+set "SHUJIAN_RELEASE_VERSION="
+set /p "SHUJIAN_RELEASE_VERSION="<"VERSION"
+if not defined SHUJIAN_RELEASE_VERSION exit /b 3
+echo [%date% %time%] Preparing ShuJian Cube %SHUJIAN_RELEASE_VERSION%
 set "UV_PYTHON_INSTALL_DIR=%cd%\.runtime\python"
 if not defined UV_CACHE_DIR set "UV_CACHE_DIR=%cd%\.runtime\cache"
 set "UV_PYTHON_PREFERENCE="

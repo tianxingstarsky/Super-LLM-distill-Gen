@@ -30,11 +30,11 @@ class NodeModelRequest:
                 or any(not isinstance(value, str) or not value for value in images)):
             raise ValueError("invalid_document_images")
         attempts = self.native_request_attempts
-        if attempts is not None and (self.prompt_id not in {"workflow.cot_native_answer", "workflow.cot_native_joint", "workflow.conversation_reasoning", *READING_PROMPTS}
+        if attempts is not None and (self.prompt_id not in {"workflow.cot_native_answer", "workflow.cot_native_joint", "workflow.conversation_reasoning", "workflow.conversation_reasoning_hints", *READING_PROMPTS}
                 or type(attempts) is not int or not 1 <= attempts <= 10):
             raise ValueError("invalid_model_request_attempts")
         attempts = self.structured_response_attempts
-        if attempts is not None and (self.prompt_id in {"workflow.cot_native_answer", "workflow.cot_native_joint", "workflow.conversation_reasoning", *READING_PROMPTS}
+        if attempts is not None and (self.prompt_id in {"workflow.cot_native_answer", "workflow.cot_native_joint", "workflow.conversation_reasoning", "workflow.conversation_reasoning_hints", *READING_PROMPTS}
                 or type(attempts) is not int or not 1 <= attempts <= 10):
             raise ValueError("invalid_structured_response_attempts")
 

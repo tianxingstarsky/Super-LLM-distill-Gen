@@ -11,8 +11,9 @@ from lib.application.workflow_service import WorkflowApplication
 from lib.domain.creation_draft import validate_creation_draft
 from lib.domain.workflow_node_prompts import (
     NODE_PROMPT_IDS, MAX_NODE_PROMPT_CHARS, active_node_prompt_ids,
-    builtin_node_prompt, validate_node_prompts,
+    builtin_node_prompt, validate_node_prompts, snapshot_node_prompts, validate_node_prompt_snapshot,
 )
+from lib.prompts import get, render
 from lib.infrastructure import training_workflow as engine
 from lib.infrastructure.model_context_prefix import NODE_RULE_HEADER
 from lib.infrastructure.source_memory_messages import SOURCE_MEMORY_HEADER, SYSTEM_SOURCE_MEMORY_HEADER
@@ -213,6 +214,60 @@ def test_active_steps_follow_source_mode_and_style_switches():
         "workflow.sft_styled", "workflow.jev_score", "workflow.style_check")
     for stage in ("agent", "gsm8k", "package"):
         assert active_node_prompt_ids(stage, "开放需求") == ()
+
+
+@pytest.mark.parametrize("version,prompts", [
+    (1, ("workflow.conversation_reasoning",)),
+    (2, ("workflow.conversation_reasoning_hints", "workflow.conversation_reasoning")),
+    (3, ("workflow.conversation_reasoning_hints", "workflow.conversation_reasoning")),
+])
+def test_conversation_reasoning_catalog_pins_selected_protocol_and_custom_text(version, prompts):
+    assert active_node_prompt_ids("ingest", "补全对话推理", conversation_reasoning_version=version) == prompts
+    templates = snapshot_node_prompts(None, recipe_version=19, conversation_reasoning_version=version)
+    assert templates["ingest"]["workflow.conversation_reasoning"] == render(get(
+        "workflow.conversation_reasoning", version={1: "1.1.0", 2: "2.0.0", 3: "2.1.0"}[version]))
+    assert ("workflow.conversation_reasoning_hints" in templates["ingest"]) is (version in {2, 3})
+    if version in {2, 3}:
+        assert templates["ingest"]["workflow.conversation_reasoning_hints"] == render(get(
+            "workflow.conversation_reasoning_hints", version="1.1.0" if version == 3 else "1.0.0"))
+    assert validate_node_prompt_snapshot(templates, "Frozen system", recipe_version=19,
+                                        conversation_reasoning_version=version) == templates
+    overrides = {"ingest": {prompt: f"Saved custom {prompt} {{literal}}" for prompt in prompts}}
+    customized = snapshot_node_prompts(overrides, recipe_version=19, conversation_reasoning_version=version)
+    assert all(customized["ingest"][prompt] == overrides["ingest"][prompt] for prompt in prompts)
+    assert all(prompt not in snapshot_node_prompts(None, recipe_version=19)["ingest"] for prompt in prompts)
+
+
+def test_old_conversation_snapshot_keeps_its_historical_body():
+    templates = snapshot_node_prompts(None, recipe_version=19, conversation_reasoning_version=1)
+    historical = render(get("workflow.conversation_reasoning", version="1.0.0"))
+    templates["ingest"]["workflow.conversation_reasoning"] = historical
+    original = deepcopy(templates)
+    assert validate_node_prompt_snapshot(templates, "Frozen system", recipe_version=19,
+                                        conversation_reasoning_version=1) == original
+    assert templates == original
+    with pytest.raises(ValueError, match="invalid_node_prompt_snapshot"):
+        validate_node_prompt_snapshot(templates, "Frozen system", recipe_version=19,
+                                      conversation_reasoning_version=2)
+
+
+@pytest.mark.parametrize("version", [True, 0, 4, "2"])
+def test_conversation_catalog_rejects_unsupported_policy_versions(version):
+    with pytest.raises(ValueError, match="invalid_conversation_reasoning_version"):
+        snapshot_node_prompts(None, recipe_version=19, conversation_reasoning_version=version)
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_conversation_reasoning_draft_version_stays_bounded_and_workspace_scoped(version):
+    values = {"workflow-conversation-reasoning:w": "fill_missing",
+              "workflow-conversation-reasoning-version:w": version,
+              "workflow-node-prompt:w:ingest:workflow.conversation_reasoning_hints": "Hint instructions"}
+    assert validate_creation_draft(values) == values
+    for key, value in (("workflow-conversation-reasoning-version:w", 4),
+                       ("workflow-conversation-reasoning-version:w", True),
+                       ("workflow-conversation-reasoning-version:w:ingest", version)):
+        with pytest.raises(ValueError, match="invalid_creation_draft"):
+            validate_creation_draft({key: value})
 
 
 def test_prompt_draft_allows_incomplete_text_but_rejects_cross_node_keys():

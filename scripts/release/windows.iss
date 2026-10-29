@@ -7,12 +7,15 @@
 #ifndef InstallFileList
   #error InstallFileList must name the generated exact-file manifest.
 #endif
+#ifndef ReleaseVersion
+  #error ReleaseVersion must match the verified payload VERSION.
+#endif
 
 [Setup]
 AppId={{A1A3AE88-BA31-45CC-98F5-63D6D9804C95}
 AppName=ShuJian Cube
-AppVersion=0.0.1
-AppVerName=ShuJian Cube 0.0.1 Preview
+AppVersion={#ReleaseVersion}
+AppVerName=ShuJian Cube {#ReleaseVersion} Preview
 AppPublisher=ShuJian Cube contributors
 AppPublisherURL=https://github.com/tianxingstarsky/Super-LLM-distill-Gen
 AppSupportURL=https://github.com/tianxingstarsky/Super-LLM-distill-Gen/issues
@@ -23,7 +26,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 OutputDir={#ReleaseOutput}
-OutputBaseFilename=ShuJian-Cube-0.0.1-Windows-x64-Setup
+OutputBaseFilename=ShuJian-Cube-{#ReleaseVersion}-Windows-x64-Setup
 SetupIconFile={#PayloadDir}\assets\brand\shujian-cube.ico
 UninstallDisplayIcon={app}\assets\brand\shujian-cube.ico
 Compression=lzma2

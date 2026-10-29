@@ -1,4 +1,4 @@
-ShuJian Cube 0.0.1 Preview - Windows x64 Online Setup
+ShuJian Cube Preview - Windows x64 Online Setup
 
 The first setup needs an internet connection for application packages. A private
 Python 3.11 runtime is bundled. No existing Python or administrator account
@@ -17,9 +17,13 @@ open the same app and saved work.
 If dependency setup fails, check data\output\installation.log. Run setup again
 or use the Repair runtime shortcut. Downloaded packages are cached locally.
 
-This is an initial preview. Generated examples can be wrong. Check them before
+This is an early preview. Generated examples can be wrong. Check them before
 training or sharing. Optional local Docling models, legacy OpenCUA gui-cot, and
 the independent DSH plugin are not bundled.
+
+Reconstruction of missing reasoning is experimental. A generated explanation
+may disagree with the recorded answer. It is not recovered original thinking
+or an automatic quality approval. Existing reasoning is preserved.
 
 Python is provided through Astral's python-build-standalone distribution. uv
 licenses are included in scripts\release\UV-LICENSE-*.txt. Application notices

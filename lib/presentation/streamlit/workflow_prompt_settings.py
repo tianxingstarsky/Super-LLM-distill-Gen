@@ -10,12 +10,14 @@ from lib.domain.workflow_node_prompts import (
     MAX_NODE_PROMPT_CHARS, active_node_prompt_ids, builtin_node_prompt,
 )
 from lib.presentation.streamlit.i18n import translate, translate_label
+from lib.presentation.streamlit.conversation_reasoning_controls import conversation_reasoning_snapshot
 from lib.presentation.streamlit.prompt_library_controls import (
     render_prompt_library, clear_prompt_template_selection,
 )
 
 
 PROMPT_LABELS = {
+    "workflow.conversation_reasoning_hints": "答案提炼为推导提示",
     "workflow.conversation_reasoning": "缺失推理补充",
     "workflow.reading_scene": "情景故事设计",
     "workflow.reading_user": "情景用户连续发言",
@@ -80,10 +82,12 @@ def node_prompt_snapshot(workspace: str, nodes, source_mode: str, *, node_genera
                          qa_director=None, cpt_processing=None, review_repair=None) -> dict:
     """Submit only active overrides; inactive edits stay in the local draft."""
     result = {}
+    reasoning_version = conversation_reasoning_snapshot(workspace)["version"]
     for node in nodes:
         for prompt_id in active_node_prompt_ids(node, source_mode, node_generation=node_generation,
-                                                package_review=package_review, qa_director=qa_director, cpt_processing=cpt_processing, review_repair=review_repair):
-            default = builtin_node_prompt(prompt_id)
+                                                package_review=package_review, qa_director=qa_director, cpt_processing=cpt_processing, review_repair=review_repair,
+                                                conversation_reasoning_version=reasoning_version):
+            default = builtin_node_prompt(prompt_id, conversation_reasoning_version=reasoning_version)
             body = _field(workspace, _prompt_key(workspace, node, prompt_id), default)
             if body != default:
                 result.setdefault(node, {})[prompt_id] = body
@@ -98,7 +102,8 @@ def node_prompt_has_issue(configuration: dict) -> bool:
 
 def _restore_prompt(workspace: str, node: str, prompt_id: str, save_field) -> None:
     key = _prompt_key(workspace, node, prompt_id)
-    st.session_state[key] = builtin_node_prompt(prompt_id)
+    st.session_state[key] = builtin_node_prompt(
+        prompt_id, conversation_reasoning_version=conversation_reasoning_snapshot(workspace)["version"])
     clear_prompt_template_selection(workspace, f"node:{node}:{prompt_id}")
     st.session_state.pop(f"workflow-node-prompt-upload-error:{workspace}:{node}:{prompt_id}", None)
     save_field(workspace, key)
@@ -133,7 +138,10 @@ def _import_prompt(workspace: str, node: str, prompt_id: str, save_field) -> Non
     save_field(workspace, key)
 
 
-def _prompt_label(prompt_id: str, node: str, language: str, source_cleaning: bool = False, answer_mode=None) -> str:
+def _prompt_label(prompt_id: str, node: str, language: str, source_cleaning: bool = False, answer_mode=None,
+                  conversation_reasoning_version=None) -> str:
+    if prompt_id == "workflow.conversation_reasoning" and conversation_reasoning_version in {2, 3}:
+        return translate_label("正文 CoT 补写", language)
     if node == "cot" and answer_mode == "faithful_restyle" and prompt_id == "workflow.cot_rationale":
         return "Faithful reasoning edit" if language == "en" else "推理保真改写"
     label = ({"workflow.cpt_clean": "资料清洗", "workflow.cpt_review": "资料保真核对"}.get(prompt_id)
@@ -146,8 +154,10 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
                         prompt_library=None, cpt_processing=None, review_repair=None,
                         source_cleaning=None) -> None:
     """Show the active processing prompt beside this node's model settings."""
+    reasoning_version = conversation_reasoning_snapshot(workspace)["version"]
     prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation,
-                                    package_review=package_review, qa_director=qa_director, cpt_processing=cpt_processing, review_repair=review_repair)
+                                    package_review=package_review, qa_director=qa_director, cpt_processing=cpt_processing, review_repair=review_repair,
+                                    conversation_reasoning_version=reasoning_version)
     if not prompts:
         return
     language = st.session_state.get("ui_language", "zh")
@@ -164,9 +174,10 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
         with step:
             prompt_id = st.selectbox("处理步骤", prompts, key=selection_key,
                                     format_func=lambda value: _prompt_label(value, node, language, source_cleaning,
-                                        ((node_generation or {}).get(node) or {}).get("answer_mode")))
+                                        ((node_generation or {}).get(node) or {}).get("answer_mode"),
+                                        conversation_reasoning_version=reasoning_version))
         body_key = _prompt_key(workspace, node, prompt_id)
-        default = builtin_node_prompt(prompt_id)
+        default = builtin_node_prompt(prompt_id, conversation_reasoning_version=reasoning_version)
         st.session_state[body_key] = _field(workspace, body_key, default)
         custom = st.session_state[body_key] != default
         with reset:
@@ -189,6 +200,10 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
         if error := st.session_state.get(f"workflow-node-prompt-upload-error:{workspace}:{node}:{prompt_id}"):
             st.error(error)
         st.caption("已自定义 · 仅当前步骤" if custom else "使用内置提示词 · 可直接编辑")
+        if prompt_id == "workflow.conversation_reasoning" and reasoning_version in {2, 3} and custom:
+            st.caption("自定义补写模板已保留；请使用 history、reasoning_hints 与 response_kind 输入并将 CoT 写在回复正文中，不再依赖原答案 assistant_response。"
+                       if reasoning_version == 3 else
+                       "自定义补写模板已保留；请使用 history 与 reasoning_hints 输入并将 CoT 写在回复正文中，不再依赖原答案 assistant_response。")
         from lib.presentation.streamlit.workflow_experience_controls import render_experience
         render_experience(workspace, prompt_id, save_field=save_field, prompt_library=prompt_library)
 
@@ -203,7 +218,8 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
             else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
             else "文档资料" if recipe.get("sources") else "开放需求")
     active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"),
-                                   package_review=recipe.get("package_review"), qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"))
+                                   package_review=recipe.get("package_review"), qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"),
+                                   conversation_reasoning_version=(recipe.get("conversation_reasoning") or {}).get("version"))
     legacy_design = (node == "preference" and recipe.get("preference_design_version") in {1, 2}
                      and recipe.get("preference_design_prompt_version") is None)
     if legacy_design:
@@ -221,7 +237,8 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
                                 if legacy_design and value == "workflow.preference_directed_check" else
                                 _prompt_label(value, node, language,
                                     recipe.get("version", 0) >= 19 and recipe.get("source_cleaning") is True,
-                                    recipe.get("node_generation", {}).get(node, {}).get("answer_mode"))))
+                                    recipe.get("node_generation", {}).get(node, {}).get("answer_mode"),
+                                    conversation_reasoning_version=(recipe.get("conversation_reasoning") or {}).get("version"))))
     st.text_area("提示词正文", value=prompts[prompt_id], height=164, disabled=True,
                  key=f"workflow-run-prompt-body:{run_id}:{node}:{prompt_id}")
     from lib.presentation.streamlit.workflow_experience_controls import render_pinned_experience

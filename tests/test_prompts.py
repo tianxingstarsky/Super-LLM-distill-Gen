@@ -31,10 +31,18 @@ def test_import_reasoning_default_upgrade_preserves_legacy_and_user_templates():
     prompt_id = "workflow.conversation_reasoning"
     current = get(prompt_id)
     previous = get(prompt_id, version="1.0.0")
-    assert current.version == "1.1.0"
+    assert current.version == "2.1.0"
     assert sha256(previous.template.encode("utf-8")).hexdigest() == (
         "1d23e98398301528ff0578e91d38e378e7bc5aa4c4f112ce9cc8294d66e17402")
-    assert snapshot_node_prompts(None, conversation_reasoning_version=1)["ingest"][prompt_id] == render(current)
+    assert snapshot_node_prompts(None, conversation_reasoning_version=1)["ingest"][prompt_id] == render(get(prompt_id, "1.1.0"))
+    v2_templates = snapshot_node_prompts(None, conversation_reasoning_version=2)["ingest"]
+    assert v2_templates[prompt_id] == render(get(prompt_id, "2.0.0"))
+    assert v2_templates["workflow.conversation_reasoning_hints"] == render(get(
+        "workflow.conversation_reasoning_hints", "1.0.0"))
+    v3_templates = snapshot_node_prompts(None, conversation_reasoning_version=3)["ingest"]
+    assert v3_templates[prompt_id] == render(current)
+    assert v3_templates["workflow.conversation_reasoning_hints"] == render(get(
+        "workflow.conversation_reasoning_hints", "1.1.0"))
     for pinned_text in (render(previous), "My own answer-conditioned reconstruction template."):
         overrides = {"ingest": {prompt_id: pinned_text}}
         assert snapshot_node_prompts(overrides, conversation_reasoning_version=1)["ingest"][prompt_id] == pinned_text

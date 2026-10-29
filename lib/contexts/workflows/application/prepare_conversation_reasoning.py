@@ -6,8 +6,9 @@ from typing import Protocol
 
 from lib.domain.reasoning_fields import REASONING_FIELDS, sft_reasoning_issue
 from ..domain.conversation_reasoning import (
-    conversation_reasoning_receipt, generated_reasoning_issue,
+    conversation_reasoning_receipt, generated_reasoning_issue, generated_hints_issue,
 )
+from ..domain.dialogue import dialogue_digest
 
 
 class ConversationReasoningPort(Protocol):
@@ -40,7 +41,8 @@ class PrepareConversationReasoning:
             return unit
         original_messages = unit["messages"]
         mode = self._policy["mode"]
-        receipt = conversation_reasoning_receipt(original_messages, mode)
+        version = self._policy["version"]
+        receipt = conversation_reasoning_receipt(original_messages, mode, version=version)
         prepared = {**unit, "conversation_reasoning": receipt}
         if mode == "preserve":
             return prepared
@@ -70,21 +72,38 @@ class PrepareConversationReasoning:
                        "assistant_response": deepcopy(original_messages[index]),
                        "tools": deepcopy(unit.get("tools", [])),
                        "source_scope": deepcopy(turn["source_scope"])}
-            response = self._port.request(
-                [unit["id"], "conversation_reasoning_v1", index], "generation",
-                "workflow.conversation_reasoning", payload,
-                model_stage="ingest", prompt_stage="ingest",
-                allow_reasoning_fallback=False, capture_response_details=True,
-                native_request_attempts=1,
-            )
-            details = getattr(response, "response_details", None)
-            if isinstance(details, dict) and isinstance(details.get("checkpoint"), dict):
-                turn["request"] = deepcopy(details["checkpoint"])
+            key = [unit["id"], "conversation_reasoning_v1", index]
+            if version >= 2:
+                # record.tools can merge definitions from future turns. These
+                # reconstruction requests explain actions; they do not execute
+                # tools and need neither the merged registry nor its schemas.
+                payload.pop("tools")
+                if version == 3:
+                    payload["response_kind"] = (
+                        "tool_action" if original_messages[index].get("tool_calls") else "answer")
+                namespace = f"conversation_reasoning_v{version}"
+                hint_key = [unit["id"], namespace, index, "hints", dialogue_digest(payload)]
+                hints = self._request(hint_key, "workflow.conversation_reasoning_hints", payload)
+                turn["hints"] = {"status": "proposed", "semantic_status": "not_assessed",
+                                 "raw_response": deepcopy(hints)}
+                self._capture_checkpoint(turn["hints"], hints)
+                if issue := generated_hints_issue(hints, original_messages[index]):
+                    turn["hints"].update(status="failed", reason=issue)
+                    return self._quarantine(prepared, turn, issue, hints)
+                # Build a new allowlisted request. No original answer, hint
+                # author's native reasoning or cross-turn synthetic text can
+                # enter the second model context through a copied envelope.
+                payload = {"history": deepcopy(original_messages[:index]),
+                           "reasoning_hints": hints["reasoning_hints"],
+                           "source_scope": deepcopy(turn["source_scope"]),
+                           **({"response_kind": payload["response_kind"]} if version == 3 else {})}
+                key = [unit["id"], namespace, index, "reasoning",
+                       dialogue_digest(payload)]
+                self._port.check_reasoning_cancel()
+            response = self._request(key, "workflow.conversation_reasoning", payload)
+            self._capture_checkpoint(turn, response)
             if issue := generated_reasoning_issue(response):
-                turn.update(status="failed", reason=issue, raw_response=deepcopy(response))
-                receipt["status"] = "incomplete"
-                prepared.update(status="quarantined", reason=issue)
-                return prepared
+                return self._quarantine(prepared, turn, issue, response)
             message = prepared["messages"][index]
             for field in REASONING_FIELDS:
                 message.pop(field, None)  # Only this turn's absent/blank aliases.
@@ -94,4 +113,25 @@ class PrepareConversationReasoning:
             receipt["remaining_missing_turns"] -= 1
             prepared["reasoning_origin"] = "synthetic_explanation"
         receipt["status"] = "completed"
+        return prepared
+
+    def _request(self, key, prompt_id, payload):
+        return self._port.request(
+            key, "generation", prompt_id, payload,
+            model_stage="ingest", prompt_stage="ingest",
+            allow_reasoning_fallback=False, capture_response_details=True,
+            native_request_attempts=1,
+        )
+
+    @staticmethod
+    def _capture_checkpoint(target, response):
+        details = getattr(response, "response_details", None)
+        if isinstance(details, dict) and isinstance(details.get("checkpoint"), dict):
+            target["request"] = deepcopy(details["checkpoint"])
+
+    @staticmethod
+    def _quarantine(prepared, turn, issue, response):
+        turn.update(status="failed", reason=issue, raw_response=deepcopy(response))
+        prepared["conversation_reasoning"]["status"] = "incomplete"
+        prepared.update(status="quarantined", reason=issue)
         return prepared

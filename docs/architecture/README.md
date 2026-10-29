@@ -1,5 +1,7 @@
 # 架构维护记录
 
+Agent 与模型节点的唯一提示词归属、实际用例、状态和共享设施见 [功能维护导航](agent-features.md)。`workflow.py` 已改为显式兼容转发，全部既有模板版本和值按注册表快照核对；本次不修改运行时循环。
+
 推理时利用用户发言示范、角色边界，以及 NVIDIA User Sim / Personas / Chat-v3 的采用范围见 [用户模拟与共建底座](user-simulation-2026-10-29.md)。当前只更新可编辑模板，没有引入另一套调度、训练模型或下载数据集。
 
 Codex、OpenCode 与 ADK 的状态、工具反馈和恢复机制取舍见 [Agent 运行环境适配](codex-harness-adoption-2026-10-29.md)，其中明确本次 `native_joint` 的实施范围与尚未接通的长任务、经验闭环。

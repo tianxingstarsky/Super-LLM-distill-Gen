@@ -6,8 +6,11 @@ import pytest
 from lib.contexts.workflows.application.generate_sft import GenerateSft
 from lib.contexts.workflows.application.generate_dialogue import GenerateMultiturnDialogue
 from lib.contexts.workflows.application.generate_cot import GenerateCot
+from lib.contexts.workflows.application.trim_reasoning import TrimReasoning
 from lib.contexts.workflows.domain.dialogue import DialogueSource
 from lib.contexts.workflows.domain.targets import training_record
+from lib.contexts.review.domain.candidate_content import _manual_patch, preserve_provider_reasoning
+from lib.contexts.review.infrastructure.automatic_runtime import WorkflowReviewRepair
 from lib.domain.workflow_report import report_sample
 from lib.infrastructure.workflow_report import render_report_html
 
@@ -98,6 +101,103 @@ def test_extracting_regenerated_sft_keeps_its_input_receipt_separate():
     cot = GenerateCot(PreservingPort(), {"review_repair": {}}).extract(sft)[0]
     assert cot["conversation_reasoning_scope"] == "input_only"
     assert cot["reasoning_origin"] == "prompt_styled_generation"
+
+
+@pytest.mark.parametrize("edit,expected_origin", [
+    ("human", "human_revision"), ("auto", "prompt_revision"), ("trim", "prompt_trim"),
+])
+def test_shared_revision_paths_retire_import_receipt_after_body_changes(edit, expected_origin):
+    original = GenerateSft(PreservingPort(), {"brief": "", "review_repair": {}}).execute(imported_unit())[0]
+    snapshot = deepcopy(original)
+    explanation = "After isolating the power, I can inspect the cable safely."
+    messages = deepcopy(original["messages"])
+    messages[-1]["reasoning_content"] = explanation
+    if edit == "human":
+        updated = _manual_patch("sft", original, {"messages": messages})
+    elif edit == "auto":
+        class RepairProbe(WorkflowReviewRepair):
+            recipe = {"package_review": {}, "generation_preferences": {}}
+
+            def __init__(self):
+                self.state = {"stages": {"review": {}}}
+
+            def save(self, **options):
+                pass
+
+            def _review_payload(self, target, row):
+                return training_record(target, row)
+
+            def ask(self, key, role, prompt, data, **options):
+                assert prompt == "workflow.review_repair"
+                return {"record": {"messages": deepcopy(messages)}, "quotes": [], "uncertain": False}
+
+        updated, issue = RepairProbe()._repair_content("sft", original,
+            {"source_kind": "conversation", "teacher_evidence": original["source_context"]},
+            ["revision"], PreservingPort().assess(), "Clarify the explanation.")
+        assert issue is None
+    else:
+        class TrimPort(PreservingPort):
+            def request(self, *args, **options):
+                return {"reasoning": explanation}
+
+            def check_adherence(self, *args, **options):
+                return {"keep": True, "adherence": 5}
+
+        updated, = TrimReasoning(TrimPort(), {"reasoning_trim": {"template": "custom"},
+            "reasoning_trim_prompt": "Keep the explanation concise."}).execute(
+                {"target": "sft", "sample": original})
+    assert original == snapshot
+    assert updated["messages"][-1]["reasoning_content"] == explanation
+    assert updated["reasoning_origin"] == expected_origin
+    assert updated["conversation_reasoning_scope"] == "input_only"
+    assert updated["conversation_reasoning"] == snapshot["conversation_reasoning"]
+    projected = report_sample("sft", updated, training_record("sft", updated), released=False, position=0)
+    document = render_report_html({"run_id": "run-1", "name": "Import", "status": "completed"},
+        {"target": "sft", "rows": [projected], "total": 1, "offset": 0, "limit": 6}, language="zh")
+    assert "此收据描述导入阶段；后续节点可能已改写输出。" in document
+    assert "导入消息已保留；该记录不代表质量审核通过。" not in document
+    updated["conversation_reasoning"]["turns"].clear()
+    assert original == snapshot
+
+
+@pytest.mark.parametrize("original_origin", ["source", "synthetic_explanation", "none"])
+def test_cot_revision_replaces_only_current_import_origin(original_origin):
+    sft = GenerateSft(PreservingPort(), {"brief": "", "review_repair": {}}).execute(imported_unit())[0]
+    original = GenerateCot(PreservingPort(), {"review_repair": {}}).extract(sft)[0]
+    original["reasoning_origin"] = original_origin
+    updated = _manual_patch("cot", original, {"answer": "Inspect the cable after disconnecting the power."})
+    assert updated["conversation_reasoning_scope"] == "input_only"
+    assert updated["conversation_reasoning"] == original["conversation_reasoning"]
+    assert updated["reasoning_origin"] == "human_revision"
+
+
+@pytest.mark.parametrize("scope", ["input_messages_preserved", "input_only"])
+def test_scoring_or_unchanged_body_does_not_retire_import_receipt(scope):
+    original = GenerateSft(PreservingPort(), {"brief": "", "review_repair": {}}).execute(imported_unit())[0]
+    original["conversation_reasoning_scope"] = scope
+    assert _manual_patch("sft", original, {"messages": original["messages"]}) == original
+    updated = deepcopy(original)
+    updated["judge"] = PreservingPort().assess()
+    expected = deepcopy(updated)
+    preserve_provider_reasoning("sft", original, updated, origin="prompt_revision")
+    assert updated == expected
+
+
+@pytest.mark.parametrize("scope,current_origin", [
+    ("input_messages_preserved", "provider_reasoning"),
+    ("input_only", "prompt_styled_generation"),
+    ("input_only", "synthetic_explanation"),
+])
+def test_historical_import_receipt_cannot_override_current_output_origin(scope, current_origin):
+    original = GenerateSft(PreservingPort(), {"brief": "", "review_repair": {}}).execute(imported_unit())[0]
+    original["conversation_reasoning_scope"] = scope
+    updated = deepcopy(original)
+    updated["messages"][-1]["reasoning_content"] = "A separately generated explanation."
+    updated["reasoning_origin"] = current_origin
+    preserve_provider_reasoning("sft", original, updated, origin="prompt_revision")
+    assert updated["conversation_reasoning_scope"] == "input_only"
+    assert updated["conversation_reasoning"] == original["conversation_reasoning"]
+    assert updated["reasoning_origin"] == current_origin
 
 
 @pytest.mark.parametrize("language,expected", [

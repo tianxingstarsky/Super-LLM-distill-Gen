@@ -33,7 +33,8 @@ def main() -> int:
         if source.is_absolute() or ".." in source.parts or source.parts[0] not in {"configs", "data"}:
             raise ValueError("Invalid configuration or sample seed path")
     manifest = json.loads((ROOT / "INSTALLATION.json").read_text(encoding="utf-8"))
-    if manifest["version"] != "0.0.1" or (ROOT / "VERSION").read_text().strip() != "0.0.1":
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    if manifest["product_id"] != "shujian-cube" or manifest["version"] != version:
         raise ValueError("Installed release version does not match")
     lock = ROOT / "scripts/release/requirements-windows-x64.lock"
     if hashlib.sha256(lock.read_bytes()).hexdigest() != manifest["requirements_sha256"]:

@@ -1,8 +1,8 @@
 # 工作流规则
 
-`imported_reasoning.py` 只投影输入推理处理收据。逐助手消息区分原有、缺失和合成解释；后续节点改写时将该收据标为输入信息，不能冒充新输出的来源。CoT 提取按最后助手消息确定来源，不把前面轮次的合成标记套到原有最终推理。收据不进入训练字段。验证：`test_imported_reasoning_provenance.py`。
+`imported_reasoning.py` 投影输入推理处理收据，并通过 `contracts.py` 发布纯规则 `retire_imported_reasoning`。逐助手消息区分原有、缺失和合成解释；修剪或修订实际改变训练正文时，完整原收据保留为 `input_only`，已有新输出来源不被覆盖。仅评分、正文未变及无导入收据的历史记录保持原合同。CoT 提取按最后助手消息确定来源，不把前面轮次的合成标记套到原有最终推理。收据不进入训练字段。验证：`test_imported_reasoning_provenance.py`。
 
-`conversation_reasoning.py` 定义导入会话的可选策略：保留、仅补缺失、排除缺失。逐助手回合统计已有／缺失推理，以原消息摘要和可见前缀范围记录来源；补充结果明确为合成解释，不能证明恢复了原始思考或质量通过。配置缺省维持旧任务行为，不改变原始来源或训练字段。验证见 `tests/test_conversation_reasoning_policy.py`。
+`conversation_reasoning.py` 定义导入会话的可选策略：保留、仅补缺失、排除缺失。v1 直接按答案补写，v2 经提示提炼后隔离当前答案。逐助手回合统计覆盖，以原消息摘要和可见前缀范围记录来源；无效提示、不足标记及长答案／工具载荷的整段照搬被拒绝。字面复制检查不证明没有语义暗示，提示与合成解释均非质量通过。配置缺省维持旧任务行为，原始来源和训练字段不变。验证见 `tests/test_conversation_reasoning_policy.py`。
 
 经验提案允许没有新规则（`rules=[]`），以合并后的风格概述保留当前意图；没有新证据不强迫模型凑经验。该合同不会把候选升级为通过，已有规则仍逐条认证原句。验证见 `test_experience_evolution.py`。
 

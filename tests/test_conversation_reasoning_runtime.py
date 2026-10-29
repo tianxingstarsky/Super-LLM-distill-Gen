@@ -44,18 +44,23 @@ def imported_tool_conversation():
             "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}]}
 
 
-def test_production_resume_reuses_completed_turn_and_modes_share_unchanged_raw_cache(tmp_path):
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_production_resume_reuses_completed_turn_and_modes_share_unchanged_raw_cache(tmp_path, version):
     source = tmp_path / "conversation.jsonl"
     original = imported_tool_conversation()
     source.write_text(json.dumps(original) + "\n", encoding="utf-8")
     source_bytes = source.read_bytes()
     output = tmp_path / "output"
     frozen_prompt = "Explain only this recorded assistant response using its visible history. Do not rewrite the response."
-    policy = {"version": 1, "mode": "fill_missing"}
+    policy = {"version": version, "mode": "fill_missing"}
     run_id = engine.create_run(output, sources=[source], targets=["sft"], conversation_reasoning=policy,
         node_prompts={"ingest": {"workflow.conversation_reasoning": frozen_prompt}},
         production={"goals": {"sft": 1}, "round_size": 1, "min_acceptance_rate": 0})
-    writer = ExplanationWriter(["I need to read the requested note before answering.", RuntimeError("offline interruption")])
+    responses = ["I need to read the requested note before answering.", RuntimeError("offline interruption")]
+    if version >= 2:
+        responses = ["Which evidence is needed to answer the user's maintenance question?", responses[0],
+                     "Check the required order of actions in the tool's observation.", responses[1]]
+    writer = ExplanationWriter(responses)
     runtime = engine.Workflow(output, run_id, tmp_path, generator=writer)
     assert runtime.recipe["conversation_reasoning"] == policy
     assert runtime.recipe["node_prompt_templates"]["ingest"]["workflow.conversation_reasoning"] == frozen_prompt
@@ -69,13 +74,25 @@ def test_production_resume_reuses_completed_turn_and_modes_share_unchanged_raw_c
     with pytest.raises(RuntimeError, match="offline interruption"):
         with FilesystemProductionAdapter(runtime, CorpusNearDuplicateIndex).open_session():
             pytest.fail("The interrupted second turn must not become a ready production input")
-    assert len(writer.calls) == 2
+    assert len(writer.calls) == (2 if version == 1 else 4)
     first_payload = json.loads(writer.calls[0][0][-1]["content"])
     assert len(first_payload["history"]) == 1
     assert "disconnect" not in json.dumps(first_payload).lower()
-    assert writer.calls[0][0][0] == {"role": "system", "content": frozen_prompt}
+    assert writer.calls[0 if version == 1 else 1][0][0] == {"role": "system", "content": frozen_prompt}
     assert writer.calls[0][1]["allow_reasoning_fallback"] is False
     assert writer.calls[0][1]["retries"] == 1
+    if version >= 2:
+        blind_request = json.loads(writer.calls[1][0][-1]["content"])
+        assert set(blind_request) == {"history", "reasoning_hints", "source_scope"} | ({"response_kind"} if version == 3 else set())
+        if version == 3:
+            assert first_payload["response_kind"] == blind_request["response_kind"] == "tool_action"
+        assert "tool_calls" not in str(blind_request)
+        assert "Provider's separate native channel" not in str(blind_request)
+        final_request = json.loads(writer.calls[3][0][-1]["content"])
+        if version == 3:
+            assert final_request["response_kind"] == "answer"
+        assert final_request["history"] == original["messages"][:3]
+        assert "assistant_response" not in final_request and "tools" not in final_request
 
     resumed_writer = ExplanationWriter(["The note requires power disconnection before the wiring check."])
     resumed = engine.Workflow(output, run_id, tmp_path, generator=resumed_writer)
@@ -87,6 +104,9 @@ def test_production_resume_reuses_completed_turn_and_modes_share_unchanged_raw_c
     assert prepared["messages"][3]["content"] == original["messages"][3]["content"]
     assert prepared["conversation_reasoning"]["synthesized_turns"] == 2
     assert all(turn["request"]["stage"] == "ingest" for turn in prepared["conversation_reasoning"]["turns"])
+    if version >= 2:
+        assert all(turn["hints"]["request"]["stage"] == "ingest"
+                   for turn in prepared["conversation_reasoning"]["turns"])
     assert len(resumed_writer.calls) == 1
     with FilesystemProductionAdapter(resumed, CorpusNearDuplicateIndex).open_session() as progress:
         assert progress.source_count == 1
@@ -103,7 +123,8 @@ def test_production_resume_reuses_completed_turn_and_modes_share_unchanged_raw_c
     assert {path: path.read_bytes() for path in cached_bytes} == cached_bytes
 
 
-def test_invalid_or_insufficient_completion_never_enters_training_export(tmp_path):
+@pytest.mark.parametrize("version", [1, 2])
+def test_invalid_or_insufficient_completion_never_enters_training_export(tmp_path, version):
     source = tmp_path / "incomplete.jsonl"
     records = [{"messages": [{"role": "user", "content": question},
                               {"role": "assistant", "content": "The record has no supporting explanation."}]}
@@ -112,7 +133,7 @@ def test_invalid_or_insufficient_completion_never_enters_training_export(tmp_pat
     original_bytes = source.read_bytes()
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["sft"],
-        conversation_reasoning={"version": 1, "mode": "fill_missing"})
+        conversation_reasoning={"version": version, "mode": "fill_missing"})
     writer = ExplanationWriter(["", "<INSUFFICIENT_EVIDENCE>"])
     runtime = engine.Workflow(output, run_id, tmp_path, generator=writer)
     state = runtime.execute()

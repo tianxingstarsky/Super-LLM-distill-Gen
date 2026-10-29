@@ -50,7 +50,7 @@ VERSION_24_NODE_PROMPT_IDS = {**VERSION_23_NODE_PROMPT_IDS,
 VERSION_25_NODE_PROMPT_IDS = {**VERSION_24_NODE_PROMPT_IDS,
                   "cot": (*VERSION_24_NODE_PROMPT_IDS["cot"], "workflow.cot_check_agent")}
 NODE_PROMPT_IDS = {**VERSION_25_NODE_PROMPT_IDS,
-                  "ingest": (*VERSION_25_NODE_PROMPT_IDS["ingest"], "workflow.conversation_reasoning"),
+                  "ingest": (*VERSION_25_NODE_PROMPT_IDS["ingest"], "workflow.conversation_reasoning_hints", "workflow.conversation_reasoning"),
                   "multiturn": (*VERSION_25_NODE_PROMPT_IDS["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer"),
                   "cot": (*VERSION_25_NODE_PROMPT_IDS["cot"], "workflow.cot_native_joint"),
                   "preference": (*VERSION_22_NODE_PROMPT_IDS["preference"], "workflow.preference_design_check"),
@@ -58,15 +58,20 @@ NODE_PROMPT_IDS = {**VERSION_25_NODE_PROMPT_IDS,
                              "workflow.review_reference")}
 
 
-def builtin_node_prompt(prompt_id: str) -> str:
+def builtin_node_prompt(prompt_id: str, *, conversation_reasoning_version=None) -> str:
     """Return editable text, with JSON braces already rendered exactly once."""
     if not any(prompt_id in ids for ids in NODE_PROMPT_IDS.values()):
         raise ValueError("invalid_node_prompt_id")
+    if prompt_id == "workflow.conversation_reasoning" and conversation_reasoning_version is not None:
+        return render(get(prompt_id, version={1: "1.1.0", 2: "2.0.0", 3: "2.1.0"}[conversation_reasoning_version]))
+    if prompt_id == "workflow.conversation_reasoning_hints" and conversation_reasoning_version is not None:
+        return render(get(prompt_id, version="1.1.0" if conversation_reasoning_version == 3 else "1.0.0"))
     return render(get(prompt_id))
 
 
 def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None,
-                           package_review=None, qa_director=None, cpt_processing=None, review_repair=None) -> tuple[str, ...]:
+                           package_review=None, qa_director=None, cpt_processing=None, review_repair=None,
+                           conversation_reasoning_version=None) -> tuple[str, ...]:
     """Only offer templates that the selected node can actually call."""
     # Prompt editing must remain available while users are clearing a rule or
     # adjusting the final type weight. Creation validates the complete recipe.
@@ -82,8 +87,10 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
         return (NODE_PROMPT_IDS[stage] if validate_package_review(package_review)["enabled"]
                 and package_review_stage(package_review) == stage else ())
     if stage == "ingest":
+        if source_mode == "补全对话推理":
+            return (("workflow.conversation_reasoning_hints", "workflow.conversation_reasoning")
+                    if conversation_reasoning_version in {2, 3} else ("workflow.conversation_reasoning",))
         return (("workflow.plan",) if source_mode == "开放需求" else
-                ("workflow.conversation_reasoning",) if source_mode == "补全对话推理" else
                 ("workflow.document_parse",) if source_mode == "模型辅助文档" else
                 ("workflow.document_vision",) if source_mode == "多模态文档" else ())
     if stage == "cpt":
@@ -214,9 +221,11 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
     if recipe_version >= 41:
         catalog = {**catalog, "multiturn": (*catalog["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")}
     if conversation_reasoning_version is not None:
-        if type(conversation_reasoning_version) is not int or conversation_reasoning_version != 1:
+        if type(conversation_reasoning_version) is not int or conversation_reasoning_version not in {1, 2, 3}:
             raise ValueError("invalid_conversation_reasoning_version")
-        catalog = {**catalog, "ingest": (*catalog["ingest"], "workflow.conversation_reasoning")}
+        prompts = (("workflow.conversation_reasoning_hints", "workflow.conversation_reasoning")
+                   if conversation_reasoning_version in {2, 3} else ("workflow.conversation_reasoning",))
+        catalog = {**catalog, "ingest": (*catalog["ingest"], *prompts)}
     if learner_context_review_version == 1 and "review" in catalog:
         catalog = {**catalog, "review": (*catalog["review"], "workflow.learner_context_check")}
     if (claim_review_protocol_version == 2 or claim_review_adversarial_protocol_version == 1) and "review" in catalog:
@@ -289,7 +298,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                 "1.15.0" if preference_design_version == 2 else
                 "1.14.0" if preference_design_version == 1 else
                 "1.12.0" if claim_repair_feedback_version == 1 else "1.11.0"))
-        return builtin_node_prompt(prompt_id)
+        return builtin_node_prompt(prompt_id, conversation_reasoning_version=conversation_reasoning_version)
     return {stage: {prompt_id: overrides.get(stage, {}).get(prompt_id, default_body(prompt_id))
                     for prompt_id in prompt_ids}
             for stage, prompt_ids in _prompt_catalog(recipe_version, learner_context_review_version,

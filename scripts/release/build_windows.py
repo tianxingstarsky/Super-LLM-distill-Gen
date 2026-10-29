@@ -17,7 +17,9 @@ import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = "0.0.1"
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+if not re.fullmatch(r"\d+\.\d+\.\d+", VERSION):
+    raise ValueError("VERSION must contain a numeric release version")
 ASSET = f"ShuJian-Cube-{VERSION}-Windows-x64-Setup.exe"
 
 
@@ -38,7 +40,7 @@ def download(url: str, target: Path, expected: str) -> Path:
     partial = target.with_suffix(target.suffix + ".download")
     for attempt in range(3):
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "ShuJian-Cube-release/0.0.1"})
+            request = urllib.request.Request(url, headers={"User-Agent": f"ShuJian-Cube-release/{VERSION}"})
             with urllib.request.urlopen(request, timeout=45) as response, partial.open("wb") as sink:
                 shutil.copyfileobj(response, sink, length=1024 * 256)
             if sha256(partial) != expected:
@@ -190,6 +192,7 @@ def build(ref: str, work: Path) -> Path:
     output = work / "dist"
     output.mkdir(exist_ok=True)
     compile_result = subprocess.run([str(compiler), f"/DPayloadDir={payload}", f"/DReleaseOutput={output}",
+                    f"/DReleaseVersion={VERSION}",
                     f"/DInstallFileList={install_files}",
                     str(payload / "scripts/release/windows.iss")], stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")

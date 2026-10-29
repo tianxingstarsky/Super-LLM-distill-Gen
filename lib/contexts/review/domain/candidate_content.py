@@ -3,7 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 from lib.domain.workflow_quality import canonical, conversation_issue, text_issue
-from lib.contexts.workflows.contracts import TRAINING_FIELDS, PREFERENCE_TARGETS, training_record
+from lib.contexts.workflows.contracts import (
+    TRAINING_FIELDS, PREFERENCE_TARGETS, training_record, retire_imported_reasoning,
+)
 from lib.domain.math_tasks import validate_math_candidate
 from lib.domain.source_quote import quote_spans
 from lib.domain.corpus_quality import inspect_corpus
@@ -24,8 +26,10 @@ def preserve_provider_reasoning(target, original, updated, *, origin):
     An unchanged native rationale is not carried onto a changed answer or user
     turn; a newly authored replacement can remain as revision text. Other
     unmodified turns keep their original provider provenance.
-    Legacy rows without provider reasoning/summary retain their existing schema.
+    Explicit import receipts become input-only after edits. Legacy rows without
+    import receipts or provider reasoning/summary retain their existing schema.
     """
+    retire_imported_reasoning(target, original, updated, origin=origin)
     retire_reasoning_prefill(target, original, updated, origin=origin)
     turn_reviews = original.get("turn_reviews", [])
     turn_reviews = turn_reviews if isinstance(turn_reviews, list) else []

@@ -40,8 +40,8 @@ def conversation():
             "tool_snapshots": {"after_last_turn": "MUST_NOT_ENTER_RECONSTRUCTION"}}
 
 
-def policy(mode):
-    return validate_conversation_reasoning({"version": 1, "mode": mode})
+def policy(mode, version=1):
+    return validate_conversation_reasoning({"version": version, "mode": mode})
 
 
 def test_old_recipe_is_exact_passthrough_and_preserve_marks_every_missing_assistant():
@@ -166,7 +166,7 @@ def test_streaming_is_lazy_and_documents_are_unchanged():
     assert seen == [1, 2, "closed"]
 
 
-@pytest.mark.parametrize("value", [{}, {"version": True, "mode": "preserve"}, {"version": 2, "mode": "preserve"},
+@pytest.mark.parametrize("value", [{}, {"version": True, "mode": "preserve"}, {"version": 4, "mode": "preserve"},
     {"version": 1, "mode": "overwrite"}, {"version": 1, "mode": "preserve", "hidden": True}])
 def test_creation_rejects_unsupported_policy_contracts(value):
     with pytest.raises(ValueError, match="invalid_conversation_reasoning"):
@@ -175,3 +175,91 @@ def test_creation_rejects_unsupported_policy_contracts(value):
 
 def test_absent_creation_policy_stays_absent():
     assert validate_conversation_reasoning(None) is None
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_hint_route_uses_independent_contexts_and_keeps_original_actions(version):
+    from lib.model_response_details import ModelJSONResult
+
+    original = conversation()
+    before = deepcopy(original)
+    hint = ModelJSONResult({"reasoning_hints": "Which observation is missing before a factual reply?"},
+                          {"reasoning_content": "PRIVATE_HINT_AUTHOR_THINKING",
+                           "checkpoint": {"stage": "ingest", "id": "hints-1"}})
+    port = MemoryReasoningPort([
+        hint, {"reasoning_content": "I need to read the file before relying on its contents."},
+        {"reasoning_hints": "Check the count in the actual observation, without extrapolating."},
+        {"reasoning_content": "The tool reports 17 items; I can limit the statement to that count."},
+    ])
+    prepared = PrepareConversationReasoning(port, policy("fill_missing", version)).execute(original)
+    assert len(port.calls) == 4 and original == before
+    hints1, write1, hints2, write2 = port.calls
+    assert hints1[2] == "workflow.conversation_reasoning_hints"
+    assert hints1[3]["assistant_response"] == before["messages"][4]
+    assert set(write1[3]) == {"history", "reasoning_hints", "source_scope"} | ({"response_kind"} if version == 3 else set())
+    if version == 3:
+        assert hints1[3]["response_kind"] == write1[3]["response_kind"] == "tool_action"
+        assert hints2[3]["response_kind"] == write2[3]["response_kind"] == "answer"
+    assert write1[3]["history"] == before["messages"][:4]
+    assert write2[3]["history"] == before["messages"][:6]
+    assert write1[3]["reasoning_hints"] == hint["reasoning_hints"]
+    assert "PRIVATE_HINT_AUTHOR_THINKING" not in str(write1[3])
+    assert "read-1" not in str(write1[3]) and "17 items" not in str(write1[3])
+    assert "tools" not in hints1[3] and "MUST_NOT_ENTER_RECONSTRUCTION" not in str(port.calls)
+    assert "reasoning_content" not in hints2[3]["history"][4]
+    assert hints1[0][3] == "hints" and write1[0][3] == "reasoning"
+    assert len(hints1[0][-1]) == 64 and hints1[0] != write1[0]
+    receipt = prepared["conversation_reasoning"]
+    assert receipt["version"] == version and receipt["semantic_status"] == "not_assessed"
+    assert receipt["turns"][1]["hints"]["request"]["id"] == "hints-1"
+    for actual, expected in zip(prepared["messages"], before["messages"]):
+        assert actual.get("content") == expected.get("content")
+        assert actual.get("tool_calls") == expected.get("tool_calls")
+    # Cue changes must not reuse a checkpoint from the previous independent
+    # reconstruction, even when the source turn stays the same.
+    changed = MemoryReasoningPort([
+        {"reasoning_hints": "Consider what the user expects before selecting a file read."},
+        {"reasoning_content": "I still need the actual contents."},
+        {"reasoning_hints": "Check the observed count."},
+        {"reasoning_content": "I can only report the observed count."},
+    ])
+    PrepareConversationReasoning(changed, policy("fill_missing", version)).execute(original)
+    assert changed.calls[0][0] == hints1[0] and changed.calls[1][0] != write1[0]
+
+
+@pytest.mark.parametrize("hint,issue", [
+    ("<INSUFFICIENT_EVIDENCE>", "conversation_reasoning_insufficient_evidence"),
+    ("The original candidate claims that every new trial necessarily proves an improvement.",
+     "conversation_reasoning_hints_copy_response"),
+])
+def test_failed_hint_extraction_never_buys_reconstruction_or_rewrites_source(hint, issue):
+    original = {"id": "claim", "kind": "conversation", "status": "ready", "messages": [
+        {"role": "user", "content": "Can that comparison already prove improvement?"},
+        {"role": "assistant", "content":
+         "The original candidate claims that every new trial necessarily proves an improvement."}]}
+    before = deepcopy(original)
+    port = MemoryReasoningPort([{"reasoning_hints": hint}])
+    prepared = PrepareConversationReasoning(port, policy("fill_missing", 2)).execute(original)
+    assert prepared["status"] == "quarantined" and prepared["reason"] == issue
+    assert prepared["messages"] == before["messages"] and original == before
+    assert len(port.calls) == 1
+    assert prepared["conversation_reasoning"]["turns"][0]["hints"]["raw_response"]["reasoning_hints"] == hint
+
+
+@pytest.mark.parametrize("mode", ["preserve", "exclude"])
+def test_new_policy_does_not_purchase_hints_for_non_generation_modes(mode):
+    port = MemoryReasoningPort()
+    PrepareConversationReasoning(port, policy(mode, 2)).execute(conversation())
+    assert port.calls == []
+
+
+def test_literal_hint_guard_handles_short_answers_and_nested_tool_payloads():
+    import json
+    from lib.contexts.workflows.domain.conversation_reasoning import generated_hints_issue
+
+    assert generated_hints_issue({"reasoning_hints": "答案是巴黎。"},
+                                 {"role": "assistant", "content": "答案是巴黎。"}) == "conversation_reasoning_hints_copy_response"
+    report = "This complete report is the target output, not an observation available before the write operation."
+    target = {"role": "assistant", "content": "", "tool_calls": [{"function": {
+        "name": "write_file", "arguments": json.dumps({"path": "report.md", "nested": {"content": report}})}}]}
+    assert generated_hints_issue({"reasoning_hints": "Consider: " + report}, target) == "conversation_reasoning_hints_copy_response"

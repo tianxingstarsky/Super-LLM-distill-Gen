@@ -129,6 +129,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     reasoning_policy = validate_conversation_reasoning(recipe.get("conversation_reasoning")) or {"mode": "preserve"}
     if mode == "Agent 上下文":
         values[f"workflow-conversation-reasoning:{workspace}"] = reasoning_policy["mode"]
+        values[f"workflow-conversation-reasoning-version:{workspace}"] = reasoning_policy.get("version", 1)
     production = validate_production(recipe.get("production"), recipe.get("targets", []))
     values[f"workflow-production-enabled:{workspace}"] = production is not None
     if production is not None:
@@ -297,7 +298,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
     for node in prompt_nodes:
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
                                                 package_review=package_review, review_repair=review_repair,
-                                                qa_director=director, cpt_processing=cpt_processing):
+                                                qa_director=director, cpt_processing=cpt_processing,
+                                                conversation_reasoning_version=reasoning_policy.get("version")):
             if prompt_id in copied_prompts.get(node, {}):
                 values[f"workflow-node-prompt:{workspace}:{node}:{prompt_id}"] = copied_prompts[node][prompt_id]
     research = recipe.get("web_research")

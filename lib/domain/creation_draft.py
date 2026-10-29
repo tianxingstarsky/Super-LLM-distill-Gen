@@ -17,6 +17,7 @@ from lib.domain.workflow_quality import SECRET, canonical
 from lib.domain.agent_experience import default_experience_text
 
 NUMBER_FIELDS = {
+    'workflow-conversation-reasoning-version': (1, 3),
     'workflow-generation-review-percent': (1, 100),
     'workflow-cot-checklist-version': (1, 7),
     'workflow-cot-evidence-policy': (0, 2),
@@ -139,7 +140,7 @@ def validate_creation_draft(values):
         if len(scopes) > 1:
             raise ValueError('invalid_creation_draft')
         if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
-                     'workflow-conversation-reasoning', 'workflow-conversation-format',
+                     'workflow-conversation-reasoning', 'workflow-conversation-reasoning-version', 'workflow-conversation-format',
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
                      'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
                      'workflow-director-learning-goal', 'workflow-director-user-languages',

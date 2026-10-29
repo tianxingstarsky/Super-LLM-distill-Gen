@@ -19,4 +19,4 @@ from .domain.cot_review_policy import validate_cot_review_policy
 from .domain.reading_session import has_public_reading_context
 from .domain.public_experience import initial_experience_text
 from .domain.conversation_reasoning import validate_conversation_reasoning
-from .domain.imported_reasoning import imported_reasoning_metadata
+from .domain.imported_reasoning import imported_reasoning_metadata, retire_imported_reasoning

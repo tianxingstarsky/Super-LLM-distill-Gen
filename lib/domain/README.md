@@ -1,6 +1,6 @@
 # 旧领域层
 
-节点模板目录按可选 `conversation_reasoning.version=1` 冻结补充解释提示词；未选择该策略的历史模板快照保持不变。缺失推理的业务规则位于 workflows 域，这里只维护节点模板与草稿兼容合同。
+节点模板目录按可选 `conversation_reasoning.version` 冻结补充解释提示词：1 固定 `workflow.conversation_reasoning@1.1.0`；2 分别固定 `workflow.conversation_reasoning_hints@1.0.0` 和 `workflow.conversation_reasoning@2.0.0`；3 分别固定 hints 1.1.0 与正文补写 2.1.0，由程序提供当前回合的 `response_kind`。已冻结正文、自定义覆盖和未选择该策略的历史模板快照保持不变。缺失推理的业务规则位于 workflows 域，这里只维护节点模板与草稿兼容合同。
 
 配方 41 增加多轮节点可选 `reading_session`。`training_surface.py` 仅对已认证的实际共享阅读上下文允许公开任务规则及资料引用；原知识应用、隐藏制作字段和旧任务校验不变。配置不会把过去的失败记录重新标成通过。训练 schema 不变，共享规则与材料保存在既有 messages 的 system 内容中，私有故事仅在审核收据中。
 

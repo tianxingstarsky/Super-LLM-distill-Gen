@@ -20,7 +20,7 @@ An app root contains `lib/control.py`, `configs/`, and its working Python
 environment. An existing installation can be reused. Do not move its saved work
 or install over a source checkout.
 
-For Windows x64, use the [published installer](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1).
+For Windows x64, use the [published installer](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases).
 Verify its SHA256 against the attached checksum file. The setup can run silently
 with Inno Setup's `/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART` switches.
 Use `/DIR="<dedicated app folder>"` for a chosen path and `/LOG="<log file>"`

@@ -1,6 +1,33 @@
 # 版本化提示词
 
-`workflow.conversation_reasoning@1.1.0` 根据原答案或工具动作重建缺失的思考链：以目标响应限定待解释结论，以当时可见历史提供依据，从作答者第一人称视角连接问题、论据和判断，避免第三人称评语或答案复述。工具调用前不能预知结果；若无法支持原答案，返回不足标记并保持待处理，不能在推理中悄悄纠正原答案或替它补条件。输入节点仍可编辑、保存和还原模板；原 `1.0.0`、冻结任务和自定义正文原样保留，已保存的旧草稿需主动还原默认才会采用新模板。来源仍标为合成解释，不宣称恢复原始内部思考；模板升级不代表已经通过真实质量验证。
+## 按功能维护
+
+`workflow.py` 现在只显式转发兼容名称；新增版本在下面的功能所有者中维护。注册入口仍是 `lib.prompts.get(id, version=...)`，全部旧 ID、版本、正文和导出别名保持原值。实际 Agent 用例、状态与共享设施见 [功能导航](../../docs/architecture/agent-features.md)。
+
+| 要修改的功能 | 版本定义入口 |
+| --- | --- |
+| 公共请求协议、无业务规则的 spec 构造 | [workflow_protocol.py](workflow_protocol.py)、[workflow_spec.py](workflow_spec.py) |
+| 文档读取与 CPT | [workflow_corpus.py](workflow_corpus.py) |
+| 开放任务、指导员与问题角色 | [workflow_planning.py](workflow_planning.py) |
+| SFT 回答、契约与风格核验 | [workflow_sft.py](workflow_sft.py) |
+| 普通多轮 | [workflow_dialogue.py](workflow_dialogue.py) |
+| 资料阅读的场景、用户模拟与回答 | [workflow_reading_session.py](workflow_reading_session.py) |
+| 导入会话正文 CoT 补写 | [workflow_conversation_reasoning.py](workflow_conversation_reasoning.py) |
+| CoT 作者、原生前缀续写 | [workflow_cot.py](workflow_cot.py) |
+| 同次原生推理与答案 | [workflow_native_cot.py](workflow_native_cot.py) |
+| 清单、主张与工具核查 Agent | [workflow_reasoning_checks.py](workflow_reasoning_checks.py) |
+| 偏好候选与类型设计 | [workflow_preference.py](workflow_preference.py) |
+| 独立评分、上下文核验与打包抽检 | [workflow_review.py](workflow_review.py) |
+| 已有候选修订 | [workflow_revision.py](workflow_revision.py) |
+| 推理修剪 | [workflow_trim.py](workflow_trim.py) |
+| 经验与个人风格提案 | [workflow_experience.py](workflow_experience.py) |
+| 多功能共用的语义边界与版本变换 | [workflow_shared_rules.py](workflow_shared_rules.py)，并复用既有 `workflow_context.py` / `workflow_reasoning.py` |
+
+功能模块只依赖 `base`、spec 构造、显式共享规则和已有正文资产，不导入 `workflow.py` 聚合入口，不创建模型客户端或保存运行状态。历史正文模块继续保留字符串合同；例如 `workflow_repair.py` 的版本正文与 `workflow_revision.py` 的版本模板各有一份职责，不复制正文。整理的注册表等值验证覆盖全部版本与旧导出，相关业务验证继续使用现有 prompt/节点/DDD 回归。
+
+## 当前模板与兼容说明
+
+新建导入推理策略 v3 使用 `workflow.conversation_reasoning_hints@1.1.0` 提炼待核验提示，再由 `workflow.conversation_reasoning@2.1.0` 在独立上下文中生成正文 CoT。程序提供 `response_kind` 区分工具调用前决策与文本回答，避免把尚未发生的读取结果当成调用工具的前提。补写模型不接收当前答案、完整工具载荷、提炼模型的原生推理或未来工具定义；提示不能当作事实。正文由程序存入推理字段，来源标为合成解释，完成仍为 `not_assessed`。v1 固定直接补写 `1.1.0`；v2 固定提示 `1.0.0` 与正文 `2.0.0`，历史模板、运行和用户自定义正文保留，旧草稿不静默升级。这个用例借鉴答案条件化推导，不包含 STaR 的模型微调迭代，也不声称恢复原始内部思考。
 
 `workflow.reading_user@1.2.0` 将实际用户历史作为推理时的语体示范：角色翻转后的 assistant 是用户自己的发言，user 是帮助者的回复；只从前者延续口吻、语言、省略和表达节奏，从后者理解进展。编号只限制制作题号，不压制真实的清单、引用或代码。没有示范时不宣称模仿了具体个人，人工原话示例不成为当前事实。模板继续在多轮节点编辑、保存和恢复；1.0.0、1.1.0、冻结任务和自定义覆盖保持原文。不增加请求、评审、模型路由或训练，离线接线不证明真实模仿能力。取舍与后续 NVIDIA 参考见 [用户模拟](../../docs/architecture/user-simulation-2026-10-29.md)。
 
@@ -36,7 +63,7 @@
 
 评审模板 `workflow.review_score@1.21.0` 由新传输版本选择，明确区分逐句条件裁决与普通/偏好评分；既有 `1.19.0`、`1.20.0` 文本不变。普通分数不能被误写成逐句 verdict 字段，用户覆盖仍原样保存。输出合同由程序校验，不能靠模板替代引用与覆盖检查。
 
-`base.py` 与 `__init__.py` 管理模板注册、版本和渲染。`workflow.py` 是工作流模板入口，其他 `workflow_*` 文件按对话、推理、审核、修正等职责提供资产。
+`base.py` 与 `__init__.py` 管理模板注册、版本和渲染。`workflow.py` 是工作流模板的兼容导出入口，定义与版本推进由上述功能模块负责。
 
 已提交任务固定提示词版本和哈希；更新默认模板不能改变历史任务的恢复行为。旧版本仍被引用时保留。用户自定义模板通过提示词库保存，不能混入代码默认资产。
 

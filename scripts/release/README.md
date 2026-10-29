@@ -10,6 +10,10 @@ The first installation needs an internet connection.
 - `build_windows.py` reads one Git tree, creates an isolated payload, verifies
   downloaded build tools, and invokes Inno Setup. It never copies the working
   `.venv`, ignored files, local configuration, or dirty submodules.
+  The repository `VERSION` is the single release-version source. The selected
+  Git tree must have the same version. The builder passes that value to Inno
+  Setup; installed verification compares it with the release manifest after
+  checking the payload hashes.
 - `tools.json` pins the official uv and Inno Setup downloads and their SHA256.
 - `requirements-windows-x64.lock` is the hashed Python 3.11 / Windows x64 lock.
   Its package versions were constrained to the tested main environment. It does
@@ -55,9 +59,14 @@ From the repository, using the existing development environment:
 
 `--source-ref` may name a commit or an explicitly prepared Git tree. Final release
 builds must use the committed release revision. Builds and tools stay under
-`.dataforge/releases/v0.0.1/`. The output includes
-`ShuJian-Cube-0.0.1-Windows-x64-Setup.exe`, `SHA256SUMS.txt`, and a build manifest.
+`.dataforge/releases/v0.0.2/`. The output includes
+`ShuJian-Cube-0.0.2-Windows-x64-Setup.exe`, `SHA256SUMS.txt`, and a build manifest.
 The manifest records source tree, commit, package lock, and tool hashes.
+
+Pinned download archives from an earlier release's `tools/` folder can be copied
+to the new release's `tools/` folder. The builder verifies every archive against
+`tools.json` before use. Copy only the named uv, Python and Inno Setup archives;
+do not copy an installed application, its `.venv`, local settings, or payload.
 
 Inno Setup is installed without elevation into this ignored build directory.
 Sources: [Inno Setup](https://jrsoftware.org/isdl.php),
