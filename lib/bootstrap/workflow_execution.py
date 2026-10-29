@@ -7,6 +7,7 @@ from lib.contexts.workflows.infrastructure.execution_runtime import (
 
 
 def workflow_execution(runtime) -> ExecuteWorkflowRun:
+    """Build run execution with exclusive-session and frozen-recipe verification."""
     from lib.infrastructure.training_workflow import SUPPORTED_RECIPE_VERSIONS
 
     return ExecuteWorkflowRun(

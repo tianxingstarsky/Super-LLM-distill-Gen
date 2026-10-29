@@ -7,7 +7,9 @@
 - [infrastructure](infrastructure/README.md) 承担持久化、锁和阶段操作。
 - 装配入口是 `lib/bootstrap/workflows.py`、`workflow_execution.py`、`dialogue_generation.py`、`production_execution.py`、`node_generation.py` 和 `workflow_requests.py`。
 
-维护执行顺序从 `ExecuteWorkflowRun`、`GenerateDatasetBatch`、`GenerateMultiturnDialogue`、`ExecuteProductionRounds` 和 `GenerateProductionBatch` 开始。SFT、CoT 和推理修剪分别由 `GenerateSft`、`GenerateDirectedSft`、`GenerateCot`、`TrimReasoning` 处理；`RequestNodeModel` 管理一次节点请求与检查点。评分修复用例属于 review 域；供应商请求重试属于 models 域。CPT、偏好构造及资料缓存仍有旧实现，本轮不是整个引擎重写。
+维护执行顺序从 `ExecuteWorkflowRun`、`GenerateDatasetBatch`、`GenerateMultiturnDialogue`、`ExecuteProductionRounds` 和 `GenerateProductionBatch` 开始。SFT、CoT 和推理修剪分别由 `GenerateSft`、`GenerateDirectedSft`、`GenerateCot`、`TrimReasoning` 处理；`GeneratePreferencePair` 负责版本化偏好构造；`RequestNodeModel` 管理一次节点请求与检查点。评分修复用例属于 review 域；供应商请求重试属于 models 域。CPT、部分旧版偏好路径及资料缓存仍有旧实现，不能把已有拆分理解为整个引擎已经迁移。
+
+查找“要调用哪个服务”时，从 [组合根导航](../../bootstrap/README.md) 按业务操作定位。`api.py` 还公开来源辅助生成、配置的推理检查及经验版本用例；它们不是页面启动时自动执行的后台任务。
 
 验证：`tests/test_workflow_execution_application.py`、`tests/test_workflow.py`、`tests/test_workflow_production.py`、`tests/test_workflow_reasoning_route.py`。
 

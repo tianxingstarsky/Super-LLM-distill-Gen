@@ -1,61 +1,97 @@
-# 桌面控制台页面
+# 桌面控制台展示层
 
-“长期经验 → 从轨迹进化风格”在节点内提供简洁全面初始版、个人历史版、DSH 轨迹分组提炼与采用入口，沿用本节点模型。候选只代表模型提案；采用和回退保存新版本，不覆盖父版。完整错误轨迹可用于提炼，不因此获得训练导出资格。
+这里把用户操作转换为应用用例调用，并呈现本地缓存、任务、审核与交付的真实状态。入口在 [`lib/webapp.py`](../../webapp.py)：装配页面依赖、保持历史路由、处理跨页定位，并启动后台命令。业务执行不在页面内实现。
 
-多轮节点的“提示词与风格”提供“资料阅读与情景对话”开关。场景、用户发言、回答三套提示词在同一节点编辑，沿用模板保存与恢复。明确说明资料和任务规则会一同导出、故事仅供模拟器、轮数为上限及未评审状态。复制任务恢复此开关，旧草稿默认不启用。
+只面向桌面端。视觉依据在仓库 `参考/`，页面修改后用真实浏览器检查；参考图的数量、状态与文件名不能成为产品数据。
 
-CoT 节点的“引导原生思考 · 同次回答”直接使用供应商原生通道，仍在节点配置风格、提示词、思考强度和抽检比例。与显式撰写、保真改写和前缀续写分别显示，避免把它们都叫原生。旧草稿不自动切换；未抽检不显示质量通过。
+## 视觉实现归属
 
-CoT 保真改写在本节点配置内容抽检比例或逐条核验；新草稿默认抽检 20%，旧运行复用时明确恢复严格模式。选择与比例保存到草稿和冻结配方；未抽中记录在样本报告中显示未做语义核验，不冒充评审通过。用户自定义提示词不重置。验证见 `test_cot_review_policy.py`、`test_cot_answer_mode_draft.py`。
+- [`lib/console_theme.py`](../../console_theme.py) 维护共享色板、原生控件、侧栏和页首；[`shared.py`](shared.py) 维护页首与分区标题。分区标题只决定间距，不自动给父容器添加背景或阴影。
+- `*_style.py` / `*_styles.py` 只维护对应页面的具名容器。首页的创建区域、任务列表和来源目录各有层级，不给每层布局再套卡片。
+- [`workflow_workbench_style.py`](workflow_workbench_style.py) 只负责创建页，运行状态使用 [`workflow_run_styles.py`](workflow_run_styles.py)。制作方式旁的链接定位实际节点画布；依赖摘要与完整依赖列表随画布展示。
+- 侧栏使用 Streamlit 自带 Material 图标；历史文字图标仍用于解析旧会话标签。显示图标与持久路由不得混用。
 
-CoT 节点增加可选“保真风格改写”，保留已有个人模板和恢复入口；JSON / JSONL 上传提示支持 NeMo / OpenThoughts 明确分隔的推理结果。模式提示说明需要完整原推理及一次内容核验，报告独立展示原稿对照，不混进训练正文。验证见 `test_cot_style_transfer.py`、`test_cot_answer_mode_draft.py`、`test_workflow_report.py`。
+## 按用户操作找入口
 
-CoT 的答案方式可选“推敲后定稿”，显示两段作者请求及完整草稿保留的含义，提示词选择同时提供草稿与联合定稿模板。仍在当前节点配置，不增加页面；原生前缀与同次生成保留。相关中英文本与持久化选择一同验证。
+| 用户要做什么 | 页面 / 组件 | 职责与下游入口 |
+| --- | --- | --- |
+| 从资料或数据类型开始，找回最近工作 | [`home_page.py`](home_page.py) | `render_overview` 汇总已有任务和本地来源，设置创建入口或任务定位 |
+| 导入资料、选择目标、配置节点、启动生成 | [`workflow_page.py`](workflow_page.py) | `render_workbench` 组织创建草稿和画布；执行、恢复交给工作流应用 |
+| 查看流程依赖、选择节点 | [`workflow_canvas.py`](workflow_canvas.py)、[`workflow_canvas_frontend/`](workflow_canvas_frontend/) | 展示实际执行图与节点选择；不建立另一套调度顺序 |
+| 在节点配置模型和解析能力 | [`workflow_node_settings.py`](workflow_node_settings.py) | `render_node_models`、`render_document_parser`；调用模型配置应用，能力探测见 [`workflow_model_capabilities.py`](workflow_model_capabilities.py) |
+| 人工设计问答、反复增强 | [`human_workspace_page.py`](human_workspace_page.py) | 工作会话、设计草稿、轮次与结果；退出页面不停止正在运行的任务 |
+| 找历史任务、看进度和样本报告 | [`task_management_page.py`](task_management_page.py)、[`workflow_report_panel.py`](workflow_report_panel.py) | 任务筛选与选择、真实运行状态、报告阅读；沿用工作流应用与已有报告 |
+| 看节点实时输出和新产物 | [`workflow_stream_view.py`](workflow_stream_view.py)、[`workflow_live_artifacts_view.py`](workflow_live_artifacts_view.py) | 展示流式输出、调用与文件更新；不触发模型重跑 |
+| 复用资料、预览训练数据、看分布 | [`asset_catalog_page.py`](asset_catalog_page.py)、[`dataset_browser_page.py`](dataset_browser_page.py)、[`sample_statistics_page.py`](sample_statistics_page.py) | 数据集应用提供文件目录、预览、分布与大小；[`source_handoff.py`](source_handoff.py) 将资料送入草稿 |
+| 人工制作图片和文字样本 | [`manual_dataset_page.py`](manual_dataset_page.py) | 收集图片、问题和参考答案，调用人工数据集应用保存与导出 |
+| 人工复核不同训练格式 | [`sft_review_page.py`](sft_review_page.py)、[`preference_review_page.py`](preference_review_page.py)、[`corpus_review_page.py`](corpus_review_page.py)、[`agent_review_page.py`](agent_review_page.py) | 使用各格式的审核应用，不在页面重写准入规则 |
+| 保存问题、进入返工、发布审核版本 | [`review_rework_controls.py`](review_rework_controls.py)、[`review_release_controls.py`](review_release_controls.py) | 保存审核记录后进入已有返工/发布用例；保存问题不等于启动模型 |
+| 下载结果与历史发布 | [`package_page.py`](package_page.py) | 展示审核发布与自动候选包，交付前由数据集应用核验 |
+| 调整语言、共用连接与默认偏好 | `webapp.page_system_settings`、[`backend_page.py`](backend_page.py)、[`generation_settings_page.py`](generation_settings_page.py) | 共用连接和全局默认值；具体任务的模型、提示词仍在工作流节点选择 |
+| 独立运行旧 CLI 工具和查看命令日志 | `webapp.page_run`、`webapp.page_gates`、`webapp.page_prefs`、[`monitor_page.py`](monitor_page.py) | 兼容单项工具、当前命令确认和命令偏好；不替代自动工作流 |
 
-生成风格新增“审慎探索”。“编辑这套风格”把内置全文和已有附加要求载入原编辑框，切换为自定义后沿用个人模板的保存与恢复。超过 4,000 字符时保留原输入并提示，不截断。预览使用简短说明，长文编辑框可滚动；不增加独立配置页，不自动改变当前任务。验证见 `test_workflow_prompt_library.py`、`test_workflow_generation_ui.py` 与桌面截图。
+`webapp.py` 的公开 `page_*` 名称保留兼容。不要仅凭 `page_run` 或 `page_gates` 推断新工作流执行路径；它们是旧单项命令入口。私有 `_start_command_job` 启动后台命令，`_render_command_job_status` 只渲染命令日志，`_workspace_output_dir` / `_output_file` 只定位持久目录与文件。
 
-默认思考要点文本保留 `[prefix]` / `[final]` 阶段标记；在节点编辑、还原默认或保存个人模板时，最终交付核对不被误变成前缀重复指令。验证见 `ui_tests/test_reasoning_checklist_controls.py`。
+## 节点设置按职责组织
 
-新草稿启用 CoT 增强后默认采用生成中推敲（协议 7）。原清单区域改为可选的“自定义思考要点”，关闭自定义仍保留内置推敲指引，不触发独立评分；个人模板与默认还原沿用原入口。复制旧协议保留原设置，节点可选择“改为生成中推敲”，只影响新任务。协议 7 的提示词列表仅显示实际运行的生成/原生答案模板。冻结旧任务不改写。验证：`ui_tests/test_reasoning_checklist_controls.py`。
+| 配置内容 | 维护文件 | 边界 |
+| --- | --- | --- |
+| 模型选择、能力和共享并发 | [`workflow_node_settings.py`](workflow_node_settings.py)、[`model_scheduling_controls.py`](model_scheduling_controls.py) | 人工声明和探测证据分开；模型运行时由 models 域负责 |
+| 文档与 DSH 会话导入 | [`docling_settings.py`](docling_settings.py)、[`conversation_import_controls.py`](conversation_import_controls.py) | 展示上传、预览、问题与确认；解析数据库不在页面实现 |
+| CPT、指导员、偏好与生产策略 | [`workflow_cpt_settings.py`](workflow_cpt_settings.py)、[`workflow_director_settings.py`](workflow_director_settings.py)、[`workflow_preference_settings.py`](workflow_preference_settings.py)、[`workflow_production_settings.py`](workflow_production_settings.py) | 编辑当前草稿；启动时冻结，不热改已有任务 |
+| 提示词模板、导入、恢复和个人保存 | [`workflow_prompt_settings.py`](workflow_prompt_settings.py)、[`prompt_library_controls.py`](prompt_library_controls.py) | `render_node_prompts` 编辑节点实际使用的模板；`node_prompt_snapshot` 创建冻结输入 |
+| 推理方式、风格、语言、深度和修剪 | [`workflow_generation_settings.py`](workflow_generation_settings.py) | 显式推理深度与模型原生思考强度分开；关闭生成保留选择，但不伪称已生成新推理 |
+| 自定义思考要点与旧自检协议 | [`reasoning_checklist_controls.py`](reasoning_checklist_controls.py) | 按保存的协议解释配置；不把旧清单悄悄迁移为新行为 |
+| 长期经验与轨迹进化 | [`workflow_experience_controls.py`](workflow_experience_controls.py)、[`experience_evolution_controls.py`](experience_evolution_controls.py) | 显示初始版、个人版本、DSH 轨迹提案与采用；提案不是验证成功，采用/回退保留父版 |
+| 评分修正与打包评审 | [`workflow_review_repair_settings.py`](workflow_review_repair_settings.py)、[`workflow_package_review_settings.py`](workflow_package_review_settings.py) | 配置既有 review 域用例；不在控件中建立另一条返工循环 |
 
-新协议 6 草稿在 CoT 节点可选择“偏差作为改进建议”或“必须满足风格要求”。前者仍要求内容、任务契约与逐项规则通过；必需语言/格式可写入清单。复制已有任务保持原严格策略；显式选择保存到本地草稿，协议 6 的版本号也支持持久化。验证：`ui_tests/test_reasoning_checklist_controls.py`。
+模型和提示词配置都留在节点内。不要新增重复总配置页。节点前后导航按实际图计算，切换时保留草稿和角色绑定。
 
-新草稿开启逐项自检时默认使用协议 6；已保存草稿和复制任务的显式版本保持原样。检查清单、核查策略仍在 CoT 节点编辑和保存，不增加独立配置页。
+## 页面状态、路由和兼容规则
 
-`reasoning_checklist_controls.py` 在 CoT 节点提供逐项自检、规则编辑、个人模板保存和默认还原。每行一项，`? ` 前缀允许在说明原因后不适用；默认关闭以避免旧草稿重绘自动增加请求。显式开启后冻结到新任务，已有缓存与运行不改变。
+- [`i18n.py`](i18n.py) 只负责显示语言；路由采用稳定内部标识，英文标签不能成为 `PAGES` 的查找键。历史 URL、任务定位和控件键继续兼容。
+- [`app_navigation.py`](app_navigation.py)、[`review_navigation.py`](review_navigation.py) 管理跨页定位。报告进入审核、返工、导出再返回时，保留任务、阅读类型和页码。
+- Streamlit session state 保存界面状态；工作流应用提供持久任务状态。创建草稿通过既有草稿服务保存，冻结配方不随界面重绘而修改。无变化的重绘不重复保存，失败后仍允许重试完整草稿。
+- [`work_drafts.py`](work_drafts.py)、[`workflow_reuse.py`](workflow_reuse.py) 负责恢复与复用。自动生成、人工增强各自的入口模式保留；旧草稿缺少新开关时不自动开启。
+- [`selection_labels.py`](selection_labels.py) 通过稳定编号区分重名工作和样本。提交仍使用原 ID；短编号碰撞时扩展，不以显示文本决定对象身份。
+- 只有全部选中来源被当前 DSH 确认回执覆盖时才省去不会运行的指导员配置；混合或未知来源沿用原流程。全部输入隔离时显示原因和调整入口，不能声称已有可用素材。
+- 任务列表默认：已完成且不活跃的工作打开样本报告；运行中和待处理的工作打开过程视图。用户手动选择通过非控件状态跨页面保留。
+- 文件目录默认展示资料和交付文件；运行记录通过显式开关显示。文件行提供任务编号与定位，时间排序来自真实文件状态。
+- 人工图文提交时读取并校验当前输入，不要求先按回车。空输入不进入存储；同名集合的选择依赖稳定 ID。
 
-`workflow_page.py` 组织创建任务与画布；`workflow_node_settings.py` 处理节点配置；`task_management_page.py` 展示运行任务；`dataset_browser_page.py`、`dataset_preview_page.py`、`package_page.py` 展示资料与交付；审核页面调用各自审核应用。
+## 推理、经验和结果的准确呈现
 
-`i18n.py` 保存语言转换。路由使用稳定内部标识，不能将英文显示文案用作页面字典键。持久化任务状态由应用层读取，Streamlit session state 只保留界面状态。
+`workflow_generation_settings.py` 区分五种 CoT 方式：原生思考同次回答、显式推理与答案、保真风格改写、推敲后定稿试验、原生前缀续写。它们的请求次数、原稿与交付内容不同，不能统一标成“原生思考”。
 
-模型与提示词在节点上配置。避免新增重复的总配置页面。组件键包含内容版本时，测试必须使用真实组件键，不模拟已经失效的旧键。
+当前未保存自检版本的新草稿使用生成中推敲（协议 7）。关闭“自定义思考要点”仍保留内置指引，不因此购买独立评审。旧协议 1–6、证据策略和风格准入值按原记录恢复；只有用户显式切换才改变新任务。`[prefix]` / `[final]` 阶段标记与 `? ` 可不适用标记在编辑、恢复、个人模板保存时保留。证据策略 2 的指定语言与风格要求仍按原合同执行。
 
-`workflow_preference_settings.py` 在偏好节点提供答非所问／相反结论类型、负例推理字符与比例上限。回调保存既有持久草稿，启动时冻结到新配方；不修改正在运行或已完成的任务。生成与类型核验仍使用本节点提示词编辑器。
+原生同次回答、协议 7 下的保真改写可配置内容抽检或逐条核验；新选择的抽检初值为 20%，已有任务恢复原值。未抽检必须显示未核验，生成完成、自查完成和质量通过不能混用。保真改写保留完整原稿，NeMo / OpenThoughts 导入的推理与答案需有明确边界；原稿对照进入报告，不混入训练正文。
 
-`workflow_recipe_controls.py` 按需下载当前冻结配方。运行页只展示来源与参数概要，不把多兆字节的父版本及逐句评审 JSON 反复发送到折叠区。下载保留完整原稿与提示词，读取不写回任务。真实导航和打包验收见 `ui_tests/test_recipe_download_ui.py` 及浏览器截图。
+“审慎探索”等内置风格可载入编辑框并保存个人模板；超过 4,000 字符保留原输入并提示，不截断。多轮“资料阅读与情景对话”在本节点编辑场景、用户、回答三套提示词；资料和规则会随该模式导出，故事只供模拟器，轮数是上限。
 
-`selection_labels.py` 为重名历史工作和重复预览附加稳定短编号，防止 Streamlit 用重复显示文本反向选中另一条记录。候选身份和提交参数仍使用原 ID；短编号冲突时扩展为完整 ID。回归包含真实控件序列化以及同名工作间的页面重绘。
+长期经验候选只代表提案。采用与回退保存新版本；错误轨迹可供提炼，但不能因此获得训练导出资格。具体收集、提炼、采用与可选返工能力由经验应用提供，页面不能把尚未接通的自动更新路径描述成已经运行。
 
-`conversation_import_controls.py` 提供 DSH 会话上传、预览、问题提示、重试和确认选择。页面只保存界面状态，不自行解析数据库；已确认文件通过输入缓存跨会话复用。插件提醒使用静态翻译，不直接回显任意插件错误。交互回归见 `ui_tests/test_conversation_import_ui.py`。
+报告、审核与输出必须区分自动候选、审核发布和返工子版本。返工按子任务实际目标展示，不继承父任务全部分类。已有人工审核发布优先展示，默认选中审核后的训练文件；原包与历史发布仍可访问。读取报告不改写产物；保存全部审核决定成功后才能进入返工。
 
-验收使用 `ui_tests`，并检查真实桌面截图。不要把参考图中的数量、文件名或质量分写成产品数据。
+[`workflow_recipe_controls.py`](workflow_recipe_controls.py) 按需下载完整冻结配方。界面只显示摘要，不将多兆字节原稿或核查 JSON 反复发入折叠区。现成 ZIP 优先下载，下载前重新核验，不能用页面旧状态代替交付检查。
 
-资产目录默认显示资料与交付文件；“包含运行记录”显式开启高级范围。产物按最近修改排序，文件行展示所属任务短编号并可打开对应任务。已完成且不活跃的任务首次打开样本报告；运行中和待处理任务保持过程视图，用户手动选择通过非控件状态跨页面保留。文件目录迁移至 datasets 域，旧导入仍兼容。
+## 依赖与样式归属
 
-任务报告的审核、评分修正和导出沿用同一任务上下文；返回任务需恢复原报告或运行视图。`review_rework_controls.py` 的主操作在全部保存成功后进入返工，已存集合从应用查询，不以浏览器会话中的旧数量判断。保存不等于启动模型。
+应用对象从 [`lib/bootstrap/`](../../bootstrap/README.md) 注入，跨域逻辑走各域 `api.py`。页面不定义生成策略、去重、审核准入、缓存身份或发布条件，也不创建另一份模型调度器。
 
-节点浮窗提供前后节点导航，边界沿实际工作流计算；切换节点保留草稿及角色绑定。单类数量覆盖在启动前明确展示，并可恢复统一上限。输入全部隔离时直接显示原因和调整来源的操作，不将零输入误称为素材覆盖成功。对应回归见 `ui_tests/test_workflow_operation_logic.py`、`ui_tests/test_workflow_ui.py` 和 `tests/test_production_ui.py`。
+[`shared.py`](shared.py) 提供页首和小节标题，`*_style.py` / `*_styles.py` 负责页面视觉，公共主题在 [`lib/console_theme.py`](../../console_theme.py)。[`page_motion.py`](page_motion.py) 只管理页面切换动效。样本/报告的大小显示复用 [`file_sizes.py`](../file_sizes.py)，原始字节值仍供排序与导出。
 
-选择 CoT 但关闭风格化生成时，启动摘要明确显示“只核验已有推理”，并可直接打开 CoT 的提示词与风格设置。入口不自动开启增强、不改变已保存的语言或深度，避免把输出类型误认为生成方式。
+## 按影响路径验证
 
-`workflow_page.py` 将自动生成和人工增强的入口选择保存在既有草稿的模式作用域中；冻结运行配方不变。图片解析的阻断原因与启动条件共用同一判断，并提供输入节点跳转。仅当全部选中来源受当前 DSH 确认回执覆盖时，才免去不会执行的指导员配置；混合或未知来源沿用原流程。无变化的重绘不重复保存草稿，失败后仍重试完整草稿。回归见 `ui_tests/test_workflow_operation_logic.py`。
+只运行本次改动涉及的路径；下表是定位索引，不是每次必须全部执行的清单。界面改动还需真实桌面截图与操作检查。
 
-`workflow_report_panel.py`、`review_navigation.py` 负责报告、审核、修正与交付之间的任务定位，保存阅读类型和页码，操作时重新校验产物；现成 ZIP 优先提供下载。回归见 `ui_tests/test_result_actions_ui.py`、`test_package_page.py` 与 `tests/test_review_navigation.py`。
+| 改动范围 | 现有验证入口 |
+| --- | --- |
+| 控制台入口、导航和旧链接 | `tests/test_console.py`、`ui_tests/test_console_ui.py`、`ui_tests/test_human_workspace_navigation.py` |
+| 导入与节点操作 | `ui_tests/test_conversation_import_ui.py`、`ui_tests/test_workflow_operation_logic.py`、`ui_tests/test_workflow_ui.py` |
+| 提示词、风格和自检恢复 | `tests/test_workflow_prompt_library.py`、`tests/test_workflow_generation_ui.py`、`ui_tests/test_reasoning_checklist_controls.py` |
+| CoT 模式与核验策略 | `tests/test_cot_answer_mode_draft.py`、`tests/test_cot_review_policy.py`、`tests/test_cot_style_transfer.py` |
+| 报告、返工、配方和输出定位 | `ui_tests/test_result_actions_ui.py`、`ui_tests/test_recipe_download_ui.py`、`ui_tests/test_package_page.py`、`tests/test_review_navigation.py` |
+| 人工图文与同名对象 | `tests/test_manual_dataset_page.py`、`tests/test_selection_labels.py` |
 
-返工版本按实际子任务的目标展示结果，不从父任务的全部目标默认打开空分类。输出页把本任务已有的人工审核发布放在自动候选包之前，明确两个版本的区别；默认选中审核后的训练文件。历史发布和原候选包仍可读取，文件格式与审核记录不变。
-
-人工图文页的创建和保存操作在提交时检查必填字段，接收当前输入，不要求先按回车使按钮可用；空输入不进入应用存储。重名人工数据集沿用稳定编号，避免重绘后把样本写入其他集合。回归见 `tests/test_manual_dataset_page.py`，并以真实上传、保存和 ZIP 下载复核。
-
-新建且启用 CoT 证据自检的草稿使用证据策略 1。复制/恢复旧任务保留其策略或明确为 0；不改变已运行任务。该策略没有额外操作步骤，配置随节点配方冻结。
-
-新建 CoT 证据自检采用策略 2，指定语言与风格必须通过；旧草稿保存的策略、版本及 advisory 选择保持原样。复制策略 2 的任务会保留其核查合同。
+修改依赖时补跑 `tests/test_ddd_architecture.py` 与相应业务回归。纯说明文字调整不跑业务测试；默认不启动全仓回归。

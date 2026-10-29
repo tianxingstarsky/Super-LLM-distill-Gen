@@ -3,5 +3,6 @@ from lib.contexts.workflows.application.generate_dialogue import GenerateMultitu
 from lib.contexts.workflows.infrastructure.dialogue_adapter import CheckpointedDialogueAdapter
 
 
-def dialogue_generation(runtime):
+def dialogue_generation(runtime) -> GenerateMultiturnDialogue:
+    """Build multi-turn orchestration with preserved actor history and checkpoints."""
     return GenerateMultiturnDialogue(CheckpointedDialogueAdapter(runtime), runtime.recipe)

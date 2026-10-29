@@ -1,4 +1,8 @@
-"""Workbench-only styles for source, target and generation configuration."""
+"""Creation-workbench layout, canvas hierarchy and floating node editor.
+
+Shared typography, buttons and page chrome belong to ``console_theme``. Rules
+here are scoped to the creation page; run monitoring has its own style module.
+"""
 from __future__ import annotations
 
 
@@ -9,9 +13,15 @@ WORKBENCH_STYLE = """<style>
   container-type:inline-size;container-name:workbench-sources;width:100%}
 [data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) {
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%;max-width:none;
-  gap:12px;padding:0;border:0;background:transparent}
+  gap:10px;padding:0;border:0;background:transparent}
 [data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) > button {
-  width:100%;min-width:0;height:auto;white-space:normal}
+  width:100%;min-width:0;height:auto;min-height:64px;padding:9px 11px;
+  grid-template-columns:28px minmax(0,1fr);column-gap:8px;row-gap:3px;
+  white-space:normal;background:#fff;box-shadow:none}
+[data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"] > button::before {
+  width:28px;height:28px;font-size:18px;border-radius:7px}
+[data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"] > button[data-selected="true"] {
+  background:#edf5ff;border-color:#7fa9dd;box-shadow:inset 0 1px 0 #fff}
 @container workbench-sources (max-width:959px) {
   [data-testid="stApp"] [class*="st-key-workflow-source-mode"] [data-testid="stButtonGroup"] [role="radiogroup"]:has(> button[data-variant="segmented_control"]) {
     grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -25,44 +35,45 @@ WORKBENCH_STYLE = """<style>
 .st-key-workbench-source-entry [data-testid="stTextArea"] textarea {resize:vertical}
 .st-key-workbench-targets .df-section-heading {margin:0;padding:0;border:0}
 .st-key-workbench-targets [data-testid="stToggle"] {margin-top:2px}
-.st-key-workbench-targets .df-wb-plan {font-size:12px}
 .df-source-issue {display:block;padding:11px 14px;border:1px solid #e8cdaa;border-radius:10px;
   background:linear-gradient(145deg,#fffcf5,#fff7e8);color:#805e2c;text-decoration:none;font-size:13px;line-height:1.6;
   box-shadow:inset 0 1px 0 #fff;transition:background .18s,border-color .18s}
 .df-source-issue:hover {background:#fff2da;border-color:#dcb576;color:#6d4c1f}
 .df-source-issue:focus-visible {outline:3px solid #83b7f066;outline-offset:2px}
 #workflow-source-entry {scroll-margin-top:90px}
-.st-key-workbench-entry-bar {container-type:inline-size;container-name:workbench-entry}
-.st-key-workbench-entry-bar .df-wizard-step {flex:1 1 0;min-width:0}
-.st-key-workbench-entry-bar .df-wizard-step > span {min-width:0}
-.st-key-workbench-entry-bar .df-wizard-step :is(strong,small) {white-space:normal;line-height:1.45}
-.st-key-workbench-entry-bar .df-wizard-steps > i {width:12px}
-@container workbench-entry (max-width:1000px) {
-  .st-key-workbench-entry-bar [data-testid="stHorizontalBlock"] {flex-wrap:wrap;gap:12px}
-  .st-key-workbench-entry-bar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {flex:1 1 100%;width:100%;min-width:0}
-}
+#workflow-node-configuration {scroll-margin-top:82px}
+.df-wb-canvas-shortcut {display:flex;align-items:center;justify-content:flex-end;gap:8px;
+  min-height:40px;padding:5px 2px;color:#245d9c;font-size:13px;font-weight:600;
+  text-decoration:none;text-underline-offset:4px}
+.df-wb-canvas-shortcut:hover {color:#154e90;text-decoration:underline}
+.df-wb-canvas-shortcut:focus-visible {outline:2px solid #1769e0;outline-offset:3px;border-radius:6px}
+.df-wb-canvas-heading {display:flex;align-items:center;justify-content:space-between;gap:12px 24px;
+  flex-wrap:wrap;padding:0 0 14px}
+.df-wb-canvas-heading > div:first-child {min-width:0}
+.df-wb-canvas-heading strong {display:block;color:var(--df-text,#152238);font-size:16px;font-weight:650;line-height:1.4}
+.df-wb-canvas-heading small {display:block;margin-top:4px;color:var(--df-text3,#596a80);font-size:12px;line-height:1.5}
 [data-testid="stApp"] .st-key-workbench-canvas-panel {position:relative;
-  background:radial-gradient(ellipse at 92% 0,#e8f3ff7d,transparent 50%),linear-gradient(155deg,#fff,#f3f8fe);
-  border:1px solid #d2e2f2;border-radius:21px;
-  box-shadow:inset 0 1px 0 #fff,0 2px 4px #31598208,0 14px 32px -18px #3b6c9e42}
+  background:#fff;border:1px solid #d8e3ef;border-radius:14px;
+  box-shadow:var(--df-shadow-panel,0 8px 24px -14px #31598230)}
 .st-key-workbench-canvas-panel .df-panel-icon {background:linear-gradient(145deg,#f7fbff,#d3e8ff);
   border:1px solid #c9dff7;box-shadow:inset 0 1px 0 #fff,0 3px 6px #4c88c124}
 .st-key-workbench-canvas-panel .df-section-heading {padding-bottom:14px;margin-bottom:2px;border-bottom:0}
-[data-testid="stApp"] .st-key-workbench-targets {background:linear-gradient(145deg,#fff,#f3f8ff);border-color:#d2e2f2;
-  box-shadow:inset 0 1px 0 #fff,0 3px 6px #365f8c07,0 12px 26px -20px #467ba740}
+[data-testid="stApp"] .st-key-workbench-targets,
+[data-testid="stApp"] .st-key-workbench-source-panel {background:#fff;border-color:#dce5ef;
+  border-radius:14px;padding:18px;box-shadow:none}
 .st-key-workbench-node-panel {border-top:2px solid #78acf1;background:linear-gradient(160deg,#f9fcff,#fff 45%)}
 [data-workflow-inspector-host="floating"] {height:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:visible!important}
 [data-testid="stApp"] .st-key-workbench-node-panel[data-workflow-inspector="floating"] {
-  border:1px solid #bdd4ed;border-top:2px solid #4d94e8;border-radius:19px;
-  padding:0 18px 18px;background:linear-gradient(155deg,#fcfeff 0%,#f5f9fff5 52%,#fffffffa 100%);
+  border:1px solid #bdd4ed;border-top:2px solid #4d94e8;border-radius:14px;
+  padding:0 16px 16px;background:linear-gradient(155deg,#fcfeff 0%,#f5f9fff5 52%,#fffffffa 100%);
   box-shadow:inset 0 1px 0 #fff,0 0 0 4px #ffffff8c,0 6px 14px -4px #284e782b,0 25px 65px -15px #244e804d;
   backdrop-filter:blur(16px) saturate(1.12);
-  overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b5c9e2 transparent;gap:14px}
+  overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b5c9e2 transparent;gap:10px}
 .st-key-workbench-node-panel[data-workflow-inspector="floating"] > [data-testid="stLayoutWrapper"]:has(> .st-key-workbench-node-header) {
   position:sticky;top:0;z-index:2;background:linear-gradient(180deg,#fcfeff,#f5f9ff);
 }
 .st-key-workbench-node-panel[data-workflow-inspector="floating"] .st-key-workbench-node-header {
-  padding:16px 0 13px;border-bottom:1px solid #d9e5f2;box-shadow:0 1px 0 #fff}
+  padding:12px 0 10px;border-bottom:1px solid #d9e5f2;box-shadow:0 1px 0 #fff;gap:8px}
 .st-key-workbench-node-header .df-section-heading {margin-bottom:0;padding-bottom:0;border-bottom:0}
 .st-key-workbench-node-header .df-section-heading strong {font-size:17px;letter-spacing:-.25px}
 .st-key-workbench-node-header .df-section-heading small {font-size:12px;color:#60748d}
@@ -76,8 +87,8 @@ WORKBENCH_STYLE = """<style>
 .st-key-workbench-node-header button:active {transform:translateY(1px);box-shadow:inset 0 2px 4px #315e8b14}
 .st-key-workbench-node-navigation button {min-height:30px;font-size:12px;padding:3px 9px}
 .st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab-list"],[role="tablist"]) {gap:24px}
-.st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab"],[role="tab"]) {font-size:14px;height:42px;font-weight:550}
-.st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab-panel"],[role="tabpanel"]) {padding-top:16px}
+.st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab"],[role="tab"]) {font-size:14px;height:36px;font-weight:550}
+.st-key-workbench-node-panel [data-testid="stTabs"] :is([data-baseweb="tab-panel"],[role="tabpanel"]) {padding-top:10px}
 .st-key-workbench-node-panel [data-testid="stMarkdownContainer"] p {font-size:14px;line-height:1.65;color:#334b67}
 .st-key-workbench-node-panel button [data-testid="stMarkdownContainer"] p {color:inherit}
 .st-key-workbench-node-panel [data-testid="stCaptionContainer"] p {font-size:12px;line-height:1.6;color:#64768d;opacity:1}
@@ -100,7 +111,6 @@ WORKBENCH_STYLE = """<style>
 .df-knowledge-route b {color:#7e9fc5;font-weight:400}
 .df-wb-plan {display:flex;align-items:center;flex-wrap:wrap;gap:5px 12px;
   margin:0;color:#365579;font-size:13px;line-height:1.6}
-.df-wb-plan strong {color:#213b5f;font-size:13px}
 .df-wb-plan small {color:#5a708b;font-size:12px}
 .df-wb-plan-intermediate {color:#7054a8;font-size:12px}
 .df-wb-plan-empty {color:#64768d;font-size:12px}
@@ -154,16 +164,6 @@ WORKBENCH_STYLE = """<style>
 @media(max-width:1050px) {
   .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] {flex-wrap:wrap}
   .st-key-workbench-layout > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {flex:1 1 100%;width:100%;min-width:0}
-}
-@media(max-width:959px) {
-  .df-wizard-steps > .df-wizard-step {flex:1 1 0;min-width:0}
-  .df-wizard-steps .df-wizard-step > span {min-width:0}
-  .df-wizard-steps .df-wizard-step :is(strong,small) {white-space:normal;overflow-wrap:anywhere;line-height:1.45}
-}
-@media(max-width:559px) {
-  .df-wizard-steps {flex-direction:column;align-items:stretch;gap:12px;padding:14px 16px}
-  .df-wizard-steps > .df-wizard-step {flex:none;width:100%;gap:10px}
-  .df-wizard-steps > i {display:none}
 }
 @media(max-width:700px) {.df-wb-plan-edges {grid-template-columns:1fr}}
 </style>"""

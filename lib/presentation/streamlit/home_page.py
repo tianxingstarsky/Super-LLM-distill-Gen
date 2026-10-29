@@ -15,7 +15,7 @@ from lib.presentation.streamlit.workflow_page import TARGET_LABELS
 
 # Source illustrations are decorative. Native buttons remain the accessible,
 # keyboard-operable entry points and keep their existing navigation callbacks.
-_SOURCE_ART = {
+_SOURCE_ICON_PATHS = {
     "documents": '<path d="M15 13h25l10 10v35H15z" fill="currentColor" opacity=".14"/>'
                  '<path d="M10 7h25l10 10v35H10z" fill="white" stroke="currentColor" stroke-width="2"/>'
                  '<path d="M35 7v11h10M18 27h19M18 34h19M18 41h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
@@ -37,59 +37,65 @@ _SOURCE_ART = {
 _SOURCE_COLORS = {"documents": "#236BC7", "agent": "#148368", "brief": "#8254C3"}
 # Streamlit sanitizes inline SVG from st.html. An image data URI preserves the
 # small vector artwork without adding a request or executable page content.
-_SOURCE_ART = {
+_SOURCE_ICON_URIS = {
     kind: "data:image/svg+xml;base64," + base64.b64encode(
         ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 68" '
          f'color="{_SOURCE_COLORS[kind]}">' + paths + '</svg>').encode()).decode()
-    for kind, paths in _SOURCE_ART.items()
+    for kind, paths in _SOURCE_ICON_PATHS.items()
 }
 
 
 def render_overview(application: WorkflowApplication, ws, inventory, source_total, sample_count,
                     source_location, output_location, *, navigate, job_status, open_folder=None):
+    """Show saved work and route creation shortcuts without starting generation.
+
+    The caller supplies cached source metadata and application services. Counts
+    come from persisted task summaries, never from the decorative illustrations.
+    Legacy count/folder arguments stay accepted for existing console callers.
+    """
     page_header("首页", "从文档、智能体上下文和开放需求，构建可追溯的高质量训练数据。", variant="hub")
     st.html(HOME_STYLE)
 
-    def start_mode(mode: str, preset: str) -> None:
+    def open_source_workbench(mode: str, preset: str) -> None:
         st.session_state[f'workflow-source-mode:{ws}'] = mode
         st.session_state[f'workflow-preset:{ws}'] = preset
         st.session_state[f'workflow-creation-mode:{ws}'] = '自动生成'
         st.session_state['nav'] = '自动工作流'
 
-    def start_target(target: str) -> None:
+    def open_target_workbench(target: str) -> None:
         st.session_state[f'workflow-entry-target:{ws}'] = target
         st.session_state[f'workflow-creation-mode:{ws}'] = '自动生成'
         st.session_state['nav'] = '自动工作流'
 
-    def start_manual() -> None:
+    def open_manual_editor() -> None:
         st.session_state[f'workflow-creation-mode:{ws}'] = '人工制作图文'
         st.session_state['nav'] = '自动工作流'
 
-    def open_run(run_id: str) -> None:
+    def open_saved_run(run_id: str) -> None:
         st.session_state[f'task-view:{ws}'] = '数据工作流'
         st.session_state[f'task-center-run:{ws}'] = run_id
         st.session_state[f'workflow-selected:{ws}'] = run_id
         st.session_state['nav'] = '任务管理'
 
     try:
-        runs = application.task_runs()
+        workflow_runs = application.task_runs()
     except OSError:
-        runs = []
-    recent = sorted(runs, key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+        workflow_runs = []
+    recent_runs = sorted(workflow_runs, key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
                     reverse=True)[:5]
-    items = (("工作流总数", len(runs), "blue"),
-             ("已完成", sum(row.get("status") == "completed" for row in runs), "green"),
-             ("处理中", sum(row.get("status") in {"running", "queued"} for row in runs), "blue"),
-             ("需检查", sum(row.get("status") in {"failed", "needs_attention"} for row in runs), "amber"))
+    run_metrics = (("工作流总数", len(workflow_runs), "blue"),
+             ("已完成", sum(row.get("status") == "completed" for row in workflow_runs), "green"),
+             ("处理中", sum(row.get("status") in {"running", "queued"} for row in workflow_runs), "blue"),
+             ("需检查", sum(row.get("status") in {"failed", "needs_attention"} for row in workflow_runs), "amber"))
     st.html('<div class="df-home-kpis">' + ''.join(
         f'<div class="df-home-kpi" data-tone="{tone}"><small>{label}</small><strong>{value}</strong></div>'
-        for label, value, tone in items) + '</div>')
+        for label, value, tone in run_metrics) + '</div>')
 
     with st.container(key="home-main"):
         source_column, recent_column = st.columns([1.25, 1], gap="medium")
         with source_column:
-            with st.container(border=True, key="home-source-panel"):
-                section_heading("开始制作数据", "导入资料，或直接选择要制作的数据类型。", "◈")
+            with st.container(key="home-source-panel"):
+                section_heading("开始制作数据", "导入资料，或直接选择要制作的数据类型。")
                 with st.container(key="home-source-entries"):
                     cards = st.columns(3, gap="small")
                     entries = (
@@ -100,9 +106,9 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                     for column, (mode, detail, preset, kind) in zip(cards, entries):
                         with column, st.container(key=f"home-entry-{kind}"):
                             st.html('<div class="df-home-entry-art" aria-hidden="true">'
-                                    '<img src="' + html.escape(studio_art_url(kind, _SOURCE_ART[kind]), quote=True) + '" alt="">'
+                                    '<img src="' + html.escape(studio_art_url(kind, _SOURCE_ICON_URIS[kind]), quote=True) + '" alt="">'
                                     '<span>↗</span></div>')
-                            st.button(mode, key=f"overview:{mode}", on_click=start_mode,
+                            st.button(mode, key=f"overview:{mode}", on_click=open_source_workbench,
                                       args=(mode, preset), width="stretch")
                             st.caption(detail)
                 with st.container(key="home-manual-entry"):
@@ -110,26 +116,26 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                     with description:
                         st.html('<div class="df-home-manual"><b>✎</b><span><strong>图片 + 文字</strong>'
                                 '<small>添加图片，编写问题与参考答案。</small></span></div>')
-                    action.button("人工制作图文", key="overview-manual", on_click=start_manual, width="stretch")
+                    action.button("人工制作图文", key="overview-manual", on_click=open_manual_editor, width="stretch")
                 with st.container(key="home-strategy-options"):
                     st.caption("按数据类型开始 · 工作台内可组合多类目标")
                     with st.container(key="home-targets-primary"):
                         for column, target in zip(st.columns(3, gap="small"), ("cpt", "sft", "dpo")):
                             column.button(TARGET_LABELS[target], key=f"overview-target:{target}",
-                                          on_click=start_target, args=(target,), width="stretch")
+                                          on_click=open_target_workbench, args=(target,), width="stretch")
                     with st.container(key="home-targets-secondary"):
                         targets = ("orpo", "rlaif", "agent", "multiturn", "cot", "gsm8k")
                         for offset in range(0, len(targets), 3):
                             for column, target in zip(st.columns(3, gap="small"), targets[offset:offset + 3]):
                                 column.button(TARGET_LABELS[target], key=f"overview-target:{target}",
-                                              on_click=start_target, args=(target,), width="stretch")
+                                              on_click=open_target_workbench, args=(target,), width="stretch")
         with recent_column:
             with st.container(border=True, key="home-recent-panel"):
-                section_heading("最近任务", "选择任务直接查看工作流过程", "◷")
-                if recent:
+                section_heading("最近任务", "选择任务直接查看工作流过程")
+                if recent_runs:
                     status_labels = {"completed": "已完成", "needs_attention": "需检查", "running": "处理中",
                                      "queued": "排队中", "failed": "失败", "cancelled": "已停止"}
-                    for index, row in enumerate(recent):
+                    for index, row in enumerate(recent_runs):
                         status = str(row.get("status", "未知"))
                         targets = "、".join(str(target).upper() for target in row.get("targets", [])) or "—"
                         updated = str(row.get("updated_at") or row.get("created_at") or "")[:16].replace('T', ' ') or "—"
@@ -144,7 +150,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
                                         + html.escape(targets) + ' · ' + html.escape(updated) + '</small></div>')
                             with action:
                                 if row.get("id"):
-                                    st.button("查看 →", key=f"overview-run:{row['id']}", on_click=open_run,
+                                    st.button("查看 →", key=f"overview-run:{row['id']}", on_click=open_saved_run,
                                               args=(row['id'],), width="stretch")
                 else:
                     st.html('<div class="df-home-empty df-home-empty-work"><span aria-hidden="true">◈</span><strong>暂无最近任务</strong>'
@@ -154,7 +160,7 @@ def render_overview(application: WorkflowApplication, ws, inventory, source_tota
 
     with recent_column:
         with st.container(border=True, key="home-library-panel"):
-            section_heading("来源文件", "本机缓存中的部分输入资料", "▤")
+            section_heading("来源文件", "本机缓存中的部分输入资料")
             if inventory:
                 rows = []
                 for item in inventory[:3]:

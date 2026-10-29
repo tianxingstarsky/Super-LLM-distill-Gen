@@ -21,7 +21,6 @@ def page_header(title: str, description: str, tag: str = "", *, variant: str = "
     st.html(
         f'<section class="{hero_class}">'
         '<div class="df-page-copy">'
-        '<span class="df-page-eyebrow" aria-hidden="true">SHUJIAN CUBE / DATA STUDIO</span>'
         f'<h1>{html.escape(title)}</h1>'
         f'<p>{html.escape(description)}</p>'
         '</div>'

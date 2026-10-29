@@ -8,19 +8,29 @@ from lib.contexts.workflows.infrastructure.experience_evolution import Experienc
 from lib.contexts.workflows.infrastructure.experience_evolution_model import ExperienceEvolutionModelPort
 
 
-def experience_evolution_application(binding=None, *, root=None, user_key=None):
-    user = getpass.getuser() if user_key is None else user_key
-    if not isinstance(user, str) or not user.strip() or len(user) > 1024 or "\x00" in user:
+def experience_evolution_application(binding=None, *, root=None, user_key=None) -> EvolveExperience:
+    """Build a user-owned style library with an optional proposal model binding.
+
+    ``root`` is the library's storage base, not the model-settings directory.
+    Omitting ``binding`` still permits saved-edition access. A client is loaded
+    only when the model port requests a proposal; no running recipe is changed.
+    """
+    user_identifier = getpass.getuser() if user_key is None else user_key
+    if (not isinstance(user_identifier, str) or not user_identifier.strip()
+            or len(user_identifier) > 1024 or "\x00" in user_identifier):
         raise ValueError("experience_evolution_invalid_user")
-    namespace = hashlib.sha256(user.encode("utf-8")).hexdigest()
-    storage_root = Path.home()/".shujian-cube" if root is None else Path(root)
-    repository = ExperienceEvolutionRepository(storage_root/"experience-evolution"/namespace)
+    user_namespace = hashlib.sha256(user_identifier.encode("utf-8")).hexdigest()
+    storage_root = Path.home() / ".shujian-cube" if root is None else Path(root)
+    edition_repository = ExperienceEvolutionRepository(storage_root / "experience-evolution" / user_namespace)
     settings_root = Path(__file__).resolve().parents[2]
-    def client_factory(selected):
+
+    def client_factory(selected_binding):
         from lib.llm_client import load_backend
-        return load_backend(settings_root, backend=selected["backend"], model=selected["model"],
+
+        return load_backend(settings_root, backend=selected_binding["backend"], model=selected_binding["model"],
             role="generation", allow_global_endpoint_override=False,
-            context_window_tokens=selected.get("context_window_tokens"),
-            **({"reasoning": selected["reasoning"]} if "reasoning" in selected else {}))
-    return EvolveExperience(ExperienceEvolutionModelPort(repository, settings_root, binding,
+            context_window_tokens=selected_binding.get("context_window_tokens"),
+            **({"reasoning": selected_binding["reasoning"]} if "reasoning" in selected_binding else {}))
+
+    return EvolveExperience(ExperienceEvolutionModelPort(edition_repository, settings_root, binding,
         client_factory=client_factory))

@@ -8,12 +8,15 @@ from lib.contexts.models.infrastructure.tool_request_adapter import SDKToolReque
 
 
 def model_request(client) -> ExecuteModelRequest:
+    """Build text-request admission, retry and settlement for an existing client."""
     return ExecuteModelRequest(SDKModelRequestAdapter(client), retry=TenacityRetry())
 
 
 def json_response_request(client) -> RequestJSONResponse:
+    """Build structured-response completion; do not run the request during assembly."""
     return RequestJSONResponse(ClientJSONResponseAdapter(client), retry=TenacityRetry())
 
 
 def tool_turn_request(client) -> ExecuteToolTurn:
+    """Build provider tool-decision requests; the caller owns tool execution."""
     return ExecuteToolTurn(SDKToolRequestAdapter(client), retry=TenacityRetry())

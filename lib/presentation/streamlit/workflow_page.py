@@ -630,20 +630,19 @@ def _missing_model_role_summary(issues, language, node_generation=None, *, sourc
     return " · ".join(descriptions)
 
 
-def _planned_flow_html(targets, nodes: tuple[str, ...], edges: tuple[tuple[str, str], ...]) -> str:
-    """Keep the summary compact; the canvas and dependency list show the nodes."""
+def _workflow_dependency_summary_html(targets, nodes: tuple[str, ...], edges: tuple[tuple[str, str], ...]) -> str:
+    """Describe the selected execution graph without inventing another progress bar."""
     if not targets:
         return ('<div class="df-wb-plan df-wb-plan-empty">'
                 '<span>请从上方列表至少选择一类训练目标。</span></div>')
     intermediate = ('<span class="df-wb-plan-intermediate">SFT 中间候选</span>'
                     if "sft" in nodes and ("sft" not in targets or sft_uses_cot_output(targets)) else '')
     return ('<div class="df-wb-plan">'
-            '<strong>运行前流程预览</strong>'
             f'<small>{len(nodes)} 个阶段 · {len(edges)} 条数据依赖</small>'
             + intermediate + '</div>')
 
 
-def _planned_dependencies_html(edges: tuple[tuple[str, str], ...], node_generation=None, *, source_cleaning=False, targets=None) -> str:
+def _workflow_dependency_list_html(edges: tuple[tuple[str, str], ...], node_generation=None, *, source_cleaning=False, targets=None) -> str:
     """Render only the data-dependency edges supplied by execution_graph."""
     rows = []
     for origin, destination in edges:
@@ -1598,7 +1597,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             except (OSError, ValueError):
                 st.session_state[f"workflow-draft-error:{ws}"] = True
     with st.container(key="workbench-entry-bar"):
-        mode_column, journey_column = st.columns([2.5, 3.2], gap="medium", vertical_alignment="center")
+        mode_column, navigation_column = st.columns([3, 1], gap="medium", vertical_alignment="center")
     with mode_column:
         creation_key = f"workflow-creation-mode:{ws}"
         modes = ["自动生成", "人工问答增强"] + (["人工制作图文"] if manual_application is not None else [])
@@ -1617,13 +1616,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
         render_manual_datasets(manual_application, ws, show_title=False)
         return
-    journey_column.html(
-        '<div class="df-wizard-steps">'
-        '<div class="df-wizard-step active"><b>1</b><span><strong>配置本次任务</strong><small>来源、目标与节点模型</small></span></div>'
-        '<i></i><div class="df-wizard-step"><b>2</b><span><strong>自动生成与质检</strong><small>实时查看阶段与结果</small></span></div>'
-        '<i></i><div class="df-wizard-step"><b>3</b><span><strong>审核与导出</strong><small>核对后生成训练包</small></span></div>'
-        '</div>'
-    )
     if notice := st.session_state.pop(f"workflow-reuse-notice:{ws}", None):
         st.success("已复制到新草稿，可直接修改后运行。联网检索需重新开启。")
         if notice.get("missing_sources"):
@@ -1634,8 +1626,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     if draft_application is not None:
         if st.session_state.get(f"workflow-draft-error:{ws}"):
             st.warning("配置草稿未能保存或恢复。当前修改仍保留在会话中。")
-        else:
-            st.caption("资料、节点模型与提示词自动保存在本机；联网检索需单独开启。")
     entry_target = st.session_state.pop(f"workflow-entry-target:{ws}", None)
     if entry_target in TARGETS:
         # A named entry chooses that exact output. Old edits to a quick plan
@@ -1732,12 +1722,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                    qa_director=qa_director, package_review=package_review, recipe_version=draft_recipe_version,
                                                    source_cleaning=source_cleaning, review_repair=review_repair,
                                                    arithmetic_seed_protocol_version=1, cpt_review_policy_version=1)
-        st.html(_planned_flow_html(targets, graph_nodes, graph_edges))
-        if targets and graph_edges:
-            with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
-                st.html(_planned_dependencies_html(graph_edges, generation_snapshot(ws, graph_nodes), source_cleaning=source_cleaning, targets=targets))
-                if "sft" in graph_nodes and "sft" not in targets:
-                    st.caption("仅用于下游目标的 SFT 中间候选不会单独导出。")
+        if not targets:
+            st.html(_workflow_dependency_summary_html(targets, graph_nodes, graph_edges))
         if "agent" in targets:
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
@@ -1807,8 +1793,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
     workbench = st.container(key="workbench-layout")
     if targets:
+        # A real page shortcut replaces the static wizard: it never changes
+        # the draft or selected node, and remains available after every rerun.
+        navigation_column.html('<a class="df-wb-canvas-shortcut" href="#workflow-node-configuration">'
+                               '工作流节点配置 <span aria-hidden="true">↓</span></a>')
         with workbench, st.container(border=True, key="workbench-canvas-panel"):
-            section_heading("工作流节点配置", "点击节点，就近配置模型、提示词与处理方式。", "◇")
+            st.html('<div id="workflow-node-configuration" class="df-wb-canvas-heading">'
+                    '<div><strong>工作流节点配置</strong>'
+                    '<small>点击节点，就近配置模型、提示词与处理方式。</small></div>'
+                    + _workflow_dependency_summary_html(targets, graph_nodes, graph_edges) + '</div>')
             render_canvas(canvas_spec(targets, {node: {"status": "configuration_required",
                                        "missing_roles": [role for issue_node, role in model_issues if issue_node == node]}
                                        for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
@@ -1824,6 +1817,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                           selection_key, key=f"setup-canvas:{ws}",
                           inspector_key="workbench-node-panel", expanded=True,
                           reveal_key=f"workflow-setup-reveal:{ws}")
+            if graph_edges:
+                with st.expander(f"查看完整数据依赖 · {len(graph_edges)} 条"):
+                    st.html(_workflow_dependency_list_html(graph_edges, node_generation,
+                                                           source_cleaning=source_cleaning, targets=targets))
+                    if "sft" in graph_nodes and "sft" not in targets:
+                        st.caption("仅用于下游目标的 SFT 中间候选不会单独导出。")
         with workbench, st.container(border=True, key="workbench-node-panel"):
             with st.container(key="workbench-node-header"):
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")

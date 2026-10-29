@@ -1,4 +1,8 @@
-"""Composition root: the only place that selects concrete workflow adapters."""
+"""Build the legacy workflow facade from separate run, dataset and review services.
+
+New node algorithms and execution policies have their own factories in this
+package. This facade remains a compatibility entry for pages and CLI callers.
+"""
 from pathlib import Path
 
 from lib.application.workflow_service import WorkflowApplication
@@ -9,6 +13,7 @@ from lib.contexts.workflows.infrastructure.driver import FilesystemWorkflowRunDr
 
 
 def workflow_application(root: Path, output: Path) -> WorkflowApplication:
+    """Build run access plus injected dataset, Agent-review and report services."""
     return WorkflowApplication(FilesystemWorkflowRunDriver(root, output),
                                datasets=dataset_application(root, output),
                                review=agent_review_application(root, output),
@@ -16,6 +21,7 @@ def workflow_application(root: Path, output: Path) -> WorkflowApplication:
 
 
 def human_augmentation_application(root: Path, output: Path):
+    """Build saved human-design sessions; callers explicitly launch returned runs."""
     from lib.application.human_augmentation_service import HumanAugmentationApplication
     from lib.infrastructure.human_sessions import FilesystemHumanSessionDriver
 

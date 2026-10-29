@@ -1,4 +1,12 @@
-"""Local console: drop files into a persistent cache and create training data."""
+"""Desktop console entry: assemble pages, route navigation, and start command jobs.
+
+Page renderers live in ``lib.presentation.streamlit``; their application services
+come from ``lib.bootstrap``. This entry also retains the legacy single-command
+forms and review routes. It does not own workflow generation or quality rules.
+
+Keep route strings, widget keys, and public ``page_*`` renderer identities stable:
+existing deep links and page-motion state use them across reruns.
+"""
 from __future__ import annotations
 
 import argparse
@@ -33,31 +41,36 @@ st.html(f"<style>{MESSAGE_CSS}\n{CHROME_CSS}\n{PAGE_MOTION_CSS}</style>")
 WORKSPACES = workspace_application()
 
 
-def _ws_out():
+def _workspace_output_dir() -> Path:
+    """Return the persistent task/review output root for the current local cache."""
     return WORKSPACES.output(st.session_state.get("ws", "default"))
 
 
-def _OUT(name):
-    return _ws_out() / name
+def _output_file(name: str) -> Path:
+    """Locate a legacy output file without creating or changing it."""
+    return _workspace_output_dir() / name
 
 
 def _select_page(page: str):
+    """Navigate and persist only entry-mode changes, leaving running work intact."""
     changes = select_console_page(st.session_state, st.query_params, page)
     if changes:
         from lib.bootstrap.creation_drafts import creation_draft_application
         try:
             # Update only the entry mode. Human session data, saved designs,
             # node choices and active workers belong to their existing stores.
-            creation_draft_application(_ws_out()).update(changes)
+            creation_draft_application(_workspace_output_dir()).update(changes)
         except (ValueError, OSError, Timeout):
             st.session_state[f"workflow-draft-error:{st.session_state['ws']}"] = True
 
 
 def _set_ui_language():
+    """Apply the language choice while preserving canonical route identifiers."""
     set_language_from_choice(st, st.session_state.get("ui-language-choice", "简体中文"))
 
 
 def _initialize_local_cache():
+    """Draw the brand and bind this console session to the default durable cache."""
     st.sidebar.html(f'<div class="df-brand-line"><img class="df-brand-mark" src="data:image/png;base64,{_BRAND_MARK}" alt="" /><span><span class="df-brand">数简立方</span><span class="df-kicker">数据简单生成</span></span></div>')
     # Old links, CLI preferences and session values cannot switch cache roots.
     if st.session_state.get('ws', WORKSPACES.default_id) != WORKSPACES.default_id:
@@ -68,11 +81,12 @@ def _initialize_local_cache():
     st.query_params.pop('ws', None)
 
 
-def _sample_files():
-    candidates = {p.resolve() for p in _ws_out().glob("*.jsonl") if "samples" in p.name or "combined_preview" in p.name}
+def _reviewable_sample_files() -> list[Path]:
+    """List legacy, workflow, and imported JSONL sources available to review views."""
+    candidates = {p.resolve() for p in _workspace_output_dir().glob("*.jsonl") if "samples" in p.name or "combined_preview" in p.name}
     try:
         from lib.bootstrap.workflows import workflow_application
-        candidates.update(Path(path).resolve() for path in workflow_application(ROOT, _ws_out()).reviewable_artifacts())
+        candidates.update(Path(path).resolve() for path in workflow_application(ROOT, _workspace_output_dir()).reviewable_artifacts())
     except (OSError, ValueError):
         pass
     candidates.update(p.resolve() for p in WORKSPACES.source_files(st.session_state['ws'], suffixes=(".jsonl",)))
@@ -88,8 +102,9 @@ def _load_normalized_samples(path_key: str, mtime_ns: int):
     return [normalize_sample(row) for row in release_application().read_samples(_Path(path_key))]
 
 
-def _selected_samples(key, *, preview_only=False):
-    files = _sample_files()
+def _select_sample_records(key, *, preview_only=False):
+    """Select a source and read a bounded preview or complete legacy review records."""
+    files = _reviewable_sample_files()
     if not files:
         st.info("本机暂无样本")
         return None, []
@@ -101,17 +116,20 @@ def _selected_samples(key, *, preview_only=False):
     return source, _load_normalized_samples(str(source), source.stat().st_mtime_ns)
 
 
-def _gate():
+def _legacy_command_confirmations():
+    """Load confirmation state used by advanced commands and the legacy editor."""
     from lib.gates import GateKeeper
-    return GateKeeper(ROOT / "configs/gates.yaml", _OUT("gates_state.json"))
+    return GateKeeper(ROOT / "configs/gates.yaml", _output_file("gates_state.json"))
 
 
 def _command_meta():
+    """Read the CLI command registry used to populate the advanced-tool selector."""
     from lib.extensions import load_commands
     return load_commands(ROOT)
 
 
-def _begin(command):
+def _start_command_job(command):
+    """Start a CLI argument vector in a background job, respecting existing locks."""
     ws = st.session_state["ws"]
     job = Job(command, ws, ROOT)
     key = "job:" + ws + (":" + job.run_id if job.run_id else "")
@@ -133,7 +151,8 @@ def _begin(command):
 
 
 @st.fragment(run_every=1)
-def _job_status():
+def _render_command_job_status():
+    """Refresh the legacy command job and its recent log; workflow runs use their own view."""
     job = st.session_state.get("job:" + st.session_state["ws"])
     if not job:
         return
@@ -148,6 +167,7 @@ def _job_status():
 
 
 def page_overview():
+    """Assemble the home view from persisted tasks and local source inventory."""
     from lib.bootstrap.workflows import workflow_application
     from lib.presentation.streamlit.home_page import render_overview
     ws = st.session_state['ws']
@@ -160,20 +180,22 @@ def page_overview():
                               'extension': path.suffix.upper().lstrip('.'), 'size': path.stat().st_size})
         except OSError:
             continue
-    render_overview(workflow_application(ROOT, _ws_out()), ws, inventory, len(paths), len(_sample_files()),
-                    source.as_posix(), _ws_out().as_posix(), navigate=_select_page,
-                    job_status=_job_status)
+    render_overview(workflow_application(ROOT, _workspace_output_dir()), ws, inventory, len(paths), len(_reviewable_sample_files()),
+                    source.as_posix(), _workspace_output_dir().as_posix(), navigate=_select_page,
+                    job_status=_render_command_job_status)
 
 
 def page_preview(show_title=True):
+    """Open dataset previews, retaining the legacy JSONL source selector."""
     from lib.bootstrap.datasets import dataset_application
     from lib.presentation.streamlit.dataset_browser_page import render_dataset_preview
 
-    render_dataset_preview(dataset_application(ROOT, _ws_out()), st.session_state["ws"],
-                           lambda key: _selected_samples(key, preview_only=True), show_title=show_title)
+    render_dataset_preview(dataset_application(ROOT, _workspace_output_dir()), st.session_state["ws"],
+                           lambda key: _select_sample_records(key, preview_only=True), show_title=show_title)
 
 
 def page_workflow():
+    """Assemble the creation canvas and its node-local configuration services."""
     from lib.bootstrap.workflows import workflow_application
     from lib.bootstrap.conversation_import import conversation_import_application
     from lib.bootstrap.local_inputs import local_input_application
@@ -186,30 +208,32 @@ def page_workflow():
     from lib.bootstrap.manual_datasets import manual_dataset_application
     from lib.bootstrap.prompt_library import prompt_library_application
     from lib.bootstrap.workflows import human_augmentation_application
-    render_workbench(workflow_application(ROOT, _ws_out()), _begin, workflow_node_models_application(ROOT),
+    render_workbench(workflow_application(ROOT, _workspace_output_dir()), _start_command_job, workflow_node_models_application(ROOT),
                      input_cache=local_input_application(),
                      conversation_importer=conversation_import_application(ROOT),
-                     draft_application=creation_draft_application(_ws_out()),
+                     draft_application=creation_draft_application(_workspace_output_dir()),
                      backend_application=backend_application(ROOT),
-                     manual_application=manual_dataset_application(_ws_out()),
+                     manual_application=manual_dataset_application(_workspace_output_dir()),
                      document_preview=document_preview_application(st.session_state["ws"]),
                      knowledge_application=knowledge_application(st.session_state["ws"]),
                      prompt_library=prompt_library_application(),
-                     human_application=human_augmentation_application(ROOT, _ws_out()))
+                     human_application=human_augmentation_application(ROOT, _workspace_output_dir()))
 
 
 def page_human_workspace():
+    """Open the selected human-led design session without starting a new round."""
     from lib.bootstrap.workflows import human_augmentation_application
     from lib.bootstrap.workflows import workflow_application
     from lib.bootstrap.backends import backend_application
     from lib.presentation.streamlit.human_workspace_page import render_human_workspace
-    render_human_workspace(human_augmentation_application(ROOT, _ws_out()),
-        workflow_application(ROOT, _ws_out()), _begin, st.session_state["ws"],
+    render_human_workspace(human_augmentation_application(ROOT, _workspace_output_dir()),
+        workflow_application(ROOT, _workspace_output_dir()), _start_command_job, st.session_state["ws"],
         session_id=st.query_params.get("human") or st.session_state.get(f"human-selected:{st.session_state['ws']}"),
         backend_application=backend_application(ROOT), navigate=_select_page)
 
 
 def page_run(show_title=True):
+    """Render advanced single-command tools, not the automatic workflow canvas."""
     if show_title:
         page_header("高级单项工具", "按需独立运行文档整理、问答生成、质量报告或兼容导出。", "ADVANCED TOOLS")
     presets = {
@@ -323,9 +347,9 @@ def page_run(show_title=True):
                     if action.option_strings:
                         argv.append(action.option_strings[0])
                     argv.append(str(value))
-            _begin(argv)
-    _job_status()
-    gate = _gate()
+            _start_command_job(argv)
+    _render_command_job_status()
+    gate = _legacy_command_confirmations()
     focus_ids = [gid for gid in gate.defs if gate.status(gid) == "awaiting"]
     job = st.session_state.get("job:" + st.session_state["ws"])
     if job:
@@ -342,13 +366,14 @@ def page_run(show_title=True):
 
 
 def page_review():
+    """Retain the legacy review editor and its identity/settings navigation."""
     from lib.review_management import render_management, reviewer_identity
     from lib.review_workspace import render_workspace
 
     dataset = WORKSPACES.dataset_name(st.session_state['ws'])
     mode = st.session_state.get('review-management')
     if mode:
-        render_management(mode, dataset, lambda key: _selected_samples(key, preview_only=True))
+        render_management(mode, dataset, lambda key: _select_sample_records(key, preview_only=True))
         return
 
     def navigate(target):
@@ -357,7 +382,7 @@ def page_review():
     try:
         username = reviewer_identity()
         render_workspace(dataset, username, st.session_state['ws'],
-                         gate=_gate(), on_navigate=navigate)
+                         gate=_legacy_command_confirmations(), on_navigate=navigate)
     except PermissionError:
         st.error('当前身份没有此数据集的权限，请切换身份或由管理员授予权限。')
         if st.button('审核身份与接入'):
@@ -366,22 +391,25 @@ def page_review():
 
 
 def page_preference_review():
+    """Render preference review with the existing version-aware rework service."""
     from lib.bootstrap.preference_reviews import preference_review_application
     from lib.bootstrap.review_rework import review_rework_application
     from lib.presentation.streamlit.preference_review_page import render_preference_review
-    render_preference_review(preference_review_application(_ws_out()),
-                            rework_application=review_rework_application(ROOT, _ws_out()))
+    render_preference_review(preference_review_application(_workspace_output_dir()),
+                            rework_application=review_rework_application(ROOT, _workspace_output_dir()))
 
 
 def page_corpus_review():
+    """Render corpus review with the existing version-aware rework service."""
     from lib.bootstrap.corpus_reviews import corpus_review_application
     from lib.bootstrap.review_rework import review_rework_application
     from lib.presentation.streamlit.corpus_review_page import render_corpus_review
-    render_corpus_review(corpus_review_application(_ws_out()),
-                         rework_application=review_rework_application(ROOT, _ws_out()))
+    render_corpus_review(corpus_review_application(_workspace_output_dir()),
+                         rework_application=review_rework_application(ROOT, _workspace_output_dir()))
 
 
 def page_human_review():
+    """Select the training-format review queue and preserve the current task context."""
     page_header("人工审核 / 模型对齐", "在发布前检查样本质量、修订内容并保留审核历史。", "CPT　·　SFT　·　DPO　·　ORPO　·　RLAIF", art_kind="review")
     modes = ("SFT 数据调整", "DPO 偏好优化", "ORPO 偏好优化", "RLAIF 反馈审核", "CPT 语料审核")
     mode_key = f"review-mode:{st.session_state['ws']}"
@@ -390,7 +418,7 @@ def page_human_review():
     from lib.bootstrap.preference_reviews import preference_review_application
     from lib.bootstrap.sft_reviews import sft_review_application
     from lib.bootstrap.review_rework import review_rework_application
-    output = _ws_out()
+    output = _workspace_output_dir()
     rework_application = review_rework_application(ROOT, output)
     applications = {
         modes[0]: sft_review_application(output),
@@ -418,35 +446,39 @@ def page_human_review():
 
 
 def page_output_packages():
+    """Present verified dataset packages and existing release versions."""
     from lib.bootstrap.datasets import dataset_application
     from lib.presentation.streamlit.package_page import render_package_page
-    render_package_page(dataset_application(ROOT, _ws_out()))
+    render_package_page(dataset_application(ROOT, _workspace_output_dir()))
 
 
 def page_quality(show_title=True):
+    """Present quality reports for persisted workflow and legacy sample sources."""
     from lib.bootstrap.workflows import workflow_application
     from lib.bootstrap.releases import release_application
     from lib.presentation.streamlit.quality_page import render_quality_page
     workspace_id = st.session_state["ws"]
-    render_quality_page(workflow_application(ROOT, _ws_out()), release_application(), workspace_id,
+    render_quality_page(workflow_application(ROOT, _workspace_output_dir()), release_application(), workspace_id,
                         WORKSPACES.folder(workspace_id), WORKSPACES.dataset_name(workspace_id),
-                        _sample_files, show_title=show_title)
+                        _reviewable_sample_files, show_title=show_title)
 
 
 def page_monitor(show_title=True):
+    """Display legacy command logs; live workflow monitoring belongs to task management."""
     from lib.bootstrap.monitor import monitor_application
     from lib.presentation.streamlit.monitor_page import render_monitor_page
-    render_monitor_page(monitor_application(_OUT("runs.jsonl")), st.session_state["ws"],
-                        _job_status, show_title=show_title)
+    render_monitor_page(monitor_application(_output_file("runs.jsonl")), st.session_state["ws"],
+                        _render_command_job_status, show_title=show_title)
 
 
 def page_gates(show_title=True, focus_ids=None):
+    """Render only confirmations required by the selected advanced command."""
     if show_title:
         page_header("命令执行确认", "只处理高级命令实际需要的人工确认。", "ADVANCED COMMANDS")
     from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 
     st.html(SETTINGS_STYLE)
-    gate = _gate()
+    gate = _legacy_command_confirmations()
     if not focus_ids:
         st.info("当前没有待处理的命令确认。运行相关高级命令时，这里会显示具体要求。")
         return
@@ -501,6 +533,7 @@ def page_gates(show_title=True, focus_ids=None):
 
 
 def page_assets(show_title=True):
+    """Browse cached sources and artifacts, handing selected sources to a new draft."""
     from lib.bootstrap.asset_catalog import asset_catalog_application
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.presentation.streamlit.asset_catalog_page import render_asset_catalog
@@ -517,12 +550,13 @@ def page_assets(show_title=True):
 
     render_asset_catalog(
         asset_catalog_application(), ws, show_title=show_title,
-        on_use_source=lambda source: use_library_source(source, ws, creation_draft_application(_ws_out())),
+        on_use_source=lambda source: use_library_source(source, ws, creation_draft_application(_workspace_output_dir())),
         on_import_sources=import_sources,
     )
 
 
 def page_prefs(show_title=True):
+    """Edit advanced-command defaults; node model settings belong to the workflow canvas."""
     from lib.presentation.streamlit.generation_settings_page import render_generation_settings
 
     from lib.bootstrap.generation_settings import generation_settings_application
@@ -530,6 +564,7 @@ def page_prefs(show_title=True):
 
 
 def page_data_management():
+    """Route between source assets, previews, statistics, manual samples, and quality."""
     page_header("数据管理", "统一浏览来源与产物，预览各类训练样本并查看质量检查结果。", "DATA LIBRARY", art_kind="library")
     view_key = f"data-view:{st.session_state['ws']}"
     area = st.segmented_control(
@@ -544,16 +579,17 @@ def page_data_management():
     elif area == "样本统计":
         from lib.bootstrap.datasets import dataset_application
         from lib.presentation.streamlit.sample_statistics_page import render_sample_statistics
-        render_sample_statistics(dataset_application(ROOT, _ws_out()), st.session_state['ws'])
+        render_sample_statistics(dataset_application(ROOT, _workspace_output_dir()), st.session_state['ws'])
     elif area == "人工制作":
         from lib.bootstrap.manual_datasets import manual_dataset_application
         from lib.presentation.streamlit.manual_dataset_page import render_manual_datasets
-        render_manual_datasets(manual_dataset_application(_ws_out()), st.session_state['ws'], show_title=False)
+        render_manual_datasets(manual_dataset_application(_workspace_output_dir()), st.session_state['ws'], show_title=False)
     else:
         page_assets(show_title=False)
 
 
 def page_task_manager():
+    """Route between workflow runs, human-led sessions, drafts, and legacy command tools."""
     from lib.bootstrap.backends import backend_application
     from lib.bootstrap.creation_drafts import creation_draft_application
     from lib.presentation.streamlit.work_drafts import render_work_drafts
@@ -567,7 +603,7 @@ def page_task_manager():
         page_header("工作管理", "找回历史工作、继续配置草稿，或查看正在运行的工作流与结果。",
                     art_kind="hero")
     st.html(task_management_styles())
-    draft_application = creation_draft_application(_ws_out())
+    draft_application = creation_draft_application(_workspace_output_dir())
     with st.container(key="task-manager-navigation"):
         modes, drafts = st.columns([4, 1], gap="small", vertical_alignment="center")
         with modes:
@@ -584,7 +620,7 @@ def page_task_manager():
     if area == "人工增强工作":
         from lib.bootstrap.workflows import human_augmentation_application
         from lib.presentation.streamlit.human_workspace_page import render_human_history
-        render_human_history(human_augmentation_application(ROOT, _ws_out()), st.session_state["ws"])
+        render_human_history(human_augmentation_application(ROOT, _workspace_output_dir()), st.session_state["ws"])
     elif area == "运行日志":
         page_monitor(show_title=False)
     elif area == "命令管线":
@@ -595,17 +631,18 @@ def page_task_manager():
         from lib.bootstrap.workflows import workflow_application
         from lib.bootstrap.workflows import human_augmentation_application
         from lib.presentation.streamlit.task_management_page import render_task_management
-        application = workflow_application(ROOT, _ws_out())
+        application = workflow_application(ROOT, _workspace_output_dir())
         render_task_management(
-            application, st.session_state["ws"], _begin,
+            application, st.session_state["ws"], _start_command_job,
             lambda: _select_page("自动工作流"),
             draft_application=draft_application,
             backend_application=backend_application(ROOT),
-            human_application=human_augmentation_application(ROOT, _ws_out()),
+            human_application=human_augmentation_application(ROOT, _workspace_output_dir()),
         )
 
 
 def page_system_settings():
+    """Configure console language and shared defaults/connections, not node selection."""
     page_header("系统设置", "管理界面语言与生成偏好。任务模型在工作流节点选择。", "LOCAL SETTINGS")
     from lib.presentation.streamlit.settings_style import SETTINGS_STYLE
 
@@ -626,6 +663,7 @@ def page_system_settings():
         render_backend_page(backend_application(ROOT), embedded=True)
 
 
+# Route aliases remain accepted by saved links even when the sidebar label differs.
 PAGES = {
     "首页": page_overview, "总览": page_overview,
     "数据生成": page_workflow, "自动工作流": page_workflow,
@@ -704,8 +742,15 @@ visible_nav = [
     ("输出打包", "输出打包", {"输出打包"}),
     ("系统设置", "系统设置", {"系统设置", "偏好设置"}),
 ]
+# Retain the old glyph map only to resolve labels saved by earlier consoles.
 icons = {"首页": "⌂", "数据生成": "◈", "数据管理": "▤", "人工审核": "✓", "工作管理": "⤴",
          "任务管理": "⤴", "输出打包": "⇩", "模型与密钥": "⬡", "模型服务": "⬡", "系统设置": "⚙"}
+navigation_icons = {
+    "首页": ":material/home:", "数据生成": ":material/account_tree:",
+    "数据管理": ":material/folder_open:", "人工审核": ":material/fact_check:",
+    "工作管理": ":material/work_history:", "输出打包": ":material/package_2:",
+    "系统设置": ":material/settings:",
+}
 if "nav" not in st.session_state:
     st.session_state["nav"] = _qp_page if _qp_page in PAGES else "总览"
 # Older sessions could retain a formatted label from the former hidden radio
@@ -724,7 +769,8 @@ _select_page(_route_label)
 page = _route_label
 for label, target, active_pages in visible_nav:
     st.sidebar.button(
-        f"{icons.get(label, '•')}　{label}",
+        label,
+        icon=navigation_icons[label],
         key=f"nav-button:{target}",
         type="primary" if page in active_pages else "secondary",
         on_click=_select_page,
@@ -736,7 +782,7 @@ st.sidebar.caption("本机保存 · 关闭后仍保留")
 from lib.bootstrap.workflows import workflow_application as _sidebar_workflow_application
 from lib.presentation.streamlit.sidebar_tasks import render_sidebar_tasks
 try:
-    _sidebar_output = _ws_out()
+    _sidebar_output = _workspace_output_dir()
 except FileNotFoundError:
     _sidebar_output = None
 if _sidebar_output is not None:

@@ -64,12 +64,14 @@ $theme_vars
   --background-color: $bg;
   --secondary-background-color: $layer1;
   --primary-color: $brand;
-  --df-surface: linear-gradient(150deg,#FFFFFF 0%,#F8FBFF 100%);
-  --df-shadow-panel: 0 2px 3px #27466e06,0 12px 32px -14px #27466e30,inset 0 1px 0 #fff;
-  --df-shadow-lift: 0 5px 10px -5px #294f8830,0 18px 32px -18px #294f884d,inset 0 1px 0 #fff;
+  --df-surface: #FFFFFF;
+  --df-shadow-panel: 0 2px 4px #27466e04,0 10px 24px -18px #27466e35;
+  --df-shadow-lift: 0 4px 8px -4px #294f8820,0 12px 24px -16px #294f8840;
   --df-edge: #ffffff;
 }
-[data-testid="stApp"] { background: radial-gradient(ellipse at 78% 0%,#dcecff80,transparent 48%),radial-gradient(ellipse at 0% 55%,#ffffffb3,transparent 52%),#eef3fa; color: var(--df-text); font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+[data-testid="stApp"] { background: #F2F6FB; color: var(--df-text); font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+[data-testid="stApp"] ::selection { background:#CFE3FC; color:#153B69; }
+[data-testid="stApp"] :is(input,textarea) { caret-color:#1769E0; }
 [data-testid="stApp"] [data-testid="stHeader"] { background: transparent !important; border: 0; z-index: 1001; }
 [data-testid="stApp"] [data-testid="stMainMenu"] { display: none !important; }
 [data-testid="stAppDeployButton"] { display: none !important; }
@@ -97,9 +99,9 @@ $theme_vars
 [data-testid="stSidebar"] label { color: var(--df-text2); border-radius: 9px; }
 [data-testid="stSidebar"] [data-testid="stButton"] button { justify-content: flex-start; min-height: 44px; padding: 0 15px; border-color: transparent; border-radius: 12px; background: transparent; color: #4c607c; text-align: left; font-weight: 550; box-shadow:none; transition: background .18s ease, color .18s ease,box-shadow .18s ease; }
 [data-testid="stSidebar"] [data-testid="stButton"] button:hover { border-color: #fff; background: #ffffffa8; color: #175cc0; box-shadow:0 4px 12px -6px #4775af40; }
-[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] { position: relative; border-color: #ffffffdb; background: linear-gradient(130deg,#e8f3ff,#d5e8ff); color: #0757BF; font-weight: 700; box-shadow:inset 0 1px 0 #fff,0 6px 16px -8px #3978c952; }
+[data-testid="stApp"] [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] { position: relative; border-color:transparent; background:#E1EDFC; color:#165AA8; font-weight:650; box-shadow:none; }
 [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]::before { content: ""; position: absolute; inset: 0 auto 0 -1px; width: 3px; border-radius: 0 2px 2px 0; background: var(--df-brand); }
-[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]:hover { border-color: transparent; background: #D9EAFE; color: #0757BF; }
+[data-testid="stApp"] [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) { border-color: transparent; background: #D9EAFE; color: #0757BF; box-shadow:none; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label { position: relative; display: flex; align-items: center; min-height: 43px; margin-left: -.9rem; padding: 7px 10px 7px 12px; border-radius: 0 9px 9px 0; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label > :first-child { position: absolute !important; left: 0; top: 0; width: 1px !important; height: 1px !important; margin: 0 !important; opacity: 0 !important; overflow: hidden; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) { background: #E5F0FF; color: #0757BF; font-weight: 600; }
@@ -118,7 +120,7 @@ $theme_vars
 [data-testid="stSidebar"] [data-baseweb="radio"]:has(input:checked) { background: #E5F0FF; color: #0757BF; font-weight: 600; }
 [data-testid="stSidebar"] [data-baseweb="radio"]:has(input:checked)::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; border-radius: 0 2px 2px 0; background: var(--df-brand); }
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .4rem; }
-[data-testid="stApp"] h1 { font-size: 1.8rem !important; font-weight: 700 !important; letter-spacing: -.035em; color: var(--df-text); }
+[data-testid="stApp"] h1 { font-size: 1.8rem !important; font-weight: 700 !important; letter-spacing: -.025em; color: var(--df-text); }
 [data-testid="stApp"] h2 { font-size: 1.13rem !important; font-weight: 650 !important; color: var(--df-text); }
 [data-testid="stApp"] h3 { color: var(--df-text); }
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--df-text3); opacity: 1; font-size: 13px; line-height: 1.6; }
@@ -129,7 +131,7 @@ $theme_vars
 [data-testid="stApp"] [data-testid="stSelectbox"] input,
 [data-testid="stApp"] [data-testid="stTextArea"] textarea { font-size: 14px; }
 [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button, [data-testid="stDownloadButton"] button {
-  border-radius: 11px; min-height: 40px; border-color: #d5e0ef; color: #35516f; background: linear-gradient(180deg,#fff,#f5f8fd); font-weight: 600; box-shadow:inset 0 1px 0 #fff,0 2px 2px #32547f07,0 4px 9px -7px #32547f40; transition: background .18s ease, border-color .18s ease, box-shadow .18s ease,transform .18s ease;
+  border-radius: 9px; min-height: 40px; border-color: #CDDCEC; color: #35516f; background: #FFF; font-weight: 600; box-shadow:0 1px 2px #32547f08; transition: background .18s ease, border-color .18s ease, box-shadow .18s ease,transform .18s ease;
 }
 [data-testid="stMainBlockContainer"] [data-testid="stButton"] button { height: auto; }
 [data-testid="stMainBlockContainer"] [data-testid="stButton"] button [data-testid="stMarkdownContainer"],
@@ -192,10 +194,10 @@ $theme_vars
 [data-testid="stMainBlockContainer"] [class*="st-key-workflow-run-"] {
   border-color: #D8E3F0; border-radius: 11px; background: #fff;
 }
-/* data-test-wrap describes flex wrapping, not a bordered container. Styling it
-   as a card paints every nested column and layout block as another white box. */
+/* A heading sets rhythm, not a new card. Keyed page containers own their
+   background and elevation; inferring them here creates nested white boxes. */
 [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] > [data-testid="stHtml"] > :is(.df-section-heading, .df-pack-heading)) {
-  gap: .7rem; border-color: #D8E3F0; border-radius: 11px; background: #fff;
+  gap: .7rem;
 }
 /* Native border width is preserved, including for unbordered section blocks. */
 [data-testid="stMainBlockContainer"] .st-key-home-source-panel,
@@ -367,27 +369,24 @@ $theme_vars
 .df-step.pending .df-step-icon { background: #EFF3F8; color: #8492A6; }
 .df-step strong { display: block; color: var(--df-text); font-size: 12px; }
 .df-step small { display: block; margin-top: 2px; color: var(--df-text3); font-size: 10px; }
-.df-page-hero { position: relative; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 18px; padding: 22px 26px; margin: 0; overflow: hidden; border: 1px solid #ffffffeb; border-radius: 20px; background: radial-gradient(ellipse at 88% 30%,#c7e2ff8c,transparent 46%),linear-gradient(115deg,#fff 0%,#f4f9ff 50%,#e9f3ff 100%); box-shadow:var(--df-shadow-panel),inset 0 -1px 0 #c2d9f240; }
+.df-page-hero { position:relative; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 18px; padding:18px 22px; margin:0; overflow:hidden; border:0; border-radius:14px; background:linear-gradient(110deg,#FFF 15%,#E6F0FC 100%); box-shadow:var(--df-shadow-panel); }
 .df-page-copy, .df-page-tag { position: relative; z-index: 2; }
 .df-page-copy { flex: 1 1 440px; min-width: 0; }
-.df-page-eyebrow { display: block; margin-bottom: 7px; color: #3774BE; font-size: 10px; font-weight: 700; letter-spacing: .15em; }
-.df-page-hero h1 { margin: 0 !important; padding: 0; color: #112b50; font-size: 32px !important; font-weight:750; line-height: 1.25; letter-spacing: -.045em; overflow-wrap: anywhere; }
+.df-page-hero h1 { margin:0 !important; padding:0; color:#163454; font-size:28px !important; font-weight:700; line-height:1.25; letter-spacing:-.025em; overflow-wrap:anywhere; }
 .df-page-hero p { max-width: 750px; margin: 7px 0 0; color: var(--df-text2); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .df-page-tag { flex: 0 1 auto; max-width: 100%; padding: 6px 9px; color: #175CB3; font-size: 11px; font-weight: 650; letter-spacing: .035em; overflow-wrap: anywhere; border: 1px solid rgba(133,177,232,.25); border-radius: 6px; background: rgba(255,255,255,.65); }
 .df-page-hero .df-hero-art { inset: -12px -16px -14px auto; width: 280px; opacity: .21; overflow: hidden; border-radius: inherit; }
 .df-page-hero .df-hero-art img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.df-page-hero--illustrated { min-height: 130px; padding-right: 184px; }
+.df-page-hero--illustrated { min-height:100px; padding-right:160px; }
 .df-page-hero--illustrated .df-hero-art { inset: -30px -8px -30px auto; width: 185px; opacity: 1; }
 .df-page-hero--illustrated .df-page-tag { align-self: flex-start; margin-top: 7px; }
 /* Navigation hubs have room for a brand illustration. Dense workspaces keep
    the standard masthead so that forms, samples and logs retain their space. */
-.df-page-hero--hub { min-height: 158px; padding: 25px 28px; background: radial-gradient(ellipse at 85% 10%,#c0deff90,transparent 52%),linear-gradient(105deg,#fff 12%,#f0f7ff 60%,#deecff 100%); }
-.df-page-hero--hub::before { content: ""; position: absolute; inset: 0 0 0 auto; width: 430px; background-image: radial-gradient(#8EB8ED .7px,transparent .7px); background-size: 17px 17px; opacity: .2; mask-image: linear-gradient(90deg,transparent,#000); pointer-events: none; }
-.df-page-hero--hub::after { content: ""; position: absolute; right: 65px; top: -82px; width: 330px; height: 330px; border: 1px solid rgba(125,172,233,.15); border-radius: 50%; box-shadow: 0 0 0 34px rgba(255,255,255,.25); pointer-events: none; }
-.df-page-hero--hub .df-page-copy { flex-basis: 0; max-width: calc(100% - 340px); }
-.df-page-hero--hub h1 { font-size: 38px !important; line-height: 1.25; }
+.df-page-hero--hub { min-height:120px; padding:22px 26px; background:linear-gradient(105deg,#FFF 12%,#EDF5FF 64%,#DFECFC 100%); }
+.df-page-hero--hub .df-page-copy { flex-basis:0; max-width:calc(100% - 280px); }
+.df-page-hero--hub h1 { font-size:32px !important; line-height:1.25; }
 .df-page-hero--hub p { margin-top: 9px; line-height: 1.65; }
-.df-page-hero--hub .df-hero-art { inset: -18px -3px -22px auto; width: 390px; opacity: 1; z-index: 1; overflow: visible; }
+.df-page-hero--hub .df-hero-art { inset:-20px 8px -20px auto; width:300px; opacity:1; z-index:1; overflow:visible; }
 @media(max-width:1100px) {
   .df-page-hero--hub .df-page-copy { max-width: calc(100% - 240px); }
   .df-page-hero--hub .df-hero-art { right: -30px; width: 315px; }

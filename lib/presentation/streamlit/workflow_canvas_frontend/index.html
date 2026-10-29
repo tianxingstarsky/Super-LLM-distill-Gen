@@ -287,7 +287,9 @@ function positionInspector(){
  const naturalHeight=Math.min(panel.scrollHeight||maxHeight,maxHeight);
  let y=spec.inspector.wide?topBound:Math.max(topBound,Math.min(nodeTop,windowHeight-naturalHeight-16));
  if(spec.inspector.wide){placement="editor";}
- else if(spaceRight<width&&spaceLeft<width&&nodeBottom+gap+Math.min(naturalHeight,220)<windowHeight-16){placement="below";y=Math.max(topBound,nodeBottom+gap);}
+ // Only move below the node when the full editor fits. A partial-height
+ // check leaves the heading visible while pushing model controls offscreen.
+ else if(spaceRight<width&&spaceLeft<width&&nodeBottom+gap+naturalHeight<=windowHeight-16){placement="below";y=Math.max(topBound,nodeBottom+gap);}
  relationAttribute(panel,"workflowPlacement",placement);
  const styles={position:"fixed",left:x+"px",top:y+"px",width:width+"px","max-height":Math.min(maxHeight,Math.max(100,windowHeight-y-16))+"px","overflow-y":"auto","overscroll-behavior":"contain","z-index":"80","--workflow-anchor-x":Math.max(12,Math.min(width-12,(nodeLeft+nodeRight)/2-x))+"px","--workflow-anchor-y":Math.max(12,Math.min(maxHeight-12,(nodeTop+nodeBottom)/2-y))+"px"};
  for(const [property,value] of Object.entries(styles))if(panel.style.getPropertyValue(property)!==value)panel.style.setProperty(property,value);
