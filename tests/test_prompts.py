@@ -24,6 +24,22 @@ def test_registry_ids_unique_and_versioned():
         assert spec.purpose and spec.source
 
 
+def test_import_reasoning_default_upgrade_preserves_legacy_and_user_templates():
+    from hashlib import sha256
+    from lib.domain.workflow_node_prompts import snapshot_node_prompts
+
+    prompt_id = "workflow.conversation_reasoning"
+    current = get(prompt_id)
+    previous = get(prompt_id, version="1.0.0")
+    assert current.version == "1.1.0"
+    assert sha256(previous.template.encode("utf-8")).hexdigest() == (
+        "1d23e98398301528ff0578e91d38e378e7bc5aa4c4f112ce9cc8294d66e17402")
+    assert snapshot_node_prompts(None, conversation_reasoning_version=1)["ingest"][prompt_id] == render(current)
+    for pinned_text in (render(previous), "My own answer-conditioned reconstruction template."):
+        overrides = {"ingest": {prompt_id: pinned_text}}
+        assert snapshot_node_prompts(overrides, conversation_reasoning_version=1)["ingest"][prompt_id] == pinned_text
+
+
 def test_all_templates_render_with_declared_variables():
     for spec in registry().values():
         sample = {v: "测试占位" for v in spec.variables}
