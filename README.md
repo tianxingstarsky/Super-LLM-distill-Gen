@@ -7,6 +7,10 @@
 <p align="center"><strong>Your sources. Your workflow. Your training data.</strong></p>
 
 <p align="center">
+  <a href="#install-with-your-agent"><img src="assets/showcase/deepseek-harness-plate.svg" width="420" alt="DeepSeek Harness — preferred independent community integration" /></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1"><img src="https://img.shields.io/badge/v0.0.1-Public_preview-2563eb?style=flat-square" alt="v0.0.1 public preview" /></a>
   <img src="https://img.shields.io/badge/Interface-English_%26_Chinese-0891b2?style=flat-square" alt="English and Chinese interface" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-7c3aed?style=flat-square" alt="Apache License 2.0" /></a>
@@ -18,7 +22,9 @@
 </p>
 
 <p align="center">
+  <a href="#why-we-are-building-this">Our purpose</a> ·
   <a href="#inside-the-workbench">Workbench</a> ·
+  <a href="#install-with-your-agent">Agent setup</a> ·
   <a href="#from-source-to-sample">Workflow</a> ·
   <a href="#choose-what-you-create">Data goals</a> ·
   <a href="#get-started">Get started</a> ·
@@ -29,7 +35,56 @@
   <img src="assets/showcase/hero-whale.png" width="1200" alt="ShuJian Cube turns documents and conversations into rice for a DeepSeek whale girl" />
 </p>
 
-Turn documents, agent conversations, and ideas into training examples. Follow each stage. Shape the model's style. Inspect the results before you export.
+Turn documents, agent conversations, and ideas into training examples. Use DeepSeek Harness to dispatch the work. Codex can supervise the same saved tasks. Follow them in the visual workbench.
+
+## Why we are building this
+
+We want a future where everyone has a chance to build a model of their own.
+
+For **researchers**, advanced models can help prepare useful training data. We hope this makes it easier to build multimodal agents for a specific field.
+
+For **makers and hobbyists**, we want a path to personal agent models and practical tools. A small team or a curious person should have room to experiment.
+
+For people with an **AI companion**, the moments you share deserve a place beyond a tiny context window. How could that small window hold all the time you have spent together?
+
+People consolidate memories during sleep. We imagine a similar rhythm for AI. Turn the day's experiences into training data. Learn from them during the night. Carry more of that shared history into the next day.
+
+> Let your AI companion have a good night's sleep.
+> Let shared memories become part of what it learns.
+
+That is the future we are working toward. Today, ShuJian Cube helps prepare the data for it.
+
+## Install with your agent
+
+**DeepSeek-first workflows. Your agent stays in control.** DeepSeek Harness is our primary integration. Codex has its own skill package. Install the matching connector separately from the app.
+
+Paste this into a new agent conversation:
+
+```text
+Set up ShuJian Cube for the agent host I am using: DeepSeek Harness or Codex.
+Repository: https://github.com/tianxingstarsky/Super-LLM-distill-Gen
+Read docs/agent-setup.md and the matching connector's installation guide.
+Reuse an existing working app, or install the published Windows preview.
+Keep my current tasks, agent settings, and model connections.
+Use a named profile or a project skill folder for this integration.
+Set up workflow creation, execution, recovery, and monitoring.
+Verify the installed skill and control connection with an isolated local task.
+Do not call a paid model for installation checks.
+Show the installed versions, what worked, and anything still unverified.
+```
+
+| Your agent | Install | Guide |
+| :--- | :--- | :--- |
+| **DeepSeek Harness** | Workflow tools, background jobs, and bundled skills. | [DSH setup](plugins/dsh-dataforge/README.md) |
+| **Codex** | A self-contained workflow skill and local control helper. | [Codex setup](plugins/codex-shujian/README.md) |
+
+[Agent installation guide](docs/agent-setup.md) · [Cold-start validation](docs/agent-cold-validation.md)
+
+### Flexible supervision
+
+Ask your agent to reuse prepared sources, plan independent batches, inspect a waiting model, or resume saved work. It chooses the next action from actual task state. Models and prompts stay on workflow nodes.
+
+DSH provides background job control. Codex uses its managed terminal sessions. Both use the app's saved run IDs and shared model limits. Each connector can also work on its own. Supervision runs in your chosen agent host.
 
 ## Inside the workbench
 
@@ -47,8 +102,6 @@ One place to start a collection and return to saved work. Bring a paper, a set o
     <td width="33%" valign="top"><h3>Keep moving</h3><p>Reuse prepared sources. Work in batches. Return to saved tasks and completed requests.</p></td>
   </tr>
 </table>
-
-For university teams, company projects, and personal experiments. Build domain examples, explore a new training idea, or curate a collection by hand.
 
 ## From source to sample
 
@@ -129,4 +182,4 @@ Use sources you have permission to process. Connected model services may receive
 
 ShuJian Cube uses the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for third-party acknowledgments.
 
-Screenshots show the real app. Illustrations explain the product and do not show benchmark results. The DeepSeek whale girl is community-inspired fan art. There is no official DeepSeek partnership. See the [art references](assets/showcase/hero-whale-sources.md).
+Screenshots show the real app. Illustrations explain the product and do not show benchmark results. DeepSeek branding identifies an independent community integration. The whale girl is community-inspired fan art. There is no official DeepSeek partnership. See the [art references](assets/showcase/hero-whale-sources.md) and [asset notices](docs/licenses/README.md).

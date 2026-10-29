@@ -4,9 +4,10 @@ import {createRequire} from 'node:module'
 import {defineTool} from '@deepseek-ai/dsh-tools'
 import {Dispatcher, validatePlan} from './dispatcher.mjs'
 import {MUTATIONS, request, startRequest} from './transport.mjs'
+import {registerBundledSkills} from './skills.mjs'
 
 export const name = 'shujian-dataforge'
-export const inject = ['tools', 'jobs', 'subprocess']
+export const inject = ['tools', 'jobs', 'subprocess', 'skills']
 const ACTIONS = ['capabilities', 'runs.list', 'runs.inspect', 'runs.create', 'runs.cancel', 'runs.events',
   'runs.streams', 'runs.stream_delta', 'runs.preview', 'runs.quality', 'models.list', 'models.status', 'models.limit']
 const output = {schema: {type: 'object', additionalProperties: true},
@@ -47,10 +48,11 @@ export function configuration(value = {}) {
 
 export function apply(ctx, value) {
   const require = createRequire(import.meta.url)
-  for (const module of ['dsh-tools', 'dsh-jobs', 'dsh-subprocess']) {
+  for (const module of ['dsh-tools', 'dsh-jobs', 'dsh-subprocess', 'dsh-skill']) {
     if (require(`@deepseek-ai/${module}/package.json`).version !== '0.2.1-rc.2') throw new Error('unsupported_harness_adapter_version')
   }
   const config = configuration(value)
+  registerBundledSkills(ctx.skills)
   const dispatcher = new Dispatcher(config.maxActiveWorkflows)
   const call = (project, action, params, options = {}) => request(ctx.subprocess, project, action, params,
     {allowMutations: config.allowMutations, ...options})

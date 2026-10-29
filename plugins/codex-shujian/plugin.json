@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "shujian-cube",
+  "version": "0.1.0",
+  "description": "Inspect and orchestrate saved ShuJian Cube training-data workflows from Codex.",
+  "homepage": "https://github.com/tianxingstarsky/Super-LLM-distill-Gen",
+  "license": "Apache-2.0"
+}

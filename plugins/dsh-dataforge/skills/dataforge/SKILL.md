@@ -10,7 +10,7 @@ description: Orchestrate persistent training-data workflows with the external Da
 - NEVER read, echo, copy, or edit model credentials.
 - NEVER bypass core artifact, source, review, or reasoning validation.
 - NEVER claim that a model score proves correctness.
-- NEVER remove reasoning fields, shorten evidence, or lower thresholds to turn a failed sample into a pass.
+- NEVER silently lower thresholds, discard original reasoning/evidence, or relabel failed samples to inflate the pass rate. The operator may explicitly choose a different quality policy for a new recipe; record that policy and keep its actual outcomes visible. Do not edit a frozen recipe or hot-change a running task.
 - NEVER combine superseded rework parents and corrected children as independent examples.
 - Do not install, start, or patch the harness from inside DataForge.
 - Use only configured project ids. Deployment settings control write access and resource ceilings.
@@ -24,6 +24,28 @@ A source-dependent SFT run needs sufficient parsed and cleaned source material. 
 Treat requested sample volume as a ceiling or expectation, not a reason to keep repetitive or unsupported samples. Choose a plan with independent branches only where dependencies permit it. Dispatch through dataforge_dispatch, using priorities and dependencies; do not hold the model conversation waiting for a synchronous CLI process.
 
 Use native job_output/job_list/job_kill for owned background work. Use runs.events cursors for durable progress, runs.streams and runs.stream_delta to inspect original model token output, and bounded previews for finalized samples. A harness restart loses local job handles; resume the core's persisted run ids.
+
+## First bounded local recipe
+
+The following is a minimal native CPT recipe for an operator-supplied local Markdown source. It needs no generation model. Replace the absolute source path and stable request id with real values, and create or execute it only within the user's requested scope:
+
+```json
+{
+  "project": "local",
+  "action": "runs.create",
+  "request_id": "operator-chosen-stable-cpt-request",
+  "params": {
+    "recipe": {
+      "targets": ["cpt"],
+      "sources": ["/absolute/path/to/operator-supplied-source.md"],
+      "max_units": 2,
+      "sample_count": 1
+    }
+  }
+}
+```
+
+Creation freezes the recipe and returns its real `run_id`; it does not execute it. When execution is requested, pass that returned id to `dataforge_dispatch`, for example `{"runs":[{"id":"local-cpt","project":"local","run_id":"<returned run_id>"}]}`. Do not copy placeholder ids into a live plan. SFT, multi-turn generation, model review, and repair require their own complete node/source/model settings; do not assume this CPT example configures those paths.
 
 ## Quality checks
 

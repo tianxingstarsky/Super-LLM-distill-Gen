@@ -10,7 +10,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 function harness({failed = new Set(), delayed = false, rejectJobAt = 0} = {}) {
   const tools = new Map(), jobs = [], calls = [], releases = new Map(), kills = []
   let active = 0, peak = 0
-  const ctx = {tools: {register(tool) {tools.set(tool.name, tool)}},
+  const ctx = {skills: {registerProvider() {return () => {}}}, tools: {register(tool) {tools.set(tool.name, tool)}},
     subprocess: {spawn(spec) {
       const input = JSON.parse(spec.stdio.stdin.data), {action, params} = input
       calls.push(input)

@@ -1,19 +1,25 @@
 {
   "name": "dsh-shujian-dataforge",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "Independently installed DeepSeek Harness controller for DataForge protocol v1",
   "type": "module",
   "main": "index.mjs",
+  "bin": {
+    "dataforge-dsh": "./setup.mjs"
+  },
   "exports": {
     ".": "./index.mjs",
     "./dispatcher": "./dispatcher.mjs",
     "./transport": "./transport.mjs",
+    "./setup": "./setup.mjs",
     "./import-conversations": "./import-conversations.mjs"
   },
   "files": [
     "index.mjs",
     "dispatcher.mjs",
     "transport.mjs",
+    "skills.mjs",
+    "setup.mjs",
     "import-conversations.mjs",
     "cordis.patch.yml",
     "skills",
@@ -33,7 +39,12 @@
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
     "@deepseek-ai/dsh-jobs": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
     "@deepseek-ai/dsh-subprocess": "0.2.1-rc.2"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
   },
   "optionalDependencies": {
     "@deepseek-ai/dsh-session": "0.2.1-rc.2",

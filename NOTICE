@@ -15,6 +15,15 @@
 
 DeepSeek Harness 通过独立插件适配。`components/deepseek-harness/` 仅可作为被忽略的本地开发 checkout，不属于本仓库内置或分发的 submodule。上游为 https://github.com/deepseek-ai/deepseek-harness ，许可证 MIT；插件合同及兼容性独立维护。
 
+## DeepSeek Brand Asset
+
+The DeepSeek Harness integration nameplate uses the official DeepSeek favicon
+path from deepseek-ai/deepseek-harness commit
+f3803c96974ad4a94195fb97e5c637e9c2a3afe3. Copyright (c) 2026 DeepSeek, MIT.
+The original license is retained in docs/licenses/deepseek-harness-MIT.txt.
+The project-made plate identifies an independent community integration and
+does not indicate endorsement, partnership, or authorization by DeepSeek.
+
 ## Adapted Experience Prompts
 
 - ReasoningBank — Copyright 2026 Google LLC, Apache License 2.0.

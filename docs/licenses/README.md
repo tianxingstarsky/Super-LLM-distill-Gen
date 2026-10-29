@@ -4,6 +4,10 @@
 
 Windows 在线安装器随包保留 uv 的 [MIT](../../scripts/release/UV-LICENSE-MIT.txt) 和 [Apache-2.0](../../scripts/release/UV-LICENSE-APACHE.txt) 完整许可证。官方工具版本、来源与摘要在 `scripts/release/tools.json`，下载的 Python 与依赖包保留自身许可证元数据。
 
+## DeepSeek Harness 铭牌标记
+
+README 的集成铭牌使用 DeepSeek 官方 favicon 的原始路径，修改仅为在本项目设计的背景中定位和排版。来源固定为 [`f3803c9` 的 favicon](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/website/public/favicon.svg)，保留 [MIT 全文](deepseek-harness-MIT.txt)。名称和标记只说明独立社区适配关系，遵循上游[品牌说明](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/BRAND_GUIDELINES.md)，不表示官方背书或合作。
+
 ## ReasoningBank 经验提炼提示词
 
 - 上游：[google-research/reasoning-bank](https://github.com/google-research/reasoning-bank)。

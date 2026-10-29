@@ -1,6 +1,8 @@
 # 维护文档导航
 
 - [V0.0.1 发布说明](release-v0.0.1.md)：Windows 安装方式、验证结果与初始预览范围。
+- [Agent 安装与调度](agent-setup.md)：DeepSeek Harness 与 Codex 的独立接入和可交给 agent 的安装任务。
+- [无上下文验证](agent-cold-validation.md)：不可变安装包、真实调用与未验证边界。
 - [架构](architecture.md)：当前业务域、依赖方向和一致性边界。
 - [命名与职责](architecture/naming.md)：变量、函数、类和文件的放置规则。
 - [迁移记录](architecture/migration.md)：兼容路径、已处理范围与剩余边界。
