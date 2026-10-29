@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="264" height="52" viewBox="0 0 264 52" role="img" aria-labelledby="title">
+  <title id="title">Download for Windows x64</title>
+  <defs><linearGradient id="blue" x2="0" y2="1"><stop stop-color="#3c8cf8"/><stop offset="1" stop-color="#2563dc"/></linearGradient></defs>
+  <rect x="1" y="1" width="262" height="50" rx="11" fill="url(#blue)" stroke="#1d5dcf"/>
+  <path d="M12 2h240" stroke="#fff" stroke-opacity=".32"/>
+  <path d="M26 16v17m-6-6 6 6 6-6M17 33v5h18v-5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="49" y="32" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="16" font-weight="600" fill="#fff">Download for Windows</text>
+</svg>

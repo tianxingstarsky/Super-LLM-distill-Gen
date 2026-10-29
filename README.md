@@ -1,121 +1,132 @@
 <p align="center">
-  <img src="assets/showcase/hero-whale.png" width="1200" alt="ShuJian Cube turns sources into white rice, caught in a bowl by the DeepSeek whale girl" />
+  <img src="assets/brand/shujian-cube-mark.png" width="64" alt="ShuJian Cube logo" />
 </p>
 
 <h1 align="center">ShuJian Cube</h1>
 
-<p align="center"><strong>Your knowledge. A visible workflow. Better training examples.</strong></p>
+<p align="center"><strong>Your sources. Your workflow. Your training data.</strong></p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-2563eb?style=flat-square" alt="Apache License 2.0" /></a>
-  <img src="https://img.shields.io/badge/Training_goals-9-0891b2?style=flat-square" alt="Nine training goals" />
-  <img src="https://img.shields.io/badge/Interface-English_%26_Chinese-7c3aed?style=flat-square" alt="English and Chinese interface" />
+  <a href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1"><img src="https://img.shields.io/badge/v0.0.1-Public_preview-2563eb?style=flat-square" alt="v0.0.1 public preview" /></a>
+  <img src="https://img.shields.io/badge/Interface-English_%26_Chinese-0891b2?style=flat-square" alt="English and Chinese interface" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-7c3aed?style=flat-square" alt="Apache License 2.0" /></a>
 </p>
 
 <p align="center">
-  <a href="#meet-the-workbench">Workbench</a> ·
-  <a href="#follow-the-work">Workflow</a> ·
-  <a href="#choose-your-data">Data types</a> ·
-  <a href="#make-image-examples-by-hand">Image Q&amp;A</a> ·
-  <a href="#start-in-a-few-steps">Get started</a>
+  <a href="https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/download/v0.0.1/ShuJian-Cube-0.0.1-Windows-x64-Setup.exe"><img src="assets/showcase/download-windows.svg" width="264" height="52" alt="Download the Windows x64 installer" /></a>
+  <a href="#see-it-in-one-minute"><img src="assets/showcase/watch-film.svg" width="190" height="52" alt="Watch the one-minute product film" /></a>
 </p>
-
-ShuJian Cube helps you turn documents, agent conversations, and open briefs into training data. Choose a goal. Follow the work. Review the results. Return to your saved tasks whenever you need them.
-
-## Download the preview
-
-[Get v0.0.1 for Windows](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1).
-The installer prepares the app for you. The first setup needs an internet
-connection. Open it from the desktop or use the browser shortcut.
-
-This is an early preview. Review generated examples before use. Read the
-[release notes](docs/release-v0.0.1.md) for the available features and limits.
-
-## Watch the product film
-
-One minute from your first source to a visible workflow. See the real workbench, node settings, dialogue guidance, and saved data. The film has Chinese narration, music, and subtitles.
 
 <p align="center">
-  <a href="assets/promo/shujian-cube-promo.mp4"><img src="assets/promo/shujian-cube-promo-poster.png" width="1200" alt="Watch the one-minute ShuJian Cube product film" /></a>
+  <a href="#inside-the-workbench">Workbench</a> ·
+  <a href="#from-source-to-sample">Workflow</a> ·
+  <a href="#choose-what-you-create">Data goals</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="docs/release-v0.0.1.md">Release notes</a>
 </p>
-
-[Watch or download the film](assets/promo/shujian-cube-promo.mp4) · [Get the subtitles](assets/promo/captions.srt)
-
-## Meet the workbench
-
-One place to start, follow, and refine your work. The home screen brings new tasks and recent activity together. The interface is available in English and Chinese.
 
 <p align="center">
-  <img src="screenshots/homepage.png" width="1200" alt="The ShuJian Cube home screen with creation shortcuts and recent work" />
+  <img src="assets/showcase/hero-whale.png" width="1200" alt="ShuJian Cube turns documents and conversations into rice for a DeepSeek whale girl" />
 </p>
 
-| Bring your own sources | Stay close to the process | Build at your own pace |
-| --- | --- | --- |
-| Import MD, TXT, PDF, or DOCX files. Add agent context or describe a task. | Select a node to set its model and token limits. Open it to watch live output. | Generate in batches. Keep saved results. Return to local work history. |
+Turn documents, agent conversations, and ideas into training examples. Follow each stage. Shape the model's style. Inspect the results before you export.
+
+## Inside the workbench
+
+One place to start a collection and return to saved work. Bring a paper, a set of documents, or a short brief. Your sources and tasks stay on your computer after closing the app.
 
 <p align="center">
-  <img src="assets/showcase/capabilities.png" width="1200" alt="Flexible sources, visible generation, human-created image examples, and saved work" />
+  <a href="screenshots/v0.0.1-home.png"><img src="screenshots/v0.0.1-home.png" width="1200" alt="The v0.0.1 workbench with source options and saved-work shortcuts" /></a>
+  <br /><sub>Actual v0.0.1 interface. English and Chinese are available.</sub>
 </p>
 
-## Follow the work
+<table>
+  <tr>
+    <td width="33%" valign="top"><h3>See the work</h3><p>Follow the workflow. Open a node and watch text appear live. Inspect saved outputs.</p></td>
+    <td width="33%" valign="top"><h3>Make it yours</h3><p>Choose models and edit prompts on each node. Save a personal style. Restore an earlier version.</p></td>
+    <td width="33%" valign="top"><h3>Keep moving</h3><p>Reuse prepared sources. Work in batches. Return to saved tasks and completed requests.</p></td>
+  </tr>
+</table>
 
-See the path from source material to a finished collection. Each stage has a clear purpose. Status and sample previews help you spot work that needs attention.
+For university teams, company projects, and personal experiments. Build domain examples, explore a new training idea, or curate a collection by hand.
+
+## From source to sample
 
 <p align="center">
-  <img src="assets/showcase/workflow-map.svg" width="1200" alt="Product workflow: add sources, choose goals, configure nodes, generate, review, and export" />
+  <img src="assets/showcase/quick-start.svg" width="1200" alt="Four steps: add sources, shape the run, follow the work, and inspect and export" />
 </p>
 
-Open a model node to watch its response arrive as a token stream. For larger jobs, choose a batch size and follow progress. If a run fails, retry from saved checkpoints. Completed results remain available.
+Import MD, TXT, PDF, DOCX, or TeX files. You can also use a knowledge base or describe an open task. Manual conversation-database import currently supports DSH histories.
 
-Use a local knowledge base or an existing Qdrant collection as a source. Search a topic. Check the matched text and its origins. Generate from those passages. Saved tasks keep the retrieved text and source records.
-
-Scanned documents can use a model with confirmed image support. Choose it in the Input node. Read PDF pages, images, and pictures inside DOCX files. Check the extracted content before use.
+Select a node to set its model, prompts, and limits. Add review or reasoning cleanup when the task needs it. Inspect issues and keep corrections with the saved work.
 
 <p align="center">
-  <img src="screenshots/workflow.jpg" width="1200" alt="The actual workflow canvas with a selected node and its model settings" />
+  <a href="screenshots/v0.0.1-node.png"><img src="screenshots/v0.0.1-node.png" width="1200" alt="The current workflow canvas with model settings in a floating window beside the selected SFT node" /></a>
+  <br /><sub>Models and prompts belong to the node you are editing.</sub>
 </p>
 
-## Choose your data
+## Choose what you create
 
-Select one goal or combine several. Create CPT text, SFT instructions, DPO or ORPO preference pairs, and RLAIF feedback. You can also create agent traces, multi-turn conversations, visible CoT examples, and GSM8K-style arithmetic examples.
+Start with one goal. Combine goals when your collection needs more than one format.
 
-## Read, reflect, and keep your own style
+| Your goal | What you can create |
+| :--- | :--- |
+| **CPT** | Clean reading material for continued pretraining. |
+| **SFT** | Instructions and answers. Single-turn or multi-turn conversations. |
+| **DPO · ORPO** | Preferred and rejected answers for the same prompt. |
+| **RLAIF** | Examples with AI feedback. |
+| **CoT** | Reasoning and answers you can inspect together. |
+| **Agent traces** | Conversations with recorded tool calls and observations. |
+| **Arithmetic** | Template-based examples in GSM8K style. |
 
-Create reading conversations from your documents. Keep the model's native thinking and its answer together. Inspect each turn in the saved results.
+[Explore the nine data goals](assets/showcase/data-goals.svg) · [View the full product flow](assets/showcase/workflow-map.svg)
 
-Start with the initial style, or save your own version. Import DSH conversations to draft lessons from past attempts. Check the proposed rules before adopting them. Restore an earlier version whenever you need it.
+## Keep your own reasoning style
 
-This build is intended for a limited preview. Generated examples and proposed rules still need quality checks. See the [preview readiness notes](docs/release-readiness-2026-10-27.md) for the latest local results and open work.
+Keep native thinking and the answer from the same response. Create reading conversations with the source material included. Inspect the full conversation, not just its last reply.
+
+Use the initial style or save a personal edition. DSH histories can help draft lessons from past attempts. Check the proposed rules before adopting them. Existing tasks keep the style they started with.
+
+Style proposals are a starting point. Automatic feedback and continuous experience updates are still being completed. See the [current preview notes](docs/release-v0.0.1.md) for the scope and open work.
+
+## Add the human touch
+
+Some examples are easier to design yourself. Add an image. Write a question and reference answer. Preview, save, and continue. Export your examples with their original images.
 
 <p align="center">
-  <img src="assets/showcase/data-goals.svg" width="1200" alt="Nine supported goals: CPT, SFT, DPO, ORPO, RLAIF, Agent, Multi-turn, CoT, and GSM8K" />
+  <a href="screenshots/manual-image-qa.jpg"><img src="screenshots/manual-image-qa.jpg" width="1000" alt="The image question-and-answer editor with a real image preview and a human-written sample" /></a>
+  <br /><sub>Manual samples are saved as unreviewed. Check them before use.</sub>
 </p>
 
-## Make image examples by hand
+## Get started
 
-Some examples need a human touch. Add PNG, JPEG, or WEBP images. Write a question and a reference answer. Preview the sample, save it, and continue with the next one.
+1. **[Download v0.0.1 for Windows x64](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/download/v0.0.1/ShuJian-Cube-0.0.1-Windows-x64-Setup.exe).** Run the installer.
+2. **Open ShuJian Cube.** Use the desktop or browser shortcut.
+3. **Bring your sources.** Choose your goals. Configure the model nodes.
+4. **Create, inspect, and export.** Keep useful samples and revisit issues later.
 
-Find saved samples in the data library. Export a ZIP with the questions, answers, and original images. Manual samples are marked as unreviewed. Check them before use.
+The first setup needs an internet connection. Allow about **2 GB** of free space. The installer is about **67 MB**. Connect your own model service. Manual image Q&A needs no model connection.
+
+[Release notes](docs/release-v0.0.1.md) · [Checksums and downloads](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/releases/tag/v0.0.1) · [Report an issue](https://github.com/tianxingstarsky/Super-LLM-distill-Gen/issues)
+
+## See it in one minute
+
+Real screens, visible workflows, and a closer look at the product. The film has Chinese narration, music, and subtitles.
 
 <p align="center">
-  <img src="screenshots/manual-image-qa.jpg" width="1200" alt="The image Q&A editor with a real image preview, question, answer, and save action" />
+  <a href="assets/promo/shujian-cube-promo.mp4"><img src="assets/promo/shujian-cube-promo-poster.png" width="760" alt="Watch the one-minute ShuJian Cube product film" /></a>
 </p>
 
-## Start in a few steps
+<p align="center">
+  <a href="assets/promo/shujian-cube-promo.mp4">Watch or download the film</a> · <a href="assets/promo/captions.srt">Subtitles</a>
+</p>
 
-On Windows, open [the launcher](scripts/start_all.vbs). Then:
+## Preview and notices
 
-1. Add files, agent context, or a short brief.
-2. Choose your data goals and configure the model nodes.
-3. Start generation and open a node to follow its output.
-4. Review your samples, then export the collection.
+**v0.0.1 is an early preview.** Generated examples can be wrong. Check them before training or sharing. This release does not promise unattended million-example quality. Unreviewed samples are not approved samples.
 
-For image Q&A, choose **Create image Q&A** instead. No model connection is needed to write these samples.
+Use sources you have permission to process. Connected model services may receive the content you submit. The installer is not code signed. Its SHA256 checksums are on the release page.
 
-## Responsible use
+ShuJian Cube uses the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for third-party acknowledgments.
 
-Generated data can be wrong. Review accuracy, safety, and privacy before training or sharing. Only use sources and images you have permission to process. Model services may receive the content you submit. Quality depends on your sources, model, and review.
-
-## License and notices
-
-ShuJian Cube is available under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for third-party acknowledgments. Screenshots show the real app with local demo files. Promotional illustrations explain the product and do not report measured results. The hero uses community-inspired DeepSeek whale-girl fan art. See the [art references](assets/showcase/hero-whale-sources.md).
+Screenshots show the real app. Illustrations explain the product and do not show benchmark results. The DeepSeek whale girl is community-inspired fan art. There is no official DeepSeek partnership. See the [art references](assets/showcase/hero-whale-sources.md).

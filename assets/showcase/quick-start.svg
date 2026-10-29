@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="420" viewBox="0 0 1600 420" role="img" aria-labelledby="title desc">
+  <title id="title">From first file to training data</title>
+  <desc id="desc">Add sources, choose goals and node settings, follow live output, then inspect samples and export a collection.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#f8fbff"/><stop offset="1" stop-color="#eef3ff"/></linearGradient>
+    <linearGradient id="blue" x2="1" y2="1"><stop stop-color="#4faaff"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    <linearGradient id="mint" x2="1" y2="1"><stop stop-color="#34c6bd"/><stop offset="1" stop-color="#158c98"/></linearGradient>
+    <linearGradient id="purple" x2="1" y2="1"><stop stop-color="#a893f8"/><stop offset="1" stop-color="#7960d8"/></linearGradient>
+    <filter id="shadow" x="-10%" y="-15%" width="120%" height="145%"><feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#284b87" flood-opacity=".07"/></filter>
+    <g id="document" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 13h18l8 8v30H17zM35 13v10h8M23 31h14M23 38h14M23 45h9"/></g>
+    <g id="settings" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round"><path d="M17 22h30M17 33h30M17 44h30"/><circle cx="27" cy="22" r="4" fill="#23a9aa"/><circle cx="39" cy="33" r="4" fill="#23a9aa"/><circle cx="25" cy="44" r="4" fill="#23a9aa"/></g>
+    <g id="live" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19h34v26H15zM22 28l5 4-5 4M33 36h9"/></g>
+    <g id="export" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 35v13h30V35M32 15v24M24 31l8 8 8-8"/></g>
+  </defs>
+  <rect width="1600" height="420" rx="28" fill="url(#bg)"/>
+  <path d="M1200 0h400v420h-190z" fill="#e5eeff" opacity=".45"/>
+  <g font-family="Segoe UI, Inter, Arial, sans-serif">
+    <text x="48" y="46" fill="#4673a6" font-size="13" font-weight="700" letter-spacing="3">YOUR FIRST COLLECTION</text>
+    <text x="48" y="93" fill="#142c50" font-size="34" font-weight="700" letter-spacing="-.6">From first file to training data.</text>
+    <g filter="url(#shadow)" fill="#fff" stroke="#dce6f4"><rect x="48" y="126" width="346" height="246" rx="20"/><rect x="434" y="126" width="346" height="246" rx="20"/><rect x="820" y="126" width="346" height="246" rx="20"/><rect x="1206" y="126" width="346" height="246" rx="20"/></g>
+    <g fill="none" stroke="#88a4cd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M407 247h14m-5-5 5 5-5 5M793 247h14m-5-5 5 5-5 5M1179 247h14m-5-5 5 5-5 5"/></g>
+    <g transform="translate(76 153)"><rect width="64" height="64" rx="18" fill="url(#blue)"/><use href="#document"/></g>
+    <g transform="translate(462 153)"><rect width="64" height="64" rx="18" fill="url(#mint)"/><use href="#settings"/></g>
+    <g transform="translate(848 153)"><rect width="64" height="64" rx="18" fill="url(#purple)"/><use href="#live"/></g>
+    <g transform="translate(1234 153)"><rect width="64" height="64" rx="18" fill="url(#blue)"/><use href="#export"/></g>
+    <g fill="#c1cfe2" font-size="28" font-weight="600"><text x="322" y="188">01</text><text x="708" y="188">02</text><text x="1094" y="188">03</text><text x="1480" y="188">04</text></g>
+    <g fill="#142c50" font-size="26" font-weight="700"><text x="76" y="264">Add sources</text><text x="462" y="264">Shape the run</text><text x="848" y="264">Follow the work</text><text x="1234" y="264">Keep useful data</text></g>
+    <g fill="#5b708d" font-size="21"><text x="76" y="304">Documents, DSH histories,</text><text x="76" y="333">or an open brief.</text><text x="462" y="304">Choose goals. Set models</text><text x="462" y="333">and prompts on nodes.</text><text x="848" y="304">Watch live output.</text><text x="848" y="333">Return to saved work.</text><text x="1234" y="304">Inspect samples.</text><text x="1234" y="333">Export your collection.</text></g>
+  </g>
+</svg>
