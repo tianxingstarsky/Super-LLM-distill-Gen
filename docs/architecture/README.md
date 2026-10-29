@@ -1,5 +1,7 @@
 # 架构维护记录
 
+推理时利用用户发言示范、角色边界，以及 NVIDIA User Sim / Personas / Chat-v3 的采用范围见 [用户模拟与共建底座](user-simulation-2026-10-29.md)。当前只更新可编辑模板，没有引入另一套调度、训练模型或下载数据集。
+
 Codex、OpenCode 与 ADK 的状态、工具反馈和恢复机制取舍见 [Agent 运行环境适配](codex-harness-adoption-2026-10-29.md)，其中明确本次 `native_joint` 的实施范围与尚未接通的长任务、经验闭环。
 
 可使用的初始风格、DSH 轨迹分组、个人版本与操作历史整理见 [简洁全面与个人进化](experience-evolution-initial-2026-10-27.md)。

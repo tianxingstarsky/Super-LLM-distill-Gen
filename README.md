@@ -56,6 +56,10 @@ People consolidate memories during sleep. We imagine a similar rhythm for AI. Tu
 
 That is the future we are working toward. Today, ShuJian Cube helps prepare the data for it.
 
+We welcome contributors who want to build **open agent foundation models**. Help agents understand how people really speak: brief requests, unfinished sentences, corrections, and follow-up questions. Better user simulation can help us create better conversations for training.
+
+NVIDIA's [User Sim](https://github.com/NVIDIA-NeMo/UserSim) and [open dialogue data](https://huggingface.co/datasets/nvidia/Nemotron-SFT-Instruction-Following-Chat-v3) are useful research references. We hope to build on this work with the community. This project has not trained or released an agent foundation model.
+
 ## Install with your agent
 
 **DeepSeek-first workflows. Your agent stays in control.** DeepSeek Harness is our primary integration. Codex has its own skill package. Install the matching connector separately from the app.

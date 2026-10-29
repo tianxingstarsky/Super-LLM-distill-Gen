@@ -1,10 +1,11 @@
 """One saved reading context, private actor state and literal native exports."""
 from copy import deepcopy
+import hashlib
 import json
 import pytest
 from lib.infrastructure import training_workflow as engine
 from lib.contexts.workflows.contracts import training_record, has_public_reading_context
-from lib.contexts.workflows.domain.reading_session import reading_source
+from lib.contexts.workflows.domain.reading_session import reading_source, simulator_messages
 from lib.contexts.workflows.domain.dialogue import DialogueSource
 from lib.domain.training_surface import training_record_surface_issue
 from lib.domain.workflow_node_prompts import active_node_prompt_ids, snapshot_node_prompts
@@ -100,3 +101,45 @@ def test_reading_material_scope_and_old_prompt_catalog():
     assert "workflow.reading_answer" not in snapshot_node_prompts(None, recipe_version=40)["multiturn"]
     assert active_node_prompt_ids("multiturn", "文档", node_generation=config()) == (
         "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")
+
+
+@pytest.mark.parametrize("protocol", [1, 2])
+def test_user_voice_history_keeps_literal_speaker_turns_without_private_reasoning(protocol):
+    history = [
+        {"role": "system", "content": "PRIVATE_LEARNER_RULE"},
+        {"role": "user", "content": "  不是这个。\n1. 只看单位\n2. 保留 `ms`  "},
+        {"role": "assistant", "content": "这里的单位是毫秒。", "reasoning_content": "PRIVATE_REASONING"},
+        {"role": "user", "content": 'Wait, keep "ms".\nJust that column.'},
+        {"role": "assistant", "content": "I will keep that column.", "reasoning_content": "PRIVATE_REASONING_2"},
+    ]
+    before = deepcopy(history)
+    messages = simulator_messages("ACTOR_RULE", "PRIVATE_SCENE", "FULL_DOCUMENT", history,
+                                  protocol_version=protocol)
+    assert messages[1:] == [
+        {"role": "assistant", "content": "  不是这个。\n1. 只看单位\n2. 保留 `ms`  "},
+        {"role": "user", "content": "这里的单位是毫秒。"},
+        {"role": "assistant", "content": 'Wait, keep "ms".\nJust that column.'},
+        {"role": "user", "content": "I will keep that column."},
+    ]
+    assert history == before
+    wire = json.dumps(messages, ensure_ascii=False)
+    assert "PRIVATE_LEARNER_RULE" not in wire and "PRIVATE_REASONING" not in wire
+    assert ("FULL_DOCUMENT" in wire) is (protocol == 1)
+
+
+def test_reading_user_prompt_update_preserves_legacy_and_custom_snapshots(tmp_path):
+    from lib.prompts import get, render
+    for version, sha256 in {
+        "1.0.0": "a629392f10f6c8719d5d35bb6bb5777c21dff2ab5655d54e1db8379244606e1a",
+        "1.1.0": "52289609c8bb6522381babc27f0a3fdff57f4a5ee97a5286b954526ffb0f38d2",
+    }.items():
+        assert hashlib.sha256(get("workflow.reading_user", version=version).template.encode()).hexdigest() == sha256
+    assert get("workflow.reading_user").version == "1.2.0"
+    original = render(get("workflow.reading_user", version="1.1.0")) + '\n{"voice":"keep literal"}'
+    output = tmp_path / "out"
+    run_id = engine.create_run(output, brief="单位讨论", targets=["multiturn"], node_generation=config(),
+        node_prompts={"multiturn": {"workflow.reading_user": original}})
+    workflow = engine.Workflow(output, run_id, tmp_path)
+    workflow.stage = "multiturn"
+    assert workflow.prompt_text("workflow.reading_user") == original
+    assert snapshot_node_prompts(None, recipe_version=41)["multiturn"]["workflow.reading_user"] == render(get("workflow.reading_user"))

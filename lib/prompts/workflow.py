@@ -643,7 +643,7 @@ from lib.prompts.workflow_native_cot import (
     NATIVE_COT_BODY, DRAFT_CLAIM_CALIBRATION, CONCISE_COMPREHENSIVE_REASONING,
     EVOLVE_EXPERIENCE_BODY,
 )
-from lib.prompts.workflow_reading_session import READING_SCENE, READING_USER, READING_ANSWER, READING_SCENE_V1, READING_USER_V1
+from lib.prompts.workflow_reading_session import READING_SCENE, READING_USER, READING_ANSWER, READING_SCENE_V1, READING_USER_V1, READING_USER_V1_1
 READING_SCENE_PROMPT_V1 = PromptSpec(id="workflow.reading_scene", version="1.0.0", purpose="情景故事设计",
     source="https://adk.dev/evaluate/user-sim/", constraints=("场景虚构与资料事实分离", "只输出故事正文"), template=READING_SCENE_V1)
 READING_USER_PROMPT_V1 = PromptSpec(id="workflow.reading_user", version="1.0.0", purpose="情景用户连续发言",
@@ -653,7 +653,12 @@ READING_SCENE_PROMPT = PromptSpec(id="workflow.reading_scene", version="1.1.0", 
     source="https://adk.dev/evaluate/user-sim/", constraints=("场景虚构与资料事实分离", "只输出故事正文"), template=READING_SCENE)
 READING_USER_PROMPT = PromptSpec(id="workflow.reading_user", version="1.1.0", purpose="情景用户连续发言",
     source="https://github.com/sierra-research/tau2-bench/blob/main/src/tau2/user/user_simulator.py",
-    constraints=("只输出当前用户发言或结束信号", "看不到助手思考"), template=READING_USER)
+    constraints=("只输出当前用户发言或结束信号", "看不到助手思考"), template=READING_USER_V1_1)
+READING_USER_PROMPT_V1_1 = READING_USER_PROMPT
+READING_USER_PROMPT = _reasoning_spec_replace(READING_USER_PROMPT, version="1.2.0",
+    constraints=READING_USER_PROMPT.constraints + ("从自己的历史延续口吻，不模仿回答者", "无示例时不宣称个人模仿"),
+    template=READING_USER,
+    notes="推理时利用可见发言示范；不训练用户模型，不新增模型调用，语义与模仿效果须另作真实验证。")
 READING_ANSWER_PROMPT = PromptSpec(id="workflow.reading_answer", version="1.0.0", purpose="共享资料原生思考与回答",
     source="https://arxiv.org/abs/2409.11500", constraints=("生成与导出上下文一致", "保留原生思考"), template=READING_ANSWER)
 READING_ANSWER_PROMPT_V1_0 = READING_ANSWER_PROMPT
