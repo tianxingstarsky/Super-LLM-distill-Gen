@@ -1,5 +1,6 @@
 """Versioned prompts for the automatic training workflow."""
 from lib.prompts.base import PromptSpec, render
+from lib.prompts.workflow_conversation_reasoning import CONVERSATION_REASONING
 
 
 def spec(name, purpose, body, source=None, *, version="1.0.0"):

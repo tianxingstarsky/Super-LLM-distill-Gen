@@ -10,6 +10,22 @@ from lib.contexts.workflows.contracts import EXPLORATORY_STYLE_V1, EXPLORATORY_S
 
 
 ZH_EN: dict[str, str] = {
+    "缺失推理处理": "Missing reasoning",
+    "保留原样": "Keep as imported",
+    "仅补缺失推理": "Fill missing reasoning",
+    "排除缺失记录": "Exclude incomplete records",
+    "推理补充模型": "Reasoning completion model",
+    "缺失推理补充": "Missing reasoning completion",
+    "补全对话推理": "Conversation reasoning completion",
+    "逐个检查助手回合，也检查只有工具调用的回合。原始导入文件始终保留。": "Check every assistant turn, including tool-call-only turns. Original imported files are always kept.",
+    "保留已有推理，缺失处留空。可用于普通 SFT；需要完整推理的目标仍按原规则检查。": "Keep existing reasoning and leave missing fields empty. Ordinary SFT can use these records. Targets that require complete reasoning still apply their original checks.",
+    "只补空缺的助手推理，保留原答案、工具记录和已有推理。补充内容标为合成解释，不是恢复原始思考。": "Fill only missing assistant reasoning. Keep answers, tool records and existing reasoning. Added text is marked as a synthetic explanation, not recovered original thought.",
+    "任一助手回合缺失推理，就跳过整段记录；不会截断多轮对话或调用模型补充。": "Skip the whole record if any assistant turn lacks reasoning. Do not truncate the conversation or make completion calls.",
+    "使用本节点的模型和提示词，按当时可见上下文逐轮补充。后续节点的风格改写仍独立生效。": "Use this node's model and prompt to fill each turn from the context available at that time. Later style settings remain independent.",
+    "原始会话没有推理字段。导入保持原样，是否补充由输入节点设置决定。": "The original conversation has no reasoning. Import keeps it unchanged. Choose whether to fill it in the input node.",
+    "仅支持 DSH 会话库。导入保留角色、工具调用和已有推理；缺失推理在输入节点选择处理方式。": "DSH sessions only. Import keeps roles, tool calls and existing reasoning. Choose how to handle missing reasoning in the input node.",
+    "导入完整对话；工具轨迹需要真实观测。是否补充缺失推理，请在输入节点设置。": "Import complete conversations. Tool traces need real observations. Choose whether to fill missing reasoning in the input node.",
+    "也可导入 NeMo 的 problem / generation 结果及 OpenThoughts 的带推理对话 JSON / JSONL；只拆分明确的推理标记。缺失推理在输入节点选择处理方式。": "Also accepts NeMo problem / generation results and OpenThoughts reasoning conversations in JSON / JSONL. Only explicit reasoning markers are decoded. Choose how to handle missing reasoning in the input node.",
     "内容核验": "Content verification",
     "后续 JEV、评分修正节点仍按各自配置执行，会另有调用。": "Later JEV and scoring nodes follow their own settings and make separate calls.",
     "内容抽检比例（%）": "Content sampling rate (%)",

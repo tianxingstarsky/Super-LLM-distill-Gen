@@ -54,6 +54,9 @@ from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canva
 from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
 from lib.presentation.streamlit.workflow_cpt_settings import cpt_processing_snapshot, render_cpt_settings, cpt_vision_unconfirmed
 from lib.presentation.streamlit.workflow_preference_settings import render_preference_settings, preference_design_snapshot
+from lib.presentation.streamlit.conversation_reasoning_controls import (
+    REASONING_POLICY_LABELS, conversation_reasoning_snapshot, render_conversation_reasoning,
+)
 from lib.presentation.streamlit.workflow_generation_settings import (
     STYLE_LABELS, TRIM_LABELS, generation_snapshot, generation_issues, generation_summary, reasoning_route_description,
     render_generation_settings, render_trim_toggle, render_trim_settings, trim_snapshot, trim_has_issue,
@@ -410,6 +413,9 @@ def _stage_configuration(key, recipe, state):
         details = {"来源": [UntranslatedText(row.get("name", row.get("file", "未知来源"))) for row in recipe.get("sources", [])] or ["开放需求"],
                 "最大处理单元": recipe.get("max_units"), "分块目标字符数": recipe.get("chunk_chars"),
                 "隐私与结构规则": "疑似密钥、无效结构和超长单元进入隔离"}
+        policy = recipe.get("conversation_reasoning")
+        if policy:
+            details["缺失推理处理"] = REASONING_POLICY_LABELS[policy["mode"]]
         binding = recipe.get("node_models", {}).get(key, {}).get("generation")
         if binding:
             details["生成模型"] = UntranslatedText(binding["backend"] + " / " + binding["model"])
@@ -1038,7 +1044,8 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                                               if target != "cpt" or recipe.get("cpt_review_policy_version") != 1
                                               or recipe.get("repair_inputs")), None))
                                           if human_application is not None and "review" in graph_nodes else None),
-                                      source_mode=("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
+                                      source_mode=("补全对话推理" if (recipe.get("conversation_reasoning") or {}).get("mode") == "fill_missing"
+                                          else "多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
                                           else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
                                           else "文档资料" if recipe.get("sources") else "开放需求")),
                           selection_key, key=f"live-canvas:{run_id}", follow_key=follow_key,
@@ -1755,6 +1762,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         saved_binding = st.session_state.get(f"workflow-node-bindings:{ws}", {}).get("ingest", {}).get(parser_role)
         if saved_binding:
             document_parser["binding"] = saved_binding
+    conversation_reasoning = (conversation_reasoning_snapshot(ws) if source_mode == "Agent 上下文" else None)
     package_review = package_review_snapshot(ws)
     review_repair = review_repair_snapshot(ws)
     cpt_processing = (cpt_processing_snapshot(ws) if "cpt" in graph_nodes and source_mode != "开放需求"
@@ -1767,6 +1775,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             selected_node = graph_nodes[0]
         st.session_state[selection_key] = selected_node
         model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" or document_parser.get("assistance") else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
+        if conversation_reasoning and conversation_reasoning["mode"] == "fill_missing":
+            model_source_mode = "补全对话推理"
         if source_mode == "开放需求" and creation_mode == "人工问答增强":
             # The run snapshots these designs as input units. It never calls
             # the open-brief planning model to parse an existing human QA.
@@ -1878,6 +1888,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         package_review = package_review_snapshot(ws)
                 if selected_node == "director":
                     render_director_settings(ws, save_field=_save_draft_value)
+                if selected_node == "ingest" and source_mode == "Agent 上下文":
+                    conversation_reasoning = render_conversation_reasoning(ws, save_field=_save_draft_value)
                 if selected_node == "ingest" and source_mode == "文档资料":
                     document_parser = render_document_parser(ws, bindings, endpoints,
                         backend_application=backend_application)
@@ -2050,7 +2062,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                 key=f"workflow-upload:{ws}:{source_mode}", **upload_options)
                         st.caption("单文件最多 50 MiB，本次来源合计最多 200 MiB。")
                         if source_mode == "Agent 上下文":
-                            st.caption("也可导入 NeMo 的 problem / generation 结果及 OpenThoughts 的带推理对话 JSON / JSONL；只拆分明确的推理标记，缺失推理不会补造。")
+                            st.caption("也可导入 NeMo 的 problem / generation 结果及 OpenThoughts 的带推理对话 JSON / JSONL；只拆分明确的推理标记。缺失推理在输入节点选择处理方式。")
                 if input_cache is not None:
                     # The callback already persisted and selected these uploads.
                     uploaded = []
@@ -2078,7 +2090,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     brief = _draft_brief("补充生成要求（可选）", height=120,
                                          placeholder="例如：重点覆盖故障诊断、证据引用与清晰的分步回答。",
                                          key=f"workflow-source-brief:{ws}:{source_mode}")
-                    st.caption("导入完整对话；工具轨迹需要真实观测，推理缺失不会自动补造。"
+                    st.caption("导入完整对话；工具轨迹需要真实观测。是否补充缺失推理，请在输入节点设置。"
                                if source_mode == "Agent 上下文" else
                                "扫描件与图片可在输入节点配置多模态识别。")
                     if input_cache is not None:
@@ -2383,6 +2395,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         conversation_turns=int(conversation_turns),
                                         agent_replay_mode=agent_mode,
                                         sft_output_style=sft_output_style,
+                                        conversation_reasoning=conversation_reasoning,
                                         node_generation=node_generation,
                                         qa_director=qa_director,
                                         package_review={"enabled": False} if cpt_only else package_review,

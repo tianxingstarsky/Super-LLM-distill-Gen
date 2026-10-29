@@ -1,5 +1,9 @@
 # 运行时与旧基础设施
 
+导入对话的可选 `conversation_reasoning` 配方由 workflows 用例处理。运行时在读取可复用的原始来源缓存后、写入任务输入检查点前装配该用例；普通批次与生产轮次共用这一入口。它不回写资料库，没有该字段的历史任务保持原行为。
+
+`workflow_report.py` 在样本正文前显示输入推理的原有、合成和缺失轮数，逐条标明助手消息的位置。输入收据与后续改写分开，补全不作为审核通过；训练文件不附加这些内部收据。验证：`test_imported_reasoning_provenance.py`。
+
 `workflow_report.py` 对 CoT 抽检未覆盖的记录展示中英文说明，区分节点本地检查与后续实际审核。训练投影及历史收据不改写。
 
 新配方的 `external_reasoning_import_version=1` 在现有流式来源库入口调用 datasets 的纯合同，接收 NeMo / OpenThoughts 明确分隔的推理结果。旧任务不改变解释方式；原文件与解析缓存不改写。`dialogue_role_messages` 将风格改写原稿放入私有编辑工作单，不冒充用户发言或事实资料。验证见 `test_cot_style_transfer.py`。

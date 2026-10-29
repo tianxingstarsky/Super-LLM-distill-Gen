@@ -571,7 +571,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
     network_services = set()
     for role in roles:
         writer_label = ("对话指导员模型" if node == "director" else ("修正模型" if (package_review or {}).get("enabled") else "评分与修正模型") if node == "review" else "清洗模型" if node == "cpt" and source_mode != "开放需求" else
-                        "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else "生成模型")
+                        "文档解析模型" if node == "ingest" and source_mode == "模型辅助文档" else
+                        "推理补充模型" if node == "ingest" and source_mode == "补全对话推理" else "生成模型")
         review_label = ("JEV 评分模型" if node in {"review", "jev"} else
                         "质量评审模型" if node == "package" else "过程核对模型")
         st.html('<p style="font-size:14px;margin:14px 0 8px"><strong>'

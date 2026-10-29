@@ -57,7 +57,8 @@ def report_sample(target: str, row: dict, body: dict | None, *, released: bool,
     provenance = {key: deepcopy(row[key]) for key in (
         "source_id", "source_name", "source_location", "location", "evidence_level", "reasoning_origin",
         "reasoning_scope", "reasoning_prefill", "answer_response_details", "native_answer_terminal",
-        "native_answer_retry", "generation_style", "reasoning_reflection", "generation_check", "cot_review_policy", "native_generation", "reading_session") if key in row}
+        "native_answer_retry", "generation_style", "reasoning_reflection", "generation_check", "cot_review_policy", "native_generation", "reading_session",
+        "conversation_reasoning", "conversation_reasoning_scope") if key in row}
     if "id" in row:
         provenance["record_id"] = deepcopy(row["id"])
     if "source_context" in row:
@@ -66,6 +67,9 @@ def report_sample(target: str, row: dict, body: dict | None, *, released: bool,
         if isinstance(source, dict):
             provenance["teacher_material"].update({key: deepcopy(source[key]) for key in (
                 "source_id", "source_name", "source_kind", "kind", "source_line_ranges", "evidence_level") if key in source})
+            if "conversation_reasoning" not in provenance and isinstance(source.get("conversation_reasoning"), dict):
+                provenance["conversation_reasoning"] = deepcopy(source["conversation_reasoning"])
+                provenance["conversation_reasoning_scope"] = "input_only"
     contract = row.get("qa_contract")
     if isinstance(contract, dict):
         provenance["task_contract"] = {key: deepcopy(contract[key]) for key in (

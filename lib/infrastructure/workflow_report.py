@@ -556,6 +556,40 @@ def _body_html(body, labels):
     return ''.join(parts)
 
 
+def _imported_reasoning_notice(provenance, language):
+    """Explain per-turn import treatment without promoting it to an assessment."""
+    receipt = provenance.get("conversation_reasoning")
+    if not isinstance(receipt, dict):
+        return ""
+    english = language == "en"
+    original = receipt.get("existing_turns", 0)
+    synthetic = receipt.get("synthesized_turns", 0)
+    missing = receipt.get("remaining_missing_turns", receipt.get("missing_turns", 0))
+    summary = (f"Imported reasoning · {original} original · {synthetic} synthesized · {missing} missing"
+               if english else f"导入推理 · 原有 {original} 轮 · 合成补全 {synthetic} 轮 · 仍缺失 {missing} 轮")
+    scope = ("This receipt describes the input. A later node may have rewritten the output."
+             if english else "此收据描述导入阶段；后续节点可能已改写输出。") if provenance.get("conversation_reasoning_scope") == "input_only" else (
+             "The input messages were retained. This is not a quality verdict."
+             if english else "导入消息已保留；该记录不代表质量审核通过。")
+    note = ("Synthesized explanations are not recovered original thoughts."
+            if english else "补全内容是合成解释，并非恢复原模型的真实思考。")
+    origins = ({"source": "Original", "synthetic_explanation": "Synthesized", "missing": "Missing"}
+               if english else {"source": "原有推理", "synthetic_explanation": "合成补全", "missing": "缺失推理"})
+    turns = []
+    for turn in receipt.get("turns", []):
+        index = turn.get("message_index")
+        if type(index) is not int:
+            continue
+        label = origins.get(turn.get("origin"), "Unknown" if english else "未知来源")
+        position = f"Assistant at message {index + 1}" if english else f"消息 {index + 1} 的助手发言"
+        turns.append('<li>' + _escape(position) + ' · ' + _escape(label) + '</li>')
+    details = ('<details class="metadata"><summary>' +
+               ("Per-turn input provenance" if english else "逐条助手发言的输入来源") +
+               '</summary><ul>' + ''.join(turns) + '</ul></details>') if turns else ''
+    return ('<div class="notice"><strong>' + _escape(summary) + '</strong><p>' +
+            _escape(scope) + (' ' + _escape(note) if synthetic else '') + '</p>' + details + '</div>')
+
+
 def _reading_title(row, labels):
     body = row.get("training_body") or row.get("record") or {}
     text = body.get("text")
@@ -623,6 +657,7 @@ def render_report_html(overview: dict, page: dict, *, language: str = "zh") -> s
         record_id = str(row.get("id") or "")
         state_badge = ("" if formal and row.get("released") and row["status"] == "eligible" else '<span class="badge">' + _escape(labels["node_passed"] if row["status"] == "eligible" else _status(row["status"], labels)) + '</span>')
         reason = ('<div class="reason"><b>' + _escape(labels["reason"]) + '</b> ' + _escape(row["reason"]) + '</div>') if row.get("reason") else ''
+        reason += _imported_reasoning_notice(row.get("provenance", {}), language)
         review_policy = row.get("provenance", {}).get("cot_review_policy", {})
         if review_policy.get("semantic_status") == "not_assessed":
             reason += '<div class="notice">' + _escape(

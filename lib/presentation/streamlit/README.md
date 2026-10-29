@@ -38,6 +38,7 @@
 | --- | --- | --- |
 | 模型选择、能力和共享并发 | [`workflow_node_settings.py`](workflow_node_settings.py)、[`model_scheduling_controls.py`](model_scheduling_controls.py) | 人工声明和探测证据分开；模型运行时由 models 域负责 |
 | 文档与 DSH 会话导入 | [`docling_settings.py`](docling_settings.py)、[`conversation_import_controls.py`](conversation_import_controls.py) | 展示上传、预览、问题与确认；解析数据库不在页面实现 |
+| 导入会话的缺失推理 | [`conversation_reasoning_controls.py`](conversation_reasoning_controls.py) | 输入节点选择保留、仅补缺失或排除；复用节点模型和提示词，启动时冻结，合成解释不冒充原始思考 |
 | CPT、指导员、偏好与生产策略 | [`workflow_cpt_settings.py`](workflow_cpt_settings.py)、[`workflow_director_settings.py`](workflow_director_settings.py)、[`workflow_preference_settings.py`](workflow_preference_settings.py)、[`workflow_production_settings.py`](workflow_production_settings.py) | 编辑当前草稿；启动时冻结，不热改已有任务 |
 | 提示词模板、导入、恢复和个人保存 | [`workflow_prompt_settings.py`](workflow_prompt_settings.py)、[`prompt_library_controls.py`](prompt_library_controls.py) | `render_node_prompts` 编辑节点实际使用的模板；`node_prompt_snapshot` 创建冻结输入 |
 | 推理方式、风格、语言、深度和修剪 | [`workflow_generation_settings.py`](workflow_generation_settings.py) | 显式推理深度与模型原生思考强度分开；关闭生成保留选择，但不伪称已生成新推理 |
@@ -52,6 +53,7 @@
 - [`i18n.py`](i18n.py) 只负责显示语言；路由采用稳定内部标识，英文标签不能成为 `PAGES` 的查找键。历史 URL、任务定位和控件键继续兼容。
 - [`app_navigation.py`](app_navigation.py)、[`review_navigation.py`](review_navigation.py) 管理跨页定位。报告进入审核、返工、导出再返回时，保留任务、阅读类型和页码。
 - Streamlit session state 保存界面状态；工作流应用提供持久任务状态。创建草稿通过既有草稿服务保存，冻结配方不随界面重绘而修改。无变化的重绘不重复保存，失败后仍允许重试完整草稿。
+- 对话导入格式与缺失推理策略都是持久草稿字段；更改其控件时同步检查 `creation_draft.py` 的枚举和键范围。验证需注入生产页的 DSH 导入入口，不能只覆盖没有导入器的简化工作台。
 - [`work_drafts.py`](work_drafts.py)、[`workflow_reuse.py`](workflow_reuse.py) 负责恢复与复用。自动生成、人工增强各自的入口模式保留；旧草稿缺少新开关时不自动开启。
 - [`selection_labels.py`](selection_labels.py) 通过稳定编号区分重名工作和样本。提交仍使用原 ID；短编号碰撞时扩展，不以显示文本决定对象身份。
 - 只有全部选中来源被当前 DSH 确认回执覆盖时才省去不会运行的指导员配置；混合或未知来源沿用原流程。全部输入隔离时显示原因和调整入口，不能声称已有可用素材。

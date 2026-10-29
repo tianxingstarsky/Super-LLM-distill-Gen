@@ -13,6 +13,7 @@
 | 查找可复用资料与已生成文件 | [asset_catalog.py](asset_catalog.py) · `asset_catalog_application` | `AssetCatalogApplication`；资料目录和版本身份校验 |
 | 查看任务完整报告 | [workflow_reports.py](workflow_reports.py) · `workflow_report_application` | `WorkflowReportApplication`；便携报告读取与生成 |
 | 导入 DSH 会话数据库 | [conversation_import.py](conversation_import.py) · `conversation_import_application` | `ImportConversations`；外部转换、预览、明确确认后保存到资料缓存 |
+| 按选项补充导入会话的缺失推理 | [conversation_reasoning.py](conversation_reasoning.py) · `conversation_reasoning_preparer` | `PrepareConversationReasoning`；复用输入节点的冻结模型、提示词及检查点，构造不调用模型 |
 | 缓存上传文件 | [local_inputs.py](local_inputs.py) · `local_input_application` | `LocalInputApplication`；持久输入缓存 |
 | 查看文档片段 | [document_previews.py](document_previews.py) · `document_preview_application` | `DocumentPreviewApplication`；本地来源预览 |
 | 准备文档语料 | [document_corpus.py](document_corpus.py) · `document_corpus_application` | `PrepareDocumentCorpus`；本地读取、保留结构的分块与去重 |

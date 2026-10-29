@@ -43,7 +43,7 @@ def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = N
         return ("jev",) if review["enabled"] and stage == review_node else ()
     if stage == "ingest":
         return (("vision",) if source_mode == "多模态文档" else
-                ("generation",) if source_mode in {"开放需求", "模型辅助文档"} else ())
+                ("generation",) if source_mode in {"开放需求", "模型辅助文档", "补全对话推理"} else ())
     if stage == "cpt" and source_mode != "开放需求":
         from lib.domain.cpt_processing import validate_cpt_processing
         return (("generation", "jev") if validate_cpt_processing(cpt_processing)["mode"] == "model" else ())

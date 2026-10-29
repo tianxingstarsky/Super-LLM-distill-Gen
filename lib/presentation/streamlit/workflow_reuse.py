@@ -23,6 +23,7 @@ from lib.domain.workflow_graph import execution_graph
 from lib.domain.workflow_production import validate_production
 from lib.domain.review_repair import validate_review_repair
 from lib.domain.agent_experience import validate_agent_experience_snapshot
+from lib.contexts.workflows.contracts import validate_conversation_reasoning
 
 
 _DOCUMENT_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".tex", ".latex", ".png", ".jpg", ".jpeg", ".webp"})
@@ -125,6 +126,9 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         f"workflow-chunk-chars:{workspace}": recipe.get("chunk_chars", 2000),
         f"workflow-turns:{workspace}": recipe.get("conversation_turns", 3),
     }
+    reasoning_policy = validate_conversation_reasoning(recipe.get("conversation_reasoning")) or {"mode": "preserve"}
+    if mode == "Agent 上下文":
+        values[f"workflow-conversation-reasoning:{workspace}"] = reasoning_policy["mode"]
     production = validate_production(recipe.get("production"), recipe.get("targets", []))
     values[f"workflow-production-enabled:{workspace}"] = production is not None
     if production is not None:
@@ -269,6 +273,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         for name, weight in director["type_weights"].items():
             values[f"workflow-director-weight:{workspace}:{name}"] = weight
     prompt_mode = ("多模态文档" if parser["mode"] == "vision" else "模型辅助文档" if parser["mode"] == "model" else mode)
+    if mode == "Agent 上下文" and reasoning_policy["mode"] == "fill_missing":
+        prompt_mode = "补全对话推理"
     copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")))
     if recipe.get("agent_experience_version") == 1:
         experience = validate_agent_experience_snapshot(recipe.get("agent_experience"))

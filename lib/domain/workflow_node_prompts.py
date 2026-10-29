@@ -50,6 +50,7 @@ VERSION_24_NODE_PROMPT_IDS = {**VERSION_23_NODE_PROMPT_IDS,
 VERSION_25_NODE_PROMPT_IDS = {**VERSION_24_NODE_PROMPT_IDS,
                   "cot": (*VERSION_24_NODE_PROMPT_IDS["cot"], "workflow.cot_check_agent")}
 NODE_PROMPT_IDS = {**VERSION_25_NODE_PROMPT_IDS,
+                  "ingest": (*VERSION_25_NODE_PROMPT_IDS["ingest"], "workflow.conversation_reasoning"),
                   "multiturn": (*VERSION_25_NODE_PROMPT_IDS["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer"),
                   "cot": (*VERSION_25_NODE_PROMPT_IDS["cot"], "workflow.cot_native_joint"),
                   "preference": (*VERSION_22_NODE_PROMPT_IDS["preference"], "workflow.preference_design_check"),
@@ -82,6 +83,7 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
                 and package_review_stage(package_review) == stage else ())
     if stage == "ingest":
         return (("workflow.plan",) if source_mode == "开放需求" else
+                ("workflow.conversation_reasoning",) if source_mode == "补全对话推理" else
                 ("workflow.document_parse",) if source_mode == "模型辅助文档" else
                 ("workflow.document_vision",) if source_mode == "多模态文档" else ())
     if stage == "cpt":
@@ -170,7 +172,7 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
                     claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                     claim_review_wire_schema_version=None, claim_review_focus_version=None,
                     claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
-                    preference_design_prompt_version=None) -> dict:
+                    preference_design_prompt_version=None, conversation_reasoning_version=None) -> dict:
     if claim_review_protocol_version is not None and (
             type(claim_review_protocol_version) is not int or claim_review_protocol_version not in {1, 2}):
         raise ValueError("invalid_claim_review_protocol_version")
@@ -211,6 +213,10 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
         catalog = {**catalog, "cot": (*catalog["cot"], "workflow.cot_native_joint")}
     if recipe_version >= 41:
         catalog = {**catalog, "multiturn": (*catalog["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")}
+    if conversation_reasoning_version is not None:
+        if type(conversation_reasoning_version) is not int or conversation_reasoning_version != 1:
+            raise ValueError("invalid_conversation_reasoning_version")
+        catalog = {**catalog, "ingest": (*catalog["ingest"], "workflow.conversation_reasoning")}
     if learner_context_review_version == 1 and "review" in catalog:
         catalog = {**catalog, "review": (*catalog["review"], "workflow.learner_context_check")}
     if (claim_review_protocol_version == 2 or claim_review_adversarial_protocol_version == 1) and "review" in catalog:
@@ -229,7 +235,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          claim_review_wire_schema_version=None, claim_review_focus_version=None,
                          claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
                          claim_review_transport_version=None, claim_repair_feedback_version=None,
-                         preference_design_version=None, preference_design_prompt_version=None) -> dict:
+                         preference_design_version=None, preference_design_prompt_version=None,
+                         conversation_reasoning_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
     if preference_design_version is not None and (type(preference_design_version) is not int or preference_design_version not in {1, 2, 3}):
@@ -291,7 +298,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                 claim_review_anchor_protocol_version, claim_review_adversarial_protocol_version,
                 claim_review_wire_schema_version, claim_review_focus_version,
                 claim_review_condition_contract_version, reasoning_depth_contract_version,
-                preference_design_prompt_version).items()}
+                preference_design_prompt_version, conversation_reasoning_version).items()}
 
 
 def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11, learner_context_review_version=None,
@@ -300,7 +307,7 @@ def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: i
                                  claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                                  claim_review_wire_schema_version=None, claim_review_focus_version=None,
                                  claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
-                                 preference_design_prompt_version=None) -> dict:
+                                 preference_design_prompt_version=None, conversation_reasoning_version=None) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
     templates = validate_node_prompts(value)
     catalog = _prompt_catalog(recipe_version, learner_context_review_version, claim_review_protocol_version,
@@ -309,7 +316,7 @@ def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: i
                               claim_review_adversarial_protocol_version,
                               claim_review_wire_schema_version, claim_review_focus_version,
                               claim_review_condition_contract_version, reasoning_depth_contract_version,
-                              preference_design_prompt_version)
+                              preference_design_prompt_version, conversation_reasoning_version)
     if (set(templates) != set(catalog)
             or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):

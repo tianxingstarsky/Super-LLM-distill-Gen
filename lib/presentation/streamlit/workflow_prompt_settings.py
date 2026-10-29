@@ -16,6 +16,7 @@ from lib.presentation.streamlit.prompt_library_controls import (
 
 
 PROMPT_LABELS = {
+    "workflow.conversation_reasoning": "缺失推理补充",
     "workflow.reading_scene": "情景故事设计",
     "workflow.reading_user": "情景用户连续发言",
     "workflow.reading_answer": "共享资料原生思考与回答",
@@ -197,7 +198,8 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
     pinned = (recipe.get("node_prompt_templates") or {}).get(node, {})
     if not isinstance(pinned, dict) or not pinned:
         return
-    mode = ("多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
+    mode = ("补全对话推理" if (recipe.get("conversation_reasoning") or {}).get("mode") == "fill_missing"
+            else "多模态文档" if (recipe.get("document_parser") or {}).get("mode") == "vision"
             else "模型辅助文档" if (recipe.get("document_parser") or {}).get("mode") == "model"
             else "文档资料" if recipe.get("sources") else "开放需求")
     active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"),

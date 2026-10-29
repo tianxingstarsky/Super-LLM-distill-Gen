@@ -18,3 +18,5 @@ from .domain.reasoning_styles import EXPLORATORY_STYLE_V1, EXPLORATORY_STYLE_EN_
 from .domain.cot_review_policy import validate_cot_review_policy
 from .domain.reading_session import has_public_reading_context
 from .domain.public_experience import initial_experience_text
+from .domain.conversation_reasoning import validate_conversation_reasoning
+from .domain.imported_reasoning import imported_reasoning_metadata

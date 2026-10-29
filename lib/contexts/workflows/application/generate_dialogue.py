@@ -12,6 +12,7 @@ from ..domain.dialogue import (DialogueProgress, DialoguePlanError, controlled_t
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_quality import accepted, conversation_issue, same_answer, text_issue, tool_error_flag
 from lib.domain.human_augmentation import human_generation_instruction
+from ..domain.imported_reasoning import imported_reasoning_metadata
 
 
 class GenerateMultiturnDialogue:
@@ -30,6 +31,9 @@ class GenerateMultiturnDialogue:
                  if self.recipe.get("multiturn_generation_style_version") == 1
                  and unit.get("kind") != "conversation" else None)
         rows = self.generate(unit, style=style)
+        for row in rows:
+            row.update(imported_reasoning_metadata(unit, messages_preserved=(
+                unit.get("kind") == "conversation" and row.get("messages") == unit.get("messages"))))
         if style is not None:
             for row in rows:
                 row["generation_style"] = deepcopy(style)

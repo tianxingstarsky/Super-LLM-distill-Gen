@@ -7,6 +7,7 @@ from ..domain.dialogue import (controlled_training_messages, without_source_reas
 from lib.domain.workflow_quality import accepted, conversation_issue, text_issue, tool_error_flag
 from ..domain.generation import is_pdf_source
 from lib.domain.source_quote import quote_spans
+from ..domain.imported_reasoning import imported_reasoning_metadata
 
 
 class GenerateSft:
@@ -15,6 +16,13 @@ class GenerateSft:
         self.recipe = recipe
 
     def execute(self, unit):
+        rows = self._execute(unit)
+        for row in rows:
+            preserved = row.get("reasoning_origin") == "source" and "messages" in row
+            row.update(imported_reasoning_metadata(unit, messages_preserved=preserved))
+        return rows
+
+    def _execute(self, unit):
         if unit.get("qa_contract") is not None:
             return self._port.generate_directed_sft(unit)
         if unit.get("verification_status") == "synthetic_unverified":

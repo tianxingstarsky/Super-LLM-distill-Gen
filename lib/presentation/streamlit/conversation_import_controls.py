@@ -14,7 +14,7 @@ def _clear_import_preview(prefix):
 def conversation_import_warnings(warnings):
     """Map adapter codes to safe UI text; never echo arbitrary plugin output."""
     labels = {
-        "source_has_no_reasoning": "原始会话没有推理字段，导入时不会补造。",
+        "source_has_no_reasoning": "原始会话没有推理字段。导入保持原样，是否补充由输入节点设置决定。",
         "surface_replacements_preserved_in_audit": "保留原始消息；压缩或替换后的视图另存为审计记录。",
         "inherited_prefix_preserved": "已保留分支会话继承的前文，请确认这些消息属于本次训练资料。",
         "developer_role_preserved": "已保留 developer 角色，当前训练流程不支持的会话不会选中。",
@@ -36,7 +36,7 @@ def render_conversation_import(application, workspace, on_confirm, *, targets=()
         "导入 DSH 原始会话", type=["jsonl", "zstd", "db", "sqlite", "sqlite3"],
         max_upload_size=50, key=prefix + ":file",
         help="选择 DSH 保存的 .jsonl.zstd 或 .jsonl 会话文件。搜索索引数据库不包含完整对话。")
-    st.caption("仅支持 DSH 会话库。保留角色、工具调用和已有推理；没有推理的记录保持原样。")
+    st.caption("仅支持 DSH 会话库。导入保留角色、工具调用和已有推理；缺失推理在输入节点选择处理方式。")
     if uploaded is None:
         _clear_import_preview(prefix)
         return

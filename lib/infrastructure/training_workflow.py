@@ -204,7 +204,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
                node_generation=None, reasoning_trim=None, node_prompts=None,
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
-               review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None):
+               review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None,
+               conversation_reasoning=None):
+    from lib.contexts.workflows.contracts import validate_conversation_reasoning
+    conversation_reasoning = validate_conversation_reasoning(conversation_reasoning)
     from lib.contexts.workflows.contracts import new_preference_design, preference_design_requested
     contrastive_enabled = preference_design_requested(preference_design, node_prompts)
     preference_design = new_preference_design(preference_design)
@@ -307,7 +310,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
         claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1,
         claim_repair_feedback_version=1, preference_design_version=3 if contrastive_enabled else None,
-        preference_design_prompt_version=1 if contrastive_enabled else None)
+        preference_design_prompt_version=1 if contrastive_enabled else None,
+        conversation_reasoning_version=conversation_reasoning["version"] if conversation_reasoning else None)
     node_prompt_system = render(get("workflow.system"))
     generation_prompts = {}
     for stage, config in node_generation.items():
@@ -438,7 +442,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
             claim_review_condition_contract_version=1, reasoning_depth_contract_version=1, claim_review_transport_version=1,
             claim_repair_feedback_version=1, preference_design_version=3 if contrastive_enabled else None,
-            preference_design_prompt_version=1 if contrastive_enabled else None)
+            preference_design_prompt_version=1 if contrastive_enabled else None,
+            conversation_reasoning_version=conversation_reasoning["version"] if conversation_reasoning else None)
     if human["enabled"] and (not files or all("revision_context" in seed for seed in human["seeds"])):
         # Manual design is a real, immutable user-provided source. The parser
         # handles this descriptor explicitly, never treating Q/A as preapproved
@@ -457,6 +462,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                  if "gsm8k" in targets and not repair_inputs else {}),
               "planning_policy_version": 2, "source_processing_version": 2, "source_library_version": 1,
               "external_reasoning_import_version": 1,
+              **({"conversation_reasoning": conversation_reasoning} if conversation_reasoning else {}),
               **({"source_cleaning": True, "source_context_pack_version": 1,
                   "source_line_protocol_version": 1, "source_context_capacity_version": 2,
                   "source_context_scope_version": 1} if source_cleaning else {}),
@@ -735,7 +741,7 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                         if processing_started is None:
                             processing_started = time.monotonic()
                 value = (row_checkpoint(self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json",
-                                        lambda: self.iter_source_units(item), self.check_cancel)
+                                        lambda: self.prepared_source_units(item), self.check_cancel)
                          if stream_sources else self.checkpoint(checkpoint_key, lambda: self.run_item_safely(stage, item, action)))
                 with self._lock:
                     metrics["done"] += 1
@@ -828,7 +834,22 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
 
     def parse_source(self, source):
         """Compatibility entry point; execution consumes the streaming iterator."""
-        return list(self.iter_source_units(source))
+        return list(self.prepared_source_units(source))
+
+    def prepared_source_units(self, source):
+        """Apply this run's import policy after the reusable raw source cache."""
+        units = self.iter_source_units(source)
+        if self.recipe.get("conversation_reasoning") is None:
+            return units
+        if self.recipe["conversation_reasoning"]["mode"] == "fill_missing":
+            # Finish the shared source-library read before any model request.
+            # A run-local streaming spool releases its lock, survives failure,
+            # and does not put a million-record source into memory.
+            units = row_checkpoint(
+                self.path / "checkpoints" / "ingest" / "source-readings" / f"{digest(source)}.json",
+                lambda: self.iter_source_units(source), self.check_cancel)
+        from lib.bootstrap.conversation_reasoning import conversation_reasoning_preparer
+        return conversation_reasoning_preparer(self).execute_many(units)
 
     def cpt_source_image(self, unit):
         """Load a bounded original-page raster from this run's fixed inputs."""
@@ -1328,6 +1349,7 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
         return dialogue_generation(self).generate(unit, style=style)
 
     def agent(self, unit):
+        from lib.contexts.workflows.contracts import imported_reasoning_metadata
         if unit.get("kind") != "conversation":
             return [self.rejected(unit, "recorded_tool_trajectory_required")]
         if unit.get("verification_status") == "synthetic_unverified":
@@ -1352,8 +1374,10 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
         provenance["source_location"] = source_location
         row = {"id": unit["id"], "source_id": unit["source_id"],
                "status": result["status"], "evidence_level": evidence,
+               **imported_reasoning_metadata(unit, messages_preserved=True),
                **provenance,
-               "original_messages_sha256": digest(unit["messages"])}
+               "original_messages_sha256": (unit.get("conversation_reasoning") or {}).get(
+                   "source_messages_sha256", digest(unit["messages"]))}
         if result["status"] == "eligible":
             return [{**row, "messages": result["messages"], "tools": unit.get("tools", []),
                      **({"source_context": {"kind": "conversation", "messages": deepcopy(unit["messages"]),

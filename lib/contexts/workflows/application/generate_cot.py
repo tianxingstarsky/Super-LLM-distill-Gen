@@ -127,7 +127,23 @@ class GenerateCot:
         return rows
 
     def extract(self, sample):
+        from ..domain.imported_reasoning import imported_reasoning_metadata, imported_turn_reasoning_origin
         style = self._port.generation_style("cot", sample["id"])
+        rows = self._extract(sample, style)
+        preserved = style is None and sample.get("conversation_reasoning_scope") != "input_only"
+        for row in rows:
+            metadata = imported_reasoning_metadata(sample, messages_preserved=preserved)
+            # A CoT record extracts only the last assistant's rationale. Earlier
+            # reconstructed turns cannot relabel an original final rationale.
+            if "reasoning_origin" in metadata:
+                metadata.pop("reasoning_origin")
+                origin = imported_turn_reasoning_origin(sample, len(sample.get("messages", [])) - 1)
+                if origin is not None and "reasoning" in row:
+                    metadata["reasoning_origin"] = origin
+            row.update(metadata)
+        return rows
+
+    def _extract(self, sample, style):
         if style is not None:
             return self._port.generate_styled_cot(sample, style)
         messages = sample["messages"]

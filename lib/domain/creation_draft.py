@@ -54,6 +54,8 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-mat
                'workflow-cot-checklist-text': 32000,
                'workflow-agent-experience-text': 32768}
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
+               'workflow-conversation-format': frozenset({'标准 JSON / JSONL', 'DSH 会话库'}),
+               'workflow-conversation-reasoning': frozenset({'preserve', 'fill_missing', 'exclude'}),
                'workflow-generation-review-mode': frozenset({'sampled', 'strict'}),
                'workflow-cot-style-admission': frozenset({'strict', 'advisory'}),
                'workflow-knowledge-provider': frozenset({'local', 'qdrant'}),
@@ -137,6 +139,7 @@ def validate_creation_draft(values):
         if len(scopes) > 1:
             raise ValueError('invalid_creation_draft')
         if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
+                     'workflow-conversation-reasoning', 'workflow-conversation-format',
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
                      'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
                      'workflow-director-learning-goal', 'workflow-director-user-languages',
