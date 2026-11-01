@@ -1,5 +1,7 @@
 # 版本化提示词
 
+`workflow.cot_native_joint@1.6.0` 的初始 system 采用 `workflow_runtime_control.py`：本轮思考强度如需在推理中引用，使用固定标记 `[[SJ_REASONING_EFFORT]]`，具体配置由程序保存。标记不要求固定位置或每条必有；用户正常讨论参数的任务保留。训练读取按目标配置直接替换标记，原生响应与源记录保留，不需要外部工具或额外模型调用。旧模板、冻结任务和用户自定义正文不改写。实际格式遵循率仍需模型实测。
+
 `workflow.cot_native_joint@1.5.0` 将内部制作旁白的约束同时用于原生推理与正式答案，鼓励直接核对业务主张、依赖及证据。新增材料覆盖范围规则：节选未找到只适用于节选，未知全文、页码或跨页关系不能被写成已经核查；所写任务提示词也要保持同一范围。真实用户要求的工具/API/提示词作品不作词汇封禁，不规定句式、步骤或长度。历史 1.4.0 通过 `COT_NATIVE_JOINT_V1_4` 保持逐字段冻结。
 
 `workflow.cot_native_joint@1.4.0` 提供完整的回答者职责说明：区分真实用户、应用操作、审查员与工具观察；原生思考核对证据，正式答案交付实际任务；返工替换受审轮而非讲述后台改稿。用户需要的业务纠错解释和提示词/API 作品保留。新版取消默认“短、简洁”的正文及约束，按任务充分展开，不设字数、段数或固定思考步骤。新默认经验同步采用 v5／“充分推敲 · 初始 v2”，防止旧默认经验重新施加缩短倾向。历史模板、个人覆盖和冻结经验不改写。验证只覆盖接线与兼容，真实效果需要另看模型输出。
@@ -30,6 +32,7 @@
 | 偏好候选与类型设计 | [workflow_preference.py](workflow_preference.py) |
 | 独立评分、上下文核验与打包抽检 | [workflow_review.py](workflow_review.py) |
 | 审查理由作为可见注意事项的共享规则 | [workflow_review_guidance.py](workflow_review_guidance.py)，由 cot / review 的新版本采用 |
+| 初始系统的运行配置引用格式 | [workflow_runtime_control.py](workflow_runtime_control.py)，原生生成显式采用 |
 | 已有候选修订 | [workflow_revision.py](workflow_revision.py) |
 | 推理修剪 | [workflow_trim.py](workflow_trim.py) |
 | 经验与个人风格提案 | [workflow_experience.py](workflow_experience.py) |

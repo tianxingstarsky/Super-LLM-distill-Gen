@@ -66,13 +66,18 @@ def test_native_task_reasoning_default_preserves_frozen_and_custom_templates():
     prompt_id = "workflow.cot_native_joint"
     current = get(prompt_id)
     previous = get(prompt_id, version="1.4.0")
-    assert current.version == "1.5.0"
+    assert current.version == "1.6.0"
     assert previous == workflow.COT_NATIVE_JOINT_V1_4
     frozen_fields = json.dumps(asdict(previous), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     assert sha256(frozen_fields.encode("utf-8")).hexdigest() == (
         "943ac1bf8dfebe8b64b07c9bdc9773d182a60c5029615c7b9c57ddb55be0a44b")
+    v15 = get(prompt_id, version="1.5.0")
+    assert v15 == workflow.COT_NATIVE_JOINT_V1_5
+    frozen_v15 = json.dumps(asdict(v15), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert sha256(frozen_v15.encode("utf-8")).hexdigest() == (
+        "464fdd2b7613e3fc8d545be94b52a440d03eda3b9a0e1cd0470dc881b4fa6bbd")
     assert snapshot_node_prompts(None, recipe_version=42)["sft"][prompt_id] == render(current)
-    for saved_text in (render(previous), "My own native reasoning and answer instructions."):
+    for saved_text in (render(previous), render(v15), "My own native reasoning and answer instructions."):
         overrides = {"sft": {prompt_id: saved_text}}
         assert snapshot_node_prompts(overrides, recipe_version=42)["sft"][prompt_id] == saved_text
 

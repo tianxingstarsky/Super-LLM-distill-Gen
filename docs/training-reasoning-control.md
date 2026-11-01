@@ -89,6 +89,16 @@ Qwen3.5 的公开模板使用 `enable_thinking` 开关。本适配器直接把�
 
 默认全部开启是明确的适配选择：目标只有开关时，五个保存值可以映射到同一原生值。它不意味着目标会表现出五种不同强度。需要把 `low` 用作关闭思考的任务，可以改用 [low 关闭映射](../scripts/training/qwen35-low-off.json)；默认映射见 [全部开启](../scripts/training/qwen35-thinking-on.json)。以后适配支持多档的模型时，只需改变小型映射和目标适配器，不改数据集。
 
+输入控制转换与推理正文转换是两个不同功能。本示例不会搜索替换 `verbosity 5` 等模型自述，也不会从这些词反推样本档位。两条既有原始响应已显示控制复述分布在推理中部、尾部且有措辞变化；具体位置和来源限制见 [控制复述核对](architecture/request-provenance-2026-11-01.md#控制输入与推理复述的位置核对)。
+
+### 初始系统的固定引用与本地替换
+
+新默认 `workflow.cot_native_joint@1.6.0` 在原生 SFT、多轮和 CoT 的首条 system 中约定：若推理需要提及本轮思考强度，只使用 `[[SJ_REASONING_EFFORT]]`。无需每条出现，不规定位置或推理结构；不用自由文本猜测控制值。用户本来在讨论模型参数的业务内容仍照常回答。原始响应完整保留，旧任务、旧模板和自定义正文不热改；已有节点可显式恢复新版默认。
+
+现有 `Qwen35TrainingEncoder` 在训练读取时直接精确替换这个标记。默认五档都开启思考，因此替换为“思考已开启”；可以通过 `qwen35_training_encoder(..., reasoning_reference_text="Thinking is enabled")` 自定目标文字。这里只改变当前监督助手轮的内存副本，保留其余推理和答案；原记录中的平台等级及原始响应不变。`metadata.reasoning_reference_replacements` 记录本轮替换次数，目标文字也记录在适配配置中。任务正文若引用了同一标记则拒绝歧义替换，不改写用户原话或代码示例。
+
+这是普通的程序内字符串替换，无需 DSH、Codex、MCP 服务或额外模型请求。没有标记时保持原文，不猜测匹配 `verbosity 5` 等自由文本，也不宣称已清除所有自述。替换文字是训练文本的适配；真正启用 Qwen 思考的仍是 `enable_thinking` 与官方模板。新初始提示词是否被生成模型稳定遵从尚需真实输出验证；本轮不调用 API。
+
 适配器通过 Transformers 的 `apply_chat_template` 使用模型模板。当前接入的是文本 SFT 和多轮对话。工具、媒体、developer 角色、非开头的 system 消息不在本版支持范围内，会明确报错。连续开头的 system 内容按相同优先级合并。思考开启时目标助手缺少推理会报错，不补造；关闭时生成空 think 块，只监督答案。关闭只是本次加载视图的选择，原始记录中的完整推理不删除。
 
 Qwen 模板通常不把较早助手轮的推理保留在最新一轮上下文中。因此加载器对每个助手轮分别创建一个监督视图：此前消息是上下文，该轮按原生开关选择推理与答案的监督范围。开启时保留该轮完整推理，不会只监督最后一轮而遗漏此前推理。每个源助手轮只作为目标一次；多个视图仍在内存中按需产生。官方聊天模板的使用方式见 [Transformers 文档](https://huggingface.co/docs/transformers/main/en/chat_templating)。
@@ -178,3 +188,8 @@ think 前缀且只监督答案。双轮中的两次助手推理分别获得完�
 `a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715`。
 模板默认值不同，因此适配器始终显式传入布尔开关。这里只加载分词器，没有加载模型权重、
 启动训练或调用付费 API。转换明细保存在本机 `.dataforge/training-adapters/loader-verification.json`。
+
+固定标记的本地适配也已通过同一 4B tokenizer 检查：逐轮推理与答案完整进入监督文本，
+自定义替换文字生效，普通自由文本保持原样，任务引用歧义被拒绝，关闭思考的既有映射保持，
+源记录未改动。证据在 `.dataforge/runtime-control-governance/internal-mapping-verification.json`；
+没有模型调用或训练，不能据此声称新初始提示词已经获得稳定遵循率。

@@ -1,5 +1,7 @@
 # 模型规则
 
+`REASONING_EFFORT_REFERENCE` 是初始系统提示与训练读取共用的固定引用标记；它不是供应商 API 字段或档位值。训练读取由目标适配器直接匹配替换，不从自然语言反推配置。
+
 `reasoning_control.py` 定义 `shujian.reasoning-effort/v1`：节点始终保存
 low/medium/high/xhigh/max；`standard_reasoning` 根据已确认能力生成并冻结
 `provider_mapping`，只有请求边界调用 `resolve_provider_reasoning`。

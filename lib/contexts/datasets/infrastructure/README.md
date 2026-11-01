@@ -8,6 +8,9 @@
 历史上下文 label 为 -100；过长样本报错，不静默截断。
 首版支持文本 SFT／多轮，工具、媒体和不支持的角色明确拒绝，不删字段冒充兼容。
 模板、tokenizer 和控制映射摘要随读取视图返回；训练与推理使用同一映射。
+当前监督轮推理中的 `[[SJ_REASONING_EFFORT]]` 由此适配器直接替换为目标文字，
+默认“思考已开启”；构造参数 `reasoning_reference_text` 可自定义。只改内存副本，
+不修改原记录或自由文本控制自述；任务引用同名标记时拒绝歧义转换。无需外部工具或 Agent。
 验证：`tests/test_training_control_loader.py` 和文档中的本机 tokenizer 验证。
 
 `driver.py` 组合文件操作；`archive.py` 打包；`statistics.py` 扫描原生记录与文件字节；`verified_preview.py` 管理有限期预览核验；`release_catalog.py` 查找已发布版本。

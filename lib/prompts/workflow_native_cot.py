@@ -19,6 +19,7 @@
 """Native-response guidance; the experience body is re-exported for compatibility."""
 from lib.prompts.workflow_experience import EVOLVE_EXPERIENCE_BODY
 from lib.prompts.workflow_spec import spec
+from lib.prompts.workflow_runtime_control import RUNTIME_CONTROL_EXPRESSION_V1
 from dataclasses import replace as _reasoning_spec_replace
 
 
@@ -106,3 +107,12 @@ COT_NATIVE_JOINT = _reasoning_spec_replace(COT_NATIVE_JOINT_V1_4, version="1.5.0
         "跨页或跨材料综合须有内容和关联依据，未知关系不变成必需条件",
     ),
     template=COT_NATIVE_JOINT_V1_4.template + "\n" + NATIVE_TASK_REASONING_AND_EVIDENCE_SCOPE)
+
+COT_NATIVE_JOINT_V1_5 = COT_NATIVE_JOINT
+
+COT_NATIVE_JOINT = _reasoning_spec_replace(COT_NATIVE_JOINT_V1_5, version="1.6.0",
+    constraints=COT_NATIVE_JOINT_V1_5.constraints + (
+        "本轮思考配置引用使用程序约定的唯一标记，不猜测或复述档位数值",
+        "旧配置自述不回灌为当前事实，用户明确讨论参数的任务仍完整回答",
+    ),
+    template=RUNTIME_CONTROL_EXPRESSION_V1 + "\n\n" + COT_NATIVE_JOINT_V1_5.template)

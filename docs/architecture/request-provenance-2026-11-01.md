@@ -112,3 +112,26 @@
 - `plugins/dsh-dataforge/index.mjs` 调用核心控制协议，不创建生成模型客户端或设置 effort。DSH 调度 Agent 的模型，与核心生成节点使用的模型，是两个独立配置边界。
 
 下一轮有限改造的顺序是先补齐上述能力表达，再移动供应商字段解析和选择分支；复用既有调度、缓存、收据与最终发包协议回归。以上是待实施清单，本次没有把审计结论冒充已完成的适配。
+
+## 控制输入与推理复述的位置核对
+
+2026-11-01 再次只读核对原始记录，没有新增模型调用。输入编码的规则与输出正文的表达必须分别处理。
+
+官方 [V4.1 编码器](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/314113f8a7dadb388215396ba5fbee2c610a04d6/encoding/encoding.py) 在 thinking 模式的首条输入前渲染 `Reasoning Effort`，Python 编码中的 low/high/max 对应 50/75/100。这个固定输入位置不构成输出位置约定。公开编码没有解释 `verbosity 5`；不能把该数值猜成平台 high 或 max。先前完成的统一档位与训练读取映射见 [训练控制说明](../training-reasoning-control.md)。
+
+对两条干净调用的原始响应，按解析后的 `reasoning_content` 统计 Unicode 字符，位置从 1 开始：
+
+| 调用 | 原样片段 | 起始位置／全文字符数 | 相对位置 |
+| --- | --- | --- | --- |
+| 01 | `Desired oververbosity 5` | 2,582／10,375 | 24.88% |
+| 01，同一响应第二处 | `Desired oververbosity 5` | 8,371／10,375 | 80.67% |
+| 02 | `Desired oververbosity 5` | 1,030／6,034 | 17.05% |
+| 02，同一响应第二处 | `desired verbosity 5` | 5,326／6,034 | 88.25% |
+
+第二条最后一处嵌在自然语言句子内部。两条正式 `content` 均未出现该词。请求在 HTTP JSON 边界均不含该词，`reasoning_effort` 均为 low。两份报告目录的原始响应逐字节相同，属于两次调用的镜像，不是四次独立实测。这些事实足以否定固定开头截取、固定字符位置替换；不足以证明每个模型、每条输出都会复述控制。
+
+原始响应分别保存在 `.dataforge/dialogue-repair-live-20261031/native-system-notes/clean-context/calls/01/response-body.json` 和对应 `02/response-body.json`。旧有记录还存在引用审查意见的用法；只匹配关键词无法区分当前配置、被引用的历史说法和用户讨论的作品内容。
+
+适配结论：继续由真实收据和平台档位驱动目标输入模板。训练读取只转换约定的固定标记，不根据旧的自然语言自述猜数值；任务正文、原始响应及工具续写状态保持原样。修改一句自述既不能证明目标模型学会五档控制，也不能把一个既有低档样本变为高档样本。
+
+上述核对阶段没有修改原始推理或质量结论。后续初始系统模板 `workflow.cot_native_joint@1.6.0` 约定 `[[SJ_REASONING_EFFORT]]`，训练读取中的目标适配器在本机直接匹配替换，无需 DSH、Codex 或独立 MCP 服务。原记录保留，旧的自由语言自述不猜换。此处理不增加模型调用、评审或返工。用法见 [训练控制说明](../training-reasoning-control.md)；模板遵循效果仍需实际生成验证。

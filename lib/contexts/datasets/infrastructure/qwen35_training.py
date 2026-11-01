@@ -11,6 +11,8 @@ from copy import deepcopy
 import hashlib
 import json
 
+from lib.contexts.models.contracts import REASONING_EFFORT_REFERENCE
+
 from ..domain.training_control import TRAINING_EFFORTS, validate_training_effort
 from ..domain.trainer_formats import _has_media
 
@@ -28,7 +30,8 @@ class Qwen35TrainingEncoder:
     """
 
     def __init__(self, tokenizer, *, max_length: int | None = None,
-                 effort_mapping: Mapping[str, bool | int] | None = None):
+                 effort_mapping: Mapping[str, bool | int] | None = None,
+                 reasoning_reference_text: str = "思考已开启"):
         if max_length is not None and (type(max_length) is not int or max_length < 1):
             raise ValueError("invalid_training_max_length")
         if not getattr(tokenizer, "is_fast", False):
@@ -47,11 +50,16 @@ class Qwen35TrainingEncoder:
         self._template = template
         self._max_length = max_length
         self._effort_mapping = {effort: bool(effort_mapping[effort]) for effort in TRAINING_EFFORTS}
+        if (not isinstance(reasoning_reference_text, str) or not reasoning_reference_text.strip()
+                or REASONING_EFFORT_REFERENCE in reasoning_reference_text):
+            raise ValueError("invalid_reasoning_reference_text")
+        self._reasoning_reference_text = reasoning_reference_text
         self._provenance = {
             "adapter": "shujian.qwen35-thinking-map/v1",
             "control_kind": "enable_thinking",
             "mapping_kind": "five_efforts_to_binary",
             "native_effort_levels": False,
+            "reasoning_reference_text": reasoning_reference_text,
             "effort_mapping": dict(self._effort_mapping),
             "template_sha256": _sha256(template),
             "tokenizer_sha256": _sha256(tokenizer.backend_tokenizer.to_str()),
@@ -130,6 +138,16 @@ class Qwen35TrainingEncoder:
         # Mixed inline and dedicated reasoning is ambiguous; never duplicate it.
         if "<think>" in answer or "</think>" in answer:
             raise ValueError("qwen35_inline_and_separate_reasoning_conflict")
+        reference_count = 0
+        if enable_thinking and REASONING_EFFORT_REFERENCE in reasoning:
+            # Only the reserved self-reference is adapted. A task quoting the
+            # same token is ambiguous; do not rewrite quotations or free prose.
+            if any(REASONING_EFFORT_REFERENCE in m.get("content", "")
+                   for m in controlled if m["role"] != "system"):
+                raise ValueError("reasoning_reference_in_task_content")
+            reference_count = reasoning.count(REASONING_EFFORT_REFERENCE)
+            reasoning = reasoning.replace(REASONING_EFFORT_REFERENCE, self._reasoning_reference_text)
+            target["reasoning_content"] = reasoning
         if not enable_thinking:
             # This is an explicit target projection. The original source record
             # still retains its complete reasoning; only this copied target changes.
@@ -164,6 +182,7 @@ class Qwen35TrainingEncoder:
                 "effort": control,
                 "enable_thinking": enable_thinking,
                 "supervision": "reasoning_and_answer" if enable_thinking else "answer_only",
+                "reasoning_reference_replacements": reference_count,
                 "input_tokens": len(input_ids),
                 "supervised_tokens": len(input_ids) - len(prompt_ids),
             },

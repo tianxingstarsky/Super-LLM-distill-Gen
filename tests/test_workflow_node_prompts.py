@@ -188,15 +188,22 @@ def test_all_allowed_steps_are_scoped_to_their_own_node(tmp_path):
     assert engine.read_json(path / "recipe.json") == recipe
 
 
-@pytest.mark.parametrize("stage", ["sft", "multiturn"])
-def test_native_template_is_frozen_and_called_in_its_answering_node(tmp_path, stage):
-    body = f"NATIVE_{stage}_RULE: preserve {{literal}} and the user's conditions."
+@pytest.mark.parametrize("stage", ["sft", "multiturn", "cot"])
+@pytest.mark.parametrize("use_builtin", [True, False])
+def test_native_template_is_frozen_and_called_in_its_answering_node(tmp_path, stage, use_builtin):
+    from lib.prompts.workflow_runtime_control import RUNTIME_CONTROL_EXPRESSION_V1
+
+    body = (builtin_node_prompt("workflow.cot_native_joint") if use_builtin else
+            f"NATIVE_{stage}_RULE: preserve {{literal}} and the user's conditions.")
+    overrides = {"cot": {"workflow.cot_native_joint": "SEPARATE_COT_RULE"},
+                 stage: {"workflow.cot_native_joint": body}}
     output, rid, path = make_run(tmp_path, targets=[stage],
         node_generation={stage: {"enabled": True, "answer_mode": "native_joint"}},
-        node_prompts={stage: {"workflow.cot_native_joint": body},
-                      "cot": {"workflow.cot_native_joint": "SEPARATE_COT_RULE"}})
+        node_prompts=None if use_builtin else overrides)
     recipe = engine.read_json(path / "recipe.json")
-    assert recipe["native_generation_version"] == 1
+    if stage in {"sft", "multiturn"}:
+        assert recipe["native_generation_version"] == 1
+    assert recipe["node_generation"][stage]["answer_mode"] == "native_joint"
     assert recipe["node_prompt_templates"][stage]["workflow.cot_native_joint"] == body
     writer = Writer()
     workflow = engine.Workflow(output, rid, tmp_path, generator=writer)
@@ -204,7 +211,9 @@ def test_native_template_is_frozen_and_called_in_its_answering_node(tmp_path, st
     prompt = [{"role": "user", "content": "如何维护设备？"}]
     workflow.ask([stage, "native_prompt"], "generation", "workflow.cot_native_joint",
                  {"source": {"text": TEXT}, "prompt": prompt})
+    assert writer.calls[-1][0]["role"] == "system"
     assert writer.calls[-1][0]["content"].startswith(body + "\n")
+    assert (RUNTIME_CONTROL_EXPRESSION_V1 in writer.calls[-1][0]["content"]) is use_builtin
     assert "SEPARATE_COT_RULE" not in writer.calls[-1][0]["content"]
     assert writer.calls[-1][1:] == prompt
     assert engine.read_json(path / "recipe.json") == recipe

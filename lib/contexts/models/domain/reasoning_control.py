@@ -8,6 +8,7 @@ import json
 
 STANDARD_REASONING_SCHEMA = "shujian.reasoning-effort/v1"
 STANDARD_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+REASONING_EFFORT_REFERENCE = "[[SJ_REASONING_EFFORT]]"
 
 
 def validate_standard_effort(effort):

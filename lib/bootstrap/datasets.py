@@ -9,8 +9,10 @@ def dataset_application(root: Path, output: Path) -> DatasetApplication:
     return DatasetApplication(FilesystemDatasetDriver(root, output))
 
 
-def qwen35_training_encoder(tokenizer, *, max_length=None, effort_mapping=None):
+def qwen35_training_encoder(tokenizer, *, max_length=None, effort_mapping=None,
+                            reasoning_reference_text="思考已开启"):
     """Compose optional training preprocessing without loading model weights."""
     from lib.contexts.datasets.infrastructure.qwen35_training import Qwen35TrainingEncoder
 
-    return Qwen35TrainingEncoder(tokenizer, max_length=max_length, effort_mapping=effort_mapping)
+    return Qwen35TrainingEncoder(tokenizer, max_length=max_length, effort_mapping=effort_mapping,
+                                 reasoning_reference_text=reasoning_reference_text)

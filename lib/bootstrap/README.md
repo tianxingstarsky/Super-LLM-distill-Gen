@@ -2,6 +2,7 @@
 
 `datasets.qwen35_training_encoder(tokenizer, ...)` 装配可选训练加载适配器。
 调用方提供实际本地 tokenizer；该工厂不安装训练框架、不加载权重，也不改变生产导出。
+可选 `reasoning_reference_text` 设置训练读取时固定控制标记的目标文字，默认“思考已开启”。
 用例 `datasets.api.iter_training_examples` 负责惰性遍历，说明见
 `docs/training-reasoning-control.md`。
 

@@ -1,5 +1,11 @@
 # Dataset boundary
 
+The existing `Qwen35TrainingEncoder` in infrastructure resolves the exact
+`[[SJ_REASONING_EFFORT]]` reference while encoding the supervised assistant
+turn. The target encoder owns its wording; this domain adds no replacement
+service. Source records and quality status remain unchanged. Controls are not
+inferred from natural-language descriptions.
+
 New canonical generation receipts opt into `training_control` metadata at the
 training projection. The versioned control uses either one `effort` or
 `by_message` with assistant-message indices. Older rows without canonical

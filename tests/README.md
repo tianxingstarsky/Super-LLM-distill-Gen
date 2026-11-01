@@ -1,5 +1,7 @@
 # Python 回归
 
+`test_training_control_loader.py` 覆盖目标配置映射、逐助手轮读取与原记录保留。`test_workflow_node_prompts.py` 核对原生 SFT／多轮／CoT 的初始 system、自定义及冻结模板。固定标记替换另以本机实际 Qwen tokenizer 核对完整监督文本、任务引用歧义及原文不变；离线检查不证明模型已稳定遵循标记格式。
+
 `test_clean_context_probe.py` 在真实 SDK 与 HTTPX MockTransport 边界检查诊断脚本的完整请求正文、原生响应保留、污染字段拒绝及失败不重复购买。两项离线检查不调用模型，不把传输一致性当作语义通过。
 
 原生反馈 v3 用真实失败引语验证推理／正文通道定位、应用返工与实际 user 来源分离，并保留 v1/v2 冻结合同；重复返工同时覆盖三个版本。协议核查不替代真实输出的语义阅读。
