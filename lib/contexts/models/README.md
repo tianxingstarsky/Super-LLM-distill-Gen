@@ -2,6 +2,8 @@
 
 管理服务配置、模型能力证据、推理和并发参数，以及一次模型请求的受控执行。用户仍在工作流节点选择模型，这个业务域不是单独的配置页面。
 
+服务端控制编码、托管 API 与本地模板的区别，以及现有多协议能力缺口见 [模型控制适配核对](../../../docs/architecture/request-provenance-2026-11-01.md#官方编码核对与多模型适配边界)。配置字段、端点协议与模型模板需分别辨识；不把客户端 JSON 当作服务端最终模型输入。
+
 [api.py](api.py) 发布 `BackendApplication`、`ExecuteModelRequest`、`RequestJSONResponse`、`ExecuteToolTurn` 和消费方端口；[contracts.py](contracts.py) 发布纯规则与稳定错误。具体客户端由 [组合根](../../bootstrap/README.md) 装配，API 模块不导入 SDK 或具体适配器。
 
 - [domain](domain/README.md)：配置约束、能力证据、请求错误与 JSON 解析。
