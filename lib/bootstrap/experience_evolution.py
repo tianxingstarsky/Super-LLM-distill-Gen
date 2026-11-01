@@ -34,3 +34,11 @@ def experience_evolution_application(binding=None, *, root=None, user_key=None) 
 
     return EvolveExperience(ExperienceEvolutionModelPort(edition_repository, settings_root, binding,
         client_factory=client_factory))
+
+
+def record_advisory_review_observation(runtime, target, record):
+    """Append feedback to the existing personal library without loading a model."""
+    if runtime.recipe.get("review_advisory_policy_version") != 1:
+        return None
+    from lib.contexts.review.infrastructure.experience_observations import record_advisory_review_observation as record_feedback
+    return record_feedback(runtime, target, record, experience_evolution_application())

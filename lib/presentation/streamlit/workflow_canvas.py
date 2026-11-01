@@ -215,7 +215,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
                 review_repair=None, repair_only=False, source_cleaning=False,
-                arithmetic_seed_protocol_version=0, cpt_review_policy_version=0, native_generation_version=None):
+                arithmetic_seed_protocol_version=0, cpt_review_policy_version=0, native_generation_version=None,
+                review_advisory_policy_version=None):
     native_recipe = _native_recipe(node_generation, recipe_version, native_generation_version)
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
@@ -357,6 +358,17 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                        "lineage": "Arrows show data dependencies. Stages run in order." if english else
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
     if "review" in nodes:
+        if review_advisory_policy_version == 1 and (review_repair or {}).get("mode") == "auto":
+            for node in result["nodes"]:
+                if node["id"] == "review":
+                    node["label"] = "Advisory review" if language == "en" else "一次建议评审"
+                    node["description"] = ("One review; preserve findings and export." if language == "en"
+                                           else "仅评审一次，保留意见后输出；反馈进入经验库。")
+                    node["models"] = [text.replace("评分 + 修正", "评审").replace("Score + repair", "Review")
+                                      for text in node.get("models", [])]
+            result["labels"]["lineage"] = ("Generate → one review → export. Feedback feeds experience learning."
+                if language == "en" else "生成 → 一次建议评审 → 输出；反馈用于经验学习，不自动回流。")
+            return result
         if feedback_branch is None:
             phase = {"completed": "approved", "running": "reviewing", "failed": "needs_revision",
                      "waiting_human": "editing", "needs_attention": "needs_revision"}.get(

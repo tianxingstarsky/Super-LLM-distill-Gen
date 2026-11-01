@@ -30,6 +30,12 @@ class CheckpointedReviewAdapter:
         return self._runtime._review_payload(*args, **kwargs)
 
     def evidence(self, *args, **kwargs):
+        row = args[0] if args else kwargs.get("row")
+        if isinstance(row, dict) and row.get("checkpoint_context"):
+            if not self.authenticated_revision:
+                raise ValueError("checkpoint_review_parent_not_authenticated")
+            from copy import deepcopy
+            return deepcopy(row["checkpoint_context"]["evidence"])
         return self._runtime._review_evidence(*args, **kwargs)
 
     def repair(self, *args, **kwargs):
@@ -37,6 +43,14 @@ class CheckpointedReviewAdapter:
 
     def score(self, *args, **kwargs):
         return self._runtime._review_score(*args, **kwargs)
+
+    def review_once(self, *args, **kwargs):
+        from .advisory_review import review_once
+        return review_once(self._runtime, *args, **kwargs)
+
+    def record_advisory_observation(self, target, row):
+        from lib.bootstrap.experience_evolution import record_advisory_review_observation
+        return record_advisory_review_observation(self._runtime, target, row)
 
     def check_reasoning(self, record, evidence, key, config):
         from lib.bootstrap.reasoning_checklist import reasoning_checklist
@@ -147,10 +161,15 @@ class AuthenticatedRepairAdapter:
         from lib.infrastructure.human_revision import verified_revision_batch, verified_revision_parent
         from ..domain.candidate_content import candidate_digest as digest
         runtime = self._runtime
+        from .checkpoint_parent import verify_checkpoint_review_input
+        for item in inputs:
+            if "checkpoint_context" in item:
+                verify_checkpoint_review_input(runtime.path.parent.parent, item)
+        revisions = [item for item in inputs if "revision_context" in item]
         # Authenticate every selected immutable parent before any model request.
         with verified_revision_batch(runtime.path.parent.parent, runtime.state["id"],
-                                     [item["revision_context"] for item in inputs]):
-            for item in inputs:
+                                     [item["revision_context"] for item in revisions]):
+            for item in revisions:
                 actual = verified_revision_parent(runtime.path.parent.parent, runtime.state["id"], item["revision_context"])
                 if digest(actual) != digest(item["record"]):
                     raise ValueError("human_session_result_changed")
@@ -179,7 +198,9 @@ class AuthenticatedRepairAdapter:
             "skipped": 0, "deferred": 0, "generation_candidates": 0, "repair_candidates": len(inputs),
             "targets": list(runtime.recipe["targets"])}
         write_json_array(runtime.path / "input_records.json", [{"id": item["record"]["id"], "status": "ready",
-            "source_id": item["revision_context"]["source_id"], "kind": "repair_candidate"} for item in inputs])
+            "source_id": (item["revision_context"]["source_id"] if "revision_context" in item
+                          else item["checkpoint_context"]["evidence"]["source_id"]),
+            "kind": "checkpoint_review_candidate" if "checkpoint_context" in item else "repair_candidate"} for item in inputs])
 
     def review(self, inputs):
         runtime = self._runtime

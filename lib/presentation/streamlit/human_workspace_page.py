@@ -437,6 +437,7 @@ def _live_workflow(workflows, backends, session, round_row, context, human_appli
         node_generation=recipe.get("node_generation"), qa_director=recipe.get("qa_director"),
         package_review=recipe.get("package_review"), review_repair=recipe.get("review_repair"),
         recipe_version=recipe.get("version", 18), repair_only=bool(recipe.get("repair_inputs")),
+        review_advisory_policy_version=recipe.get("review_advisory_policy_version"),
         source_cleaning=recipe.get("source_cleaning", False), feedback_branch=projection,
         arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
         cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0))

@@ -13,6 +13,8 @@ MAX_EPISODES = 8
 MAX_EPISODE_CHARS = 60000
 MAX_RULES = 5
 MAX_HISTORY_CHARS = 16000
+OBSERVATION_OUTCOMES = frozenset({"success", "failure", "unknown", "advisory_release"})
+OBSERVATION_EVIDENCE = frozenset({"unverified", "model_assessed", "program_verified", "human_confirmed"})
 _ID = re.compile(r"[a-f0-9]{32}")
 
 EXPERIENCE_PROPOSAL_SCHEMA = {
@@ -105,6 +107,32 @@ def prepare_evolution_payload(scope, current_text, episodes, *, instruction="", 
                "objective": "compact_conditional_procedural_rules_not_task_answers"}
     canonical(payload)
     return deepcopy(payload)
+
+
+def prepare_experience_observation(scope, episode, *, run_id, outcome="unknown",
+                                   evidence_status="unverified", source_record=None, source_receipt=None):
+    """Store observed outcomes, never upgrade release or self-assessment to truth.
+
+    A compact episode is the complete relevant dialogue and feedback. The
+    optional original record retains duplicated protocol/audit material outside
+    future model prompts. Neither projection invents a missing reasoning field.
+    """
+    validate_scope(scope)
+    validate_identifier(run_id)
+    if (outcome not in OBSERVATION_OUTCOMES or evidence_status not in OBSERVATION_EVIDENCE
+            or not isinstance(episode, dict) or not isinstance(episode.get("id"), str)
+            or not episode["id"] or len(episode["id"]) > 240
+            or source_record is not None and not isinstance(source_record, dict)
+            or source_receipt is not None and not isinstance(source_receipt, dict)):
+        raise ValueError("experience_evolution_invalid_observation")
+    body = {"format_version": FORMAT_VERSION, "kind": "workflow_observation", "scope": scope,
+        "run_id": run_id, "outcome": outcome, "evidence_status": evidence_status,
+        "episode": deepcopy(episode), "source_receipt": deepcopy(source_receipt or {})}
+    if source_record is not None:
+        body["source_record"] = deepcopy(source_record)
+    if len(canonical(body)) > 20_000_000:
+        raise ValueError("experience_evolution_observation_too_large")
+    return {**body, "id": digest(body)}
 
 
 def _strings(value):

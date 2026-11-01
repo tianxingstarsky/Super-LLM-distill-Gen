@@ -87,6 +87,14 @@ class ReviewCandidate:
                 revised["_review_target"] = target
             return rows
         row = _manual_patch(target, original, item)
+        if item.get("checkpoint_context"):
+            if not self._port.authenticated_revision:
+                raise ValueError("checkpoint_review_parent_not_authenticated")
+            row["checkpoint_context"] = deepcopy(item["checkpoint_context"])
+            row.update(deepcopy(item["checkpoint_context"]["author_control"]))
+        if self.recipe.get("review_advisory_policy_version") == 1 and config["mode"] == "auto":
+            from .release_advisory_candidate import ReleaseAdvisoryCandidate
+            return ReleaseAdvisoryCandidate(self._port, config).execute(target, row)
         if item.get("revision_context"):
             row["revision_context"] = deepcopy(item["revision_context"])
             row["id"] = repaired_candidate_identity(self._port.run_id, target, row, item["revision_context"],
@@ -142,6 +150,17 @@ class ReviewCandidate:
                     row["reason"] = receipt["reason"] if receipt["reason"] == "manual_rlaif_change_requires_ai_review" else "manual_review_rejected"
         else:
             row, receipt = self._review_automatically(target, original, row, evidence, instruction, item, config, receipt)
+        if item.get("checkpoint_context"):
+            issues = (original.get("native_generation") or {}).get("issues", [])
+            if issues:
+                # A new score cannot remove a known generation defect from an
+                # unchanged, explicitly review-only checkpoint selection.
+                receipt["preserved_generation_issues"] = deepcopy(issues)
+                if row.get("status") == "eligible":
+                    receipt.update(semantic_status=receipt["status"], status="waiting_manual_review",
+                                   reason="checkpoint_generation_issues_unresolved")
+                    row.update(status="quarantined", reason=original.get("reason")
+                               or "checkpoint_generation_issues_unresolved")
         if target == "cot" and receipt["status"] == "accepted" and row["status"] == "eligible":
             row.update(self._port.independent_cot_assessment(row, human=config["mode"] == "human"))
         # Binding the receipt to exactly the content that was assessed prevents
@@ -274,9 +293,10 @@ class ReviewCandidate:
                 row.update(status="quarantined", reason="reasoning_agent_incomplete")
                 break
             force_repair = False
+            from ..domain.consolidated_claim_review import resolved_claim_assessments
             if (self.recipe.get("claim_review_condition_contract_version") == 1
-                    and (any(entry.get("review", {}).get("condition_guard", {}).get("needs_review")
-                        for entry in row.get("claim_review", {}).get("assessments", []))
+                    and (any(entry.get("condition_guard", {}).get("needs_review")
+                        for entry in resolved_claim_assessments(row.get("claim_review", {})))
                         or contrastive and row.get("preference_assessment", {}).get("stop_reason") == "condition_support_pending_review")):
                 # Missing support is not an error verdict. Keep the body
                 # and raw scores; don't pay for speculative auto-rewrites.

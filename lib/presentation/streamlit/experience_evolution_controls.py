@@ -80,6 +80,8 @@ def _use_initial(app, workspace, scope, prefix, text_key, enabled_key, save_fiel
     # instantiated; adopting must not modify their state during rendering.
     st.session_state.pop(prefix + ":error", None)
     try:
+        from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
+        google_reasoning_bank_application().activate(scope, None)
         from lib.contexts.workflows.contracts import initial_experience_text
         record = app.save_version(scope, initial_experience_text(scope),
             label="Thorough reasoning · initial v2" if en else "充分推敲 · 初始 v2", status="initial")
@@ -94,6 +96,14 @@ def _adopt(app, workspace, scope, prefix, text_key, enabled_key, save_field, en)
     try:
         candidate = st.session_state[prefix + ":candidate"]
         text = st.session_state[prefix + ":text"]
+        if candidate.get("upstream_memory_items") and text == candidate["text"]:
+            from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
+            activated = google_reasoning_bank_application().activate(scope, candidate["id"])
+            if activated["status"] != "active":
+                raise ValueError(activated.get("error", "reasoning_bank_model_unavailable"))
+        else:
+            from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
+            google_reasoning_bank_application().activate(scope, None)
         record = candidate
         if text != candidate["text"] or candidate.get("status") == "candidate":
             record = app.save_version(scope, text, parent_id=candidate["id"],
@@ -149,6 +159,37 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
         except (ImportError, OSError, ValueError, RuntimeError) as error:
             st.warning(_error(error, en))
             return
+        from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
+        google = google_reasoning_bank_application()
+        progress = app.observation_progress(scope)
+        st.markdown("**Google ReasoningBank**")
+        st.caption(("Original upstream induction and retrieval. Feedback: " if en else "执行 Google 原版提炼与检索。已收集反馈：")
+                   + str(progress["total"]))
+        learn, pause = st.columns(2, gap="small")
+        with learn:
+            if st.button("Learn from recent feedback" if en else "从近期反馈学习", key=prefix + ":google-learn",
+                         disabled=not _binding(workspace, scope, prompt_id) or not progress["total"], width="stretch"):
+                batch = app.claim_observation_batch(scope, max_records=1)
+                try:
+                    if not batch.get("records"):
+                        st.info("No pending feedback." if en else "暂无待学习反馈。")
+                    else:
+                        with st.spinner("Running upstream induction…" if en else "正在执行原版经验提炼…"):
+                            candidate = google_reasoning_bank_application(_binding(workspace, scope, prompt_id)).learn(
+                                scope, batch["records"][0], parent_id=st.session_state.get(prefix + ":parent"))
+                        app.complete_official_observation_batch(batch["id"], candidate["id"])
+                        _remember(prefix, candidate)
+                except (OSError, ValueError, RuntimeError) as error:
+                    st.error(_error(error, en))
+                finally:
+                    if batch.get("id") and app.get_observation_batch(batch["id"])["status"] != "proposed":
+                        app.release_observation_batch(batch["id"])
+        with pause:
+            if st.button("Disable retrieved memory" if en else "停用检索记忆", key=prefix + ":google-disable", width="stretch"):
+                google.activate(scope, None)
+                st.success("Future tasks will use the editor only." if en else "后续任务仅使用编辑框中的经验。")
+        if active_id := google.active()["scopes"].get(scope):
+            st.caption(("Active memory edition: " if en else "当前检索版本：") + active_id[:12])
         initial, save = st.columns(2, gap="small")
         with initial:
             st.button("Use initial style" if en else "使用初始风格", key=prefix + ":initial", width="stretch",
@@ -241,7 +282,23 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
         st.text_area("Style direction (optional)" if en else "本版方向（可选）", key=prefix + ":instruction",
             height=80, max_chars=4000,
             placeholder="For example: clear visual hierarchy and simple architecture." if en else "例如：清晰的视觉层级、容易发现的入口、简洁的架构。")
-        if st.button("Propose one edition" if en else "提炼一版", key=prefix + ":propose", width="stretch",
+        outcome = st.selectbox("Recorded trajectory outcome" if en else "导入轨迹的实际结果",
+            [None, "success", "failure"], key=prefix + ":google-outcome",
+            format_func=lambda value: (("Not labelled" if en else "尚未标注") if value is None else
+                ("Reached the goal" if en else "达成目标") if value == "success" else
+                ("Did not reach the goal" if en else "未达成目标")))
+        if st.button("Google: learn from first complete trace" if en else "Google 原版提炼首条完整轨迹",
+                     key=prefix + ":google-import", width="stretch", disabled=not binding or sources is None or outcome is None):
+            try:
+                actual = importer.evolution_sources(sources["import_id"], max_records=1, max_chars=60000,
+                    after_id=sources.get("after_id"))
+                with st.spinner("Running upstream induction…" if en else "正在执行原版经验提炼…"):
+                    candidate = google_reasoning_bank_application(binding).learn(scope, actual["records"][0],
+                        parent_id=st.session_state.get(prefix + ":parent"), user_outcome=outcome)
+                _remember(prefix, candidate)
+            except (OSError, ValueError, RuntimeError) as error:
+                st.error(_error(error, en))
+        if st.button("Custom-template proposal" if en else "自定义模板提炼", key=prefix + ":propose", width="stretch",
                      disabled=not binding or sources is None):
             try:
                 # Reauthenticate the stage at the action boundary. Cached UI

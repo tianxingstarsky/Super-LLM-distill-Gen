@@ -36,6 +36,10 @@ def validate_format_view_selections(inputs, run_id):
     for item in inputs:
         if item["target"] not in TRAINING_TASK_VIEWS:
             continue
+        if "checkpoint_context" in item:
+            # An unfinished stage snapshot authorizes only assessment of this
+            # exact target. It is not sealed cross-format lineage evidence.
+            continue
         row = _manual_patch(item["target"], item["record"], item)
         identity = (item["target"], repaired_candidate_identity(run_id, item["target"], row,
             item["revision_context"], format_lineage=True))

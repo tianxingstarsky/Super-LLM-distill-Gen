@@ -1,5 +1,7 @@
 # 工作流用例
 
+`ReasoningBank` 提供已认证版本索引、按任务召回与新配方冻结；算法执行和向量缓存由基础设施调用 Google 原函数。`EvolveExperience` 收集完整观察、事务认领批次，并将上游提炼版本绑定原批次；提案、按策略交付及质量通过各自记录。原版入口由 `bootstrap/google_reasoning_bank.py` 装配。
+
 `GeneratePreferencePair` 仅把源候选明确携带的 v3 控制文字配置保留在复制的助手消息上，
 供成对标记导出使用；消息自身的配置优先，未知来源的负例不套用正例规则。正文仍是原始
 推理与答案，不执行文字转换，也不把新增来源配置放进生成负例的模型请求。
@@ -39,6 +41,15 @@ SFT、多轮和 CoT 继续携带可选的输入推理处理收据。保留消息
 `PrepareConversationReasoning` 在输入节点按冻结选项处理完整会话。v2 每个缺失轮次先提炼答案提示，再以独立请求补写；后一步白名单只包含原始历史前缀、提示和范围，不传当前答案、提炼模型的原生推理、未来工具定义或先前合成解释。提示是待核验条件，不能当事实；两阶段分别按输入摘要保存检查点，恢复不重购已完成提炼。v1 仍直接读取当前答案。答案、工具调用及已有推理不改写，异常或不足响应保留诊断并隔离整个会话，网络错误与取消交给请求运行时；缺省、保留和排除均不购买模型调用。`execute_many` 保持流式处理；由 `bootstrap/conversation_reasoning.py` 装配。验证见 `tests/test_conversation_reasoning_policy.py`、`tests/test_conversation_reasoning_runtime.py`。
 
 `EvolveExperience` 管理初始／个人经验版本及模型提案。通过端口完成一次提炼，先认证父版本、再购买提案并绑定原句；保存为新的候选版本，不自动覆盖旧经验或应用到任务。继续进化携带最近父版本及其对应候选，保留用户实际修改、规则、指令和未验证状态；历史最多两版、16,000 字符，超出时注明省略的完整版本 ID，不截半条规则或重放原始试错。用户编辑只证明偏好，不自动成为质量成功证据。人工编辑、恢复和继续进化都通过父版本保留谱系；未验证状态不因保存改变。验证见 `test_experience_evolution.py`。
+
+生产反馈通过同一用例的 `record_observation` 收集，明确保存 `success`、`failure`、
+`unknown`、`advisory_release` 及其证据等级。放行和模型自评不等于事实正确。
+`claim_observation_batch` 按最多八份完整记录认领一批；`propose_observation_batch` 仅在显式
+请求时调用既有提炼端口，保存候选后把批次标为 `proposed`，不自动采用、不对每条样本买提炼。
+同批同参数重复提交返回已保存版本；失败保留 `needs_attention`、原材料和请求身份。
+`release_observation_batch` 可退回未完成批次，`observation_progress` 显示待整理进度。
+完整原始候选由 `get_observation` 读取；超出提炼窗口的完整 episode 标为 `needs_capacity`，
+不截断推理或偷偷消费记录。验证见 `test_experience_observations.py`。
 
 `ImportConversations.evolution_sources(import_id, selected_ids=None, max_records=8, max_chars=60000)` 读取已认证暂存中的完整规范化轨迹。失败工具调用、中间尝试和已有推理全部保留，只用于经验候选提炼；不运行 SFT / Agent 训练资格过滤，也不授予训练通过。按完整记录的紧凑 JSON 数组字符数（包含方括号和逗号）和条数选择，超限记录整体跳过并报告，未知 ID 或没有记录能完整装入时拒绝；最多返回 100 条跳过明细并标明是否截断。`confirm` 原有训练选择和缓存写入合同保持不变。验证：`test_conversation_import.py` 的完整失败轨迹、超限、未知 ID 和暂存改动回归。
 

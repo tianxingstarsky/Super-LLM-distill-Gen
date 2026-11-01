@@ -139,12 +139,12 @@ def split_context_request(run_path, data, *, instruction=None, pack_loader=None,
                      else [teacher_context_pack(pack) for pack in packs])
     payload = project(data)
     if (type(data.get("claim_review_protocol_version")) is int
-            and data["claim_review_protocol_version"] in {1, 2, 3, 4}):
+            and data["claim_review_protocol_version"] in {1, 2, 3, 4, 6}):
         # These are the literal review target and bound prior response, not
         # teacher material. A selected source range must never strip a unit's
         # text or other fields from the candidate the reviewer is checking.
         from copy import deepcopy
-        for name in ("messages", "target_fields", "target_units", "challenge_review", "reference_review"):
+        for name in ("messages", "target_fields", "target_units", "challenge_review", "reference_review", "focus"):
             if name in data:
                 payload[name] = deepcopy(data[name])
     if instruction is not None:

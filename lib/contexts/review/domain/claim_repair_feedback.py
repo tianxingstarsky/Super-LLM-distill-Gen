@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from .candidate_content import candidate_digest
 from .claim_windows import validate_windowed_claim_audit
+from .consolidated_claim_review import validate_consolidated_claim_audit, resolved_claim_assessments
 
 
 def claim_repair_feedback(payload, evidence, audit, *, include_quality_feedback=False):
@@ -13,16 +14,17 @@ def claim_repair_feedback(payload, evidence, audit, *, include_quality_feedback=
     is projected onto the new body. An audit claiming to match must validate
     completely, including the raw windows and source binding.
     """
-    if not isinstance(audit, dict) or audit.get("version") != 5:
+    if not isinstance(audit, dict) or audit.get("version") not in {5, 6}:
         return None
     if audit.get("candidate_sha256") != candidate_digest(payload):
         return None
     if audit.get("source_input_sha256") != candidate_digest(evidence):
         raise ValueError("stale_claim_repair_evidence")
-    checked = validate_windowed_claim_audit(payload, audit["derived_verdict"], audit)
+    validate = validate_consolidated_claim_audit if audit["version"] == 6 else validate_windowed_claim_audit
+    checked = validate(payload, audit["derived_verdict"], audit)
     disputes = []
-    for assessment in checked["assessments"]:
-        review = assessment["review"]
+    resolved = resolved_claim_assessments(checked)
+    for review in resolved:
         request = review["request"]
         units = {unit["id"]: unit for unit in request["target_units"]}
         guards = {entry["unit_id"]: entry for entry in review["condition_guard"]["checks"]}
@@ -41,7 +43,14 @@ def claim_repair_feedback(payload, evidence, audit, *, include_quality_feedback=
         "semantic_verification": "provenance_only_not_entailment", "reviewer_opinions_not_facts": True,
         "disputes": disputes}
     if include_quality_feedback:
-        packet["quality_feedback"] = [
+        if checked["version"] == 6:
+            packet["quality_feedback"] = [{"message_index": review["request"]["scope"]["message_index"],
+                "unit_ids": [unit["id"] for unit in review["request"]["target_units"]],
+                "verdict": deepcopy(review["assembled_response"]["verdict"])}
+                for review in resolved if (review["assembled_response"]["verdict"]["keep"] is False
+                    or min(review["assembled_response"]["verdict"]["scores"].values()) < 4)]
+        else:
+            packet["quality_feedback"] = [
             {"message_index": item["review"]["request"]["scope"]["message_index"],
              "unit_ids": deepcopy(window["review"]["request"]["review_window"]["unit_ids"]),
              "verdict": deepcopy(window["review"]["raw_response"]["verdict"])}

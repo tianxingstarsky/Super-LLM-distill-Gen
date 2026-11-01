@@ -4,3 +4,6 @@
 [submodule "components/opencua"]
 	path = components/opencua
 	url = https://github.com/xlang-ai/OpenCUA.git
+[submodule "components/reasoning-bank"]
+	path = components/reasoning-bank
+	url = https://github.com/google-research/reasoning-bank.git

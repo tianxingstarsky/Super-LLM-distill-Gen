@@ -1,5 +1,11 @@
 # 审核用例
 
+当前新任务以 `review_advisory_policy_version=1` 为准：`ReleaseAdvisoryCandidate` 复用已有绑定评语或调用一次 `review_once`，保留原始拒绝/未决/错误后按策略输出，不启动返工、自检、焦点核查或付费格式重试。完整观察进入既有经验库；`released_advisory` 与评审通过分别记录。
+
+`ReviewConsolidatedClaims` 保留此前 v6 对比记录与严格协议的读取和认证。它允许明确问题的一次指定复核；当前建议式策略优先于此协议，不再走这套默认评审。原分组、展开和源校验历史不改。
+
+中断任务的 `checkpoint_context` 仅允许自动零返工重新评审。工作副本恢复已认证的作者规则，原问答、推理、来源及检查点不改。原生生成阶段的已知问题继续保留：新评分通过不等于未修改的原稿已修复。
+
 `ControlTextSuggestionApplication` 提供 `list_pending(node, limit=30)`、`get(id)` 与
 `resolve(id, "applied" | "dismissed")`。列表最多 100 条，读取单项重新认证来源收据。
 返回候选原句、配置基版与增补后的配置，不暴露文件路径，也不自行保存节点配置。

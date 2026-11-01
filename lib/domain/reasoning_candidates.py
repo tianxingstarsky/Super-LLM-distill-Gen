@@ -77,6 +77,9 @@ def _reviewed_verdict(payload, check):
 
 def _validated_claim_audit(payload, check, audit):
     """Bind derived decisions to exact raw claim responses and request keys."""
+    if isinstance(audit, dict) and audit.get("version") == 6:
+        from lib.contexts.review.contracts import validate_consolidated_claim_audit
+        return validate_consolidated_claim_audit(payload, check, audit)
     if isinstance(audit, dict) and audit.get("version") == 5:
         from lib.contexts.review.contracts import validate_windowed_claim_audit
         return validate_windowed_claim_audit(payload, check, audit)
@@ -408,13 +411,19 @@ def assessment_from_verdict(payload: dict, check: dict, *, evidence_ref: str,
     if method == "llm_claim_review":
         claim_review = _validated_claim_audit(payload, check, claim_review)
     check = _reviewed_verdict(payload, check)
-    pending_review = bool(method == "llm_claim_review" and any(
-        item.get("review", {}).get("condition_guard", {}).get("needs_review")
-        for item in claim_review.get("assessments", [])))
+    assessments = []
+    if method == "llm_claim_review":
+        if claim_review["version"] == 6:
+            from lib.contexts.review.contracts import resolve_consolidated_review
+            assessments = [resolve_consolidated_review(item["review"],
+                item.get("focused", {}).get("review")) for item in claim_review["assessments"]]
+        else:
+            assessments = [item["review"] for item in claim_review["assessments"]]
+    pending_review = any(item.get("condition_guard", {}).get("needs_review") for item in assessments)
     review_gap_only = pending_review and not any(
         claim["status"] == "refuted"
-        for item in claim_review["assessments"]
-        for claim in item["review"]["assembled_response" if claim_review["version"] == 5 else "raw_response"]["claim_checks"])
+        for item in assessments
+        for claim in item["assembled_response" if claim_review["version"] in {5, 6} else "raw_response"]["claim_checks"])
     outcome_passed = (check["grounded"] and check["correctness"] >= 4
                       and check["scores"]["correctness"] >= 4 and check["scores"]["grounding"] >= 4)
     process_passed = check["reasoning_valid"] and check["scores"]["reasoning"] >= 4

@@ -199,9 +199,10 @@ def regenerate_native_cot_item(workflow, item):
             "rationale_checkpoint_sha256": digest(["call", [*key, "rationale"]]),
             "prefix_review_checkpoint_sha256": digest(["call", [*key, "prefix_check"]])}
         check = workflow._review_score("cot", updated, evidence, [*key, "final"], instruction)
+        from lib.contexts.review.contracts import resolved_claim_assessments
         if (workflow.recipe.get("claim_review_condition_contract_version") == 1
-                and any(entry.get("review", {}).get("condition_guard", {}).get("needs_review")
-                    for entry in updated.get("claim_review", {}).get("assessments", []))):
+                and any(entry.get("condition_guard", {}).get("needs_review")
+                    for entry in resolved_claim_assessments(updated.get("claim_review")))):
             # A support gap does not justify buying another rationale or style
             # judgment. This complete native body remains available to review;
             # phase=final also prevents incomplete-output cleanup below.

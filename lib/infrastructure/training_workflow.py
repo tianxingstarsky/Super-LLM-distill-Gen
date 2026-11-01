@@ -328,6 +328,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if native_generation:
         recipe_version = 42
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+        review_advisory_policy_version=1,
+        claim_review_schedule_version=1,
         native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
         learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
         claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
@@ -483,6 +485,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         else:
             recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+            review_advisory_policy_version=1,
+            claim_review_schedule_version=1,
             native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
             learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
@@ -546,6 +550,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_review_wire_schema_version": 1,
               "claim_review_focus_version": 1,
               "claim_review_condition_contract_version": 1,
+              "claim_review_schedule_version": 1,
+              "review_advisory_policy_version": 1,
               "claim_review_transport_version": 1,
               "claim_repair_feedback_version": 1,
               "claim_context_quote_feedback_version": 1,
@@ -645,6 +651,13 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         recipe["endpoint_pins"] = endpoint_pins
     if knowledge_retrieval is not None:
         recipe["knowledge_retrieval"] = validate_knowledge_receipt(knowledge_retrieval, snapshots)
+    from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
+    memory_selection = google_reasoning_bank_application().freeze(agent_experience,
+        "\n".join(filter(None, (name, brief, ", ".join(targets),
+            qa_director.get("learning_goal", "")))))
+    if memory_selection:
+        recipe["agent_experience"] = memory_selection["snapshot"]
+        recipe["reasoning_bank_selection"] = memory_selection["selection_receipt"]
     atomic_json(path / "recipe.json", recipe)
     atomic_json(path / "state.json", {"id": run_id, "name": name[:100], "created_at": now(), "updated_at": now(),
                 "status": "queued", "recipe_hash": digest(recipe), "targets": targets, "attempt": 0,
@@ -2033,7 +2046,17 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                                     and self.recipe.get("training_surface_protocol_version") in {1, 2}):
                                 from lib.infrastructure.workflow_review_repair import _row_training_surface_issue
                                 if issue := _row_training_surface_issue(target, row, self.recipe):
-                                    row.update(status="quarantined", reason=issue)
+                                    if (self.recipe.get("review_advisory_policy_version") == 1
+                                            and issue.startswith("training_surface_")):
+                                        # Text-surface findings are opinions under the frozen
+                                        # advisory policy. Content/shape and reasoning-presence
+                                        # checks below still govern an actual usable export.
+                                        finding = {"code": issue, "stage": "package", "effect": "advisory"}
+                                        findings = row.setdefault("advisory_findings", [])
+                                        if finding not in findings:
+                                            findings.append(finding)
+                                    else:
+                                        row.update(status="quarantined", reason=issue)
                             if (row["status"] == "eligible" and self.recipe.get("reasoning_required") is True
                                     and target in {"sft", "multiturn", "agent"}):
                                 from lib.domain.turn_review import reasoning_text
@@ -2073,6 +2096,21 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                     if row.get("reason"):
                         reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
                 report["targets"][target] = {"eligible": len(training), "total": len(records), "reasons": reasons}
+                if self.recipe.get("review_advisory_policy_version") == 1:
+                    observations = {"policy": "single_pass_advisory", "reviewed": 0,
+                                    "review_accepted": 0, "review_rejected": 0, "unavailable": 0,
+                                    "released": 0}
+                    for record in records:
+                        if record.get("review_repair", {}).get("status") != "released_advisory":
+                            continue
+                        observation = record.get("review_observation", {})
+                        if observation.get("status") == "observed":
+                            observations["reviewed"] += 1
+                            observations["review_accepted" if observation["verdict"]["keep"] else "review_rejected"] += 1
+                        else:
+                            observations["unavailable"] += 1
+                        observations["released"] += record.get("status") == "eligible"
+                    report["targets"][target]["advisory_review"] = observations
                 if target in review_plans:
                     report["targets"][target]["package_review"] = review_plans[target]
                 if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:

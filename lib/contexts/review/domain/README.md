@@ -1,5 +1,13 @@
 # 审核规则
 
+`advisory_policy.py` 验证新冻结 `review_advisory_policy_version=1` 的按政策导出收据：候选正文、评审配置和完整原意见必须分别匹配哈希，状态为 `released_advisory`，不把拒绝或未决意见改成通过。结构与文件完整性仍由各边界验证；无该策略的历史配方沿用原资格判定。验证：`tests/test_advisory_release_binding.py`。
+
+`checkpoint_parent.py` 定义未封存任务的不可变检查点评审来源。
+该来源只能选择原候选进行零返工评审，不能人工批准、改正文或替代已封存的跨格式谱系。
+`repair.py` 对它与原 `revision_context` 分流，旧的人工作业认证规则不变。
+
+`consolidated_claim_review.py` 的审计 v6 将同一助手轮集中评审，允许明确列出的多个单元共享依据与前提；程序展开后仍通过既有逐单元、逐字来源、条件和全覆盖校验。原分组响应、程序展开及兼容校验产物分别保存，不能称为独立的两次模型审查。只对实质反驳或证据不足的具体单元进行一次集中复核，完整原文和来源继续可见；未决、不完整与伪造依据不能通过。认证绑定原始回执和确切请求，旧 v1–v5 收据不改写。`resolved_claim_assessments` 供待复核判断与返工反馈读取复核后的决定，完整发布认证仍由 `validate_consolidated_claim_audit` 负责。验证：`tests/test_consolidated_claim_review.py`。
+
 `control_text_suggestions.py` 为同一次评审提供附属匹配建议合同。仅明确开启的 v3 配置参与；
 旧配置缺少 `review_suggestions` 时保持旧请求。模型只选择来源编号、已有规则及精确原句，
 候选哈希、消息字段和字符位置由程序绑定。逐轮评审只可见当前受审轮的开头，不能引入未来轮次。

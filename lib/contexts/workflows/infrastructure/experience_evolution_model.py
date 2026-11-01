@@ -69,3 +69,33 @@ class ExperienceEvolutionModelPort:
 
     def list_versions(self, scope):
         return self.repository.list_versions(scope)
+
+    def record_observation(self, observation):
+        return self.repository.record_observation(observation)
+
+    def get_observation(self, identifier):
+        return self.repository.get_observation(identifier)
+
+    def claim_observation_batch(self, scope, **options):
+        return self.repository.claim_observation_batch(scope, **options)
+
+    def get_observation_batch(self, identifier):
+        return self.repository.get_observation_batch(identifier)
+
+    def observation_batch_guard(self, identifier):
+        return self.repository.observation_batch_guard(identifier)
+
+    def bind_observation_batch_request(self, identifier, request_hash):
+        return self.repository.bind_observation_batch_request(identifier, request_hash)
+
+    def complete_observation_batch(self, identifier, edition_id, request_hash):
+        return self.repository.complete_observation_batch(identifier, edition_id, request_hash)
+
+    def fail_observation_batch(self, identifier, error_type):
+        return self.repository.fail_observation_batch(identifier, error_type)
+
+    def release_observation_batch(self, identifier):
+        return self.repository.release_observation_batch(identifier)
+
+    def observation_progress(self, scope, **options):
+        return self.repository.observation_progress(scope, **options)

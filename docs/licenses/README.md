@@ -1,5 +1,7 @@
 # 第三方资产来源与许可证
 
+完整 Google ReasoningBank 源码现由 `components/reasoning-bank` 子模块固定，保留原 Apache-2.0 许可证和版权。执行范围包括原单轨迹/对照提炼及检索函数，适配声明见 [接入说明](../architecture/google-reasoning-bank-integration.md)。Google Chrysalis 完整源目录在 `components/google-chrysalis`，原许可证为其中的 `UPSTREAM_LICENSE`，逐文件来源摘要在旁边的 snapshot 文件；它没有作为数据生成后端执行。
+
 本目录保留已复制或改编资产的上游版本、改编范围及完整许可证，供维护和分发核对；不承接运行时实现。提示词入口是 `lib/prompts/workflow.py`，本目录没有代码依赖。
 
 Windows 在线安装器随包保留 uv 的 [MIT](../../scripts/release/UV-LICENSE-MIT.txt) 和 [Apache-2.0](../../scripts/release/UV-LICENSE-APACHE.txt) 完整许可证。官方工具版本、来源与摘要在 `scripts/release/tools.json`，下载的 Python 与依赖包保留自身许可证元数据。

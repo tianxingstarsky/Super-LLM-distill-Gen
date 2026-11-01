@@ -1,0 +1,4 @@
+# Local semantic provider for Google's original ReasoningBank retrieval.
+# The original algorithms are pinned in components/reasoning-bank.
+fastembed==0.9.1
+torch>=2.2

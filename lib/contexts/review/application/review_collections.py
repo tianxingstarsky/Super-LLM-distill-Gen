@@ -64,13 +64,18 @@ class ReviewGeneratedCollections:
         def process(item):
             record = item["record"]
             receipt = record.get("review_repair", {})
+            advisory = self.recipe.get("review_advisory_policy_version") == 1
             try:
-                valid = (receipt.get("status") in {"accepted", "rejected", "waiting_manual_review"}
-                    and receipt.get("config_sha256") == digest(config)
-                    and receipt.get("candidate_sha256") == digest(port.payload(item["target"], item["record"])))
+                if advisory:
+                    from ..domain.advisory_policy import advisory_release_valid
+                    valid = advisory_release_valid(record, port.payload(item["target"], record), self.recipe["review_repair"])
+                else:
+                    valid = (receipt.get("status") in {"accepted", "rejected", "waiting_manual_review"}
+                        and receipt.get("config_sha256") == digest(config)
+                        and receipt.get("candidate_sha256") == digest(port.payload(item["target"], item["record"])))
             except (KeyError, TypeError, ValueError):
                 valid = False
-            if not valid and item["target"] == "cot" and record.get("id") in native_terminals:
+            if not valid and not advisory and item["target"] == "cot" and record.get("id") in native_terminals:
                 valid = (record.get("status") == "quarantined"
                     and record.get("reason") in {"native_regeneration_failed_after_prefix_review", "native_answer_missing_after_retry"}
                     and receipt.get("status") == "rejected" and receipt.get("native_regeneration") is True

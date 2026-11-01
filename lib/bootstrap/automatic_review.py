@@ -35,6 +35,13 @@ def claim_windows(runtime, **options):
     return ReviewClaimWindows(CheckpointedClaimWindowAdapter(runtime, **options))
 
 
+def consolidated_review(runtime, **options):
+    """Review each full prefix once, with at most one focused clarification."""
+    from lib.contexts.review.api import ReviewConsolidatedClaims
+    from lib.contexts.review.infrastructure.consolidated_adapter import CheckpointedConsolidatedReviewAdapter
+    return ReviewConsolidatedClaims(CheckpointedConsolidatedReviewAdapter(runtime, **options))
+
+
 def training_format_lineage(runtime):
     """Build format-view authorization, not another content quality review."""
     from lib.contexts.review.api import AuthorizeTrainingFormatView
@@ -47,3 +54,15 @@ def preference_assessment(runtime):
     from lib.contexts.review.api import AssessPreferencePair
     from lib.contexts.review.infrastructure.preference_assessment import CheckpointedPreferenceAssessmentAdapter
     return AssessPreferencePair(CheckpointedPreferenceAssessmentAdapter(runtime), runtime.recipe)
+
+
+def checkpoint_review_input(output, parent_run_id, target, candidate_id):
+    """Select a stopped run's exact candidate for a new review-only recipe."""
+    from lib.contexts.review.infrastructure.checkpoint_parent import checkpoint_review_input as select
+    return select(output, parent_run_id, target, candidate_id)
+
+
+def reviewed_checkpoint_input(output, parent_run_id, target, candidate_id):
+    """Select a completed review stage without making another review call."""
+    from lib.contexts.review.infrastructure.checkpoint_parent import reviewed_checkpoint_input as select
+    return select(output, parent_run_id, target, candidate_id)

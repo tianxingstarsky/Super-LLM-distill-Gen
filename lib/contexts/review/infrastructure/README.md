@@ -1,5 +1,11 @@
 # 审核持久化
 
+新默认为 `advisory_review.py::review_once`：完整候选和来源只审查一次，意见或不可用状态均先持久化，恢复后不再购买；没有逐句单元或大格式包。`experience_observations.py` 本地收集原文与意见，模型提炼由用户明确触发。下述 consolidated 设施用于旧协议/对比记录，不是当前默认。
+
+`consolidated_scoring.py` 将冻结候选接到集中评审用例；`consolidated_adapter.py` 复用原请求调度、流式输出和付费检查点。动态格式由程序生成，模型只返回语义判断；有明确格式错误最多重试一次，不逐句重买评审。控制文字建议仍附在同次请求，需用户确认才能修改节点规则。
+
+集中评审同次区分训练消息与教师资料，检查来源范围、实际用户要求和历史角色；不另买相同候选的学习者上下文评审。质量评分、全部单元覆盖、真实引文、显式前提与来源认证仍保留。单次模型意见不是独立交叉验证；未决、拒绝和原生成阻断分开记录。
+
 `control_text_suggestions.py` 把可选建议附在既有评分请求中。上游返回封套里的 `review`
 由程序原样拆出，继续交给原质量校验器；缺失或不合规建议不触发额外付费重试。
 窗口质量审计的 `raw_response` 指封套中的原质量对象；完整上游封套保留在原请求检查点，
@@ -18,6 +24,24 @@
 训练文件中的成对标签是导出视图，不反向写入候选或审核输入。
 
 `AuthenticatedRepairAdapter` 对显式原生首轮续跑同时核对父记录、父配置及父作者的模型绑定和端点快照；全部选中父版本确认之后才进入任何模型调用。`CheckpointedReviewAdapter` 通过组合根连接 workflows 的续跑用例，不拥有第二份多轮调度器。
+
+`checkpoint_parent.py` 让已停止但尚未打包的任务进入新的只评审任务。
+`lib.bootstrap.automatic_review.checkpoint_review_input` 读取原候选，认证父配方、原始来源、
+资料包、阶段文件和现有检查点，并把摘要固定在新配方里；执行前重新认证。
+只允许自动评审且 `max_rounds=0`，不改父任务、不补造发布清单、不重生成。
+已有条件登记和 JEV 检查点仅是带来源的历史观察，不等于新评审或合格入库。
+原生推理的既有阻断仍需独立处理，评分不能自动消除。验证见
+`tests/test_checkpoint_review_parent.py`。
+
+已封存的审查阶段另用 `reviewed_checkpoint_input` 的版本 2 来源合同，先验证发布清单，
+再固定 `stage-results/review-<target>.jsonl` 及全部检查点。若来源来自未封存旧父任务，
+递归认证冻结选择和资料，不把空的新任务 sources 当作原知识来源。版本 1 仍仅接收
+失败／取消且尚未封存的任务，原判定与原记录都不改。
+
+`experience_observations.py` 在 `review_advisory_policy_version=1` 下将一次评审与真实交付状态
+送入既有个人经验库。通过 `bootstrap.experience_evolution.record_advisory_review_observation`
+接入；没有模型调用，也不改变训练状态。完整原记录、推理及原审查存档保留，放行仅记为
+`advisory_release`，不伪造质量成功。相同记录重复恢复不会反复新增观察。
 
 `StreamingReviewCollectionsAdapter.align_native_cot` 将已评审的完整 SFT 流式投影为 CoT，并为实际格式正文重新绑定收据摘要及派生身份。它保留原生推理、历史回合、来源和拒绝状态，不把格式变换当成一次独立评审，也不复用旧候选正文的摘要。
 

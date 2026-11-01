@@ -16,3 +16,4 @@ from .application.generate_with_sources import GenerateWithSources
 from .application.experience_evolution import EvolveExperience
 from .application.continue_native_dialogue import ContinueNativeDialogue
 from .application.continue_native_feedback import ContinueNativeFeedback
+from .application.reasoning_bank import ReasoningBank

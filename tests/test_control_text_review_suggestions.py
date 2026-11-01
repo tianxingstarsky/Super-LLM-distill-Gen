@@ -227,6 +227,10 @@ def test_production_claim_windows_preserve_quality_contract_without_extra_calls(
     reference["control_text_config"].pop("review_suggestions")
     old_client, new_client = WindowClient(), SuggestionClient()
     old, new = flow(tmp_path / "old", old_client), flow(tmp_path / "new", new_client)
+    # This is the frozen two-phase window protocol, not the new default
+    # consolidated protocol. Its historical client and receipts stay intact.
+    old.recipe.pop("claim_review_schedule_version", None)
+    new.recipe.pop("claim_review_schedule_version", None)
     old_grade = old._review_claim_score("sft", reference, evidence(), ["candidate"])
     new_grade = new._review_claim_score("sft", row, evidence(), ["candidate"])
     assert new_grade == old_grade

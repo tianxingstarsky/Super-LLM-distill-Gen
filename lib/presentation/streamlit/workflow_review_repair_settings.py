@@ -14,7 +14,7 @@ def _field(workspace, name, default):
 
 def review_repair_snapshot(workspace: str) -> dict:
     return {"mode": _field(workspace, "mode", "auto"),
-            "max_rounds": int(_field(workspace, "rounds", 2)),
+            "max_rounds": 0 if _field(workspace, "mode", "auto") == "auto" else int(_field(workspace, "rounds", 0)),
             "score_threshold": float(_field(workspace, "threshold", 80)) / 100}
 
 
@@ -25,10 +25,14 @@ def render_review_repair_settings(workspace: str, package_review: dict, *, save_
         if key not in st.session_state:
             st.session_state[key] = _field(workspace, name, default)
     mode_key = f"workflow-review-repair-mode:{workspace}"
-    mode = st.segmented_control("评分与修正方式", ("auto", "human"), required=True,
+    mode = st.segmented_control("Review mode" if language == "en" else "评审方式", ("auto", "human"), required=True,
         key=mode_key, format_func=lambda value: translate_label(
-            "自动评分与修正" if value == "auto" else "人工评分与修正", language),
+            ("One advisory review" if language == "en" else "一次建议评审") if value == "auto" else "人工评分与修正", language),
         on_change=save_field, args=(workspace, mode_key))
+    if mode == "auto":
+        st.caption("Review once, then export with the original findings. Feedback is saved for experience learning; no automatic repair or repeat review."
+                   if language == "en" else "只评审一次，保留原始意见后继续输出。问题存入经验库供后续学习，不自动返工或追加评审。")
+        return review_repair_snapshot(workspace)
     threshold, rounds = st.columns(2, gap="small")
     threshold_key = f"workflow-review-repair-threshold:{workspace}"
     rounds_key = f"workflow-review-repair-rounds:{workspace}"

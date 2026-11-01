@@ -35,13 +35,32 @@ def validate_repair_inputs(value, config=None):
         return None
     if not config or not isinstance(value, list) or not 1 <= len(value) <= 200:
         raise ValueError("invalid_review_repair_inputs")
-    fields = {"target", "record", "revision_context", "instruction", "question", "answer", "messages", "score", "approved", "corrected_record"}
+    fields = {"target", "record", "revision_context", "checkpoint_context", "instruction", "question", "answer", "messages", "score", "approved", "corrected_record"}
     result, identities = [], set()
     for item in value:
-        if (not isinstance(item, dict) or not {"target", "record", "revision_context"} <= set(item)
+        if (not isinstance(item, dict) or not {"target", "record"} <= set(item)
+                or ("revision_context" in item) == ("checkpoint_context" in item)
                 or set(item) - fields or item["target"] not in TARGETS or not isinstance(item["record"], dict)):
             raise ValueError("invalid_review_repair_inputs")
         row = deepcopy(item)
+        if "checkpoint_context" in row:
+            from .checkpoint_parent import validate_checkpoint_context
+            from .candidate_content import candidate_digest
+            if (set(row) != {"target", "record", "checkpoint_context"}
+                    or config.get("mode") != "auto" or config.get("max_rounds") != 0
+                    or config.get("native_regeneration") or config.get("reference_sources")):
+                raise ValueError("checkpoint_review_requires_unmodified_review_only")
+            context = validate_checkpoint_context(row["checkpoint_context"])
+            if (context["target"] != row["target"] or row["record"].get("id") != context["candidate_id"]
+                    or candidate_digest(row["record"]) != context["candidate_sha256"]):
+                raise ValueError("checkpoint_review_candidate_changed")
+            identity = (context["parent_run_id"], row["target"], context["candidate_id"])
+            if identity in identities:
+                raise ValueError("duplicate_review_repair_input")
+            identities.add(identity)
+            row["checkpoint_context"] = context
+            result.append(row)
+            continue
         row["revision_context"] = validate_revision_context(row["revision_context"], review=True)
         if (config.get("native_regeneration", False) != row["revision_context"].get("native_regeneration", False)
                 or config.get("native_regeneration") and row["target"] != "cot"):

@@ -226,15 +226,8 @@ class WorkflowReviewRepair:
         if type(version) is not int or version != 1:
             raise ValueError("invalid_claim_refutation_release_version")
         audit = row["claim_review"]
-        refuted = []
-        for item in audit["assessments"]:
-            review = item["review"]
-            actual_claims = (review["normalized_response"] if audit["version"] in {3, 4, 5} else review["raw_response"])
-            for claim in actual_claims["claim_checks"]:
-                if claim["status"] == "refuted":
-                    refuted.append({"message_index": review["request"]["scope"]["message_index"],
-                        "field": claim["field"], "quote": claim["quote"], "severity": claim["severity"],
-                        "reason": claim["basis"]["derivation"]})
+        from ..domain.consolidated_claim_review import claim_review_refutations
+        refuted = claim_review_refutations(audit)
         row["claim_release_decision"] = {"version": 1, "source_claim_review_sha256": digest(audit),
             "blocked": bool(refuted), "refuted_claims": deepcopy(refuted),
             "reason": "reviewer_reported_refutation" if refuted else "no_reviewer_reported_refutation"}
@@ -253,6 +246,12 @@ class WorkflowReviewRepair:
         provider replies and the derived conservative result remain separate;
         every request still uses the workflow's durable scheduling/checkpoints.
         """
+        schedule = self.recipe.get("claim_review_schedule_version")
+        if schedule is not None:
+            if type(schedule) is not int or schedule != 1:
+                raise ValueError("invalid_claim_review_schedule_version")
+            from .consolidated_scoring import score_consolidated_claims
+            return score_consolidated_claims(self, target, row, evidence, instruction)
         from lib.domain.claim_review import (claim_review_requests, validate_claim_review,
                                              merge_claim_reviews)
         from lib.infrastructure.workflow_store import digest
@@ -817,6 +816,8 @@ class WorkflowReviewRepair:
                     return check
         from lib.domain.learner_context import learner_contract, learner_messages, prompt_at_least
         if (row.get("qa_contract") and accepted(check)
+                and not (self.recipe.get("claim_review_schedule_version") == 1
+                         and target in {"sft", "multiturn", "cot"})
                 and prompt_at_least(self.recipe, "workflow.review_score", (1, 1, 0))):
             messages = learner_messages(target, data["candidate"])
             if messages:

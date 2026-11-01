@@ -1,5 +1,7 @@
 # 工作流运行适配
 
+Google 原版入口见 `reasoning_bank_source.py`（固定源码与原函数摘要）、`reasoning_bank_induction.py`（原 main + 模型/轨迹 I/O）、`reasoning_bank.py`（原检索 + 本地嵌入）、`google_reasoning_bank.py`（个人版本、采用和停用的宿主适配）。不改上游仓库，不把云/SRE 示例回退当成功。安装和实测边界见 [接入说明](../../../../docs/architecture/google-reasoning-bank-integration.md)。
+
 指导员批量出口 `_directed_worker_batch` 与普通 `stage_items` 一样，发布前绑定实际作者节点的
 冻结控制文字配置。待复核、隔离与缓存返回同样保留归属，不能因未通过质量检查而丢失规则；
 原检查点、推理正文和质量状态保持不变。真实原生 SFT 待复核记录回放见 `test_node_control_text.py`。
@@ -27,6 +29,12 @@ SFT 与多轮的既有评审上下文携带同一份 `answer_context_scope`，�
 `experience_evolution_model.py` 使用组合根注入的节点模型客户端，一次严格 `submit_experience_rules` 提案提交；上游完整响应、原生提炼思考和 usage 先持久化再做本地引用校验。缓存身份包含输入、模板、提交合同和模型配置，重复输入不重新购买已完成响应。它不调用独立评审，不自动应用候选；版本库保留父版、实际用户编辑与原始轨迹。
 
 `ExperienceEvolutionRepository` 接收组合根提供的当前用户目录，以追加文件保存经验版本、原始轨迹、父版本及来源收据。完整落盘后原子发布，已有版本不可覆盖；读取核对正文摘要，路径只接受版本 ID。它不调用模型、不更新工作流缓存，也不把候选标记为评审通过。模型提案端口由组合根另行提供。
+
+同一库的 `observations.sqlite` 保存生产反馈及原始候选。内容摘要避免恢复时重复收集；
+SQLite 事务认领批次，避免并行进化拿到同一份待处理材料。完整候选和审查原文保存在
+观察存档；提炼 episode 只去掉重复的协议存档，保留完整对话和实际意见，并引用原存档摘要。
+一次评审后的 `advisory_release` 明确不属于独立质量验证。批次提案沿用原模型请求缓存、
+用户版本库和父版本谱系；这里没有新建进化模型或第二套调用调度。
 
 阅读情景路线的三类文本请求复用原生双通道传输、SDK、节点绑定与检查点；程序装配字段，不让模型包装 JSON。回答请求逐字使用应用层形成的 learner messages，不再注入私有来源或制作指令。固定的系统／资料前缀保持稳定，续聊只追加已发生的对话；缓存命中由上游实际 usage 证明，不承诺永久命中或无限上下文。验证：`test_reading_session.py`。
 

@@ -319,6 +319,14 @@ class WorkflowQADirector:
 
     def human_package_issue(self, row, target):
         """No derived/cached sample may bypass its human-design assessment."""
+        if self.recipe.get("review_advisory_policy_version") == 1:
+            from lib.contexts.review.contracts import advisory_release_valid
+            try:
+                if advisory_release_valid(row, self._review_payload(target, row), self.recipe.get("review_repair")):
+                    return None
+            except (KeyError, TypeError, ValueError):
+                pass
+            return "review_advisory_receipt_missing_or_changed"
         if self.recipe.get("review_repair") is not None:
             receipt = row.get("review_repair", {})
             try:

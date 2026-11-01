@@ -10,6 +10,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+def test_new_advisory_canvas_has_one_review_and_no_repair_loop():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    from lib.domain.workflow_graph import execution_graph
+    config = {"mode": "auto", "max_rounds": 0, "score_threshold": .8}
+    nodes, _ = execution_graph(["sft"], recipe_version=42, review_repair=config)
+    labels = {key: key for key in nodes}
+    spec = canvas_spec(["sft"], {}, "review", labels, labels, recipe_version=42,
+        review_repair=config, review_advisory_policy_version=1)
+    assert next(node for node in spec["nodes"] if node["id"] == "review")["label"] == "一次建议评审"
+    assert not spec.get("control_edges")
+    assert "不自动回流" in spec["labels"]["lineage"]
+
 def _spec(targets, *, reasoning_trim=False, package_review=None):
     from lib.domain.workflow_graph import execution_graph
     from lib.presentation.streamlit.workflow_canvas import canvas_spec

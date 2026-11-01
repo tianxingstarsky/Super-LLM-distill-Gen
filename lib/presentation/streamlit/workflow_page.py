@@ -1048,6 +1048,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
             render_canvas(canvas_spec(recipe["targets"], state["stages"], selected_stage,
                                       GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
                                       language=st.session_state.get("ui_language", "zh"), live=True,
+                                      review_advisory_policy_version=recipe.get("review_advisory_policy_version"),
                                       reasoning_trim=reasoning_trim_enabled,
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
                                       qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"),
@@ -1879,6 +1880,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                                                   node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
+                                      review_advisory_policy_version=1,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                       qa_director=qa_director, recipe_version=draft_recipe_version, source_cleaning=source_cleaning,
                                       native_generation_version=0 if native_cot_conflict else native_generation_version,
@@ -2371,8 +2373,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 run_summary += " · " + translate("人工问答增强" if human_enabled else "对话指导员", language)
             review_summary = ("CPT 清洗后直接打包" if cpt_only else
                               "人工评分与修正" if review_repair["mode"] == "human" else
-                              "JEV 评分 + 模型修正" if package_review["enabled"] else
-                              "单模型评分与修正")
+                              "One advisory review" if language == "en" else "一次建议评审，随后输出")
             run_summary += " · " + translate(review_summary, language)
             if evaluation_uploads:
                 run_summary += (f" · {len(evaluation_uploads)} evaluation references" if language == "en"

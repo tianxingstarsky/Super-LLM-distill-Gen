@@ -256,9 +256,16 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
                          claim_review_transport_version=None, claim_repair_feedback_version=None,
                          preference_design_version=None, preference_design_prompt_version=None,
-                         conversation_reasoning_version=None, native_feedback_guidance_version=None) -> dict:
+                         conversation_reasoning_version=None, native_feedback_guidance_version=None,
+                         claim_review_schedule_version=None, review_advisory_policy_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
+    if review_advisory_policy_version is not None and (
+            type(review_advisory_policy_version) is not int or review_advisory_policy_version != 1):
+        raise ValueError("invalid_review_advisory_policy_version")
+    if claim_review_schedule_version is not None and (
+            type(claim_review_schedule_version) is not int or claim_review_schedule_version != 1):
+        raise ValueError("invalid_claim_review_schedule_version")
     if preference_design_version is not None and (type(preference_design_version) is not int or preference_design_version not in {1, 2, 3}):
         raise ValueError("invalid_preference_design_version")
     if claim_review_transport_version is not None and (
@@ -285,6 +292,10 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
         # the registry's latest entry, selects the new claim-level contract.
         # Existing catalogs retain the previous aggregate body verbatim.
         if prompt_id == "workflow.review_score":
+            if review_advisory_policy_version == 1:
+                return render(get(prompt_id, version="1.27.0"))
+            if claim_review_schedule_version == 1:
+                return render(get(prompt_id, version="1.26.0"))
             if claim_review_adversarial_protocol_version == 1:
                 if claim_review_condition_contract_version == 1:
                     if claim_review_transport_version == 1:
