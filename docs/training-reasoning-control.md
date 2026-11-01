@@ -135,6 +135,43 @@ encoder = qwen35_training_encoder(
 由程序加入了字段，或已确认存在过拟合。新拼写先保留原文，确认后再增加适配版本。
 完整事实与消耗见 [真实复跑记录](architecture/request-provenance-2026-11-01.md#16-初始提示词的两条真实复跑)。
 
+### 修改、停用和保存文字规则
+
+[control-text-deepseek.json](../scripts/training/control-text-deepseek.json) 是可编辑配置示例。
+复制后按自己的来源和目标模型修改，不需要改 Python：
+
+| 配置 | 效果 |
+| --- | --- |
+| 顶层 `enabled: false` | 完全关闭控制文字适配，保留原文和已有标记 |
+| 规则的 `enabled: false` | 只停用这条规则，其它启用规则继续工作 |
+| `matches` | 精确匹配的原文列表；区分大小写，不把它当正则执行 |
+| `marker` | 对应的固定标记 |
+| `replacement: null` | 只标记，不换成目标文字 |
+| `replacement: "目标文字"` | 同次读取时替换为该文字；空串不允许 |
+| `matches: []` | 只替换已存在的标记 |
+
+```python
+import json
+from pathlib import Path
+
+config = json.loads(Path("scripts/training/control-text-deepseek.json").read_text(encoding="utf-8"))
+config["enabled"] = False  # Turn text adaptation off, not model thinking.
+encoder = qwen35_training_encoder(tokenizer, control_text_config=config)
+```
+
+命令行使用 `--control-text-config path/to/config.json`。加上 `--no-control-text` 可临时完全
+关闭，优先于 JSON 和旧文字参数。JSON 的关闭状态也会禁止旧 `[[SJ_REASONING_EFFORT]]`
+自动替换；真正的 `enable_thinking` 仍由独立的五档映射决定。
+
+新配置完全管理文字适配，不能与旧 `source_control_profile`、`verbosity_reference_text`
+或自定义 `reasoning_reference_text` 混用。未传新配置的历史调用保持原行为。
+每个加载器冻结配置副本，并在 `metadata.control_text_configuration` 中保存快照及对应摘要；
+修改外部字典或文件只影响下一次创建的加载器，不热改当前批次。
+
+启用规则的冲突会在加载时提示。替换只扫描原输入一次，不把一条规则的输出继续交给另一条；
+重复读取已标记文本也会检查任务是否正在讨论该字段。`source_control_edits` 保存原位置与
+规则 ID，`control_text_replacements` 记录转换为目标文字的次数。原始任务、响应和导出不变。
+
 适配器通过 Transformers 的 `apply_chat_template` 使用模型模板。当前接入的是文本 SFT 和多轮对话。工具、媒体、developer 角色、非开头的 system 消息不在本版支持范围内，会明确报错。连续开头的 system 内容按相同优先级合并。思考开启时目标助手缺少推理会报错，不补造；关闭时生成空 think 块，只监督答案。关闭只是本次加载视图的选择，原始记录中的完整推理不删除。
 
 Qwen 模板通常不把较早助手轮的推理保留在最新一轮上下文中。因此加载器对每个助手轮分别创建一个监督视图：此前消息是上下文，该轮按原生开关选择推理与答案的监督范围。开启时保留该轮完整推理，不会只监督最后一轮而遗漏此前推理。每个源助手轮只作为目标一次；多个视图仍在内存中按需产生。官方聊天模板的使用方式见 [Transformers 文档](https://huggingface.co/docs/transformers/main/en/chat_templating)。
@@ -235,3 +272,8 @@ think 前缀且只监督答案。双轮中的两次助手推理分别获得完�
 另验证多轮逐助手轮读取和六种任务引用歧义。证据在
 `.dataforge/deepseek-control-marking-20261101/training-verification.json`；本次新增 API 调用为零。
 这是程序适配成功，不是新一轮生成或语义质量通过。
+
+可编辑配置随后复用同两条原生响应，通过总关闭、默认标记、自定义文字、单条关闭四种
+加载视图的本机 tokenizer 检查；总关闭同时保留已有思考强度标记。命令行关闭优先级也已
+通过真实入口确认。证据在 `.dataforge/deepseek-control-config-20261101/verification.json`
+和 `cli-off.txt`，新增 API 调用为零。

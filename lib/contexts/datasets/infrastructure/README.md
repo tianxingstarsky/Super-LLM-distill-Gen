@@ -21,6 +21,14 @@
 `verbosity_reference_text` 选择目标文字。未启用的旧读取行为、源数据和导出不变。
 定向回归在 `tests/test_deepseek_control_text.py`；真实 tokenizer 验证见训练说明。
 
+`control_text.py` 的 `ControlTextAdapter` 是可配置的字面文本适配器：构造时校验、冻结
+配置并编译匹配，单次扫描只处理原输入，保留原位置收据。支持总开关、逐条开关、匹配列表、
+标记及目标文字。DeepSeek 冻结配置转发到同一实现，旧收据形状保持。
+`Qwen35TrainingEncoder(control_text_config=...)` 显式采用该配置后完全接管控制文字适配，
+不叠加旧文字参数或隐式标记替换。`enabled=false` 保留原文字，独立于模型思考开关。
+配置本身不读文件，JSON 读取由调用方负责；示例在 `scripts/training/control-text-deepseek.json`。
+规则开关、配置快照和引用边界由 `tests/test_configurable_control_text.py` 验证。
+
 `driver.py` 组合文件操作；`archive.py` 打包；`statistics.py` 扫描原生记录与文件字节；`verified_preview.py` 管理有限期预览核验；`release_catalog.py` 查找已发布版本。
 
 `corpus_index.py` 提供磁盘近重复索引与簇计数。重复判定规则仍属于纯领域算法，不能在 SQLite 实现中偷偷改变相似度或数字保护。

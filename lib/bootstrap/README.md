@@ -6,6 +6,8 @@
 显式 `source_control_profile="deepseek-v4.1-flash-control/v1"` 标记已观察到的
 DeepSeek 详尽程度自述；`verbosity_reference_text` 可再选择目标文字，省略则保留标记。
 详尽程度文本不参与五档思考强度映射，旧调用默认保持原文。
+`control_text_config` 接收已读取的 JSON 配置，支持总开关及逐条修改，完整取代旧文字参数；
+关闭后保留控制原文。工厂不读配置文件；示例见 `scripts/training/control-text-deepseek.json`。
 用例 `datasets.api.iter_training_examples` 负责惰性遍历，说明见
 `docs/training-reasoning-control.md`。
 

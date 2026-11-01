@@ -1,5 +1,8 @@
 # Python 回归
 
+`test_configurable_control_text.py` 检查控制文字配置的总开关、逐条停用、自定义规则、
+配置快照、重复读取及任务引用边界；关闭适配不应执行旧标记的隐式替换。
+
 `test_deepseek_control_text.py` 使用真实响应片段检查 DeepSeek 固定自述的精确标记、
 数值与词边界、幂等和可逆位置。训练加载接线另以本机 Qwen tokenizer 验证完整推理／答案、
 默认行为保持及任务引用歧义；证据入口见 `docs/training-reasoning-control.md`。

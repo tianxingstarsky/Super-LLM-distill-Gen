@@ -5,6 +5,7 @@
 | 检查同一份 JSONL 如何进入 Qwen3.5 | `preview_qwen35.py` | 逐助手轮的 token 数、监督范围、适配器摘要，可选完整文本 |
 | 选择目标的原生思考开关映射 | `qwen35-thinking-on.json` / `qwen35-low-off.json` | 默认全部开启，或仅将 `low` 作为关闭思考的读取视图 |
 | 标记 DeepSeek 的固定控制自述 | `--source-control-profile deepseek-v4.1-flash-control/v1` | 已确认的字面串变为可替换标记，原数据保持不变 |
+| 修改或停用控制文字适配 | `--control-text-config control-text-deepseek.json` | 使用可保存的逐条规则；`--no-control-text` 临时全部关闭 |
 | 在自己的训练器中复用加载器 | [训练强度转换说明](../../docs/training-reasoning-control.md) | 惰性读取与保留 labels 的接入示例 |
 
 这里仅有文件读取和示例组合。训练控制规则归 datasets domain；逐轮转换归 datasets application；模型模板和 tokenization 归 datasets infrastructure，经 `lib.bootstrap.datasets` 装配。产品页面不能反向依赖本目录。
@@ -25,6 +26,17 @@
 可在读取时改为指定文字；这只是文字替换示例，不是 Qwen 的原生控制参数。
 源位置、替换记录和摘要随预览返回，不把 verbosity 的 5 当成思考强度。
 其它模型、其它表达与数值保持原样；任务引用相关文字时拒绝歧义转换。
+
+需要调整规则时，复制并编辑本目录的 `control-text-deepseek.json`，通过
+`--control-text-config scripts/training/control-text-deepseek.json` 加载。顶层 `enabled=false`
+关闭全部控制文字适配；规则内的 `enabled=false` 只停用那条。`matches` 修改匹配原文，
+`marker` 修改标记，`replacement` 设置目标文字；`null` 保留标记，不能用空串删除。
+`matches=[]` 只处理已存在的标记。文件中的两条示例分别处理 DeepSeek 详尽程度和已有思考强度标记。
+
+`--no-control-text` 的优先级最高，即便原命令仍带旧配置参数，也完整保留原控制文字。
+这是关闭文字适配，不是关闭思考。使用 JSON 配置时不能再叠加旧版
+`--source-control-profile` / `--verbosity-reference-text`；未选新配置的旧调用保持原行为。
+配置在加载器创建时冻结，编辑文件只影响下一次加载。快照、摘要及逐条替换记录随预览返回。
 
 依赖为已有项目 Python 环境、Transformers 和本地 Qwen3.5 tokenizer/template。脚本不下载权重、不启动训练、不调用模型 API、不写转换数据集。当前适配范围是文本 SFT 和多轮对话；思考开启时目标轮必须有推理。工具、媒体及不支持的角色不能静默降级。
 

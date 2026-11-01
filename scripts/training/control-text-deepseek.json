@@ -1,0 +1,23 @@
+{
+  "schema": "shujian.control-text-adaptation/v1",
+  "enabled": true,
+  "rules": [
+    {
+      "id": "deepseek-output-verbosity-5",
+      "enabled": true,
+      "matches": ["Desired oververbosity 5", "desired verbosity 5"],
+      "marker": "[[SJ_OUTPUT_VERBOSITY:5]]",
+      "replacement": null,
+      "field": "output_verbosity",
+      "observed_value": 5
+    },
+    {
+      "id": "reasoning-effort-reference",
+      "enabled": true,
+      "matches": [],
+      "marker": "[[SJ_REASONING_EFFORT]]",
+      "replacement": "思考已开启",
+      "field": "reasoning_reference"
+    }
+  ]
+}

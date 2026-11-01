@@ -15,6 +15,7 @@ from lib.contexts.models.contracts import REASONING_EFFORT_REFERENCE
 
 from ..domain.training_control import TRAINING_EFFORTS, validate_training_effort
 from ..domain.trainer_formats import _has_media
+from .control_text import ControlTextAdapter
 from .deepseek_control_text import MARKER as VERBOSITY_REFERENCE
 from .deepseek_control_text import PROFILE as DEEPSEEK_CONTROL_PROFILE
 from .deepseek_control_text import normalize_deepseek_control_text
@@ -36,7 +37,8 @@ class Qwen35TrainingEncoder:
                  effort_mapping: Mapping[str, bool | int] | None = None,
                  reasoning_reference_text: str = "思考已开启",
                  source_control_profile: str | None = None,
-                 verbosity_reference_text: str | None = None):
+                 verbosity_reference_text: str | None = None,
+                 control_text_config: Mapping | None = None):
         if max_length is not None and (type(max_length) is not int or max_length < 1):
             raise ValueError("invalid_training_max_length")
         if not getattr(tokenizer, "is_fast", False):
@@ -68,6 +70,12 @@ class Qwen35TrainingEncoder:
             raise ValueError("invalid_verbosity_reference_text")
         self._source_control_profile = source_control_profile
         self._verbosity_reference_text = verbosity_reference_text
+        if control_text_config is not None and (source_control_profile is not None
+                or verbosity_reference_text is not None or reasoning_reference_text != "思考已开启"):
+            raise ValueError("control_text_config_conflicts_with_legacy_options")
+        self._control_text_adapter = (
+            ControlTextAdapter(control_text_config) if control_text_config is not None else None
+        )
         self._provenance = {
             "adapter": "shujian.qwen35-thinking-map/v1",
             "control_kind": "enable_thinking",
@@ -89,6 +97,16 @@ class Qwen35TrainingEncoder:
                     "source_control_profile": source_control_profile,
                     "verbosity_reference_text": verbosity_reference_text,
                 }, ensure_ascii=False, sort_keys=True)),
+            })
+        if self._control_text_adapter is not None:
+            configuration = self._control_text_adapter.configuration
+            self._provenance.update({
+                "reasoning_reference_text": None,
+                "control_text_enabled": self._control_text_adapter.enabled,
+                "control_text_configuration": configuration,
+                "control_text_mapping_sha256": _sha256(json.dumps(
+                    configuration, ensure_ascii=False, sort_keys=True,
+                )),
             })
 
     @property
@@ -164,7 +182,15 @@ class Qwen35TrainingEncoder:
         if "<think>" in answer or "</think>" in answer:
             raise ValueError("qwen35_inline_and_separate_reasoning_conflict")
         control_text_metadata = {}
-        if enable_thinking and (self._source_control_profile or self._verbosity_reference_text is not None):
+        if enable_thinking and self._control_text_adapter is not None:
+            original_reasoning = reasoning
+            reasoning, control_text_metadata = self._control_text_adapter.apply(
+                reasoning, task_contents=[m.get("content", "") for m in controlled
+                                          if m["role"] != "system"],
+            )
+            control_text_metadata["source_reasoning_sha256"] = _sha256(original_reasoning)
+            target["reasoning_content"] = reasoning
+        elif enable_thinking and (self._source_control_profile or self._verbosity_reference_text is not None):
             original_reasoning = reasoning
             edits = []
             if self._source_control_profile == DEEPSEEK_CONTROL_PROFILE:
@@ -187,7 +213,8 @@ class Qwen35TrainingEncoder:
                 "verbosity_reference_replacements": replacement_count,
             }
         reference_count = 0
-        if enable_thinking and REASONING_EFFORT_REFERENCE in reasoning:
+        if (self._control_text_adapter is None and enable_thinking
+                and REASONING_EFFORT_REFERENCE in reasoning):
             # Only the reserved self-reference is adapted. A task quoting the
             # same token is ambiguous; do not rewrite quotations or free prose.
             if any(REASONING_EFFORT_REFERENCE in m.get("content", "")

@@ -55,6 +55,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Explicitly mark known DeepSeek native-reasoning control text")
     parser.add_argument("--verbosity-reference-text",
                         help="Target wording for the verbosity marker; omitted keeps the marker")
+    parser.add_argument("--control-text-config", type=Path,
+                        help="Editable JSON with enabled, literal rules, markers and target wording")
+    parser.add_argument("--no-control-text", action="store_true",
+                        help="Keep all reasoning control text unchanged; overrides text-adaptation options")
     parser.add_argument("--show-text", action="store_true",
                         help="Also print the complete decoded input and supervised target")
     args = parser.parse_args(argv)
@@ -64,6 +68,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--tokenizer must be a local directory; this script does not download files")
     if args.effort_mapping is not None and not args.effort_mapping.is_file():
         parser.error("--effort-mapping must be an existing JSON file")
+    if not args.no_control_text and args.control_text_config is not None:
+        if not args.control_text_config.is_file():
+            parser.error("--control-text-config must be an existing JSON file")
+        if args.source_control_profile is not None or args.verbosity_reference_text is not None:
+            parser.error("--control-text-config cannot be combined with legacy text-adaptation options")
 
     from transformers import AutoTokenizer
     from lib.bootstrap.datasets import qwen35_training_encoder
@@ -76,10 +85,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.effort_mapping is not None:
             with args.effort_mapping.open("r", encoding="utf-8-sig") as mapping_file:
                 effort_mapping = json.load(mapping_file)
+        control_text_config = None
+        if args.no_control_text:
+            control_text_config = {"schema": "shujian.control-text-adaptation/v1", "enabled": False}
+        elif args.control_text_config is not None:
+            with args.control_text_config.open("r", encoding="utf-8-sig") as config_file:
+                control_text_config = json.load(config_file)
+            if not isinstance(control_text_config, dict):
+                raise ValueError("control_text_configuration_must_be_object")
         encoder = qwen35_training_encoder(
             tokenizer, max_length=args.max_length, effort_mapping=effort_mapping,
-            source_control_profile=args.source_control_profile,
-            verbosity_reference_text=args.verbosity_reference_text,
+            source_control_profile=None if args.no_control_text else args.source_control_profile,
+            verbosity_reference_text=None if args.no_control_text else args.verbosity_reference_text,
+            control_text_config=control_text_config,
         )
         examples = iter_training_examples(
             iter_jsonl_records(args.input), encoder, default_effort=args.default_effort,
