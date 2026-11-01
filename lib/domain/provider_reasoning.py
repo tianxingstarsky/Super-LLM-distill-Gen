@@ -51,10 +51,12 @@ def select_candidate_reasoning(candidate: dict, *, styled: bool = False) -> dict
                 and isinstance(checkpoint.get("sha256"), str)
                 and re.fullmatch(r"[0-9a-f]{64}", checkpoint["sha256"])):
             selected["call"] = {"stage": checkpoint["stage"], "sha256": checkpoint["sha256"]}
+    if isinstance(details.get("generation_control"), dict):
+        selected["generation_control"] = deepcopy(details["generation_control"])
     return selected
 
 
-def reasoning_provenance(selection: dict) -> dict:
+def reasoning_provenance(selection: dict, *, message_index: int | None = None) -> dict:
     """Project trusted reasoning provenance into the auditable sample record."""
     result = {"reasoning_origin": selection["origin"]}
     if "summary" in selection:
@@ -63,4 +65,9 @@ def reasoning_provenance(selection: dict) -> dict:
         result["reasoning_api_format"] = selection["api_format"]
     if "call" in selection:
         result["reasoning_call"] = deepcopy(selection["call"])
+    if "generation_control" in selection:
+        result["generation_control"] = deepcopy(selection["generation_control"])
+        if message_index is not None:
+            from lib.contexts.workflows.contracts import generation_controls_metadata
+            result.update(generation_controls_metadata([(message_index, result)]))
     return result

@@ -4,6 +4,11 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 
+from .reasoning_control import (
+    STANDARD_REASONING_SCHEMA, STANDARD_REASONING_EFFORTS, standard_reasoning,
+    validate_standard_reasoning, resolve_provider_reasoning, reasoning_control_receipt,
+)
+
 
 REASONING_FORMATS = ("deepseek", "anthropic_adaptive", "anthropic_budget")
 
@@ -23,6 +28,8 @@ def effort_levels(value):
 def validate_reasoning(value, *, max_output_tokens=None) -> dict:
     if value is None:
         return {"mode": "auto"}
+    if isinstance(value, dict) and "schema" in value:
+        return validate_standard_reasoning(value, max_output_tokens=max_output_tokens)
     if not isinstance(value, dict) or set(value) - {"mode", "effort", "budget_tokens"}:
         raise ValueError("invalid_model_reasoning")
     mode = value.get("mode", "auto")

@@ -190,6 +190,15 @@ class GenerateNativeCot:
                 **({"execution_state": deepcopy(execution_state)} if execution_state is not None else {}),
                 "history_status": "unchanged_not_assessed" if any(m.get("role") == "assistant" for m in prompt) else "no_assistant_history"},
             **qa_metadata(sample)}
+        from ..domain.generation_control import feedback_control_scope, generation_controls_metadata
+        scope = feedback_control_scope(feedback_receipt) if feedback_receipt is not None else None
+        if scope is not None and scope["status"] != "complete":
+            # Per-call controls remain in the receipt, but joined reasoning
+            # with mixed or unknown sources cannot train under one label.
+            row["generation_control_scope"] = scope
+        elif isinstance(details.get("generation_control"), dict):
+            row["generation_control"] = deepcopy(details["generation_control"])
+            row.update(generation_controls_metadata([(len(prompt), row)]))
         if feedback_receipt is not None:
             row["reasoning_origin"] = ("provider_reasoning_review_guided_regeneration" if
                 review_guidance is not None else "provider_reasoning_tool_continuation")

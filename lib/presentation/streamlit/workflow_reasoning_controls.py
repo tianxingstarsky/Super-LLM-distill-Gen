@@ -3,7 +3,10 @@ from copy import deepcopy
 
 import streamlit as st
 
-from lib.domain.model_reasoning import effort_levels, validate_reasoning
+from lib.domain.model_reasoning import (
+    STANDARD_REASONING_SCHEMA, STANDARD_REASONING_EFFORTS, standard_reasoning,
+    resolve_provider_reasoning, validate_reasoning,
+)
 from lib.presentation.streamlit.i18n import UntranslatedText, translate_label
 
 
@@ -19,9 +22,30 @@ REASONING_ERRORS = {
     "model_reasoning_format_unknown": "尚未确认模型的思考参数格式，请获取模型能力或选择自动。",
     "model_reasoning_parameter_unsupported": "模型服务拒绝了思考参数。已保留配置，请重新获取模型能力或选择自动。",
 }
+REASONING_ERRORS.update({
+    "invalid_standard_reasoning": REASONING_ERRORS["invalid_model_reasoning"],
+    "invalid_standard_reasoning_effort": REASONING_ERRORS["invalid_model_reasoning"],
+    "invalid_reasoning_provider_mapping": REASONING_ERRORS["model_reasoning_format_unknown"],
+    "reasoning_provider_mapping_required": REASONING_ERRORS["model_reasoning_format_unknown"],
+})
 
 MODE_LABELS = {"auto": "自动（服务默认）", "enabled": "开启思考", "disabled": "关闭思考",
                "saved": "保留已保存配置"}
+
+CONTROL_COPY = {
+    "平台 {effort} → 实际模型设置：{provider}": "Platform {effort} → Actual model setting: {provider}",
+    "共用模型设置：{groups}。平台五档不代表模型原生支持五档。":
+        "Shared model settings: {groups}. The platform choices are not five native model levels.",
+    "保留已保存的原生思考配置；选择开启思考后才切换为平台五档。":
+        "Keep the saved native reasoning configuration. Select Enable reasoning to switch to the platform's five levels.",
+}
+
+
+def reasoning_label(text, language=None):
+    language = language or st.session_state.get("ui_language", "zh")
+    if language == "en" and text in CONTROL_COPY:
+        return UntranslatedText(CONTROL_COPY[text])
+    return UntranslatedText(translate_label(text, language))
 
 
 def _key(prefix, backend, model):
@@ -46,11 +70,20 @@ def set_reasoning_widgets(prefix, binding):
     value = deepcopy(binding.get("reasoning"))
     st.session_state[key + ":value"] = value
     choice = validate_reasoning(value)
-    st.session_state[key + ":mode"] = choice["mode"]
+    standard = choice.get("schema") == STANDARD_REASONING_SCHEMA
+    st.session_state[key + ":mode"] = "saved" if choice["mode"] == "enabled" and not standard else choice["mode"]
+    st.session_state[key + ":standard_ui"] = True
     for field in ("effort", "budget_tokens"):
         st.session_state.pop(key + ":" + field, None)
-        if field in choice:
+        if standard and field in choice:
             st.session_state[key + ":" + field] = choice[field]
+
+
+def _standard_choice(effort, info, output_tokens, api_format, previous=None):
+    mapping = (previous.get("provider_mapping") if isinstance(previous, dict)
+               and previous.get("schema") == STANDARD_REASONING_SCHEMA else None)
+    return standard_reasoning(effort, model_info=info, api_format=api_format,
+                              max_output_tokens=output_tokens, provider_mapping=mapping)
 
 
 def selected_reasoning(prefix, backend, model, info, output_tokens, *, saved=None):
@@ -67,78 +100,87 @@ def selected_reasoning(prefix, backend, model, info, output_tokens, *, saved=Non
     elif mode == "disabled":
         value = {"mode": "disabled"}
     else:
-        value = {"mode": "enabled"}
-        levels = effort_levels(info.get("reasoning_efforts")) or []
-        if info.get("reasoning_format") == "anthropic_budget":
-            default = (previous or {}).get("budget_tokens", min(4096, output_tokens - 1))
-            value["budget_tokens"] = st.session_state.get(key + ":budget_tokens", max(1024, default))
-        elif levels:
-            default = info.get("default_reasoning_effort")
-            if default not in levels:
-                default = levels[0]
+        standard = isinstance(previous, dict) and previous.get("schema") == STANDARD_REASONING_SCHEMA
+        if previous and not standard and not st.session_state.get(key + ":standard_ui"):
+            value = deepcopy(previous)
+        else:
+            default = previous["effort"] if standard else "medium"
             effort = st.session_state.get(key + ":effort", default)
-            if effort is not None:
-                value["effort"] = effort
-        elif (previous or {}).get("mode") == "enabled":
-            value.update({field: previous[field] for field in ("effort", "budget_tokens") if field in previous})
+            if effort not in STANDARD_REASONING_EFFORTS:
+                effort = default
+            value = _standard_choice(effort, info, output_tokens,
+                st.session_state.get(key + ":api_format", "chat"), previous)
     if value is not None:
         value = validate_reasoning(value, max_output_tokens=output_tokens)
     st.session_state[key + ":value"] = deepcopy(value)
     return value
 
 
+def _mapping_caption(choice):
+    actual = resolve_provider_reasoning(choice)
+    st.caption(UntranslatedText(reasoning_label("平台 {effort} → 实际模型设置：{provider}").format(
+        effort=choice["effort"], provider=reasoning_summary(actual))))
+    groups = []
+    for effort in STANDARD_REASONING_EFFORTS:
+        native = choice["provider_mapping"][effort]
+        group = next((group for group in groups if group[0] == native), None)
+        if group is None:
+            groups.append((native, [effort]))
+        else:
+            group[1].append(effort)
+    collapsed = [" / ".join(levels) + " → " + reasoning_summary(native)
+                 for native, levels in groups if len(levels) > 1]
+    if collapsed:
+        st.caption(UntranslatedText(reasoning_label(
+            "共用模型设置：{groups}。平台五档不代表模型原生支持五档。").format(groups="; ".join(collapsed))))
+
+
 def render_reasoning_controls(prefix, backend, model, info, output_tokens, *, saved=None,
                               api_format="chat", on_change=None, args=(), application=None, endpoint=None):
     key = _key(prefix, backend, model)
     st.session_state[key + ":capabilities"] = deepcopy(info)
+    st.session_state[key + ":api_format"] = api_format
     current = st.session_state.get(key + ":value", saved)
     choice = validate_reasoning(current)
-    levels = effort_levels(info.get("reasoning_efforts")) or []
-    scheme = info.get("reasoning_format")
-    budget_mode = api_format == "anthropic" and scheme == "anthropic_budget"
-    native_toggle = ((scheme == "deepseek" and api_format in {"chat", "anthropic"})
-                     or (scheme == "anthropic_adaptive" and api_format == "anthropic"))
-    can_enable = ((bool(levels) and api_format in {"chat", "responses"}) or native_toggle
-                  or (budget_mode and output_tokens > 1024))
-    if budget_mode and output_tokens <= 1024:
+    standard = choice.get("schema") == STANDARD_REASONING_SCHEMA
+    legacy_enabled = choice["mode"] == "enabled" and not standard
+    try:
+        _standard_choice("medium", info, output_tokens, api_format, current)
+        can_enable = True
+    except ValueError:
         can_enable = False
     options = ["auto", *(["enabled"] if can_enable else []),
                *(["disabled"] if info.get("reasoning_disabled") is True else [])]
-    supported_saved = (choice["mode"] in options
-        and ("effort" not in choice or choice["effort"] in levels)
-        and ("budget_tokens" not in choice or budget_mode)
-        and choice.get("budget_tokens", 0) < output_tokens
-        and not (choice["mode"] == "enabled" and budget_mode and "budget_tokens" not in choice)
-        and not (choice["mode"] == "enabled" and not native_toggle and not budget_mode and "effort" not in choice))
+    supported_saved = choice["mode"] in options and not legacy_enabled
     if current and choice["mode"] != "auto" and not supported_saved:
         options.append("saved")
     selected = choice["mode"] if supported_saved else "saved"
-    if not supported_saved or key + ":mode" not in st.session_state or st.session_state[key + ":mode"] not in options:
+    if (key + ":mode" not in st.session_state or st.session_state[key + ":mode"] not in options
+            or (legacy_enabled and not st.session_state.get(key + ":standard_ui"))):
         st.session_state[key + ":mode"] = selected
+    if not st.session_state.get(key + ":standard_ui") and not standard:
+        st.session_state.pop(key + ":effort", None)
+    st.session_state[key + ":standard_ui"] = True
     st.session_state.setdefault(key + ":value", deepcopy(current))
     mode = st.selectbox("模型思考", options, key=key + ":mode",
                         format_func=lambda item: translate_label(MODE_LABELS[item], st.session_state.get("ui_language", "zh")),
                         on_change=on_change, args=args,
                         help="自动不发送思考覆盖参数，沿用服务默认设置。")
-    if mode == "enabled" and budget_mode:
-        budget = (current or {}).get("budget_tokens", min(4096, output_tokens - 1))
-        st.number_input("思考预算（tokens）", min_value=1024, max_value=output_tokens - 1,
-                        value=max(1024, budget), step=1024, key=key + ":budget_tokens",
-                        on_change=on_change, args=args)
-    elif mode == "enabled" and levels:
-        effort_options = [None, *levels] if native_toggle else levels
-        default = ((current or {}).get("effort") if (current or {}).get("mode") == "enabled"
-                   else info.get("default_reasoning_effort"))
-        if default not in effort_options:
-            default = effort_options[0]
-        if key + ":effort" not in st.session_state or st.session_state[key + ":effort"] not in effort_options:
+    if mode == "enabled":
+        default = choice["effort"] if standard else "medium"
+        if (key + ":effort" not in st.session_state
+                or st.session_state[key + ":effort"] not in STANDARD_REASONING_EFFORTS):
             st.session_state[key + ":effort"] = default
-        st.selectbox("思考强度", effort_options, key=key + ":effort", on_change=on_change, args=args,
-                     format_func=lambda value: UntranslatedText(value) if value is not None else
-                     translate_label("服务默认强度", st.session_state.get("ui_language", "zh")))
+        st.selectbox("思考强度", list(STANDARD_REASONING_EFFORTS), key=key + ":effort",
+                     on_change=on_change, args=args, format_func=UntranslatedText)
+        _mapping_caption(_standard_choice(st.session_state[key + ":effort"], info,
+                                         output_tokens, api_format, current))
     elif mode == "saved":
         st.caption(reasoning_summary(current))
-        st.caption("已保存的思考配置尚未获得当前能力声明确认。配置予以保留，可选择自动重置。")
+        if legacy_enabled:
+            st.caption(reasoning_label("保留已保存的原生思考配置；选择开启思考后才切换为平台五档。"))
+        else:
+            st.caption("已保存的思考配置尚未获得当前能力声明确认。配置予以保留，可选择自动重置。")
     elif not can_enable:
         st.caption("尚未获取可调思考能力。可在模型检测中获取模型列表；默认沿用服务设置。")
     st.caption("思考强度控制模型的推理投入，不等同于答案长度；答案详略由提示词与输出上限共同影响。")

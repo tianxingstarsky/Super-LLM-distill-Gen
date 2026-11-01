@@ -29,6 +29,49 @@ def native_row():
             "reasoning_api_format": "chat", "reasoning_call": deepcopy(CALL)}
 
 
+@pytest.mark.parametrize("edit_index", [None, 1, 3])
+def test_generation_controls_survive_only_unchanged_author_prefixes(edit_index):
+    original = native_row()
+    original["messages"] += [{"role": "user", "content": "Then what?"},
+        {"role": "assistant", "content": "Answer two.", "reasoning_content": "The next condition matters."}]
+    entries = [{"message_index": index, "generation_control": {
+        "schema": "shujian.reasoning-effort/v1", "effort": effort,
+        "provider": {"mode": "enabled"}, "mapping_sha256": "a" * 64}}
+        for index, effort in ((1, "low"), (3, "max"))]
+    original["generation_controls"] = {"version": 1, "assistant_turns": deepcopy(entries)}
+    original["training_control"] = {"schema": "shujian.training-control/v1", "by_message": {"1": "low", "3": "max"}}
+    updated = deepcopy(original)
+    if edit_index is not None:
+        updated["messages"][edit_index]["content"] = "A different answer."
+    preserve_provider_reasoning("multiturn", original, updated, origin="human_revision")
+    if edit_index is None:
+        assert updated["generation_controls"] == original["generation_controls"]
+        assert "generation_control_history" not in updated
+    else:
+        surviving = updated.get("generation_controls", {}).get("assistant_turns", [])
+        assert [entry["message_index"] for entry in surviving] == ([1] if edit_index == 3 else [])
+        retired = updated["generation_control_history"][0]["assistant_turns"]
+        assert [entry["message_index"] for entry in retired] == ([3] if edit_index == 3 else [1, 3])
+        assert "training_control" not in updated
+    assert original["generation_controls"]["assistant_turns"] == entries
+
+
+def test_cot_rewriting_retires_inherited_control_but_extraction_keeps_it():
+    from lib.domain.workflow_reasoning_route import cot_with_sft_context
+    original = native_row()
+    original["generation_controls"] = {"version": 1, "assistant_turns": [{"message_index": 1,
+        "generation_control": {"schema": "shujian.reasoning-effort/v1", "effort": "high"}}]}
+    result = {"status": "eligible", "question": deepcopy(original["messages"][:-1]),
+        "answer": original["messages"][-1]["content"],
+        "reasoning": [original["messages"][-1]["reasoning_content"]]}
+    extracted = cot_with_sft_context(original, result)
+    assert extracted["generation_controls"] == original["generation_controls"]
+    result["answer"] = "A revised answer from another author request."
+    rewritten = cot_with_sft_context(original, result)
+    assert "generation_controls" not in rewritten
+    assert rewritten["generation_control_history"][0]["superseded_by"] == "cot_generation"
+
+
 def score():
     return {"keep": True, "grounded": True, "reasoning_valid": True, "correctness": 5,
             "scores": {name: 5 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},

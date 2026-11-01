@@ -4,6 +4,7 @@ import math
 from urllib.parse import urlsplit
 from . import tool_transport
 from .request_adapter import ClientRequestAdmission
+from ..contracts import reasoning_control_receipt
 
 
 class SDKToolRequestAdapter(ClientRequestAdmission):
@@ -36,6 +37,7 @@ class SDKToolRequestAdapter(ClientRequestAdmission):
         accounting = self.runtime.tool_context_accounting(messages, tools)
         request_max, reservation_usd = self.client._budget_request_bound(accounting, max_tokens)
         self._kwargs = self.runtime._request_kwargs(self.client, messages, tools, request_max, temperature, tool_choice=tool_choice)
+        self._generation_control = reasoning_control_receipt(self.client.reasoning)
         self._names = {tool["function"]["name"] for tool in tools}
         return reservation_usd
 
@@ -72,6 +74,9 @@ class SDKToolRequestAdapter(ClientRequestAdmission):
 
     def response_details(self, response):
         details = self.runtime.extract_response_details(response, self.client.api_format)
+        if self._generation_control is not None:
+            from copy import deepcopy
+            details["generation_control"] = deepcopy(self._generation_control)
         if self._strict:
             details["strict_tool_response"] = self.runtime._plain(response)
             details["strict_tool_protocol_version"] = 1

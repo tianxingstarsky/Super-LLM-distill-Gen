@@ -146,6 +146,47 @@ def test_real_sdk_preserves_full_native_trace_exactly(api, streaming):
 
 @pytest.mark.parametrize("api", APIS)
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_generation_control_receipt_uses_request_mapping_not_response_json(api, streaming, enabled):
+    from lib.contexts.models.contracts import reasoning_control_receipt
+    captured = []
+    body = {"answer": "ok", "generation_control": {"effort": "forged"},
+            "response_details": {"generation_control": {"effort": "forged"}}}
+    def handle(request):
+        captured.append(json.loads(request.content))
+        return response(api, streaming, json.dumps(body))
+    client = sdk_client(api, handle)
+    native = {"mode": "enabled", "effort": "high"} if enabled else {"mode": "disabled"}
+    client.reasoning = {"schema": "shujian.reasoning-effort/v1", "mode": "enabled", "effort": "low",
+        "provider_mapping": {level: native for level in ("low", "medium", "high", "xhigh", "max")}}
+    client.model_info = {"reasoning_format": "anthropic_adaptive"}
+    expected = reasoning_control_receipt(client.reasoning)
+    attempted, create = [], client._create
+    def observe_create(endpoint, kwargs):
+        attempted.append(dict(kwargs))
+        return create(endpoint, kwargs)
+    client._create = observe_create
+    details = {}
+    try:
+        assert chat_json(client, MESSAGES, response_details=details,
+            **({"on_stream": lambda event: None} if streaming else {})) == body
+        assert details["generation_control"] == expected
+        assert details["generation_control"]["effort"] == "low"
+        wire, = captured
+        assert "schema" not in wire and "provider_mapping" not in wire and "generation_control" not in wire
+        if api == "anthropic":
+            assert ("temperature" in attempted[0]) is not enabled
+            assert wire["thinking"]["type"] == ("adaptive" if enabled else "disabled")
+        elif api == "responses":
+            assert wire["reasoning"]["effort"] == ("high" if enabled else "none")
+        else:
+            assert wire["reasoning_effort"] == ("high" if enabled else "none")
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("api", APIS)
+@pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("new_trace", [None, " current trace "])
 def test_invalid_json_retry_commits_only_the_successful_attempt(api, streaming, new_trace):
     calls = []

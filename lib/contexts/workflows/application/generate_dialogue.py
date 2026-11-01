@@ -15,6 +15,7 @@ from lib.domain.human_augmentation import human_generation_instruction
 from ..domain.imported_reasoning import imported_reasoning_metadata
 from ..domain.native_generation import native_generation_enabled
 from ..domain.native_dialogue_continuation import native_dialogue_progress_blocker
+from ..domain.generation_control import generation_controls_metadata
 
 
 class GenerateMultiturnDialogue:
@@ -37,6 +38,8 @@ class GenerateMultiturnDialogue:
         for row in rows:
             row.update(imported_reasoning_metadata(unit, messages_preserved=(
                 unit.get("kind") == "conversation" and row.get("messages") == unit.get("messages"))))
+            row.update(generation_controls_metadata((turn["end_message_index"], turn)
+                for turn in row.get("turn_reviews", []) if "end_message_index" in turn))
         if style is not None:
             for row in rows:
                 row["generation_style"] = deepcopy(style)
@@ -120,6 +123,11 @@ class GenerateMultiturnDialogue:
                 "semantic_status": "not_assessed", "reasoning_origin": "provider_reasoning",
                 "call": getattr(response, "response_details", {}).get("checkpoint"),
                 "request_messages_sha256": digest(answer_task["messages"])})
+            details = getattr(response, "response_details", {})
+            if isinstance(details.get("generation_control"), dict):
+                turns[-1].update(end_message_index=len(messages) - 1,
+                    generation_control=deepcopy(details["generation_control"]),
+                    reasoning_call=deepcopy(details.get("checkpoint")))
             if local_issues:
                 issues.extend(local_issues)
                 end_reason = "local_defect"
@@ -134,6 +142,8 @@ class GenerateMultiturnDialogue:
                 "scenario": scene, "user_simulation": actor_receipts,
                 "visibility": "rules_and_material_exported_scene_private", "issues": issues}}
         from lib.domain.training_surface import training_record_surface_issue
+        row.update(generation_controls_metadata((turn["end_message_index"], turn)
+            for turn in turns if "end_message_index" in turn))
         if surface_issue := training_record_surface_issue("multiturn", row, protocol_version=2):
             issues.append(surface_issue)
         if issues:
@@ -440,7 +450,9 @@ class GenerateMultiturnDialogue:
                 from lib.domain.provider_reasoning import select_candidate_reasoning, reasoning_provenance
                 try:
                     selected_reasoning = ({"content": native_row["reasoning"][0], "origin": "provider_reasoning",
-                        "api_format": native_row.get("reasoning_api_format"), "call": native_row.get("reasoning_call")}
+                        "api_format": native_row.get("reasoning_api_format"), "call": native_row.get("reasoning_call"),
+                        **({"generation_control": deepcopy(native_row["generation_control"])}
+                           if "generation_control" in native_row else {})}
                         if native else select_candidate_reasoning(response, styled=style is not None))
                 except ValueError:
                     feedback = "推理字段结构无效"

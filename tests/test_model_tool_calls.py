@@ -57,6 +57,36 @@ def reply(api, *, calls=True, thought=THOUGHT, content=ANSWER):
 
 
 @pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_tool_response_control_is_request_scoped_and_never_added_to_assistant(api, enabled):
+    from lib.contexts.models.contracts import reasoning_control_receipt
+    captured = []
+    def handle(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=reply(api))
+    client = sdk_client(api, handle)
+    native = {"mode": "enabled", "effort": "high"} if enabled else {"mode": "disabled"}
+    client.reasoning = {"schema": "shujian.reasoning-effort/v1", "mode": "enabled", "effort": "max",
+        "provider_mapping": {level: native for level in ("low", "medium", "high", "xhigh", "max")}}
+    client.model_info = {"reasoning_format": "anthropic_adaptive"}
+    attempted, create = [], client._create
+    def observe_create(endpoint, kwargs):
+        attempted.append(dict(kwargs))
+        return create(endpoint, kwargs)
+    client._create = observe_create
+    details = {}
+    try:
+        assistant = client.tool_turn(MESSAGES, TOOLS, response_details=details)
+        assert details["generation_control"] == reasoning_control_receipt(client.reasoning)
+        assert "generation_control" not in assistant and "generation_controls" not in assistant
+        assert "generation_control" not in captured[0]
+        if api == "anthropic":
+            assert ("temperature" in attempted[0]) is not enabled
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("api", ["chat", "responses", "anthropic"])
 def test_sdk_round_trip_preserves_calls_ids_and_provider_reasoning_without_mutation(api):
     captured, events = [], []
     first_response = reply(api)

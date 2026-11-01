@@ -1,5 +1,13 @@
 # 模型规则
 
+`reasoning_control.py` 定义 `shujian.reasoning-effort/v1`：节点始终保存
+low/medium/high/xhigh/max；`standard_reasoning` 根据已确认能力生成并冻结
+`provider_mapping`，只有请求边界调用 `resolve_provider_reasoning`。
+映射可能多对一，UI和请求收据分别显示平台选择及上游实际配置，不声称五档原生等价。
+未知供应商档位需要显式映射。旧无schema配置仍按原生含义运行，不热改冻结任务。
+训练转换由datasets域使用同一平台枚举，目标映射不反向改写生成记录。
+验证：`test_model_reasoning_controls.py` 的真实SDK/离线HTTP合同。
+
 旧 JSON 外层兼容由标准库 `JSONDecoder.raw_decode` 解析对象边界，移除自写括号／转义扫描。严格工具通道仍独立使用完整 Schema 验证，不由此修补或放宽字段。
 
 显式输出 token 上限使用 `ModelOutputLimitError`，区别于连接中断和没有正常结束的响应。该错误不自动重复同一请求；需要更小工作单元的用例可以据此有界拆分。原始部分输出仍只能作为诊断，不能成为训练记录。

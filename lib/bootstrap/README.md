@@ -1,5 +1,10 @@
 # 组合根：找到服务，再选择实现
 
+`datasets.qwen35_training_encoder(tokenizer, ...)` 装配可选训练加载适配器。
+调用方提供实际本地 tokenizer；该工厂不安装训练框架、不加载权重，也不改变生产导出。
+用例 `datasets.api.iter_training_examples` 负责惰性遍历，说明见
+`docs/training-reasoning-control.md`。
+
 新原生任务冻结 `native_feedback_guidance_version=7`；`native_feedback_repairer` 仍装配同一用例，其 `execute` 转交 `RegenerateWithReviewGuidance`，在真实 user 后附公开 system 提醒并重新生成。旧 v1–v6 路由、检查点与冻结任务不热改；组合根不自动挑选父回执或启动返工。
 
 `native_feedback_repairer(runtime)` 对显式采用 v5/v6 的冻结配方返回支持 `execute_from_feedback` 的同一用例；此处描述保留的旧工具续写路径，新任务默认为公开注意事项 v7。v5/v6 真实尝试未解决原生旁白，不能自动升级为默认。该入口显式复用已交付工具反馈的认证回执，只追加一次原作者请求；正常 `execute` 和历史指导继续保留。组合根不挑父回执、不自动返工，不新增 MCP 服务或第二套调度器。

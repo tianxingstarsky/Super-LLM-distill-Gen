@@ -1,5 +1,12 @@
 # Dataset boundary
 
+New canonical generation receipts opt into `training_control` metadata at the
+training projection. The versioned control uses either one `effort` or
+`by_message` with assistant-message indices. Older rows without canonical
+receipts keep their exact prior export shape; native provider effort is not
+retrospectively guessed. The loader rejects unlabelled turns unless the caller
+explicitly supplies a default. Existing quality and eligibility checks remain.
+
 `reasoning_import.py` adapts explicit NeMo and OpenThoughts result envelopes.
 It decodes complete markers without inventing reasoning or trusting upstream
 scores. The source-library adapter owns file reads and recipe-version gating.
@@ -25,6 +32,17 @@ hashing and worker jobs belong to infrastructure. No model is called here.
 preserves the configured reasoning representation and keeps evidence separate
 from learner-visible messages. A new format must use the same projection rules,
 not copy them into a download handler.
+
+`training_control.py` owns the explicit learner-control contract
+`shujian.training-control/v1`, with effort `low`, `medium`, `high`, `xhigh` or
+`max`. `with_training_control` makes a deep copy and rejects conflicting labels.
+Teacher request effort, response length and legacy explanation depth never imply
+a learner label. Missing controls fail unless a caller explicitly chooses a
+default for a read-only legacy view; malformed existing controls still fail.
+Legacy rows retain their existing projections, hashes and artifacts. Only rows
+with explicit versioned canonical controls opt into the new metadata.
+Verify control validation, immutable source records and legacy-default behavior
+alongside the lazy training-loader regression and DDD boundary checks.
 
 Cross-context callers use `datasets/contracts.py`. The SQLite corpus index lives
 in `datasets/infrastructure/corpus_index.py`; its storage policy must not change

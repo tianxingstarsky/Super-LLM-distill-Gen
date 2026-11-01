@@ -26,6 +26,7 @@ from lib.model_request_reliability import (
 from lib.model_response_details import commit_response_details, extract_response_details
 from lib.model_streaming import ModelStreamError
 from ..domain.request_errors import ModelOutputLimitError
+from ..contracts import resolve_provider_reasoning
 
 
 MAX_TOOLS = 128
@@ -275,7 +276,7 @@ def _request_kwargs(client, messages, tools, max_tokens, temperature, *, tool_ch
             **{key: tool["function"][key] for key in ("description", "strict")
                if key in tool["function"]}} for tool in tools], tool_choice={"type": tool_choice},
             max_tokens=max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS)
-        if client.reasoning.get("mode") == "enabled":
+        if resolve_provider_reasoning(client.reasoning).get("mode") == "enabled":
             kwargs.pop("temperature", None)
     if not tools:
         # A final native regeneration with public system notes has no tool

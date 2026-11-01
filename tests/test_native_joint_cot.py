@@ -21,7 +21,8 @@ def config():
 
 
 @pytest.mark.parametrize("capture_author", [True, False])
-def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boundary(tmp_path, capture_author):
+@pytest.mark.parametrize("canonical_control", [False, True])
+def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boundary(tmp_path, request, capture_author, canonical_control):
     text = "设备维护前必须断电；然后检查线路，完成维护后记录实际结果。"
     source = tmp_path / "manual.txt"
     source.write_text(text, encoding="utf8")
@@ -44,15 +45,39 @@ def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boun
         "kind": "document", "text": text, "qa_contract": {
             "id": "directed-01", "qa_type": "closed_book", "guidance": "解释维护的安全前提。",
             "question": "维护时先做什么？", "visible_context": "", "answer_policy": "answer", "evidence_quotes": [text]}}
+    sdk = None
+    wire = []
+    if canonical_control:
+        import httpx
+        from openai import OpenAI
+        from lib.llm_client import ChatClient
+        def respond(http_request):
+            assert http_request.url.host == "offline.invalid"
+            wire.append(json.loads(http_request.content))
+            return httpx.Response(200, json={"id": "offline-native", "object": "chat.completion", "created": 0,
+                "model": "offline-author", "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                    "role": "assistant", "content": "先断电，再检查线路。",
+                    "reasoning_content": "  用户问维护的先后。带电检查有风险，必须先断电再检查线路。\n"}}]})
+        sdk = ChatClient("https://offline.invalid/v1", "offline-test-key", "offline-author", reasoning={
+            "schema": "shujian.reasoning-effort/v1", "mode": "enabled", "effort": "high",
+            "provider_mapping": {level: {"mode": "enabled", "effort": "low"}
+                for level in ("low", "medium", "high", "xhigh", "max")}})
+        sdk.client.close()
+        sdk.client = OpenAI(base_url="https://offline.invalid/v1", api_key="offline-test-key", max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(respond)))
+        sdk.stream_supported = False
+        request.addfinalizer(sdk.client.close)
     class Author:
         calls = 0
-        reasoning = {"mode": "enabled"}
+        reasoning = sdk.reasoning if sdk else {"mode": "enabled"}
         def chat(self, messages, **options):
             self.calls += 1
             self.last_messages = deepcopy(messages)
             assert messages[-1] == {"role": "user", "content": unit["qa_contract"]["question"]}
             assert text in messages[0]["content"]
             assert not options.get("json_output") and options["retries"] == 1
+            if sdk:
+                return sdk.chat(messages, **options)
             options["response_details"].update(api_format="chat",
                 reasoning_content="  用户问维护的先后。带电检查有风险，必须先断电再检查线路。\n")
             return "先断电，再检查线路。"
@@ -79,6 +104,16 @@ def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boun
     assert row["status"] == "eligible" and row["reasoning_origin"] == "provider_reasoning"
     assert row["messages"][-1]["reasoning_content"].startswith("  用户问维护的先后。")
     assert row["reasoning_call"]["stage"] == "sft"
+    if canonical_control:
+        entry, = row["generation_controls"]["assistant_turns"]
+        assert entry["message_index"] == len(row["messages"]) - 1
+        assert entry["generation_control"]["effort"] == "high"
+        assert entry["generation_control"]["provider"]["effort"] == "low"
+        assert wire[0]["reasoning_effort"] == "low"
+        assert "schema" not in wire[0] and "generation_control" not in wire[0]
+        assert entry["reasoning_call"] == row["reasoning_call"]
+    else:
+        assert "generation_control" not in row and "generation_controls" not in row
     assert ("author_session" in row["native_generation"]) == capture_author
     if capture_author:
         assert row["native_generation"]["author_session"]["messages"] == author.last_messages
@@ -99,6 +134,12 @@ def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boun
     cot = json.loads((resumed.path / "artifacts" / "cot.jsonl").read_text(encoding="utf8"))
     assert cot["reasoning"] == [sft["messages"][-1]["reasoning_content"]]
     assert cot["answer"] == sft["messages"][-1]["content"] and author.calls == 1
+    if canonical_control:
+        expected = {str(len(row["messages"]) - 1): "high"}
+        assert sft["training_control"]["by_message"] == expected
+        assert cot["training_control"]["by_message"] == expected
+    else:
+        assert "training_control" not in sft and "training_control" not in cot
 
 
 @pytest.mark.parametrize("invalid_recipe", ["changed_hash", "unsupported_version"])

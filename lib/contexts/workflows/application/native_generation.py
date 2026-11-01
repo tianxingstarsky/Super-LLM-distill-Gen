@@ -73,6 +73,8 @@ def generate_native_turn(port, recipe, *, stage, unit, messages, style,
     reasoning = reasoning[0] if isinstance(reasoning, list) and reasoning else ""
     row["messages"] = [*preserved_history, {"role": "assistant",
         "content": row.get("answer", ""), "reasoning_content": reasoning}]
+    from ..domain.generation_control import generation_controls_metadata
+    row.update(generation_controls_metadata([(len(row["messages"]) - 1, row)]))
     row["source_context"] = deepcopy(unit)
     row["provided_source_context"] = {
         "version": 1, "kind": "context_provided", "scope": source_scope,

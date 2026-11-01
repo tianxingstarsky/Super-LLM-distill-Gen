@@ -1,5 +1,9 @@
 # 工作流规则
 
+`generation_control.py` 将已知回答请求收据投影为 `generation_controls.version=1` 的逐助手索引映射。只记录有真实来源的轮次，历史缺失项不继承末轮档位；消息正文、原生推理和既有内容摘要不因此改写。
+
+工具续写会把多次请求的原生思考合并到同一训练目标；仅当全部来源收据的 canonical 档位一致时才标记该目标。不同档位或来源缺失标为 `generation_control_scope` 的 `mixed` / `partial`，各调用收据和完整思考仍留在原始回执中。v7 单次原生重答使用本次实际档位。
+
 `review_guidance.py` 持有 v7 公开注意事项合同：在实际 user 后追加 system 提醒，原作者重新生成完整原生响应。原稿和已有反馈归档；提醒进入训练上下文。原请求、提醒、响应及导出上下文通过收据一致性认证。`restore_review_guidance_session` 仅从完整认证的旧工具返工收据恢复待答原始会话；当前候选仍绑定父响应，完整父收据归档，缺可信原始上下文就拒绝，不靠裁掉工具历史凑请求。公开提醒的自然转述不算私有规则泄露，但不扩大资料范围或证明审查意见正确。验证见 `test_review_guidance_protocol.py`、`test_review_guidance_generation.py`、`test_public_review_guidance_surface.py`。
 
 反馈指导 v5/v6 是显式试验版本，保存完整请求、原生推理与父回执；v6 将约束集中到业务依赖、资料范围与实际证据。真实两条复跑改善了节选范围，但内部旁白和旧篇幅设定仍会出现，推理消耗上升，不能标为已解决或默认启用。这两次试验未升级为默认；v1–v6 文本原样保留，新任务改用公开注意事项 v7。

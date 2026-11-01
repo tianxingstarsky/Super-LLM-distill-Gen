@@ -14,6 +14,66 @@ from model_streaming_fixtures import sdk_client
 DEEPSEEK = {"effort": {"supported_levels": ["low", "high", "max"], "default_level": "high"}}
 
 
+@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
+def test_canonical_effort_is_saved_while_only_mapped_effort_reaches_wire(protocol):
+    from copy import deepcopy
+    from lib.contexts.models.contracts import standard_reasoning
+
+    captured = []
+    def handler(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=_response(protocol))
+    client = sdk_client(protocol, handler)
+    client.model_info = normalize_model_info("writer", DEEPSEEK, "service")
+    choice = standard_reasoning("medium", model_info=client.model_info, api_format=protocol)
+    original = deepcopy(choice)
+    binding = validate_node_models({"sft": {"generation": {
+        "backend": "service", "model": "writer", "reasoning": choice}}})
+    client.reasoning = binding["sft"]["generation"]["reasoning"]
+    try:
+        chat_json(client, [{"role": "user", "content": "Work"}], max_tokens=4096)
+    finally:
+        client.client.close()
+    assert client.reasoning == original
+    assert client.reasoning["effort"] == "medium"
+    payload = captured[0]
+    assert not {"schema", "provider_mapping", "training_control"} & payload.keys()
+    if protocol == "chat":
+        assert payload["reasoning_effort"] == "high"
+    elif protocol == "responses":
+        assert payload["reasoning"] == {"effort": "high"}
+    else:
+        assert payload["output_config"] == {"effort": "high"}
+
+
+def test_mapping_is_frozen_and_unknown_vendor_vocabulary_requires_explicit_map():
+    from lib.contexts.models.contracts import standard_reasoning, resolve_provider_reasoning
+    info = normalize_model_info("writer", DEEPSEEK, "service")
+    choice = standard_reasoning("xhigh", model_info=info)
+    info["reasoning_efforts"] = ["low", "high"]
+    assert resolve_provider_reasoning(choice) == {"mode": "enabled", "effort": "max"}
+    with pytest.raises(ValueError, match="model_reasoning_effort_unsupported"):
+        reasoning_request(choice, api_format="chat", model_info=info)
+    with pytest.raises(ValueError, match="reasoning_provider_mapping_required"):
+        standard_reasoning("low", model_info={"reasoning_efforts": ["tiny", "large"]})
+    mapping = {level: {"mode": "enabled", "effort": "large"}
+               for level in ("low", "medium", "high", "xhigh", "max")}
+    mapping["low"] = {"mode": "disabled"}
+    off = standard_reasoning("low", model_info={}, provider_mapping=mapping)
+    assert reasoning_request(off, api_format="responses") == {"reasoning": {"effort": "none"}}
+    assert off["effort"] == "low"
+
+
+def test_standard_budget_mapping_keeps_canonical_effort_and_valid_output_limits():
+    from lib.contexts.models.contracts import standard_reasoning, resolve_provider_reasoning
+    choice = standard_reasoning("max", model_info={"reasoning_format": "anthropic_budget"},
+                                api_format="anthropic", max_output_tokens=4096)
+    assert choice["effort"] == "max"
+    assert resolve_provider_reasoning(choice)["budget_tokens"] == 4095
+    assert reasoning_request(choice, api_format="anthropic", max_tokens=4096)["thinking"] == {
+        "type": "enabled", "budget_tokens": 4095}
+
+
 def _response(protocol):
     if protocol == "chat":
         return {"id": "test", "object": "chat.completion", "created": 1, "model": "writer",

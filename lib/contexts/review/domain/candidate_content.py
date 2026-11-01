@@ -12,6 +12,7 @@ from lib.domain.corpus_quality import inspect_corpus
 from lib.domain.authored_reasoning import AUTHORED_REASONING_VERSION
 from lib.domain.training_surface import training_surface_issue
 from .reasoning_history import retire_reasoning_prefill
+from .generation_control_history import retire_generation_controls
 
 
 def candidate_digest(value):
@@ -29,6 +30,7 @@ def preserve_provider_reasoning(target, original, updated, *, origin):
     Explicit import receipts become input-only after edits. Legacy rows without
     import receipts or provider reasoning/summary retain their existing schema.
     """
+    retire_generation_controls(target, original, updated, origin=origin)
     retire_imported_reasoning(target, original, updated, origin=origin)
     retire_reasoning_prefill(target, original, updated, origin=origin)
     turn_reviews = original.get("turn_reviews", [])

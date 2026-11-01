@@ -13,6 +13,7 @@
 - [模型发现](model-discovery-and-tests.md)：声明、探测与连通测试。
 - [外部控制协议](external-control.md)：独立插件的调用合同。
 - [样本统计](sample-statistics.md)：分布与文件大小的口径。
+- [思考强度转换](training-reasoning-control.md)：统一五档存储、原生控制映射、Qwen3.5 惰性加载示例，不复制模型专用数据集。
 - [内测发布准备](release-readiness-2026-10-27.md)：当前能力、真实样本观察、验证结果和未完成范围。
 
 历史报告保留当时的环境和结论，不能代替当前代码说明。修改行为时更新负责该行为的文档，避免不断向同一个架构文件追加完整工作日志。

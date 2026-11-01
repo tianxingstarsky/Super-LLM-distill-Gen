@@ -1,5 +1,9 @@
 # 旧领域层
 
+下游 CoT 改写沿用 SFT 上下文时，通过审核域公开合同退休已变动回答的旧生成档位；不把来源记录的收据贴到新内容上，未改轮次和原始历史仍保留。
+
+`provider_reasoning.py` 仅从候选对象的可信 `response_details` 属性读取生成控制收据。新记录通过 workflows 域的逐助手映射保存控制来源；JSON 正文里的同名键没有来源权限，旧记录与训练消息保持原合同。
+
 `training_surface.py` 对协议 2 的记录先通过工作流合同认证 `native_generation.review_guidance`，只把匹配的公开 system 注意事项计入各助手轮当时可见的规则。提醒不会扩大资料阅读范围，不豁免后台字段或臆造篇幅设置；后来的提醒不能回溯解释旧轮泄露。`multiturn.py` 只有调用方传入认证位置才接受 user 后连续的 system 提醒；旧调用仍拒绝中途 system。验证：`test_public_review_guidance_surface.py`。
 
 `agent_experience.py` 默认经验包 v5 仅更新 reasoning 范围为“充分推敲 · 初始 v2”：按任务充分展开，不设默认简短、字数、段数或固定步骤，保留角色归属、证据与真实反思。v1–v4 文本及摘要不变；已冻结任务和个人覆盖不迁移。工作流的 `initial_experience_text` 及“使用初始”动作采用 v2，新经验版本仍由用户显式保存。验证：`test_agent_experience.py`、`test_workflow_agent_experience.py`、`test_experience_evolution_ui.py`。

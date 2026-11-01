@@ -143,7 +143,7 @@ class GenerateSft:
                          **({"quote_spans": evidence_spans} if evidence_spans is not None else {}),
                          **({"generation_style": style} if style is not None else {}),
                          "repair_attempts": attempt,
-                         **({"reasoning_origin": "source"} if messages is history else reasoning_provenance(selected_reasoning)),
+                         **({"reasoning_origin": "source"} if messages is history else reasoning_provenance(selected_reasoning, message_index=len(messages) - 1)),
                          "evidence_level": ("recorded_context_model_assessed" if messages is history else
                             "model_assessed_synthetic" if unit["kind"] == "brief" else document_evidence_level(unit, assessed=True))}]
             # Recorded answers need no generation call. Key their verdict to
@@ -165,7 +165,7 @@ class GenerateSft:
                             if unit["kind"] == "conversation" and
                             self.recipe.get("qa_director", {}).get("human_augmentation", {}).get("enabled") else {}),
                          "repair_attempts": attempt,
-                         **({"reasoning_origin": "source"} if messages is history else reasoning_provenance(selected_reasoning)),
+                         **({"reasoning_origin": "source"} if messages is history else reasoning_provenance(selected_reasoning, message_index=len(messages) - 1)),
                          "evidence_level": ("recorded_context_model_assessed" if messages is history else
                                             "model_assessed_synthetic" if unit["kind"] == "brief"
                                             else document_evidence_level(unit, assessed=True))}]

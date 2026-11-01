@@ -119,6 +119,8 @@ def cot_with_sft_context(sample: dict, result: dict) -> dict:
     final.pop("reasoning", None)
     final.pop("thinking", None)
     row["question"] = deepcopy(messages[:-1])
+    from lib.contexts.review.contracts import retire_generation_controls
+    retire_generation_controls("sft", sample, row, origin="cot_generation")
     return row
 
 

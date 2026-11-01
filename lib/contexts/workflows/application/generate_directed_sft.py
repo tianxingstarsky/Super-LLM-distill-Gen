@@ -118,7 +118,7 @@ class GenerateDirectedSft:
                          "status": "eligible", "messages": messages, "tools": [], "quotes": quotes,
                          "source_context": unit, "qa_contract": contract, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "generation_check": "structure_and_source_quotes",
-                         "repair_attempts": attempt, **reasoning_provenance(reasoning),
+                         "repair_attempts": attempt, **reasoning_provenance(reasoning, message_index=len(messages) - 1),
                          "evidence_level": evidence_level,
                          **({"generation_style": style} if style else {})}]
             check = self._port.assess([unit["id"], "sft_directed_judge", attempt],
@@ -136,7 +136,7 @@ class GenerateDirectedSft:
                          "source_context": unit, "qa_contract": contract,
                          "qa_contract_check": contract_check, "family_id": unit["family_id"],
                          "parent_id": unit.get("parent_id"), "repair_attempts": attempt,
-                         **reasoning_provenance(reasoning),
+                         **reasoning_provenance(reasoning, message_index=len(messages) - 1),
                          "evidence_level": evidence_level,
                          **({"generation_style": style, "style_check": style_check} if style else {})}]
             feedback = {"quality": check["reason"], "contract": contract_check["reason"],

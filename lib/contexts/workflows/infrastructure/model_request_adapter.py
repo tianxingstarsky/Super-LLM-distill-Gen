@@ -409,7 +409,8 @@ class CheckpointedModelRequest:
                     field = "reasoning_hints" if prompt_id == "workflow.conversation_reasoning_hints" else "reasoning_content"
                     value = {field: visible}
                 elif prompt_id == "workflow.cot_native_joint" or prompt_id in READING_PROMPTS:
-                    if getattr(client, "reasoning", {}).get("mode") == "disabled":
+                    from lib.contexts.models.contracts import resolve_provider_reasoning
+                    if resolve_provider_reasoning(getattr(client, "reasoning", None)).get("mode") == "disabled":
                         raise ValueError("native_cot_thinking_disabled")
                     visible = client.chat(request_messages, max_tokens=binding.get("max_output_tokens"),
                         allow_reasoning_fallback=False, response_details=response_details,

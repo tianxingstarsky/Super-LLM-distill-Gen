@@ -31,3 +31,4 @@ from .domain.native_dialogue_continuation import is_initial_native_dialogue_fail
 from .domain.dialogue_constraints import (
     DialogueConstraintReferenceError, dialogue_constraint_reference_request, validate_referenced_dialogue_step,
 )
+from .domain.generation_control import generation_controls_metadata

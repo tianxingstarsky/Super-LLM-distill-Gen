@@ -20,6 +20,7 @@ from lib.model_protocols import (ANTHROPIC_DEFAULT_MAX_TOKENS, anthropic_request
                                  anthropic_text, response_text, responses_input,
                                  reasoning_request, validate_api_format)
 from lib.domain.model_reasoning import validate_reasoning
+from lib.contexts.models.contracts import reasoning_control_receipt, resolve_provider_reasoning
 from lib.model_streaming import ModelStreamError, StreamCallback, consume_stream
 from lib.model_response_details import commit_response_details, extract_response_details
 from lib.model_reasoning_prefill import DEEPSEEK_PREFILL_BASE_URL, prepare_reasoning_prefill
@@ -482,7 +483,7 @@ class ChatClient:
             except Exception as error:
                 transport_diagnostics.failure(error, "stream")
                 raise
-            commit_response_details(response_details, {**request_details, **prefill_metadata})
+            commit_response_details(response_details, {**request_details, **prefill_metadata, **control_metadata})
             return result
         def full_result(response, result, stop_reason, allowed):
             if replayed_tools:
@@ -491,7 +492,7 @@ class ChatClient:
                        if capture_details else {})
             result = self._full_result(result, on_stream, stop_reason, allowed,
                                       verify_complete=capture_details, details=details)
-            commit_response_details(response_details, {**details, **prefill_metadata})
+            commit_response_details(response_details, {**details, **prefill_metadata, **control_metadata})
             return result
         choice = getattr(self, "reasoning", {"mode": "auto"})
         explicit_reasoning = choice.get("mode", "auto") != "auto"
@@ -501,6 +502,8 @@ class ChatClient:
         reasoning_kwargs = reasoning_request(choice, api_format=self.api_format,
             base_url=getattr(self, "base_url", ""), model_info=getattr(self, "model_info", {}),
             max_tokens=max_tokens or (ANTHROPIC_DEFAULT_MAX_TOKENS if self.api_format == "anthropic" else None))
+        control = reasoning_control_receipt(choice)
+        control_metadata = {"generation_control": control} if control is not None else {}
         def check_reasoning_rejection(error):
             if explicit_reasoning and any(_is_parameter_unsupported(error, parameter) for parameter in
                     ("thinking", "reasoning_effort", "reasoning.effort", "output_config", "budget_tokens")):
@@ -510,7 +513,7 @@ class ChatClient:
             kwargs.update(model=self.model, temperature=temperature,
                           max_tokens=max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS)
             kwargs.update(reasoning_kwargs)
-            if choice.get("mode") == "enabled":
+            if resolve_provider_reasoning(choice).get("mode") == "enabled":
                 # Anthropic thinking APIs require their own sampling default.
                 kwargs.pop("temperature", None)
             if on_stream and getattr(self, "stream_supported", None) is not False:

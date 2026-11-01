@@ -2,6 +2,10 @@
 from lib.contexts.datasets.domain.delivery import delivery_manifest_matches, has_deliverable_results
 from lib.contexts.datasets.domain.training_projection import preferred_training_record
 from lib.contexts.datasets.domain.reasoning_import import adapt_reasoning_record
+from lib.contexts.datasets.domain.training_control import (
+    TRAINING_CONTROL_SCHEMA, TRAINING_EFFORTS, training_control_effort,
+    validate_training_effort, with_training_control,
+)
 from lib.contexts.datasets.domain.assets import (
     Asset, AssetInventory, DIRECT_DOWNLOAD_LIMIT_BYTES, TRAINING_CATEGORIES, generation_source_mode,
 )

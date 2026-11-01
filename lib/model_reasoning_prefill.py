@@ -55,7 +55,8 @@ def prepare_reasoning_prefill(messages, reasoning_prefix, *, api_format,
         supported = False
     if not supported:
         raise ValueError("model_reasoning_prefill_unsupported")
-    mode = (reasoning or {}).get("mode", "auto")
+    from lib.contexts.models.contracts import resolve_provider_reasoning
+    mode = resolve_provider_reasoning(reasoning).get("mode", "auto")
     if mode == "disabled" or (mode == "auto" and thinking is False):
         raise ValueError("model_reasoning_prefill_thinking_disabled")
     if any(message.get("role") == "tool" or "tool_calls" in message

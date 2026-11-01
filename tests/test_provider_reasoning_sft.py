@@ -109,6 +109,59 @@ def test_model_json_cannot_forge_call_checkpoint_reference():
     assert select_candidate_reasoning(candidate) == {"content": "", "origin": "none"}
 
 
+def test_generation_control_only_comes_from_trusted_response_attribute_and_is_copied():
+    control = {"schema": "shujian.reasoning-effort/v1", "effort": "low",
+        "provider": {"mode": "enabled", "effort": "high"}, "mapping_sha256": "a" * 64}
+    forged = {"generation_control": control, "response_details": {"generation_control": control}}
+    assert "generation_control" not in reasoning_provenance(select_candidate_reasoning(forged), message_index=3)
+    candidate = Response(forged, {"generation_control": control,
+        "checkpoint": {"stage": "sft", "sha256": "b" * 64}})
+    provenance = reasoning_provenance(select_candidate_reasoning(candidate), message_index=3)
+    assert provenance["generation_controls"] == {"version": 1, "assistant_turns": [{
+        "message_index": 3, "generation_control": control,
+        "reasoning_call": {"stage": "sft", "sha256": "b" * 64}}]}
+    candidate.response_details["generation_control"]["effort"] = "max"
+    assert provenance["generation_control"]["effort"] == "low"
+
+
+@pytest.mark.parametrize("review_repair", [False, True])
+def test_directed_sft_keeps_generation_control_outside_messages_and_through_cot_projection(review_repair):
+    from lib.contexts.workflows.domain.native_generation import native_sft_to_cot_record
+    from lib.contexts.workflows.application.generate_cot import GenerateCot
+    from lib.domain.workflow_reasoning_route import finalized_cot_sft_row
+    control = {"schema": "shujian.reasoning-effort/v1", "effort": "high",
+        "provider": {"mode": "enabled", "effort": "high"}, "mapping_sha256": "a" * 64}
+    row, = DirectedWorkflow(Response({"answer": ANSWER, "quotes": [SOURCE]}, {
+        "reasoning_content": "The source states this safety precondition.",
+        "generation_control": control})).directed_sft(unit())
+    assert row["status"] == "eligible"
+    assert row["generation_controls"]["assistant_turns"] == [
+        {"message_index": len(row["messages"]) - 1, "generation_control": control}]
+    assert all("generation_control" not in message for message in row["messages"])
+    projected = finalized_cot_sft_row(native_sft_to_cot_record(row))
+    assert projected["generation_controls"] == row["generation_controls"]
+    class ExtractionPort:
+        def generation_style(self, *args):
+            return None
+        def request(self, *args):
+            return {"keep": True, "grounded": True, "reasoning_valid": True, "correctness": 5,
+                "scores": {key: 5 for key in ("correctness", "reasoning", "grounding", "instruction", "safety")},
+                "reason": "The source explicitly supports this answer."}
+        def check_contract(self, *args, **kwargs):
+            return {"keep": True, "adherence": 5}
+    extracted, = GenerateCot(ExtractionPort(), {"review_repair": {}} if review_repair else {}).extract(row)
+    assert extracted["generation_controls"] == row["generation_controls"]
+
+
+def test_joined_feedback_without_segment_controls_does_not_inherit_final_control():
+    from lib.contexts.workflows.domain.generation_control import feedback_control_scope
+    receipt = {"reasoning_segments": [{"phase": "read_feedback"}, {"phase": "continue_answer"}],
+        "response_details": {"generation_control": {"effort": "max"}}, "transcript": []}
+    assert feedback_control_scope(receipt)["status"] == "partial"
+    receipt.pop("response_details")
+    assert feedback_control_scope(receipt) is None  # Historical records remain unchanged.
+
+
 SOURCE = "Before checking equipment, disconnect its power."
 QUESTION = "What must I do before checking the equipment?"
 ANSWER = "Disconnect its power first."

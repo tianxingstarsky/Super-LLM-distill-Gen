@@ -68,6 +68,30 @@ def test_dialogue_port_keeps_separate_actors_and_every_turn_reasoning():
     assert "messages" not in source
 
 
+def test_multiturn_generation_controls_follow_each_answer_not_the_last_or_review_call():
+    from lib.model_response_details import ModelJSONResult
+    class ControlledDialogue(DialogueMemory):
+        answer_count = 0
+        def request(self, key, role, prompt_id, data, **options):
+            answer = super().request(key, role, prompt_id, data, **options)
+            effort = "medium"  # A user-simulation call is not an answer label.
+            if prompt_id == "workflow.multiturn_assistant":
+                effort = ("low", "max")[self.answer_count]
+                self.answer_count += 1
+            control = {"schema": "shujian.reasoning-effort/v1", "effort": effort,
+                "provider": {"mode": "enabled"}, "mapping_sha256": "a" * 64}
+            return ModelJSONResult(answer, {"generation_control": control,
+                "checkpoint": {"stage": "multiturn", "sha256": str(self.answer_count) * 64}})
+    port = ControlledDialogue()
+    row, = GenerateMultiturnDialogue(port, {"version": 9, "conversation_turns": 2}).execute(
+        {"id": "task", "source_id": "brief", "kind": "brief", "text": "Maintenance guidance"})
+    entries = row["generation_controls"]["assistant_turns"]
+    assert [(item["message_index"], item["generation_control"]["effort"]) for item in entries] == [(1, "low"), (3, "max")]
+    assert [item["reasoning_call"]["sha256"] for item in entries] == ["1" * 64, "2" * 64]
+    assert "generation_control" not in row
+    assert all("generation_control" not in message for message in row["messages"])
+
+
 def test_natural_end_cannot_purchase_an_answer_or_promote_a_single_turn():
     port = DialogueMemory(stop=True)
     result, = GenerateMultiturnDialogue(port, {"version": 9, "conversation_turns": 5,

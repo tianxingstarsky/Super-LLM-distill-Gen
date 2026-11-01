@@ -11,7 +11,7 @@ import json
 from typing import Any
 from urllib.parse import urlsplit
 
-from lib.domain.model_reasoning import validate_reasoning
+from lib.domain.model_reasoning import resolve_provider_reasoning
 from lib.contexts.models.domain.api_format import API_FORMATS, validate_api_format
 
 
@@ -21,7 +21,7 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
 def reasoning_request(reasoning, *, api_format: str, base_url: str = "", model_info=None,
                       max_tokens=None) -> dict[str, Any]:
     """Serialize an explicit selection without silently weakening its intent."""
-    choice = validate_reasoning(reasoning, max_output_tokens=max_tokens)
+    choice = resolve_provider_reasoning(reasoning, max_output_tokens=max_tokens)
     mode = choice["mode"]
     if mode == "auto":
         return {}

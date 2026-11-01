@@ -182,9 +182,18 @@ def test_legacy_feedback_keeps_its_observation_fields_and_instruction_messages(g
     assert observation["findings"] == issues
 
 
-def test_native_cot_repair_uses_tool_continuation_without_buying_an_independent_review():
+@pytest.mark.parametrize("efforts", [None, ("max", "max"), ("low", "max"), (None, "max"), ("max", None)])
+def test_native_cot_repair_uses_tool_continuation_without_buying_an_independent_review(efforts):
     from lib.contexts.workflows.application.generate_native_cot import GenerateNativeCot
-    tools_port = Port([response(requesting_feedback(), "tool_calls"), response(revised())])
+    responses = [response(requesting_feedback(), "tool_calls"), response(revised())]
+    if efforts:
+        for reply, effort in zip(responses, efforts):
+            if effort is None:
+                continue
+            reply["response_details"]["generation_control"] = {
+                "schema": "shujian.reasoning-effort/v1", "effort": effort,
+                "provider": {"mode": "enabled"}, "mapping_sha256": "a" * 64}
+    tools_port = Port(responses)
 
     class NativePort:
         def source_evidence(self, source):
@@ -217,6 +226,18 @@ def test_native_cot_repair_uses_tool_continuation_without_buying_an_independent_
     assert row["status"] == "quarantined"
     assert row["cot_review_policy"]["semantic_status"] == "not_assessed"
     assert row["cot_review_policy"]["selected"] is False and "judge" not in row
+    if efforts == ("max", "max"):
+        entry, = row["generation_controls"]["assistant_turns"]
+        assert entry["message_index"] == len(row["question"])
+        assert entry["generation_control"]["effort"] == "max"
+        assert row["generation_control"] == responses[-1]["response_details"]["generation_control"]
+    else:
+        assert "generation_control" not in row and "generation_controls" not in row
+        if efforts:
+            assert row["generation_control_scope"]["status"] == ("partial" if None in efforts else "mixed")
+            transcript = row["native_generation"]["tool_feedback"]["transcript"]
+            assert [turn["response"]["response_details"].get("generation_control", {}).get("effort")
+                    for turn in transcript] == list(efforts)
 
 
 def test_native_feedback_uses_real_call_id_preserves_draft_and_never_certifies_quality():

@@ -161,7 +161,7 @@ class GenerateCot:
                      "question": messages[:-1], "reasoning": [reasoning], "answer": answer,
                      "source_context": deepcopy(sample.get("source_context")), "quotes": sample.get("quotes", []),
                      **{name: deepcopy(sample[name]) for name in ("reasoning_origin", "reasoning_summary",
-                         "reasoning_api_format", "reasoning_call") if name in sample},
+                         "reasoning_api_format", "reasoning_call", "generation_control", "generation_controls") if name in sample},
                      "evidence_level": sample["evidence_level"], **qa_metadata(sample)}]
         task = {"prompt": messages[:-1], "reasoning": reasoning, "answer": answer,
                 "source": sample.get("source_context"), "quotes": sample.get("quotes", [])}
@@ -184,7 +184,7 @@ class GenerateCot:
                  "question": messages[:-1], "reasoning": steps or [reasoning], "answer": answer,
                  "judge": check, "evidence_level": sample["evidence_level"],
                  **{name: deepcopy(sample[name]) for name in ("reasoning_origin", "reasoning_summary",
-                     "reasoning_api_format", "reasoning_call") if name in sample},
+                     "reasoning_api_format", "reasoning_call", "generation_control", "generation_controls") if name in sample},
                  **qa_metadata(sample, contract_check)}]
 
     def generate_styled(self, sample, style):

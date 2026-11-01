@@ -1,5 +1,9 @@
 # 工作流运行适配
 
+Canonical 生成收据随已有可信响应详情及检查点保存，并由普通 SFT、原生 CoT 和逐轮回答投影。历史 styled/分阶段作者路径若未启用可信详情封装，仍不额外猜造训练档位；其底层请求收据不等于整段样本标签。扩展此类路径须同时设计独立 metadata 捕获合同，不能为捕获元数据改变 visible-only 协议或将模型 JSON 视作可信响应封装。
+
+原生回答的请求前检查使用 canonical 映射后的供应商模式；映射为关闭时拒绝原生双通道生成。实际响应的控制收据沿原检查点保存，不能从模型正文中的同名字段恢复。
+
 公开 system 注意事项 v7 复用 `NativeFeedbackAdapter` 的原作者绑定、参数、用量和检查点。工具为空的最终原生响应使用既有模型请求入口，但线上不声明空工具或虚构调用。普通工具请求仍要求有效工具。验证：`test_review_guidance_protocol.py`、`test_model_tool_calls.py`。
 
 `CheckpointedDialogueAdapter(model_stage="multiturn")` 为已认证续跑显式指定回答与评审的模型、模板节点。质量、风格、对话契约和人工设计复核均复用原评审实现，不能受外层 `review` 执行阶段影响，也不切换线程的全局阶段。未指定节点时保持普通多轮请求原样。`test_dialogue_adapter_review_routing.py` 对比两条路径的实际完整请求与模型加载，验证五种评审请求一致。
