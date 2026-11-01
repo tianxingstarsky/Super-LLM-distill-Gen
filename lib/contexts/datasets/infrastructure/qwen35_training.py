@@ -15,6 +15,9 @@ from lib.contexts.models.contracts import REASONING_EFFORT_REFERENCE
 
 from ..domain.training_control import TRAINING_EFFORTS, validate_training_effort
 from ..domain.trainer_formats import _has_media
+from .deepseek_control_text import MARKER as VERBOSITY_REFERENCE
+from .deepseek_control_text import PROFILE as DEEPSEEK_CONTROL_PROFILE
+from .deepseek_control_text import normalize_deepseek_control_text
 
 
 def _sha256(text: str) -> str:
@@ -31,7 +34,9 @@ class Qwen35TrainingEncoder:
 
     def __init__(self, tokenizer, *, max_length: int | None = None,
                  effort_mapping: Mapping[str, bool | int] | None = None,
-                 reasoning_reference_text: str = "思考已开启"):
+                 reasoning_reference_text: str = "思考已开启",
+                 source_control_profile: str | None = None,
+                 verbosity_reference_text: str | None = None):
         if max_length is not None and (type(max_length) is not int or max_length < 1):
             raise ValueError("invalid_training_max_length")
         if not getattr(tokenizer, "is_fast", False):
@@ -54,6 +59,15 @@ class Qwen35TrainingEncoder:
                 or REASONING_EFFORT_REFERENCE in reasoning_reference_text):
             raise ValueError("invalid_reasoning_reference_text")
         self._reasoning_reference_text = reasoning_reference_text
+        if source_control_profile not in (None, DEEPSEEK_CONTROL_PROFILE):
+            raise ValueError("unsupported_source_control_profile")
+        if verbosity_reference_text is not None and (
+                not isinstance(verbosity_reference_text, str) or not verbosity_reference_text.strip()
+                or VERBOSITY_REFERENCE in verbosity_reference_text
+                or REASONING_EFFORT_REFERENCE in verbosity_reference_text):
+            raise ValueError("invalid_verbosity_reference_text")
+        self._source_control_profile = source_control_profile
+        self._verbosity_reference_text = verbosity_reference_text
         self._provenance = {
             "adapter": "shujian.qwen35-thinking-map/v1",
             "control_kind": "enable_thinking",
@@ -65,6 +79,17 @@ class Qwen35TrainingEncoder:
             "tokenizer_sha256": _sha256(tokenizer.backend_tokenizer.to_str()),
             "control_mapping_sha256": _sha256(json.dumps(self._effort_mapping, sort_keys=True)),
         }
+        # Optional source-text adaptation has separate provenance; legacy encoder
+        # metadata and native thinking-switch semantics stay unchanged by default.
+        if source_control_profile is not None or verbosity_reference_text is not None:
+            self._provenance.update({
+                "source_control_profile": source_control_profile,
+                "verbosity_reference_text": verbosity_reference_text,
+                "control_text_mapping_sha256": _sha256(json.dumps({
+                    "source_control_profile": source_control_profile,
+                    "verbosity_reference_text": verbosity_reference_text,
+                }, ensure_ascii=False, sort_keys=True)),
+            })
 
     @property
     def provenance(self) -> dict:
@@ -138,6 +163,29 @@ class Qwen35TrainingEncoder:
         # Mixed inline and dedicated reasoning is ambiguous; never duplicate it.
         if "<think>" in answer or "</think>" in answer:
             raise ValueError("qwen35_inline_and_separate_reasoning_conflict")
+        control_text_metadata = {}
+        if enable_thinking and (self._source_control_profile or self._verbosity_reference_text is not None):
+            original_reasoning = reasoning
+            edits = []
+            if self._source_control_profile == DEEPSEEK_CONTROL_PROFILE:
+                reasoning, edits = normalize_deepseek_control_text(reasoning)
+            if edits or VERBOSITY_REFERENCE in reasoning:
+                # Literal matching cannot distinguish a quoted field from a
+                # self-reference. Refuse tasks that discuss the matched text.
+                if any(VERBOSITY_REFERENCE in m.get("content", "") or
+                       normalize_deepseek_control_text(m.get("content", ""))[1]
+                       for m in controlled if m["role"] != "system"):
+                    raise ValueError("verbosity_reference_in_task_content")
+            replacement_count = 0
+            if self._verbosity_reference_text is not None:
+                replacement_count = reasoning.count(VERBOSITY_REFERENCE)
+                reasoning = reasoning.replace(VERBOSITY_REFERENCE, self._verbosity_reference_text)
+            target["reasoning_content"] = reasoning
+            control_text_metadata = {
+                "source_control_edits": edits,
+                "source_reasoning_sha256": _sha256(original_reasoning),
+                "verbosity_reference_replacements": replacement_count,
+            }
         reference_count = 0
         if enable_thinking and REASONING_EFFORT_REFERENCE in reasoning:
             # Only the reserved self-reference is adapted. A task quoting the
@@ -183,6 +231,7 @@ class Qwen35TrainingEncoder:
                 "enable_thinking": enable_thinking,
                 "supervision": "reasoning_and_answer" if enable_thinking else "answer_only",
                 "reasoning_reference_replacements": reference_count,
+                **control_text_metadata,
                 "input_tokens": len(input_ids),
                 "supervised_tokens": len(input_ids) - len(prompt_ids),
             },

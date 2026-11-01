@@ -51,6 +51,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Explicit training condition for legacy rows without training_control")
     parser.add_argument("--effort-mapping", type=Path,
                         help="Small JSON map from all five canonical efforts to true/false or 1/0")
+    parser.add_argument("--source-control-profile", choices=["deepseek-v4.1-flash-control/v1"],
+                        help="Explicitly mark known DeepSeek native-reasoning control text")
+    parser.add_argument("--verbosity-reference-text",
+                        help="Target wording for the verbosity marker; omitted keeps the marker")
     parser.add_argument("--show-text", action="store_true",
                         help="Also print the complete decoded input and supervised target")
     args = parser.parse_args(argv)
@@ -74,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
                 effort_mapping = json.load(mapping_file)
         encoder = qwen35_training_encoder(
             tokenizer, max_length=args.max_length, effort_mapping=effort_mapping,
+            source_control_profile=args.source_control_profile,
+            verbosity_reference_text=args.verbosity_reference_text,
         )
         examples = iter_training_examples(
             iter_jsonl_records(args.input), encoder, default_effort=args.default_effort,

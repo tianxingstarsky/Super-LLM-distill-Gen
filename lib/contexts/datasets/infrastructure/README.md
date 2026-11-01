@@ -10,8 +10,16 @@
 模板、tokenizer 和控制映射摘要随读取视图返回；训练与推理使用同一映射。
 当前监督轮推理中的 `[[SJ_REASONING_EFFORT]]` 由此适配器直接替换为目标文字，
 默认“思考已开启”；构造参数 `reasoning_reference_text` 可自定义。只改内存副本，
-不修改原记录或自由文本控制自述；任务引用同名标记时拒绝歧义转换。无需外部工具或 Agent。
+默认不修改原记录或自由文本控制自述；任务引用同名标记时拒绝歧义转换。无需外部工具或 Agent。
 验证：`tests/test_training_control_loader.py` 和文档中的本机 tokenizer 验证。
+
+`deepseek_control_text.py` 持有显式来源配置 `deepseek-v4.1-flash-control/v1`：
+精确匹配已观察到的两种 verbosity 自述，返回标记化文字及原位置、原文、替换值。
+它是源文本适配，不认证上游设置，不根据数值推断思考强度。`Qwen35TrainingEncoder`
+在配置 `source_control_profile` 后，只适配当前监督助手轮的推理；公开任务引用这些
+文字时拒绝歧义替换。默认保留 `[[SJ_OUTPUT_VERBOSITY:5]]`，可由
+`verbosity_reference_text` 选择目标文字。未启用的旧读取行为、源数据和导出不变。
+定向回归在 `tests/test_deepseek_control_text.py`；真实 tokenizer 验证见训练说明。
 
 `driver.py` 组合文件操作；`archive.py` 打包；`statistics.py` 扫描原生记录与文件字节；`verified_preview.py` 管理有限期预览核验；`release_catalog.py` 查找已发布版本。
 

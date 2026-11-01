@@ -1,5 +1,9 @@
 # Python 回归
 
+`test_deepseek_control_text.py` 使用真实响应片段检查 DeepSeek 固定自述的精确标记、
+数值与词边界、幂等和可逆位置。训练加载接线另以本机 Qwen tokenizer 验证完整推理／答案、
+默认行为保持及任务引用歧义；证据入口见 `docs/training-reasoning-control.md`。
+
 `test_training_control_loader.py` 覆盖目标配置映射、逐助手轮读取与原记录保留。`test_workflow_node_prompts.py` 核对原生 SFT／多轮／CoT 的初始 system、自定义及冻结模板。固定标记替换另以本机实际 Qwen tokenizer 核对完整监督文本、任务引用歧义及原文不变；离线检查不证明模型已稳定遵循标记格式。
 
 `test_clean_context_probe.py` 在真实 SDK 与 HTTPX MockTransport 边界检查诊断脚本的完整请求正文、原生响应保留、污染字段拒绝及失败不重复购买。两项离线检查不调用模型，不把传输一致性当作语义通过。

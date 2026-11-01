@@ -97,10 +97,42 @@ Qwen3.5 的公开模板使用 `enable_thinking` 开关。本适配器直接把�
 
 现有 `Qwen35TrainingEncoder` 在训练读取时直接精确替换这个标记。默认五档都开启思考，因此替换为“思考已开启”；可以通过 `qwen35_training_encoder(..., reasoning_reference_text="Thinking is enabled")` 自定目标文字。这里只改变当前监督助手轮的内存副本，保留其余推理和答案；原记录中的平台等级及原始响应不变。`metadata.reasoning_reference_replacements` 记录本轮替换次数，目标文字也记录在适配配置中。任务正文若引用了同一标记则拒绝歧义替换，不改写用户原话或代码示例。
 
-这是普通的程序内字符串替换，无需 DSH、Codex、MCP 服务或额外模型请求。没有标记时保持原文，不猜测匹配 `verbosity 5` 等自由文本，也不宣称已清除所有自述。替换文字是训练文本的适配；真正启用 Qwen 思考的仍是 `enable_thinking` 与官方模板。最初本地接线阶段未调用 API，实际生成观察另见下段。
+这是普通的程序内字符串替换，无需 DSH、Codex、MCP 服务或额外模型请求。默认没有标记时保持原文；下节提供显式启用的 DeepSeek 字面匹配配置。替换文字是训练文本的适配；真正启用 Qwen 思考的仍是 `enable_thinking` 与官方模板。最初本地接线阶段未调用 API，实际生成观察另见下段。
 
 后续授权的两条 V4.1-Flash 实测均未产生标记，仍复述 verbosity 5，实际替换为零。
 思考强度标记不能自动覆盖输出详尽程度自述；不能把这次结果宣传为标记治理成功。
+
+### DeepSeek 固定文本：程序标记，加载时转换
+
+选择 `source_control_profile="deepseek-v4.1-flash-control/v1"` 后，程序直接将已观察到的
+`Desired oververbosity 5` 和 `desired verbosity 5` 替换为 `[[SJ_OUTPUT_VERBOSITY:5]]`。
+无需让模型重新输出。匹配保持大小写和词边界，不吞掉后续标点，不匹配 50、5.0、其它数值
+或未确认的表达。这里只处理当前监督助手轮的推理；源文件、用户原话和答案保持不变。
+若任务正文讨论这些字段，转换会报歧义错误，不改写任务引用。
+
+```python
+encoder = qwen35_training_encoder(
+    tokenizer,
+    source_control_profile="deepseek-v4.1-flash-control/v1",
+    # Omit this argument to retain the portable marker.
+    verbosity_reference_text="输出详尽程度：5",
+)
+```
+
+这段目标文字只是替换示例，不是 Qwen 的原生参数。`verbosity_reference_text` 不允许空串：
+此入口用来替换控制表达，不用来删掉它。平台 `low` 到 `max` 以及 Qwen 的 `enable_thinking`
+仍按独立的思考强度配置工作，不能把模型自述的 verbosity 5 当作已认证的档位。
+对混合教师来源的数据，应按来源选择适配器；不能给未知来源统一套 DeepSeek 配置。
+
+每轮读取的 `metadata.source_control_edits` 保存原文、原位置（零起始 Unicode 字符下标，
+末端不含）、标记与观察值；`source_reasoning_sha256` 绑定完整原生推理。
+`verbosity_reference_replacements` 记录标记到目标文字的替换次数。
+配置和映射摘要随读取视图保存，源数据不需要迁移，也不用再导出一套大型数据集。
+这些记录描述本地转换，不改变样本质量或合格状态。
+
+版本化固定标记能让特殊控制的训练和适配更一致；自然推理仍保持自由表达。
+重复输出足以支持对已确认字面串做定向适配，但不能单凭这些输出证明上游训练时一定
+由程序加入了字段，或已确认存在过拟合。新拼写先保留原文，确认后再增加适配版本。
 完整事实与消耗见 [真实复跑记录](architecture/request-provenance-2026-11-01.md#16-初始提示词的两条真实复跑)。
 
 适配器通过 Transformers 的 `apply_chat_template` 使用模型模板。当前接入的是文本 SFT 和多轮对话。工具、媒体、developer 角色、非开头的 system 消息不在本版支持范围内，会明确报错。连续开头的 system 内容按相同优先级合并。思考开启时目标助手缺少推理会报错，不补造；关闭时生成空 think 块，只监督答案。关闭只是本次加载视图的选择，原始记录中的完整推理不删除。
@@ -197,3 +229,9 @@ think 前缀且只监督答案。双轮中的两次助手推理分别获得完�
 自定义替换文字生效，普通自由文本保持原样，任务引用歧义被拒绝，关闭思考的既有映射保持，
 源记录未改动。证据在 `.dataforge/runtime-control-governance/internal-mapping-verification.json`；
 没有模型调用或训练，不能据此声称新初始提示词已经获得稳定遵循率。
+
+后续 DeepSeek 专用配置复用同两条完整响应做离线验收：各两处、共四处字面自述全部标记，
+目标文字转换后完整推理与答案仍进入本机 4B tokenizer 的监督范围，原响应摘要不变。
+另验证多轮逐助手轮读取和六种任务引用歧义。证据在
+`.dataforge/deepseek-control-marking-20261101/training-verification.json`；本次新增 API 调用为零。
+这是程序适配成功，不是新一轮生成或语义质量通过。

@@ -3,6 +3,9 @@
 `datasets.qwen35_training_encoder(tokenizer, ...)` 装配可选训练加载适配器。
 调用方提供实际本地 tokenizer；该工厂不安装训练框架、不加载权重，也不改变生产导出。
 可选 `reasoning_reference_text` 设置训练读取时固定控制标记的目标文字，默认“思考已开启”。
+显式 `source_control_profile="deepseek-v4.1-flash-control/v1"` 标记已观察到的
+DeepSeek 详尽程度自述；`verbosity_reference_text` 可再选择目标文字，省略则保留标记。
+详尽程度文本不参与五档思考强度映射，旧调用默认保持原文。
 用例 `datasets.api.iter_training_examples` 负责惰性遍历，说明见
 `docs/training-reasoning-control.md`。
 
