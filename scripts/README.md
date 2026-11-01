@@ -1,5 +1,7 @@
 # 本地辅助脚本
 
+[diagnostics](diagnostics/README.md) 用于隔离的公开上下文对照，保存实际 HTTP 请求正文和原始响应；默认仅准备，显式执行时每条至多一次调用，不接管工作流业务逻辑。
+
 开源运行时调整只验证受影响路径，见 `docs/architecture/open-source-runtime-2026-10-26.md`。已撤回的框架迁移及当时的对照脚本存于本地 `.dataforge/oss-migration/withdrawn-langgraph/`，不作为当前实现或验收结果。
 
 `replay_reasoning_environment.py --output <目录>` 仅回放 `tests/fixtures/reasoning_agent/environment_sessions.json`，输出完整问答、推理、工具回执和新旧对照 HTML/JSON。脚本禁止网络连接，不创建模型客户端；新协议字段投影明确标记，不能将它的程序检查通过率当作真实模型正确率。验证见 `tests/test_reasoning_environment.py`。
