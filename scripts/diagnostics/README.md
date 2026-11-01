@@ -10,6 +10,13 @@ uses the configured DeepSeek endpoint, verifies its advertised V4.1-Flash model,
 and makes at most one completion request per case. No SDK retries or model review
 are performed. A previously started attempt cannot silently buy another request.
 
+For an initial-prompt comparison, `--initial-system <utf8-text-file>` pins the
+exact first system message. Prepared requests must already contain it; the
+script refuses mismatches and still checks public dialogue independently for
+old reasoning or feedback. The previous no-system mode is unchanged. Snapshot
+the prompt version and source requests alongside the experiment; adding a full
+template to a no-system baseline is not a single-rule causal comparison.
+
 `observe_http_json.py` records the complete final HTTPX JSON entity body and its
 byte digest before transmission. Headers and credentials are excluded. The SDK
 argument snapshot is labelled separately. This is client-side observation, not

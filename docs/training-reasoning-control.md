@@ -97,7 +97,11 @@ Qwen3.5 的公开模板使用 `enable_thinking` 开关。本适配器直接把�
 
 现有 `Qwen35TrainingEncoder` 在训练读取时直接精确替换这个标记。默认五档都开启思考，因此替换为“思考已开启”；可以通过 `qwen35_training_encoder(..., reasoning_reference_text="Thinking is enabled")` 自定目标文字。这里只改变当前监督助手轮的内存副本，保留其余推理和答案；原记录中的平台等级及原始响应不变。`metadata.reasoning_reference_replacements` 记录本轮替换次数，目标文字也记录在适配配置中。任务正文若引用了同一标记则拒绝歧义替换，不改写用户原话或代码示例。
 
-这是普通的程序内字符串替换，无需 DSH、Codex、MCP 服务或额外模型请求。没有标记时保持原文，不猜测匹配 `verbosity 5` 等自由文本，也不宣称已清除所有自述。替换文字是训练文本的适配；真正启用 Qwen 思考的仍是 `enable_thinking` 与官方模板。新初始提示词是否被生成模型稳定遵从尚需真实输出验证；本轮不调用 API。
+这是普通的程序内字符串替换，无需 DSH、Codex、MCP 服务或额外模型请求。没有标记时保持原文，不猜测匹配 `verbosity 5` 等自由文本，也不宣称已清除所有自述。替换文字是训练文本的适配；真正启用 Qwen 思考的仍是 `enable_thinking` 与官方模板。最初本地接线阶段未调用 API，实际生成观察另见下段。
+
+后续授权的两条 V4.1-Flash 实测均未产生标记，仍复述 verbosity 5，实际替换为零。
+思考强度标记不能自动覆盖输出详尽程度自述；不能把这次结果宣传为标记治理成功。
+完整事实与消耗见 [真实复跑记录](architecture/request-provenance-2026-11-01.md#16-初始提示词的两条真实复跑)。
 
 适配器通过 Transformers 的 `apply_chat_template` 使用模型模板。当前接入的是文本 SFT 和多轮对话。工具、媒体、developer 角色、非开头的 system 消息不在本版支持范围内，会明确报错。连续开头的 system 内容按相同优先级合并。思考开启时目标助手缺少推理会报错，不补造；关闭时生成空 think 块，只监督答案。关闭只是本次加载视图的选择，原始记录中的完整推理不删除。
 

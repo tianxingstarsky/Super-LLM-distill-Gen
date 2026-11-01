@@ -38,11 +38,16 @@ def freeze(path, value):
         atomic_json(path, value)
 
 
-def validate_request(body, case):
+def validate_request(body, case, *, initial_system=None):
     expected = {"messages", "model", "max_tokens", "reasoning_effort", "temperature", "thinking"}
     if set(body) != expected or body["model"] != MODEL:
         raise ValueError("unexpected_control_parameters")
     messages = body["messages"]
+    if initial_system is not None:
+        if (not isinstance(initial_system, str) or not initial_system.strip()
+                or not messages or messages[0] != {"role": "system", "content": initial_system}):
+            raise ValueError("unexpected_initial_system")
+        messages = messages[1:]
     if [m.get("role") for m in messages] != (["user"] if case == "01" else ["user", "assistant", "user"]):
         raise ValueError("unexpected_public_dialogue_roles")
     if any(set(m) != {"role", "content"} or not isinstance(m["content"], str) or not m["content"] for m in messages):
@@ -61,9 +66,9 @@ def sdk_arguments(body):
     return result
 
 
-def run_case(sdk, body, directory, case, *, network_route):
+def run_case(sdk, body, directory, case, *, network_route, initial_system=None):
     """No generated history is carried to the other case, and no attempt is retried."""
-    validate_request(body, case)
+    validate_request(body, case, initial_system=initial_system)
     directory.mkdir(parents=True, exist_ok=True)
     result_path = directory / "result.json"
     attempt_path = directory / "attempt.json"
@@ -131,14 +136,20 @@ def main():
     parser.add_argument("--requests", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--initial-system", type=Path,
+                        help="Optional frozen initial system text; public history is still checked separately.")
     options = parser.parse_args()
     options.output.mkdir(parents=True, exist_ok=True)
+    initial_system = options.initial_system.read_text(encoding="utf-8") if options.initial_system else None
+    if initial_system is not None:
+        freeze(options.output / "initial-system.json", {"content": initial_system,
+               "sha256": sha256(initial_system.encode("utf-8")).hexdigest()})
     controls = {}
     provenance = []
     for case in CASES:
         path = options.requests / f"{case}-public-dialogue-request.json"
         body = read(path)
-        validate_request(body, case)
+        validate_request(body, case, initial_system=initial_system)
         freeze(options.output / f"{case}-request.json", body)
         controls[case] = body
         provenance.append({"case_id": case, "source_path": str(path.resolve()),
@@ -147,7 +158,9 @@ def main():
         "model": MODEL, "expected_model_family": "DeepSeek-V4.1-Flash",
         "scope": "One isolated call for each original pending user turn, not a new two-turn dialogue.",
         "controls": provenance, "maximum_completion_calls": 2, "independent_review_calls": 0,
-        "context": "Only original public role/content messages. No system, native history, feedback or tools.",
+        "context": ("Frozen initial system followed by original public role/content messages. No native history, feedback or tools."
+                    if initial_system is not None else
+                    "Only original public role/content messages. No system, native history, feedback or tools."),
         "preservation": "Inputs are read-only; original archives are not rewritten.",
         "parameters": {k: v for k, v in controls['01'].items() if k != 'messages'},
         "sdk_versions": {k: importlib.metadata.version(k) for k in ("openai", "httpx")}})
@@ -173,7 +186,8 @@ def main():
         try:
             if client.base_url.rstrip("/") != "https://api.deepseek.com/v1":
                 raise ValueError("endpoint_changed")
-            value = run_case(client.client, body, options.output / "calls" / case, case, network_route=client.network_route)
+            value = run_case(client.client, body, options.output / "calls" / case, case,
+                             network_route=client.network_route, initial_system=initial_system)
             print(json.dumps({"case_id": case, "status": value["status"],
                               "elapsed_seconds": value["elapsed_seconds"], "usage": value["usage"]}), flush=True)
         finally:
