@@ -21,6 +21,17 @@ class Embedding:
         return [1.0, 0.0]
 
 
+def test_reviewer_provides_feedback_and_is_never_an_evolution_target(tmp_path, monkeypatch):
+    app = google_reasoning_bank_application(root=tmp_path, user_key="fixture")
+    with pytest.raises(ValueError, match="generation_scope_required"):
+        app.learn("review", {})
+    with pytest.raises(ValueError, match="generation_scope_required"):
+        app.activate("review", "a" * 32)
+    # Older saved reviewer selections cannot enter a new task's system context.
+    monkeypatch.setattr(app, "active", lambda: {"scopes": {"review": "a" * 32}})
+    assert app.freeze(None, "A generation task") is None
+
+
 def test_original_google_main_retrieval_resume_and_disable(tmp_path):
     calls = []
     class Client:

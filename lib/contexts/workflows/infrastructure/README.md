@@ -2,6 +2,8 @@
 
 Google 原版入口见 `reasoning_bank_source.py`（固定源码与原函数摘要）、`reasoning_bank_induction.py`（原 main + 模型/轨迹 I/O）、`reasoning_bank.py`（原检索 + 本地嵌入）、`google_reasoning_bank.py`（个人版本、采用和停用的宿主适配）。不改上游仓库，不把云/SRE 示例回退当成功。安装和实测边界见 [接入说明](../../../../docs/architecture/google-reasoning-bank-integration.md)。
 
+自动经验只作用于生成角色。`review` 只提供反馈来源，禁止提炼为评审版本或激活评审记忆；冻结配方时忽略旧的 review 检索配置。原生 SFT/多轮反馈归 reasoning，普通答案反馈归 answer，CPT 归 cpt；不会把生成经验串入评审 system。
+
 指导员批量出口 `_directed_worker_batch` 与普通 `stage_items` 一样，发布前绑定实际作者节点的
 冻结控制文字配置。待复核、隔离与缓存返回同样保留归属，不能因未通过质量检查而丢失规则；
 原检查点、推理正文和质量状态保持不变。真实原生 SFT 待复核记录回放见 `test_node_control_text.py`。

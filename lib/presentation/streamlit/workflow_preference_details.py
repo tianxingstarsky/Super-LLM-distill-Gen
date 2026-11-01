@@ -21,6 +21,12 @@ def preference_stage_label(targets):
 
 
 def preference_route(node, review_repair=None):
+    advisory = (review_repair or {}).get("mode") == "auto" and (review_repair or {}).get("max_rounds") == 0
+    if advisory:
+        if node == "preference":
+            return "本节点生成候选对 → 集中评审一次并保留意见 → 按所选类型分别导出。"
+        if node == "review":
+            return "集中评审一次，保留问题与反例后继续输出；反馈供生成节点学习，不自动返工。"
     if node == "preference":
         if review_repair is not None:
             return "本节点生成候选对 → 评分与修正确定偏好 → 按所选类型分别导出。"

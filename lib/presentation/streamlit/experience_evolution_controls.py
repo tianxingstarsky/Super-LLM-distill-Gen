@@ -144,6 +144,10 @@ def _advance_sources(prefix, *, first=False):
 def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enabled_key, save_field):
     """Use the current node model only after a deliberate proposal click."""
     en = st.session_state.get("ui_language", "zh") == "en"
+    if scope == "review":
+        st.caption("Review feedback is collected for generation nodes. The reviewer is not evolved."
+                   if en else "评审只提供问题与反例，供 SFT、原生推理、多轮等生成节点学习；评审自身不参与进化。")
+        return
     prefix = f"experience-evolution:{workspace}:{scope}"
     parent_key = f"workflow-agent-experience-parent:{workspace}:{scope}"
     saved = st.session_state.get(f"workflow-form-draft:{workspace}", {})
@@ -163,6 +167,8 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
         google = google_reasoning_bank_application()
         progress = app.observation_progress(scope)
         st.markdown("**Google ReasoningBank**")
+        st.caption(("Lessons improve this generation role, using review feedback as evidence."
+                    if en else "经验用于当前生成角色；评审意见仅作为学习依据。"))
         st.caption(("Original upstream induction and retrieval. Feedback: " if en else "执行 Google 原版提炼与检索。已收集反馈：")
                    + str(progress["total"]))
         learn, pause = st.columns(2, gap="small")

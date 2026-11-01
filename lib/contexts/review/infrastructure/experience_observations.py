@@ -41,7 +41,9 @@ def record_advisory_review_observation(runtime, target, record, evolution):
     if source:
         episode["source_evidence"] = {key: deepcopy(source[key]) for key in (
             "teacher_evidence", "text", "task", "source_kind", "source_id", "source_line_ranges") if key in source}
-    return evolution.record_observation("reasoning", episode, run_id=runtime.state["id"],
+    native = runtime.recipe.get("node_generation", {}).get(target, {}).get("answer_mode") == "native_joint"
+    scope = "cpt" if target == "cpt" else "reasoning" if target == "cot" or native else "answer"
+    return evolution.record_observation(scope, episode, run_id=runtime.state["id"],
         outcome="advisory_release" if original.get("status") == "eligible" else "unknown",
         evidence_status="model_assessed" if receipt.get("verdict") or original.get("review_observation") else "unverified",
         source_record=original, source_receipt={"kind": "workflow_advisory_review", "target": target,

@@ -22,6 +22,8 @@ class ReasoningBank:
 
     def index_edition(self, edition_id):
         edition = self._port.get_edition(validate_identifier(edition_id))
+        if edition["scope"] == "review":
+            raise ValueError("reasoning_bank_generation_scope_required")
         entries = entries_from_edition(edition)
         reference = edition_reference(edition)
         if not entries:
@@ -34,6 +36,8 @@ class ReasoningBank:
 
     def retrieve(self, scope, task_text, limit=5, edition_ids=None):
         validate_scope(scope)
+        if scope == "review":
+            raise ValueError("reasoning_bank_generation_scope_required")
         if (not isinstance(task_text, str) or not task_text.strip() or len(task_text) > 32000
                 or "\x00" in task_text):
             raise ValueError("reasoning_bank_invalid_task")
@@ -61,5 +65,5 @@ class ReasoningBank:
         if not isinstance(queries_by_scope, dict):
             raise ValueError("reasoning_bank_invalid_queries")
         selections = {scope: self.retrieve(scope, task, limit, edition_ids)
-                      for scope, task in queries_by_scope.items()}
+                      for scope, task in queries_by_scope.items() if scope != "review"}
         return freeze_selection(agent_experience_config, selections)

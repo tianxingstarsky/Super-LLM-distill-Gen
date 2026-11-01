@@ -51,6 +51,8 @@ class GoogleReasoningBank:
 
     def learn(self, scope, observation, *, parent_id=None, user_outcome=None):
         validate_scope(scope)
+        if scope == "review":
+            raise ValueError("reasoning_bank_generation_scope_required")
         episode = recorded_episode(observation, user_outcome)
         source_hash = digest({"scope": scope, "episode": episode, "binding": self.binding, "parent_id": parent_id})
         receipt = self.repository.root / "official-editions" / (source_hash + ".json")
@@ -80,6 +82,8 @@ class GoogleReasoningBank:
 
     def activate(self, scope, edition_id):
         validate_scope(scope)
+        if scope == "review" and edition_id is not None:
+            raise ValueError("reasoning_bank_generation_scope_required")
         path = self.repository.root / "reasoning-bank-active.json"
         if edition_id:
             edition = self.repository.get_version(edition_id)
@@ -101,6 +105,7 @@ class GoogleReasoningBank:
         return {"status": "active" if edition_id else "disabled", "scope": scope, "edition_id": edition_id}
 
     def freeze(self, config, task_text):
-        active = self.active()["scopes"]
+        active = {scope: identifier for scope, identifier in self.active()["scopes"].items()
+                  if scope != "review"}
         return self.bank.freeze(config, {scope: task_text for scope in active},
             edition_ids=list(active.values())) if active else None
