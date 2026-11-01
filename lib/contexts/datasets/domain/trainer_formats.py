@@ -6,6 +6,7 @@ No chat template is applied here. The selected tokenizer must support tool
 calling and, if present, the ``thinking`` field used by Harmony-style models.
 """
 from __future__ import annotations
+from copy import deepcopy
 
 from collections.abc import Mapping
 import json
@@ -234,9 +235,30 @@ def to_trl_sft(sample: Mapping[str, Any]) -> dict[str, Any]:
     if _has_media(sample):
         raise ValueError("trl_multimodal_content_unsupported")
     tools = _tool_schemas(sample.get("tools"))
-    messages = _convert_messages(sample.get("messages"), tools, require_user=True,
+    source_messages = sample.get("messages")
+    if source_messages is None and {"question", "reasoning", "answer"} <= sample.keys():
+        question, reasoning = sample["question"], sample["reasoning"]
+        if isinstance(question, str):
+            prompt = [{"role": "user", "content": question}]
+        elif isinstance(question, list):
+            prompt = deepcopy(question)
+        else:
+            raise ValueError("trl_cot_question_required")
+        if (not isinstance(reasoning, list) or not reasoning
+                or any(not isinstance(part, str) or not part.strip() for part in reasoning)):
+            raise ValueError("trl_cot_reasoning_required")
+        source_messages = [*prompt, {"role": "assistant", "content": sample["answer"],
+                                     "reasoning_content": "\n\n".join(reasoning)}]
+    messages = _convert_messages(source_messages, tools, require_user=True,
                                  require_final_assistant=True)
     output: dict[str, Any] = {"messages": messages}
+    # Explicit node controls travel with new exports; text remains unmodified.
+    if "control_text_config" in sample:
+        output["control_text_config"] = deepcopy(sample["control_text_config"])
+        if "control_text_node" in sample:
+            output["control_text_node"] = sample["control_text_node"]
+        if "training_control" in sample:
+            output["training_control"] = deepcopy(sample["training_control"])
     if tools:
         output["tools"] = tools
     return output

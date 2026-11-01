@@ -107,11 +107,21 @@ def _assert_open(ui, node, tab):
 
 @pytest.mark.parametrize("node", ["sft", "cot"])
 def test_style_warning_opens_matching_node_prompt_tab_and_preserves_other_drafts(node):
-    ui = AppTest.from_string(SCRIPT).run()
-    ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["sft", "cot"]).run()
+    ui = AppTest.from_string(SCRIPT)
+    if node == "cot":
+        # Exercise a retained legacy authoring node through a saved draft.
+        ui.session_state["workflow-form-draft:fixture"] = {
+            "workflow-targets:fixture:自动推荐": ["sft", "cot"],
+            "workflow-generation-answer-mode:fixture:sft": "joint",
+        }
+    ui.run()
     ui.text_input(key="workflow-name:fixture").set_value("Keep this run name").run()
     ui.button(key=f"fixture-node:{node}").click().run()
-    ui.toggle(key=f"workflow-generation-enabled:fixture:{node}").set_value(True).run()
+    if node == "sft":
+        ui.radio(key="workflow-generation-answer-mode:fixture:sft").set_value("native_joint").run()
+        assert not any(toggle.key == "workflow-generation-enabled:fixture:sft" for toggle in ui.toggle)
+    else:
+        ui.toggle(key=f"workflow-generation-enabled:fixture:{node}").set_value(True).run()
     ui.selectbox(key=f"workflow-generation-style:fixture:{node}").set_value("custom").run()
     ui.button(key="fixture-node:ingest").click().run()
     key = f"workflow-config-fix:fixture:style:{node}"
@@ -126,7 +136,8 @@ def test_style_warning_opens_matching_node_prompt_tab_and_preserves_other_drafts
 
 def test_trim_warning_opens_its_template_without_changing_other_prompts():
     ui = AppTest.from_string(SCRIPT).run()
-    source_prompt = "workflow-node-prompt:fixture:sft:workflow.sft"
+    prompt_id = ui.selectbox(key="workflow-node-prompt-selection:fixture:sft").value
+    source_prompt = f"workflow-node-prompt:fixture:sft:{prompt_id}"
     ui.text_area(key=source_prompt).set_value("Keep these SFT instructions.").run()
     ui.toggle(key="workflow-trim-enabled:fixture").set_value(True).run()
     ui.button(key="fixture-node:trim").click().run()
@@ -140,11 +151,15 @@ def test_trim_warning_opens_its_template_without_changing_other_prompts():
 
 def test_prompt_warning_selects_the_actual_invalid_template_after_another_node_is_selected():
     ui = AppTest.from_string(SCRIPT).run()
+    # Ordinary generation still exposes its separate author and score templates.
+    ui.radio(key="workflow-generation-answer-mode:fixture:sft").set_value("joint").run()
     selection = "workflow-node-prompt-selection:fixture:sft"
+    author_prompt = ui.selectbox(key=selection).value
+    assert author_prompt != "workflow.jev_score"
     ui.selectbox(key=selection).set_value("workflow.jev_score").run()
     invalid_key = "workflow-node-prompt:fixture:sft:workflow.jev_score"
     ui.text_area(key=invalid_key).set_value(" ").run()
-    ui.selectbox(key=selection).set_value("workflow.sft").run()
+    ui.selectbox(key=selection).set_value(author_prompt).run()
     ui.button(key="fixture-node:ingest").click().run()
     ui.button(key="workflow-config-fix:fixture:prompt:sft").click().run()
     _assert_open(ui, "sft", "提示词与风格")
@@ -168,7 +183,8 @@ def test_missing_models_are_separate_clickable_node_errors():
 @pytest.mark.parametrize("invalid_rules", [False, True])
 def test_director_issue_opens_settings_or_rules_for_the_actual_failure(invalid_rules):
     ui = AppTest.from_string(SCRIPT).run()
-    ui.toggle(key="workflow-director-enabled:fixture").set_value(True).run()
+    assert not any(toggle.key == "workflow-director-enabled:fixture" for toggle in ui.toggle)
+    assert any(button.key == "fixture-node:director" for button in ui.button)
     ui.button(key="fixture-node:director").click().run()
     if invalid_rules:
         ui.text_area(key="workflow-director-question-rules:fixture").set_value(" ").run()
@@ -255,7 +271,8 @@ from lib.presentation.streamlit.i18n import install_streamlit_localization
 install_streamlit_localization()
 st.session_state.setdefault('ui_language', 'en')""", 1)
     ui = AppTest.from_string(code).run()
-    ui.toggle(key="workflow-generation-enabled:fixture:sft").set_value(True).run()
+    assert ui.radio(key="workflow-generation-answer-mode:fixture:sft").value == "native_joint"
+    assert not any(toggle.key == "workflow-generation-enabled:fixture:sft" for toggle in ui.toggle)
     ui.selectbox(key="workflow-generation-style:fixture:sft").set_value("custom").run()
     action = ui.button(key="workflow-config-fix:fixture:style:sft")
     assert not re.search(r"[\u4e00-\u9fff]", action.label)
@@ -264,3 +281,35 @@ st.session_state.setdefault('ui_language', 'en')""", 1)
     ui.session_state["ui_language"] = "zh"
     ui.run()
     _assert_open(ui, "sft", "提示词与风格")
+
+
+def test_incomplete_output_rules_open_their_node_and_keep_unrelated_drafts():
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.segmented_control(key="workflow-source-mode:fixture").set_value("开放需求").run()
+    brief = "Design maintenance conversations for equipment safety."
+    ui.text_area(key="workflow-open-brief:fixture").set_value(brief).run()
+    ui.button(key="fixture-node:sft").click().run()
+    ui.text_input(key="workflow-name:fixture").set_value("Keep this configured task").run()
+    prompt_id = ui.selectbox(key="workflow-node-prompt-selection:fixture:sft").value
+    source_prompt = f"workflow-node-prompt:fixture:sft:{prompt_id}"
+    ui.text_area(key=source_prompt).set_value("Preserve these generation instructions.").run()
+    assert not ui.button(key="workflow-create:fixture").disabled
+    prefix = "control-text-ui:fixture:sft"
+    ui.toggle(key=f"{prefix}:all:enabled").set_value(True).run()
+    ui.text_input(key=f"{prefix}:0:marker").set_value("").run()
+    assert not ui.exception
+    assert ui.button(key="workflow-create:fixture").disabled
+    ui.button(key="fixture-node:ingest").click().run()
+    key = "workflow-config-fix:fixture:control-text:sft"
+    ui.button(key=key).click().run()
+    _assert_open(ui, "sft", "输出适配")
+    assert ui.text_input(key=f"{prefix}:0:marker").value == ""
+    assert ui.text_input(key="workflow-name:fixture").value == "Keep this configured task"
+    assert ui.text_area(key="workflow-open-brief:fixture").value == brief
+    assert ui.session_state["workflow-form-draft:fixture"][source_prompt] == "Preserve these generation instructions."
+    assert ui.button(key="workflow-create:fixture").disabled
+    ui.text_input(key=f"{prefix}:0:marker").set_value("[[RESTORED_VERBOSITY]]").run()
+    assert not ui.exception
+    assert not any(button.key == key for button in ui.button)
+    assert not ui.button(key="workflow-create:fixture").disabled
+    assert ui.session_state["workflow-form-draft:fixture"]["workflow-control-text:fixture:sft"]["rules"][0]["marker"] == "[[RESTORED_VERBOSITY]]"

@@ -5,6 +5,13 @@ description: Orchestrate persistent training-data workflows with the external Da
 
 # DataForge orchestration
 
+For configuration choices or a failure, consult the relevant section of
+[operations and troubleshooting](references/operations.md). It explains the
+node settings, actual evidence, recovery actions, and unsupported boundaries.
+Choose the next action from current feedback; the symptom table is not a fixed sequence.
+Read [tool parameters](references/control.md) when forming a request. The
+capabilities response lists actions; it is not their parameter schema.
+
 ## Hard constraints
 
 - NEVER read, echo, copy, or edit model credentials.

@@ -73,6 +73,10 @@ class Qwen35TrainingEncoder:
         if control_text_config is not None and (source_control_profile is not None
                 or verbosity_reference_text is not None or reasoning_reference_text != "思考已开启"):
             raise ValueError("control_text_config_conflicts_with_legacy_options")
+        self._explicit_control_text_options = (control_text_config is not None
+            or source_control_profile is not None or verbosity_reference_text is not None
+            or reasoning_reference_text != "思考已开启")
+        self._record_control_text_cache = None
         self._control_text_adapter = (
             ControlTextAdapter(control_text_config) if control_text_config is not None else None
         )
@@ -166,7 +170,8 @@ class Qwen35TrainingEncoder:
         return self._render(self._prepare_messages(messages), generation=True,
                             enable_thinking=enable_thinking)
 
-    def encode_turn(self, messages: list[dict], control: str, *, tools=None) -> dict:
+    def encode_turn(self, messages: list[dict], control: str, *, tools=None,
+                    control_text_config: Mapping | None = None) -> dict:
         enable_thinking = self._effort_mapping[validate_training_effort(control)]
         controlled = self._prepare_messages(messages, tools)
         target = controlled[-1]
@@ -181,10 +186,29 @@ class Qwen35TrainingEncoder:
         # Mixed inline and dedicated reasoning is ambiguous; never duplicate it.
         if "<think>" in answer or "</think>" in answer:
             raise ValueError("qwen35_inline_and_separate_reasoning_conflict")
+        text_adapter = self._control_text_adapter
+        mapping_metadata = {}
+        if control_text_config is not None:
+            mapping_metadata["control_text_source"] = ("encoder_override" if self._explicit_control_text_options else "record")
+            if not self._explicit_control_text_options:
+                # Node configurations repeat across many rows; compile once
+                # per change, and keep a bounded one-configuration cache.
+                cached = self._record_control_text_cache
+                if cached is None or cached[0] != control_text_config:
+                    adapter = ControlTextAdapter(control_text_config)
+                    configuration = adapter.configuration
+                    receipt = {"reasoning_reference_text": None,
+                               "control_text_enabled": adapter.enabled,
+                               "control_text_configuration": configuration,
+                               "control_text_mapping_sha256": _sha256(json.dumps(
+                                   configuration, ensure_ascii=False, sort_keys=True))}
+                    cached = self._record_control_text_cache = (configuration, adapter, receipt)
+                text_adapter = cached[1]
+                mapping_metadata.update(deepcopy(cached[2]))
         control_text_metadata = {}
-        if enable_thinking and self._control_text_adapter is not None:
+        if enable_thinking and text_adapter is not None:
             original_reasoning = reasoning
-            reasoning, control_text_metadata = self._control_text_adapter.apply(
+            reasoning, control_text_metadata = text_adapter.apply(
                 reasoning, task_contents=[m.get("content", "") for m in controlled
                                           if m["role"] != "system"],
             )
@@ -213,7 +237,7 @@ class Qwen35TrainingEncoder:
                 "verbosity_reference_replacements": replacement_count,
             }
         reference_count = 0
-        if (self._control_text_adapter is None and enable_thinking
+        if (text_adapter is None and enable_thinking
                 and REASONING_EFFORT_REFERENCE in reasoning):
             # Only the reserved self-reference is adapted. A task quoting the
             # same token is ambiguous; do not rewrite quotations or free prose.
@@ -254,6 +278,7 @@ class Qwen35TrainingEncoder:
             "labels": labels,
             "metadata": {
                 **self.provenance,
+                **mapping_metadata,
                 "effort": control,
                 "enable_thinking": enable_thinking,
                 "supervision": "reasoning_and_answer" if enable_thinking else "answer_only",

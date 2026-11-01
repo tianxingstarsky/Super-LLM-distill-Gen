@@ -29,20 +29,26 @@ def source(path, *, name=None):
 
 
 def test_reuse_preserves_each_native_nodes_mode_style_and_guidance_without_mutating_recipe():
+    from lib.contexts.datasets.api import default_control_text_config
     from lib.contexts.workflows.contracts import checklist_from_text
     from lib.presentation.streamlit.reasoning_checklist_controls import checklist_settings
     generation = {node: {"enabled": True, "style": "custom", "instruction": f"Keep {node} concise.",
                         "answer_mode": "native_joint",
                         "self_check": checklist_from_text(f"? [prefix] Check the {node} request.\n[final] Preserve the conditions.", version=7)}
                   for node in ("sft", "multiturn")}
+    controls = {node: default_control_text_config() for node in generation}
+    controls["multiturn"]["enabled"] = False
     original = recipe(version=42, native_generation_version=1, targets=["sft", "multiturn"],
-                      node_generation=generation)
+                      node_generation=generation, node_control_text_configs=controls)
     frozen = deepcopy(original)
     values = recipe_to_draft(original, "Native", "w", [])["values"]
     for node in generation:
         assert values[f"workflow-generation-answer-mode:w:{node}"] == "native_joint"
         assert values[f"workflow-generation-instruction:w:{node}"] == generation[node]["instruction"]
+        assert values[f"workflow-control-text:w:{node}"] == controls[node]
         assert checklist_settings("w", lambda _, key, default: values.get(key, default), node=node) == generation[node]["self_check"]
+    assert original == frozen
+    values["workflow-control-text:w:sft"]["rules"][0]["marker"] = "[[EDITABLE_DRAFT]]"
     assert original == frozen
 
 

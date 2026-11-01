@@ -65,6 +65,10 @@ from lib.presentation.streamlit.workflow_generation_settings import (
 from lib.presentation.streamlit.workflow_prompt_settings import (
     node_prompt_snapshot, node_prompt_has_issue, render_node_prompts, render_run_node_prompts,
 )
+from lib.presentation.streamlit.workflow_control_text_settings import (
+    render_control_text_settings, control_text_snapshot,
+)
+from lib.presentation.streamlit.workflow_node_guide import render_node_guide
 
 
 LABELS = {"queued": "待启动", "pending": "等待", "running": "执行中", "completed": "完成", "failed": "失败，可重试",
@@ -112,8 +116,7 @@ def _select_setup_node(key: str, node: str, tab: str = "settings", prompt_id: st
     st.session_state[serial_key] = serial
     st.session_state[f"workflow-setup-reveal:{workspace}"] = {"node": node, "serial": serial}
     language = st.session_state.get("ui_language", "zh")
-    label = "提示词与风格" if tab == "prompts" else "节点设置"
-    st.session_state[f"workflow-node-tabs:{workspace}:{node}"] = translate_label(label, language)
+    st.session_state[f"workflow-node-tabs:{workspace}:{node}"] = _node_tab_label(tab, language)
     if prompt_id is not None:
         st.session_state[f"workflow-node-prompt-selection:{workspace}:{node}"] = prompt_id
 
@@ -133,16 +136,27 @@ def _render_setup_issue(workspace: str, node: str, message: str, *, kind: str,
                   args=(f"workflow-setup-node:{workspace}", node, tab, prompt_id))
 
 
-def _setup_node_tabs(workspace: str, node: str):
+def _node_tab_label(tab: str, language: str) -> str:
+    if tab == "control_text":
+        return "Output rules" if language == "en" else "输出适配"
+    if tab == "guide":
+        return "Guide" if language == "en" else "使用说明"
+    return translate_label("提示词与风格" if tab == "prompts" else "节点设置", language)
+
+
+def _setup_node_tabs(workspace: str, node: str, *, has_prompts=True):
     """Keep the active native tab controllable and valid after language changes."""
     language = st.session_state.get("ui_language", "zh")
-    labels = [translate_label(label, language) for label in ("节点设置", "提示词与风格")]
+    names = ["settings", *(["prompts"] if has_prompts else []),
+             *(["control_text"] if node in {"sft", "multiturn", "cot"} else []), "guide"]
+    labels = [_node_tab_label(name, language) for name in names]
     key = f"workflow-node-tabs:{workspace}:{node}"
     previous = st.session_state.get(key)
     if previous not in labels:
-        prompt_labels = {"提示词与风格", translate_label("提示词与风格", "en")}
-        st.session_state[key] = labels[1] if previous in prompt_labels else labels[0]
-    return st.tabs(labels, key=key, on_change="rerun")
+        selected = next((name for name in names if previous in {
+            _node_tab_label(name, "zh"), _node_tab_label(name, "en")}), "settings")
+        st.session_state[key] = _node_tab_label(selected, language)
+    return dict(zip(names, st.tabs([UntranslatedText(label) for label in labels], key=key, on_change="rerun")))
 
 
 def _change_source_mode(workspace, key):
@@ -1887,9 +1901,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
                                                       node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                                       qa_director=qa_director))
-            settings_tab, prompts_tab = (_setup_node_tabs(ws, selected_node) if has_prompts
-                                        else (nullcontext(), nullcontext()))
-            with settings_tab:
+            node_tabs = _setup_node_tabs(ws, selected_node, has_prompts=has_prompts)
+            with node_tabs["settings"]:
                 render_generation_mode(selected_node, ws, save_field=_save_draft_value)
                 if selected_node in {"preference", "review", "package"} and selected_preferences(targets):
                     st.caption(preference_route(selected_node, review_repair))
@@ -1945,7 +1958,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
                 elif selected_node == "package":
                     st.caption("检查结构、去重并导出训练文件、报告与清单。")
-            with prompts_tab:
+            with node_tabs.get("prompts", nullcontext()):
                 if selected_node in {"sft", "cot", "multiturn"}:
                     render_generation_settings(selected_node, ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 elif selected_node == "trim":
@@ -1955,6 +1968,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 render_node_prompts(selected_node, model_source_mode, ws,
                                     save_field=_save_draft_value, node_generation=generation_snapshot(ws, graph_nodes), package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                     qa_director=qa_director, prompt_library=prompt_library)
+            if "control_text" in node_tabs:
+                with node_tabs["control_text"]:
+                    render_control_text_settings(selected_node, ws, save_field=_save_draft_value)
+            with node_tabs["guide"]:
+                render_node_guide(selected_node)
         with workbench:
             if "rlaif" in targets and review_repair.get("mode") == "human":
                 _render_setup_issue(ws, "review", _workflow_error("rlaif_generation_requires_ai_review"),
@@ -1971,6 +1989,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     # Only the node-local form follows the selected graph node.
     node_generation = generation_snapshot(ws, graph_nodes) if targets else {}
     generation_invalid = generation_issues(node_generation)
+    node_control_text_configs = {}
+    control_text_invalid = []
+    for node in graph_nodes if targets else ():
+        try:
+            node_control_text_configs.update(control_text_snapshot(ws, (node,)))
+        except ValueError:
+            control_text_invalid.append(node)
     reasoning_trim = trim_snapshot(ws, eligible=bool(set(targets).intersection({"sft", "cot"})))
     trim_invalid = trim_has_issue(reasoning_trim)
     director_invalid = director_has_issue(qa_director)
@@ -2249,6 +2274,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             if generation_invalid:
                 for node in generation_invalid:
                     _render_setup_issue(ws, node, "风格配置尚未完成，点击填写自定义指令", kind="style", tab="prompts")
+            for node in control_text_invalid:
+                _render_setup_issue(ws, node,
+                    "Output rules need attention. Open the node to fix them." if st.session_state.get("ui_language") == "en"
+                    else "控制文字规则尚未完成，点击节点检查并修正", kind="control-text", tab="control_text")
             if trim_invalid:
                 _render_setup_issue(ws, "trim", "修剪配置尚未完成，点击填写自定义模板", kind="trim", tab="prompts")
             if director_invalid:
@@ -2364,7 +2393,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       or agent_source_missing or source_limit_exceeded or source_size_exceeded
                                       or source_unavailable or not targets or bool(model_issues)
                                       or agent_unavailable or web_unavailable
-                                      or bool(generation_invalid) or trim_invalid or prompts_invalid or director_invalid
+                                      or bool(generation_invalid) or bool(control_text_invalid) or trim_invalid or prompts_invalid or director_invalid
                                       or parser_unavailable or cpt_vision_blocked
                                       or (not arithmetic_only
                                           and not (source_mode == "Agent 上下文" and
@@ -2419,6 +2448,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         sft_output_style=sft_output_style,
                                         conversation_reasoning=conversation_reasoning,
                                         node_generation=node_generation,
+                                        node_control_text_configs=node_control_text_configs or None,
                                         qa_director=qa_director,
                                         package_review={"enabled": False} if cpt_only else package_review,
                                         cpt_processing=cpt_processing, review_repair=None if cpt_only else review_repair,

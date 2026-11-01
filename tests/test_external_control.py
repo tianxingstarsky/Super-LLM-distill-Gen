@@ -68,7 +68,14 @@ def test_capabilities_and_rejected_mutations_need_no_harness_or_credentials(tmp_
     assert not (tmp_path / "data/output").exists()
 
 
-def test_oversized_request_identity_cannot_recurse_or_echo_unvalidated_input(tmp_path):
+def test_error_responses_keep_valid_identity_without_echoing_invalid_identifiers(tmp_path):
+    valid_id = "missing-run-parameter"
+    result, reply = cli(request("runs.inspect", request_id=valid_id), tmp_path)
+    assert result.returncode == 2
+    assert reply == {"protocol": PROTOCOL, "version": VERSION, "request_id": valid_id,
+                     "ok": False, "error": {"code": "invalid_control_run_id"}}
+    assert not (tmp_path / "data/output").exists()
+
     result, reply = cli(request(request_id="private" * 100_000), tmp_path)
     assert result.returncode == 2 and not reply["ok"]
     assert reply["request_id"] is None and len(result.stdout) < 300
@@ -86,6 +93,11 @@ def test_native_cpt_runs_through_actual_protocol_and_keeps_reasoning_exports_unt
     assert result.returncode == 0, reply
     run_id = reply["data"]["run_id"]
     assert cli(create, tmp_path, mutations=True)[1]["data"] == {"run_id": run_id, "created": True, "replayed": True}
+    _, inspected = cli(request("runs.inspect", {"run_id": run_id}), tmp_path)
+    assert inspected["ok"]
+    assert set(inspected["data"]) == {"state", "active", "node_models"}
+    assert inspected["data"]["state"]["id"] == run_id
+    assert inspected["data"]["active"] is False
     result, reply = cli(request("runs.execute", {"run_id": run_id}), tmp_path, mutations=True)
     assert result.returncode == 0 and reply["data"]["state"]["status"] == "completed", reply
     output = tmp_path / "data/output"
@@ -96,6 +108,30 @@ def test_native_cpt_runs_through_actual_protocol_and_keeps_reasoning_exports_unt
     _, preview = cli(request("runs.preview", {"run_id": run_id, "target": "cpt", "limit": 1}), tmp_path)
     assert preview["ok"] and len(preview["data"]["items"]) == 1
     assert cli(request("runs.list"), tmp_path)[1]["data"]["total"] == 1
+
+    from lib.contexts.datasets.api import default_control_text_config
+    config = default_control_text_config()
+    config["enabled"] = False
+    configured = request("runs.create", {"recipe": {"targets": ["sft"], "sources": [str(source)],
+        "node_control_text_configs": {"sft": config}}}, "disabled-node-text-rules")
+    result, reply = cli(configured, tmp_path, mutations=True)
+    assert result.returncode == 0 and reply["ok"], reply
+    configured_id = reply["data"]["run_id"]
+    result, inspected = cli(request("runs.inspect", {"run_id": configured_id}), tmp_path)
+    assert result.returncode == 0 and inspected["ok"], inspected
+    assert set(inspected["data"]) == {"state", "active", "node_models", "node_control_text_configs"}
+    assert inspected["data"]["node_control_text_configs"] == {"sft": config}
+    assert inspected["data"]["state"]["id"] == configured_id
+    assert inspected["data"]["active"] is False
+    assert isinstance(inspected["data"]["node_models"], dict)
+
+    frozen_path = run_path(output, configured_id) / "recipe.json"
+    changed = json.loads(frozen_path.read_text(encoding="utf-8"))
+    changed["node_control_text_configs"]["sft"]["enabled"] = True
+    atomic_json(frozen_path, changed)
+    result, inspected = cli(request("runs.inspect", {"run_id": configured_id}), tmp_path)
+    assert result.returncode == 2 and not inspected["ok"]
+    assert inspected["error"]["code"] == "recipe_changed_create_new_run"
 
 
 def test_concurrent_create_and_payload_conflicts_are_not_repeated(tmp_path):

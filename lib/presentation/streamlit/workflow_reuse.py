@@ -159,6 +159,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         if style not in {"separated", "drop"}:
             style = "separated"
     values[f"workflow-sft-output-style:{workspace}"] = style
+    for node, configuration in (recipe.get("node_control_text_configs") or {}).items():
+        values[f"workflow-control-text:{workspace}:{node}"] = deepcopy(configuration)
     review_repair = validate_review_repair(recipe.get("review_repair"))
     if review_repair is not None:
         values[f"workflow-review-repair-mode:{workspace}"] = review_repair["mode"]

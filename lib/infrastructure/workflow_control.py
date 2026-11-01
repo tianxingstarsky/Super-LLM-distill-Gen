@@ -131,8 +131,16 @@ class WorkflowControl:
                     "next_offset": min(len(rows), offset + limit)}
         if action == "runs.inspect":
             run_id = params["run_id"]
-            return {"state": public_state(app.state(run_id)), "active": app.is_active(run_id),
-                    "node_models": app.recipe(run_id).get("node_models", {})}
+            state, recipe = app.state(run_id), app.recipe(run_id)
+            summary = {"state": public_state(state), "active": app.is_active(run_id),
+                       "node_models": recipe.get("node_models", {})}
+            if "node_control_text_configs" in recipe:
+                # Expose only the explicit, authenticated node snapshot; never
+                # expand inspection into source material or the full recipe.
+                if state.get("recipe_hash") != digest(recipe):
+                    raise ValueError("recipe_changed_create_new_run")
+                summary["node_control_text_configs"] = recipe["node_control_text_configs"]
+            return summary
         if action == "runs.execute":
             return {"state": public_state(app.resume(params["run_id"]))}
         if action == "runs.cancel":

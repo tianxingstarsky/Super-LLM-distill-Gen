@@ -23,6 +23,9 @@ The helper can run from any working directory when its script path is absolute.
 It creates UTF-8 JSON itself. It does not call a model for connection checks.
 Read [the control reference](references/control.md) when selecting parameters or
 creating a recipe. Do not guess unavailable actions from another agent system.
+For configuration choices or a failure, read the relevant section of
+[operations and troubleshooting](references/operations.md). It maps symptoms to
+actual evidence, node settings, supported recovery actions, and their limits.
 
 ## Choose actions from current evidence
 

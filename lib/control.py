@@ -42,7 +42,10 @@ def main(argv=None):
         raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
         if len(raw) > MAX_REQUEST_BYTES:
             raise ValueError("control_request_too_large")
-        request = validate_request(json.loads(raw.decode("utf-8")))
+        # Retain a valid correlation ID even when parameter validation fails.
+        # response() independently rejects unsafe or oversized identifiers.
+        request = json.loads(raw.decode("utf-8"))
+        validate_request(request)
         if request["action"] in MUTATIONS and not args.allow_mutations:
             raise ValueError("control_mutations_disabled")
         # Keep old pipeline progress and provider diagnostics off the protocol

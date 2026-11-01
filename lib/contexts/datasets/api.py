@@ -14,3 +14,7 @@ from .application.trainer_export import prepare_trl_export
 from .application.asset_catalog import AssetCatalogApplication
 from .application.training_loader import TrainingTurnEncoder, iter_training_examples
 from .domain.training_control import with_training_control
+
+from .domain.control_text import (
+    default_control_text_config, validate_control_text_config, preview_control_text,
+)

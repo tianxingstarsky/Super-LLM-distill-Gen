@@ -28,7 +28,7 @@ class WorkflowRunApplication:
             "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
             "batch_size", "node_models", "conversation_turns", "brief",
             "agent_replay_mode", "evaluation_sources", "web_research", "sources",
-            "node_generation", "reasoning_trim", "node_prompts", "package_review", "qa_director", "production",
+            "node_generation", "reasoning_trim", "node_prompts", "node_control_text_configs", "package_review", "qa_director", "production",
             "cpt_processing", "review_repair", "repair_inputs", "agent_experience", "reasoning_required", "preference_design") if key in recipe}
         targets, node_models = validate_creation(**fields)
         validate_generation_review(targets, recipe.get("review_repair"), recipe.get("repair_inputs"))

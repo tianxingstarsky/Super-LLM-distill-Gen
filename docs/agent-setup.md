@@ -1,5 +1,9 @@
 # Install and use agent support
 
+After installation, use the [operations and troubleshooting guide](agent-operations.md)
+for node settings, symptom diagnosis, checkpoint recovery, and verification.
+Both independent orchestration skills include a self-contained copy.
+
 DeepSeek Harness is the primary external controller. Codex has an independent
 skill package. Both use the app's saved workflows and control protocol.
 The app, connector, and agent host have separate installation and update cycles.

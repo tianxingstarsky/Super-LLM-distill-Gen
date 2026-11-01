@@ -18,7 +18,8 @@ class TrainingTurnEncoder(Protocol):
     """
 
     def encode_turn(self, messages: list[dict[str, Any]], control: str, *,
-                    tools: list[dict[str, Any]] | None = None) -> dict[str, Any]: ...
+                    tools: list[dict[str, Any]] | None = None,
+                    control_text_config: Mapping | None = None) -> dict[str, Any]: ...
 
 
 def iter_training_examples(records: Iterable[Mapping[str, Any]], encoder: TrainingTurnEncoder, *,
@@ -39,6 +40,8 @@ def iter_training_examples(records: Iterable[Mapping[str, Any]], encoder: Traini
             raise ValueError("training_record_must_be_object")
         if "status" in record and record["status"] != "eligible":
             raise ValueError("training_record_ineligible")
+        if "control_text_config" in record and not isinstance(record["control_text_config"], Mapping):
+            raise ValueError("invalid_control_text_configuration")
         normalized = to_trl_sft(record)
         messages = normalized["messages"]
         indices = [index for index, message in enumerate(messages) if message["role"] == "assistant"]
@@ -49,9 +52,13 @@ def iter_training_examples(records: Iterable[Mapping[str, Any]], encoder: Traini
             control = record.get("training_control", {})
             labelled = "effort" in control or str(message_index) in control.get("by_message", {})
             encoded = encoder.encode_turn(deepcopy(messages[:message_index + 1]), efforts[message_index],
-                                          tools=deepcopy(normalized.get("tools")))
+                                          tools=deepcopy(normalized.get("tools")),
+                                          **({"control_text_config": deepcopy(record["control_text_config"])}
+                                             if "control_text_config" in record else {}))
             yield {**encoded, "metadata": {
                 **deepcopy(encoded.get("metadata", {})),
+                **({"control_text_node": record["control_text_node"]}
+                   if "control_text_node" in record else {}),
                 "source_record_index": record_index,
                 "source_message_index": message_index,
                 "control_source": "record" if labelled else "explicit_default",

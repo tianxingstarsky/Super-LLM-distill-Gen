@@ -4,6 +4,7 @@
 - [V0.0.1 发布说明](release-v0.0.1.md)：初始预览的历史验证记录。
 - [Agent 功能维护地图](architecture/agent-features.md)：按功能查找提示词、用例、状态和共享设施。
 - [Agent 安装与调度](agent-setup.md)：DeepSeek Harness 与 Codex 的独立接入和可交给 agent 的安装任务。
+- [Agent 操作与排错](agent-operations.md)：技术开关、适用条件、故障原因、可用动作和生效证据。
 - [无上下文验证](agent-cold-validation.md)：不可变安装包、真实调用与未验证边界。
 - [架构](architecture.md)：当前业务域、依赖方向和一致性边界。
 - [命名与职责](architecture/naming.md)：变量、函数、类和文件的放置规则。

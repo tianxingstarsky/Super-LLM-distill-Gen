@@ -234,6 +234,21 @@ def validate_creation_draft(values):
                     valid = isinstance(value, dict) and validate_node_models(value) == value
                 except ValueError:
                     valid = False
+        elif field == 'workflow-control-text':
+            # Preserve incomplete editor entries. Semantic validation belongs
+            # to creation, where enabled mappings become an immutable contract.
+            try:
+                valid = (len(parts) == 3 and parts[2] in {'sft', 'cot', 'multiturn'}
+                         and isinstance(value, dict)
+                         and not set(value) - {'schema', 'enabled', 'rules'}
+                         and value.get('schema') == 'shujian.control-text-adaptation/v1'
+                         and type(value.get('enabled')) is bool
+                         and isinstance(value.get('rules', []), list)
+                         and len(value.get('rules', [])) <= 128
+                         and all(isinstance(rule, dict) for rule in value.get('rules', []))
+                         and len(canonical(value)) <= 200_000)
+            except (TypeError, ValueError):
+                valid = False
         elif field == 'workflow-node-model-confirmations':
             valid = (isinstance(value, dict) and not set(value) - set(NODE_ROLES)
                      and all(isinstance(signature, str) and re.fullmatch(r'[0-9a-f]{64}', signature)

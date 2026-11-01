@@ -9,3 +9,7 @@ from lib.contexts.datasets.domain.training_control import (
 from lib.contexts.datasets.domain.assets import (
     Asset, AssetInventory, DIRECT_DOWNLOAD_LIMIT_BYTES, TRAINING_CATEGORIES, generation_source_mode,
 )
+
+from .domain.control_text import (
+    default_control_text_config, validate_control_text_config, preview_control_text,
+)

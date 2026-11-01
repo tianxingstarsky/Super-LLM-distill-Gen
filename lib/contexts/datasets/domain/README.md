@@ -1,10 +1,12 @@
 # Dataset boundary
 
-The existing `Qwen35TrainingEncoder` in infrastructure resolves the exact
-`[[SJ_REASONING_EFFORT]]` reference while encoding the supervised assistant
-turn. The target encoder owns its wording; this domain adds no replacement
-service. Source records and quality status remain unchanged. Controls are not
-inferred from natural-language descriptions.
+`control_text.py` owns the pure `ControlTextAdapter`: validates and freezes explicit
+literal rules and returns an in-memory view with original-span receipts. It performs
+no I/O or model calls. The public API exposes defaults, validation and local preview.
+Infrastructure's compatibility file forwards to this single implementation.
+`Qwen35TrainingEncoder` applies the record's frozen node rules at training read time;
+explicit caller configuration takes precedence. Source records and quality status
+remain unchanged. Controls are not inferred from natural-language descriptions.
 
 New canonical generation receipts opt into `training_control` metadata at the
 training projection. The versioned control uses either one `effort` or

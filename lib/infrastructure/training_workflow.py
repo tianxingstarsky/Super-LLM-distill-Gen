@@ -202,7 +202,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                sample_count=None, concurrency=1, batch_size=100, node_models=None,
                agent_replay_mode="configured", web_research=None, settings_root=None,
                sft_output_style=None, document_parser=None, knowledge_retrieval=None,
-               node_generation=None, reasoning_trim=None, node_prompts=None,
+               node_generation=None, reasoning_trim=None, node_prompts=None, node_control_text_configs=None,
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
                review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None,
                conversation_reasoning=None, open_dialogue_question_mode="auto",
@@ -225,7 +225,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         node_models=node_models, conversation_turns=conversation_turns, brief=brief,
         agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources, node_generation=node_generation,
-        reasoning_trim=reasoning_trim, node_prompts=node_prompts,
+        reasoning_trim=reasoning_trim, node_prompts=node_prompts, node_control_text_configs=node_control_text_configs,
         package_review=package_review, qa_director=qa_director, production=production,
         cpt_processing=None if arithmetic_only else cpt_processing,
         review_repair=review_repair, repair_inputs=repair_inputs, agent_experience=agent_experience,
@@ -591,6 +591,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"document_parser_signature": document_parser_signature}
                  if document_parser_signature is not None else {}),
               "node_generation": node_generation,
+              **({"node_control_text_configs": deepcopy(node_control_text_configs)}
+                 if node_control_text_configs else {}),
               "dialogue_context_scope_version": 1,
               "dialogue_constraint_provenance_version": 1,
               **({"open_dialogue_routing_version": 1,
@@ -813,6 +815,9 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                 value = (row_checkpoint(self.path / "checkpoints" / self.stage / f"{digest(checkpoint_key)}.json",
                                         lambda: self.prepared_source_units(item), self.check_cancel)
                          if stream_sources else self.checkpoint(checkpoint_key, lambda: self.run_item_safely(stage, item, action)))
+                from lib.contexts.workflows.contracts import attach_node_control_text
+                if stage in self.recipe.get("node_control_text_configs", {}):
+                    value = [attach_node_control_text(row, stage, self.recipe) for row in value]
                 with self._lock:
                     metrics["done"] += 1
                     metrics["outputs"] += len(value)

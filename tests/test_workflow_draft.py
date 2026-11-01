@@ -50,15 +50,27 @@ def test_training_targets_are_visible_multi_select_choices():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
     picker = ui.pills(key='workflow-targets:fixture:自动推荐')
-    assert picker.options == [TARGET_LABELS[target] for target in TARGETS]
+    # New work uses CoT inside the answering node; legacy CoT remains readable.
+    assert picker.options == [TARGET_LABELS[target] for target in TARGETS if target != 'cot']
     assert picker.proto.click_mode == ButtonGroup.MULTI_SELECT
     assert not any(widget.key.startswith('workflow-targets:') for widget in ui.multiselect)
-    picker.set_value(['cpt', 'dpo', 'cot']).run()
-    assert ui.pills(key='workflow-targets:fixture:自动推荐').value == ['cpt', 'dpo', 'cot']
+    picker.set_value(['cpt', 'dpo', 'sft']).run()
+    assert ui.pills(key='workflow-targets:fixture:自动推荐').value == ['cpt', 'dpo', 'sft']
     ui.pills(key='workflow-targets:fixture:自动推荐').unselect('dpo').run()
-    assert ui.pills(key='workflow-targets:fixture:自动推荐').value == ['cpt', 'cot']
-    assert ui.session_state['workflow-form-draft:fixture']['workflow-targets:fixture:自动推荐'] == ['cpt', 'cot']
+    assert ui.pills(key='workflow-targets:fixture:自动推荐').value == ['cpt', 'sft']
+    assert ui.session_state['workflow-form-draft:fixture']['workflow-targets:fixture:自动推荐'] == ['cpt', 'sft']
     assert not ui.exception
+
+    legacy = AppTest.from_string(SCRIPT)
+    legacy.session_state['workflow-form-draft:fixture'] = {
+        'workflow-targets:fixture:自动推荐': ['sft', 'cot'],
+        'workflow-generation-answer-mode:fixture:sft': 'joint',
+    }
+    legacy.run()
+    assert not legacy.exception
+    assert TARGET_LABELS['cot'] in legacy.pills(key='workflow-targets:fixture:自动推荐').options
+    assert legacy.pills(key='workflow-targets:fixture:自动推荐').value == ['sft', 'cot']
+    assert any(button.key == 'fixture-node:cot' for button in legacy.button)
 
 
 def test_each_direct_entry_selects_only_its_target_and_changes_source_only_when_needed():

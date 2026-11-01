@@ -128,3 +128,55 @@ Skill frontmatter checks and package tests complement these trials. Neither
 proves that an agent can use the skill independently. Installation, discovery,
 real host loading, workflow execution, and semantic quality remain separate
 claims. A later skill or plugin edit requires a new context-free trial.
+
+## Node controls and troubleshooting — 1 November 2026
+
+The node-rule release adds editable controls and bilingual help inside the actual
+workflow panel. Rules travel from the saved draft to the frozen recipe, native
+and TRL records, and lazy training reads. Original reasoning is retained.
+Disabled rules are not treated as disabling the model's thinking.
+
+Focused verification passed in separate affected suites: 90 backend, format,
+loader and DDD checks; 4 editor checks; 36 workbench/navigation checks; 23 recipe
+reuse checks; and 2 external-control checks. This was not a full repository run.
+The local Qwen3.5 tokenizer verified enable/disable/reenable and explicit caller
+override without loading model weights or calling an API. Desktop browser
+checks covered editing exact literals and replacement text, local preview,
+reload persistence, switching off, resetting defaults, and Chinese/English tabs.
+
+Cold trials found actionable gaps: an undocumented workspace-ID distinction,
+a missing required schema example, missing DSH parameter reference, and a
+misnamed tool in a candidate document. The revised packages explain these.
+Each changed package was retested by a different agent with no inherited context.
+
+The same trials exposed two product issues. `runs.inspect` now returns an
+explicit `node_control_text_configs` snapshot only after checking the frozen
+recipe hash. Legacy tasks without that field keep their old response shape.
+Parameter-validation failures now retain a valid request ID, so adapters can
+show the real error instead of misreporting a protocol mismatch. Invalid IDs
+are still not echoed. Real subprocess regressions cover both changes.
+
+The final Codex 0.1.1 ZIP has SHA256
+`fec8e840dda0783e4bb0316fd56098e488a33cc28b9fc5fe438d4e98387210a7`.
+Its fresh tester installed the skill, completed source-only CPT task
+`3c50a32dcbae4a179cd4de6c0f6f4885`, and froze an unexecuted SFT task
+`d8e6689f70c8455eab4b44285ba60405` with rules disabled. It used the packaged
+instructions without reading implementation/tests to infer usage. This proves
+manual skill/helper and local protocol use, not native Codex host discovery.
+
+The final DSH 0.3.3 archive has SHA256
+`9ac2e1d824db72144bff2a8a3cf49d7a12261b0a2d88e0a2a07b115611f70ea3`.
+Another fresh tester completed isolated installation and the official SDK
+registration/doctor checks, then created SFT task
+`ab4f2524f25b4b1494174182beb6bc38` through the documented local protocol.
+`runs.inspect` confirmed the schema, `sft.enabled=false`, `queued`,
+`attempt=0`, `active=false`, and empty usage. No implementation/test reading was
+needed to discover how to operate it. This final trial did not launch the DSH
+host or invoke native host tools/jobs. Its evidence is not an end-to-end host
+execution claim.
+
+Raw immutable packages, reports and receipts are retained locally under
+`.dataforge/node-controls-cold-20261101/`. UI screenshots and observations are
+under `.dataforge/node-controls-ui-20261101/`. These runtime files remain ignored.
+No paid model call was made. Native host discovery, native tool/job execution,
+local protocol business and semantic quality remain separate evidence claims.

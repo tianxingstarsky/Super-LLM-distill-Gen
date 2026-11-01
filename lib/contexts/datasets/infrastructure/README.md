@@ -21,7 +21,7 @@
 `verbosity_reference_text` 选择目标文字。未启用的旧读取行为、源数据和导出不变。
 定向回归在 `tests/test_deepseek_control_text.py`；真实 tokenizer 验证见训练说明。
 
-`control_text.py` 的 `ControlTextAdapter` 是可配置的字面文本适配器：构造时校验、冻结
+`control_text.py` 兼容转发到 domain 的唯一 `ControlTextAdapter`：构造时校验、冻结
 配置并编译匹配，单次扫描只处理原输入，保留原位置收据。支持总开关、逐条开关、匹配列表、
 标记及目标文字。DeepSeek 冻结配置转发到同一实现，旧收据形状保持。
 `Qwen35TrainingEncoder(control_text_config=...)` 显式采用该配置后完全接管控制文字适配，

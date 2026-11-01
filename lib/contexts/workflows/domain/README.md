@@ -1,5 +1,9 @@
 # 工作流规则
 
+`node_control_text.py` 固定 SFT、多轮、CoT 的规则归属，校验节点配置并把已冻结配置附到
+相应节点记录；通过 datasets 的纯合同复用字面规则，不复制匹配器、不改写推理。
+原生 SFT 的 CoT 投影继承 SFT 作者配置。验证：`tests/test_node_control_text.py`。
+
 `generation_control.py` 将已知回答请求收据投影为 `generation_controls.version=1` 的逐助手索引映射。只记录有真实来源的轮次，历史缺失项不继承末轮档位；消息正文、原生推理和既有内容摘要不因此改写。
 
 工具续写会把多次请求的原生思考合并到同一训练目标；仅当全部来源收据的 canonical 档位一致时才标记该目标。不同档位或来源缺失标为 `generation_control_scope` 的 `mixed` / `partial`，各调用收据和完整思考仍留在原始回执中。v7 单次原生重答使用本次实际档位。

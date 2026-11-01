@@ -48,7 +48,7 @@ Creation accepts the product's public recipe fields: `sources`, `brief`, `target
 `name`, `backend`, `model`, `judge_backend`, `judge_model`, `jev_backend`, `jev_model`,
 `max_units`, `chunk_chars`, `tasks`, `sample_count`, `concurrency`, `batch_size`,
 `node_models`, `conversation_turns`, `document_parser`, `cpt_processing`,
-`node_generation`, `reasoning_trim`, `node_prompts`, `qa_director`, `production`,
+`node_generation`, `node_control_text_configs`, `reasoning_trim`, `node_prompts`, `qa_director`, `production`,
 `evaluation_sources`, `web_research`, `package_review`, `review_repair`,
 `agent_experience`, `reasoning_required`, `agent_replay_mode`, `repair_inputs`,
 `knowledge_retrieval`, `sft_output_style`, `source_names`, `evaluation_source_names`.

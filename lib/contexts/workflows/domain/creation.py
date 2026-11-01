@@ -1,5 +1,6 @@
 """Pure creation rules shared by every workflow entry point."""
 from pathlib import PurePath
+from .node_control_text import validate_node_control_text_configs
 from lib.contexts.workflows.domain.targets import TARGETS
 from lib.domain.workflow_quality import text_issue
 from lib.contexts.workflows.domain.scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, validate_node_models
@@ -36,7 +37,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       batch_size=100, node_models=None, conversation_turns=3, brief="",
                       agent_replay_mode="configured", evaluation_sources=(),
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
-                      node_prompts=None, package_review=None, qa_director=None, production=None,
+                      node_prompts=None, node_control_text_configs=None, package_review=None, qa_director=None, production=None,
                       cpt_processing=None, review_repair=None, repair_inputs=None, agent_experience=None,
                       reasoning_required=False, preference_design=None, preparing_review_session=False):
     if type(preparing_review_session) is not bool:
@@ -84,6 +85,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
         if not cot.get("enabled") or cot.get("answer_mode") != "native_prefill":
             raise ValueError("native_regeneration_requires_native_cot_style")
     validate_node_prompts(node_prompts)
+    validate_node_control_text_configs(node_control_text_configs)
     validate_agent_experience(agent_experience)
     validate_package_review(package_review)
     cpt = validate_cpt_processing(cpt_processing)

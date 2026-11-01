@@ -86,6 +86,13 @@ SFT / 多轮的 `回答生成方式` 在本节点模型配置旁设置；原生 
 
 ## 依赖与样式归属
 
+`workflow_control_text_settings.py` 管理 SFT、多轮和历史 CoT 的“输出适配”表单与本地预览；
+规则由 datasets 公共 API 校验，草稿允许未完成输入，启动时冻结。
+`workflow_node_guide.py` 持有各节点中英文“使用说明”与故障定位，不能在说明里增加业务行为。
+`workflow_page.py` 负责页签和错误跳转，`workflow_reuse.py` 恢复配方快照。
+节点开关影响训练读取视图，原生推理和历史任务不被重写。
+
+
 应用对象从 [`lib/bootstrap/`](../../bootstrap/README.md) 注入，跨域逻辑走各域 `api.py`。页面不定义生成策略、去重、审核准入、缓存身份或发布条件，也不创建另一份模型调度器。
 
 [`shared.py`](shared.py) 提供页首和小节标题，`*_style.py` / `*_styles.py` 负责页面视觉，公共主题在 [`lib/console_theme.py`](../../console_theme.py)。[`page_motion.py`](page_motion.py) 只管理页面切换动效。样本/报告的大小显示复用 [`file_sizes.py`](../file_sizes.py)，原始字节值仍供排序与导出。
