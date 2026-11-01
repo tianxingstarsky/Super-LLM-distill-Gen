@@ -319,6 +319,9 @@ def test_protocol_one_real_engine_keeps_revised_reasoning_and_reuses_paid_checkp
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     from lib.prompts import get, render
+    # Replay the historical review route with the recorded candidate below.
+    # This client intentionally implements review/repair, not the new director tools.
+    recipe["qa_director"]["enabled"] = False
     recipe["claim_review_protocol_version"] = 1
     recipe.pop("claim_review_quote_matching_version", None)
     recipe.pop("claim_reference_policy_version", None)

@@ -1242,6 +1242,7 @@ class WorkflowQADirector:
 
     def _directed_worker_batch(self, stage, batch, offset, handle, local_history, published_history):
         """Workers may finish out of order; acceptance and dedup commit in order."""
+        from lib.contexts.workflows.contracts import attach_node_control_text
         self.activate_directed_stage(stage)
         self._abort.clear()
         metrics = self.state["stages"][stage]
@@ -1327,6 +1328,9 @@ class WorkflowQADirector:
                                                                   learner_task_dedup=self.qa_core_dedup(stage)):
                     row = {**self.rejected(unit, "duplicate_qa_contract"),
                            "qa_contract": unit["qa_contract"], "family_id": unit["family_id"]}
+                # Directed batches bypass stage_items. Bind their frozen author
+                # configuration here as well, including cached/quarantined rows.
+                row = attach_node_control_text(row, stage, self.recipe)
                 metrics["outputs"] += 1
                 metrics["eligible"] += int(row["status"] == "eligible")
                 metrics["quarantined"] += int(row["status"] == "quarantined")

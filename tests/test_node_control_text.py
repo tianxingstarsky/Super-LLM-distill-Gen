@@ -120,6 +120,50 @@ def test_absent_configuration_keeps_legacy_artifact_shape():
     assert set(preferred_training_record("sft", record)) == {"messages"}
 
 
+def test_directed_pending_native_response_keeps_frozen_owner_on_replay(tmp_path):
+    from io import StringIO
+    from threading import Event
+    from lib.infrastructure.workflow_qa_director import WorkflowQADirector
+    from lib.contexts.review.domain.control_text_suggestions import build_control_text_review_context
+    fixture = json.loads((Path(__file__).parent / "fixtures/native_sft_control_owner.json").read_text(encoding="utf-8"))
+    original = fixture["record"]
+    config = default_control_text_config()
+
+    class Replay(WorkflowQADirector):
+        recipe = {"concurrency": 1, "node_control_text_configs": {"sft": config}}
+        path = tmp_path
+
+        def __init__(self):
+            self._abort, self.cached = Event(), None
+            self.state = {"id": "offline-replay", "stages": {"sft": {key: 0 for key in
+                ("done", "outputs", "eligible", "quarantined", "cached", "batches_done")}}}
+
+        def activate_directed_stage(self, stage): pass
+        def check_cancel(self): pass
+        def event(self, *args, **kwargs): pass
+        def save(self): pass
+        def checkpoint_has(self, key, *, stage): return self.cached is not None
+        def checkpoint(self, key, operation):
+            if self.cached is None:
+                self.cached = deepcopy(operation())
+            return deepcopy(self.cached)
+        def sft(self, unit): return [deepcopy(original)]
+
+    worker = Replay()
+    unit = {"id": original["id"], "source_id": original["source_id"], "kind": "document"}
+    for _ in range(2):
+        output = StringIO()
+        worker._directed_worker_batch("sft", [unit], 0, output, Mock(), Mock())
+        record = json.loads(output.getvalue())
+        assert record == {**original, "control_text_node": "sft", "control_text_config": config}
+        assert record["status"] == "quarantined" and record["reason"] == "native_instruction_reference_unresolved"
+        context = build_control_text_review_context("sft", record, {"messages": record["messages"]})
+        assert context["sources"][0]["node"] == "sft"
+        assert context["sources"][0]["prefix"] == original["messages"][-1]["reasoning_content"][:512]
+    assert worker.state["stages"]["sft"]["cached"] == 1
+    assert worker.cached == [original]
+
+
 def test_previous_node_configuration_can_restore_v1_without_migrating_it():
     current = default_control_text_config()
     previous = {**deepcopy(current), "schema": "shujian.control-text-adaptation/v1"}

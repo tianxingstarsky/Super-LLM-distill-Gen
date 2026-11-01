@@ -84,7 +84,9 @@ def test_factory_sends_two_condition_contexts_per_turn_and_preserves_full_source
     workflow = flow(tmp_path, client)
     assert workflow.recipe["claim_review_condition_contract_version"] == 1
     assert workflow.recipe["prompts"]["workflow.review_reference"]["version"] == "2.2.0"
-    assert workflow.recipe["prompts"]["workflow.review_score"]["version"] == "1.22.0"
+    current_score = get("workflow.review_score")
+    assert workflow.recipe["prompts"]["workflow.review_score"] == {
+        "version": current_score.version, "sha256": engine.digest(current_score.template)}
     check = workflow._review_claim_score("multiturn", row, evidence(), ["candidate"])
     assert accepted(check) and len(client.calls) == 4
     assert row["messages"] == original
@@ -103,6 +105,7 @@ def test_factory_sends_two_condition_contexts_per_turn_and_preserves_full_source
             assert request["challenge_review"]["issues"] == []
             assert "verdict" not in request["challenge_review"]
     audit = row["claim_review"]
+    assert audit["version"] == 4
     for collection in ("challenge_reviews", "assessments"):
         for item in audit[collection]:
             receipt, checkpoint = item["review"], item["checkpoint"]
@@ -209,6 +212,15 @@ def test_an_explicit_refutation_still_uses_the_existing_bounded_repair_branch(tm
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["sft"], reasoning_required=True,
         review_repair={"mode": "auto", "max_rounds": 1}, sft_output_style="separated")
+    # This fixture supplies the known faulty candidate directly, so keep the
+    # historical no-director generation route and exercise the actual repair path.
+    path = engine.run_path(output, run_id)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe["qa_director"]["enabled"] = False
+    engine.atomic_json(path / "recipe.json", recipe)
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    engine.atomic_json(path / "state.json", state)
     def generate(self, unit):
         row = sample()
         row["messages"][1]["content"] = "WRONG_DRAFT: Inspect with power on."
