@@ -58,7 +58,7 @@ Reflector 输出结构正确 JSON；"错误→教训、只留正确操作"的防
 另：distilabel 解析输出依赖 `beautifulsoup4`，未随核心安装，已加进 requirements.txt。
 
 ### F6.（环境冲突，已避开）本机 8765 端口被你的 llama.cpp bridge_server 占用
-排查测试失败时发现：`F:\llama_cpp\output_my_model\release\python\python.exe bridge_server.py`
+排查测试失败时发现：`<external-runtime>/Scripts/python.exe bridge_server.py`
 监听 `127.0.0.1:8765`（疑似你的本地推理桥），同时你的 `train_pretrain.py --arch minimind4dpsk`
 训练任务正在运行。**两者均未做任何改动**；本项目 mock 测试端口改为 **18765** 彻底避开。
 后续 M1 如要接入你的 llama.cpp 本地端点，可把 `configs/backends.yaml` 里本地后端

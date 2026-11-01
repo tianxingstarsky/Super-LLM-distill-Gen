@@ -1317,6 +1317,23 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                 + html.escape(str(reveal["serial"]), quote=True) + '" hidden></span>')
 
 
+def _commit_draft_fields(workspace, changes):
+    """Persist explicit edits and their recovery snapshot before publishing them."""
+    draft_key = f"workflow-form-draft:{workspace}"
+    candidate = {**st.session_state.get(draft_key, {}), **deepcopy(changes)}
+    application = st.session_state.get(f"workflow-draft-application:{workspace}")
+    try:
+        if application is not None:
+            application.replace(candidate)
+    except (OSError, ValueError, Timeout):
+        return False
+    st.session_state[draft_key] = candidate
+    for key, value in changes.items():
+        st.session_state[key] = deepcopy(value)
+    st.session_state.pop(f"workflow-draft-error:{workspace}", None)
+    return True
+
+
 def _save_draft_value(workspace, key):
     draft_key = f"workflow-form-draft:{workspace}"
     previous = st.session_state.get(draft_key, {})
@@ -1873,7 +1890,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
                 with title:
                     section_heading(node_display_label(selected_node, GRAPH_LABELS, node_generation,
-                        source_cleaning=source_cleaning, recipe_version=draft_recipe_version, targets=targets), "节点配置 · 自动保存", STAGE_GLYPHS[selected_node])
+                        source_cleaning=source_cleaning, recipe_version=draft_recipe_version, targets=targets), UntranslatedText("Node settings" if st.session_state.get("ui_language") == "en" else "节点配置"), STAGE_GLYPHS[selected_node])
                 with expand:
                     wide_key = f"canvas-wide:setup-canvas:{ws}"
                     st.button("收窄编辑" if st.session_state.get(wide_key) else "展开编辑",
@@ -1970,7 +1987,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                     qa_director=qa_director, prompt_library=prompt_library)
             if "control_text" in node_tabs:
                 with node_tabs["control_text"]:
-                    render_control_text_settings(selected_node, ws, save_field=_save_draft_value)
+                    render_control_text_settings(selected_node, ws, save_fields=_commit_draft_fields)
             with node_tabs["guide"]:
                 render_node_guide(selected_node)
         with workbench:

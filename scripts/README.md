@@ -8,6 +8,8 @@
 
 `launch_console.py`、`launch_desktop.py` 启动产品；`import_rollout.py` 导入轨迹；`make_gui_fixture.py` 准备受控展示数据；`real_spike.py` 用于真实场景验证。
 
+`env_redirect.sh` 可由 POSIX shell `source` 后使用当前用户的缓存目录，遵守已有的 `PIP_CACHE_DIR`、`HF_HOME`、`HUGGINGFACE_HUB_CACHE`，否则使用 `XDG_CACHE_HOME` 或 `~/.cache`。它只设置当前 shell 的环境变量，不移动或删除已有缓存。
+
 [promo](promo/README.md) 是宣传片工具，[assets](assets/README.md) 是脚本使用的本地资产。产品业务规则不能放进这些脚本再由页面反向导入。
 
 [release](release/README.md) 从固定 Git 版本构建 Windows x64 预览安装器，记录运行时、依赖与文件校验，不承接产品业务逻辑。

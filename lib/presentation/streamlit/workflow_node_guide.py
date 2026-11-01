@@ -19,9 +19,9 @@ _THINKING_EFFORT = (
     "The platform stores low, medium, high, xhigh or max, then maps it to the provider's supported settings when sending a request. Providers may support fewer levels. Auto leaves the choice to the provider. Effort, response length and token capacity are separate. A phrase such as “verbosity 5” is an observed self-description, not proof of a provider setting or high/max effort.",
 )
 _OUTPUT_ADAPTATION = (
-    "控制文本匹配与替换", "Match and replace control text",
-    "在本节点「输出适配」中开关整套规则、修改匹配原文和目标文本，先用预览检查。它按明确字符串标记控制文本，再在训练读取时按目标配置替换；不调用模型，不改原始推理存档。关闭后保留原文，不会关闭模型思考。仅替换已确认的控制字段，不用它修正事实或删掉推理。",
-    "Use this node's Output rules tab to enable rules, edit exact text and set a replacement. Check the preview first. Rules mark known control text and adapt it when training data is read. They make no model calls and preserve the raw reasoning archive. Disabling them keeps the text; it does not disable thinking. Use them for confirmed control fields, not factual repairs or removing reasoning.",
+    "仅标记与文字替换", "Mark or replace control text",
+    "「输出适配」默认只读；编辑后先预览，保存才生效。可取消修改，也可载入上一版或默认规则后确认恢复。新版「仅标记」完整保留正文，另存命中范围和标记名；只有明确选择替换才改训练读取文字。不调用模型，不改原始推理，也不关闭模型思考。旧 v1 任务保持旧占位符行为，不自动升级。",
+    "Output rules are read-only until you edit. Preview changes, then save to apply them. Cancel to keep the saved rules, or load the previous version or defaults before confirming a restore. New Mark only rules preserve every character and record spans and marker names separately. Only explicit replacements change training-read text. No model is called; raw reasoning and model thinking stay intact. Old v1 tasks retain their placeholder behavior.",
 )
 _PROMPT_EDITING = (
     "提示词与个人模板", "Prompts and personal templates",

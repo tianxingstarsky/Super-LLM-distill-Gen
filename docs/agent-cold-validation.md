@@ -175,6 +175,33 @@ needed to discover how to operate it. This final trial did not launch the DSH
 host or invoke native host tools/jobs. Its evidence is not an end-to-end host
 execution claim.
 
+### Follow-up: preserve text and require explicit saves
+
+The next package revision documents v2 annotations: mark-only retains the exact
+text and records spans separately. V1 frozen recipes retain their original
+semantics. The node editor now separates pending edits from the committed draft,
+validates before Save, and persists the previous configuration in the same
+write. Cancel and failed writes leave the committed rules in place.
+
+Fresh, context-free agents tested these final immutable packages independently:
+
+| Package | SHA256 | Created, unexecuted SFT task |
+| --- | --- | --- |
+| Codex 0.1.2 | `830e14fa02dda65cd953a343739812d0dbfc0d42d7ea03e8baefb2d0ebeb6b45` | `b8e07859a42847d493aa5b765030e175` |
+| DSH 0.3.4 | `3faf4853e814b82ac596f18e996bd660dc195628db7d1e0ca39f851b9fb3c85d` | `09c5d192d9b6464e85111acb19b6df80` |
+
+Each tester installed into an isolated directory, followed the bundled guide,
+and read back a v2 exact-match rule with `replacement: null`. Both tasks stayed
+queued with zero attempts and no model usage. Neither tester needed to infer
+instructions from implementation or test code. These are installation and local
+protocol findings, not native host or generated-data quality claims.
+
+The affected regressions passed: 34 rule/legacy/pipeline checks, 26 editor and
+issue-navigation checks, and 72 DDD/draft/reuse checks. The editor cases include
+cancel, invalid input, write failure, retry, reload, previous-version recovery,
+and explicit v1-to-v2 adoption. No full repository or paid model run was used.
+Evidence is under `.dataforge/node-marker-preserve-20261101/`.
+
 Raw immutable packages, reports and receipts are retained locally under
 `.dataforge/node-controls-cold-20261101/`. UI screenshots and observations are
 under `.dataforge/node-controls-ui-20261101/`. These runtime files remain ignored.

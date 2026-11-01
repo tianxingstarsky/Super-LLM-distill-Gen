@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from lib.contexts.datasets.infrastructure.control_text import ControlTextAdapter, SCHEMA
+from lib.contexts.datasets.api import default_control_text_config, preview_control_text
 
 
 def _configuration():
@@ -119,3 +120,45 @@ def test_conflicting_or_cascading_configuration_is_rejected(change):
 def test_empty_rule_list_is_a_noop():
     adapter = ControlTextAdapter({"schema": SCHEMA, "enabled": True, "rules": []})
     assert adapter.mark("Desired oververbosity 5") == ("Desired oververbosity 5", [])
+
+
+def test_v2_mark_only_preserves_every_character_and_records_original_spans():
+    configuration = default_control_text_config()
+    assert configuration["schema"] == "shujian.control-text-adaptation/v2"
+    original = "我先核对。Desired oververbosity 5. [[SJ_REASONING_EFFORT]]\n完整推理仍在。"
+    before = deepcopy(configuration)
+    adapter = ControlTextAdapter(configuration)
+    marked, annotations = adapter.mark(original)
+    assert marked == original
+    assert [annotation["original"] for annotation in annotations] == [
+        "Desired oververbosity 5", "[[SJ_REASONING_EFFORT]]"]
+    assert all(original[row["start"]:row["end"]] == row["original"] for row in annotations)
+    adapted, receipt = adapter.apply(original)
+    assert adapted == original
+    assert receipt["source_control_edits"] == []
+    assert receipt["control_text_replacements"] == 0
+    assert receipt["source_control_annotations"] == annotations
+    assert adapter.mark(marked) == (marked, annotations)
+    assert adapter.apply(adapted) == (adapted, receipt)
+    assert configuration == before
+
+
+def test_v2_explicit_target_replaces_literal_and_legacy_marker_but_marking_does_not():
+    configuration = default_control_text_config()
+    configuration["rules"][0]["replacement"] = "按需展开"
+    original = "Desired oververbosity 5. [[SJ_OUTPUT_VERBOSITY:5]]。完整推理。"
+    adapter = ControlTextAdapter(configuration)
+    assert adapter.mark(original)[0] == original
+    preview = preview_control_text(configuration, original)
+    assert preview["marked_text"] == original
+    assert preview["transformed_text"] == "按需展开. 按需展开。完整推理。"
+    assert preview["receipt"]["control_text_replacements"] == 2
+    assert len(preview["receipt"]["source_control_annotations"]) == 2
+    assert all(row["replacement"] == "按需展开" for row in preview["receipt"]["source_control_edits"])
+    with pytest.raises(ValueError, match="control_text_reference_in_task_content"):
+        adapter.apply(original, task_contents=["解释 desired verbosity 5"])
+    configuration["enabled"] = False
+    disabled = preview_control_text(configuration, original, task_contents=[original])
+    assert disabled["marked_text"] == disabled["transformed_text"] == original
+    assert disabled["receipt"]["source_control_annotations"] == []
+    assert disabled["match_count"] == 0

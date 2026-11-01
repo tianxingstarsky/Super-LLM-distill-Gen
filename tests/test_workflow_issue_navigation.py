@@ -295,8 +295,15 @@ def test_incomplete_output_rules_open_their_node_and_keep_unrelated_drafts():
     ui.text_area(key=source_prompt).set_value("Preserve these generation instructions.").run()
     assert not ui.button(key="workflow-create:fixture").disabled
     prefix = "control-text-ui:fixture:sft"
-    ui.toggle(key=f"{prefix}:all:enabled").set_value(True).run()
-    ui.text_input(key=f"{prefix}:0:marker").set_value("").run()
+    # Recover a previously saved invalid configuration. New edits cannot
+    # produce this state because an explicit valid commit is now required.
+    from lib.contexts.datasets.api import default_control_text_config
+    invalid = default_control_text_config()
+    invalid["rules"][0]["marker"] = ""
+    draft = dict(ui.session_state["workflow-form-draft:fixture"])
+    draft["workflow-control-text:fixture:sft"] = invalid
+    ui.session_state["workflow-form-draft:fixture"] = draft
+    ui.run()
     assert not ui.exception
     assert ui.button(key="workflow-create:fixture").disabled
     ui.button(key="fixture-node:ingest").click().run()
@@ -308,7 +315,10 @@ def test_incomplete_output_rules_open_their_node_and_keep_unrelated_drafts():
     assert ui.text_area(key="workflow-open-brief:fixture").value == brief
     assert ui.session_state["workflow-form-draft:fixture"][source_prompt] == "Preserve these generation instructions."
     assert ui.button(key="workflow-create:fixture").disabled
+    ui.button(key=f"{prefix}:edit").click().run()
     ui.text_input(key=f"{prefix}:0:marker").set_value("[[RESTORED_VERBOSITY]]").run()
+    assert ui.button(key="workflow-create:fixture").disabled
+    ui.button(key=f"{prefix}:save").click().run()
     assert not ui.exception
     assert not any(button.key == key for button in ui.button)
     assert not ui.button(key="workflow-create:fixture").disabled

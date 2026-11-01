@@ -2,17 +2,14 @@
 
 只测试本模块的纯函数与事件处理（不依赖 Streamlit 运行时、不启动 review_center HTTP、
 不触碰真实数据库）：渲染安全性、本地图片作用域、工具元数据不截断、save/submit/ai
-闸门与幂等去重。临时图片写入 F:\\无项目工作文件夹\\tools\\tmp（存在时），否则用
-pytest 的 tmp_path。
+闸门与幂等去重。临时图片使用 pytest 的 tmp_path，由 pytest 统一隔离和管理。
 """
 from __future__ import annotations
 
 import base64
 import json
 import pathlib
-import shutil
 import sys
-from uuid import uuid4
 
 import pytest
 
@@ -23,23 +20,14 @@ if str(ROOT) not in sys.path:
 from lib import review_editor as editor  # noqa: E402
 from lib import review_workspace as rw  # noqa: E402
 
-F_TMP_ROOT = pathlib.Path("F:/无项目工作文件夹/tools/tmp")
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
 DATASET = "rollout_review"
 
 
 @pytest.fixture
 def tmp_area(tmp_path):
-    """测试临时目录：优先 F 盘 tools/tmp（项目约定），否则退回 pytest tmp_path。"""
-    if F_TMP_ROOT.parent.exists():
-        area = F_TMP_ROOT / f"review-workspace-{uuid4().hex[:10]}"
-        area.mkdir(parents=True, exist_ok=True)
-        try:
-            yield area
-        finally:
-            shutil.rmtree(area, ignore_errors=True)
-    else:
-        yield tmp_path
+    """在 pytest 管理的独立临时目录中创建测试图片。"""
+    return tmp_path
 
 
 # ── 假后端 / 假闸门 ──────────────────────────────────────────────────────────

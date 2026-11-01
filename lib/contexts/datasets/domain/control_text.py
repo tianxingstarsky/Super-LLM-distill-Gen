@@ -13,6 +13,7 @@ import re
 
 
 SCHEMA = "shujian.control-text-adaptation/v1"
+CURRENT_SCHEMA = "shujian.control-text-adaptation/v2"
 
 
 def _nonempty_text(value: object) -> bool:
@@ -31,18 +32,20 @@ def _literal_pattern(text: str) -> str:
 class ControlTextAdapter:
     """Snapshot caller-owned literal rules; never change source messages.
 
-    ``replacement=None`` retains a rule's marker. Empty ``matches`` supports
-    marker-only adaptation. Disabling the configuration bypasses every text
-    rule, including existing markers; it does not disable model thinking.
+    In v2, ``replacement=None`` annotates original spans without changing text.
+    V1 retains its historical literal-to-placeholder behavior for frozen tasks.
+    Empty ``matches`` supports existing-marker adaptation. Disabling a rule
+    bypasses it; disabling the configuration does not disable model thinking.
     """
 
     def __init__(self, configuration: Mapping):
         if (not isinstance(configuration, Mapping)
-                or configuration.get("schema") != SCHEMA
+                or configuration.get("schema") not in (SCHEMA, CURRENT_SCHEMA)
                 or type(configuration.get("enabled")) is not bool
                 or set(configuration) - {"schema", "enabled", "rules"}):
             raise ValueError("invalid_control_text_configuration")
         self._configuration = deepcopy(dict(configuration))
+        self._annotations_only = configuration["schema"] == CURRENT_SCHEMA
         self._enabled = configuration["enabled"]
         self._rules: dict[str, dict] = {}
         self._tokens: dict[str, tuple[str, bool]] = {}
@@ -114,10 +117,14 @@ class ControlTextAdapter:
 
     def _transform(self, text: str, *, target: bool) -> tuple[str, dict, set[str]]:
         edits = []
+        annotations = []
         replacements = 0
         matched_rules: set[str] = set()
+        metadata = {"source_control_edits": edits, "control_text_replacements": 0}
+        if self._annotations_only:
+            metadata["source_control_annotations"] = annotations
         if not self._enabled or self._pattern is None:
-            return text, {"source_control_edits": edits, "control_text_replacements": 0}, matched_rules
+            return text, metadata, matched_rules
 
         def replace(match: re.Match[str]) -> str:
             nonlocal replacements
@@ -126,6 +133,21 @@ class ControlTextAdapter:
             rule = self._rules[identity]
             marker = rule["marker"]
             matched_rules.add(identity)
+            replacement = rule.get("replacement") if target else None
+            if self._annotations_only:
+                annotation = {"start": match.start(), "end": match.end(), "original": original,
+                              "marker": marker, "rule_id": identity,
+                              "evidence_kind": "observed_self_description",
+                              "upstream_control_verified": False}
+                for key in ("field", "observed_value"):
+                    if key in rule:
+                        annotation[key] = rule[key]
+                annotations.append(annotation)
+                if replacement is None:
+                    return original
+                replacements += 1
+                edits.append({**annotation, "replacement": replacement})
+                return replacement
             if not is_marker:
                 edit = {"start": match.start(), "end": match.end(), "original": original,
                         "replacement": marker, "rule_id": identity,
@@ -134,26 +156,26 @@ class ControlTextAdapter:
                     if key in rule:
                         edit[key] = rule[key]
                 edits.append(edit)
-            replacement = rule.get("replacement") if target else None
             if replacement is not None:
                 replacements += 1
                 return replacement
             return marker
 
         adapted = self._pattern.sub(replace, text)
-        return adapted, {"source_control_edits": edits, "control_text_replacements": replacements}, matched_rules
+        metadata["control_text_replacements"] = replacements
+        return adapted, metadata, matched_rules
 
     def mark(self, text: str) -> tuple[str, list[dict]]:
-        """Insert portable markers only; offsets refer to the original text."""
+        """Return text and original-span annotations (v1: placeholder edits)."""
         adapted, metadata, _ = self._transform(text, target=False)
-        return adapted, metadata["source_control_edits"]
+        return adapted, metadata["source_control_annotations" if self._annotations_only else "source_control_edits"]
 
     def apply(self, text: str, *, task_contents=()) -> tuple[str, dict]:
         """Adapt current reasoning, rejecting references inside task content.
 
-        Literal-to-marker edits describe the intermediate view; the replacement
-        count also includes markers already present in the input. The original
-        text stays available to the caller, regardless of either transformation.
+        V2 reports original-span annotations separately from actual replacements;
+        mark-only rules never rewrite text. V1 receipts remain unchanged. The
+        replacement count includes markers already present in the input.
         """
         adapted, metadata, matched_rules = self._transform(text, target=True)
         if matched_rules:
@@ -166,7 +188,7 @@ class ControlTextAdapter:
 
 
 _DEFAULT_CONFIGURATION = {
-    "schema": SCHEMA,
+    "schema": CURRENT_SCHEMA,
     "enabled": True,
     "rules": [
         {
@@ -177,7 +199,7 @@ _DEFAULT_CONFIGURATION = {
         },
         {
             "id": "reasoning-effort-reference", "enabled": True, "matches": [],
-            "marker": "[[SJ_REASONING_EFFORT]]", "replacement": "思考已开启",
+            "marker": "[[SJ_REASONING_EFFORT]]", "replacement": None,
             "field": "reasoning_reference",
         },
     ],
@@ -185,7 +207,7 @@ _DEFAULT_CONFIGURATION = {
 
 
 def default_control_text_config() -> dict:
-    """Return an editable copy of the built-in exact-match example."""
+    """Return v2 defaults: annotate spans, never replace text implicitly."""
     return deepcopy(_DEFAULT_CONFIGURATION)
 
 

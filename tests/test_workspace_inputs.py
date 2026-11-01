@@ -165,6 +165,19 @@ def test_legacy_rollout_dir_env_resolution_in_fresh_process(tmp_path):
     assert result.stdout.strip() == str(tmp_path / "env-dir")
 
 
+def test_default_rollout_dir_uses_current_user_home(tmp_path):
+    """默认配置跟随当前用户目录，不依赖发布者的本机位置。"""
+    profile = tmp_path / "isolated-profile"
+    env = dict(os.environ)
+    env.pop("ROLLOUT_DIR", None)
+    env.update(HOME=str(profile), USERPROFILE=str(profile), PYTHONPATH=str(ROOT))
+    code = "import sys; sys.path.insert(0, 'scripts'); import import_rollout; print(import_rollout.ROLLOUT_DIR)"
+    result = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert pathlib.Path(result.stdout.strip()) == profile / ".zcode" / "cli" / "rollout"
+
+
 # ── 枚举排除 .dataforge 产物（输出目录就在所选文件夹内也不自我摄取） ────────
 def test_import_never_ingests_dataforge_outputs(ws_env, tmp_path, monkeypatch):
     from lib import cli

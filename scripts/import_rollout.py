@@ -33,7 +33,7 @@ from lib.pipeline_config import load_pipeline_config  # noqa: E402
 
 _rcfg = load_pipeline_config("rollout", ROOT)["rollout"]
 # 历史默认数据源（default 工作区回退用）：configs/pipelines/rollout.yaml 或环境变量 ROLLOUT_DIR
-ROLLOUT_DIR = pathlib.Path(os.environ.get("ROLLOUT_DIR", _rcfg["dir"]))
+ROLLOUT_DIR = pathlib.Path(os.environ.get("ROLLOUT_DIR", _rcfg["dir"])).expanduser()
 ROLLOUT_PATTERN = _rcfg["pattern"]
 OUT_DIR = ROOT / "data" / "output"
 COT_STYLE = "separated"

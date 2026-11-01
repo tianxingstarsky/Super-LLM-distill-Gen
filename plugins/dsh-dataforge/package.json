@@ -1,6 +1,6 @@
 {
   "name": "dsh-shujian-dataforge",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Independently installed DeepSeek Harness controller for DataForge protocol v1",
   "type": "module",
   "main": "index.mjs",

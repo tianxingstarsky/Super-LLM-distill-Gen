@@ -1,123 +1,136 @@
-"""Node text rules remain editable, persisted and isolated without model calls."""
+"""Explicit edits cannot corrupt the saved rules or their recovery copy."""
 from copy import deepcopy
-
 import pytest
 from streamlit.testing.v1 import AppTest
 
-
 @pytest.fixture(scope="session", autouse=True)
 def mock_llm_server():
-    """This form uses local text adaptation only."""
     yield
 
-
 SCRIPT = '''
-from copy import deepcopy
 import streamlit as st
-from lib.presentation.streamlit.workflow_control_text_settings import (
-    render_control_text_settings, control_text_snapshot,
-)
-
-def save_field(workspace, key):
-    draft_key = f"workflow-form-draft:{workspace}"
-    st.session_state[draft_key] = {
-        **st.session_state.get(draft_key, {}), key: deepcopy(st.session_state[key]),
-    }
-
+from lib.domain.creation_draft import validate_creation_draft
+from lib.presentation.streamlit.workflow_page import _commit_draft_fields
+from lib.presentation.streamlit.workflow_control_text_settings import render_control_text_settings, control_text_snapshot
+class DraftStore:
+    def replace(self, values):
+        if st.session_state.get("fail-save"):
+            raise OSError("fixture unavailable")
+        st.session_state["disk"] = validate_creation_draft(values)
+st.session_state["workflow-draft-application:fixture"] = DraftStore()
 node = st.radio("Node", ("sft", "multiturn", "cot"), key="fixture-node")
-render_control_text_settings(node, "fixture", save_field=save_field)
-try:
-    st.session_state["snapshot"] = control_text_snapshot("fixture", ("sft", "multiturn", "cot"))
-    st.session_state["snapshot_error"] = ""
-except ValueError as error:
-    st.session_state["snapshot_error"] = str(error)
+render_control_text_settings(node, "fixture", save_fields=_commit_draft_fields)
+st.session_state["snapshot"] = control_text_snapshot("fixture", ("sft", "multiturn", "cot"))
 '''
-
 
 def _key(field, *, node="sft", rule=0):
     return f"control-text-ui:fixture:{node}:{rule}:{field}"
 
+def _button(ui, name, node="sft"):
+    return ui.button(key=f"control-text-ui:fixture:{node}:{name}")
 
 def _saved(ui, node="sft"):
     return ui.session_state["workflow-form-draft:fixture"][f"workflow-control-text:fixture:{node}"]
 
+def _initial_save(ui):
+    _button(ui, "edit").click().run()
+    ui.toggle(key=_key("enabled", rule="all")).set_value(True).run()
+    _button(ui, "save").click().run()
 
-def test_opening_is_read_only_and_edits_save_complete_rule_with_local_preview():
+def test_read_only_edit_preview_cancel_and_explicit_save():
     ui = AppTest.from_string(SCRIPT).run()
     assert not ui.exception
     assert ui.session_state["snapshot"] == {}
-    assert not ui.toggle(key=_key("enabled", rule="all")).value
+    assert ui.toggle(key=_key("enabled", rule="all")).disabled
+    assert ui.text_input(key=_key("marker")).disabled
+    _button(ui, "edit").click().run()
     ui.toggle(key=_key("enabled", rule="all")).set_value(True).run()
-    ui.text_input(key=_key("id")).set_value("my-verbosity").run()
-    ui.text_area(key=_key("matches")).set_value("Desired oververbosity 5\ncustom verbosity").run()
     ui.text_input(key=_key("marker")).set_value("[[MY_VERBOSITY]]").run()
+    assert ui.session_state["snapshot"] == {}
+    assert ui.code[0].value == "Desired oververbosity 5. I will check the evidence before answering."
+    _button(ui, "cancel").click().run()
+    assert ui.session_state["snapshot"] == {}
+    assert ui.text_input(key=_key("marker")).value == "[[SJ_OUTPUT_VERBOSITY:5]]"
+    _initial_save(ui)
+    assert _saved(ui)["schema"].endswith("/v2")
+    assert _saved(ui)["enabled"]
+    assert ui.session_state["disk"] == ui.session_state["workflow-form-draft:fixture"]
+    assert ui.text_input(key=_key("marker")).disabled
+
+def test_invalid_edit_never_overwrites_saved_rule_and_failure_keeps_retry():
+    ui = AppTest.from_string(SCRIPT).run()
+    _initial_save(ui)
+    saved = deepcopy(_saved(ui))
+    disk = deepcopy(ui.session_state["disk"])
+    _button(ui, "edit").click().run()
     ui.radio(key=_key("mode")).set_value("replace").run()
-    assert ui.error  # Incomplete target is retained until the user finishes it.
-    ui.text_area(key=_key("replacement")).set_value("Thinking is enabled").run()
-    assert not ui.exception
-    assert not ui.error
-    saved = _saved(ui)
-    assert saved["rules"][0] == {
-        "id": "my-verbosity", "enabled": True,
-        "matches": ["Desired oververbosity 5", "custom verbosity"],
-        "marker": "[[MY_VERBOSITY]]", "replacement": "Thinking is enabled",
-    }
-    assert "field" not in saved["rules"][0]
-    assert "observed_value" not in saved["rules"][0]
+    assert ui.error and _button(ui, "save").disabled
+    assert _saved(ui) == saved
     assert ui.session_state["snapshot"]["sft"] == saved
-    assert any("Thinking is enabled. I will" in code.value for code in ui.code)
-    assert any("[[MY_VERBOSITY]]. I will" in code.value for code in ui.code)
-
-
-def test_master_off_keeps_edits_and_restore_does_not_turn_it_on():
-    ui = AppTest.from_string(SCRIPT).run()
-    ui.toggle(key=_key("enabled", rule="all")).set_value(True).run()
-    ui.toggle(key=_key("enabled", rule="all")).set_value(False).run()
-    ui.text_input(key=_key("marker")).set_value("[[MY_DISABLED_RULE]]").run()
-    assert not _saved(ui)["enabled"]
-    assert _saved(ui)["rules"][0]["marker"] == "[[MY_DISABLED_RULE]]"
-    assert ui.code[0].value.startswith("Desired oververbosity 5.")
-    ui.button(key="control-text-ui:fixture:sft:restore").click().run()
-    assert not _saved(ui)["enabled"]
-    assert _saved(ui)["rules"][0]["marker"] == "[[SJ_OUTPUT_VERBOSITY:5]]"
-    ui.button(key="control-text-ui:fixture:sft:add").click().run()
-    assert len(_saved(ui)["rules"]) == 3
-    ui.button(key="control-text-ui:fixture:sft:remove").click().run()
-    assert len(_saved(ui)["rules"]) == 2
+    ui.text_area(key=_key("replacement")).set_value("按需说明细节").run()
+    ui.session_state["fail-save"] = True
+    _button(ui, "save").click().run()
+    assert _saved(ui) == saved and ui.session_state["disk"] == disk
+    assert any("保存失败" in error.value for error in ui.error)
+    assert ui.text_area(key=_key("replacement")).value == "按需说明细节"
+    ui.session_state["fail-save"] = False
+    _button(ui, "save").click().run()
+    assert _saved(ui)["rules"][0]["replacement"] == "按需说明细节"
+    assert ui.session_state["disk"]["workflow-control-text-previous:fixture:sft"] == saved
     assert not ui.exception
 
-
-def test_node_switch_and_reloaded_draft_preserve_separate_rules():
+def test_previous_version_survives_reload_and_requires_confirmed_restore():
     ui = AppTest.from_string(SCRIPT).run()
+    _initial_save(ui)
+    first = deepcopy(_saved(ui))
+    _button(ui, "edit").click().run()
+    ui.text_input(key=_key("marker")).set_value("[[SECOND_VERSION]]").run()
+    _button(ui, "save").click().run()
+    second = deepcopy(_saved(ui))
+    restored = AppTest.from_string(SCRIPT)
+    restored.session_state["workflow-form-draft:fixture"] = deepcopy(ui.session_state["disk"])
+    restored.session_state["ui_language"] = "en"
+    restored.run()
+    _button(restored, "previous").click().run()
+    assert _saved(restored) == second
+    assert restored.text_input(key=_key("marker")).value == first["rules"][0]["marker"]
+    _button(restored, "save").click().run()
+    assert _saved(restored) == first
+    assert restored.session_state["disk"]["workflow-control-text-previous:fixture:sft"] == second
+    assert not restored.exception
+
+def test_node_switch_and_reset_keep_unsaved_changes_out_of_tasks():
+    ui = AppTest.from_string(SCRIPT).run()
+    _initial_save(ui)
+    first = deepcopy(_saved(ui))
+    _button(ui, "edit").click().run()
     ui.text_input(key=_key("marker")).set_value("[[SFT_CONTROL]]").run()
     ui.radio(key="fixture-node").set_value("multiturn").run()
     assert "multiturn" not in ui.session_state["snapshot"]
-    ui.text_input(key=_key("marker", node="multiturn")).set_value("[[DIALOGUE_CONTROL]]").run()
+    assert ui.text_input(key=_key("marker", node="multiturn")).disabled
     ui.radio(key="fixture-node").set_value("sft").run()
     assert ui.text_input(key=_key("marker")).value == "[[SFT_CONTROL]]"
-    restored = AppTest.from_string(SCRIPT)
-    restored.session_state["workflow-form-draft:fixture"] = deepcopy(ui.session_state["workflow-form-draft:fixture"])
-    restored.session_state["ui_language"] = "en"
-    restored.run()
-    assert not restored.exception
-    assert restored.text_input(key=_key("marker")).value == "[[SFT_CONTROL]]"
-    assert restored.toggle(key=_key("enabled", rule="all")).label == "Enable output text adaptation"
-    restored.radio(key="fixture-node").set_value("multiturn").run()
-    assert restored.text_input(key=_key("marker", node="multiturn")).value == "[[DIALOGUE_CONTROL]]"
+    _button(ui, "restore").click().run()
+    assert not ui.toggle(key=_key("enabled", rule="all")).value
+    assert _saved(ui) == first
+    _button(ui, "cancel").click().run()
+    assert _saved(ui) == first
 
-
-def test_invalid_rule_is_saved_and_blocks_snapshot_until_disabled_or_fixed():
-    ui = AppTest.from_string(SCRIPT).run()
-    ui.toggle(key=_key("enabled", rule="all")).set_value(True).run()
-    ui.text_input(key=_key("marker")).set_value("").run()
-    assert not ui.exception
-    assert ui.error
-    assert _saved(ui)["rules"][0]["marker"] == ""
-    assert ui.session_state["snapshot_error"].startswith("sft:")
-    ui.radio(key="fixture-node").set_value("cot").run()
-    ui.radio(key="fixture-node").set_value("sft").run()
-    assert ui.text_input(key=_key("marker")).value == ""
-    ui.toggle(key=_key("enabled")).set_value(False).run()
-    assert not ui.session_state["snapshot_error"]
-    assert not _saved(ui)["rules"][0]["enabled"]
-    assert _saved(ui)["rules"][0]["marker"] == ""
+def test_legacy_configuration_only_upgrades_when_saved():
+    from lib.contexts.datasets.api import default_control_text_config
+    old = default_control_text_config()
+    old["schema"] = "shujian.control-text-adaptation/v1"
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state["workflow-form-draft:fixture"] = {"workflow-control-text:fixture:sft": old}
+    ui.run()
+    assert ui.warning
+    assert ui.code[0].value.startswith("[[SJ_OUTPUT_VERBOSITY:5]]")
+    _button(ui, "edit").click().run()
+    assert _saved(ui) == old
+    assert ui.code[0].value.startswith("Desired oververbosity 5")
+    _button(ui, "cancel").click().run()
+    assert _saved(ui) == old
+    _button(ui, "edit").click().run()
+    _button(ui, "save").click().run()
+    assert _saved(ui)["schema"].endswith("/v2")
+    assert ui.session_state["disk"]["workflow-control-text-previous:fixture:sft"] == old

@@ -32,7 +32,7 @@ The original source fixture and its report SHA-256 remain unchanged. Model reque
 
 - Final main suite: 10,424 passed, zero failures, 51 pre-existing environment/platform skips. Its source-file snapshot matches the delivered code.
 - Console interaction suite: 227 passed, zero failures or skips.
-- The existing isolated runtime at `F:/docling-local-validation/modern-venv` has Docling 2.140.0 and Docling-core 2.102.0. Its six relevant parser suites passed all 106 tests. These cover all 50 Docling-related skipped test/module entries from the main environment. The remaining skip is a POSIX signal test; Windows termination already forcibly stops the process.
+- The existing isolated runtime at `<docling-runtime>` has Docling 2.140.0 and Docling-core 2.102.0. Its six relevant parser suites passed all 106 tests. These cover all 50 Docling-related skipped test/module entries from the main environment. The remaining skip is a POSIX signal test; Windows termination already forcibly stops the process.
 - Regression processes ran sequentially with external socket connections blocked. No provider was called by these tests.
 - The bounded version 5 live calculator recovery used two V4.1-Flash turns. The first retained a count/proportion input error. The second corrected that entry after reading tool feedback. Four conditional arithmetic receipts were retained, with no candidate edits or sample-level approval. This is a tool-recovery check, not a new whole-sample pass-rate measurement.
 - Earlier live trials retain a genuine ratio-direction finding, a semantic reviewer disagreement, and an output-limit failure. They are labelled by their actual runtime revision; none is relabelled as a successful version 5 review.

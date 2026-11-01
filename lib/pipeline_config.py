@@ -17,7 +17,7 @@ DEFAULTS: Dict[str, Any] = {
     "doc2corpus": {"chunk_size": 2000, "overlap": 0},
     "distill": {"llm_check_n": 5, "judge_temperature": 0.2},
     "review": {"pass_threshold": 0.9, "min_reviewed": 10},
-    "rollout": {"dir": r"C:\Users\tianx\.zcode\cli\rollout", "pattern": "model-io-sess_*.jsonl", "truncate_chars": 8000},
+    "rollout": {"dir": "~/.zcode/cli/rollout", "pattern": "model-io-sess_*.jsonl", "truncate_chars": 8000},
 }
 
 

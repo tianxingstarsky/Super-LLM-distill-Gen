@@ -43,7 +43,8 @@ def test_preview_counts_existing_markers_once_and_preserves_defaults():
     preview = preview_control_text(config, original)
     assert preview["match_count"] == 2
     assert preview["original_text"] == original
-    assert preview["transformed_text"] == "适当展开. 思考已开启"
+    assert preview["marked_text"] == original
+    assert preview["transformed_text"] == "适当展开. [[SJ_REASONING_EFFORT]]"
     config["enabled"] = False
     preview = preview_control_text(config, original)
     assert preview["match_count"] == 0 and preview["transformed_text"] == original
@@ -58,6 +59,7 @@ def test_protocol_freeze_checkpoint_export_and_lazy_training_use_node_rules(tmp_
     output = tmp_path / "output"
     configs = {node: default_control_text_config() for node in ("sft", "multiturn", "cot")}
     configs["multiturn"]["enabled"] = False
+    configs["cot"]["schema"] = "shujian.control-text-adaptation/v1"
     request = validate_request({"protocol": PROTOCOL, "version": VERSION,
         "request_id": "node-controls", "action": "runs.create", "params": {"recipe": {
             "sources": [str(source)], "targets": ["sft", "multiturn", "cot"],
@@ -99,10 +101,12 @@ def test_protocol_freeze_checkpoint_export_and_lazy_training_use_node_rules(tmp_
     for record in exported:
         assert to_trl_sft(record)["control_text_config"] == record["control_text_config"]
     examples = list(iter_training_examples(exported, Encoder(), default_effort="high"))
-    assert examples[0]["text"].startswith("[[SJ_OUTPUT_VERBOSITY:5]]")
+    assert examples[0]["text"].startswith("Desired oververbosity 5")
     assert examples[1]["text"].startswith("Desired oververbosity 5")
     assert examples[2]["text"].startswith("[[SJ_OUTPUT_VERBOSITY:5]]")
-    assert examples[0]["metadata"]["source_control_edits"][0]["original"] == "Desired oververbosity 5"
+    assert examples[0]["metadata"]["source_control_edits"] == []
+    assert examples[0]["metadata"]["source_control_annotations"][0]["original"] == "Desired oververbosity 5"
+    assert examples[2]["metadata"]["source_control_edits"][0]["original"] == "Desired oververbosity 5"
     assert exported == before
 
 
@@ -110,3 +114,14 @@ def test_absent_configuration_keeps_legacy_artifact_shape():
     record = {"messages": [{"role": "user", "content": "question"},
                            {"role": "assistant", "content": "answer", "reasoning_content": "reasoning"}]}
     assert set(preferred_training_record("sft", record)) == {"messages"}
+
+
+def test_previous_node_configuration_can_restore_v1_without_migrating_it():
+    current = default_control_text_config()
+    previous = {**deepcopy(current), "schema": "shujian.control-text-adaptation/v1"}
+    draft = {"workflow-control-text:default:sft": current,
+             "workflow-control-text-previous:default:sft": previous}
+    assert validate_creation_draft(draft) == draft
+    invalid = {"workflow-control-text-previous:default:unknown-node": previous}
+    with pytest.raises(ValueError, match="invalid_creation_draft"):
+        validate_creation_draft(invalid)

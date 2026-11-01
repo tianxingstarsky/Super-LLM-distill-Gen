@@ -8,14 +8,16 @@
 
 ## 在节点直接编辑控制文字
 
-点击 SFT、多轮或历史 CoT 节点 → **输出适配**，即可开启/关闭整套规则、逐条开关、
-增删规则、改匹配文字、标记和目标文字，或恢复默认模板。无需手动编辑 JSON。
-使用本地预览检查原文、标记与最终变换；这里不调用模型。每个节点的“使用说明”解释
+点击 SFT、多轮或历史 CoT 节点 → **输出适配**。默认只读，点击编辑后可开关规则、
+增删规则、改匹配文字、标记名和目标文字。先预览，通过校验后保存才生效；取消修改
+或保存失败保持原配置。上一版配置和默认模板也先载入编辑区，确认保存后恢复，无需改 JSON。
+新版“仅标记”完整保留正文，把命中范围和标记名另存为标注；只有明确选择替换才改训练读取文字。
+本地预览不调用模型。每个节点的“使用说明”解释
 适用条件与常见故障，Agent 可查 [操作与排错指南](agent-operations.md)。
 
 配置随新配方冻结，原生训练记录携带所属节点与配置快照；训练读取器自动采用记录的规则，
 调用方显式配置优先。适配只改变读取视图，不改原生推理、回答或旧任务；
-总开关关闭只停文字适配，不关闭模型思考。未完成的规则可保存草稿，冲突会在启动前提示修正。
+总开关关闭只停文字适配，不关闭模型思考。未保存的编辑不会进入新任务，旧冻结配置不热改。
 
 ## 生成时：平台选择与上游参数分开
 
@@ -84,9 +86,11 @@ controlled_record = with_training_control(training_record, "high")
 
 ## 第一版：Qwen3.5 文本适配
 
-本机完整 Qwen3.5-4B 的 safetensors 权重目录已确认为 `F:\wavefit\qwen35_weights`。另外存在 Ollama `qwen3.5:0.8b` Q8_0，早期模板检查使用过这一份；它与完整 4B 训练权重分别管理。加载示例接收用户指定的 Qwen3.5 tokenizer 目录，不固定权重大小。
+文中的 `<QWEN35_MODEL_DIR>` 和 `<TRAINING_ENV>` 分别代表本机模型目录与独立训练环境，需替换成使用者自己的位置。
 
-项目 `.venv` 中的 Transformers 4.57 可以完成 tokenizer 预处理，但没有 Qwen3.5 模型架构实现，不能据此声称权重能在该环境中训练。本机 `C:\Users\tianx\.conda\envs\myenv\python.exe` 已有 Transformers 5.16 和带 CUDA 的 PyTorch 2.11，可作为后续训练环境。**本轮只验证加载转换，没有启动微调，也没有训练后效果结论。**
+本机完整 Qwen3.5-4B 的 safetensors 权重目录已确认为 `<QWEN35_MODEL_DIR>`。另外存在 Ollama `qwen3.5:0.8b` Q8_0，早期模板检查使用过这一份；它与完整 4B 训练权重分别管理。加载示例接收用户指定的 Qwen3.5 tokenizer 目录，不固定权重大小。
+
+项目 `.venv` 中的 Transformers 4.57 可以完成 tokenizer 预处理，但没有 Qwen3.5 模型架构实现，不能据此声称权重能在该环境中训练。本机 `<TRAINING_ENV>/Scripts/python.exe` 已有 Transformers 5.16 和带 CUDA 的 PyTorch 2.11，可作为后续训练环境。**本轮只验证加载转换，没有启动微调，也没有训练后效果结论。**
 
 Qwen3.5 的公开模板使用 `enable_thinking` 开关。本适配器直接把平台五档映射到这个原生开关，不注入额外五档 system 提示，也不要求模型重新学习五档。官方模板和模型说明分别见 [Qwen3.5-4B 模板](https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/chat_template.jinja) 与 [模型卡](https://huggingface.co/Qwen/Qwen3.5-4B)。本地验收另记录实际模板摘要，避免上游 main 更新后混用结论。
 
@@ -113,9 +117,9 @@ Qwen3.5 的公开模板使用 `enable_thinking` 开关。本适配器直接把�
 后续授权的两条 V4.1-Flash 实测均未产生标记，仍复述 verbosity 5，实际替换为零。
 思考强度标记不能自动覆盖输出详尽程度自述；不能把这次结果宣传为标记治理成功。
 
-### DeepSeek 固定文本：程序标记，加载时转换
+### 旧版 DeepSeek 占位符转换：保留兼容
 
-选择 `source_control_profile="deepseek-v4.1-flash-control/v1"` 后，程序直接将已观察到的
+下面是旧 v1 接口的行为，不是新版“仅标记”。选择 `source_control_profile="deepseek-v4.1-flash-control/v1"` 后，程序直接将已观察到的
 `Desired oververbosity 5` 和 `desired verbosity 5` 替换为 `[[SJ_OUTPUT_VERBOSITY:5]]`。
 无需让模型重新输出。匹配保持大小写和词边界，不吞掉后续标点，不匹配 50、5.0、其它数值
 或未确认的表达。这里只处理当前监督助手轮的推理；源文件、用户原话和答案保持不变。
@@ -148,24 +152,25 @@ encoder = qwen35_training_encoder(
 
 ### 修改、停用和保存文字规则
 
-[control-text-deepseek.json](../scripts/training/control-text-deepseek.json) 是可编辑配置示例。
-复制后按自己的来源和目标模型修改，不需要改 Python：
+新配置使用 `shujian.control-text-adaptation/v2`，可从 `default_control_text_config()`
+取得独立副本。节点界面优先用于日常编辑；下表和代码供训练集成使用。
+[control-text-deepseek.json](../scripts/training/control-text-deepseek.json) 保留旧 v1 示例，
+其 null 仍表示转换成占位符。不要把旧语义当成新版仅标记，或改写冻结任务来升级。
 
 | 配置 | 效果 |
 | --- | --- |
 | 顶层 `enabled: false` | 完全关闭控制文字适配，保留原文和已有标记 |
 | 规则的 `enabled: false` | 只停用这条规则，其它启用规则继续工作 |
 | `matches` | 精确匹配的原文列表；区分大小写，不把它当正则执行 |
-| `marker` | 对应的固定标记 |
-| `replacement: null` | 只标记，不换成目标文字 |
+| `marker` | 标注中的稳定名称，用于定位和后续映射，不插入正文 |
+| `replacement: null` | 仅记录命中范围和标记名，正文每个字符都保留 |
 | `replacement: "目标文字"` | 同次读取时替换为该文字；空串不允许 |
-| `matches: []` | 只替换已存在的标记 |
+| `matches: []` | 只识别正文中已存在的标记；有明确目标文字才替换 |
 
 ```python
-import json
-from pathlib import Path
+from lib.contexts.datasets.api import default_control_text_config
 
-config = json.loads(Path("scripts/training/control-text-deepseek.json").read_text(encoding="utf-8"))
+config = default_control_text_config()  # v2, both defaults mark without replacing text.
 config["enabled"] = False  # Turn text adaptation off, not model thinking.
 encoder = qwen35_training_encoder(tokenizer, control_text_config=config)
 ```
@@ -180,8 +185,10 @@ encoder = qwen35_training_encoder(tokenizer, control_text_config=config)
 修改外部字典或文件只影响下一次创建的加载器，不热改当前批次。
 
 启用规则的冲突会在加载时提示。替换只扫描原输入一次，不把一条规则的输出继续交给另一条；
-重复读取已标记文本也会检查任务是否正在讨论该字段。`source_control_edits` 保存原位置与
-规则 ID，`control_text_replacements` 记录转换为目标文字的次数。原始任务、响应和导出不变。
+重复读取也会检查任务是否正在讨论该字段。v2 的 `source_control_annotations` 保存命中
+范围、原文、规则 ID 和标记名；`source_control_edits` 只记录明确替换，
+`control_text_replacements` 记录其次数。仅标记时后两者分别为空列表和零，正文保持原样。
+原始任务、响应和导出不变。旧 v1 继续使用原有行为和回执。
 
 适配器通过 Transformers 的 `apply_chat_template` 使用模型模板。当前接入的是文本 SFT 和多轮对话。工具、媒体、developer 角色、非开头的 system 消息不在本版支持范围内，会明确报错。连续开头的 system 内容按相同优先级合并。思考开启时目标助手缺少推理会报错，不补造；关闭时生成空 think 块，只监督答案。关闭只是本次加载视图的选择，原始记录中的完整推理不删除。
 
@@ -265,7 +272,7 @@ model_inputs = tokenizer(prompt, add_special_tokens=False, return_tensors="pt")
 
 ## 本机验收记录（2026-11-01）
 
-已用完整 4B 目录 `F:\wavefit\qwen35_weights` 的实际 tokenizer 和模板，以及之前找到的
+已用完整 4B 目录 `<QWEN35_MODEL_DIR>` 的实际 tokenizer 和模板，以及之前找到的
 0.8B 模板完成离线转换。默认五档输入一致、均开启思考；自定义 low=0 时使用官方空
 think 前缀且只监督答案。双轮中的两次助手推理分别获得完整监督，源记录不变；过长输入
 明确拒绝。4B 模板摘要为

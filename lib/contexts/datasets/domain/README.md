@@ -4,6 +4,13 @@
 literal rules and returns an in-memory view with original-span receipts. It performs
 no I/O or model calls. The public API exposes defaults, validation and local preview.
 Infrastructure's compatibility file forwards to this single implementation.
+New configurations use `shujian.control-text-adaptation/v2`. Mark-only mode
+keeps the complete text unchanged and records original Unicode spans and marker
+identities in `source_control_annotations`. Only an explicit target replacement
+edits the training view. Defaults perform no replacement, including existing
+thinking markers. `v1` configurations keep their historical placeholder behavior
+and receipt shape; stored tasks are never silently migrated. The old `SCHEMA`
+constant remains v1 for compatibility; new defaults use `CURRENT_SCHEMA`.
 `Qwen35TrainingEncoder` applies the record's frozen node rules at training read time;
 explicit caller configuration takes precedence. Source records and quality status
 remain unchanged. Controls are not inferred from natural-language descriptions.
