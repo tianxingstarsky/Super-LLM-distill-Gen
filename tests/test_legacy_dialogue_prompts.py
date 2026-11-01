@@ -68,6 +68,9 @@ def historical_run(tmp_path):
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = 8
+    # A pre-v9 resume predates mandatory design for new tasks. Its actor
+    # and answer prompts, rather than a current director, own the old loop.
+    recipe["qa_director"] = {"enabled": False}
     for key in ("node_prompts", "node_prompt_templates", "node_prompt_system",
                 "agent_experience_version", "agent_experience", "authored_role_projection_version"):
         recipe.pop(key)
@@ -89,7 +92,7 @@ def test_unfinished_legacy_plan_and_multiturn_calls_resume_with_original_assets(
     resumed = engine.resume(output, run_id, tmp_path, generator=writer, jev=reviewer)
     assert resumed["status"] == "completed", resumed.get("error")
     assert get("workflow.plan").version == "1.2.0"  # the current default differs
-    assert get("workflow.multiturn_user").version == "1.5.0"
+    assert get("workflow.multiturn_user").version == "1.7.0"
     assert len([call for call in writer.calls if call[0] == "workflow.plan"]) == (2 if failed_prompt == "workflow.plan" else 1)
     assert engine.read_json(path / "artifacts/multiturn.records.json")[0]["turn_count"] == 2
 

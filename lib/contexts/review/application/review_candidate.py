@@ -53,6 +53,39 @@ class ReviewCandidate:
             return [row]
         if target == "cot" and config.get("native_regeneration") is True:
             return self._port.regenerate_native(item)
+        from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
+        if (target == "multiturn" and self.recipe.get("native_dialogue_continuation_version") == 1
+                and is_initial_native_dialogue_failure(original)):
+            if not item.get("revision_context") or not self._port.authenticated_revision:
+                raise ValueError("native_dialogue_continuation_parent_not_authenticated")
+            if config["mode"] != "auto" or config["max_rounds"] < 1:
+                raise ValueError("native_dialogue_continuation_requires_explicit_auto_repair")
+            rows = self._port.continue_native_dialogue(item)
+            for revised in rows:
+                # Tool-feedback repair can stop before any dialogue assessment.
+                # Bind the actual coverage; never buy an extra pass here.
+                try:
+                    candidate_hash = digest(self._port.payload(target, revised))
+                except (KeyError, TypeError, ValueError):
+                    candidate_hash = None
+                reused = self.recipe.get("reuse_initial_native_response") is True
+                native = revised.get("native_generation", {})
+                feedback = native.get("review_guidance", native.get("tool_feedback"))
+                feedback_unassessed = isinstance(feedback, dict) and feedback.get("semantic_status") == "not_assessed"
+                revised["review_repair"] = {"mode": "auto", "node": "review", "attempts": 0 if reused else 1,
+                    "status": "not_assessed" if feedback_unassessed else
+                        "accepted" if revised.get("status") == "eligible" else "rejected",
+                    "score": None, "assessment": "not_assessed" if feedback_unassessed else "ordinary_multiturn_checks",
+                    "original_reason": original.get("reason"),
+                    "history": [{"action": "reuse_first_native_answer_for_diagnostic_continuation" if reused
+                        else "regenerate_first_native_answer_with_system_notes" if feedback_unassessed and "review_guidance" in native
+                        else "repair_first_native_answer_with_tool_feedback" if feedback_unassessed
+                        else "repair_first_native_answer_then_continue",
+                        "parent_sha256": digest(original)}],
+                    "candidate_sha256": candidate_hash,
+                    "config_sha256": digest(config)}
+                revised["_review_target"] = target
+            return rows
         row = _manual_patch(target, original, item)
         if item.get("revision_context"):
             row["revision_context"] = deepcopy(item["revision_context"])

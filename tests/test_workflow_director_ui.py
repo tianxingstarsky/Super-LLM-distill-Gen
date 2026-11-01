@@ -17,7 +17,6 @@ def mock_llm_server():
 
 
 def _director(ui, *, balanced=False):
-    ui.toggle(key="workflow-director-enabled:fixture").set_value(True).run()
     ui.button(key="fixture-node:director").click().run()
     assert not ui.exception
     if balanced:
@@ -25,27 +24,28 @@ def _director(ui, *, balanced=False):
         ui.selectbox(key="workflow-director-mode:fixture").set_value("balanced").run()
 
 
-def test_empty_draft_enables_separated_director_but_explicit_disabled_choice_is_preserved():
+def test_new_dialogue_draft_requires_director_even_when_an_old_draft_disabled_it():
     code = SCRIPT.replace("st.session_state.setdefault('workflow-director-enabled:fixture', False)", '')
     ui = AppTest.from_string(code).run()
     assert not ui.exception
-    assert ui.toggle(key='workflow-director-enabled:fixture').value is True
+    assert not any(toggle.key == 'workflow-director-enabled:fixture' for toggle in ui.toggle)
+    assert ui.session_state['workflow-director-enabled:fixture'] is True
     assert any(button.key == 'fixture-node:director' for button in ui.button)
-    assert ui.selectbox(key='workflow-node-prompt-selection:fixture:sft').value == 'workflow.sft_answer'
+    assert ui.selectbox(key='workflow-node-prompt-selection:fixture:sft').value == 'workflow.cot_native_joint'
     assert set(ui.session_state['workflow-node-bindings:fixture']['director']) == {'generation', 'question'}
-    ui.toggle(key='workflow-director-enabled:fixture').set_value(False).run()
-    saved = ui.session_state['workflow-form-draft:fixture']
+    saved = dict(ui.session_state['workflow-form-draft:fixture'])
+    saved['workflow-director-enabled:fixture'] = False
     restarted = AppTest.from_string(code)
     restarted.session_state['workflow-form-draft:fixture'] = saved
     restarted.run()
     assert not restarted.exception
-    assert restarted.toggle(key='workflow-director-enabled:fixture').value is False
-    assert not any(button.key == 'fixture-node:director' for button in restarted.button)
+    assert restarted.session_state['workflow-form-draft:fixture']['workflow-director-enabled:fixture'] is True
+    assert any(button.key == 'fixture-node:director' for button in restarted.button)
 
 
 def test_director_rules_type_weights_and_prompts_survive_node_changes():
     ui = AppTest.from_string(SCRIPT).run()
-    assert not any(button.key == "fixture-node:director" for button in ui.button)
+    assert any(button.key == "fixture-node:director" for button in ui.button)
     _director(ui, balanced=True)
     ui.number_input(key="workflow-director-batch:fixture").set_value(7).run()
     ui.number_input(key="workflow-director-history:fixture").set_value(3).run()
@@ -55,15 +55,16 @@ def test_director_rules_type_weights_and_prompts_survive_node_changes():
     prompt = "workflow-node-prompt:fixture:director:workflow.qa_director"
     ui.text_area(key=prompt).set_value("Custom batch planning instructions.").run()
     ui.button(key="fixture-node:sft").click().run()
-    assert ui.selectbox(key="workflow-node-prompt-selection:fixture:sft").value == "workflow.sft_answer"
+    assert ui.selectbox(key="workflow-node-prompt-selection:fixture:sft").value == "workflow.cot_native_joint"
     ui.button(key="fixture-node:director").click().run()
     assert ui.number_input(key="workflow-director-batch:fixture").value == 7
     assert ui.number_input(key="workflow-director-history:fixture").value == 3
     assert ui.number_input(key="workflow-director-weight:fixture:closed_book").value == 70
     assert ui.text_area(key="workflow-director-question-rules:fixture").value == "Cover boundary cases."
     assert ui.text_area(key=prompt).value == "Custom batch planning instructions."
-    ui.toggle(key="workflow-director-enabled:fixture").set_value(False).run()
+    ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["cpt"]).run()
     assert not any(button.key == "fixture-node:director" for button in ui.button)
+    ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["sft"]).run()
     _director(ui)
     assert ui.text_area(key=prompt).value == "Custom batch planning instructions."
 
@@ -76,7 +77,7 @@ def test_all_zero_type_weights_prevent_start_and_cpt_does_not_activate_director(
     assert ui.button(key="workflow-create:fixture").disabled
     assert any("指导员" in warning.value for warning in ui.warning)
     ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["cpt"]).run()
-    assert ui.toggle(key="workflow-director-enabled:fixture").disabled
+    assert not any(toggle.key == "workflow-director-enabled:fixture" for toggle in ui.toggle)
     assert not any(button.key == "fixture-node:director" for button in ui.button)
     assert not ui.exception
 
@@ -163,7 +164,7 @@ install_streamlit_localization()
 st.session_state['ui_language'] = 'en' """, 1)
     ui = AppTest.from_string(code).run()
     _director(ui)
-    assert ui.toggle(key="workflow-director-enabled:fixture").label == "Add a dialogue director"
+    assert any("Required for new conversations" in row.value for row in ui.caption)
     assert ui.selectbox(key="workflow-director-context-mode:fixture").label == "Conversation context"
     assert ui.selectbox(key="workflow-director-context-mode:fixture").options == [
         "Continue with the same knowledge", "Independent batches"]

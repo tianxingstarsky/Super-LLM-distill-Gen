@@ -1,5 +1,45 @@
 # 工作流规则
 
+`review_guidance.py` 持有 v7 公开注意事项合同：在实际 user 后追加 system 提醒，原作者重新生成完整原生响应。原稿和已有反馈归档；提醒进入训练上下文。原请求、提醒、响应及导出上下文通过收据一致性认证。`restore_review_guidance_session` 仅从完整认证的旧工具返工收据恢复待答原始会话；当前候选仍绑定父响应，完整父收据归档，缺可信原始上下文就拒绝，不靠裁掉工具历史凑请求。公开提醒的自然转述不算私有规则泄露，但不扩大资料范围或证明审查意见正确。验证见 `test_review_guidance_protocol.py`、`test_review_guidance_generation.py`、`test_public_review_guidance_surface.py`。
+
+反馈指导 v5/v6 是显式试验版本，保存完整请求、原生推理与父回执；v6 将约束集中到业务依赖、资料范围与实际证据。真实两条复跑改善了节选范围，但内部旁白和旧篇幅设定仍会出现，推理消耗上升，不能标为已解决或默认启用。这两次试验未升级为默认；v1–v6 文本原样保留，新任务改用公开注意事项 v7。
+
+`native_feedback_provenance.py` 提供纯函数 `authenticate_native_feedback_receipt`，统一验证完整响应、真实工具配对、观察正文、请求历史、父摘要和嵌套复用谱系。它返回原会话与实际续接会话，不猜补通道；不访问磁盘或认证持久存储来源，也不作质量判断。来源文件/检查点及当前模型身份仍由调用者与适配器确认。多轮的 `_recorded_feedback_author` 复用它并检查展示记录与实际响应一致。
+
+`reused_delivered_feedback` 收据保留完整父回执及其摘要；本次 `reasoning_segments` 仅包含本次真实上游输出，父回执中的读工具思考、旧末答和全部原生通道另存完整，不能把它们删去或冒充本次生成。普通返工、复用返工与再次认证共享这一合同。验证：三个 native feedback/adapter/dialogue 测试文件。
+
+历史 `native_feedback_guidance_version=4`。它继承 v3 的来源和引文定位，增加 `delivery`：产物替换受审助手轮，评语仍是审查员观察，应用修改不算用户新发言；正式答案不叙述私有编辑事件。引导按任务充分展开，取消默认篇幅目标，保留用户明确格式、必要纠错解释及提示词/API 作品。旧 v1–v3 指令和观察逐字不变，版本仍纳入请求身份；不增加模型回合或质量豁免。
+
+`native_feedback_guidance_version=3` 将应用发起返工、审查员意见、受审助手和实际最后 user 发言分别标明。程序给每条引文附上原始 `reasoning_content`／`content` 的精确位置与邻近原文；该定位只证明引文存在，不证明审查结论正确。旧 v1/v2 观察与指令不变，原始消息和推理不改写。验证：`test_native_feedback_continuation.py`、`test_native_dialogue_continuation.py`。
+
+历史 `native_feedback_guidance_version=2` 保留第一人称反思建议的工具来源及原文；引导按具体问题自然转折，不强制固定开头。`native_dialogue_continuation_input` 在 v2/v3/v4 收集父候选已绑定的 `judge.reason` 或 `review_repair.verdict.reason`，与人工修正意见分开保留来源；旧评语不自动改写，未绑定或过期评语不进入反馈。该来源绑定不证明评语为真，不改变训练资格。
+
+再次返工时，`native_dialogue_continuation.py` 从完整工具反馈收据核对候选展示、全部新原生片段、真实末回合、准确作者会话及父会话摘要。核对后才选择真实最后 assistant；原稿与展示合并推理仍完整保存。旧收据缺少准确续接会话时明确停止，不能由展示消息猜补。此认证不增加质量判定或扩展诊断续跑范围。
+
+`native_feedback.py` 约定 `read_review_feedback` 的只读反馈工具及原生回合边界。意见必须逐字绑定原推理或原答案，已确认、证据不足和误判的分类均作为待核对观察，不附带替代答案或质量通过。原作者历史缺失原生字段时不猜补；反馈正文保持工具角色，工具调用 ID 来自真实作者回合。此模块只处理纯合同，不读取记录或调用模型；作者和父版本认证由适配器／既有返工入口负责。验证：`tests/test_native_feedback_continuation.py`。
+
+`open_dialogue_routing.py` 只在明确冻结 `open_dialogue_routing_version=1` 与 `open_dialogue_question_mode=auto` 时，将没有附加资料、工具或人工参考答案的合成开放场景交给指导员直接生成用户发言。`separated` 强制保留独立发问，缺少版本标记完全沿用旧开关；文档等来源保留既有分离策略。回执说明实际路由，不表示问题或回答质量通过。验证见 `test_open_dialogue_routing.py`。
+
+`native_dialogue_continuation.py` 区分首轮原生失败与不支持的中途状态，核对原首问、资料和指导员契约，产生复用摘要。只检查已有记录，不读取父任务、不调用模型；父版本认证仍由 review 显式返工入口负责。通过 `contracts.py` 发布路由判断，应用层保留完整旧稿。
+
+同文件的 `native_dialogue_progress_blocker` 仅识别可保留作诊断历史的完整开放场景原生响应：现有定位证据只能包含推理中的 `unsupported_runtime_setting`，答案交付、消息角色、原文摘要和资料范围均须完整。未知引用、缺失／截断、工具或其它问题仍停止。返回值始终带 `training_eligible=false`；它不消除旧问题或判定答案正确。`DialogueProgress.release_blockers` 暂存各轮已知拒绝，不能与实际生成进度混同。验证见 `test_native_dialogue_continuation.py`。
+
+`native_dialogue_progress_version=2` 仅对显式诊断续跑使用完整响应判定：两通道、实际角色序列、消息与正文摘要、零私有来源收据和交付检查必须成立。既有训练表面、指令引用或模型评审的质量问题不改变进度，但全部保留为入库阻断；不按某个表达或关键词重新解释原判定。未知错误、缺失／截断、工具、角色或资料范围异常仍停止。普通生成和冻结 v1 继续原有狭窄判定。
+
+`dialogue_constraints.py` 在冻结 `dialogue_constraint_provenance_version=1` 的续轮请求中提供实际 user 消息索引。指导员同次选择 `user_constraint_refs`，程序将对应完整用户原话投影为 `active_constraints`，保存位置、内容摘要与历史摘要。助手来源、未知/重复索引和模型自行填写约束均拒绝；计划中的下一句尚未发生，不能提前成为来源。完整原话保留引用、否定与条件，但来源收据不证明用户认可引语或整份状态的语义正确。旧版本继续原合同；不增加模型调用。验证见 `tests/test_dialogue_constraint_sources.py`。
+
+`native_cot.py` 的 `native_instruction_scope_version=1` 对原生输出中的执行引用逐次记录作用对象：明确构造或传送的外部提示词为 `task_artifact`；公开规则引文需能定位实际 system 来源，数值篇幅要求需有真实用户／system 指令。明确自称遵守内部规则、私有执行字段与无依据数值元叙述仍阻断；来源未决单列 `native_instruction_reference_unresolved`，不冒充已确认泄露。只判断局部可观察引用，不认证整条语义质量，不因出现 API 或技术词豁免整段。无标记的冻结任务完全沿用旧校验；完整原生推理及逐字符证据均保留。验证：`test_native_instruction_scope.py`。
+
+`dialogue_context.py` 在显式冻结 `dialogue_context_scope_version=1` 的任务中投影回答者上下文。仅 `kind=brief`、`synthetic=True` 且非人工资料的私有场景不进入回答知识；实际用户消息、公开资料片段和用户配置规则保留。创作简报、场景条件与指导员草稿仍供指导和审计使用，不替用户确认个人资源。文档、人工作品资料、导入对话及无版本标记的旧任务不变。投影是纯规则，由原生回答用例及普通回答请求适配器共用，不请求额外模型。
+
+`native_generation.py` 判定冻结的原生 SFT／多轮路线，并将已有 SFT 推理原文投影为 CoT 格式。投影不请求模型、不新增评审结论，保留消息、状态与来源记录；缺失最终推理或答案仍隔离。该规则通过 `contracts.py` 供批次和评审域复用。
+
+新建原生 SFT 同时选择 CoT 格式时，若还显式提交了独立 `cot` 配置，`validate_new_native_generation_route` 在任务落盘前拒绝冲突，不能静默丢弃旧 CoT 要求。未提交独立配置的 SFT+CoT 仍仅投影，旧冻结配方不受此创建校验影响。
+
+同文件 `normalize_new_reading_generation` 只在新建任务边界，将旧资料阅读草稿转成标准指导员 `document_reading` + 原生多轮；保留风格、配置规则和阅读类型权重，闭卷权重归零。既有冻结任务不调用此归一化。原有 `reading_scene/user/answer` 自定义提示词存档于新配方但不执行；迁移收据列出这些不生效的旧 ID。
+
+`dialogue_creation.py` 只决定新建任务的指导员要求：新设计 SFT、多轮及依赖问答的偏好/CoT 需要指导员，完整记录对话、CPT-only 与返工例外。`prepare_new_dialogue_director` 保留已配置规则，为必需但未开启的步骤补上默认分离问答配置；不参与已有配方的执行和恢复。固定来源的分类由基础设施提供，领域规则不读文件。验证见 `test_workflow_clean_sources.py` 的创建与来源分类用例。
+
 `imported_reasoning.py` 投影输入推理处理收据，并通过 `contracts.py` 发布纯规则 `retire_imported_reasoning`。逐助手消息区分原有、缺失和合成解释；修剪或修订实际改变训练正文时，完整原收据保留为 `input_only`，已有新输出来源不被覆盖。仅评分、正文未变及无导入收据的历史记录保持原合同。CoT 提取按最后助手消息确定来源，不把前面轮次的合成标记套到原有最终推理。收据不进入训练字段。验证：`test_imported_reasoning_provenance.py`。
 
 `conversation_reasoning.py` 定义导入会话的可选策略：保留、仅补缺失、排除缺失。v1 直接按答案补写，v2 经提示提炼后隔离当前答案。逐助手回合统计覆盖，以原消息摘要和可见前缀范围记录来源；无效提示、不足标记及长答案／工具载荷的整段照搬被拒绝。字面复制检查不证明没有语义暗示，提示与合成解释均非质量通过。配置缺省维持旧任务行为，原始来源和训练字段不变。验证见 `tests/test_conversation_reasoning_policy.py`。
@@ -7,6 +47,10 @@
 经验提案允许没有新规则（`rules=[]`），以合并后的风格概述保留当前意图；没有新证据不强迫模型凑经验。该合同不会把候选升级为通过，已有规则仍逐条认证原句。验证见 `test_experience_evolution.py`。
 
 `public_experience.py` 提供“简洁全面 · 初始 v1”和已冻结经验的投影。新任务显式保存 `native_experience_version=1`；原生 CoT 的经验成为实际 learner system 消息并随 question 导出，阅读对话将推理经验与规则、资料一同导出，场景和用户经验只进入各自私有角色。没有标记的旧任务不追加经验。
+
+同文件 `without_injected_public_experience` 只为用户发言者投影公开轮次：首条 system 必须与该运行冻结的原生经验消息完整匹配，才从投影中移除。它复用既有经验包装，不按标签猜测、不删除未知 system；训练历史、回答上下文与原生推理原样保留。通过 `contracts.py` 供指导员适配器调用，随后继续严格检查角色顺序。验证见 `test_separated_dialogue_generation.py`。
+
+`public_experience_provenance` 复用相同的完整匹配，且只在 `dialogue_context_scope_version=1` 时提供公开经验来源回执。回执绑定首条消息的位置与摘要，说明其是随训练对话导出的冻结 system 输入，不授予内容正确性或安全性通过。改写、额外字段、错位和未知 system 都不认证；整段评审仍读取完整消息并作独立判断。
 
 `experience_evolution.py` 定义有适用条件与反例的少量经验提案，绑定完整来源轨迹中的逐字引文，不按错误标记自动判断样本正负。公开概述和条件规则可形成下一版紧凑经验；原始试错、来源收据与基版正文留在谱系中，不直接注入后续提示词。引文匹配只证明来源存在，提案仍是 `model_proposed_not_verified`。
 

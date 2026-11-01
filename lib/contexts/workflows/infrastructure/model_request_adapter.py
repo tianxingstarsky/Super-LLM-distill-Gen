@@ -135,6 +135,13 @@ class CheckpointedModelRequest:
     def messages(self, client, request):
         runtime = self.runtime
         data, instruction = request.data, request.instruction
+        if request.prompt_id in {"workflow.sft_answer", "workflow.sft_directed", "workflow.multiturn_assistant"}:
+            from ..domain.dialogue_context import project_answer_context
+            source = data.get("source_context")
+            if not isinstance(source, dict):
+                source = data.get("provenance", data)
+            data = project_answer_context(data, source,
+                version=runtime.recipe.get("dialogue_context_scope_version"))
         if request.prompt_id in {"workflow.conversation_reasoning", "workflow.conversation_reasoning_hints"}:
             from lib.domain.workflow_quality import canonical
             return [{"role": "system", "content": runtime.prompt_text(request.prompt_id, stage=request.prompt_stage)},
@@ -408,6 +415,14 @@ class CheckpointedModelRequest:
                         allow_reasoning_fallback=False, response_details=response_details,
                         retries=native_request_attempts or 1, **streaming)
                     value = {"answer": visible, "reasoning": response_details.get("reasoning_content", "")}
+                    if (prompt_id == "workflow.cot_native_joint"
+                            and runtime.recipe.get("native_author_session_version") == 1
+                            and all(message.get("role") != "assistant" or "reasoning_content" in message
+                                    for message in request_messages)):
+                        from .authored_edit_adapter import author_session
+                        response_details["author_session"] = author_session(
+                            client, binding, request_messages, [], stage=model_stage or runtime.stage,
+                            role=role, max_tokens=binding.get("max_output_tokens"), temperature=0.7)
                 elif prompt_id == "workflow.cot_native_answer":
                     # Prefix completion returns the real visible answer,
                     # not a model-owned JSON envelope. No text is invented

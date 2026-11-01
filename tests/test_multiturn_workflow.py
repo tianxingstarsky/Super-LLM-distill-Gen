@@ -1,4 +1,8 @@
-"""Offline end-to-end contracts for complete multi-turn training examples."""
+"""Offline end-to-end contracts for the historical v8 multi-turn request loop.
+
+The frozen loop uses plan -> user -> assistant calls without a director. New
+directed/native workflows are covered by their own production-boundary tests.
+"""
 from __future__ import annotations
 
 import json
@@ -8,6 +12,7 @@ from lib.domain.multiturn import completed_turn_ends
 from lib.infrastructure.training_workflow import Workflow, create_run, digest, read_json, resume, run_path, verify_artifacts
 from lib.infrastructure.workflow_driver import FilesystemWorkflowDriver
 from lib.io_utils import atomic_json
+from lib.prompts import get
 
 
 def _verdict(keep=True):
@@ -71,6 +76,23 @@ class Judge:
 def _run(tmp_path, *, brief="", sources=(), generator=None, judge=None, **options):
     output = tmp_path / "out"
     run_id = create_run(output, brief=brief, sources=sources, targets=["multiturn"], **options)
+    path = run_path(output, run_id)
+    recipe = read_json(path / "recipe.json")
+    # These fixtures model the original three-call first turn and its retry
+    # keys. Do not silently make them stand in for the current director route.
+    recipe["version"] = 8
+    recipe["qa_director"] = {"enabled": False}
+    for key in ("node_prompts", "node_prompt_templates", "node_prompt_system",
+                "agent_experience_version", "agent_experience", "authored_role_projection_version"):
+        recipe.pop(key, None)
+    ids = ("workflow.system", "workflow.plan", "workflow.multiturn_user", "workflow.multiturn_assistant",
+           "workflow.multiturn_consistency", "workflow.jev_score")
+    recipe["prompts"] = {prompt_id: {"version": "1.0.0", "sha256": digest(get(prompt_id, version="1.0.0").template)}
+                         for prompt_id in ids}
+    atomic_json(path / "recipe.json", recipe)
+    initial = read_json(path / "state.json")
+    initial["recipe_hash"] = digest(recipe)
+    atomic_json(path / "state.json", initial)
     state = Workflow(output, run_id, tmp_path, generator=generator or Generator(), jev=judge or Judge()).execute()
     return state, run_path(output, run_id), output, run_id
 

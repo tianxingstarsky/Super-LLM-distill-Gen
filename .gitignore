@@ -28,6 +28,7 @@ data/review_center.db*
 data/output/argilla.db*
 !data/output/.gitkeep
 data/workspaces/
+data/conversation-imports/
 # 文件夹注册表：机器私有（含本机绝对路径）＋并发锁，勿提交/手改
 data/workspaces.json
 data/workspaces.json.lock

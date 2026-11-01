@@ -55,6 +55,23 @@ def set_version(path, version):
     atomic_json(path / "state.json", saved)
 
 
+def freeze_legacy_document_route(path):
+    """Recreate a frozen v20 task where the director was still optional."""
+    recipe = engine.read_json(path / "recipe.json")
+    assert recipe["version"] == 20 and "native_generation_version" not in recipe
+    recipe["qa_director"] = {"enabled": False}
+    atomic_json(path / "recipe.json", recipe)
+    saved = engine.read_json(path / "state.json")
+    saved["recipe_hash"] = engine.digest(recipe)
+    atomic_json(path / "state.json", saved)
+
+
+def legacy_document_run(tmp_path, **options):
+    output, rid, path = run(tmp_path, **options)
+    freeze_legacy_document_route(path)
+    return output, rid, path
+
+
 def native(path, target):
     return [json.loads(line) for line in (path / "artifacts" / f"{target}.jsonl").read_text(encoding="utf-8").splitlines()]
 
@@ -67,8 +84,99 @@ def test_route_is_versioned_and_requires_both_outputs(version, targets, linked):
     assert cot_updates_sft({"version": version, "targets": targets}) is linked
 
 
+@pytest.mark.parametrize("targets,hide_sft", [(["sft", "cot"], False), (["cot"], True), (["sft", "cot"], True)])
+def test_native_views_share_trim_review_and_reuse_final_receipts(tmp_path, targets, hide_sft):
+    from types import SimpleNamespace
+    from lib.contexts.workflows.application.trim_reasoning import TrimReasoning
+    from lib.contexts.workflows.infrastructure.generation_adapter import StreamingReasoningAdapter
+    from lib.contexts.review.application.review_collections import ReviewGeneratedCollections
+    from lib.contexts.review.domain.repair import validate_review_repair
+    from lib.contexts.review.domain.candidate_content import candidate_digest as digest
+    from lib.contexts.review.infrastructure.automatic_adapter import StreamingReviewCollectionsAdapter
+    from lib.contexts.review.infrastructure.automatic_runtime import WorkflowReviewRepair
+    recipe = {"version": 42, "targets": targets, "native_generation_version": 1,
+              "node_generation": {"sft": {"enabled": True, "answer_mode": "native_joint"}},
+              "review_repair": {"mode": "auto"}, "sft_output_style": "drop"}
+    assert not cot_updates_sft(recipe)
+    source = {"id": "native-one", "source_id": "paper-one", "status": "eligible", "messages": [
+        {"role": "user", "content": "Can I compare these results?"},
+        {"role": "assistant", "content": "First check the units.", "reasoning_content": "I need comparable quantities."},
+        {"role": "user", "content": "Does this prove an improvement?"},
+        {"role": "assistant", "content": "It suggests an improvement.", "reasoning_content": "I should check the conditions."}]}
+    source_path = tmp_path / "native-source.jsonl"
+    write_jsonl(source_path, [source])
+    collections = {"sft": WorkflowRows(source_path, 1), "cot": []}
+    trim_calls = []
+
+    def trim(rows, *, targets):
+        trim_calls.append(targets)
+        assert targets == ("sft",)
+        rewritten = deepcopy(source)
+        rewritten["messages"][-1]["reasoning_content"] = "The comparison still needs controls."
+        destination = tmp_path / "trimmed.jsonl"
+        write_jsonl(destination, [rewritten])
+        rows["sft"] = WorkflowRows(destination, 1)
+
+    delivery = StreamingReasoningAdapter(SimpleNamespace(check_cancel=lambda: None))
+    port = SimpleNamespace(apply_reasoning_trim=trim, publish_native_cot=delivery.publish_native_cot)
+    TrimReasoning(port, recipe).finalize(collections)
+    assert trim_calls == [("sft",)]
+    assert list(collections["cot"])[0]["reasoning"] == ["The comparison still needs controls."]
+    assert list(collections["cot"])[0]["messages"][1] == source["messages"][1]
+    if hide_sft:
+        collections["sft"] = []
+
+    class ReviewRuntime:
+        _review_payload = WorkflowReviewRepair._review_payload
+        _split_review_rows = WorkflowReviewRepair._split_review_rows
+
+        def __init__(self):
+            self.path, self.recipe, self.state = tmp_path, recipe, {"id": "native-review"}
+            self.calls = []
+            (self.path / "stage-results").mkdir()
+
+        def check_cancel(self):
+            pass
+
+        def stage_items(self, stage, rows, action):
+            assert stage == "review"
+            return [output for row in rows for output in action(row)]
+
+        def _review_repair_item(self, item):
+            self.calls.append(item["target"])
+            # Dropping reasoning from SFT export must not hide it from the
+            # canonical review that also certifies the full CoT export.
+            assert self._review_payload("sft", item["record"])["messages"][-1]["reasoning_content"]
+            record = deepcopy(item["record"])
+            record["messages"][-1].update(content="No. A controlled comparison is still needed.",
+                reasoning_content="I distinguish a possible comparison from evidence of improvement.")
+            record["review_repair"] = {"status": "accepted", "config_sha256": digest(validate_review_repair(recipe["review_repair"])),
+                "candidate_sha256": digest(self._review_payload("sft", record))}
+            return [{**record, "_review_target": "sft"}]
+
+    runtime = ReviewRuntime()
+    review = ReviewGeneratedCollections(StreamingReviewCollectionsAdapter(runtime), recipe)
+    reviewed = review.execute(collections)
+    cot = list(reviewed["cot"])[0]
+    assert runtime.calls == ["sft"]
+    assert cot["answer"] == "No. A controlled comparison is still needed."
+    assert cot["reasoning"] == [cot["messages"][-1]["reasoning_content"]]
+    assert cot["messages"][1] == source["messages"][1]
+    assert bool(len(reviewed["sft"])) is (not hide_sft and "sft" in targets)
+    if len(reviewed["sft"]):
+        assert list(reviewed["sft"])[0]["messages"] == cot["messages"]
+    assert cot["review_repair"]["derived_from"] == {"target": "sft", "candidate_id": source["id"]}
+    # Production final aggregation reads already-bound receipts for each
+    # format. It must not purchase a second review for the same response.
+    runtime._production_finalizing = True
+    finalized = review.execute({target: list(rows) for target, rows in reviewed.items()})
+    assert runtime.calls == ["sft"]
+    assert list(finalized["cot"])[0]["answer"] == cot["answer"]
+    assert list(WorkflowRows(source_path, 1)) == [source]
+
+
 def test_new_sft_delivery_uses_cot_final_answer_and_reasoning(tmp_path):
-    output, rid, path = run(tmp_path, node_generation={"cot": {"style": "structured"}})
+    output, rid, path = legacy_document_run(tmp_path, node_generation={"cot": {"style": "structured"}})
     assert engine.read_json(path / "recipe.json")["version"] >= 15
     writer = RewritingGenerator()
     state = engine.Workflow(output, rid, tmp_path, generator=writer, jev=Reviewer()).execute()
@@ -86,7 +194,7 @@ def test_new_sft_delivery_uses_cot_final_answer_and_reasoning(tmp_path):
 
 
 def test_rejected_cot_cannot_fall_back_to_previously_accepted_sft(tmp_path):
-    output, rid, path = run(tmp_path, node_generation={"cot": {"style": "structured"}})
+    output, rid, path = legacy_document_run(tmp_path, node_generation={"cot": {"style": "structured"}})
     state = engine.Workflow(output, rid, tmp_path, generator=Generator(), jev=Reviewer(reject_style=2)).execute()
     assert state["status"] == "needs_attention", state.get("error")
     assert state["stages"]["sft"]["eligible"] == 1
@@ -121,7 +229,7 @@ def test_terminal_trim_failure_quarantines_both_formats(tmp_path):
 
 
 def test_drop_format_removes_only_final_sft_reasoning_field(tmp_path):
-    output, rid, path = run(tmp_path, sft_output_style="drop",
+    output, rid, path = legacy_document_run(tmp_path, sft_output_style="drop",
                             node_generation={"cot": {"style": "structured"}})
     state = engine.Workflow(output, rid, tmp_path, generator=RewritingGenerator(), jev=Reviewer()).execute()
     assert state["status"] == "completed", state.get("error")
@@ -155,7 +263,7 @@ def test_dedup_uses_final_cot_payload_instead_of_distinct_upstream_answers(tmp_p
 
 
 def test_resuming_failed_cot_review_reuses_generation_checkpoints(tmp_path):
-    output, rid, path = run(tmp_path, node_generation={"cot": {"style": "structured"}})
+    output, rid, path = legacy_document_run(tmp_path, node_generation={"cot": {"style": "structured"}})
     writer = RewritingGenerator()
     state = engine.Workflow(output, rid, tmp_path, generator=writer, jev=Reviewer(invalid_style=True)).execute()
     assert state["status"] == "failed" and state["error"] == "invalid_style_judge_schema"
@@ -167,7 +275,7 @@ def test_resuming_failed_cot_review_reuses_generation_checkpoints(tmp_path):
 
 
 def test_legacy_dual_output_keeps_its_original_independent_answers(tmp_path):
-    output, rid, path = run(tmp_path, node_generation={"cot": {"style": "structured"}})
+    output, rid, path = legacy_document_run(tmp_path, node_generation={"cot": {"style": "structured"}})
     set_version(path, 14)
     state = engine.Workflow(output, rid, tmp_path, generator=RewritingGenerator(), jev=Reviewer()).execute()
     assert state["status"] == "completed", state.get("error")
@@ -301,6 +409,7 @@ def test_partial_production_targets_keep_cot_dependency_without_extra_delivery(t
         production={"goals": goals, "round_size": 1, "min_acceptance_rate": 0})
     path = engine.run_path(output, rid)
     writer = ProductionCoTWriter()
+    freeze_legacy_document_route(path)
     state = engine.Workflow(output, rid, tmp_path, generator=writer, jev=Reviewer()).execute()
     assert state["status"] == "completed", state.get("error")
     assert writer.cot_calls == 3

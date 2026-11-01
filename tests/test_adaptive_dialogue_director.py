@@ -95,14 +95,20 @@ class Expert:
             if self.repeat_message:
                 state.update(shared_understanding=[data["dialogue_messages"][-1]["content"]],
                              user_intent="进一步缩短上轮实际卡片版本。")
+            referenced_constraints = data.get("dialogue_constraint_provenance_version") == 1
+            if referenced_constraints:
+                state.pop("active_constraints")
             return json.dumps({"continue": True, "user_message": "再简短一点。" if self.repeat_message else
                 "好，我知道如何使用这份卡了。" if self.confirmation else SECOND_MESSAGE,
-                "reason": "上一轮已给出初稿，可据实际措辞继续修改。", "dialogue_state": state}, ensure_ascii=False)
+                "reason": "上一轮已给出初稿，可据实际措辞继续修改。", "dialogue_state": state,
+                **({"user_constraint_refs": [0]} if referenced_constraints else {})}, ensure_ascii=False)
         final_state = {"progress": "操作卡修改已完成。"}
         if self.false_stop_state:
             final_state["shared_understanding"] = ["用户已说设备是999伏。"]
         return json.dumps({"continue": False, "user_message": "", "reason": "实际修改已完成，没有新的必要活动。",
-                           "dialogue_state": final_state}, ensure_ascii=False)
+                           "dialogue_state": final_state,
+                           **({"user_constraint_refs": []}
+                              if data.get("dialogue_constraint_provenance_version") == 1 else {})}, ensure_ascii=False)
 
 
 class Worker:
@@ -238,11 +244,10 @@ def test_old_recipe_does_not_acquire_new_mode_or_change_schedule():
         validate_qa_director(recipe(planning_mode="rigid_dialogue_act_quota"))
 
 
-def test_new_dialogue_assets_keep_original_version_lookups_and_render_safely():
+def test_frozen_adaptive_dialogue_assets_keep_original_version_lookups_and_render_safely():
     for name in ("plan", "qa_director", "sft_directed", "sft_directed_check", "multiturn_user",
                  "multiturn_assistant", "multiturn_consistency", "multiturn_directed_check"):
         prompt_id = "workflow." + name
-        current = get(prompt_id)
         old = get(prompt_id, version="1.0.0")
         expected_version = ("1.2.0" if name == "plan" else "1.1.0" if name == "multiturn_consistency" else
                             "1.11.0" if name == "qa_director" else
@@ -250,8 +255,9 @@ def test_new_dialogue_assets_keep_original_version_lookups_and_render_safely():
                             "1.5.0" if name == "multiturn_user" else
                             "1.3.0" if name in {"sft_directed_check", "multiturn_directed_check"} else
                             "1.8.0" if name == "multiturn_assistant" else "1.2.0")
-        assert current.version == expected_version and old.version == "1.0.0"
-        assert render(current) != render(old)
+        adaptive = get(prompt_id, version=expected_version)
+        assert adaptive.version == expected_version and old.version == "1.0.0"
+        assert render(adaptive) != render(old)
     # The earlier workshop upgrade remains available to frozen recipes.
     assert get("workflow.sft_directed", version="1.10.0").version == "1.10.0"
     assert get("workflow.multiturn_assistant", version="1.7.0").version == "1.7.0"
@@ -285,7 +291,7 @@ def test_live_replanning_uses_director_binding_actual_answers_and_natural_two_tu
     row = engine.read_json(path / "artifacts/multiturn.records.json")[0]
     assert row["turn_count"] == 2  # an upper bound of eight is not a quota
     assert row["dialogue_end_reason"] == "natural_completion"
-    assert row["dialogue_state"] == {"progress": "操作卡修改已完成。"}
+    assert row["dialogue_state"] == {"progress": "操作卡修改已完成。", "active_constraints": []}
     assert row["dialogue_state_scope"] == "final_summary" and row["dialogue_state_after_turn"] == 2
     assert len(expert.calls) == 3 and len(worker.calls) == 2
     assert set(loaded) == {"language-expert", "dialogue-worker"}
@@ -294,6 +300,9 @@ def test_live_replanning_uses_director_binding_actual_answers_and_natural_two_tu
     assert row["messages"][2]["content"] == SECOND_MESSAGE
     assert row["dialogue_steps"][1]["dialogue_state"]["shared_understanding"] == [FIRST_ANSWER]
     next_turn = request_data(expert.calls[1])
+    assert next_turn["dialogue_constraint_provenance_version"] == 1
+    assert next_turn["user_message_indices"] == [0]
+    assert row["dialogue_steps"][1]["dialogue_state"]["active_constraints"] == [first]
     assert next_turn["dialogue_messages"][1]["content"] == FIRST_ANSWER
     reviewed = [request_data(call) for call in reviewer.calls]
     blinded = [data for data in reviewed if data.get("learner_context_only")]

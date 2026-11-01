@@ -11,6 +11,7 @@ from lib.domain.workflow_graph import BASE_STAGES, DERIVED_STAGES, execution_gra
 from lib.domain.workflow_scale import node_roles
 from lib.presentation.streamlit.i18n import translate_label
 from lib.presentation.streamlit.workflow_preference_details import preference_stage_label, preference_route
+from lib.contexts.workflows.contracts import native_generation_enabled
 
 _CANVAS_ASSET = Path(__file__).with_name("workflow_canvas_frontend") / "index.html"
 _canvas = components.declare_component("workflow_canvas", path=str(_CANVAS_ASSET.parent))
@@ -27,8 +28,17 @@ def _canvas_asset_revision() -> str:
     return _cached_canvas_asset_revision(_CANVAS_ASSET, metadata.st_mtime_ns, metadata.st_size)
 
 
-def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None, targets=None):
+def _native_recipe(node_generation, recipe_version, native_generation_version=None):
+    return {"node_generation": node_generation or {}, "native_generation_version":
+            (int((recipe_version or 0) >= 42) if native_generation_version is None else native_generation_version)}
+
+
+def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None, targets=None,
+                       native_generation_version=None, language="zh"):
     """Name the dataset stage; shared corpus reuse does not erase CPT."""
+    if native_generation_enabled(_native_recipe(node_generation, recipe_version, native_generation_version), node):
+        base = "SFT" if node == "sft" else "Multi-turn" if language == "en" else "多轮"
+        return f"{base} · Native CoT" if language == "en" else f"{base} · 原生 CoT"
     if node == "cot":
         settings = (node_generation or {}).get("cot")
         generates = bool(settings and settings.get("enabled", True))
@@ -44,7 +54,7 @@ def node_display_label(node, labels, node_generation=None, *, source_cleaning=Fa
 
 def node_description(node, source_mode, *, node_generation=None, package_review=None, cpt_processing=None,
                      review_repair=None, recipe_version=None, source_cleaning=False, targets=None,
-                     cpt_review_policy_version=0):
+                     cpt_review_policy_version=0, native_generation_version=None, language="zh"):
     """A short purpose and cost hint available on every node without another card."""
     descriptions = {
         "ingest": "读取来源并整理为可处理的文档片段或任务。",
@@ -60,7 +70,12 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         "review": "在同一节点评分、修正并重新评分；通过后才进入打包，修正不会回到 SFT 生成。",
         "package": "检查结构、去重并导出训练文件、报告与清单。",
     }
-    if node == "preference":
+    if native_generation_enabled(_native_recipe(node_generation, recipe_version, native_generation_version), node):
+        description = ("The answering model produces native reasoning and the answer in one response. "
+                       "CoT export reuses this response without another generation call."
+                       if language == "en" else
+                       "回答模型在同次响应中输出原生思考与答案；CoT 导出复用同一结果，不再追加独立生成。")
+    elif node == "preference":
         description = preference_route(node, review_repair)
     elif node == "multiturn" and (node_generation or {}).get("multiturn", {}).get("reading_session"):
         description = "从清洗资料设计私有场景，模拟用户与回答者交替发言；公开规则和资料随完整原生对话导出。生成不代表独立评审通过。"
@@ -200,13 +215,15 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
                 review_repair=None, repair_only=False, source_cleaning=False,
-                arithmetic_seed_protocol_version=0, cpt_review_policy_version=0):
+                arithmetic_seed_protocol_version=0, cpt_review_policy_version=0, native_generation_version=None):
+    native_recipe = _native_recipe(node_generation, recipe_version, native_generation_version)
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
                                   repair_only=repair_only, source_cleaning=source_cleaning,
                                   review_repair=review_repair,
                                   arithmetic_seed_protocol_version=arithmetic_seed_protocol_version,
-                                  cpt_review_policy_version=cpt_review_policy_version, node_generation=node_generation)
+                                  cpt_review_policy_version=cpt_review_policy_version, node_generation=node_generation,
+                                  native_generation_version=native_recipe["native_generation_version"])
     shared_cleaning = (recipe_version >= 19 and source_cleaning is True
                        and any(a == "cpt" and b in {"director", "sft", "multiturn"} for a, b in edges))
     independent_arithmetic = (arithmetic_seed_protocol_version == 1 and "gsm8k" in nodes
@@ -302,15 +319,20 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                        translate_label(text, language) for text in node_description(key, source_mode,
                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                            review_repair=review_repair, recipe_version=recipe_version, source_cleaning=shared_cleaning,
-                           targets=targets, cpt_review_policy_version=0 if repair_only else cpt_review_policy_version))
+                           targets=targets, cpt_review_policy_version=0 if repair_only else cpt_review_policy_version,
+                           native_generation_version=native_recipe["native_generation_version"], language=language))
         data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation,
-                         source_cleaning=shared_cleaning, recipe_version=recipe_version, targets=targets), language), "glyph": glyphs.get(key, "✓"),
+                         source_cleaning=shared_cleaning, recipe_version=recipe_version, targets=targets,
+                         native_generation_version=native_recipe["native_generation_version"], language=language), language), "glyph": glyphs.get(key, "✓"),
                      "x": positions[key][0], "y": positions[key][1], "status": status,
                      "description": description,
                      "subtitle": subtitle, "models": models, "percent": min(100, done * 100 / total) if total else
                      100 if status == "completed" else 0,
                      "intermediate": (key == "cpt" and shared_cleaning and "cpt" not in targets) or
-                     key == "sft" and ("sft" not in targets or sft_uses_cot_output(targets, recipe_version))})
+                     key == "sft" and ("sft" not in targets and not
+                         ("cot" in targets and native_generation_enabled(native_recipe, "sft")) or
+                         sft_uses_cot_output(targets, recipe_version,
+                             native_generation_version=native_recipe["native_generation_version"], node_generation=node_generation))})
     english = language == "en"
     result = {"nodes": data, "edges": edges, "selected": selected, "width": width, "height": height,
             "live": live, "language": language, "review_repair": dict(review_repair or {}),

@@ -3,6 +3,36 @@
 from lib.domain.workflow_graph import execution_graph
 
 
+def test_native_sft_cot_exports_share_one_generation_node_and_keep_legacy_graphs():
+    settings = {"sft": {"enabled": True, "answer_mode": "native_joint"}}
+    for targets in (["cot"], ["sft", "cot"]):
+        nodes, edges = execution_graph(targets, recipe_version=42, native_generation_version=1,
+            node_generation=settings, qa_director=True, reasoning_trim=True, review_repair={"mode": "auto"})
+        assert "cot" not in nodes
+        assert ("director", "sft") in edges and ("sft", "trim") in edges
+        assert ("trim", "review") in edges and ("review", "package") in edges
+        legacy, _ = execution_graph(targets, recipe_version=41, node_generation=settings)
+        assert "cot" in legacy
+        disabled, _ = execution_graph(targets, recipe_version=42, native_generation_version=1,
+            node_generation={"sft": {"enabled": False, "answer_mode": "native_joint"}})
+        assert "cot" in disabled
+
+
+def test_canvas_native_nodes_match_frozen_version_and_do_not_claim_intermediate_sft():
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    settings = {stage: {"enabled": True, "answer_mode": "native_joint"} for stage in ("sft", "multiturn")}
+    labels = {key: key for key in execution_graph(["sft", "cot", "multiturn"])[0]}
+    modern = canvas_spec(["cot", "multiturn"], {}, "sft", labels, labels, language="en",
+                         recipe_version=42, node_generation=settings)
+    nodes = {node["id"]: node for node in modern["nodes"]}
+    assert "cot" not in nodes and nodes["sft"]["intermediate"] is False
+    assert nodes["sft"]["label"] == "SFT · Native CoT"
+    assert nodes["multiturn"]["label"] == "Multi-turn · Native CoT"
+    assert "one response" in nodes["sft"]["description"]
+    legacy = canvas_spec(["sft", "cot"], {}, "sft", labels, labels, recipe_version=41, node_generation=settings)
+    assert any(node["id"] == "cot" for node in legacy["nodes"])
+
+
 def test_canvas_shows_both_node_model_roles_and_keeps_live_progress():
     from lib.presentation.streamlit.workflow_canvas import canvas_spec
     labels = {key: key for key in execution_graph(['sft'])[0]}

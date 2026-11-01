@@ -48,8 +48,14 @@ def test_all_roles_defer_schema_and_unknown_domain_to_the_actual_stage_and_user(
 
 def test_every_registered_node_prompt_maps_to_the_processing_role():
     from lib.domain.workflow_node_prompts import NODE_PROMPT_IDS
+    # CheckpointedModelRequest.messages returns these input-reconstruction
+    # requests before the ordinary experience_system injection path.
+    input_reconstruction = {"workflow.conversation_reasoning", "workflow.conversation_reasoning_hints"}
+    for prompt in input_reconstruction:
+        assert experience_scope(prompt) is None
     for prompt_ids in NODE_PROMPT_IDS.values():
-        assert all(experience_scope(prompt) in EXPERIENCE_SCOPES for prompt in prompt_ids)
+        assert all(experience_scope(prompt) in EXPERIENCE_SCOPES
+                   for prompt in prompt_ids if prompt not in input_reconstruction)
     assert experience_scope("workflow.qa_director") == "director"
     assert experience_scope("workflow.question_user") == "question"
     assert experience_scope("workflow.sft_answer") == "answer"
@@ -116,7 +122,7 @@ def test_invalid_scope_cannot_restore_or_export_a_different_roles_text(scope):
         experience_prompt_payload(scope)
 
 
-@pytest.mark.parametrize("version", [True, "1", 1.0, 0, 5, None])
+@pytest.mark.parametrize("version", [True, "1", 1.0, 0, 6, None])
 def test_default_version_must_be_a_known_immutable_integer(version):
     with pytest.raises(ValueError, match="invalid_agent_experience_version"):
         default_experience_text("director", version=version)
@@ -136,7 +142,7 @@ def test_text_limit_counts_exact_utf8_bytes_instead_of_character_count(text):
 
 def test_complete_snapshot_pins_version_raw_text_and_enabled_flags():
     pack = snapshot_agent_experience()
-    assert pack["version"] == AGENT_EXPERIENCE_VERSION == 4
+    assert pack["version"] == AGENT_EXPERIENCE_VERSION == 5
     assert pack["kind"] == EXPERIENCE_KIND
     assert set(pack["scopes"]) == set(EXPERIENCE_SCOPES)
     for scope, config in pack["scopes"].items():
@@ -189,14 +195,15 @@ def test_v2_conditions_do_not_force_unknown_inputs_into_diagnosis_or_examples_in
     assert "把实例属性升级为方法的必要条件" in default_experience_text("reasoning", version=3)
 
 
-def test_version_three_is_frozen_and_prior_versions_keep_literal_snapshots():
+def test_published_versions_one_to_four_keep_literal_snapshots():
     hashes = {
         1: "ad620281d7f40cc04d66823fb0ae1897c99b33692ba28afc105d9bc4eb4d2197",
         2: "bb92e1b0d4284a88921c7965f1ab82e020825610a46d85b9ccda831e0071e8ef",
         3: "dc50cb269a9c78f124b2254e952487cbbf35a4bb689ada0c22d15d3ade421f00",
+        4: "e867e1a89c7c57b6e286ea0029e23f5c3258db46096eac5db0b4b98579aff32d",
     }
     packs = {version: snapshot_agent_experience(version=version) for version in hashes}
-    assert snapshot_agent_experience()["version"] == 4
+    assert snapshot_agent_experience()["version"] == 5
     for version, expected_sha in hashes.items():
         assert packs[version]["sha256"] == expected_sha
         assert validate_agent_experience_snapshot(packs[version]) == packs[version]
@@ -217,7 +224,6 @@ def test_version_three_is_frozen_and_prior_versions_keep_literal_snapshots():
 def test_version_four_is_compact_and_preserves_other_roles_and_old_bodies():
     prior = snapshot_agent_experience(version=3)
     current = snapshot_agent_experience(version=4)
-    assert current == snapshot_agent_experience()
     assert validate_agent_experience_snapshot(current) == current
     text = current["scopes"]["reasoning"]["text"]
     assert len(text.encode("utf8")) < len(prior["scopes"]["reasoning"]["text"].encode("utf8"))
@@ -226,6 +232,34 @@ def test_version_four_is_compact_and_preserves_other_roles_and_old_bodies():
         assert requirement in text
     for scope in set(EXPERIENCE_SCOPES) - {"reasoning"}:
         assert current["scopes"][scope] == prior["scopes"][scope]
+    reused = snapshot_agent_experience({"reasoning": {"text": prior["scopes"]["reasoning"]["text"]}})
+    assert reused["scopes"]["reasoning"]["text"] == prior["scopes"]["reasoning"]["text"]
+    assert reused["scopes"]["reasoning"]["origin"] == "custom"
+
+
+def test_version_five_changes_only_default_reasoning_and_keeps_frozen_public_experience():
+    from lib.contexts.workflows.domain.public_experience import initial_experience_text, public_experience_text
+    from lib.domain.agent_experience import INITIAL_STYLE_V1, INITIAL_STYLE_V2
+
+    prior = snapshot_agent_experience(version=4)
+    current = snapshot_agent_experience()
+    assert current == snapshot_agent_experience(version=5)
+    assert validate_agent_experience_snapshot(current) == current
+    text = current["scopes"]["reasoning"]["text"]
+    assert text.endswith(INITIAL_STYLE_V2)
+    assert initial_experience_text("reasoning") == INITIAL_STYLE_V2
+    for requirement in ("充分展开分析", "不预设字数、段落、步骤或长短目标", "不为控制篇幅省略必要论证",
+                        "支持与反证", "修正带进最终答案", "不编造负例、失败和反转", "分别保留归属",
+                        "不替用户编造处境、行动和结果", "完整交付", "遵守用户明确的语言、格式、深度和篇幅要求"):
+        assert requirement in text
+    assert "最少但足够" not in text and "默认风格是短" not in text
+    for scope in set(EXPERIENCE_SCOPES) - {"reasoning"}:
+        assert current["scopes"][scope] == prior["scopes"][scope]
+    for snapshot in (prior, current):
+        frozen = {"native_experience_version": 1, "agent_experience": snapshot}
+        assert public_experience_text(frozen) == snapshot["scopes"]["reasoning"]["text"]
+    assert public_experience_text({"agent_experience": prior}) == ""
+    assert prior["scopes"]["reasoning"]["text"].endswith(INITIAL_STYLE_V1)
     reused = snapshot_agent_experience({"reasoning": {"text": prior["scopes"]["reasoning"]["text"]}})
     assert reused["scopes"]["reasoning"]["text"] == prior["scopes"]["reasoning"]["text"]
     assert reused["scopes"]["reasoning"]["origin"] == "custom"

@@ -1,5 +1,9 @@
 # 审核持久化
 
+`AuthenticatedRepairAdapter` 对显式原生首轮续跑同时核对父记录、父配置及父作者的模型绑定和端点快照；全部选中父版本确认之后才进入任何模型调用。`CheckpointedReviewAdapter` 通过组合根连接 workflows 的续跑用例，不拥有第二份多轮调度器。
+
+`StreamingReviewCollectionsAdapter.align_native_cot` 将已评审的完整 SFT 流式投影为 CoT，并为实际格式正文重新绑定收据摘要及派生身份。它保留原生推理、历史回合、来源和拒绝状态，不把格式变换当成一次独立评审，也不复用旧候选正文的摘要。
+
 `math_reference_adapter.py` 调用 Math-Verify 0.9.0 的等价验证，以及它的 `latex2sympy2_extended` 完整表达式解析器。禁止用面向自由文本的末答案提取器忽略冲突片段、去掉单位或猜修坏公式。工作进程有整体超时，兼容 Windows 和后台线程；不修改依赖源码。失败返回未解决，检查收据经既有任务检查点复用。验证见 `tests/test_math_reference_verification.py`。
 
 `training_review_driver.py` 复用训练内容审核的持久化流程；SFT、CPT 和偏好适配器绑定各自规则。`agent_review_driver.py` 保存 Agent 决定和审计事件；`agent_driver.py` 将运行任务视角的端口转换到该存储接口。

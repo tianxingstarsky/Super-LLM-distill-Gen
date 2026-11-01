@@ -59,10 +59,17 @@ class CheckpointedReasoningAgent:
             recover_arguments=runtime.recipe.get("node_generation", {}).get("cot", {}).get("self_check", {}).get("version") in (4, 5, 6))
 
     def prepared_tool_turn(self, key, role, prepared, tools, *, recover_arguments=False, final=False, strict=False,
-                           request_options=None, capture_details=False):
+                           request_options=None, capture_details=False, model_stage="cot"):
         """Transport a prepared author or reviewer turn; never add role instructions here."""
         runtime = self.runtime
         call_key = [*key, checklist_digest(prepared), checklist_digest(tools)]
+        if not isinstance(model_stage, str) or not model_stage:
+            raise ValueError("invalid_reasoning_model_stage")
+        binding = runtime.recipe.get("node_models", {}).get(model_stage, {}).get(role, {})
+        if model_stage != "cot":
+            # Preserve historical CoT checkpoint identities. Other nodes must
+            # not reuse a response bought with a different frozen binding.
+            call_key.extend(["model_stage_v1", model_stage, checklist_digest(binding)])
         if final and not strict:
             call_key.append("tools_disabled")
         if strict:
@@ -74,8 +81,7 @@ class CheckpointedReasoningAgent:
         def invoke():
             nonlocal journal
             from lib.infrastructure.workflow_stream_journal import StreamJournal
-            client = runtime.client(role, stage="cot")
-            binding = runtime.recipe.get("node_models", {}).get("cot", {}).get(role, {})
+            client = runtime.client(role, stage=model_stage)
             with runtime._client_locks[id(client)]:
                 before = dict(getattr(client, "usage", {}))
                 runtime.check_cancel()

@@ -8,7 +8,7 @@ import pytest
 
 from lib.domain.workflow_graph import execution_graph, uses_shared_source_cleaning
 from lib.infrastructure import training_workflow as engine
-from lib.infrastructure.structured_source_kind import contains_document_records
+from lib.infrastructure.structured_source_kind import contains_document_records, structured_source_kind
 from lib.infrastructure.workflow_qa_director import DirectorBatchTooLarge
 from tests.test_workflow_qa_director_engine import request_data as role_request_data
 
@@ -195,6 +195,10 @@ def make_run(tmp_path, *, targets=("sft",), **options):
     source = tmp_path / "manual.txt"
     source.write_text(ORIGINAL, encoding="utf-8")
     output = tmp_path / "output"
+    # Cleaning tests use the existing batch director. The adaptive, separated
+    # default has a different model protocol covered by its own routing tests.
+    if "sft" in targets:
+        options.setdefault("qa_director", directed_config())
     run_id = engine.create_run(output, sources=[source], targets=targets,
                                cpt_processing={"mode": "model", "review_mode": "text"}, **options)
     return output, run_id, engine.run_path(output, run_id)
@@ -244,12 +248,15 @@ def test_non_document_routes_do_not_invent_cleaning(targets, sources, mode):
 
 def test_sft_only_uses_qualified_cleaned_text_and_pins_custom_cleaning_prompt(tmp_path):
     output, run_id, path = make_run(tmp_path, node_prompts={"cpt": {"workflow.cpt_clean": "Use the user's cleaning rules."}})
-    generator, reviewer = Generator(), Reviewer()
+    generator, reviewer = DirectedGenerator(), DirectedReviewer()
     state = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=reviewer).execute()
     assert state["status"] == "completed", state.get("error")
     assert len(generator.clean_calls) == len(generator.sft_sources) == 1
     assert generator.sft_sources[0]["text"] == CLEAN
-    assert generator.sft_sources[0]["source_cleaning"]["status"] == "accepted"
+    assert generator.director_inputs[0]["candidates"][0]["source_cleaning"]["status"] == "accepted"
+    sft_messages = next(messages for messages in generator.message_history
+                        if "source_context" in request_data(messages))
+    assert all(material["cleaning_status"] == "accepted" for material in source_materials(sft_messages))
     assert "页码 12" not in generator.sft_sources[0]["text"]
     assert state["input_summary"]["ready_after_cleaning"] == 1
     assert state["stages"]["cpt"]["status"] == "completed"
@@ -260,25 +267,26 @@ def test_sft_only_uses_qualified_cleaned_text_and_pins_custom_cleaning_prompt(tm
     assert engine.verify_artifacts(path)["counts"] == {"sft": 1}
 
 
-def test_direct_api_default_cleaning_is_native_and_does_not_add_model_calls(tmp_path):
+def test_direct_api_default_cleaning_is_native_and_does_not_add_cleaning_model_calls(tmp_path):
     source = tmp_path / "manual.md"
     source.write_text(ORIGINAL, encoding="utf-8")
     output = tmp_path / "output"
-    run_id = engine.create_run(output, sources=[source], targets=["sft"])
-    generator, reviewer = Generator(), Reviewer()
+    run_id = engine.create_run(output, sources=[source], targets=["sft"], qa_director=directed_config())
+    generator, reviewer = DirectedGenerator(), DirectedReviewer()
     state = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=reviewer).execute()
     assert state["status"] == "completed", state.get("error")
     assert generator.clean_calls == [] and len(generator.sft_sources) == 1
-    assert len(reviewer.calls) == 1 and "original_source_text" not in reviewer.calls[0]
+    assert len(generator.director_inputs) == 1
+    assert len(reviewer.calls) == 2 and all("original_source_text" not in call for call in reviewer.calls)
     assert state["input_summary"]["source_cleaning"] == {"candidates": 1, "accepted": 1, "quarantined": 0}
 
 
 def test_resume_reuses_successful_cleaning_after_generation_failure(tmp_path):
     output, run_id, _ = make_run(tmp_path)
-    generator, reviewer = Generator(), Reviewer()
-    class FailFirstGeneration(Generator):
+    generator, reviewer = DirectedGenerator(), DirectedReviewer()
+    class FailFirstGeneration(DirectedGenerator):
         def chat(self, messages, **kwargs):
-            if "source" in request_data(messages):
+            if "source_context" in request_data(messages):
                 raise RuntimeError("offline generation interruption")
             return super().chat(messages, **kwargs)
     interrupted = FailFirstGeneration()
@@ -292,7 +300,7 @@ def test_resume_reuses_successful_cleaning_after_generation_failure(tmp_path):
 
 def test_cpt_and_sft_reuse_one_cleaning_result(tmp_path):
     output, run_id, path = make_run(tmp_path, targets=("cpt", "sft"))
-    generator, reviewer = Generator(), Reviewer()
+    generator, reviewer = DirectedGenerator(), DirectedReviewer()
     state = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=reviewer).execute()
     assert state["status"] == "completed", state.get("error")
     assert len(generator.clean_calls) == 1
@@ -317,7 +325,7 @@ def test_uncertain_document_never_reaches_sft_or_sample_expansion(tmp_path):
 def test_production_cleans_once_before_reusing_sources_across_rounds(tmp_path):
     output, run_id, path = make_run(tmp_path, production={"goals": {"sft": 2}, "round_size": 1,
                                                         "min_acceptance_rate": 0})
-    generator, reviewer = Generator(), Reviewer()
+    generator, reviewer = DirectedGenerator(), DirectedReviewer()
     state = engine.Workflow(output, run_id, tmp_path, generator=generator, jev=reviewer).execute()
     assert state["status"] == "completed", state.get("error")
     assert len(generator.clean_calls) == 1 and len(generator.sft_sources) == 2
@@ -342,6 +350,7 @@ def test_historical_recipe_resumes_on_the_original_input_path(tmp_path):
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = 18
     recipe.pop("source_cleaning")
+    recipe["qa_director"] = {"enabled": False}
     engine.atomic_json(path / "recipe.json", recipe)
     state = engine.read_json(path / "state.json")
     state["recipe_hash"] = engine.digest(recipe)
@@ -572,3 +581,64 @@ def test_director_selects_complete_clean_neighbor_block_for_sft_tool_memory(tmp_
     assert row["status"] == "eligible" and quote in row["messages"][0]["content"]
     assert row["qa_contract"]["source_line_ranges"] == expected_ranges
     assert completion in row["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("kind,targets,required", [
+    ("brief", ["sft"], True),
+    ("text", ["multiturn"], True),
+    ("structured_document", ["sft"], True),
+    ("mixed", ["sft"], True),
+    ("conversation", ["sft"], False),
+    ("conversation", ["multiturn"], False),
+    ("text", ["cpt"], False),
+])
+def test_new_runs_require_director_for_new_questions_but_not_preserved_dialogues(tmp_path, kind, targets, required):
+    messages = [{"role": "user", "content": "Explain this concept."},
+                {"role": "assistant", "content": "Here is the explanation."}]
+    source = None
+    if kind == "text":
+        source = tmp_path / "source.txt"
+        source.write_text("A sufficient source paragraph for making new dialogue examples.", encoding="utf-8")
+    elif kind != "brief":
+        source = tmp_path / "source.jsonl"
+        rows = ([{"text": "The source explains a useful concept."}] if kind == "structured_document"
+                else [{"messages": messages}])
+        if kind == "mixed":
+            rows.append({"text": "Additional source facts need new questions."})
+        source.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    output = tmp_path / "output"
+    run_id = engine.create_run(output, sources=[source] if source else [],
+        brief="Design practical learning examples." if source is None else "",
+        targets=targets, qa_director={"enabled": False})
+    recipe = engine.read_json(engine.run_path(output, run_id) / "recipe.json")
+    assert recipe["qa_director"]["enabled"] is required
+    if required:
+        assert recipe["qa_director"]["planning_mode"] == "adaptive"
+        assert recipe["qa_director"]["question_separation"] is True
+        assert recipe["version"] >= 20
+        assert "workflow.sft_answer" in recipe["node_prompt_templates"]["sft"]
+    if kind == "conversation":
+        copied = engine.run_path(output, run_id) / "inputs" / recipe["sources"][0]["file"]
+        assert copied.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.parametrize("rows,expected", [
+    ([], None),
+    ([{"messages": [{"role": "user", "content": "Incomplete request."}]}], None),
+    ([{"messages": [{"role": "user", "content": "Explain."},
+                    {"role": "assistant", "content": "A complete reply."}]}], "conversation_collection"),
+    ([{"text": "Real document contents."}], "document_collection"),
+])
+def test_director_exemption_requires_complete_nonempty_recorded_conversations(tmp_path, rows, expected):
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps(rows), encoding="utf-8")
+    assert structured_source_kind(source, ["sft"]) == expected
+
+
+def test_new_director_requirement_keeps_existing_rules_and_exempts_repair():
+    from lib.contexts.workflows.contracts import prepare_new_dialogue_director
+    from lib.domain.workflow_qa_director import validate_qa_director
+    custom = {"enabled": True, "question_rules": "Use the chosen role and context.",
+              "answer_rules": "Preserve the supported conditions."}
+    assert prepare_new_dialogue_director(custom, ["sft"]) == validate_qa_director(custom)
+    assert prepare_new_dialogue_director({"enabled": False}, ["sft"], repair=True) == {"enabled": False}

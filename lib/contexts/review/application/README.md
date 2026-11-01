@@ -1,5 +1,15 @@
 # 审核用例
 
+v7 公开 system 注意事项重新生成与旧原生工具续写均可能在普通逐轮评审前停止；`review_guidance` 与 `tool_feedback` 按实际来源区分，完成状态仍为 `not_assessed`，不额外购买评审补状态。
+
+显式原生工具返工可能在逐轮评审前停止待审。该分支的 `review_repair.status` 与 `assessment` 均为 `not_assessed`，不能写成已经执行普通多轮审核或语义拒绝；原有局部缺陷与新稿仍保留。审核入口仅记录此次修复尝试，不为补齐状态额外购买模型评审。
+
+开放对话可显式复用已认证的完整首答做诊断续跑。`reuse_initial_native_response` 的收据使用 `attempts=0` 与 `reuse_first_native_answer_for_diagnostic_continuation`，不把读取原稿计为新修正。继续收集后续对话与训练合格是两项状态；逐轮和整段校验仍由原多轮用例执行，保留拒绝理由和完整原生推理，未解决的入库阻断不能被后续对话覆盖。
+
+新冻结 `native_dialogue_continuation_version=1` 的显式首轮原生返工，先由 `ExecuteRepairBranch` 验证全部父版本和原作者绑定，再通过组合根进入 workflows 的 `ContinueNativeDialogue`。该用例已执行逐轮、风格、契约和整段校验，`ReviewCandidate` 只绑定对应收据，不再次购买相同候选的独立评审。普通多轮文本返工和历史任务保持原路径。未通过的新稿与完整旧推理都保留，不能用改变状态冒充修正成功。
+
+显式原生集成路线的 SFT/CoT 是同一响应的两个格式：`ReviewGeneratedCollections` 只评审与修正完整 SFT，再逐条投影 CoT；既有 CoT→SFT 路线保持不变。生产部分目标不补出未选择的格式；最终汇总验证各自已绑定的审核收据，不重复请求模型。SFT 导出选择去掉推理时，配套 CoT 的完整推理仍需进入本次审核。验证见 `test_workflow_reasoning_route.py`。
+
 `VerifyReferenceAnswer` 只处理显式、版本化的无单位数值表达式参考合同。缺少参考是 `not_applicable`，不支持或工具失败是 `unresolved`，两者均不是正确证明。数学端口由组合根注入；通过只表示该最终数值等价，不证明推理、历史或来源范围正确。
 
 协议 7 的生成中推敲不属于独立评审。显式审核节点仍照常评分和保留拒绝结果，但不把这份生成指引再交给 `CheckReasoning` 追加清单请求；生成收据不能替代审核决定。验证：`tests/test_integrated_reflection.py`。

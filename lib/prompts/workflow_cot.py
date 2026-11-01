@@ -11,6 +11,7 @@ from dataclasses import replace as _reasoning_spec_replace
 from lib.prompts.workflow_shared_rules import (
     _SELF_CONTAINED_KNOWLEDGE, _SELF_CONTAINED_REVIEW, _configured_style_template,
     _USER_EPISTEMIC_BOUNDARY, _warmup_spec, _claim_scope_spec, _workshop_spec,
+    FIRST_PERSON_REVIEW_FEEDBACK, REVIEWER_ROLE_FEEDBACK,
 )
 from lib.prompts.workflow_prefill import (
     RATIONAL_ONLY_BODY, NATIVE_ANSWER_BODY, PREFIX_CHECK_BODY, RATIONAL_ONLY_BODY_V1_2,
@@ -18,6 +19,7 @@ from lib.prompts.workflow_prefill import (
 )
 from lib.prompts.workflow_agent_contracts import RATIONALE_CHECK_V1_6
 from lib.prompts.workflow_reasoning_workshop import COT_FINALIZATION_BODY_V1
+from lib.prompts.workflow_review_guidance import REVIEWER_SYSTEM_GUIDANCE
 
 
 COT_DIRECTED_CHECK = spec("cot_directed_check", "检查导出推理与答案对问答契约的遵循",
@@ -212,3 +214,18 @@ COT_RATIONALE = _workshop_spec(COT_RATIONALE, "1.3.0", prefix=True)
 COT_PREFIX_CHECK = _workshop_spec(COT_PREFIX_CHECK, "1.4.0", review=True)
 
 RATIONALE_CHECK = _workshop_spec(RATIONALE_CHECK, "1.9.0", review=True)
+
+RATIONALE_CHECK_V1_9 = RATIONALE_CHECK
+
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, version="1.10.0",
+    template=RATIONALE_CHECK.template + FIRST_PERSON_REVIEW_FEEDBACK)
+
+RATIONALE_CHECK_V1_10 = RATIONALE_CHECK
+
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, version="1.11.0",
+    template=RATIONALE_CHECK_V1_9.template + REVIEWER_ROLE_FEEDBACK)
+
+RATIONALE_CHECK_V1_11 = RATIONALE_CHECK
+
+RATIONALE_CHECK = _reasoning_spec_replace(RATIONALE_CHECK, version="1.12.0",
+    template=RATIONALE_CHECK_V1_9.template + REVIEWER_SYSTEM_GUIDANCE)

@@ -43,13 +43,20 @@ def test_invalid_experience_is_rejected_before_creating_any_job(tmp_path):
     assert not (tmp_path / "output").exists()
 
 
-def test_new_run_pins_experience_and_reuse_copies_the_exact_body(tmp_path):
+@pytest.mark.parametrize("native", [False, True])
+def test_new_run_pins_experience_and_reuse_copies_the_exact_body(tmp_path, native):
     text = "用户表面问句未必表达全部意图。只依据实际角色前文判断省略成分。" * 30
     output = tmp_path / "output"
     rid = engine.create_run(output, brief="设备维护业务", targets=["sft"],
+                            node_generation={"sft": {"enabled": True, "style": "default", "answer_mode": "native_joint"}}
+                            if native else None,
                             agent_experience={"answer": {"enabled": True, "text": text}})
     recipe = json.loads((engine.run_path(output, rid) / "recipe.json").read_text(encoding="utf-8"))
     assert recipe["agent_experience_version"] == 1
+    assert recipe["agent_experience"]["version"] == 5
+    assert recipe["agent_experience"]["scopes"]["reasoning"]["text"] == default_experience_text("reasoning")
+    if native:
+        assert recipe["native_feedback_guidance_version"] == 7
     assert recipe["agent_experience"]["scopes"]["answer"]["text"] == text
     assert recipe["authored_role_projection_version"] == 3
     before = deepcopy(recipe)

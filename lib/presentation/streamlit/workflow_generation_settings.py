@@ -49,6 +49,77 @@ def _restore_field(workspace: str, key: str, default):
     st.session_state[key] = _field(workspace, key, default)
 
 
+def generation_mode(workspace: str, node: str) -> str:
+    """New drafts use same-response reasoning; saved authoring choices stay intact."""
+    draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
+    legacy_keys = (f"workflow-generation-{field}:{workspace}:{node}"
+                   for field in ("enabled", "style", "instruction"))
+    legacy = any(key in draft or key in st.session_state for key in legacy_keys)
+    return _field(workspace, f"workflow-generation-answer-mode:{workspace}:{node}",
+                  "joint" if legacy or node == "cot" else "native_joint")
+
+
+def _change_generation_mode(workspace, node, save_field):
+    mode_key = f"workflow-generation-answer-mode:{workspace}:{node}"
+    enabled_key = f"workflow-generation-enabled:{workspace}:{node}"
+    st.session_state[enabled_key] = st.session_state[mode_key] == "native_joint"
+    save_field(workspace, mode_key)
+    save_field(workspace, enabled_key)
+
+
+def render_generation_mode(node, workspace, *, save_field):
+    """Keep the generation choice beside the answering model, on its own node."""
+    if node not in {"sft", "multiturn"}:
+        return
+    key = f"workflow-generation-answer-mode:{workspace}:{node}"
+    _restore_field(workspace, key, generation_mode(workspace, node))
+    en = st.session_state.get("ui_language", "zh") == "en"
+    labels = ({"native_joint": "Native reasoning + answer", "joint": "Standard generation"} if en else
+              {"native_joint": "原生 CoT 与答案同次生成", "joint": "普通生成"})
+    st.radio("Answer generation" if en else "回答生成方式", tuple(labels), key=key,
+             format_func=labels.__getitem__, horizontal=True, on_change=_change_generation_mode,
+             args=(workspace, node, save_field))
+    # Persist the initial choice too: hidden widgets are discarded by Streamlit,
+    # and merely opening another node must not switch this draft back to legacy.
+    if key not in st.session_state.get(f"workflow-form-draft:{workspace}", {}):
+        save_field(workspace, key)
+    if st.session_state[key] == "native_joint":
+        st.caption("The answering model returns both fields in one response. Edit its guidance in Prompts; set thinking intensity in Model settings."
+                   if en else "回答模型一次返回原生推理和答案。风格与思考要点在「提示词」中编辑，思考强度在本节点模型配置中设置。")
+
+
+def integrate_cot_draft(workspace, target_key, save_field):
+    """Explicitly migrate the editable draft, never a frozen run or its outputs."""
+    targets = list(st.session_state.get(target_key, []))
+    if "sft" not in targets and "multiturn" not in targets:
+        targets.append("sft")
+    destinations = [node for node in ("sft", "multiturn") if node in targets]
+    for node in destinations:
+        native_prompt = _field(workspace, f"workflow-node-prompt:{workspace}:cot:workflow.cot_native_joint", None)
+        if native_prompt is not None:
+            prompt_key = f"workflow-node-prompt:{workspace}:{node}:workflow.cot_native_joint"
+            st.session_state[prompt_key] = native_prompt
+            save_field(workspace, prompt_key)
+        for field, default in (("style", "default"), ("instruction", ""),
+                               ("reasoning-language", "auto"), ("reasoning-depth", "auto")):
+            key = f"workflow-generation-{field}:{workspace}:{node}"
+            st.session_state[key] = _field(workspace, f"workflow-generation-{field}:{workspace}:cot", default)
+            save_field(workspace, key)
+        for field, default in (("enabled", False), ("text", None)):
+            value = _field(workspace, f"workflow-cot-checklist-{field}:{workspace}", default)
+            if value is not None:
+                key = f"workflow-{node}-checklist-{field}:{workspace}"
+                st.session_state[key] = value
+                save_field(workspace, key)
+        for key, value in ((f"workflow-generation-answer-mode:{workspace}:{node}", "native_joint"),
+                           (f"workflow-generation-enabled:{workspace}:{node}", True),
+                           (f"workflow-{node}-checklist-version:{workspace}", 7)):
+            st.session_state[key] = value
+            save_field(workspace, key)
+    st.session_state[target_key] = [target for target in targets if target != "cot"]
+    save_field(workspace, target_key)
+
+
 def generation_snapshot(workspace: str, nodes) -> dict:
     """Read active nodes only, including settings hidden by node selection."""
     configuration = {node: {
@@ -61,6 +132,13 @@ def generation_snapshot(workspace: str, nodes) -> dict:
     } for node in nodes if node in {"sft", "cot", "multiturn"}}
     draft = st.session_state.get(f"workflow-form-draft:{workspace}", {})
     for node, settings in configuration.items():
+        if node in {"sft", "multiturn"} and generation_mode(workspace, node) == "native_joint":
+            settings.update(enabled=True, answer_mode="native_joint")
+            from .reasoning_checklist_controls import checklist_settings
+            try:
+                settings["self_check"] = checklist_settings(workspace, _field, node=node)
+            except ValueError:
+                settings["self_check"] = {}
         if node == "multiturn" and settings["enabled"] and _field(workspace, f"workflow-reading-session:{workspace}:{node}", False):
             settings["reading_session"] = True
         key = f"workflow-generation-reasoning-language:{workspace}:{node}"
@@ -99,8 +177,12 @@ def generation_issues(configuration: dict) -> list[str]:
     return invalid
 
 
-def reasoning_route_description(node, targets, recipe_version=15) -> str:
+def reasoning_route_description(node, targets, recipe_version=15, node_generation=None) -> str:
     """Explain the combined output at its nodes without adding another panel."""
+    if (recipe_version >= 42 and node in {"sft", "multiturn"}
+            and (node_generation or {}).get(node, {}).get("answer_mode") == "native_joint"):
+        return ("指导员设计用户发言；回答模型同次返回原生推理与答案，随后按已配置的质量流程处理。"
+                "SFT 默认分字段保留推理。")
     if not sft_uses_cot_output(targets, recipe_version):
         return ""
     return {
@@ -111,6 +193,7 @@ def reasoning_route_description(node, targets, recipe_version=15) -> str:
 
 def render_generation_settings(node: str, workspace: str, *, save_field, prompt_library=None) -> None:
     """Keep generation style separate from training-file output formatting."""
+    native = node in {"sft", "multiturn"} and generation_mode(workspace, node) == "native_joint"
     prefix = f"{workspace}:{node}"
     enabled_key = f"workflow-generation-enabled:{prefix}"
     style_key = f"workflow-generation-style:{prefix}"
@@ -134,18 +217,26 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                                         "reasoning_depth": "auto"},
                               apply_extras={enabled_key: True}, restore_extras={enabled_key: False},
                               label="我的风格模板", save_label="保存风格")
-        enabled = st.toggle("启用风格化生成", key=enabled_key,
-                            on_change=save_field, args=(workspace, enabled_key),
-                            help=("开启后，可重新生成或保真改写已有推理；关闭后核验已有推理。" if node == "cot" else
-                                  "开启后，教师按风格提示词撰写推理与答案；关闭后使用普通蒸馏。"))
-        if node == "multiturn":
+        if native:
+            enabled = True
+            st.caption("Guide native reasoning here. The complete reasoning and answer come from the same response."
+                       if language == "en" else "这里的风格直接引导原生思考；完整推理与答案来自同一次响应。")
+        else:
+            enabled = st.toggle("启用风格化生成", key=enabled_key,
+                                on_change=save_field, args=(workspace, enabled_key),
+                                help=("开启后，可重新生成或保真改写已有推理；关闭后核验已有推理。" if node == "cot" else
+                                      "开启后，教师按风格提示词撰写推理与答案；关闭后使用普通蒸馏。"))
+        if node == "multiturn" and native:
+            st.caption("Choose document reading or knowledge application on the director node. It designs user turns before this model answers."
+                       if language == "en" else "资料阅读或知识应用在指导员节点选择；先设计用户发言，再由这里的回答模型逐轮生成。")
+        if node == "multiturn" and not native:
             reading_key = f"workflow-reading-session:{prefix}"
             _restore_field(workspace, reading_key, False)
             reading = st.toggle("资料阅读与情景对话", key=reading_key, disabled=not enabled,
                 on_change=save_field, args=(workspace, reading_key))
             if enabled and reading:
-                st.caption("同一份资料连续对话，直接保留原生思考和答案；任务规则与资料一同导出。故事只给用户模拟器，助手看到实际发言后再回答。")
-                st.caption("在下方编辑场景、用户发言和回答三套提示词。轮数是上限，用户目标完成即可停止；未独立评审会明确标记。")
+                st.caption("New runs use the director's document-reading route with native reasoning. Saved runs keep the previous scene protocol."
+                           if language == "en" else "新建任务会转为指导员负责的资料阅读流程，并同次保留原生推理；已保存任务继续使用原情景协议。")
         style = st.selectbox("生成风格", GENERATION_STYLES, key=style_key, disabled=not enabled,
                              format_func=lambda value: translate_label(STYLE_LABELS[value], language),
                              on_change=save_field, args=(workspace, style_key))
@@ -160,15 +251,23 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
             st.selectbox("推理语言", REASONING_LANGUAGES, key=reasoning_language_key, disabled=not enabled,
                          format_func=lambda value: translate_label(REASONING_LANGUAGE_LABELS[value], language),
                          on_change=save_field, args=(workspace, reasoning_language_key),
-                         help="围绕影响判断的关键概念、短语或关键句做忠实中英互译，解释含义、条件或歧义并推进论证。保留完整相关推理，避免全文写成两份译文。答案跟随用户语言，只控制新撰写的显式推理。")
+                         help=(("Guide the language of native reasoning. The final answer follows the user's language; bilingual guidance focuses on relevant terms and meanings."
+                                if language == "en" else "引导原生推理的语言。互译围绕影响判断的关键词句，不要求全文翻译；最终答案跟随用户语言。") if native else
+                               "围绕影响判断的关键概念、短语或关键句做忠实中英互译，解释含义、条件或歧义并推进论证。保留完整相关推理，避免全文写成两份译文。答案跟随用户语言，只控制新撰写的显式推理。"))
         with depth_column:
-            st.selectbox("显式推理深度", tuple(REASONING_DEPTH_LABELS), key=reasoning_depth_key,
+            st.selectbox(("Reasoning detail" if language == "en" else "推理展开程度") if native else "显式推理深度", tuple(REASONING_DEPTH_LABELS), key=reasoning_depth_key,
                          disabled=not enabled,
                          format_func=lambda value: translate_label(REASONING_DEPTH_LABELS[value], language),
                          on_change=save_field, args=(workspace, reasoning_depth_key),
-                         help="控制新生成的训练用解释如何展开，与模型原生思考强度独立，不保证字数。深入档补全必要推导与核对，不要求固定步骤或凑长；混合档为样本稳定分配档位。选择随任务即可取消控制。")
+                         help=(("Guidance for how reasoning develops, not a length guarantee. Set provider thinking intensity in this node's model settings."
+                                if language == "en" else "引导推理如何展开，不保证字数、不规定步骤。上游思考强度仍在本节点模型配置中设置。") if native else
+                               "控制新生成的训练用解释如何展开，与模型原生思考强度独立，不保证字数。深入档补全必要推导与核对，不要求固定步骤或凑长；混合档为样本稳定分配档位。选择随任务即可取消控制。"))
         if not enabled:
             st.caption("开启风格化生成后，可指定显式推理的语言与深度；关闭时保留选择但不生效。")
+        if native:
+            from .reasoning_checklist_controls import render_reasoning_checklist
+            render_reasoning_checklist(workspace, field=_field, restore=_restore_field,
+                save_field=save_field, prompt_library=prompt_library, node=node)
         if node == "cot" and enabled:
             mode_key = f"workflow-generation-answer-mode:{prefix}"
             _restore_field(workspace, mode_key, "joint")
@@ -218,7 +317,10 @@ def render_generation_settings(node: str, workspace: str, *, save_field, prompt_
                 '<div><i aria-hidden="true">◈</i><strong>' + html.escape(translate(status, language)) +
                 '</strong><span>' + html.escape(translate(STYLE_LABELS[style], language)) + '</span></div>'
                 '<p>' + html.escape(translate(description if enabled else inactive_description, language)) + '</p></div>')
-        if enabled:
+        if native:
+            st.caption("Generation preserves native reasoning; it does not establish an independent review pass."
+                       if language == "en" else "生成时完整保留原生推理；生成完成不等于独立评审通过。")
+        elif enabled:
             st.caption("一次回复保留模型原生思考与答案。生成完成不代表独立评审通过。" if node == "multiturn" and st.session_state.get(f"workflow-reading-session:{prefix}") else
                        "正文按任务自然组织，不套固定步骤；必要推导须写进正文，审计记录不能代替解释。推理规范可在节点提示词编辑。" if node == "cot" else
                        "教师根据提示词生成显式推理与答案，正确性与风格分别检查。")
@@ -405,6 +507,8 @@ def generation_summary(configuration: dict, language: str) -> str:
         label = translate(STYLE_LABELS.get(settings.get("style"), "遵循任务"), language)
         if settings.get("enabled"):
             detail = label + (" + " + translate("附加指令", language) if settings.get("instruction", "").strip() else "")
+            if node in {"sft", "multiturn"} and settings.get("answer_mode") == "native_joint":
+                detail = ("Native CoT · " if language == "en" else "原生 CoT · ") + detail
             reasoning_language = settings.get("reasoning_language", "auto")
             if reasoning_language != "auto":
                 detail += " · " + translate(REASONING_LANGUAGE_LABELS[reasoning_language], language)

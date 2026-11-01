@@ -14,6 +14,11 @@ from lib.prompts.workflow_agent_contracts import (
 from lib.prompts.workflow_utterance import (
     QA_DIRECTOR_V1_10, QUESTION_USER_V1_3, QUESTION_FIT_V1_4, QA_DIRECTOR_V1_11,
 )
+from lib.prompts.workflow_user_expression import (
+    ADAPTIVE_USER_EXPRESSION, DIRECTOR_EXPRESSION_DISPATCH,
+    ADAPTIVE_USER_EXPRESSION_V2, DIRECTOR_EXPRESSION_DISPATCH_V2,
+    DIRECTOR_CONSTRAINT_PROVENANCE, DIRECTOR_EXPRESSION_DISPATCH_V3,
+)
 
 
 PLAN = spec("plan", "从开放需求规划训练任务",
@@ -208,3 +213,92 @@ QA_DIRECTOR_V1_10 = QA_DIRECTOR
 
 QA_DIRECTOR = _reasoning_spec_replace(QA_DIRECTOR, version="1.11.0", template=spec(
     "qa_director", "依据真实互动依赖选择多轮任务并自然结束", QA_DIRECTOR_V1_11).template)
+
+QA_DIRECTOR_V1_11_SPEC = QA_DIRECTOR
+
+QUESTION_USER_V1_3_SPEC = QUESTION_USER
+
+QA_DIRECTOR = context_version(QA_DIRECTOR, version="1.12.0", body=(
+    ADAPTIVE_USER_EXPRESSION + "\n" + DIRECTOR_EXPRESSION_DISPATCH))
+
+QUESTION_USER = context_version(QUESTION_USER, version="1.4.0", body=ADAPTIVE_USER_EXPRESSION)
+
+QA_DIRECTOR_V1_12_SPEC = QA_DIRECTOR
+
+_PREVIOUS_DIRECTOR_EVIDENCE_RULE = (
+    "事实任务的evidence_quotes必须来自实际可用的完整资料范围；有线索类型的核验引用还须在visible_context中。"
+    "开放需求没有独立资料时只使用其明确条件，不制造引用或声称已事实核验。"
+)
+_DIRECTOR_TASK_BASIS_RULE = (
+    "evidence_quotes是指导员私有的任务依据逐字摘录，必填且保留数组，不等于提供给用户的资料。"
+    "程序以候选teacher_evidence或实际所选来源作为source_text校验；来源已提供时，"
+    "有效任务的evidence_quotes不能省略或为空，每条必须完整位于该任务可用原文或一个实际选区内。"
+    "closed_book只要求visible_context为空，不免除私有任务依据；引用仍不发给独立发言者。"
+    "候选kind=brief或source_is_synthetic=true时，摘录已提供需求中的明确目标、约束或当前条件，"
+    "用来说明任务从何而来，不需要另找外部论文，也不能把合成需求包装成已核实的事实来源。"
+    "这种摘录不能证明后续助手的技术建议、产品能力、因果判断或实验结果正确。"
+    "文档事实任务则引用支持该任务的原始知识与必要条件；有线索类型的核验引用还须在visible_context中。"
+    "不捏造不存在于原文的引句，不引用内部guidance、历史答案或自己刚写的question来代替候选来源。"
+    "没有独立资料的开放需求仍只按其明确条件设计，不声称外部事实已核验；"
+    "合理引用已提供需求与伪造外部事实引文是不同的行为。"
+    "若实际没有可用依据支持新的任务，adaptive沿用skip_reason契约，不用空依据提交有效任务。"
+)
+if QA_DIRECTOR.template.count(_PREVIOUS_DIRECTOR_EVIDENCE_RULE) != 1:
+    raise ValueError("director_task_basis_anchor_changed")
+QA_DIRECTOR = _reasoning_spec_replace(
+    QA_DIRECTOR, version="1.13.0",
+    template=QA_DIRECTOR.template.replace(_PREVIOUS_DIRECTOR_EVIDENCE_RULE, _DIRECTOR_TASK_BASIS_RULE, 1),
+)
+
+QA_DIRECTOR_V1_13_SPEC = QA_DIRECTOR
+QUESTION_USER_V1_4_SPEC = QUESTION_USER
+
+# Change the source-of-truth and task-design clauses in this new version, rather
+# than leaving the earlier instructions in force and appending an opposing rule.
+QA_DIRECTOR = _reasoning_spec_replace(
+    QA_DIRECTOR, version="1.14.0",
+    template=QA_DIRECTOR.template.replace(
+        "next_turn时仅根据dialogue_messages、previous_dialogue_state、dialogue_design、qa_contract、已发生的真实回应及反馈决定是否继续。教师材料和预写计划不自动进入shared_understanding。",
+        "next_turn时以dialogue_messages中实际说话者、话语层级和已发生的回应为准，结合qa_contract及真实反馈决定是否继续。previous_dialogue_state是可错的摘要，dialogue_design是可调整计划；它们不能替代原话证明用户意图或已完成事实。教师材料、助手示例和预写计划不自动成为双方确认的内容。",
+        1,
+    ).replace(
+        '"shared_understanding": ["双方实际已说出或确认的内容"]',
+        '"shared_understanding": ["有实际发言依据的理解，保留说话者、示例或建议层级及确认范围"]',
+        1,
+    ).replace(
+        "应选择助手先交付当前可用成果、用户查看实际成果后提出有意义的新约束/反馈、助手据此修订或共同解决的活动；",
+        "选择确有前后依赖的协作，后续行动取决于实际成果与当时未解决的目标；可以有反馈和修订，但不预设用户每轮认可成果后追加新约束，",
+        1,
+    ).replace(
+        "turn_guidance写可依据真实回应选择的协作方向、哪些约束或判断须在成果出现后由用户表达；",
+        "turn_guidance写依据真实成果继续、调整或结束的可能方向，不预先安排用户必须新增哪些偏好或认可；",
+        1,
+    ).replace(ADAPTIVE_USER_EXPRESSION, ADAPTIVE_USER_EXPRESSION_V2, 1).replace(
+        DIRECTOR_EXPRESSION_DISPATCH, DIRECTOR_EXPRESSION_DISPATCH_V2, 1,
+    ),
+)
+
+QUESTION_USER = _reasoning_spec_replace(
+    QUESTION_USER, version="1.5.0",
+    template=QUESTION_USER.template.replace(ADAPTIVE_USER_EXPRESSION, ADAPTIVE_USER_EXPRESSION_V2, 1),
+)
+
+QA_DIRECTOR_V1_14_SPEC = QA_DIRECTOR
+
+# In the new contract, source selection is model-owned; constraint text and
+# receipts are program-owned. Historical response schemas remain untouched.
+_OLD_CONSTRAINT_FIELD = '"active_constraints": ["当前真实约束"], '
+_NEXT_TURN_REASON_FIELD = '"reason": "继续或结束的具体依据", "dialogue_state":'
+if (QA_DIRECTOR.template.count(_OLD_CONSTRAINT_FIELD) != 1
+        or QA_DIRECTOR.template.count(_NEXT_TURN_REASON_FIELD) != 1):
+    raise ValueError("director_constraint_provenance_anchor_changed")
+QA_DIRECTOR = _reasoning_spec_replace(
+    QA_DIRECTOR, version="1.15.0",
+    template=QA_DIRECTOR.template.replace(_OLD_CONSTRAINT_FIELD, "", 1).replace(
+        _NEXT_TURN_REASON_FIELD,
+        '"reason": "继续或结束的具体依据", "user_constraint_refs": [], "dialogue_state":', 1,
+    ).replace(
+        "返回以下JSON；dialogue_state还可包含expression_design表达建议和conversational_frame，字段与上面相同。",
+        DIRECTOR_CONSTRAINT_PROVENANCE + "\n返回以下JSON；dialogue_state还可包含expression_design表达建议和conversational_frame，字段与上面相同。", 1,
+    ).replace(DIRECTOR_EXPRESSION_DISPATCH_V2, DIRECTOR_EXPRESSION_DISPATCH_V3, 1),
+)

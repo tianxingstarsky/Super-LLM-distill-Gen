@@ -133,6 +133,13 @@ class TrimReasoning:
     def finalize(self, collections, *, delivery_targets=None):
         """Finalize one reasoning result before exposing its selected formats."""
         selected = set(self.recipe["targets"] if delivery_targets is None else delivery_targets)
+        from ..domain.native_generation import native_generation_enabled
+        if native_generation_enabled(self.recipe, "sft") and "cot" in selected:
+            # One canonical conversation is trimmed once; CoT is only another
+            # export view of that same native response, never a new request.
+            self._port.apply_reasoning_trim(collections, targets=("sft",))
+            self._port.publish_native_cot(collections)
+            return
         if not cot_updates_sft(self.recipe):
             self._port.apply_reasoning_trim(collections)
             return

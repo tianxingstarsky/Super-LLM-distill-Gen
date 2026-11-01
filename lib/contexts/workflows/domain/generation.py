@@ -26,8 +26,10 @@ def generation_style(recipe, stage, sample_id):
     if pinned is not None:
         style["instruction"] = pinned
         from lib.domain.workflow_generation import reasoning_language_instruction
+        from .native_generation import native_generation_enabled
         language_rule = reasoning_language_instruction(style.get("reasoning_language", "auto"),
-                                                        version=language_version)
+                                                        version=language_version,
+                                                        native=native_generation_enabled(recipe, stage))
         if language_rule and not pinned.endswith(language_rule):
             style["instruction"] += "\n" + language_rule
     if style.get("reasoning_depth_instruction"):

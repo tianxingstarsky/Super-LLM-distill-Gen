@@ -205,6 +205,15 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
             values[f"workflow-generation-reasoning-language:{workspace}:{node}"] = generation["reasoning_language"]
         if "reasoning_depth" in generation:
             values[f"workflow-generation-reasoning-depth:{workspace}:{node}"] = generation["reasoning_depth"]
+        if node in {"sft", "multiturn"}:
+            values[f"workflow-generation-answer-mode:{workspace}:{node}"] = generation.get("answer_mode", "joint")
+            values[f"workflow-{node}-checklist-enabled:{workspace}"] = bool(generation.get("self_check"))
+            if checklist := generation.get("self_check"):
+                values[f"workflow-{node}-checklist-version:{workspace}"] = checklist["version"]
+                values[f"workflow-{node}-checklist-text:{workspace}"] = "\n".join(
+                    ("? " if rule["allow_na"] else "")
+                    + ("[" + rule["phases"][0] + "] " if len(rule.get("phases", [])) == 1 else "")
+                    + rule["requirement"] for rule in checklist["rules"])
         if node == "cot":
             values[f"workflow-generation-answer-mode:{workspace}:{node}"] = generation.get("answer_mode", "joint")
             policy = generation.get("review_policy", {"mode": "strict", "sample_percent": 20})
@@ -294,8 +303,13 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
                                      recipe_version=max(18 if review_repair else 16, recipe.get("version", 16)),
                                      source_cleaning=recipe.get("source_cleaning", False), review_repair=review_repair,
                                      arithmetic_seed_protocol_version=recipe.get("arithmetic_seed_protocol_version", 0),
-                                     cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0))
+                                     cpt_review_policy_version=recipe.get("cpt_review_policy_version", 0),
+                                     native_generation_version=recipe.get("native_generation_version", 0))
     for node in prompt_nodes:
+        if node in {"sft", "multiturn"}:
+            # Reusing a legacy recipe keeps its generation route. The new
+            # native default belongs only to genuinely new creation drafts.
+            values.setdefault(f"workflow-generation-answer-mode:{workspace}:{node}", "joint")
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
                                                 package_review=package_review, review_repair=review_repair,
                                                 qa_director=director, cpt_processing=cpt_processing,

@@ -198,6 +198,9 @@ class FilesystemHumanSessionDriver:
             if "cpt" not in inherited["targets"]:
                 inherited.pop("cpt_processing", None)
             inherited.pop("repair_inputs", None)
+            # Reusing an existing failed first answer is an explicit action,
+            # never a default inherited by later repair or generation rounds.
+            inherited.pop("reuse_initial_native_response", None)
             if inherited.get("production"):
                 inherited["production"]["goals"] = {target: count for target, count in inherited["production"]["goals"].items()
                     if target in inherited["targets"]}
@@ -468,16 +471,36 @@ class FilesystemHumanSessionDriver:
         self._can_prepare(state, issue_rework=issue_ids is not None)
         human_review = repair_inputs is not None and (review_mode or
             (state["blueprint"].get("review_repair") or {}).get("mode")) == "human"
+        from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
+        continue_native = (not human_review and any(item["target"] == "multiturn"
+            and is_initial_native_dialogue_failure(item["record"]) for item in (repair_inputs or [])))
         blueprint, pins = self._checked_blueprint(path, state,
-            check_models=not human_review and repair_node_models is None)
+            check_models=not human_review and (repair_node_models is None or continue_native))
         if repair_node_models is not None:
-            blueprint["node_models"] = deepcopy(repair_node_models)
+            blueprint["node_models"] = ({**blueprint["node_models"],
+                "review": {**blueprint["node_models"].get("review", {}),
+                           **deepcopy(repair_node_models.get("review", {}))}} if continue_native
+                else deepcopy(repair_node_models))
         blueprint["qa_director"] = {**blueprint["qa_director"], "human_augmentation": human}
         if repair_inputs is not None:
             # Existing answers are immutable repair evidence, never new SFT
-            # seeds. This branch executes only the review node and packaging.
-            blueprint["qa_director"] = {**blueprint["qa_director"], "enabled": False,
+            # seeds. An explicit native first-answer continuation also retains
+            # the director for subsequent turns within this repair branch.
+            blueprint["qa_director"] = {**blueprint["qa_director"],
+                                        "enabled": blueprint["qa_director"]["enabled"] if continue_native else False,
                                         "human_augmentation": {"enabled": False}}
+            if continue_native:
+                # A new child adopts current registered defaults; authored
+                # rules remain exact. The parent's frozen catalog is untouched.
+                from lib.prompts import registry_versions, render
+                registered = registry_versions()
+                for stage, prompt_id in (("director", "workflow.qa_director"),
+                                         ("multiturn", "workflow.cot_native_joint")):
+                    overrides = (blueprint.get("node_prompts") or {}).get(stage, {})
+                    text = overrides.get(prompt_id)
+                    if isinstance(text, str) and any(text == render(spec)
+                            for spec in registered.get(prompt_id, {}).values()):
+                        overrides.pop(prompt_id)
             blueprint["repair_inputs"] = deepcopy(repair_inputs)
             blueprint["targets"] = list(dict.fromkeys(item["target"] for item in repair_inputs))
             if "sft" not in blueprint["targets"]:
@@ -502,14 +525,17 @@ class FilesystemHumanSessionDriver:
                     binding = models.get(target_node, {}).get("generation") or models.get("sft", {}).get("generation")
                     if binding:
                         bindings["generation"] = deepcopy(binding)
-                if (blueprint.get("package_review") or {}).get("enabled") and not bindings.get("jev"):
+                needs_reviewer = continue_native or (blueprint.get("package_review") or {}).get("enabled")
+                if needs_reviewer and not bindings.get("jev"):
                     binding = (models.get("jev", {}).get("jev") or models.get("package", {}).get("jev")
                                or models.get(target_node, {}).get("jev") or bindings.get("generation"))
                     if binding:
                         bindings["jev"] = deepcopy(binding)
-                active_roles = {"generation", "jev"} if (blueprint.get("package_review") or {}).get("enabled") else {"generation"}
+                active_roles = {"generation", "jev"} if needs_reviewer else {"generation"}
                 selected = {role: binding for role, binding in bindings.items() if role in active_roles}
-                blueprint["node_models"] = {"review": selected} if selected else {}
+                continued = {stage: deepcopy(models[stage]) for stage in ("director", "multiturn")
+                    if continue_native and stage in models}
+                blueprint["node_models"] = {**continued, **({"review": selected} if selected else {})}
             pins = {stage: {role: snapshot_backend_endpoint(self.root, binding["backend"], binding["model"])
                 for role, binding in roles.items()} for stage, roles in blueprint["node_models"].items()}
         if sample_count is not None:

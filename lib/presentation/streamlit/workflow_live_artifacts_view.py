@@ -153,6 +153,7 @@ def render_live_artifacts(application, run_id, *, state, recipe):
     source_cleaning = bool(recipe.get("source_cleaning"))
     scheduled, _ = execution_graph(recipe.get("targets", ()),
         node_generation=recipe.get("node_generation"),
+        native_generation_version=recipe.get("native_generation_version", 0),
         reasoning_trim=bool((recipe.get("reasoning_trim") or {}).get("enabled")),
         qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
         review_repair=recipe.get("review_repair"), source_cleaning=source_cleaning,

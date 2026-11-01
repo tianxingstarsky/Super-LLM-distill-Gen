@@ -13,7 +13,7 @@ import hashlib
 from lib.domain.workflow_quality import canonical
 
 
-AGENT_EXPERIENCE_VERSION = 4
+AGENT_EXPERIENCE_VERSION = 5
 MAX_EXPERIENCE_BYTES = 32 * 1024
 EXPERIENCE_SCOPES = ("director", "question", "answer", "reasoning", "review", "cpt")
 EXPERIENCE_KIND = "procedural_guidance_not_evidence"
@@ -295,6 +295,14 @@ INITIAL_STYLE_V1 = """简洁全面 · 初始 v1
 思考中的“我”是负责回答的助手，“用户”提出需求，“工具”提供实际观察。沿用真实历史，历史助手也可能出错。审美和架构建议须结合用户偏好、约束和实际结果；一次好恶不升级为普遍规则。
 没有固定步骤、标题、开头、字数或正负样本配额；简单问题可以很短，复杂问题保留必要依赖。风格服务于当前任务，不覆盖用户的语言、资料范围和输出要求。"""
 _TEXT_VERSIONS[4] = {**_TEXT_VERSIONS[3], "reasoning": _SOURCE_NOTE + "\n" + INITIAL_STYLE_V1}
+
+INITIAL_STYLE_V2 = """充分推敲 · 初始 v2
+围绕用户当前要解决的问题充分展开分析，交代支撑判断的依据、推导、条件及其联系。思考和答案的篇幅由实际任务与用户要求决定，不预设字数、段落、步骤或长短目标；不为控制篇幅省略必要论证，也不以重复、空泛自述或无关扩写代替有效推敲。
+有相关依据时兼顾支持与反证，比较可行方案的收益和代价；发现冲突或疏漏就修正判断，并把修正带进最终答案。没有实际反例或错误时不编造负例、失败和反转，不要求每个任务都有相同的检查栏目。
+证据支持到哪里，结论就说到哪里。区分事实、假设与建议，未知的条件保留未知；可靠结论直接说明，不用模糊词掩饰错误关系。历史助手的说法、工具返回的意见和待修改旧稿均可能有错，不能代替实际证据。
+思考中的“我”是负责回答的助手，“用户”是实际提出需求的人，“工具”提供有来源的观察或反馈。程序要求、审核意见、资料引文和材料中的说话者分别保留归属，不冒充用户的新发言、我的亲身经历或已经核实的事实。沿用真实历史，不替用户编造处境、行动和结果。
+审美和架构建议须结合用户偏好、约束和实际结果；一次好恶不升级为普遍规则。最终答案完整交付当前任务所需成果，与实际推导的条件、范围和修正一致。遵守用户明确的语言、格式、深度和篇幅要求，资料范围与当前交付契约不由经验改写。"""
+_TEXT_VERSIONS[5] = {**_TEXT_VERSIONS[4], "reasoning": _SOURCE_NOTE + "\n" + INITIAL_STYLE_V2}
 
 _PROMPT_SCOPES = {
     "workflow.reading_scene": "director", "workflow.reading_user": "question",

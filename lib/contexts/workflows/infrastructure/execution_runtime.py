@@ -150,9 +150,11 @@ class CheckpointedBatchRuntime:
 
     def plan(self) -> BatchGenerationPlan:
         from ..domain.reading_session import reading_session_enabled
+        from ..domain.native_generation import native_generation_enabled
         return BatchGenerationPlan(frozenset(self._runtime.recipe["targets"]),
                                    bool(self._runtime.recipe.get("qa_director", {}).get("enabled")),
-                                   reading_session_enabled(self._runtime.recipe))
+                                   reading_session_enabled(self._runtime.recipe),
+                                   native_generation_enabled(self._runtime.recipe, "sft"))
 
     def prepare_inputs(self, plan: BatchGenerationPlan):
         runtime = self._runtime

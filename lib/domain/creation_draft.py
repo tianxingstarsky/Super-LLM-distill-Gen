@@ -20,6 +20,8 @@ NUMBER_FIELDS = {
     'workflow-conversation-reasoning-version': (1, 3),
     'workflow-generation-review-percent': (1, 100),
     'workflow-cot-checklist-version': (1, 7),
+    'workflow-sft-checklist-version': (7, 7),
+    'workflow-multiturn-checklist-version': (7, 7),
     'workflow-cot-evidence-policy': (0, 2),
     'workflow-count': (1, MAX_PRODUCTION_GOAL), 'workflow-max-units': (1, MAX_PRODUCTION_GOAL),
     'workflow-turns': (2, 8), 'workflow-concurrency': (1, MAX_CONCURRENCY),
@@ -53,6 +55,8 @@ TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-mat
                'workflow-human-answer-requirements': 6000,
                'workflow-node-prompt': MAX_NODE_PROMPT_CHARS,
                'workflow-cot-checklist-text': 32000,
+               'workflow-sft-checklist-text': 32000,
+               'workflow-multiturn-checklist-text': 32000,
                'workflow-agent-experience-text': 32768}
 ENUM_FIELDS = {'workflow-sft-output-style': frozenset({'separated', 'drop'}),
                'workflow-conversation-format': frozenset({'标准 JSON / JSONL', 'DSH 会话库'}),
@@ -80,6 +84,7 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-reading-session', 'workflow-trim-enabled',
                   'workflow-cot-checklist-enabled',
+                  'workflow-sft-checklist-enabled', 'workflow-multiturn-checklist-enabled',
                   'workflow-preference-reuse-failures',
                   'workflow-docling-ocr', 'workflow-docling-formula', 'workflow-docling-assist', 'workflow-docling-page-review',
                   'workflow-package-review-enabled', 'workflow-director-enabled',
@@ -91,6 +96,9 @@ NODE_GENERATION_FIELDS = {'workflow-generation-enabled', 'workflow-reading-sessi
                           'workflow-generation-reasoning-language', 'workflow-generation-reasoning-depth'}
 HUMAN_FIELDS = {'workflow-human-enabled', 'workflow-human-seeds',
                 'workflow-human-question-requirements', 'workflow-human-answer-requirements'}
+NATIVE_CHECKLIST_FIELDS = {f'workflow-{node}-checklist-{field}'
+                          for node in ('sft', 'multiturn')
+                          for field in ('enabled', 'text', 'version')}
 _MODEL_INITIALIZATION_MARKERS = frozenset(
     node + ':' + role for node, roles in NODE_ROLES.items() for role in roles)
 _HUMAN_SEED_LIMITS = {'question': 12_000, 'answer': 12_000,
@@ -144,7 +152,7 @@ def validate_creation_draft(values):
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
                      'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
                      'workflow-director-learning-goal', 'workflow-director-user-languages',
-                     *HUMAN_FIELDS} and len(parts) != 2 and not model_initialized:
+                     *HUMAN_FIELDS, *NATIVE_CHECKLIST_FIELDS} and len(parts) != 2 and not model_initialized:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:
             parts = key.split(':')
@@ -152,8 +160,11 @@ def validate_creation_draft(values):
                 raise ValueError('invalid_creation_draft')
             if len(parts) != 3 or not parts[1] or parts[2] not in {'sft', 'cot', 'multiturn'}:
                 raise ValueError('invalid_creation_draft')
-            if field in {'workflow-generation-answer-mode', 'workflow-generation-review-mode',
+            if field in {'workflow-generation-review-mode',
                          'workflow-generation-review-percent'} and parts[2] != 'cot':
+                raise ValueError('invalid_creation_draft')
+            if (field == 'workflow-generation-answer-mode' and parts[2] != 'cot'
+                    and value not in ('joint', 'native_joint')):
                 raise ValueError('invalid_creation_draft')
         if field == 'workflow-node-prompt':
             parts = key.split(':')
@@ -188,7 +199,8 @@ def validate_creation_draft(values):
                      and (field != 'workflow-node-prompt' or '\x00' not in value))
             if field in HUMAN_FIELDS:
                 valid = _human_text(value, TEXT_FIELDS[field])
-            if field == 'workflow-cot-checklist-text':
+            if field in {'workflow-cot-checklist-text', 'workflow-sft-checklist-text',
+                         'workflow-multiturn-checklist-text'}:
                 valid = _human_text(value, TEXT_FIELDS[field])
             if field == 'workflow-agent-experience-text':
                 try:

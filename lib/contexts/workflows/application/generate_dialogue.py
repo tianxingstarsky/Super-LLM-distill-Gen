@@ -13,6 +13,8 @@ from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_quality import accepted, conversation_issue, same_answer, text_issue, tool_error_flag
 from lib.domain.human_augmentation import human_generation_instruction
 from ..domain.imported_reasoning import imported_reasoning_metadata
+from ..domain.native_generation import native_generation_enabled
+from ..domain.native_dialogue_continuation import native_dialogue_progress_blocker
 
 
 class GenerateMultiturnDialogue:
@@ -20,7 +22,8 @@ class GenerateMultiturnDialogue:
         self._port = port
         self.recipe = recipe
 
-    def execute(self, unit):
+    def execute(self, unit, *, continuation=None):
+        native = native_generation_enabled(self.recipe, "multiturn") and unit.get("kind") != "conversation"
         from ..domain.reading_session import reading_session_enabled
         if reading_session_enabled(self.recipe):
             return self._reading_session(unit)
@@ -28,9 +31,9 @@ class GenerateMultiturnDialogue:
         # Imported dialogue and frozen older requests remain literal.
         style_node = "multiturn" if "multiturn" in self.recipe.get("node_generation", {}) else "sft"
         style = (self._port.generation_style(style_node, unit["id"])
-                 if self.recipe.get("multiturn_generation_style_version") == 1
+                 if (native or self.recipe.get("multiturn_generation_style_version") == 1)
                  and unit.get("kind") != "conversation" else None)
-        rows = self.generate(unit, style=style)
+        rows = self.generate(unit, style=style, continuation=continuation)
         for row in rows:
             row.update(imported_reasoning_metadata(unit, messages_preserved=(
                 unit.get("kind") == "conversation" and row.get("messages") == unit.get("messages"))))
@@ -39,7 +42,7 @@ class GenerateMultiturnDialogue:
                 row["generation_style"] = deepcopy(style)
                 if any(message.get("role") == "assistant" and message.get("reasoning_content")
                        for message in row.get("messages", [])):
-                    row["reasoning_origin"] = "prompt_styled_generation"
+                    row["reasoning_origin"] = "provider_reasoning" if native else "prompt_styled_generation"
         return rows
 
     def _reading_session(self, unit):
@@ -137,13 +140,16 @@ class GenerateMultiturnDialogue:
             row.update(self._port.reject(unit, issues[0]))
         return [row]
 
-    def generate(self, unit, *, style=None):
+    def generate(self, unit, *, style=None, continuation=None):
         """Build or conservatively assess a complete multi-turn conversation.
 
         Imported traces are never rewritten. Generated turns use separate
         user/assistant calls, turn-level review, and a whole-dialogue check.
         All model checks are assessments, never independent fact verification.
         """
+        if (native_generation_enabled(self.recipe, "multiturn") and unit.get("kind") != "conversation"
+                and not unit.get("qa_contract")):
+            return [self._port.reject(unit, "native_generation_requires_director_contract")]
         if unit.get("verification_status") == "synthetic_unverified":
             return [self._port.reject(unit, "simulated_tool_observation_not_verified_multiturn")]
         if any(tool_error_flag(message)[0] or tool_error_flag(message)[1]
@@ -151,10 +157,41 @@ class GenerateMultiturnDialogue:
             return [self._port.reject(unit, "observed_tool_error_not_multiturn")]
         dialogue = self._prepare(unit, style)
         failed = (self._review_recorded(unit, dialogue) if unit["kind"] == "conversation"
-                  else self._generate_turns(unit, style, dialogue))
-        if failed is not None:
-            return failed
-        return self._assess_complete(unit, dialogue)
+                  else self._generate_turns(unit, style, dialogue, continuation=continuation))
+        rows = failed if failed is not None else self._assess_complete(unit, dialogue)
+        if self.recipe.get("native_dialogue_progress_version") in {1, 2} and native_generation_enabled(self.recipe, "multiturn"):
+            for row in rows:
+                # A usable continuation context is not a training acceptance.
+                # The complete native trace and its unresolved defect survive
+                # every ordinary assessment and remain excluded from export.
+                if (dialogue.release_blockers or dialogue.diagnostic_continuation) and row.get("status") == "eligible":
+                    row.update(status="quarantined", reason="multiturn_native_quality_pending")
+                candidate_messages = (row.get("messages") or
+                    (row.get("failed_generation") or {}).get("messages") or dialogue.messages)
+                row["dialogue_progress"] = {
+                    "version": self.recipe["native_dialogue_progress_version"],
+                    "generation": "complete" if failed is None else "stopped",
+                    "generated_turns": sum(message.get("role") == "assistant" for message in candidate_messages),
+                    "passed_turn_reviews": sum(review.get("accepted", True) for review in dialogue.reviews),
+                    "training_admission": row.get("status", "quarantined"),
+                    "release_blockers": deepcopy(dialogue.release_blockers),
+                    "initial_response_reused": bool(continuation and continuation.get("initial_native_response")),
+                    **({"stop_reason": row.get("reason")} if failed is not None else {})}
+        return rows
+
+    @staticmethod
+    def _history_receipt(dialogue):
+        if not dialogue.diagnostic_continuation and not dialogue.release_blockers:
+            return {"accepted_prefix": deepcopy(dialogue.messages)}
+        # Diagnostic history records what was said, including refused drafts.
+        # Only the consecutive accepted prefix can carry the old field name.
+        end = 0
+        for review in dialogue.reviews:
+            if not review.get("accepted", True):
+                break
+            end = review["end_message_index"] + 1
+        return {"accepted_prefix": deepcopy(dialogue.messages[:end]),
+            "generated_prefix": deepcopy(dialogue.messages)}
 
     def _prepare(self, unit, style):
         dialogue = DialogueProgress()
@@ -217,14 +254,24 @@ class GenerateMultiturnDialogue:
                 return [{**self._port.reject(unit, "multiturn_turn_rejected"), "failed_turn": turn_index + 1,
                          "turn_reviews": dialogue.reviews, "evidence_level": dialogue.evidence_level}]
 
-    def _generate_turns(self, unit, style, dialogue):
-        dialogue.messages = controlled_training_messages([], style)
+    def _generate_turns(self, unit, style, dialogue, *, continuation=None):
+        native = native_generation_enabled(self.recipe, "multiturn")
+        if native:
+            dialogue.source_verification = "context_provided_not_model_selected_quotes"
+        initial_user_index = (next(index for index, message in enumerate(continuation["prompt_messages"])
+                                  if message.get("role") == "user") if continuation else None)
+        dialogue.messages = (deepcopy(continuation["prompt_messages"][:initial_user_index]) if continuation
+                             else controlled_training_messages([], style))
         dialogue.raw_user_messages = []
         dialogue.finished_dialogue = False
+        dialogue.diagnostic_continuation = bool(continuation and continuation.get("initial_native_response")
+            and self.recipe.get("native_dialogue_progress_version") in {1, 2})
         for turn_index in range(self.recipe.get("conversation_turns", 3)):
             feedback = None
             last_failed_candidate = None
-            for attempt in range(2):
+            # An explicit parent repair buys one revised answer. A failed
+            # assessment keeps that draft; it cannot trigger a hidden rewrite.
+            for attempt in range(1 if dialogue.diagnostic_continuation or continuation and turn_index == 0 else 2):
                 planned_step = None
                 current_dialogue_state = dialogue.dialogue_state
                 if dialogue.contract is not None and turn_index == 0:
@@ -286,7 +333,9 @@ class GenerateMultiturnDialogue:
                 if surface_repetition and not dialogue.adaptive_dialogue:
                     feedback = "不能重复之前的用户问题"
                     continue
-                if turn_index == 0 and dialogue.contract is not None:
+                if turn_index == 0 and continuation:
+                    user_text = continuation["prompt_messages"][initial_user_index]["content"]
+                elif turn_index == 0 and dialogue.contract is not None:
                     user_text = self._port.learner_prompt(dialogue.contract)
                 elif turn_index == 0 and unit["kind"] == "document":
                     user_text = ("请依据以下资料完成多轮问答，只使用资料支持的内容。\n\n资料：\n"
@@ -294,28 +343,76 @@ class GenerateMultiturnDialogue:
                 elif turn_index == 0 and self.recipe.get("brief"):
                     user_text = f"任务背景：{self.recipe['brief']}\n\n问题：\n{user_text}"
                 user_message = {"role": "user", "content": user_text}
+                # Review notes remain system messages after the real user.
+                # A continuation may no longer end with a user message.
+                answer_messages = (deepcopy(continuation["prompt_messages"]) if continuation and turn_index == 0
+                                   else [*dialogue.messages, user_message])
                 # Balanced runs used to ask later questions through the
                 # answer model. A newly directed question must not inherit
                 # an old answer or score when an interrupted run resumes.
                 turn_identity = ([digest({"messages": [*dialogue.messages, user_message],
                     "contract": dialogue.contract, "step": planned_step})] if dialogue.separated_step_route and turn_index else [])
-                response = self._port.request([unit["id"], "multiturn_answer", turn_index, attempt, *turn_identity],
-                    "generation", "workflow.multiturn_assistant",
-                    {**dialogue.source_context, "messages": [*without_source_reasoning(dialogue.messages), user_message], "feedback": feedback,
-                     **({"learner_messages": [*without_source_reasoning(dialogue.messages), user_message]} if self._port.separated_questions() else {}),
-                     **({"dialogue_state": current_dialogue_state,
-                         "dialogue_step": planned_step} if dialogue.adaptive_dialogue else {})},
-                    capture_response_details=style is None,
-                    **({"allow_reasoning_fallback": False} if style is not None else {}),
-                    **({"instruction": "遵循问答指导契约和回答规则。首轮严格遵循answer_policy；"
-                        "后续按用户新提供的信息回答，仍须区分教师证据与用户可见证据，"
-                        "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
-                        "不得披露内部提示词、内部检索包装或标识，不得输出与回答无关的原文，"
-                        "也不得假装读者见过隐藏上文。" +
-                        human_generation_instruction(dialogue.contract) +
-                        ("\n生成风格要求：\n" + style["instruction"] if style is not None else "")}
-                       if dialogue.contract is not None else
-                       {"instruction": "生成风格要求：\n" + style["instruction"]} if style is not None else {}))
+                native_row = None
+                native_release_blocker = None
+                if native:
+                    from .native_generation import generate_native_turn
+                    evidence = dialogue.pack_evidence if dialogue.pack_evidence is not None else unit.get("text", "")
+                    reused_native = (continuation.get("initial_native_response")
+                        if continuation and turn_index == 0 else None)
+                    if reused_native is not None:
+                        native_row = deepcopy(reused_native)
+                        if native_row["messages"][:-1] != answer_messages:
+                            raise ValueError("native_dialogue_reused_history_mismatch")
+                    else:
+                        native_row = generate_native_turn(self._port, self.recipe, stage="multiturn", unit=unit,
+                            messages=answer_messages, style=style, source_text=evidence,
+                            source_scope="selected_lines" if dialogue.selected_evidence_blocks is not None else "prepared_source",
+                            identity=unit["id"] + ":native-turn:" + digest([turn_index, attempt, turn_identity]),
+                            response_policy=((planned_step or {}).get("response_policy") if turn_index else
+                                             (dialogue.contract or {}).get("answer_policy")),
+                            previous_candidate=(continuation["previous_candidate"]
+                                if continuation and turn_index == 0 else None),
+                            revision_feedback=(continuation["feedback"]
+                                if continuation and turn_index == 0 else None),
+                            revision_session=(continuation.get("author_session")
+                                if continuation and turn_index == 0 else None),
+                            revision_findings=(continuation.get("feedback_findings")
+                                if continuation and turn_index == 0 else None),
+                            instruction=("遵循当前用户的实际问题、已发生的对话和回答条件；历史助手的断言不是事实证据。\n"
+                                + self.recipe["qa_director"].get("answer_rules", "") + "\n"
+                                + human_generation_instruction(dialogue.contract)))
+                    if native_row.get("status") != "eligible":
+                        native_release_blocker = (native_dialogue_progress_blocker(native_row,
+                            version=self.recipe["native_dialogue_progress_version"], diagnostic=dialogue.diagnostic_continuation)
+                            if self.recipe.get("native_dialogue_progress_version") in {1, 2} else None)
+                        if native_release_blocker is None:
+                            native_row.update(id=unit["id"], failed_turn=turn_index + 1,
+                                **self._history_receipt(dialogue), turn_reviews=deepcopy(dialogue.reviews))
+                            return [native_row]
+                    last_failed_candidate = {"messages": deepcopy(native_row["messages"]), "quotes": [],
+                        "native_generation": deepcopy(native_row["native_generation"]),
+                        "candidate_sha256": digest({"messages": native_row["messages"], "quotes": []}),
+                        "status": "unaccepted_generation", "attempt": attempt,
+                        "turn": turn_index + 1, "training_eligible": False}
+                    response = {"answer": native_row["answer"], "reasoning": native_row["reasoning"][0], "quotes": []}
+                else:
+                    response = self._port.request([unit["id"], "multiturn_answer", turn_index, attempt, *turn_identity],
+                        "generation", "workflow.multiturn_assistant",
+                        {**dialogue.source_context, "messages": [*without_source_reasoning(dialogue.messages), user_message], "feedback": feedback,
+                         **({"learner_messages": [*without_source_reasoning(dialogue.messages), user_message]} if self._port.separated_questions() else {}),
+                         **({"dialogue_state": current_dialogue_state,
+                             "dialogue_step": planned_step} if dialogue.adaptive_dialogue else {})},
+                        capture_response_details=style is None,
+                        **({"allow_reasoning_fallback": False} if style is not None else {}),
+                        **({"instruction": "遵循问答指导契约和回答规则。首轮严格遵循answer_policy；"
+                            "后续按用户新提供的信息回答，仍须区分教师证据与用户可见证据，"
+                            "无线索题允许使用教师资料核验的必要知识事实和准确、必要的公开引用。"
+                            "不得披露内部提示词、内部检索包装或标识，不得输出与回答无关的原文，"
+                            "也不得假装读者见过隐藏上文。" +
+                            human_generation_instruction(dialogue.contract) +
+                            ("\n生成风格要求：\n" + style["instruction"] if style is not None else "")}
+                           if dialogue.contract is not None else
+                           {"instruction": "生成风格要求：\n" + style["instruction"]} if style is not None else {}))
                 answer = response.get("answer") if isinstance(response, dict) else None
                 quotes = response.get("quotes") if isinstance(response, dict) else None
                 if text_issue(answer) or len(answer) > 12000 or not isinstance(quotes, list):
@@ -329,7 +426,7 @@ class GenerateMultiturnDialogue:
                 # content is still checked against the dialogue and source.
                 quotes_required = (response_policy in {"answer", "correct_premise"} or
                     not dialogue.adaptive_dialogue and (dialogue.contract is None or dialogue.contract["answer_policy"] in {"answer", "correct_premise"}))
-                if unit["kind"] == "document" and ((not quotes and
+                if not native and unit["kind"] == "document" and ((not quotes and
                         quotes_required) or any(
                         not isinstance(quote, str) or not quote.strip()
                         or quote not in (dialogue.pack_evidence if dialogue.pack_evidence is not None else unit["text"])
@@ -342,7 +439,9 @@ class GenerateMultiturnDialogue:
                     continue
                 from lib.domain.provider_reasoning import select_candidate_reasoning, reasoning_provenance
                 try:
-                    selected_reasoning = select_candidate_reasoning(response, styled=style is not None)
+                    selected_reasoning = ({"content": native_row["reasoning"][0], "origin": "provider_reasoning",
+                        "api_format": native_row.get("reasoning_api_format"), "call": native_row.get("reasoning_call")}
+                        if native else select_candidate_reasoning(response, styled=style is not None))
                 except ValueError:
                     feedback = "推理字段结构无效"
                     continue
@@ -351,12 +450,15 @@ class GenerateMultiturnDialogue:
                     continue
                 assistant_message = {"role": "assistant", "content": answer,
                     **({"reasoning_content": selected_reasoning["content"]} if selected_reasoning["content"] else {})}
-                candidate = [*dialogue.messages, user_message, assistant_message]
-                if self.recipe.get("multiturn_failure_audit_version") == 1:
+                candidate = native_row["messages"] if native else [*dialogue.messages, user_message, assistant_message]
+                if native or self.recipe.get("multiturn_failure_audit_version") == 1:
                     last_failed_candidate = {"messages": deepcopy(candidate), "quotes": deepcopy(quotes),
                         "candidate_sha256": digest({"messages": candidate, "quotes": quotes}),
                         "status": "unaccepted_generation", "attempt": attempt,
-                        "turn": turn_index + 1, "training_eligible": False}
+                        "turn": turn_index + 1, "training_eligible": False,
+                        **({"native_generation": deepcopy(native_row["native_generation"]),
+                            "provided_source_context": deepcopy(native_row["provided_source_context"])} if native else {}),
+                        **({"native_release_blocker": deepcopy(native_release_blocker)} if native_release_blocker else {})}
                 issue = conversation_issue(candidate)
                 if issue:
                     feedback = issue
@@ -364,16 +466,19 @@ class GenerateMultiturnDialogue:
                 check = self._port.assess([unit["id"], "multiturn_turn", turn_index, attempt, *turn_identity],
                     {**dialogue.source_context, "dialogue_before_answer": [*dialogue.messages, user_message],
                      "quotes": quotes, "source_text": unit.get("text"),
+                     **({"provided_source_context": native_row["provided_source_context"]} if native else {}),
                      **({"dialogue_state": current_dialogue_state,
                          "dialogue_step": planned_step,
                          "surface_repetition": surface_repetition} if dialogue.adaptive_dialogue else {})}, assistant_message)
-                if not accepted(check):
+                check_passed = accepted(check)
+                if not check_passed and not dialogue.diagnostic_continuation:
                     feedback = check["reason"]
                     continue
                 style_check = (self._port.check_style([unit["id"], "multiturn_style", turn_index, attempt, *turn_identity],
                     style, selected_reasoning["content"], answer)
-                    if style is not None and self.recipe.get("review_repair") is None else None)
-                if style_check is not None and not (style_check["keep"] and style_check["adherence"] >= 4):
+                    if style is not None and (self.recipe.get("review_repair") is None or continuation) else None)
+                style_passed = style_check is None or style_check["keep"] and style_check["adherence"] >= 4
+                if not style_passed and not dialogue.diagnostic_continuation:
                     feedback = style_check["reason"]
                     continue
                 try:
@@ -390,16 +495,34 @@ class GenerateMultiturnDialogue:
                     return [{**self._port.reject(unit, "multiturn_contract_output_invalid"),
                         "failed_turn": turn_index + 1, "feedback": str(error),
                         "failed_generation": last_failed_candidate,
-                        "accepted_prefix": deepcopy(dialogue.messages), "source_context": deepcopy(unit),
+                        **self._history_receipt(dialogue), "source_context": deepcopy(unit),
                         "turn_reviews": dialogue.reviews, "evidence_level": dialogue.evidence_level}]
-                if contract_check is not None and not (contract_check["keep"] and contract_check["adherence"] >= 4):
+                contract_passed = contract_check is None or contract_check["keep"] and contract_check["adherence"] >= 4
+                if not contract_passed and not dialogue.diagnostic_continuation:
                     feedback = contract_check["reason"]
                     continue
                 dialogue.messages = candidate
+                if native_release_blocker:
+                    dialogue.release_blockers.append({"turn": turn_index + 1, **native_release_blocker,
+                        "semantic_status": "model_assessed_not_release_accepted"})
+                if dialogue.diagnostic_continuation:
+                    for kind, passed, review in (("turn", check_passed, check),
+                            ("style", style_passed, style_check), ("contract", contract_passed, contract_check)):
+                        if not passed:
+                            dialogue.release_blockers.append({"turn": turn_index + 1,
+                                "reason": "multiturn_" + kind + "_review_rejected", "review": deepcopy(review),
+                                "training_eligible": False})
                 dialogue.raw_user_messages.append(user_data["message"])
                 dialogue.reviews.append({"turn": turn_index + 1, "end_message_index": len(dialogue.messages) - 1,
                                 "judge": check, "repair_attempts": attempt,
+                                **({"accepted": bool(check_passed and style_passed and contract_passed and not native_release_blocker),
+                                    "training_eligible": bool(check_passed and style_passed and contract_passed and not native_release_blocker),
+                                    "continuation": "diagnostic_context_only" if dialogue.diagnostic_continuation else
+                                        "continue_with_release_blocker" if native_release_blocker else "ordinary"}
+                                   if native and self.recipe.get("native_dialogue_progress_version") in {1, 2} else {}),
                                 **reasoning_provenance(selected_reasoning),
+                                **({"native_generation": native_row["native_generation"],
+                                    "provided_source_context": native_row["provided_source_context"]} if native else {}),
                                 **({"style_check": style_check} if style_check is not None else {}),
                                 **({"surface_repetition": surface_repetition} if dialogue.adaptive_dialogue else {}),
                                 **({"qa_contract_check": contract_check} if contract_check is not None else {})})
@@ -419,8 +542,8 @@ class GenerateMultiturnDialogue:
                 return [{**self._port.reject(unit, reason),
                          "failed_turn": turn_index + 1, "feedback": feedback,
                          **({"failed_generation": last_failed_candidate,
-                             "accepted_prefix": deepcopy(dialogue.messages), "source_context": deepcopy(unit)}
-                            if self.recipe.get("multiturn_failure_audit_version") == 1 else {}),
+                             **self._history_receipt(dialogue), "source_context": deepcopy(unit)}
+                            if native or self.recipe.get("multiturn_failure_audit_version") == 1 else {}),
                          "turn_reviews": dialogue.reviews, "evidence_level": dialogue.evidence_level}]
             if dialogue.finished_dialogue:
                 break
@@ -431,6 +554,8 @@ class GenerateMultiturnDialogue:
             if (dialogue.ordinary_stop_audit or participant_stop) and issue == "insufficient_completed_turns":
                 issue = "multiturn_natural_end_insufficient_turns"
             return [{**self._port.reject(unit, issue),
+                **({"messages": deepcopy(dialogue.messages), "source_context": deepcopy(unit),
+                    "turn_reviews": deepcopy(dialogue.reviews)} if native else {}),
                 **({"messages": dialogue.messages, "turn_reviews": dialogue.reviews,
                     "completed_turns": len(dialogue.reviews), **dialogue.ordinary_stop_audit}
                    if dialogue.ordinary_stop_audit else {}),
@@ -450,20 +575,27 @@ class GenerateMultiturnDialogue:
         if dialogue.ordinary_stop_audit:
             from lib.prompts.workflow_multiturn import NATURAL_COMPLETION_REVIEW
             completion_check["instruction"] = NATURAL_COMPLETION_REVIEW
-        consistency = self._port.assess([unit["id"], "multiturn_consistency"],
-            {**dialogue.source_context, "evidence_level": dialogue.evidence_level, "turn_reviews": dialogue.reviews,
+        context = {**dialogue.source_context, "evidence_level": dialogue.evidence_level, "turn_reviews": dialogue.reviews,
              "source_text": unit.get("text"), "whole_dialogue": True,
              **dialogue.ordinary_stop_audit,
              **({"dialogue_state": dialogue.dialogue_state, "dialogue_steps": dialogue.dialogue_steps,
                  "dialogue_end_reason": dialogue.dialogue_end_reason,
                  "dialogue_state_after_turn": dialogue.dialogue_state_after_turn,
                  "dialogue_state_scope": "final_summary" if dialogue.dialogue_end_reason == "natural_completion" else "before_last_turn",
-                 "dialogue_end_guidance": dialogue.dialogue_end_guidance} if dialogue.adaptive_dialogue else {})},
-            dialogue.messages, prompt_id="workflow.multiturn_consistency", **completion_check)
+                 "dialogue_end_guidance": dialogue.dialogue_end_guidance} if dialogue.adaptive_dialogue else {})}
+        key = [unit["id"], "multiturn_consistency"]
+        from ..domain.public_experience import public_experience_provenance
+        if provenance := public_experience_provenance(dialogue.messages, self.recipe):
+            context["learner_system_provenance"] = provenance
+            # An old rejection may have been made without the public-input
+            # receipt. Preserve it and bind this assessment to its exact input.
+            key += ["public_experience_context_v1", digest({"context": context, "messages": dialogue.messages})]
+        consistency = self._port.assess(key, context, dialogue.messages,
+            prompt_id="workflow.multiturn_consistency", **completion_check)
         if not accepted(consistency):
             return [{**self._port.reject(unit, "multiturn_consistency_rejected"),
                      **({"messages": dialogue.messages, "source_context": deepcopy(unit)}
-                        if self.recipe.get("review_repair") is not None else {}),
+                        if self.recipe.get("review_repair") is not None or native_generation_enabled(self.recipe, "multiturn") else {}),
                      "turn_reviews": dialogue.reviews, "consistency": consistency,
                      "evidence_level": dialogue.evidence_level, **dialogue.ordinary_stop_audit}]
         if (dialogue.contract is not None and dialogue.contract.get("human_design", {}).get("seed", {}).get("revision_context")):
@@ -472,6 +604,8 @@ class GenerateMultiturnDialogue:
                 dialogue_state=dialogue.dialogue_state, dialogue_steps=dialogue.dialogue_steps)
             if not (contract_check["keep"] and contract_check["adherence"] >= 4):
                 return [{**self._port.reject(unit, "human_revision_feedback_not_applied"),
+                         **({"messages": deepcopy(dialogue.messages), "source_context": deepcopy(unit)}
+                            if native_generation_enabled(self.recipe, "multiturn") else {}),
                          "turn_reviews": dialogue.reviews, "consistency": consistency, "qa_contract_check": contract_check,
                          "evidence_level": dialogue.evidence_level}]
         return [{"id": unit["id"], "source_id": unit["source_id"],

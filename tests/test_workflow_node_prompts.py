@@ -71,6 +71,22 @@ def make_run(tmp_path, **kwargs):
     return output, rid, engine.run_path(output, rid)
 
 
+def freeze_legacy_optional_director(path):
+    """Represent a queued historical v20 recipe, before mandatory design.
+
+    The legacy SFT tests exercise their frozen prompt and request protocol;
+    current-catalog and native-generation tests still use normal creation.
+    """
+    recipe = engine.read_json(path / "recipe.json")
+    state = engine.read_json(path / "state.json")
+    assert recipe["version"] == 20 and "native_generation_version" not in recipe
+    assert state["status"] == "queued" and not state["usage"] and state["attempt"] == 0
+    recipe["qa_director"] = {"enabled": False}
+    state["recipe_hash"] = engine.digest(recipe)
+    atomic_json(path / "recipe.json", recipe)
+    atomic_json(path / "state.json", state)
+
+
 @pytest.mark.parametrize("value,error", [
     (False, "invalid_node_prompts"), ([], "invalid_node_prompts"),
     ({"agent": {}}, "invalid_node_prompts"), ({"package": []}, "invalid_node_prompts"),
@@ -101,6 +117,7 @@ def test_prompt_config_is_independent_and_literal_braces_are_not_interpolated(tm
     forwarded["sft"]["workflow.sft"] = "outside edit"
     assert original["sft"]["workflow.sft"] == body
     output, rid, path = make_run(tmp_path, node_prompts=original)
+    freeze_legacy_optional_director(path)
     original["sft"]["workflow.sft"] = "outside edit"
     writer, reviewer = Writer(), Reviewer()
     state = engine.Workflow(output, rid, tmp_path, generator=writer, jev=reviewer).execute()
@@ -120,7 +137,7 @@ def test_prompt_config_is_independent_and_literal_braces_are_not_interpolated(tm
     assert TEXT in memory["content"]
     assert all("LOCAL_PROMPT_SENTINEL" not in message["content"]
                for message in writer.calls[0] if message["role"] == "user")
-    assert recipe["version"] == 19 and recipe["node_prompts"]["sft"]["workflow.sft"] == body
+    assert recipe["version"] == 20 and recipe["node_prompts"]["sft"]["workflow.sft"] == body
     assert recipe["node_prompt_templates"]["sft"]["workflow.sft"] == body
     report = engine.read_json(path / "artifacts/quality.json")
     assert report["node_prompts"]["sft"]["workflow.sft"] == {"sha256": engine.digest(body), "custom": True}
@@ -143,9 +160,24 @@ def test_all_allowed_steps_are_scoped_to_their_own_node(tmp_path):
         workflow.stage = stage
         for prompt_id, body in templates.items():
             assert body == overrides[stage][prompt_id]
-            workflow.ask([stage, prompt_id], "generation", prompt_id, {"source": "DATA_SENTINEL"})
-            assert writer.calls[-1][0]["content"].endswith(body + experience_system(workflow.recipe, prompt_id))
-            assert json.loads(writer.calls[-1][1]["content"]) == {"source": "DATA_SENTINEL"}
+            task = {"source": "DATA_SENTINEL"}
+            if prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
+                task["learner_messages"] = [{"role": "user", "content": "DATA_SENTINEL"}]
+            elif prompt_id == "workflow.question_user":
+                task = {"question_brief": {"topic": "DATA_SENTINEL", "communication_goal": "Ask how to maintain equipment."}}
+            workflow.ask([stage, prompt_id], "generation", prompt_id, task)
+            system = writer.calls[-1][0]["content"]
+            assert body in system
+            assert all(other not in system for node, bodies in overrides.items()
+                       for other_id, other in bodies.items() if (node, other_id) != (stage, prompt_id))
+            if "learner_messages" in task:
+                assert writer.calls[-1][-1] == task["learner_messages"][-1]
+            elif prompt_id == "workflow.question_user":
+                assert "DATA_SENTINEL" in json.dumps(writer.calls[-1])
+                assert "source" not in task
+            else:
+                assert system.endswith(body + experience_system(workflow.recipe, prompt_id))
+                assert json.loads(writer.calls[-1][1]["content"]) == task
     for stage, ids in NODE_PROMPT_IDS.items():
         workflow.stage = stage
         for prompt_id in set(ids) - set(frozen_templates.get(stage, {})):
@@ -156,9 +188,32 @@ def test_all_allowed_steps_are_scoped_to_their_own_node(tmp_path):
     assert engine.read_json(path / "recipe.json") == recipe
 
 
+@pytest.mark.parametrize("stage", ["sft", "multiturn"])
+def test_native_template_is_frozen_and_called_in_its_answering_node(tmp_path, stage):
+    body = f"NATIVE_{stage}_RULE: preserve {{literal}} and the user's conditions."
+    output, rid, path = make_run(tmp_path, targets=[stage],
+        node_generation={stage: {"enabled": True, "answer_mode": "native_joint"}},
+        node_prompts={stage: {"workflow.cot_native_joint": body},
+                      "cot": {"workflow.cot_native_joint": "SEPARATE_COT_RULE"}})
+    recipe = engine.read_json(path / "recipe.json")
+    assert recipe["native_generation_version"] == 1
+    assert recipe["node_prompt_templates"][stage]["workflow.cot_native_joint"] == body
+    writer = Writer()
+    workflow = engine.Workflow(output, rid, tmp_path, generator=writer)
+    workflow.stage = stage
+    prompt = [{"role": "user", "content": "如何维护设备？"}]
+    workflow.ask([stage, "native_prompt"], "generation", "workflow.cot_native_joint",
+                 {"source": {"text": TEXT}, "prompt": prompt})
+    assert writer.calls[-1][0]["content"].startswith(body + "\n")
+    assert "SEPARATE_COT_RULE" not in writer.calls[-1][0]["content"]
+    assert writer.calls[-1][1:] == prompt
+    assert engine.read_json(path / "recipe.json") == recipe
+
+
 def test_resuming_uses_pinned_builtin_and_custom_text_after_catalog_changes(tmp_path, monkeypatch):
     body = builtin_node_prompt("workflow.sft") + " CUSTOM_WRITER_RULE"
     output, rid, path = make_run(tmp_path, node_prompts={"sft": {"workflow.sft": body}})
+    freeze_legacy_optional_director(path)
     recipe = engine.read_json(path / "recipe.json")
     pinned_review = recipe["node_prompt_templates"]["sft"]["workflow.jev_score"]
     writer = Writer()
@@ -176,9 +231,10 @@ def test_resuming_uses_pinned_builtin_and_custom_text_after_catalog_changes(tmp_
 
 def test_preference_rechecks_chosen_when_same_model_has_a_different_prompt(tmp_path):
     base = builtin_node_prompt("workflow.jev_score")
-    output, rid, _ = make_run(tmp_path, targets=["sft", "dpo"], node_prompts={
+    output, rid, path = make_run(tmp_path, targets=["sft", "dpo"], node_prompts={
         "sft": {"workflow.jev_score": base + " SFT_REVIEW_SENTINEL"},
         "preference": {"workflow.jev_score": base + " PREFERENCE_REVIEW_SENTINEL"}})
+    freeze_legacy_optional_director(path)
     reviewer = Reviewer()
     state = engine.Workflow(output, rid, tmp_path, generator=Writer(), jev=reviewer).execute()
     assert state["status"] == "completed"
@@ -190,6 +246,7 @@ def test_preference_rechecks_chosen_when_same_model_has_a_different_prompt(tmp_p
 @pytest.mark.parametrize("version", range(2, 9))
 def test_legacy_recipe_keeps_existing_prompt_validation_and_execution(tmp_path, version):
     output, rid, path = make_run(tmp_path)
+    freeze_legacy_optional_director(path)
     recipe = engine.read_json(path / "recipe.json")
     recipe["version"] = version
     for key in ("node_prompts", "node_prompt_templates", "node_prompt_system"):

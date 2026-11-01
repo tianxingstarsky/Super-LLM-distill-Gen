@@ -51,7 +51,8 @@ VERSION_25_NODE_PROMPT_IDS = {**VERSION_24_NODE_PROMPT_IDS,
                   "cot": (*VERSION_24_NODE_PROMPT_IDS["cot"], "workflow.cot_check_agent")}
 NODE_PROMPT_IDS = {**VERSION_25_NODE_PROMPT_IDS,
                   "ingest": (*VERSION_25_NODE_PROMPT_IDS["ingest"], "workflow.conversation_reasoning_hints", "workflow.conversation_reasoning"),
-                  "multiturn": (*VERSION_25_NODE_PROMPT_IDS["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer"),
+                  "sft": (*VERSION_25_NODE_PROMPT_IDS["sft"], "workflow.cot_native_joint"),
+                  "multiturn": (*VERSION_25_NODE_PROMPT_IDS["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer", "workflow.cot_native_joint"),
                   "cot": (*VERSION_25_NODE_PROMPT_IDS["cot"], "workflow.cot_native_joint"),
                   "preference": (*VERSION_22_NODE_PROMPT_IDS["preference"], "workflow.preference_design_check"),
                   "review": (*VERSION_22_NODE_PROMPT_IDS["review"], "workflow.learner_context_check",
@@ -102,6 +103,9 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
     config = (node_generation or {}).get(stage) or {}
     styled = config.get("enabled", True) if config else False
     if stage == "sft":
+        if styled and config.get("answer_mode") == "native_joint":
+            return (("workflow.cot_native_joint",) if review_repair is not None else
+                    ("workflow.cot_native_joint", "workflow.sft_directed_check", "workflow.jev_score", "workflow.style_check"))
         if directed:
             generation_prompt = "workflow.sft_answer" if separated else "workflow.sft_directed"
             return (*((generation_prompt, "workflow.sft_directed_check", "workflow.jev_score", "workflow.style_check")
@@ -110,6 +114,10 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
                 if styled else ("workflow.sft", "workflow.jev_score"))
     if stage == "multiturn":
         multi_style = (node_generation or {}).get("multiturn", (node_generation or {}).get("sft")) or {}
+        if multi_style.get("enabled") and multi_style.get("answer_mode") == "native_joint":
+            base = VERSION_16_NODE_PROMPT_IDS[stage] if directed else LEGACY_NODE_PROMPT_IDS[stage]
+            return (*tuple(prompt for prompt in base if prompt != "workflow.multiturn_assistant"),
+                    "workflow.cot_native_joint", *(("workflow.style_check",) if review_repair is None else ()), *human_prompt)
         if multi_style.get("enabled") and multi_style.get("reading_session"):
             return ("workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")
         styled = bool(multi_style and multi_style.get("enabled", True))
@@ -220,6 +228,9 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
         catalog = {**catalog, "cot": (*catalog["cot"], "workflow.cot_native_joint")}
     if recipe_version >= 41:
         catalog = {**catalog, "multiturn": (*catalog["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")}
+    if recipe_version >= 42:
+        for stage in ("sft", "multiturn"):
+            catalog[stage] = (*catalog[stage], "workflow.cot_native_joint")
     if conversation_reasoning_version is not None:
         if type(conversation_reasoning_version) is not int or conversation_reasoning_version not in {1, 2, 3}:
             raise ValueError("invalid_conversation_reasoning_version")
@@ -245,7 +256,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
                          claim_review_transport_version=None, claim_repair_feedback_version=None,
                          preference_design_version=None, preference_design_prompt_version=None,
-                         conversation_reasoning_version=None) -> dict:
+                         conversation_reasoning_version=None, native_feedback_guidance_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
     if preference_design_version is not None and (type(preference_design_version) is not int or preference_design_version not in {1, 2, 3}):
@@ -277,7 +288,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
             if claim_review_adversarial_protocol_version == 1:
                 if claim_review_condition_contract_version == 1:
                     if claim_review_transport_version == 1:
-                        return render(get(prompt_id, version="1.22.0"))
+                        return render(get(prompt_id, version="1.25.0" if native_feedback_guidance_version == 7 else "1.22.0"))
                     return render(get(prompt_id, version="1.20.0" if reasoning_depth_contract_version == 1 else "1.19.0"))
                 return render(get(prompt_id, version="1.18.0"))
             version = {1: "1.12.0", 2: ("1.17.0" if claim_review_anchor_protocol_version == 1 else

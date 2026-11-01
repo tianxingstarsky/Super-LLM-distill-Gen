@@ -1,5 +1,15 @@
 # 版本化提示词
 
+`workflow.cot_native_joint@1.5.0` 将内部制作旁白的约束同时用于原生推理与正式答案，鼓励直接核对业务主张、依赖及证据。新增材料覆盖范围规则：节选未找到只适用于节选，未知全文、页码或跨页关系不能被写成已经核查；所写任务提示词也要保持同一范围。真实用户要求的工具/API/提示词作品不作词汇封禁，不规定句式、步骤或长度。历史 1.4.0 通过 `COT_NATIVE_JOINT_V1_4` 保持逐字段冻结。
+
+`workflow.cot_native_joint@1.4.0` 提供完整的回答者职责说明：区分真实用户、应用操作、审查员与工具观察；原生思考核对证据，正式答案交付实际任务；返工替换受审轮而非讲述后台改稿。用户需要的业务纠错解释和提示词/API 作品保留。新版取消默认“短、简洁”的正文及约束，按任务充分展开，不设字数、段数或固定思考步骤。新默认经验同步采用 v5／“充分推敲 · 初始 v2”，防止旧默认经验重新施加缩短倾向。历史模板、个人覆盖和冻结经验不改写。验证只覆盖接线与兼容，真实效果需要另看模型输出。
+
+`workflow.rationale_check@1.11.0` 与 `workflow.review_score@1.24.0` 明确区分审查员、受审助手、原对话用户与工具证据。审查员在原有 `reason`／协议指定的逐项理由字段说明依据、缺口与修正方向，不认领受审助手的原生推理；第一人称反思由原回答模型读取反馈后自行产生。嵌套历史属于审查材料，工具传回的评语也可质疑，不能冒充已核实事实。已确认缺陷、证据不足与误判分别处理，不强制认错、措辞、篇幅或思考步骤。新版本采用 `workflow_shared_rules.REVIEWER_ROLE_FEEDBACK`，替换旧版的第一人称追加段；判决、分数阈值、JSON 字段与证据要求不变，不增加独立模型调用。旧 `1.10.0`／`1.23.0` 及 `FIRST_PERSON_REVIEW_FEEDBACK` 原文保留，冻结任务和用户自定义正文不被覆盖。离线验证只证明版本和接线，不能声称真实语义效果已经改善。
+
+`workflow.qa_director@1.15.0` 对应冻结的 `dialogue_constraint_provenance_version=1` 续轮合同：同次返回 `user_constraint_refs` 整数索引，不再让模型撰写 `active_constraints`。程序使用完整实际用户原话生成约束列表和来源收据，拒绝助手来源及未来拟发言；`context_links` 仍用于说明指代和局部接受范围。原话认证不等于认可或事实核验，也不限定表达长短和句式。旧 `1.14.0` 全字段继续注册，不迁移正在执行的配方。验证见 `tests/test_dialogue_constraint_sources.py`。
+
+`workflow.rationale_check@1.12.0` 与 `workflow.review_score@1.25.0` 将需要修正的 `reason` 写成自包含、可执行的注意事项，由 `workflow_review_guidance.py` 统一定义角色和证据边界。注意事项可作为实际 user 后的 system 消息；推理引用确实随训练上下文提供的注意事项不等于内部披露。无依据的设置、角色混淆和不可见来源仍需检查，意见不因以 system 传入就成为事实。审查员仍保持独立身份，判决、阈值和字段不变，不额外购买改写调用；旧 1.11.0 / 1.24.0 及全部历史正文保留。rationale_check 的新建默认可取最新模板；review_score 的任务快照仍由协议版本选择，注册新模板不等于所有旧评分路线已采用它。冻结任务和个人覆盖原样保留。
+
 ## 按功能维护
 
 `workflow.py` 现在只显式转发兼容名称；新增版本在下面的功能所有者中维护。注册入口仍是 `lib.prompts.get(id, version=...)`，全部旧 ID、版本、正文和导出别名保持原值。实际 Agent 用例、状态与共享设施见 [功能导航](../../docs/architecture/agent-features.md)。
@@ -9,6 +19,7 @@
 | 公共请求协议、无业务规则的 spec 构造 | [workflow_protocol.py](workflow_protocol.py)、[workflow_spec.py](workflow_spec.py) |
 | 文档读取与 CPT | [workflow_corpus.py](workflow_corpus.py) |
 | 开放任务、指导员与问题角色 | [workflow_planning.py](workflow_planning.py) |
+| 指导员与用户发言共用的情境表达策略 | [workflow_user_expression.py](workflow_user_expression.py)；由 planning / dialogue 的新版本显式采用 |
 | SFT 回答、契约与风格核验 | [workflow_sft.py](workflow_sft.py) |
 | 普通多轮 | [workflow_dialogue.py](workflow_dialogue.py) |
 | 资料阅读的场景、用户模拟与回答 | [workflow_reading_session.py](workflow_reading_session.py) |
@@ -18,6 +29,7 @@
 | 清单、主张与工具核查 Agent | [workflow_reasoning_checks.py](workflow_reasoning_checks.py) |
 | 偏好候选与类型设计 | [workflow_preference.py](workflow_preference.py) |
 | 独立评分、上下文核验与打包抽检 | [workflow_review.py](workflow_review.py) |
+| 审查理由作为可见注意事项的共享规则 | [workflow_review_guidance.py](workflow_review_guidance.py)，由 cot / review 的新版本采用 |
 | 已有候选修订 | [workflow_revision.py](workflow_revision.py) |
 | 推理修剪 | [workflow_trim.py](workflow_trim.py) |
 | 经验与个人风格提案 | [workflow_experience.py](workflow_experience.py) |
@@ -26,6 +38,14 @@
 功能模块只依赖 `base`、spec 构造、显式共享规则和已有正文资产，不导入 `workflow.py` 聚合入口，不创建模型客户端或保存运行状态。历史正文模块继续保留字符串合同；例如 `workflow_repair.py` 的版本正文与 `workflow_revision.py` 的版本模板各有一份职责，不复制正文。整理的注册表等值验证覆盖全部版本与旧导出，相关业务验证继续使用现有 prompt/节点/DDD 回归。
 
 ## 当前模板与兼容说明
+
+`workflow.cot_native_joint@1.3.0` 区分实际公开规则、用户当前要求与任务中设计的提示词／API 配置，不从示例或历史助手推断用户约束，不臆造隐藏篇幅等级。它不规定固定思考顺序或输出句式，不增加独立评审；1.2.0 通过 `COT_NATIVE_JOINT_V1_2` 保留原文。实际生成效果仍由完整保存的原生通道判断。
+
+`workflow.qa_director@1.14.0`、`workflow.question_user@1.5.0` 与 `workflow.multiturn_user@1.7.0` 按本轮交流动作更新表达，替换旧版共用表达段，不把相似措辞直接认定为永久习惯，也不强制改短、改长或轮换句式。指导员直接修正旧版状态依据与多轮任务设计：真实发言优先，状态是可错摘要，助手嵌套示例中的人物偏好不能变成当前用户要求。已答内容只对仍有实际歧义的对象或条件继续；草案交付可自然结束，但不表示已实施、已验证或用户验收。旧版字段、证据约束、用户节点覆盖及冻结任务不变；1.13.0 / 1.4.0 / 1.6.0 原样注册。离线检查只能验证接线与兼容性，表达改进须查看真实续轮结果。
+
+`workflow.qa_director@1.13.0` 修正开放需求的任务依据说明：`evidence_quotes` 是私有的逐字任务依据，`closed_book` 仅让 `visible_context` 为空，不能清空已有来源的依据。合成 `brief` 可摘录其明确目标、约束与当前条件来证明任务来源，但不因此认证外部事实或助手答案；文档任务仍按来源与选区核验。独立发言者不接收这些引文。真实调用发现 1.12.0 将“没有外部事实来源”与“不提供任务依据”混为一谈，模型重复返回空依据；1.13.0 澄清两种证据含义，未放宽程序校验，1.12.0 的冻结正文原样保留。
+
+`workflow.qa_director@1.12.0`、`workflow.question_user@1.4.0` 与 `workflow.multiturn_user@1.6.0` 共同采用 `workflow_user_expression.py` 的情境表达策略：简洁承接与较完整的情境叙事同等有效，同一用户可随真实交流改变表达，不设长短、固定句式或切换配额。指导员通过现有 `expression_design`、`dialogue_design` 和续轮 `dialogue_state.expression_design` 给出可编辑建议；独立发言者继续只接收合规简报与公开历史。新增偏好不等于虚构经历，助手建议也不自动成为已验证事实。功能模块拥有版本，公共正文没有模型客户端或调度状态；旧版本逐字注册，自定义提示词与冻结任务保持原样。通过既有节点编辑、个人模板与默认恢复入口修改，未另加运行时强制规则或评审调用。离线验证检查版本、字段和接线，真实语言效果仍由实际对话观察。
 
 新建导入推理策略 v3 使用 `workflow.conversation_reasoning_hints@1.1.0` 提炼待核验提示，再由 `workflow.conversation_reasoning@2.1.0` 在独立上下文中生成正文 CoT。程序提供 `response_kind` 区分工具调用前决策与文本回答，避免把尚未发生的读取结果当成调用工具的前提。补写模型不接收当前答案、完整工具载荷、提炼模型的原生推理或未来工具定义；提示不能当作事实。正文由程序存入推理字段，来源标为合成解释，完成仍为 `not_assessed`。v1 固定直接补写 `1.1.0`；v2 固定提示 `1.0.0` 与正文 `2.0.0`，历史模板、运行和用户自定义正文保留，旧草稿不静默升级。这个用例借鉴答案条件化推导，不包含 STaR 的模型微调迭代，也不声称恢复原始内部思考。
 

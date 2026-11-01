@@ -4,6 +4,7 @@ import json
 import pytest
 
 from lib.infrastructure import training_workflow as engine
+from lib.bootstrap.workflow_execution import workflow_execution
 from lib.domain.workflow_node_prompts import active_node_prompt_ids
 from lib.domain.workflow_generation import validate_node_generation
 from lib.contexts.workflows.domain.integrated_reflection import default_integrated_reflection
@@ -17,6 +18,145 @@ from lib.io_utils import atomic_json
 def config():
     return {"cot": {"enabled": True, "style": "skeptical", "instruction": "",
         "answer_mode": "native_joint", "self_check": default_integrated_reflection()}}
+
+
+@pytest.mark.parametrize("capture_author", [True, False])
+def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boundary(tmp_path, capture_author):
+    text = "设备维护前必须断电；然后检查线路，完成维护后记录实际结果。"
+    source = tmp_path / "manual.txt"
+    source.write_text(text, encoding="utf8")
+    output = tmp_path / "output"
+    generation = {"sft": {"enabled": True, "style": "default", "answer_mode": "native_joint",
+        "instruction": "", "self_check": default_integrated_reflection()}}
+    rid = engine.create_run(output, sources=[source], targets=["sft", "cot"], node_generation=generation,
+                            package_review={"enabled": False})
+    path = engine.run_path(output, rid)
+    frozen = engine.read_json(path / "recipe.json")
+    assert frozen["native_author_session_version"] == 1
+    if not capture_author:
+        # Historical queued tasks did not record an author-session envelope.
+        frozen.pop("native_author_session_version")
+        state = engine.read_json(path / "state.json")
+        state["recipe_hash"] = engine.digest(frozen)
+        atomic_json(path / "recipe.json", frozen)
+        atomic_json(path / "state.json", state)
+    unit = {"id": "directed-01", "source_id": "manual", "family_id": "manual-task",
+        "kind": "document", "text": text, "qa_contract": {
+            "id": "directed-01", "qa_type": "closed_book", "guidance": "解释维护的安全前提。",
+            "question": "维护时先做什么？", "visible_context": "", "answer_policy": "answer", "evidence_quotes": [text]}}
+    class Author:
+        calls = 0
+        reasoning = {"mode": "enabled"}
+        def chat(self, messages, **options):
+            self.calls += 1
+            self.last_messages = deepcopy(messages)
+            assert messages[-1] == {"role": "user", "content": unit["qa_contract"]["question"]}
+            assert text in messages[0]["content"]
+            assert not options.get("json_output") and options["retries"] == 1
+            options["response_details"].update(api_format="chat",
+                reasoning_content="  用户问维护的先后。带电检查有风险，必须先断电再检查线路。\n")
+            return "先断电，再检查线路。"
+    author = Author()
+    def offline_reviews(worker):
+        worker.judge_answer = lambda *args, **options: {"keep": True, "grounded": True,
+            "reasoning_valid": True, "correctness": 5,
+            "scores": {key: 5 for key in ("correctness", "reasoning", "grounding", "instruction", "safety")},
+            "reason": "已知测试输入中的安全前提与回答一致。"}
+        worker.qa_contract_check = lambda *args, **options: {"keep": True, "adherence": 5, "reason": "回答实际问题。"}
+        worker.style_check = lambda *args, **options: {"keep": True, "adherence": 5, "reason": "保留实际判断。"}
+    workflow = engine.Workflow(output, rid, tmp_path, generator=author)
+    offline_reviews(workflow)
+    workflow.stage = "sft"
+    assert workflow.recipe["native_generation_version"] == 1
+    assert workflow.recipe["version"] == 42
+    # Exercise the actual composition root before the node: direct calls to
+    # sft() alone cannot catch a new recipe rejected at the execution boundary.
+    session = workflow_execution(workflow)._session
+    with session.exclusive():
+        session.verify_pinned_inputs()
+    assert author.calls == 0
+    row, = workflow.sft(unit)
+    assert row["status"] == "eligible" and row["reasoning_origin"] == "provider_reasoning"
+    assert row["messages"][-1]["reasoning_content"].startswith("  用户问维护的先后。")
+    assert row["reasoning_call"]["stage"] == "sft"
+    assert ("author_session" in row["native_generation"]) == capture_author
+    if capture_author:
+        assert row["native_generation"]["author_session"]["messages"] == author.last_messages
+    assert "author_session" not in json.dumps(training_record("sft", row), ensure_ascii=False)
+    assert row["provided_source_context"]["semantic_support"] == "not_assessed"
+    resumed = engine.Workflow(output, rid, tmp_path, generator=author)
+    offline_reviews(resumed)
+    resumed.stage = "sft"
+    assert resumed.sft(unit) == [row] and author.calls == 1
+    from lib.contexts.workflows.infrastructure.execution_runtime import CheckpointedBatchRuntime
+    collections = {"sft": [row], "cot": []}
+    adapter = CheckpointedBatchRuntime(resumed)
+    adapter.finalize_reasoning(collections)
+    assert not isinstance(collections["cot"], list)  # Lazy export projection.
+    atomic_json(resumed.path / "input_records.json", [{**unit, "status": "ready"}])
+    adapter.publish(collections)
+    sft = json.loads((resumed.path / "artifacts" / "sft.jsonl").read_text(encoding="utf8"))
+    cot = json.loads((resumed.path / "artifacts" / "cot.jsonl").read_text(encoding="utf8"))
+    assert cot["reasoning"] == [sft["messages"][-1]["reasoning_content"]]
+    assert cot["answer"] == sft["messages"][-1]["content"] and author.calls == 1
+
+
+@pytest.mark.parametrize("invalid_recipe", ["changed_hash", "unsupported_version"])
+def test_native_recipe_execution_boundary_still_rejects_changed_or_unknown_inputs(tmp_path, invalid_recipe):
+    rid = engine.create_run(tmp_path, brief="维护安全问答", targets=["sft"],
+        node_generation={"sft": {"enabled": True, "answer_mode": "native_joint"}})
+    path = engine.run_path(tmp_path, rid)
+    recipe = engine.read_json(path / "recipe.json")
+    state = engine.read_json(path / "state.json")
+    assert recipe["version"] == 42 and recipe["native_generation_version"] == 1
+    if invalid_recipe == "changed_hash":
+        recipe["brief"] = "运行创建后修改了任务要求。"
+        assert engine.digest(recipe) != state["recipe_hash"]
+    else:
+        recipe["version"] = 10_000
+        state["recipe_hash"] = engine.digest(recipe)
+        atomic_json(path / "state.json", state)
+    atomic_json(path / "recipe.json", recipe)
+    session = workflow_execution(engine.Workflow(tmp_path, rid, tmp_path))._session
+    with session.exclusive(), pytest.raises(ValueError, match="^recipe_changed_create_new_run$"):
+        session.verify_pinned_inputs()
+
+
+def test_new_reading_creation_uses_director_without_executing_archived_scene_prompt(tmp_path):
+    source = tmp_path / "paper.md"
+    source.write_text("实验结果只支持给定条件下的差异。", encoding="utf8")
+    generation = {"multiturn": {"enabled": True, "style": "skeptical",
+        "instruction": "保留适用条件。", "reading_session": True}}
+    director = {"enabled": True, "planning_mode": "balanced", "learning_goal": "knowledge_application",
+        "type_weights": {"closed_book": 100, "grounded": 0, "partial": 0, "multi_source": 0, "distractor": 0},
+        "question_rules": "跟进真实的历史回应。", "answer_rules": "解释哪些证据仍然缺失。"}
+    frozen_inputs = deepcopy((generation, director))
+    rid = engine.create_run(tmp_path, sources=[source], targets=["multiturn"], node_generation=generation,
+        qa_director=director, node_prompts={"multiturn": {"workflow.reading_scene": "Saved private scene guidance."}})
+    recipe = engine.read_json(engine.run_path(tmp_path, rid) / "recipe.json")
+    assert recipe["native_generation_version"] == 1
+    assert recipe["node_generation"]["multiturn"]["answer_mode"] == "native_joint"
+    assert recipe["node_generation"]["multiturn"]["style"] == "skeptical"
+    assert not recipe["node_generation"]["multiturn"].get("reading_session")
+    assert recipe["qa_director"]["learning_goal"] == "document_reading"
+    assert recipe["qa_director"]["question_separation"] is True
+    assert recipe["qa_director"]["type_weights"]["closed_book"] == 0
+    assert recipe["qa_director"]["type_weights"]["grounded"] == 100
+    assert recipe["qa_director"]["answer_rules"] == director["answer_rules"]
+    assert recipe["reading_session_migration"]["archived_inactive_prompt_ids"] == ["workflow.reading_scene"]
+    assert recipe["node_prompts"]["multiturn"]["workflow.reading_scene"] == "Saved private scene guidance."
+    active = active_node_prompt_ids("multiturn", "文档资料", node_generation=recipe["node_generation"])
+    assert "workflow.cot_native_joint" in active and "workflow.reading_scene" not in active
+    assert (generation, director) == frozen_inputs
+
+
+@pytest.mark.parametrize("cot_enabled", [True, False])
+def test_new_native_sft_rejects_explicit_cot_stage_instead_of_silently_projecting(tmp_path, cot_enabled):
+    generation = {"sft": {"enabled": True, "answer_mode": "native_joint"},
+                  "cot": {"enabled": cot_enabled}}
+    with pytest.raises(ValueError, match="^native_generation_conflicting_cot_stage$"):
+        engine.create_run(tmp_path, brief="维护安全问答", targets=["sft", "cot"], node_generation=generation)
+    assert not (tmp_path / "workflows").exists()
 
 
 @pytest.mark.parametrize("native", ["  用户要比较差异。我需要先确认指标和实际结果；没有测量不能认定改善。\n", ""])
@@ -60,6 +200,9 @@ def test_one_actual_request_captures_exact_channels_and_resumes_without_json(tmp
     workflow.stage = "cot"
     sample = {**original, "id": "native", "source_id": "source", "evidence_level": "unassessed"}
     row, = workflow.cot(sample)
+    # A native history stripped by the historical request path is not a
+    # certified tool-continuation session, even for newly created tasks.
+    assert "author_session" not in row["native_generation"]
     assert row["reasoning"] == [native]
     assert "PROFILE_LITERAL_{unchanged}" in row["question"][0]["content"]
     assert row["question"][0] in author.last_messages

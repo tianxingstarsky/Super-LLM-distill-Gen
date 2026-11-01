@@ -1,5 +1,6 @@
 """A node adopts a durable edition without changing frozen or source records."""
 from streamlit.testing.v1 import AppTest
+import pytest
 
 
 def editor(tmp_path, *, english=False, model=True, many=False):
@@ -92,28 +93,34 @@ def test_proposal_is_one_call_and_adoption_saves_an_editable_child_version(tmp_p
     assert len(ui.session_state["port"].calls) == 1
 
 
-def test_initial_style_and_manual_save_need_no_generation_model(tmp_path):
+@pytest.mark.parametrize("english, label", [(True, "Thorough reasoning · initial v2"),
+                                          (False, "充分推敲 · 初始 v2")])
+def test_initial_style_and_manual_save_need_no_generation_model(tmp_path, english, label):
     from lib.contexts.workflows.contracts import initial_experience_text
-    ui = editor(tmp_path, english=True, model=False)
+    from lib.domain.agent_experience import INITIAL_STYLE_V2, default_experience_text
+    ui = editor(tmp_path, english=english, model=False)
     prefix = "experience-evolution:fixture:reasoning"
     text_key = "workflow-agent-experience-text:fixture:reasoning"
     assert not ui.exception
     assert ui.button(key=prefix + ":propose").disabled
-    assert ui.button(key=prefix + ":initial").label == "Use initial style"
+    if english:
+        assert ui.button(key=prefix + ":initial").label == "Use initial style"
     ui.button(key=prefix + ":initial").click().run()
     assert not ui.exception
-    assert ui.text_area(key=text_key).value == initial_experience_text("reasoning")
+    assert ui.text_area(key=text_key).value == initial_experience_text("reasoning") == INITIAL_STYLE_V2
     ui.text_area(key=text_key).set_value("Keep only decisive evidence and counterexamples.").run()
     ui.button(key=prefix + ":save").click().run()
     assert not ui.exception and not ui.session_state["port"].calls
     versions = ui.session_state["port"].repo.list_versions("reasoning")
     assert [record["status"] for record in versions] == ["personal", "initial"]
+    assert versions[1]["label"] == label
     del ui.session_state[prefix + ":parent"]
     ui.run()
     assert ui.session_state[prefix + ":parent"] == versions[0]["id"]
     ui.button(key="reset-default").click().run()
     assert not ui.exception
     assert ui.session_state[prefix + ":parent"] is None
+    assert ui.text_area(key=text_key).value == default_experience_text("reasoning")
     assert ui.session_state["workflow-form-draft:fixture"]["workflow-agent-experience-parent:fixture:reasoning"] is None
 
 
@@ -143,17 +150,22 @@ def test_next_group_proposes_from_that_cursor_without_replaying_first_group(tmp_
 
 
 def test_personal_template_default_restore_detaches_the_saved_evolution_parent(tmp_path):
+    from lib.domain.agent_experience import default_experience_text
     from tests.test_workflow_prompt_library import workbench, library_key
     ui = workbench(tmp_path)
-    scope = "experience:answer"
-    parent_key = "workflow-agent-experience-parent:fixture:answer"
+    # The workbench now defaults to native generation, whose editor owns the
+    # reasoning experience rather than the ordinary answer experience.
+    scope = "experience:reasoning"
+    parent_key = "workflow-agent-experience-parent:fixture:reasoning"
+    text_key = "workflow-agent-experience-text:fixture:reasoning"
     parent = "a" * 32
     ui.session_state[parent_key] = parent
     form = ui.session_state["workflow-form-draft:fixture"]
     ui.session_state["workflow-form-draft:fixture"] = {**form, parent_key: parent}
-    ui.text_area(key="workflow-agent-experience-text:fixture:answer").set_value("My edited experience.").run()
+    ui.text_area(key=text_key).set_value("My edited experience.").run()
     ui.button(key=library_key(scope, "restore")).click().run()
     assert not ui.exception
     assert ui.session_state[parent_key] is None
     assert ui.session_state["workflow-form-draft:fixture"][parent_key] is None
-    assert ui.session_state["experience-evolution:fixture:answer:parent"] is None
+    assert ui.session_state["experience-evolution:fixture:reasoning:parent"] is None
+    assert ui.text_area(key=text_key).value == default_experience_text("reasoning")

@@ -9,6 +9,7 @@ from pathlib import PurePath
 
 from lib.contexts.workflows.domain.targets import PREFERENCE_TARGETS, TARGETS
 from lib.domain.workflow_reasoning_route import cot_updates_sft
+from .native_generation import native_generation_enabled
 
 
 BASE_STAGES = ("cpt", "sft", "multiturn", "agent", "gsm8k")
@@ -41,16 +42,18 @@ def uses_shared_source_cleaning(targets, sources=(), *, source_mode=None) -> boo
     return False
 
 
-def sft_uses_cot_output(targets, recipe_version=15) -> bool:
-    """New combined runs publish SFT from the final CoT result, never its input."""
-    return cot_updates_sft({"version": recipe_version, "targets": targets})
+def sft_uses_cot_output(targets, recipe_version=15, *, native_generation_version=0, node_generation=None) -> bool:
+    """Historical authored-CoT routes finalize SFT from their downstream output."""
+    return cot_updates_sft({"version": recipe_version, "targets": targets,
+                           "native_generation_version": native_generation_version,
+                           "node_generation": node_generation or {}})
 
 
 def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
                     package_review=None, recipe_version=16,
                     repair_only=False, source_cleaning=None,
                     review_repair=None, arithmetic_seed_protocol_version=0,
-                    cpt_review_policy_version=0, node_generation=None
+                    cpt_review_policy_version=0, node_generation=None, native_generation_version=0
                     ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
@@ -68,6 +71,10 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
         active.add("preference")
     if "preference" in active or "cot" in active:
         active.add("sft")
+    native_sft = native_generation_enabled({"native_generation_version": native_generation_version,
+                                           "node_generation": node_generation or {}}, "sft")
+    if native_sft:
+        active.discard("cot")
     shared_cleaning = not math_only and recipe_version >= SOURCE_CLEANING_RECIPE_VERSION and (
         source_cleaning is True or source_cleaning is None and bool(selected.intersection(SOURCE_QA_TARGETS)))
     if shared_cleaning:
@@ -82,6 +89,8 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     if directed:
         active.add("director")
     trimmed_outputs = selected.intersection({"sft", "cot"}) if reasoning_trim else set()
+    if native_sft and "cot" in trimmed_outputs:
+        trimmed_outputs = (trimmed_outputs - {"cot"}) | {"sft"}
     if trimmed_outputs:
         active.add("trim")
     # New recipes run scoring and repair together after the requested outputs
@@ -115,7 +124,8 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
     outputs = {"multiturn", "agent", "gsm8k", "preference", "cot"}
     if "cpt" in selected:
         outputs.add("cpt")
-    if "sft" in selected and not sft_uses_cot_output(selected, recipe_version):
+    if (native_sft and selected.intersection({"sft", "cot"}) or
+            "sft" in selected and not sft_uses_cot_output(selected, recipe_version)):
         outputs.add("sft")
     terminal = "review" if unified_review else "jev" if reviewed else "package"
     edges.extend((key, "package" if cpt_direct and key == "cpt" else

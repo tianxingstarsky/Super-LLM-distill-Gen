@@ -55,6 +55,28 @@ def test_all_templates_render_with_declared_variables():
         assert isinstance(out, str) and out
 
 
+def test_native_task_reasoning_default_preserves_frozen_and_custom_templates():
+    from dataclasses import asdict
+    from hashlib import sha256
+    import json
+
+    from lib.domain.workflow_node_prompts import snapshot_node_prompts
+    from lib.prompts import workflow
+
+    prompt_id = "workflow.cot_native_joint"
+    current = get(prompt_id)
+    previous = get(prompt_id, version="1.4.0")
+    assert current.version == "1.5.0"
+    assert previous == workflow.COT_NATIVE_JOINT_V1_4
+    frozen_fields = json.dumps(asdict(previous), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert sha256(frozen_fields.encode("utf-8")).hexdigest() == (
+        "943ac1bf8dfebe8b64b07c9bdc9773d182a60c5029615c7b9c57ddb55be0a44b")
+    assert snapshot_node_prompts(None, recipe_version=42)["sft"][prompt_id] == render(current)
+    for saved_text in (render(previous), "My own native reasoning and answer instructions."):
+        overrides = {"sft": {prompt_id: saved_text}}
+        assert snapshot_node_prompts(overrides, recipe_version=42)["sft"][prompt_id] == saved_text
+
+
 def test_render_fails_fast_on_missing_or_extra_vars():
     spec = get("distill.reflector")
     with pytest.raises(PromptRenderError):
@@ -138,7 +160,7 @@ def test_precise_fact_review_preserves_old_prompt_snapshots():
 
 def test_latest_review_protocol_preserves_literal_scope_and_refuses_invented_support():
     current = get("workflow.review_score")
-    assert current.version == "1.22.0"
+    assert current.version == "1.25.0"
     assert get("workflow.review_score", version="1.20.0").version == "1.20.0"
     text = render(current)
     for constraint in (
@@ -151,10 +173,34 @@ def test_latest_review_protocol_preserves_literal_scope_and_refuses_invented_sup
         "不伪造工具核验",
     ):
         assert constraint in text
-    for name, version in (("rationale_check", "1.9.0"), ("package_review", "1.4.0")):
+    for name, version in (("rationale_check", "1.12.0"), ("package_review", "1.4.0")):
         spec = get("workflow." + name)
         assert spec.version == version
         assert "没有依据的精确细节应省略或明确保留不确定性" in render(spec)
+
+
+@pytest.mark.parametrize("prompt_id,old_version,new_version,old_sha", [
+    ("workflow.rationale_check", "1.11.0", "1.12.0",
+     "0d32106f3082f17f4ff07200b07156743cc2776398a38e238e22f26da3b0bfd6"),
+    ("workflow.review_score", "1.24.0", "1.25.0",
+     "5816b8508726c59cc1a137f7414ff9b611192c0c8fd2f47ff755dd3ebac67703"),
+])
+def test_review_guidance_versions_preserve_frozen_schema_and_prompt_overrides(
+        prompt_id, old_version, new_version, old_sha):
+    from dataclasses import asdict, replace
+    from hashlib import sha256
+    import json
+    from lib.domain.workflow_node_prompts import snapshot_node_prompts
+
+    current, previous = get(prompt_id), get(prompt_id, version=old_version)
+    assert current.version == new_version
+    frozen = json.dumps(asdict(previous), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert sha256(frozen.encode("utf8")).hexdigest() == old_sha
+    assert replace(current, version=old_version, template=previous.template) == previous
+    stage = "cot" if prompt_id == "workflow.rationale_check" else "review"
+    for saved in (render(previous), "My own review instructions with evidence requirements."):
+        overrides = {stage: {prompt_id: saved}}
+        assert snapshot_node_prompts(overrides, recipe_version=42)[stage][prompt_id] == saved
 
 
 def test_repair_draft_errors_are_not_attributed_to_actual_user_and_old_version_stays_pinned():

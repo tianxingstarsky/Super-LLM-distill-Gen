@@ -175,9 +175,13 @@ class DirectorResponder:
         if data and data.get("request_phase") == "next_turn":
             self.steps.append(deepcopy(messages))
             completed = data["completed_turns"]
+            # Current directors return actual user indices, not a rewritten
+            # constraint summary. Historical frozen requests keep their schema.
+            constraint_refs = ({"user_constraint_refs": list(data["user_message_indices"])}
+                               if data.get("dialogue_constraint_provenance_version") == 1 else {})
             if completed >= 2:
                 return json.dumps({"continue": False, "user_message": "", "reason": "实际修改已经完成。",
-                    "dialogue_state": {"progress": "卡片已经完成必要修改。"}}, ensure_ascii=False)
+                    "dialogue_state": {"progress": "卡片已经完成必要修改。"}, **constraint_refs}, ensure_ascii=False)
             return json.dumps({"continue": True,
                 "user_message": "内部续轮占位：不可冒充独立发问者。",
                 "reason": "实际卡片已经给出，可以按真实成果继续修改。",
@@ -185,7 +189,7 @@ class DirectorResponder:
                     "shared_understanding": [data["dialogue_messages"][-1]["content"]],
                     "open_issues": ["调整卡片表达。"]},
                 "question_brief": deepcopy(self.followup_brief) if self.followup_brief is not None
-                    else brief(followup=True)}, ensure_ascii=False)
+                    else brief(followup=True), **constraint_refs}, ensure_ascii=False)
         dispatch = tool_payload(messages, "dialogue_dispatch")
         if dispatch is not None and "qa_type" in dispatch:
             self.answers.append(deepcopy(messages))
@@ -588,3 +592,77 @@ def test_stored_reasoning_metadata_is_removed_before_preflight_and_question_disp
     assert tool_payload(questioner.calls[-1], "dialogue_dispatch")["visible_dialogue"] == public
     assert HIDDEN_REASONING not in json.dumps(writer.brief_checks[-1], ensure_ascii=False)
     assert HIDDEN_REASONING not in json.dumps(questioner.calls[-1], ensure_ascii=False)
+
+
+def test_native_multiturn_keeps_experience_and_reasoning_but_actor_receives_only_public_turns(tmp_path):
+    from lib.contexts.workflows.domain.integrated_reflection import default_integrated_reflection
+
+    experience = "EXPERIENCE_SENTINEL 只根据已经明确的条件做判断。"
+
+    class NativeAuthor(DirectorResponder):
+        reasoning = {"mode": "enabled"}
+
+        def chat(self, messages, **options):
+            actual = messages[-1]
+            if actual.get("role") == "user" and actual.get("content") in {FIRST_QUESTION, FOLLOWUP_QUESTION}:
+                self.calls.append(deepcopy(messages))
+                self.answers.append(deepcopy(messages))
+                self.usage["calls"] += 1
+                assert experience in json.dumps(messages, ensure_ascii=False)
+                options["response_details"].update(api_format="chat", reasoning_content=HIDDEN_REASONING)
+                return FOLLOWUP_ANSWER if actual["content"] == FOLLOWUP_QUESTION else FIRST_ANSWER
+            return super().chat(messages, **options)
+
+    class InterruptedQuestioner(Questioner):
+        followup_attempts = 0
+
+        def chat(self, messages, **options):
+            if tool_payload(messages, "dialogue_dispatch").get("visible_dialogue"):
+                self.followup_attempts += 1
+                if self.followup_attempts == 1:
+                    raise ModelRequestError("service_timeout", "transient", 1)
+            return super().chat(messages, **options)
+
+    workflow, author, questioner, reviewer = make_run(tmp_path,
+        writer=NativeAuthor(), questioner=InterruptedQuestioner(), targets=["multiturn"], conversation_turns=2,
+        node_generation={"multiturn": {"enabled": True, "answer_mode": "native_joint", "style": "default",
+            "instruction": "", "self_check": default_integrated_reflection()}},
+        agent_experience={"reasoning": {"enabled": True, "text": experience}})
+    interrupted = workflow.execute()
+    assert interrupted["status"] == "failed" and interrupted["error"] == "service_timeout"
+    assert len(author.plans) == len(author.answers) == len(questioner.calls) == 1
+
+    resumed = engine.Workflow(tmp_path / "out", workflow.path.name, tmp_path,
+        generator=author, questioner=questioner, jev=reviewer)
+    state = resumed.execute(resume_run=True)
+    assert state["status"] == "completed", state.get("error")
+    assert len(author.plans) == 1 and len(author.answers) == len(questioner.calls) == 2
+    assert questioner.followup_attempts == 2
+    row, = records(resumed.path, "multiturn")
+    saved_messages = deepcopy(row["messages"])
+    expected_system = {"role": "system", "content": "<working_principles>\n" + experience + "\n</working_principles>"}
+    assert saved_messages[0] == expected_system
+    assert [m["content"] for m in saved_messages if m["role"] == "user"] == [FIRST_QUESTION, FOLLOWUP_QUESTION]
+    assert [m["reasoning_content"] for m in saved_messages if m["role"] == "assistant"] == [HIDDEN_REASONING] * 2
+    expected_visible = public_messages(saved_messages[1:3])
+    assert tool_payload(questioner.calls[1], "dialogue_dispatch")["visible_dialogue"] == expected_visible
+    assert task_payload(author.brief_checks[-1])["visible_dialogue"] == expected_visible
+    assert experience not in json.dumps(questioner.calls, ensure_ascii=False)
+    assert HIDDEN_REASONING not in json.dumps(questioner.calls, ensure_ascii=False)
+    exported = json.loads((resumed.path / "artifacts/multiturn.jsonl").read_text(encoding="utf8"))
+    assert exported["messages"] == saved_messages
+
+    # Only the exact injected leading message is removable. Lookalikes and
+    # arbitrary systems must fail before buying any new actor/brief request.
+    calls_before = (len(author.calls), len(questioner.calls))
+    for invalid in (
+        [{"role": "system", "content": "Unknown system rules."}, *saved_messages[1:]],
+        [{**expected_system, "content": expected_system["content"] + " changed"}, *saved_messages[1:]],
+        [{**expected_system, "name": "extra-field"}, *saved_messages[1:]],
+        [expected_system, {"role": "system", "content": "Unknown extra system."}, *saved_messages[1:]],
+    ):
+        with pytest.raises(ValueError, match="^invalid_visible_dialogue$"):
+            resumed._closed_book_question({}, {},
+                key=["must-not-reach-model"], visible_messages=invalid, brief=brief(followup=True))
+    assert calls_before == (len(author.calls), len(questioner.calls))
+    assert records(resumed.path, "multiturn")[0]["messages"] == saved_messages

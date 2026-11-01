@@ -82,7 +82,7 @@ def _use_initial(app, workspace, scope, prefix, text_key, enabled_key, save_fiel
     try:
         from lib.contexts.workflows.contracts import initial_experience_text
         record = app.save_version(scope, initial_experience_text(scope),
-            label="Compact and complete · initial v1" if en else "简洁全面 · 初始 v1", status="initial")
+            label="Thorough reasoning · initial v2" if en else "充分推敲 · 初始 v2", status="initial")
         _remember(prefix, record)
         _apply(workspace, scope, record, text_key, enabled_key, save_field)
     except (OSError, ValueError, RuntimeError) as error:

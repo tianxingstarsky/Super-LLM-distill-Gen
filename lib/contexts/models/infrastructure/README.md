@@ -1,5 +1,7 @@
 # 模型配置与请求适配
 
+`tool_request_adapter.py` 允许无工具的 `tool_choice="none"` 非严格最终响应，复用请求、结算与原生推理保留路径；线上省略空 `tools` 和 `tool_choice`。普通工具选择与严格工具提交仍要求有效工具，不以虚构工具实现 system 提醒重答。
+
 `retry.py` 是唯一 Tenacity 请求执行器。`telemetry.py` 使用 Langfuse observation API 记录实际模型请求、用量与失败；未配置时不连接追踪服务，追踪故障不重试业务。
 
 `provider_failures.py` 用 OpenAI/Anthropic SDK 与 HTTPX 的真实异常类型识别传输失败，并统一读取响应头。重试边界遵循上游 `x-should-retry: false`，优先读取毫秒等待信息，再读取 Retry-After 秒数／日期；显式允许重试不覆盖额度、认证和质量校验等终止条件。SDK 内部重试仍关闭，次数、取消、共享冷却和结算仍由现有请求用例负责。验证见 `test_model_request_reliability.py`、`test_model_stream_transport_recovery.py`。

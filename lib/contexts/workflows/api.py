@@ -14,3 +14,5 @@ from .application.conversation_import import ImportConversations
 from .application.check_reasoning import CheckReasoning
 from .application.generate_with_sources import GenerateWithSources
 from .application.experience_evolution import EvolveExperience
+from .application.continue_native_dialogue import ContinueNativeDialogue
+from .application.continue_native_feedback import ContinueNativeFeedback

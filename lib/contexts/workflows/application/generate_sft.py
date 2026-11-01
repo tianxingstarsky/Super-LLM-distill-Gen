@@ -57,6 +57,13 @@ class GenerateSft:
                        for m in unit.get("messages", [])]},
                    "requirement": self.recipe["brief"]}
         style = self._port.generation_style("sft", unit["id"])
+        from ..domain.native_generation import native_generation_enabled
+        if native_generation_enabled(self.recipe, "sft"):
+            if unit["kind"] != "conversation":
+                return [self._port.reject(unit, "native_generation_requires_director_contract")]
+            # Imported answers and their missing-reasoning policy belong to
+            # the input node. The new default must not silently rewrite them.
+            style = None
         if style is not None:
             if history:
                 controlled_training_messages(history[:-1], style)

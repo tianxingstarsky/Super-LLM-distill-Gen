@@ -12,6 +12,9 @@ import pytest
 from lib.domain.workflow_qa_director import validate_director_task
 from lib.infrastructure import training_workflow as engine
 from lib.prompts import get, render
+from lib.prompts.workflow_user_expression import (
+    ADAPTIVE_USER_EXPRESSION_V2, DIRECTOR_CONSTRAINT_PROVENANCE,
+)
 from lib.prompts.workflow_utterance import (
     PARTICIPANT_UTTERANCE_GUIDANCE, PARTICIPANT_UTTERANCE_REVIEW,
     QA_DIRECTOR_V1_10, QA_DIRECTOR_V1_11, QUESTION_USER_V1_3, MULTITURN_USER_V1_5, SFT_V1_7,
@@ -45,9 +48,13 @@ def test_versioned_complete_contract_has_shared_guidance_once(name, version, bod
 
 def test_latest_director_retains_participant_contract_with_adaptive_multiturn_design():
     prompt = get("workflow.qa_director")
-    assert prompt.version == "1.11.0"
-    assert render(prompt) == QA_DIRECTOR_V1_11
+    assert prompt.version == "1.15.0"
+    assert render(get("workflow.qa_director", "1.11.0")) == QA_DIRECTOR_V1_11
     assert render(prompt).count(PARTICIPANT_UTTERANCE_GUIDANCE) == 1
+    assert render(prompt).count(ADAPTIVE_USER_EXPRESSION_V2) == 1
+    assert render(prompt).count(DIRECTOR_CONSTRAINT_PROVENANCE) == 1
+    assert '"user_constraint_refs": []' in render(prompt)
+    assert '"active_constraints": ["当前真实约束"]' not in render(prompt)
 
 
 @pytest.mark.parametrize("name,version,expected", [
@@ -106,7 +113,8 @@ class ObservedExpert(Expert):
 def test_grounded_planning_and_next_turn_share_protocol_and_existing_review_call(tmp_path, monkeypatch):
     output, run_id, path, expert, worker, reviewer, _ = make_run(tmp_path, monkeypatch, ObservedExpert())
     recipe = engine.read_json(path / "recipe.json")
-    assert recipe["prompts"]["workflow.qa_director"]["version"] == "1.11.0"
+    assert recipe["prompts"]["workflow.qa_director"]["version"] == "1.15.0"
+    assert recipe["dialogue_constraint_provenance_version"] == 1
     before = deepcopy(recipe["node_prompt_templates"])
     state = engine.Workflow(output, run_id, tmp_path, jev=reviewer).execute()
     assert state["status"] == "completed", state.get("error")
@@ -115,6 +123,10 @@ def test_grounded_planning_and_next_turn_share_protocol_and_existing_review_call
     checks = [messages for messages in reviewer.calls if PARTICIPANT_UTTERANCE_REVIEW in messages[0]["content"]]
     assert checks and all('"adherence"' in messages[0]["content"] for messages in checks)
     assert len(worker.calls) == 2
+    row, = engine.read_json(path / "artifacts/multiturn.records.json")
+    continued = next(step for step in row["dialogue_steps"] if step.get("turn") == 2 and step.get("continue"))
+    assert continued["constraint_provenance"]["sources"][0]["message_index"] == 0
+    assert continued["dialogue_state"]["active_constraints"] == [row["messages"][0]["content"]]
     assert engine.read_json(path / "recipe.json")["node_prompt_templates"] == before
 
 

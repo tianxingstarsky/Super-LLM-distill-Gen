@@ -28,6 +28,39 @@ def source(path, *, name=None):
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
 
 
+def test_reuse_preserves_each_native_nodes_mode_style_and_guidance_without_mutating_recipe():
+    from lib.contexts.workflows.contracts import checklist_from_text
+    from lib.presentation.streamlit.reasoning_checklist_controls import checklist_settings
+    generation = {node: {"enabled": True, "style": "custom", "instruction": f"Keep {node} concise.",
+                        "answer_mode": "native_joint",
+                        "self_check": checklist_from_text(f"? [prefix] Check the {node} request.\n[final] Preserve the conditions.", version=7)}
+                  for node in ("sft", "multiturn")}
+    original = recipe(version=42, native_generation_version=1, targets=["sft", "multiturn"],
+                      node_generation=generation)
+    frozen = deepcopy(original)
+    values = recipe_to_draft(original, "Native", "w", [])["values"]
+    for node in generation:
+        assert values[f"workflow-generation-answer-mode:w:{node}"] == "native_joint"
+        assert values[f"workflow-generation-instruction:w:{node}"] == generation[node]["instruction"]
+        assert checklist_settings("w", lambda _, key, default: values.get(key, default), node=node) == generation[node]["self_check"]
+    assert original == frozen
+
+
+def test_reuse_does_not_upgrade_legacy_generation_or_change_frozen_cot_settings():
+    from lib.contexts.workflows.contracts import checklist_from_text
+    original = recipe(version=35, targets=["sft", "multiturn", "cot"], node_generation={
+        "cot": {"enabled": True, "style": "concise", "instruction": "Keep the original guidance.",
+                "answer_mode": "joint", "self_check": checklist_from_text("Check assumptions.", version=6)}})
+    frozen = deepcopy(original)
+    values = recipe_to_draft(original, "Legacy", "w", [])["values"]
+    assert values["workflow-generation-answer-mode:w:sft"] == "joint"
+    assert values["workflow-generation-answer-mode:w:multiturn"] == "joint"
+    assert values["workflow-generation-answer-mode:w:cot"] == "joint"
+    assert values["workflow-cot-checklist-version:w"] == 6
+    assert values["workflow-targets:w:自动推荐"] == ["sft", "multiturn", "cot"]
+    assert original == frozen
+
+
 def test_recipe_maps_bounded_settings_and_keeps_secrets_out_of_draft():
     original = recipe(endpoint_pins={"sft": {"secret": "DO_NOT_COPY_SECRET"}},
                       api_key="DO_NOT_COPY_SECRET", endpoint="DO_NOT_COPY_ENDPOINT",

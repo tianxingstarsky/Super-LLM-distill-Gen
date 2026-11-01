@@ -36,6 +36,7 @@ from lib.domain.human_augmentation import (
 from lib.infrastructure.qa_history import QAHistory, contract_identity, learner_task_identity, MAX_QUESTION_CHARS
 from lib.infrastructure.workflow_rows import WorkflowRows
 from lib.model_request_reliability import ModelJSONError
+from lib.contexts.workflows.contracts import open_dialogue_question_route
 
 
 _PLAN_VALIDATION_CODES = frozenset({
@@ -75,13 +76,13 @@ def _plan_validation_code(error):
     return code if code in _PLAN_VALIDATION_CODES else "qa_director_contract_validation_failed"
 
 
-def _typed_director_repair(recipe):
+def _typed_director_repair(recipe, *, minimum=(1, 9, 0)):
     """New contracts opt in; historical repair requests remain byte identical."""
     prompts = recipe.get("prompts")
     pinned = prompts.get("workflow.qa_director") if isinstance(prompts, dict) else None
     version = pinned.get("version") if isinstance(pinned, dict) else None
     match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version) if isinstance(version, str) else None
-    return bool(match and tuple(map(int, match.groups())) >= (1, 9, 0))
+    return bool(match and tuple(map(int, match.groups())) >= minimum)
 
 
 _DIALOGUE_DESIGN_REPAIR = (
@@ -180,7 +181,9 @@ class WorkflowQADirector:
         from lib.domain.dialogue_expression import natural_expression_guide
         return {"natural_expression_guidance": natural_expression_guide(self.recipe["qa_expression_version"])}
 
-    def separated_questions(self):
+    def separated_questions(self, unit=None):
+        if unit is not None and (route := open_dialogue_question_route(self.recipe, unit)):
+            return route["route"] == "source_blind_questioner"
         return self.recipe.get("qa_director", {}).get("question_separation") is True
 
     def _question_brief_boundary(self, unit, contract, brief, visible_messages=None):
@@ -243,7 +246,9 @@ class WorkflowQADirector:
 
     def _closed_book_question(self, unit, contract, *, key, visible_messages=None, brief=None, expression_design=None):
         """Separate authorship, then verify the real question against evidence."""
+        from lib.contexts.workflows.contracts import without_injected_public_experience
         from lib.infrastructure.dialogue_role_messages import visible_dialogue
+        visible_messages = without_injected_public_experience(visible_messages, self.recipe)
         visible_messages = (visible_dialogue([*visible_messages, {"role": "user", "content": "next turn"}])[:-1]
                             if visible_messages else [])
         brief = contract.get("question_brief") if brief is None else brief
@@ -541,7 +546,8 @@ class WorkflowQADirector:
                    if self.qa_identity_design(contract) is not None else {})}
 
     def qa_contract_check(self, key, unit, messages, *, prompt_id="workflow.sft_directed_check",
-                          dialogue_state=None, dialogue_steps=None, review_scope="complete"):
+                          dialogue_state=None, dialogue_steps=None, review_scope="complete",
+                          model_stage=None, prompt_stage=None):
         from lib.domain.learner_context import learner_contract, prompt_at_least
         contract = unit["qa_contract"]
         source = unit.get("source_context", unit)
@@ -565,7 +571,9 @@ class WorkflowQADirector:
             data = {name: value for name, value in data.items()
                     if name not in {"teacher_evidence", "source_context", "dialogue_state", "dialogue_steps"}}
             data.update(qa_contract=learner_contract(contract), learner_context_only=True)
-        value = self.ask(key, "jev", prompt_id, data, allow_reasoning_fallback=False)
+        node_options = {**({"model_stage": model_stage} if model_stage is not None else {}),
+                        **({"prompt_stage": prompt_stage} if prompt_stage is not None else {})}
+        value = self.ask(key, "jev", prompt_id, data, allow_reasoning_fallback=False, **node_options)
         format_metadata = (type(self.recipe.get("style_verdict_protocol_version")) is int
                            and self.recipe["style_verdict_protocol_version"] == 2)
         if format_metadata:
@@ -593,6 +601,7 @@ class WorkflowQADirector:
                 "fact_verification": "not_independently_verified",
                 "review_scope": review_scope,
             }, allow_reasoning_fallback=False,
+                **node_options,
                 **({"instruction": HUMAN_REVISION_INSTRUCTION} if design.get("seed", {}).get("revision_context") else {}))
             try:
                 check = validate_human_check(check)
@@ -612,6 +621,7 @@ class WorkflowQADirector:
         parallel. The request and response stay in the current worker's durable
         checkpoints while model and editable prompt are resolved at director.
         """
+        from lib.contexts.workflows.contracts import director_context_authority, dialogue_constraint_reference_request
         key = [unit["id"], "dialogue_director", len(messages) // 2, attempt, _digest(messages)]
         data = {
             "request_phase": "next_turn", "planning_mode": "adaptive",
@@ -629,10 +639,15 @@ class WorkflowQADirector:
             "maximum_turns": self.recipe.get("conversation_turns", 3),
             "question_rules": self.recipe["qa_director"]["question_rules"],
             "answer_rules": self.recipe["qa_director"]["answer_rules"], "feedback": feedback,
+            **director_context_authority(self.recipe),
+            **dialogue_constraint_reference_request(self.recipe, messages),
             **self._natural_expression_guidance(),
             **_task_controls(unit["qa_contract"]),
         }
-        if self.separated_questions():
+        if route := open_dialogue_question_route(self.recipe, unit):
+            data["question_routing"] = route
+            data["question_separation"] = self.separated_questions(unit)
+        if self.separated_questions(unit):
             from lib.infrastructure.source_memory_messages import directed_source_request
             data = directed_source_request(self.recipe, {**data, "question_separation": True}, unit, unit["qa_contract"])
         runtime = self._dialogue_knowledge_runtime(unit)
@@ -693,6 +708,9 @@ class WorkflowQADirector:
 
     def _next_dialogue_plan(self, key, data, runtime, unit, messages, previous_state):
         """Validate the actual step and blind actor before durable Agent commit."""
+        from lib.contexts.workflows.contracts import (
+            DialogueConstraintReferenceError, validate_referenced_dialogue_step,
+        )
         brief_version = self._question_brief_protocol_version()
         options = ({"instruction": HUMAN_DIRECTOR_INSTRUCTION + human_generation_instruction(unit["qa_contract"])}
                    if unit["qa_contract"].get("human_design") else {})
@@ -706,10 +724,13 @@ class WorkflowQADirector:
             raise DialoguePlanError() from error
         validating_step = True
         try:
-            step = validate_dialogue_step(value, completed_turns=len(messages) // 2,
-                                          natural_utterance=self.participant_utterances(),
-                                          question_brief_protocol_version=brief_version,
-                                          **_task_controls(unit["qa_contract"]))
+            validation_options = {"completed_turns": len(messages) // 2,
+                                  "natural_utterance": self.participant_utterances(),
+                                  "question_brief_protocol_version": brief_version,
+                                  **_task_controls(unit["qa_contract"])}
+            step = (validate_referenced_dialogue_step(value, messages=messages, **validation_options)
+                    if data.get("dialogue_constraint_provenance_version") == 1
+                    else validate_dialogue_step(value, **validation_options))
             if self.participant_utterances():
                 from lib.domain.dialogue_expression import carry_expression_design
                 inherited = (previous_state or {}).get("expression_design", unit["qa_contract"].get("expression_design"))
@@ -717,7 +738,7 @@ class WorkflowQADirector:
                 if design:
                     step["dialogue_state"]["expression_design"] = design
             validating_step = False
-            if (self.separated_questions() and unit["qa_contract"]["qa_type"] == "closed_book"
+            if (self.separated_questions(unit) and unit["qa_contract"]["qa_type"] == "closed_book"
                     and step["continue"]):
                 # A replacement Agent plan may change the brief under the
                 # same operation key. Never reuse an actor reply purchased
@@ -741,7 +762,8 @@ class WorkflowQADirector:
                 self.commit_knowledge_plan(key)
         except ValueError as error:
             if brief_version == 2 and not (
-                    validating_step and str(error) in _DIALOGUE_VALIDATION_CODES
+                    validating_step and (str(error) in _DIALOGUE_VALIDATION_CODES
+                                         or isinstance(error, DialogueConstraintReferenceError))
                     or isinstance(error, _QuestionDispatchValidationError)):
                 # Request/config/integrity failures are not candidate defects.
                 # In particular no failed durable commit may buy a new plan.
@@ -750,9 +772,12 @@ class WorkflowQADirector:
                 self.invalidate_knowledge_plan(key)
             else:
                 self._invalidate_director_call(key)
-            raise DialoguePlanError(error if brief_version == 2 else None) from error
+            raise DialoguePlanError(error if brief_version == 2 or isinstance(error, DialogueConstraintReferenceError)
+                                    else None) from error
         if runtime and brief_version == 2:
             self.commit_knowledge_plan(key)
+        if route := open_dialogue_question_route(self.recipe, unit):
+            step["question_routing"] = route
         return step
 
     @staticmethod
@@ -769,6 +794,7 @@ class WorkflowQADirector:
         brief_version = self._question_brief_protocol_version()
         self.activate_directed_stage("director")
         guided = [unit for unit in batch if unit["kind"] != "conversation"]
+        guided_by_id = {unit["id"]: unit for unit in guided}
         if not guided:
             return batch
         for unit in guided:
@@ -876,7 +902,14 @@ class WorkflowQADirector:
                     for label, store in (("current_run", local_history), ("published", published_history))}
             if self.recipe.get("source_line_protocol_version") == 1:
                 data["source_line_protocol_version"] = 1
-            if self.separated_questions():
+            if self.recipe.get("open_dialogue_routing_version") is not None:
+                for candidate in data["candidates"]:
+                    source = guided_by_id[candidate["id"]]
+                    candidate["question_routing"] = open_dialogue_question_route(self.recipe, source)
+                    candidate["question_separation"] = self.separated_questions(source)
+                choices = {candidate["question_separation"] for candidate in data["candidates"]}
+                data["question_separation"] = choices.pop() if len(choices) == 1 else "per_candidate"
+            elif self.separated_questions():
                 data["question_separation"] = True
             if adaptive:
                 data.update(request_phase="batch_design", planning_mode="adaptive",
@@ -990,6 +1023,7 @@ class WorkflowQADirector:
                         raise
                     response = None
                 validated_plan = False
+                evidence_context = None
                 try:
                     tasks = response.get("tasks") if isinstance(response, dict) else None
                     if (not isinstance(tasks, list) or len(tasks) != len(guided)
@@ -1027,13 +1061,15 @@ class WorkflowQADirector:
                                 task["question_brief"] = {name: value for name, value in task["question_brief"].items()
                                                           if name != "user_language"}
                         controls = _task_controls(candidate)
+                        source_text = self._director_evidence_text(candidate)
+                        evidence_context = (candidate, task, source_text)
                         contracts[candidate["id"]] = validate_director_task(
                             task, expected_type=candidate["assigned_type"],
-                            source_text=self._director_evidence_text(candidate),
+                            source_text=source_text,
                             expected_id=candidate["id"],
                             source_materials=self._director_evidence_materials(candidate),
                             question_brief_protocol_version=brief_version, **controls)
-                        if (self.separated_questions() and task["qa_type"] == "closed_book"
+                        if (self.separated_questions(guided_by_id[candidate["id"]]) and task["qa_type"] == "closed_book"
                                 and not candidate.get("preserve_human_input")):
                             self._question_brief_boundary(candidate, contracts[candidate["id"]], task.get("question_brief"))
                         if candidate.get("human_design"):
@@ -1075,11 +1111,34 @@ class WorkflowQADirector:
                         repair_feedback["validation"] = deepcopy(error.feedback)
                     if str(error) == "invalid_dialogue_design" and _typed_director_repair(self.recipe):
                         repair_feedback["instruction"] += _DIALOGUE_DESIGN_REPAIR
+                    if (evidence_context is not None
+                            and _typed_director_repair(self.recipe, minimum=(1, 13, 0))
+                            and str(error) in {"invalid_qa_director_task", "invalid_qa_director_evidence",
+                                               "qa_director_evidence_not_in_source"}):
+                        candidate, task, source_text = evidence_context
+                        quotes = task.get("evidence_quotes")
+                        issue = ("missing" if "evidence_quotes" not in task else
+                                 "empty" if quotes == [] else
+                                 "not_verbatim" if str(error) == "qa_director_evidence_not_in_source" else
+                                 "invalid_type_or_items" if str(error) == "invalid_qa_director_evidence" else None)
+                        if issue is not None and source_text is not None:
+                            repair_feedback["validation"] = {
+                                "field": "evidence_quotes", "candidate_id": candidate["id"], "issue": issue,
+                                "minimum_items": 2 if task.get("qa_type") == "multi_source" else 1,
+                                "source_available": bool(source_text.strip()),
+                                "source_kind": candidate.get("kind", "brief"),
+                            }
+                            repair_feedback["instruction"] += (
+                                "evidence_quotes是必填的非空字符串数组，不能省略、填null或空数组。"
+                                "有源文本时至少摘录一条该候选中的逐字片段；不能改写、翻译或引用外部知识，"
+                                "multi_source至少两条不同片段。closed_book仅visible_context为空，私有evidence_quotes仍须提供。"
+                                "kind=brief时可摘录明确目标、限制或场景条件作为任务依据，不表示这些内容已被事实认证。"
+                                "不要补造事实来满足引用；adaptive下确实没有可用依据时才使用skip_reason。")
                     if self.recipe.get("source_line_protocol_version") == 1:
                         repair_feedback["instruction"] += (
                             "编号资料的 source_line_ranges 只能引用该包 material_id 和实际1-based行号；"
                             "范围包含完整事实及条件，不把辅助行号写入问题、答案或逐字引用。")
-                    if self.separated_questions():
+                    if any(self.separated_questions(unit) for unit in guided):
                         repair_feedback["instruction"] += (
                             "closed_book须提供question_brief宽泛主题与交往目标，不含原文、摘要、参考问答或标识。")
                     if any(name in config for name in ("learning_goal", "user_languages")):
@@ -1127,7 +1186,7 @@ class WorkflowQADirector:
                 feedback[contract["skip_reason"]] = feedback.get(contract["skip_reason"], 0) + 1
                 self.state["qa_director"]["skipped"] = self.state["qa_director"].get("skipped", 0) + 1
                 continue
-            if (self.separated_questions() and contract["qa_type"] == "closed_book"
+            if (self.separated_questions(unit) and contract["qa_type"] == "closed_book"
                     and unit["id"] not in preserved_human):
                 try:
                     contract = self.checkpoint([*key, "question_dispatch", unit["id"], _digest(contract)],
@@ -1144,6 +1203,7 @@ class WorkflowQADirector:
                     self.state["qa_director"]["feedback"][str(error)] = self.state["qa_director"]["feedback"].get(str(error), 0) + 1
                     continue
             result.append({**unit, "qa_contract": contract,
+                           **({"question_routing": route} if (route := open_dialogue_question_route(self.recipe, unit)) else {}),
                            "family_id": _digest([unit["source_id"], contract["question"]]),
                            "parent_id": unit.get("generation_variant", {}).get("source_unit_id", unit["id"]),
                            "director_batch": offset // config["batch_size"]})

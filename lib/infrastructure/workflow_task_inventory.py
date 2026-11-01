@@ -71,6 +71,8 @@ def _summary(path, identity, recipe_identity):
     if isinstance(recipe, dict) and isinstance(recipe.get("targets"), list):
         try:
             scheduled, _ = execution_graph(recipe["targets"],
+                node_generation=recipe.get("node_generation"),
+                native_generation_version=recipe.get("native_generation_version", 0),
                 reasoning_trim=bool((recipe.get("reasoning_trim") or {}).get("enabled")),
                 qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
                 recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),

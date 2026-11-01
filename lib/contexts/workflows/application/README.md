@@ -1,5 +1,31 @@
 # 工作流用例
 
+`RegenerateWithReviewGuidance` 承接新任务 v7：复用已有评审理由，将 system 注意事项追加到真实 user 后，原作者只重新生成一次。不追加当前失败助手轮，不伪造工具或推理。完整旧稿归档；新推理、答案与可见提醒一起保留。SFT／多轮包装把提醒传入质量检查和训练记录，再次返工按真实 user 位置恢复。完成仍是 `not_assessed`，没有独立评审调用。
+
+`ContinueNativeFeedback.execute_from_feedback` 是 v5/v6 的显式已交付反馈续写入口（试验，非默认）。先认证原 session、原稿、findings 与完整父回执，再保留父 `continuation_session` 全部消息、真实工具调用及回执，追加该冻结版本的 system 指导并仅调用一次 `final=True`。原会话、模型与参数绑定继续由适配器核对；父回执完整保存，新原生响应不裁剪。不重购读取反馈或独立评审，检查点可恢复；完成仍是 `not_assessed`。调用者必须提供已认证持久父记录，普通页面不会自动挑选任意旧回执走此分支。
+
+`ContinueNativeDialogue → GenerateMultiturnDialogue → generate_native_turn` 原样传递已保存评审理由和人工备注，再由 `ContinueNativeFeedback` 作为真实工具观察返回。旧任务冻结 `native_feedback_guidance_version=4`，由领域合同标明审查员、受审助手、应用返工与真实用户来源，并附原文通道定位；第一人称反思由原作者自己续写。v4 明确新答案替换受审助手轮，内部修改事件不进入用户对话，也不设默认篇幅目标。没有新增评审或“转换成第一人称”的模型调用。v1/v2/v3 文本、请求身份与检查点保持不变，再次返工按收据自己的引导版本认证。
+
+工具返工完成后，`ContinueNativeFeedback` 保存最后一次真实请求的 `continuation_session`；`GenerateNativeCot` 把该会话、实际最终 assistant 与响应明细连同完整工具收据留在 `native_generation`。展示用推理可合并本次两个原生片段，后续请求必须使用收据认证的真实最后 assistant，不能把展示合并文本冒充单次响应。配方 v2 只影响带旧稿或显式工具反馈的当前候选，普通后续生成保持原路径。显式工具返工先停止待审，`ContinueNativeDialogue.assessments` 为 `not_assessed`，不自动购买逐轮或整段评审。
+
+新原生任务冻结 `native_author_session_version=1` 后，模型请求设施仅在全部历史 assistant 原生字段完整时保存作者会话。没有该版本的历史任务不补写作者字段；旧回合只能依据经认证的原始请求／响应记录显式恢复，不能从展示合并推理反推原始会话。
+
+原生返工 `native_revision_context_version=2` 使用保存的作者会话及已有反馈，通过真实工具回执继续推理并重答；`GenerateNativeCot` 保留局部检查，结果明确待审核，不新增独立评审。新原生响应在原检查点保存作者会话，已认证首答返工可自动选择 v2；缺少作者会话的历史配方保持旧行为。旧记录需以完整原始请求和响应认证恢复后才能显式工具续写，不能猜补。
+
+`ContinueNativeFeedback` 对已认证作者会话执行一次工具反馈续写。原响应没有反馈工具调用时，先让原模型真实调用 `read_review_feedback`，再用该调用 ID 回传已有逐字定位的意见，最后继续原生思考并重答；最多两个请求，已有匹配工具调用只需一个。端口负责原作者绑定、请求准入与检查点，恢复不重购已完成回合。原稿、反馈、新原生片段和新答案各自保存，不购买独立评审，不把完成状态视作训练资格。未知工具、缺失原生通道或不完整结束保留回执后停止。已认证的历史补全收据继续传递，不能声称补全前后 wire 前缀相同。验证：`tests/test_native_feedback_continuation.py`。
+
+`native_revision_context_version=1` 仅投影原生返工请求中的 `previous_candidate`：发送旧 `role/content` 答案及原样缺陷反馈，不再把旧私有 `reasoning_content` 重播进 system 的修订上下文。完整旧稿仍保存在 `native_generation.previous_candidate`，新推理由同一次原生请求重新生成并完整保存；旁路收据绑定原稿／请求摘要、包含与排除字段。请求摘要自然改变，不能复用先前污染请求；没有版本标记的冻结任务保持原请求。真实 2026-10-31 英文失败记录证实旧推理携带的错误篇幅数值曾进入 system，但此投影不声称已单独证明错误的唯一成因。验证见 `test_native_instruction_scope.py` 的实际消息投影对照。
+
+`GenerateNativeCot` 可由已认证的返工用例显式传入 `native_previous_candidate`，只作为私有待修订旧稿；不插入真实对话历史，与末尾 assistant 旧稿同时存在时拒绝歧义。`native_revision_feedback` 继续承接实际缺陷反馈。显式冻结 `native_instruction_scope_version=1` 后保存逐处引用归属、阻断或未决证据，原生推理和答案原样保留；旧版本无新增字段或判断。该用例不自行购买循环修复或独立评审。
+
+回答上下文范围由 `dialogue_context_scope_version=1` 冻结。`native_generation.py` 对私有合成场景仅提供实际对话，资料收据写为 `learner_dialogue_only`、零资料字符和 `private_scene=not_provided`；原始来源与完整推理仍保存。首轮也不把场景的 `guidance` 当已陈述用户条件。文档知识及人工提供资料继续通过已有认证端口。
+
+`GenerateMultiturnDialogue` 的整段评审为精确匹配冻结公开经验的首条 system 附上来源回执，避免把明确导出的训练输入误认成私有泄露。仅带该回执的新范围协议请求以完整评审上下文与候选摘要区分检查点，旧判定保留；没有回执的旧任务、未知或改写 system 沿用原键。回执不删除消息、不替代评分，也不自动放行。
+
+显式 `native_generation_version=1` 且 SFT 开启 `native_joint` 的新任务以 SFT 为完整响应。普通批次和生产轮次不再调度独立 CoT 生成；若仍请求 `cot` 导出，`TrimReasoning.finalize` 先处理一次完整 SFT，再由端口逐条投影同一结果。历史 CoT→SFT 路线不变。验证：`test_workflow_execution_application.py`、`test_workflow_reasoning_route.py`。
+
+`native_generation.py` 在 SFT／多轮的实际回答边界复用 `GenerateNativeCot`，由同一次原生请求保存推理与答案。`GenerateDirectedSft` 消费指导员的问题和已认证资料范围；`GenerateMultiturnDialogue` 按真实回合保留历史原生推理并使用现有回合、契约和完整对话评审。资料收据只证明 `context_provided`，不冒充模型逐字引文或事实通过。渠道、范围或审核失败仍保留完整候选。新路线需冻结 `native_generation_version=1`；无标记的旧任务及显式 CoT 后处理保持原请求路径。
+
 导入推理策略 v3 在两阶段正文补写中冻结当前响应的时点类型：`tool_action` 只解释为什么采取工具行动，`answer` 才要求最终断言的证据。原始历史不含未来结果；该类型由程序从当前响应决定，不由提炼模型猜测。v1/v2 的提示词与请求键保持原样。
 
 SFT、多轮和 CoT 继续携带可选的输入推理处理收据。保留消息的路径保留逐轮来源；显式风格改写只携带输入收据，不将合成解释重新标记为原始思考。生成和审核状态保持独立，合成完成不代表质量通过。验证：`test_imported_reasoning_provenance.py`。
@@ -110,3 +136,11 @@ CoT 协议 7 在生成中完成草稿推敲：联合生成只请求一次，原�
 `RepairAuthoredSubmission.recover_edit` 显式恢复未应用的错误补丁：读取原作者与原始工具返回，将失败结果作为同一调用的真实 tool 回执追加，再请求一次完整替换补丁。原基稿未发生变化；不模糊匹配、不跳过坏编辑、不自动放行。可选定位文本必须逐字存在于基稿。恢复响应持久化并复用，继续交回完整业务质量检查；不自动循环调用。回归见 `test_style_transfer_edits.py`。
 
 新建严格工具任务冻结 `cot_style_transfer_version=2`。`GenerateCot` 在保真改写中先消费可选的明确数值参考核验，再请求局部替换；开放题不伪造参考答案。原答案、未改推理、真实历史保持原文，语义评审仍保留。评审与作者使用相同任务资料范围。`GenerateWithSources` 的检索路线使用同一编辑协议，`RepairAuthoredSubmission` 可以继续该作者会话。历史配方未设置版本时继续原路径。验证入口：`test_style_transfer_edits.py`、`test_math_reference_verification.py` 和已有 CoT/工具请求回归。
+
+## 原生多轮首答返工与续跑
+
+`ContinueNativeDialogue` 仅接收显式返工分支已经认证的父记录。当前支持完整保留原始问题、失败原生推理和答案的开放需求首轮，尚无已接受助手回合；不支持文档资料包、工具轨迹或任意中途检查点。它复用原资料、指导员契约、首问及公共上下文，把旧回答作为私有编辑候选交给原作者一次，再由 `GenerateMultiturnDialogue` 完成原逐轮、风格、契约和整段校验。失败不再自动重写首答，全文留待处理。调用与恢复沿用现有请求检查点，不另建调度器。验证：`tests/test_native_dialogue_continuation.py`。
+
+新冻结 `native_dialogue_progress_version=1` 将原生响应的生成进度与训练资格分开：领域规则认可的局部推理元叙述问题可进入原有全部语义检查，旧缺陷仍阻止整条训练导出。显式选择 `reuse_initial_native_response=true` 的诊断子任务直接复用已认证首答，每个新回合最多生成一次；逐轮、风格、契约及整段评审照常记录原始分数。语义拒绝作为入库阻断保留，不自动重写已发生对话，也不把拒绝当通过。完整性、角色、工具、资料范围和无效协议仍停止。该模式最终始终隔离；失败收据区分 `generated_prefix` 与 `accepted_prefix`，完整原生推理和父版本保留。未选择诊断模式的普通任务仍按原语义失败逻辑停止，历史配方不改变。
+
+冻结版本 2 的显式诊断继续以完整可读、来源清楚的实际响应推进，不再因某一种训练表面标签提前停止；全部检查、分数、未决引用和原生推理仍保留，最终始终隔离。普通路线和旧版不热改。它不扩展任意父任务恢复、不自行复制检查点；上游已认证的相同请求仍由既有请求缓存负责复用。

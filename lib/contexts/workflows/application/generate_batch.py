@@ -25,7 +25,7 @@ class GenerateDatasetBatch:
         else:
             collections["gsm8k"] = []
             self._runtime.skip_stage("gsm8k")
-        if "cot" in plan.targets:
+        if "cot" in plan.targets and not plan.native_cot_projection:
             accepted_sft = self._runtime.eligible_records("sft", collections["sft"])
             collections["cot"] = self._runtime.run_stage("cot", accepted_sft)
         else:

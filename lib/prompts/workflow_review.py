@@ -3,9 +3,11 @@ from lib.prompts.workflow_spec import spec
 from lib.prompts.workflow_context import BLIND_REVIEW, CONTEXT_REVIEW, context_version
 from lib.prompts.workflow_shared_rules import (
     _SELF_CONTAINED_REVIEW, _configured_style_template, _warmup_spec, _claim_scope_spec,
+    FIRST_PERSON_REVIEW_FEEDBACK, REVIEWER_ROLE_FEEDBACK,
 )
 from dataclasses import replace as _reasoning_spec_replace
 from lib.prompts.workflow_reasoning import task_adaptive_reasoning_template
+from lib.prompts.workflow_review_guidance import REVIEWER_SYSTEM_GUIDANCE
 from lib.prompts.workflow_learner_context import LEARNER_CONTEXT_CHECK_V1, LEARNER_CONTEXT_CHECK_V1_1
 from lib.prompts.workflow_fact_review import (
     REVIEW_SCORE_V1_6, REVIEW_SCORE_V1_7, REVIEW_SCORE_V1_8, REVIEW_SCORE_V1_9,
@@ -240,3 +242,18 @@ REVIEW_REFERENCE = _reasoning_spec_replace(REVIEW_REFERENCE, version="2.2.0", te
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.22.0", template=spec(
     "review_score", "逐句核验实际承诺，区分原文算例与新增条件",
     render(REVIEW_SCORE_V1_21) + EXPLICIT_SCENARIO_SCOPE).template)
+
+REVIEW_SCORE_V1_22 = REVIEW_SCORE
+
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.23.0",
+    template=REVIEW_SCORE.template + FIRST_PERSON_REVIEW_FEEDBACK)
+
+REVIEW_SCORE_V1_23 = REVIEW_SCORE
+
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.24.0",
+    template=REVIEW_SCORE_V1_22.template + REVIEWER_ROLE_FEEDBACK)
+
+REVIEW_SCORE_V1_24 = REVIEW_SCORE
+
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.25.0",
+    template=REVIEW_SCORE_V1_22.template + REVIEWER_SYSTEM_GUIDANCE)

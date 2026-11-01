@@ -15,11 +15,30 @@ def config():
     return {"multiturn": {"enabled": True, "style": "default", "instruction": "", "reading_session": True}}
 
 
+def legacy_reading_run(output, **options):
+    """Restore the saved v41 route; new creation now uses the visible director."""
+    from lib.io_utils import atomic_json
+    from lib.domain.workflow_generation import validate_node_generation
+    rid = engine.create_run(output, **options)
+    path = engine.run_path(output, rid)
+    recipe = engine.read_json(path / "recipe.json")
+    recipe.update(version=41, node_generation=validate_node_generation(options["node_generation"]),
+                  qa_director={"enabled": False})
+    for key in ("native_generation_version", "reading_session_migration", "native_environment_version"):
+        recipe.pop(key, None)
+    recipe["reading_actor_protocol_version"] = 2
+    state = engine.read_json(path / "state.json")
+    state["recipe_hash"] = engine.digest(recipe)
+    atomic_json(path / "recipe.json", recipe)
+    atomic_json(path / "state.json", state)
+    return rid
+
+
 def test_public_context_native_history_resume_and_export(tmp_path):
     source = tmp_path / "paper.md"
     source.write_text("实验只显示这一组条件下的观察差异，不能由此推出唯一原因。", encoding="utf8")
     output = tmp_path / "out"
-    rid = engine.create_run(output, sources=[source], targets=["multiturn"], node_generation=config(), conversation_turns=3,
+    rid = legacy_reading_run(output, sources=[source], targets=["multiturn"], node_generation=config(), conversation_turns=3,
         agent_experience={"reasoning": {"enabled": True, "text": "PROFILE_LITERAL_{unchanged}"}})
     class Author:
         reasoning = {"mode": "enabled"}
@@ -137,7 +156,7 @@ def test_reading_user_prompt_update_preserves_legacy_and_custom_snapshots(tmp_pa
     assert get("workflow.reading_user").version == "1.2.0"
     original = render(get("workflow.reading_user", version="1.1.0")) + '\n{"voice":"keep literal"}'
     output = tmp_path / "out"
-    run_id = engine.create_run(output, brief="单位讨论", targets=["multiturn"], node_generation=config(),
+    run_id = legacy_reading_run(output, brief="单位讨论", targets=["multiturn"], node_generation=config(),
         node_prompts={"multiturn": {"workflow.reading_user": original}})
     workflow = engine.Workflow(output, run_id, tmp_path)
     workflow.stage = "multiturn"

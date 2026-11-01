@@ -10,6 +10,27 @@ def dialogue_digest(value):
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
+def director_context_authority(recipe):
+    """Describe input roles without certifying a model's state summary.
+
+    Actual utterances can contain examples and quotations. This receipt does
+    not resolve their meaning or promote private scene design into user facts.
+    Historical recipes retain their existing request bodies.
+    """
+    version = recipe.get("dialogue_context_scope_version")
+    if type(version) is not int or version != 1:
+        return {}
+    return {"context_authority": {
+        "dialogue_messages": "actual_messages_with_roles_examples_and_quotations",
+        "previous_dialogue_state": "fallible_model_summary_not_verified_facts",
+        "dialogue_design": "private_creation_intent_not_user_confirmation",
+        "teacher_evidence": "source_context_not_the_users_personal_history",
+        "user_preferences": "use_actual_user_statements_and_confirmations_in_their_scope",
+        "assistant_examples": "hypothetical_until_the_user_adopts_the_specific_condition",
+        "completion": "draft_delivery_is_not_user_acceptance_or_real_world_execution",
+    }}
+
+
 @dataclass(frozen=True)
 class DialogueSource:
     context: dict
@@ -90,3 +111,5 @@ class DialogueProgress:
     raw_user_messages: list = field(default_factory=list)
     finished_dialogue: bool = False
     ends: list = field(default_factory=list)
+    release_blockers: list = field(default_factory=list)
+    diagnostic_continuation: bool = False

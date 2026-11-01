@@ -61,6 +61,9 @@ class MemoryGenerationPort:
     def separated_questions(self):
         return True
 
+    def source_evidence(self, source):
+        return source["text"]
+
     def checkpoint(self, key, action):
         digest = dialogue_digest(key)
         if digest not in self.checkpoints:
@@ -86,6 +89,115 @@ def conversation():
             "messages": [{"role": "user", "content": "维护时先做什么？"},
                          {"role": "assistant", "content": ANSWER, "reasoning_content": REASONING}],
             "evidence_level": "recorded_context_model_assessed"}
+
+
+def native_recipe(stage="sft"):
+    return {"brief": "", "native_generation_version": 1, "node_generation": {stage: {
+        "enabled": True, "style": "default", "answer_mode": "native_joint"}},
+        "qa_director": {"question_rules": "实际问题", "answer_rules": "回答当前问题"},
+        "review_repair": {}}
+
+
+def directed_source():
+    return {**source(), "family_id": "family", "qa_contract": {
+        "question": "维护时先做什么？", "visible_context": "", "answer_policy": "answer"}}
+
+
+def test_native_sft_authors_once_from_director_scope_and_projects_exact_channels():
+    from lib.contexts.workflows.domain.native_generation import native_sft_to_cot_record
+    class ScopedPort(MemoryGenerationPort):
+        def prepare_source_request(self, payload, source, contract):
+            return {**payload, "source_line_scope": "selected"}
+        def selected_evidence_text(self, source, contract):
+            return "设备维护前必须断电"
+        def selected_evidence_blocks(self, source, contract):
+            return [self.selected_evidence_text(source, contract)]
+    native = "  用户问维护的先后。我先确认安全前提，带电检查不安全，应先断电。\n"
+    port = ScopedPort([{"answer": "先断电。", "reasoning": native}])
+    port.styles["sft"] = {"preset": "default", "instruction": "说明实际判断。"}
+    unit = directed_source()
+    row, = GenerateDirectedSft(port, native_recipe()).execute(unit)
+    assert row["status"] == "eligible" and len(port.calls) == 1
+    assert port.calls[0][2] == "workflow.cot_native_joint"
+    assert port.calls[0][3]["prompt"] == [{"role": "user", "content": unit["qa_contract"]["question"]}]
+    assert port.calls[0][3]["source"] == {"text": "设备维护前必须断电"}
+    assert "previous_candidate" not in port.calls[0][3]
+    assert row["messages"][-1]["reasoning_content"] == native
+    assert row["quotes"] == [] and row["provided_source_context"]["kind"] == "context_provided"
+    assert row["provided_source_context"]["model_selected_quotes"] is False
+    assert row["provided_source_context"]["semantic_support"] == "not_assessed"
+    cot = native_sft_to_cot_record(row)
+    assert cot["reasoning"] == [native] and cot["messages"] == row["messages"]
+    assert cot["status"] == row["status"] and len(port.calls) == 1
+
+
+@pytest.mark.parametrize("native", ["", "用户需要安全维护。先断电再检查。"])
+def test_native_sft_failed_channels_or_assessment_keep_complete_response(native):
+    port = MemoryGenerationPort([{"answer": ANSWER, "reasoning": native}])
+    port.styles["sft"] = {"preset": "default", "instruction": "根据实际条件推导。"}
+    recipe = native_recipe()
+    recipe.pop("review_repair")
+    port.assess = lambda *args, **kwargs: {**score(), "keep": False, "reason": "仍有未验证的条件。"}
+    row, = GenerateDirectedSft(port, recipe).execute(directed_source())
+    assert row["status"] == "quarantined" and len(port.calls) == 1
+    assert row["messages"][-1] == {"role": "assistant", "content": ANSWER, "reasoning_content": native}
+    assert row["reasoning"] == [native] and row["answer"] == ANSWER
+
+
+def test_new_native_default_keeps_imported_answer_literal_and_requires_director_for_new_questions():
+    port = MemoryGenerationPort()
+    port.styles["sft"] = {"preset": "default", "instruction": "原生生成规则"}
+    original = conversation()
+    row, = GenerateSft(port, native_recipe()).execute(original)
+    assert row["messages"] == original["messages"] and row["reasoning_origin"] == "source"
+    missing, = GenerateSft(port, native_recipe()).execute(source())
+    assert missing["reason"] == "native_generation_requires_director_contract"
+    assert not any(call[1] == "generation" for call in port.calls)
+
+
+@pytest.mark.parametrize("whole_review_keep", [True, False])
+def test_native_multiturn_uses_one_author_per_turn_and_retains_earlier_native_reasoning(whole_review_keep):
+    from lib.contexts.workflows.application.generate_dialogue import GenerateMultiturnDialogue
+    from lib.contexts.workflows.domain.dialogue import DialogueSource
+    from lib.contexts.workflows.domain.generation import learner_prompt
+    class DialoguePort(MemoryGenerationPort):
+        def learner_prompt(self, contract):
+            return learner_prompt(contract)
+        def prepare_source(self, unit, style):
+            return DialogueSource({"task": unit["text"]}, unit["text"], [unit["text"]])
+        def next_dialogue_step(self, unit, messages, state, **options):
+            return {"continue": True, "user_message": "检查完以后呢？", "response_policy": "answer",
+                    "reason": "用户接着处理检查后的记录。", "dialogue_state": state}
+        def assess(self, key, context, candidate, **options):
+            grade = super().assess(key, context, candidate, **options)
+            if options.get("prompt_id") == "workflow.multiturn_consistency":
+                grade["keep"] = whole_review_keep
+            return grade
+    first = "  用户先问安全前提。我需要先避免带电检查，所以应先断电。\n"
+    second = "用户现在问检查以后的操作。检查已完成，下一步记录实际结果，不虚构检查结论。"
+    port = DialoguePort([{"answer": "先断电，再检查线路。", "reasoning": first},
+                         {"answer": "记录实际检查结果。", "reasoning": second}])
+    port.styles["multiturn"] = {"preset": "default", "instruction": "随实际问题解释判断。"}
+    recipe = {**native_recipe("multiturn"), "conversation_turns": 2, "multiturn_generation_style_version": 1,
+              "native_experience_version": 1, "agent_experience": {"scopes": {
+                  "reasoning": {"enabled": True, "text": "只根据真实条件做判断。"}}}}
+    unit = directed_source()
+    unit["qa_contract"].update(user_language="zh", guidance="首轮确认安全前提。")
+    row, = GenerateMultiturnDialogue(port, recipe).execute(unit)
+    assert row["status"] == ("eligible" if whole_review_keep else "quarantined")
+    if whole_review_keep:
+        assert row["turn_count"] == 2
+    authors = [call for call in port.calls if call[1] == "generation"]
+    assert len(authors) == 2 and all(call[2] == "workflow.cot_native_joint" for call in authors)
+    assistants = [message for message in row["messages"] if message["role"] == "assistant"]
+    assert [message["reasoning_content"] for message in assistants] == [first, second]
+    assert len([message for message in row["messages"] if message["role"] == "system"]) == 1
+    assert row["reasoning_origin"] == "provider_reasoning"
+    assert "reasoning_content" not in authors[1][3]["prompt"][-2]
+    assert '"user_language": "zh"' in authors[0][4]["instruction"]
+    assert '"user_language"' not in authors[1][4]["instruction"]
+    assert "首轮确认安全前提" not in authors[1][4]["instruction"]
+    assert row["turn_reviews"][1]["provided_source_context"]["model_selected_quotes"] is False
 
 
 def test_sft_retries_schema_without_spending_on_review_and_keeps_request_keys():

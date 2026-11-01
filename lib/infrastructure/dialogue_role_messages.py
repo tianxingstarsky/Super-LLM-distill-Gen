@@ -104,7 +104,7 @@ def answer_role_messages(system, memory_context, data, *, transport="tool", incl
     requirement = data.get("requirement", data.get("brief"))
     if requirement:
         dispatch["requirement"] = deepcopy(requirement)
-    for key in ("generation_style", "feedback", "dialogue_state", "dialogue_step"):
+    for key in ("generation_style", "feedback", "dialogue_state", "dialogue_step", "answer_context_scope"):
         if data.get(key) is not None:
             dispatch[key] = deepcopy(data[key])
     if isinstance(data.get("dialogue_step"), dict) and data["dialogue_step"].get("response_policy"):

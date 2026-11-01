@@ -60,6 +60,10 @@ class CheckpointedGenerationAdapter:
     def request(self, *args, **kwargs):
         return self._runtime.ask(*args, **kwargs)
 
+    def continue_native_feedback(self, key, session, assistant, *, findings):
+        from lib.bootstrap.node_generation import native_feedback_repairer
+        return native_feedback_repairer(self._runtime).execute(key, session, assistant, findings=findings)
+
     def check_reasoning_cancel(self):
         self._runtime.check_cancel()
 
@@ -129,6 +133,16 @@ class CheckpointedGenerationAdapter:
 
 
 class StreamingReasoningAdapter(CheckpointedGenerationAdapter):
+    def publish_native_cot(self, collections):
+        from ..domain.native_generation import native_sft_to_cot_record
+        from lib.infrastructure.workflow_rows import MappedRows
+
+        def project(record):
+            self._runtime.check_cancel()
+            return native_sft_to_cot_record(record)
+
+        collections["cot"] = MappedRows(collections["sft"], project)
+
     def skip_trim_stage(self):
         if "trim" in self._runtime.state["stages"]:
             self._runtime.state["stages"]["trim"]["status"] = "skipped"

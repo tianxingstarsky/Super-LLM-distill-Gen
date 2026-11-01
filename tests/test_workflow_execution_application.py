@@ -119,6 +119,36 @@ def test_director_consumes_clean_candidates_and_suppresses_duplicate_generation(
     assert runtime.published["multiturn"].name == "multiturn"
 
 
+@pytest.mark.parametrize("targets", [{"cot"}, {"sft", "cot", "orpo"}])
+def test_native_cot_export_never_schedules_another_generation_stage(targets):
+    from lib.contexts.workflows.application.generate_production_batch import GenerateProductionBatch
+    runtime = MemoryBatchRuntime(targets, director=True)
+    runtime.plan = lambda: BatchGenerationPlan(frozenset(targets), True, native_cot_projection=True)
+
+    def finalize(collections, selected=None):
+        assert collections["sft"].name == "sft"
+        assert collections["cot"] == []
+        collections["cot"] = OpaqueBatch("native-cot-view")
+        runtime.events.append("finalize-reasoning")
+        runtime.finalized = collections
+
+    runtime.finalize_reasoning = finalize
+    GenerateDatasetBatch(runtime).execute()
+    assert "cot" not in runtime.events
+    assert runtime.published["cot"].name == "native-cot-view"
+    runtime.events.clear()
+    runtime.begin = lambda: None
+    runtime.trim_reasoning = lambda collections: pytest.fail("Canonical trim already ran in finalization")
+    recipe = {"version": 42, "targets": list(targets), "sources": [], "native_generation_version": 1,
+              "qa_director": {"enabled": True},
+              "node_generation": {"sft": {"enabled": True, "answer_mode": "native_joint"}}}
+    collections = GenerateProductionBatch(runtime, recipe).execute(runtime.inputs.generation_candidates,
+        runtime.inputs.source_records, targets)
+    assert "cot" not in runtime.events
+    assert collections["cot"].name == "native-cot-view"
+    assert len(collections["sft"]) == (1_000_000 if "sft" in targets else 0)
+
+
 @pytest.mark.parametrize("with_sft", [False, True])
 def test_reading_session_uses_clean_source_without_duplicate_director(with_sft):
     from lib.contexts.workflows.application.generate_production_batch import GenerateProductionBatch

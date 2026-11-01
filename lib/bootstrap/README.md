@@ -1,5 +1,15 @@
 # 组合根：找到服务，再选择实现
 
+新原生任务冻结 `native_feedback_guidance_version=7`；`native_feedback_repairer` 仍装配同一用例，其 `execute` 转交 `RegenerateWithReviewGuidance`，在真实 user 后附公开 system 提醒并重新生成。旧 v1–v6 路由、检查点与冻结任务不热改；组合根不自动挑选父回执或启动返工。
+
+`native_feedback_repairer(runtime)` 对显式采用 v5/v6 的冻结配方返回支持 `execute_from_feedback` 的同一用例；此处描述保留的旧工具续写路径，新任务默认为公开注意事项 v7。v5/v6 真实尝试未解决原生旁白，不能自动升级为默认。该入口显式复用已交付工具反馈的认证回执，只追加一次原作者请求；正常 `execute` 和历史指导继续保留。组合根不挑父回执、不自动返工，不新增 MCP 服务或第二套调度器。
+
+`native_feedback_repairer` 按任务冻结的 `native_feedback_guidance_version` 选择工具反馈引导；缺少标记使用 v1。新版 v2 允许评审理由以原作者第一人称自然转折继续，但不将工具文字当成原生推理。
+
+`native_feedback_repairer` 装配原作者工具反馈续写，复用模型调度、原节点身份与检查点。构造不会请求模型，调用不会购买独立评审。
+
+`dialogue_generation.continue_native_dialogue` 只连接已认证的显式原生首答返工。它通过 workflows API 装配普通多轮用例及固定作者节点的适配器，不自行产生问题、评分或调度请求。
+
 这里把应用用例与文件、数据库、模型客户端等适配器连接起来。工厂返回应用对象；执行任务、模型请求或返工，仍须调用该对象的相应方法。页面不应自行拼装生成引擎。
 
 先按需要完成的业务动作查下表，再进入对应 application 用例看规则。工厂里找不到业务主循环是正常的：这里负责依赖选择，不负责调度决策。

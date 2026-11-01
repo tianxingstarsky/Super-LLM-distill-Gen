@@ -32,15 +32,25 @@ def user_actor_action(value):
     return {"end": False, "message": value["message"]}
 
 
-def completed_turn_ends(messages: list[dict], minimum_turns: int = 2) -> tuple[list[int], str | None]:
+def completed_turn_ends(messages: list[dict], minimum_turns: int = 2, *,
+                        public_system_positions=()) -> tuple[list[int], str | None]:
     """Return inclusive end indexes for user-to-final-assistant turns.
 
     Tool-call exchanges may occur *within* a turn. A turn ends only with an
-    assistant text answer, and a new user must start the next turn.
+    assistant text answer, and a new user must start the next turn. Callers may
+    supply authenticated review-note positions immediately after a user; this
+    does not make arbitrary mid-turn system messages valid.
     """
     issue = conversation_issue(messages)
     if issue:
         return [], issue
+    public_positions = set(public_system_positions)
+    for position in public_positions:
+        if (type(position) is not int or not 0 < position < len(messages)
+                or messages[position]["role"] != "system"
+                or not (messages[position - 1]["role"] == "user"
+                        or position - 1 in public_positions)):
+            return [], "system_message_out_of_place"
     ends: list[int] = []
     active = False
     finished = False
@@ -48,7 +58,7 @@ def completed_turn_ends(messages: list[dict], minimum_turns: int = 2) -> tuple[l
     for index, message in enumerate(messages):
         role = message["role"]
         if role == "system":
-            if started:
+            if started and index not in public_positions:
                 return [], "system_message_out_of_place"
             continue
         started = True

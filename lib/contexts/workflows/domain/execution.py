@@ -28,6 +28,7 @@ class BatchGenerationPlan:
     targets: frozenset[str]
     director_enabled: bool
     reading_session: bool = False
+    native_cot_projection: bool = False
 
     @property
     def needs_sft(self) -> bool:

@@ -79,8 +79,8 @@ def tool_context_input_bytes(messages, tools):
         1024 if any(message.get("role") == "tool" for message in messages) else 0)
 
 
-def _tools(value):
-    if not isinstance(value, list) or not 1 <= len(value) <= MAX_TOOLS:
+def _tools(value, *, allow_empty=False):
+    if not isinstance(value, list) or not (0 if allow_empty else 1) <= len(value) <= MAX_TOOLS:
         raise ValueError("invalid_model_tools")
     result, names = [], set()
     for tool in value:
@@ -277,6 +277,11 @@ def _request_kwargs(client, messages, tools, max_tokens, temperature, *, tool_ch
             max_tokens=max_tokens or ANTHROPIC_DEFAULT_MAX_TOKENS)
         if client.reasoning.get("mode") == "enabled":
             kwargs.pop("temperature", None)
+    if not tools:
+        # A final native regeneration with public system notes has no tool
+        # decision. Omit absent optional declarations rather than inventing one.
+        kwargs.pop("tools", None)
+        kwargs.pop("tool_choice", None)
     return kwargs
 
 

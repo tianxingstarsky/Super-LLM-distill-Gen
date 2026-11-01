@@ -127,9 +127,13 @@ def validate_node_generation(value: dict | None) -> dict:
             normalized[stage]["reading_session"] = config["reading_session"]
         if "self_check" in config:
             from lib.contexts.workflows.contracts import validate_reasoning_checklist
-            if stage != "cot":
+            integrated_native = (stage in {"sft", "multiturn"} and enabled
+                                 and config.get("answer_mode") == "native_joint")
+            if stage != "cot" and not integrated_native:
                 raise ValueError("invalid_reasoning_checklist")
             normalized[stage]["self_check"] = validate_reasoning_checklist(config["self_check"])
+            if integrated_native and normalized[stage]["self_check"].get("version") != 7:
+                raise ValueError("native_cot_requires_generation_reflection_without_source_tools")
         if "source_lookup" in config:
             from lib.contexts.workflows.contracts import validate_source_lookup
             if stage != "cot" or not enabled or config.get("self_check", {}).get("version") != 7:
@@ -145,7 +149,9 @@ def validate_node_generation(value: dict | None) -> dict:
                 raise ValueError("invalid_node_generation") from error
         if "answer_mode" in config:
             mode = config["answer_mode"]
-            if (stage != "cot" or not isinstance(mode, str) or mode not in {"joint", "native_joint", "native_prefill", "draft_then_finalize", "faithful_restyle"}
+            supported_modes = ({"joint", "native_joint", "native_prefill", "draft_then_finalize", "faithful_restyle"}
+                               if stage == "cot" else {"native_joint"})
+            if (not isinstance(mode, str) or mode not in supported_modes
                     or (mode != "joint" and not enabled)):
                 raise ValueError("invalid_cot_answer_mode")
             normalized[stage]["answer_mode"] = mode

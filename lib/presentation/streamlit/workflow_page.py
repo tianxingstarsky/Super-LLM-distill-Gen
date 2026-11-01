@@ -45,7 +45,7 @@ from lib.presentation.streamlit.workflow_package_review_settings import (
     package_review_snapshot, render_package_review_toggle, render_package_review_settings,
 )
 from lib.presentation.streamlit.workflow_director_settings import (
-    director_snapshot, director_has_issue, render_director_toggle,
+    director_snapshot, director_has_issue, render_director_requirement,
     render_director_settings, render_director_rules, TYPE_LABELS,
 )
 from lib.presentation.streamlit.knowledge_memory_summary import render_knowledge_memory_summary
@@ -59,7 +59,8 @@ from lib.presentation.streamlit.conversation_reasoning_controls import (
 )
 from lib.presentation.streamlit.workflow_generation_settings import (
     STYLE_LABELS, TRIM_LABELS, generation_snapshot, generation_issues, generation_summary, reasoning_route_description,
-    render_generation_settings, render_trim_toggle, render_trim_settings, trim_snapshot, trim_has_issue,
+    render_generation_settings, render_generation_mode, integrate_cot_draft,
+    render_trim_toggle, render_trim_settings, trim_snapshot, trim_has_issue,
 )
 from lib.presentation.streamlit.workflow_prompt_settings import (
     node_prompt_snapshot, node_prompt_has_issue, render_node_prompts, render_run_node_prompts,
@@ -86,7 +87,7 @@ PRESETS = {
     "偏好对齐": ("sft", "orpo", "dpo", "rlaif"),
     "ORPO 数据生成": ("orpo",),
     "RLAIF 反馈数据": ("rlaif",),
-    "数学推理": ("sft", "cot"),
+    "数学推理": ("sft",),
     "自选目标": (),
 }
 
@@ -497,7 +498,7 @@ def _stage_configuration(key, recipe, state):
             if key == "sft" and "sft" in targets:
                 details["SFT 训练文件格式"] = ("只保留答案" if recipe.get("sft_output_style") == "drop"
                                               else "分字段保留推理")
-            route = reasoning_route_description(key, targets, recipe.get("version", 0))
+            route = reasoning_route_description(key, targets, recipe.get("version", 0), recipe.get("node_generation"))
             if route:
                 details["导出数据流"] = route
         elif key == "review":
@@ -642,7 +643,7 @@ def _workflow_dependency_summary_html(targets, nodes: tuple[str, ...], edges: tu
         return ('<div class="df-wb-plan df-wb-plan-empty">'
                 '<span>请从上方列表至少选择一类训练目标。</span></div>')
     intermediate = ('<span class="df-wb-plan-intermediate">SFT 中间候选</span>'
-                    if "sft" in nodes and ("sft" not in targets or sft_uses_cot_output(targets)) else '')
+                    if "sft" in nodes and ("sft" not in targets or "cot" in nodes) else '')
     return ('<div class="df-wb-plan">'
             f'<small>{len(nodes)} 个阶段 · {len(edges)} 条数据依赖</small>'
             + intermediate + '</div>')
@@ -1110,7 +1111,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                 close.button("关闭窗口", key=f"close-node-output:{run_id}", width="stretch",
                              icon=":material/close:", on_click=st.session_state.pop, args=(output_open_key, None))
             st.progress(percent / 100, text=f"{done} / {total} 单元")
-            route = reasoning_route_description(selected_stage, recipe["targets"], recipe.get("version", 0))
+            route = reasoning_route_description(selected_stage, recipe["targets"], recipe.get("version", 0), recipe.get("node_generation"))
             if route:
                 st.caption(route)
             if selected_stage in {"preference", "review", "package"} and selected_preferences(recipe["targets"]):
@@ -1687,13 +1688,22 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         target_key = f"workflow-targets:{ws}:{preset}"
         target_defaults = [target for target in PRESETS[preset] if target in TARGETS]
         _restore_selection(ws, target_key, target_defaults, TARGETS)
+        target_options = [target for target in TARGETS
+                          if target != "cot" or target in st.session_state[target_key]]
         targets = st.pills(
-            "训练目标", list(TARGETS), default=None,
+            "训练目标", target_options, default=None,
             format_func=lambda target: TARGET_LABELS.get(target, target.upper()),
             key=target_key, selection_mode="multi", wrap=True,
             on_change=_save_draft_value, args=(ws, target_key),
             help="点击即可选中或取消，可以同时选择多类训练数据。",
         ) or []
+        if "cot" in targets:
+            en = st.session_state.get("ui_language", "zh") == "en"
+            st.caption("This draft uses a separate CoT stage. Merge its style into SFT and multi-turn generation to return reasoning and answers together. Saved runs stay unchanged."
+                       if en else "此草稿仍有独立 CoT 节点。可将其风格并入 SFT / 多轮生成，让推理和答案同次输出；已有任务不受影响。")
+            st.button("Merge CoT into generation" if en else "将 CoT 并入生成节点",
+                      key=f"workflow-integrate-cot:{ws}", on_click=integrate_cot_draft,
+                      args=(ws, target_key, _save_draft_value))
         receipt = st.session_state.get(f"conversation-import:{ws}:confirmed")
         if (source_mode == "Agent 上下文" and creation_mode == "自动生成"
                 and isinstance(receipt, dict)
@@ -1715,7 +1725,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 qa_director = {"enabled": False}
                 st.caption("导入对话保留原有问题与轮次，无需配置对话指导员。")
             else:
-                qa_director = render_director_toggle(ws, targets, save_field=_save_draft_value)
+                # Newly designed questions always go through their director.
+                # Only confirmed preserved conversations bypass this stage.
+                qa_director = render_director_requirement(ws, targets, save_field=_save_draft_value)
             if creation_mode == "人工问答增强":
                 # Designs belong to the persistent working window. The entry
                 # screen validates only the model and workflow configuration.
@@ -1723,14 +1735,22 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         package_review = package_review_snapshot(ws)
         review_repair = review_repair_snapshot(ws)
         source_cleaning = uses_shared_source_cleaning(targets, source_mode=source_mode)
-        draft_recipe_version = 20 if qa_director.get("question_separation") is True else 19
+        draft_generation = generation_snapshot(ws, ["sft", "multiturn"])
+        native_generation_version = int(any(config.get("answer_mode") == "native_joint" for config in draft_generation.values()))
+        native_cot_conflict = "cot" in targets and draft_generation.get("sft", {}).get("answer_mode") == "native_joint"
+        draft_recipe_version = 42 if native_generation_version else 20 if qa_director.get("question_separation") is True else 19
         graph_nodes, graph_edges = execution_graph(targets, reasoning_trim=reasoning_trim["enabled"],
-                                                   node_generation=generation_snapshot(ws, ["multiturn"]),
+                                                   node_generation=draft_generation,
+                                                   native_generation_version=0 if native_cot_conflict else native_generation_version,
                                                    qa_director=qa_director, package_review=package_review, recipe_version=draft_recipe_version,
                                                    source_cleaning=source_cleaning, review_repair=review_repair,
                                                    arithmetic_seed_protocol_version=1, cpt_review_policy_version=1)
         if not targets:
             st.html(_workflow_dependency_summary_html(targets, graph_nodes, graph_edges))
+        if native_cot_conflict:
+            st.warning("Choose “Merge CoT into generation” above, or restore standard SFT generation. An existing independent CoT configuration cannot be silently replaced."
+                       if st.session_state.get("ui_language", "zh") == "en" else
+                       "请点击上方「将 CoT 并入生成节点」，或把 SFT 改回普通生成。旧的独立 CoT 配置不能被静默覆盖，处理后才能启动。")
         if "agent" in targets:
             st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
@@ -1820,6 +1840,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                       qa_director=qa_director, recipe_version=draft_recipe_version, source_cleaning=source_cleaning,
+                                      native_generation_version=0 if native_cot_conflict else native_generation_version,
                                       arithmetic_seed_protocol_version=1, cpt_review_policy_version=1,
                                       feedback_branch=(project_feedback_branch({"targets": targets, "package_review": package_review, "review_repair": review_repair, "version": draft_recipe_version}, {},
                                           target=next((target for target in targets if target != "cpt"), None))
@@ -1860,7 +1881,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         key=f"workflow-next-node:{ws}", width="stretch", disabled=node_index == len(graph_nodes) - 1,
                         on_click=_select_setup_node,
                         args=(selection_key, graph_nodes[min(len(graph_nodes) - 1, node_index + 1)]))
-            route = reasoning_route_description(selected_node, targets)
+            route = reasoning_route_description(selected_node, targets, draft_recipe_version, node_generation)
             if route:
                 st.caption(route)
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
@@ -1869,6 +1890,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             settings_tab, prompts_tab = (_setup_node_tabs(ws, selected_node) if has_prompts
                                         else (nullcontext(), nullcontext()))
             with settings_tab:
+                render_generation_mode(selected_node, ws, save_field=_save_draft_value)
                 if selected_node in {"preference", "review", "package"} and selected_preferences(targets):
                     st.caption(preference_route(selected_node, review_repair))
                     if selected_node == "package":
@@ -1931,7 +1953,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 elif selected_node == "director":
                     render_director_rules(ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 render_node_prompts(selected_node, model_source_mode, ws,
-                                    save_field=_save_draft_value, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                    save_field=_save_draft_value, node_generation=generation_snapshot(ws, graph_nodes), package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                     qa_director=qa_director, prompt_library=prompt_library)
         with workbench:
             if "rlaif" in targets and review_repair.get("mode") == "human":
@@ -2336,7 +2358,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     st.caption("人工增强需要对话或偏好目标，并开启对话指导员；也可切回自动生成。")
                 elif not targets:
                     st.caption("先选择至少一类训练目标。")
-                submitted = st.button("启动人工增强窗口" if human_enabled else "开始自动生成", type="primary", disabled=source_missing or bool(brief_issue)
+                submitted = st.button("启动人工增强窗口" if human_enabled else "开始自动生成", type="primary", disabled=native_cot_conflict or source_missing or bool(brief_issue)
                                       or human_mode_unavailable
                                       or ("rlaif" in targets and review_repair.get("mode") == "human")
                                       or agent_source_missing or source_limit_exceeded or source_size_exceeded

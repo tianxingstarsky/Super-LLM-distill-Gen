@@ -32,14 +32,20 @@ class Reviewer:
 
 
 def row(index, answer, *, article=False):
-    question = ARTICLE + "\n设备检查如何准备？" if article else f"设备检查场景{index}如何准备？"
+    question = "设备检查如何准备？" if article else f"设备检查场景{index}如何准备？"
+    visible_question = ARTICLE + "\n" + question if article else question
     return {"id": f"native-{index}", "source_id": "verified-source", "status": "eligible",
+            "family_id": f"native-family-{index}",
             "reasoning_origin": "provider_reasoning", "reasoning_api_format": "chat",
-            "messages": [{"role": "user", "content": question},
+            "messages": [{"role": "user", "content": visible_question},
                          {"role": "assistant", "content": answer, "reasoning_content": NATIVE}],
             "source_context": {"kind": "document", "text": ARTICLE},
-            "qa_contract": {"qa_type": "grounded" if article else "closed_book", "answer_policy": "answer",
-                            "visible_context": ARTICLE if article else ""}}
+            # Packaging consumes the complete director contract, including the
+            # question used by publication deduplication and its family lineage.
+            "qa_contract": {"id": f"native-{index}", "question": question,
+                            "qa_type": "grounded" if article else "closed_book", "answer_policy": "answer",
+                            "visible_context": ARTICLE if article else "",
+                            "guidance": "区分停机条件和断电次序。", "evidence_quotes": [ARTICLE]}}
 
 
 def package(tmp_path, values, *, review=False, marker=True, protocol=1, required=False, style=None):

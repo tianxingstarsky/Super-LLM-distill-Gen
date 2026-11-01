@@ -59,6 +59,9 @@ def _depth_projected_source_messages(sample: dict, result: dict):
 
 def cot_updates_sft(recipe: dict) -> bool:
     """Historical recipes keep their independent SFT and CoT deliveries."""
+    from lib.contexts.workflows.domain.native_generation import native_generation_enabled
+    if native_generation_enabled(recipe, "sft"):
+        return False
     return (recipe.get("version", 0) >= 15
             and {"sft", "cot"}.issubset(recipe.get("targets", ())))
 

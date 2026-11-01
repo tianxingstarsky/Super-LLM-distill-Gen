@@ -22,6 +22,10 @@ from tests.test_workflow_draft import SCRIPT
     ('workflow-generation-style:w:sft', 'unknown'), ('workflow-generation-style:w:trim', 'concise'),
     ('workflow-generation-style:w', 'concise'), ('workflow-generation-style::sft', 'concise'),
     ('workflow-generation-enabled:w:cot', 1), ('workflow-generation-instruction:w:sft', 'x' * 4001),
+    ('workflow-generation-answer-mode:w:sft', 'native_prefill'),
+    ('workflow-generation-answer-mode:w:multiturn', 'faithful_restyle'),
+    ('workflow-sft-checklist-version:w', 6), ('workflow-multiturn-checklist-version:w', 8),
+    ('workflow-sft-checklist-enabled:w:sft', True), ('workflow-multiturn-checklist-text:w', '\x00'),
     ('workflow-trim-enabled:w', 'true'), ('workflow-trim-template:w', 'unknown'),
     ('workflow-trim-instruction:w', 'x' * 4001), ('workflow-trim-prompt:w', 'x' * 16001),
     ('workflow-node-model-confirmations:w', {'sft': 'invalid'}),
@@ -116,6 +120,27 @@ def test_generation_and_trim_drafts_preserve_incomplete_custom_edits_across_rest
     assert creation_draft_application(tmp_path).restore_snapshot(identifier) == values
 
 
+def test_native_generation_and_separate_node_guidance_survive_restart_and_named_restore(tmp_path):
+    values = {}
+    for node in ('sft', 'multiturn'):
+        values.update({
+            f'workflow-generation-answer-mode:w:{node}': 'native_joint',
+            f'workflow-generation-style:w:{node}': 'custom',
+            f'workflow-generation-instruction:w:{node}': f'{node}: Preserve the uncertainty.',
+            f'workflow-{node}-checklist-enabled:w': True,
+            f'workflow-{node}-checklist-version:w': 7,
+            f'workflow-{node}-checklist-text:w': f'{node}: Check the user request.',
+        })
+    application = creation_draft_application(tmp_path)
+    application.replace(values)
+    identifier = application.save_snapshot()
+    assert creation_draft_application(tmp_path).load() == values
+    application.update({'workflow-generation-answer-mode:w:sft': 'joint',
+                        'workflow-sft-checklist-text:w': ''})
+    assert application.load()['workflow-multiturn-checklist-text:w'] == values['workflow-multiturn-checklist-text:w']
+    assert creation_draft_application(tmp_path).restore_snapshot(identifier) == values
+
+
 def test_fresh_instance_restores_values_without_rewriting_unchanged_draft(tmp_path):
     app = creation_draft_application(tmp_path)
     values = {'workflow-count:w': 50000, 'workflow-open-brief:w': '设备维护对话'}
@@ -174,7 +199,8 @@ def test_persistent_director_node_saves_cleared_question_role_and_exact_prompt_a
     ui = AppTest.from_string(script).run()
     assert not ui.exception
     assert not any('草稿未能' in warning.value for warning in ui.warning)
-    ui.toggle(key='workflow-director-enabled:fixture').set_value(True).run()
+    assert not any(toggle.key == 'workflow-director-enabled:fixture' for toggle in ui.toggle)
+    assert ui.session_state['workflow-director-enabled:fixture'] is True
     ui.button(key='fixture-node:director').click().run()
     assert not ui.exception
     assert ui.session_state['workflow-setup-node:fixture'] == 'director'
@@ -194,6 +220,7 @@ def test_persistent_director_node_saves_cleared_question_role_and_exact_prompt_a
     assert not any('草稿未能' in warning.value for warning in ui.warning)
     fresh = AppTest.from_string(script).run()
     assert not fresh.exception
+    assert fresh.session_state['workflow-director-enabled:fixture'] is True
     fresh.button(key='fixture-node:director').click().run()
     assert not fresh.exception
     assert 'question' not in fresh.session_state['workflow-node-bindings:fixture']['director']

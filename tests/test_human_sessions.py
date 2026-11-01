@@ -85,6 +85,7 @@ class Writer:
             question = "断电是在检查开始后才做吗？" if data["completed_turns"] >= 2 else "检查结束后该做什么？"
             return json.dumps({"continue": not complete, "user_message": question if not complete else "",
                 "reason": "确认检查后的记录。" if not complete else "当前目标完成。",
+                **({"user_constraint_refs": []} if data.get("dialogue_constraint_provenance_version") == 1 else {}),
                 "dialogue_state": {"user_intent": "安全完成检查并记录", "progress": "已确认安全前提。"}})
         if "candidates" in data:
             tasks = []

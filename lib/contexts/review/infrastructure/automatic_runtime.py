@@ -105,6 +105,12 @@ class WorkflowReviewRepair:
 
     def _review_payload(self, target, row):
         from lib.contexts.datasets.contracts import preferred_training_record
+        from lib.contexts.workflows.contracts import native_generation_enabled
+        if (target == "sft" and "cot" in self.recipe.get("targets", ())
+                and native_generation_enabled(self.recipe, "sft")):
+            # Review the full canonical reasoning even if the SFT export alone
+            # is configured to omit it. The paired CoT view still contains it.
+            return training_record("sft", row)
         if (target == "sft" and self.recipe.get("preference_design_version") in {1, 2, 3}
                 and row.get("_complete_preference_response") is True):
             return {key: deepcopy(row[key]) for key in ("messages", "tools") if key in row and row[key]}

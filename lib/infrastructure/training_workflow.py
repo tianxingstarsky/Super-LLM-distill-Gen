@@ -100,7 +100,7 @@ COT_SFT_RECIPE_VERSION = 15
 JEV_NODE_RECIPE_VERSION = 16
 HUMAN_AUGMENTATION_RECIPE_VERSION = 17
 REVIEW_REPAIR_RECIPE_VERSION = 18
-SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41})
+SUPPORTED_RECIPE_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42})
 
 # The automatic workflow has no recipe pools or batch tagger. Keep those
 # preferences visible as unapplied until their behavior can be implemented.
@@ -205,7 +205,14 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                node_generation=None, reasoning_trim=None, node_prompts=None,
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
                review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None,
-               conversation_reasoning=None):
+               conversation_reasoning=None, open_dialogue_question_mode="auto",
+               reuse_initial_native_response=False):
+    from lib.contexts.workflows.contracts import validate_open_dialogue_question_mode
+    open_dialogue_question_mode = validate_open_dialogue_question_mode(open_dialogue_question_mode)
+    if open_dialogue_question_mode == "separated" and (qa_director is None or isinstance(qa_director, dict)):
+        qa_director = {**(qa_director or {}), "question_separation": True}
+    if type(reuse_initial_native_response) is not bool:
+        raise ValueError("invalid_reuse_initial_native_response")
     from lib.contexts.workflows.contracts import validate_conversation_reasoning
     conversation_reasoning = validate_conversation_reasoning(conversation_reasoning)
     from lib.contexts.workflows.contracts import new_preference_design, preference_design_requested
@@ -225,11 +232,22 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         reasoning_required=reasoning_required, preference_design=preference_design)
     review_repair = validate_review_repair(review_repair)
     repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
+    if reuse_initial_native_response:
+        from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
+        if (not repair_inputs or review_repair["mode"] != "auto" or any(
+                item["target"] != "multiturn" or not is_initial_native_dialogue_failure(item["record"])
+                for item in repair_inputs)):
+            raise ValueError("native_response_reuse_requires_authenticated_dialogue_repair")
     validate_generation_review(targets, review_repair, repair_inputs)
     cpt_only = targets == ["cpt"] and not repair_inputs
     production = validate_production(production, targets)
     web_research = validate_web_research(web_research, brief=brief, sources=sources, targets=targets)
     node_generation = validate_node_generation(node_generation)
+    from lib.contexts.workflows.domain.native_generation import (
+        normalize_new_reading_generation, validate_new_native_generation_route)
+    reading_generation_migrated = node_generation.get("multiturn", {}).get("reading_session") is True
+    node_generation, qa_director = normalize_new_reading_generation(node_generation, qa_director)
+    validate_new_native_generation_route(node_generation, targets)
     reasoning_trim = validate_reasoning_trim(reasoning_trim)
     package_review = validate_package_review(package_review)
     qa_director = validate_qa_director(qa_director)
@@ -304,7 +322,12 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         recipe_version = 40
     if node_generation.get("multiturn", {}).get("reading_session"):
         recipe_version = 41
+    native_generation = any(config.get("enabled") is True and config.get("answer_mode") == "native_joint"
+                            for stage, config in node_generation.items() if stage in {"sft", "multiturn"})
+    if native_generation:
+        recipe_version = 42
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+        native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
         learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
         claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
         claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
@@ -390,13 +413,19 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     run_path(output, run_id)
     endpoint_pins = None
     if repair_inputs:
-        # A correction authenticates the parent snapshots without executing its
-        # parsing, generation, cleaning or replay nodes. Inherited bindings for
-        # those nodes must not load clients or require still-active services.
-        active_roles = ({"generation", "jev"} if package_review["enabled"] else {"generation"}) if review_repair["mode"] == "auto" else set()
+        from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
+        continue_native = review_repair["mode"] == "auto" and any(
+            item.get("target") == "multiturn" and is_initial_native_dialogue_failure(item.get("record"))
+            for item in repair_inputs)
+        # Ordinary corrections do not execute parent generation nodes. An
+        # explicit native-dialogue continuation does: keep its original author,
+        # director and per-turn reviewer bindings frozen with the child.
+        retained = ({stage: dict(node_models[stage]) for stage in ("director", "multiturn")
+                     if stage in node_models} if continue_native else {})
+        active_roles = ({"generation", "jev"} if package_review["enabled"] or continue_native else {"generation"}) if review_repair["mode"] == "auto" else set()
         native_bindings = (dict(node_models.get("cot", {})) if review_repair.get("native_regeneration") else {})
         bindings = {role: binding for role, binding in node_models.get("review", {}).items() if role in active_roles}
-        node_models = {"review": bindings} if bindings else {}
+        node_models = {**retained, **({"review": bindings} if bindings else {})}
         if native_bindings:
             node_models["cot"] = native_bindings
     elif arithmetic_only:
@@ -420,6 +449,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         path, evaluation_sources, evaluation_source_names) if evaluation_sources else []
     snapshots = []
     copied_bytes = 0
+    recorded_conversations = bool(files)
     for index, source in enumerate(files):
         destination = path / "inputs" / f"{index:04d}{source.suffix.lower()}"
         snapshot = snapshot_source(source, destination, min(MAX_FILE_BYTES, 200 * 1024 * 1024 - copied_bytes))
@@ -427,16 +457,32 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         snapshots.append({"name": (source_names or {}).get(str(source), source.name),
                           "file": destination.name, **snapshot})
         if destination.suffix in {".json", ".jsonl"}:
-            from lib.infrastructure.structured_source_kind import contains_document_records
-            if contains_document_records(destination):
+            from lib.infrastructure.structured_source_kind import structured_source_kind
+            source_kind = structured_source_kind(destination, targets)
+            if source_kind == "document_collection":
                 snapshots[-1]["kind"] = "document_collection"
+            recorded_conversations = recorded_conversations and source_kind == "conversation_collection"
+        else:
+            recorded_conversations = False
     # Classify the exact copied records, rather than a mutable upload path.
     # Structured document collections need the same shared evidence cleaning
     # as PDF/Markdown; actual conversation-only containers keep their path.
-    if not repair_inputs and not source_cleaning and uses_shared_source_cleaning(targets, snapshots):
-        source_cleaning = True
-        recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
+    from lib.contexts.workflows.contracts import prepare_new_dialogue_director
+    prepared_director = prepare_new_dialogue_director(
+        qa_director, targets, recorded_conversations=recorded_conversations,
+        repair=bool(repair_inputs))
+    director_changed = prepared_director != qa_director
+    qa_director = prepared_director
+    shared_cleaning_needed = (not repair_inputs and not source_cleaning
+                              and uses_shared_source_cleaning(targets, snapshots))
+    if director_changed or shared_cleaning_needed:
+        source_cleaning = source_cleaning or shared_cleaning_needed
+        if director_changed:
+            recipe_version = max(recipe_version, 20)
+        else:
+            recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+            native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
             learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
             claim_refutation_release_version=1, claim_reference_policy_version=1, claim_review_anchor_protocol_version=1,
             claim_review_adversarial_protocol_version=1, claim_review_wire_schema_version=1, claim_review_focus_version=1,
@@ -545,10 +591,34 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"document_parser_signature": document_parser_signature}
                  if document_parser_signature is not None else {}),
               "node_generation": node_generation,
+              "dialogue_context_scope_version": 1,
+              "dialogue_constraint_provenance_version": 1,
+              **({"open_dialogue_routing_version": 1,
+                  "open_dialogue_question_mode": open_dialogue_question_mode}
+                 if open_dialogue_question_mode is not None else {}),
+              **({"native_generation_version": 1} if native_generation else {}),
+              **({"native_author_session_version": 1}
+                 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else {}),
+              **({"native_feedback_guidance_version": 7}
+                 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else {}),
+              **({"native_dialogue_continuation_version": 1} if native_generation else {}),
+              **({"native_dialogue_progress_version": 2} if native_generation else {}),
+              **({"reuse_initial_native_response": True} if reuse_initial_native_response else {}),
+              **({"native_revision_context_version": (2 if all(
+                  item.get("record", {}).get("native_generation", {}).get("author_session") for item in repair_inputs)
+                  else 1)}
+                 if native_generation and repair_inputs and continue_native else {}),
+              **({"reading_session_migration": {"version": 1, "route": "director_native_multiturn",
+                  "archived_inactive_prompt_ids": [prompt_id for prompt_id in
+                      ("workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer")
+                      if prompt_id in node_prompts.get("multiturn", {})]}}
+                 if reading_generation_migrated else {}),
               **({"native_experience_version": 1} if (node_generation.get("multiturn", {}).get("reading_session")
-                  or node_generation.get("cot", {}).get("answer_mode") == "native_joint") else {}),
+                  or node_generation.get("cot", {}).get("answer_mode") == "native_joint" or native_generation) else {}),
               **({"native_environment_version": 1}
-                 if node_generation.get("cot", {}).get("answer_mode") == "native_joint" else {}),
+                 if node_generation.get("cot", {}).get("answer_mode") == "native_joint" or native_generation else {}),
+              **({"native_instruction_scope_version": 1}
+                 if node_generation.get("cot", {}).get("answer_mode") == "native_joint" or native_generation else {}),
               **({"reading_actor_protocol_version": 2} if node_generation.get("multiturn", {}).get("reading_session") else {}),
               "node_prompts": node_prompts,
               "node_prompt_templates": node_prompt_templates,
@@ -1263,10 +1333,12 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                        "kind": "brief", "text": task, "status": "ready", "synthetic": True}
 
     def judge_answer(self, key, context, message, prompt_id="workflow.jev_score", *, instruction=None,
-                     allow_reasoning_fallback=True):
+                     allow_reasoning_fallback=True, model_stage=None, prompt_stage=None):
         # A failed schema must not become a permanent successful call checkpoint.
         value = self.ask(key, "jev", prompt_id,
             {"context": context, "answer": message},
+            **({"model_stage": model_stage} if model_stage is not None else {}),
+            **({"prompt_stage": prompt_stage} if prompt_stage is not None else {}),
             **({"instruction": instruction} if instruction is not None else {}),
             **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}))
         try:
@@ -1289,13 +1361,17 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
         from lib.contexts.workflows.domain.dialogue import without_source_reasoning
         return without_source_reasoning(value)
 
-    def style_check(self, key, style, reasoning, answer):
+    def style_check(self, key, style, reasoning, answer, *, model_stage=None, prompt_stage=None):
         return self.adherence_check(key, "workflow.style_check", {
-            "generation_style": style, "reasoning": reasoning, "answer": answer})
+            "generation_style": style, "reasoning": reasoning, "answer": answer},
+            **({"model_stage": model_stage} if model_stage is not None else {}),
+            **({"prompt_stage": prompt_stage} if prompt_stage is not None else {}))
 
-    def adherence_check(self, key, prompt_id, data, *, instruction=None):
+    def adherence_check(self, key, prompt_id, data, *, instruction=None, model_stage=None, prompt_stage=None):
         from lib.domain.style_judge import style_verdict
         value = self.ask(key, "jev", prompt_id, data,
+                         **({"model_stage": model_stage} if model_stage is not None else {}),
+                         **({"prompt_stage": prompt_stage} if prompt_stage is not None else {}),
                          **({"instruction": instruction} if instruction is not None else {}))
         recipe = getattr(self, "recipe", {})
         try:

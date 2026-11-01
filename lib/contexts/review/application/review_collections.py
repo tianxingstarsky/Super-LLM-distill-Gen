@@ -1,9 +1,10 @@
-"""Review streamed collections once and preserve canonical CoT-to-SFT lineage."""
+"""Review streamed collections once and preserve each recipe's canonical response."""
 from __future__ import annotations
 from .automatic_ports import ReviewCollectionsPort
 from ..domain.repair import validate_review_repair, skips_post_generation_review
 from ..domain.candidate_content import candidate_digest as digest
 from lib.domain.workflow_reasoning_route import cot_updates_sft
+from lib.contexts.workflows.contracts import native_generation_enabled
 
 
 class ReviewGeneratedCollections:
@@ -20,6 +21,18 @@ class ReviewGeneratedCollections:
         if not review_targets:
             self._port.skip_review()
             return collections
+        native_projection = ("cot" in review_targets and len(collections.get("cot", []))
+                             and native_generation_enabled(self.recipe, "sft")
+                             and not self.recipe.get("repair_inputs") and not port.finalizing)
+        selected_sft = "sft" in self.recipe["targets"] and bool(len(collections.get("sft", [])))
+        if native_projection:
+            # Production windows may hide unrequested SFT after generation.
+            # Its lossless CoT view still holds the canonical full conversation.
+            collections = dict(collections)
+            if not len(collections.get("sft", [])):
+                collections["sft"] = collections.get("cot", [])
+            review_targets = tuple(dict.fromkeys("sft" if target == "cot" else target
+                                                 for target in review_targets))
         linked = bool(cot_updates_sft(self.recipe) and len(collections.get("cot", []))
                       and not self.recipe.get("repair_inputs")
                       and not self._port.finalizing)
@@ -71,4 +84,8 @@ class ReviewGeneratedCollections:
         result = self._port.split_reviewed(reviewed, collections, targets=review_targets)
         if linked and skipped_sft:
             self._port.align_cot_sft(result, collections)
+        if native_projection:
+            self._port.align_native_cot(result)
+            if not selected_sft:
+                result["sft"] = []
         return result

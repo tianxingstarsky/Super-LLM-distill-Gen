@@ -11,6 +11,7 @@ from dataclasses import replace as _reasoning_spec_replace
 from lib.prompts.workflow_reasoning import task_adaptive_reasoning_template
 from lib.prompts.workflow_multiturn import MULTITURN_USER_V1_4, multiturn_assistant_v1_5
 from lib.prompts.workflow_utterance import MULTITURN_USER_V1_5, MULTITURN_DIRECTED_CHECK_V1_3
+from lib.prompts.workflow_user_expression import ADAPTIVE_USER_EXPRESSION, ADAPTIVE_USER_EXPRESSION_V2
 from lib.prompts.base import render
 
 
@@ -86,6 +87,17 @@ MULTITURN_DIRECTED_CHECK_V1_2 = MULTITURN_DIRECTED_CHECK
 
 MULTITURN_USER = _reasoning_spec_replace(MULTITURN_USER, version="1.5.0", template=spec(
     "multiturn_user", "自然承接公开对话并判断结束", MULTITURN_USER_V1_5).template)
+
+MULTITURN_USER_V1_5_SPEC = MULTITURN_USER
+
+MULTITURN_USER = context_version(MULTITURN_USER, version="1.6.0", body=ADAPTIVE_USER_EXPRESSION)
+
+MULTITURN_USER_V1_6_SPEC = MULTITURN_USER
+
+MULTITURN_USER = _reasoning_spec_replace(
+    MULTITURN_USER, version="1.7.0",
+    template=MULTITURN_USER.template.replace(ADAPTIVE_USER_EXPRESSION, ADAPTIVE_USER_EXPRESSION_V2, 1),
+)
 
 MULTITURN_DIRECTED_CHECK = _reasoning_spec_replace(MULTITURN_DIRECTED_CHECK, version="1.3.0", template=spec(
     "multiturn_directed_check", "核对自然多轮行动与信息权限", MULTITURN_DIRECTED_CHECK_V1_3).template)

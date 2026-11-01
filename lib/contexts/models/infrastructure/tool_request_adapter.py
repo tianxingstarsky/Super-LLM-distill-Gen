@@ -19,13 +19,14 @@ class SDKToolRequestAdapter(ClientRequestAdmission):
             raise ValueError("invalid_model_temperature")
         if not isinstance(tool_choice, str) or tool_choice not in {"auto", "none"}:
             raise ValueError("invalid_model_tool_choice")
-        tools = self.runtime._tools(tools)
+        tools = (self.runtime._tools(tools, allow_empty=True)
+                 if tools == [] and tool_choice == "none" and not strict else self.runtime._tools(tools))
         self._strict = strict
         if strict:
             if self.client.api_format != "chat" or not all(t["function"].get("strict") is True for t in tools):
                 raise ValueError("model_strict_tools_unsupported")
         messages = self.runtime._history(messages, self.client.api_format)
-        if self.client.model_info.get("tools") is False:
+        if tools and self.client.model_info.get("tools") is False:
             raise ValueError("model_tools_unsupported")
         if not strict and urlsplit(self.client.base_url).hostname == "api.deepseek.com" and urlsplit(self.client.base_url).path.rstrip("/") == "/beta":
             raise ValueError("model_tool_turn_native_prefill_unsupported")

@@ -1,5 +1,6 @@
 """Answer the assigned learner task without rewriting its question or evidence scope."""
 from __future__ import annotations
+from copy import deepcopy
 from .generation_ports import DirectedSftPort
 from ..domain.dialogue import controlled_training_messages, without_source_reasoning
 from lib.domain.workflow_quality import accepted, conversation_issue, text_issue
@@ -35,6 +36,11 @@ class GenerateDirectedSft:
                    "question_rules": self.recipe["qa_director"]["question_rules"],
                    "answer_rules": self.recipe["qa_director"]["answer_rules"],
                    **task_controls(contract)}
+        from ..domain.dialogue_context import project_answer_context
+        answer_scope = project_answer_context({}, unit,
+            version=self.recipe.get("dialogue_context_scope_version")).get("answer_context_scope")
+        if answer_scope is not None:
+            context["answer_context_scope"] = answer_scope
         if style is not None:
             context = without_source_reasoning(context)
             context["generation_style"] = style
@@ -44,6 +50,9 @@ class GenerateDirectedSft:
                 [{"role": "user", "content": learner_prompt(contract)}], style)
         selected_blocks = (self._port.selected_evidence_blocks(unit, contract)
                            if context.get("source_line_scope") == "selected" else None)
+        from ..domain.native_generation import native_generation_enabled
+        if native_generation_enabled(self.recipe, "sft"):
+            return self._native(unit, contract, context, style, evidence_level)
         feedback = None
         check = contract_check = style_check = None
         instructions = ([human_generation_instruction(contract)] if contract.get("human_design") else [])
@@ -141,3 +150,42 @@ class GenerateDirectedSft:
                  **({"generation_failure_kind": failure_kind} if separated else {}),
                  "judge": check, "qa_contract_check": contract_check,
                  **({"generation_style": style, "style_check": style_check} if style else {})}]
+
+    def _native(self, unit, contract, context, style, evidence_level):
+        """Answer the assigned question once; the existing review policy remains authoritative."""
+        from .native_generation import generate_native_turn
+        selected = context.get("source_line_scope") == "selected"
+        evidence = (self._port.selected_evidence_text(unit, contract) if selected else
+                    self._port.source_evidence(unit) if unit.get("source_context_pack") else unit.get("text", ""))
+        messages = controlled_training_messages(
+            [{"role": "user", "content": learner_prompt(contract)}], style)
+        row = generate_native_turn(self._port, self.recipe, stage="sft", unit=unit,
+            messages=messages, style=style, source_text=evidence,
+            source_scope="selected_lines" if selected else "prepared_source",
+            instruction=("遵循用户的实际问题和指导员指定的回答条件，不把历史助手说法当作事实。\n"
+                         + self.recipe["qa_director"].get("answer_rules", "") + "\n"
+                         + human_generation_instruction(contract)))
+        row.update(id=unit["id"], source_name=unit.get("source_name"), location=unit.get("location"),
+                   source_location=unit.get("source_location"), tools=[], quotes=[],
+                   source_context=deepcopy(unit), repair_attempts=0)
+        if row.get("status") != "eligible":
+            return [row]
+        if issue := conversation_issue(row["messages"]):
+            row.update(self._port.reject(unit, issue))
+            return [row]
+        if self.recipe.get("review_repair") is not None:
+            return [row]
+        key = [unit["id"], "sft_native_review_v1", row["native_generation"]["content_sha256"]]
+        check = self._port.assess(key, {**context, "rendered_prompt": row["messages"][:-1],
+            "provided_source_context": row["provided_source_context"]}, row["messages"], allow_reasoning_fallback=False)
+        contract_check = self._port.check_contract([*key, "contract"], unit, row["messages"])
+        style_check = (self._port.check_style([*key, "style"], style, row["reasoning"][0], row["answer"])
+                       if style is not None else None)
+        row.update(judge=check, qa_contract_check=contract_check,
+                   **({"style_check": style_check} if style_check else {}))
+        if not (accepted(check) and contract_check["keep"] and contract_check["adherence"] >= 4
+                and (style_check is None or style_check["keep"] and style_check["adherence"] >= 4)):
+            row.update(self._port.reject(unit, "directed_sft_quality_failed_after_repair"))
+        else:
+            row["evidence_level"] = evidence_level
+        return [row]

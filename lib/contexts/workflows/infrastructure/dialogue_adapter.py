@@ -5,16 +5,29 @@ from ..domain.dialogue import DialogueSource
 
 
 class CheckpointedDialogueAdapter:
-    def __init__(self, runtime):
+    def __init__(self, runtime, *, model_stage=None):
         self._runtime = runtime
+        self._model_stage = model_stage
+
+    def source_evidence(self, source):
+        from lib.infrastructure.workflow_source_context import pack_evidence_text
+        return pack_evidence_text(source, self._runtime.path)
 
     def prepare_source(self, unit, style):
         runtime = self._runtime
         provenance = {"source_id": unit["source_id"], "source_name": unit.get("source_name"),
                       "location": unit.get("location"), "source_location": unit.get("source_location"),
                       "kind": unit["kind"]}
+        if runtime.recipe.get("dialogue_context_scope_version") == 1:
+            provenance.update(synthetic=unit.get("synthetic") is True,
+                              human_provided=bool(unit.get("human_provided")))
         source_context = {"provenance": provenance, "task": unit.get("text"),
                           "brief": runtime.recipe.get("brief", ""), "tools": unit.get("tools", [])}
+        from ..domain.dialogue_context import project_answer_context
+        answer_scope = project_answer_context({}, unit,
+            version=runtime.recipe.get("dialogue_context_scope_version")).get("answer_context_scope")
+        if answer_scope is not None:
+            source_context["answer_context_scope"] = answer_scope
         if style is not None:
             source_context["generation_style"] = deepcopy(style)
         pack_evidence = None
@@ -44,7 +57,7 @@ class CheckpointedDialogueAdapter:
         return learner_prompt(contract)
 
     def prompt_text(self, prompt_id):
-        return self._runtime.prompt_text(prompt_id)
+        return self._runtime.prompt_text(prompt_id, **({"stage": self._model_stage} if self._model_stage else {}))
 
     def generation_style(self, *args, **kwargs):
         return self._runtime.generation_style(*args, **kwargs)
@@ -53,19 +66,30 @@ class CheckpointedDialogueAdapter:
         return self._runtime.rejected(*args, **kwargs)
 
     def assess(self, *args, **kwargs):
-        return self._runtime.judge_answer(*args, **kwargs)
+        return self._runtime.judge_answer(*args, **self._node_options(kwargs))
 
     def next_dialogue_step(self, *args, **kwargs):
         return self._runtime.next_dialogue_step(*args, **kwargs)
 
     def request(self, *args, **kwargs):
-        return self._runtime.ask(*args, **kwargs)
+        return self._runtime.ask(*args, **self._node_options(kwargs))
+
+    def continue_native_feedback(self, key, session, assistant, *, findings):
+        from lib.bootstrap.node_generation import native_feedback_repairer
+        return native_feedback_repairer(self._runtime).execute(key, session, assistant, findings=findings)
+
+    def _node_options(self, options):
+        """Keep the authenticated dialogue node while a repair owns the stage."""
+        if self._model_stage:
+            options.setdefault("model_stage", self._model_stage)
+            options.setdefault("prompt_stage", self._model_stage)
+        return options
 
     def check_contract(self, *args, **kwargs):
-        return self._runtime.qa_contract_check(*args, **kwargs)
+        return self._runtime.qa_contract_check(*args, **self._node_options(kwargs))
 
     def check_style(self, *args, **kwargs):
-        return self._runtime.style_check(*args, **kwargs)
+        return self._runtime.style_check(*args, **self._node_options(kwargs))
 
     def separated_questions(self, *args, **kwargs):
         return self._runtime.separated_questions(*args, **kwargs)

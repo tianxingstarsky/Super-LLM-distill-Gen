@@ -19,6 +19,10 @@ class CheckpointedReviewAdapter:
         from lib.infrastructure.workflow_native_regeneration import regenerate_native_cot_item
         return regenerate_native_cot_item(self._runtime, item)
 
+    def continue_native_dialogue(self, item):
+        from lib.bootstrap.dialogue_generation import continue_native_dialogue
+        return continue_native_dialogue(self._runtime, item)
+
     def record_revision_style(self, target, original, updated):
         return _record_accepted_revision_style(self._runtime, target, original, updated)
 
@@ -69,6 +73,28 @@ class StreamingReviewCollectionsAdapter(CheckpointedReviewAdapter):
 
     def split_reviewed(self, rows, collections, *, targets):
         return self._runtime._split_review_rows(rows, collections, targets=targets)
+
+    def align_native_cot(self, result):
+        from copy import deepcopy
+        from lib.contexts.workflows.contracts import native_sft_to_cot_record
+        from lib.infrastructure.workflow_rows import MappedRows
+        from ..domain.candidate_content import candidate_digest as digest
+
+        def project(record):
+            self._runtime.check_cancel()
+            row = native_sft_to_cot_record(record)
+            receipt = deepcopy(row.get("review_repair", {}))
+            if receipt:
+                try:
+                    candidate_hash = digest(self.payload("cot", row))
+                except (KeyError, TypeError, ValueError):
+                    candidate_hash = None
+                receipt.update(derived_from={"target": "sft", "candidate_id": row["id"]},
+                               candidate_sha256=candidate_hash)
+                row["review_repair"] = receipt
+            return row
+
+        result["cot"] = MappedRows(result["sft"], project)
 
     def align_cot_sft(self, result, collections):
         from copy import deepcopy
@@ -128,6 +154,18 @@ class AuthenticatedRepairAdapter:
                 actual = verified_revision_parent(runtime.path.parent.parent, runtime.state["id"], item["revision_context"])
                 if digest(actual) != digest(item["record"]):
                     raise ValueError("human_session_result_changed")
+                from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
+                if (runtime.recipe.get("native_dialogue_continuation_version") == 1
+                        and item["target"] == "multiturn" and is_initial_native_dialogue_failure(actual)):
+                    from lib.infrastructure.training_workflow import read_json, run_path
+                    parent = read_json(run_path(runtime.path.parent.parent,
+                        item["revision_context"]["parent_run_id"]) / "recipe.json")
+                    author = parent.get("node_models", {}).get("multiturn", {}).get("generation")
+                    pin = parent.get("endpoint_pins", {}).get("multiturn", {}).get("generation")
+                    if (not author or not pin
+                            or runtime.recipe.get("node_models", {}).get("multiturn", {}).get("generation") != author
+                            or runtime.recipe.get("endpoint_pins", {}).get("multiturn", {}).get("generation") != pin):
+                        raise ValueError("native_dialogue_continuation_author_changed")
 
     def prepare(self, inputs):
         from lib.infrastructure.workflow_rows import write_json_array

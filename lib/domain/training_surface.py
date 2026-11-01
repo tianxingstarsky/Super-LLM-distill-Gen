@@ -176,11 +176,13 @@ def _text(value):
     return ""
 
 
-def _visible_text(messages, *, public_system=False):
+def _visible_text(messages, *, public_system=False, public_system_positions=()):
     """Read only learner-visible input bodies; assistant/audit fields cannot grant access."""
     parts = []
-    for message in messages if isinstance(messages, (list, tuple)) else ():
-        if not isinstance(message, Mapping) or message.get("role") not in ({"system", "user", "tool"} if public_system else {"user", "tool"}):
+    for index, message in enumerate(messages if isinstance(messages, (list, tuple)) else ()):
+        roles = {"system", "user", "tool"} if public_system else {"user", "tool"}
+        if not isinstance(message, Mapping) or (message.get("role") not in roles
+                and not (message.get("role") == "system" and index in public_system_positions)):
             continue
         content = message.get("content")
         if isinstance(content, str):
@@ -206,7 +208,8 @@ def _article_is_visible(visible, contract):
 
 
 def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=None, protocol_version=1,
-                           knowledge_application_voice_version=None, learning_goal=None, public_reading_context=False):
+                           knowledge_application_voice_version=None, learning_goal=None, public_reading_context=False,
+                           public_system_positions=()):
     """Return a stable issue code for explicit leakage in exported output text.
 
     ``contract`` is not evidence by itself: source references are allowed only
@@ -216,16 +219,27 @@ def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=N
     Version 1 preserves historical authored-only callers. Version 2 also checks
     native provider reasoning when the caller is about to export that text;
     its provenance never grants permission to leak the production protocol.
+    ``public_system_positions`` identifies already-authenticated exported
+    review notes. These expose rules, not a missing document or private fields.
     """
-    visible = _visible_text(visible_messages, public_system=public_reading_context)
-    article_visible = public_reading_context or _article_is_visible(visible, contract)
+    source_visible = _visible_text(visible_messages, public_system=public_reading_context)
+    article_visible = public_reading_context or _article_is_visible(source_visible, contract)
+    visible = _visible_text(visible_messages, public_system=public_reading_context,
+                            public_system_positions=public_system_positions)
+    public_rules = public_reading_context or bool(public_system_positions)
     from lib.domain.knowledge_voice import knowledge_voice_rules, knowledge_voice_sentence_issue
     voice_active = knowledge_application_voice_version == 3 and bool(knowledge_voice_rules(learning_goal, contract))
     for text in (_text(reasoning), _text(answer)):
+        if protocol_version == 2 and public_system_positions:
+            from lib.contexts.workflows.contracts import native_instruction_scope_evidence
+            evidence = native_instruction_scope_evidence(text, visible_messages,
+                public_system_positions=public_system_positions)
+            if any(item["disposition"] == "block" for item in evidence):
+                return "training_surface_internal_process_reference"
         for sentence in re.split(r"[。！？!?；;\n]+|(?<=[.!?])\s+", text):
             if voice_active and (issue := knowledge_voice_sentence_issue(sentence, visible, article_visible=article_visible)):
                 return issue
-            if protocol_version == 2 and _production_protocol_reference(sentence, visible, public_task_rules=public_reading_context):
+            if protocol_version == 2 and _production_protocol_reference(sentence, visible, public_task_rules=public_rules):
                 return "training_surface_internal_process_reference"
             if _INTERNAL_FIELD.search(sentence) and _PROCESS_CUE.search(sentence):
                 return "training_surface_internal_process_reference"
@@ -240,7 +254,7 @@ def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=N
                               and not re.search(r"(?:我|本次|当前)|\b(?:I|my|this)\b", sentence, re.IGNORECASE))
                 quoted = (match.group(0).casefold() in visible.casefold()
                           and _EXPLANATION_CUE.search(sentence) and not _PROCESS_CUE.search(sentence))
-                public_rule_reference = public_reading_context and not re.search(
+                public_rule_reference = public_rules and not re.search(
                     r"指导员|生成|评分|开发者|\b(?:generation|scoring|developer)\b", match[0], re.I)
                 if not (discussion or quoted or public_rule_reference):
                     return "training_surface_internal_process_reference"
@@ -277,6 +291,11 @@ def training_record_surface_issue(target, row, *, protocol_version=None,
     version = protocol_version if protocol_version is not None else row.get("training_surface_protocol_version")
     if version != 2:
         return None
+    from lib.contexts.workflows.contracts import authenticated_review_guidance_positions
+    try:
+        public_system_positions = authenticated_review_guidance_positions(row)
+    except ValueError:
+        return "review_guidance_public_context_mismatch"
     public_reading_context = False
     if row.get("reading_session") is not None:
         from lib.contexts.workflows.contracts import has_public_reading_context
@@ -290,7 +309,8 @@ def training_record_surface_issue(target, row, *, protocol_version=None,
         question = row.get("question")
         visible = question if isinstance(question, list) else [{"role": "user", "content": question}]
         return training_surface_issue(row.get("reasoning"), row.get("answer"),
-                                      visible_messages=visible, contract=contract, protocol_version=2, **voice_options)
+            visible_messages=visible, contract=contract, protocol_version=2,
+            public_system_positions=public_system_positions, **voice_options)
     if target in {"sft", "multiturn", "agent"}:
         branches = [((), row.get("messages"))]
     elif target in {"dpo", "orpo", "rlaif"}:
@@ -311,6 +331,7 @@ def training_record_surface_issue(target, row, *, protocol_version=None,
                                       for field in ("reasoning_content", "reasoning", "thinking"))
                 issue = training_surface_issue(reasoning, message.get("content"),
                     visible_messages=visible, contract=contract, protocol_version=2,
+                    public_system_positions=tuple(i for i in public_system_positions if i < len(visible)),
                     public_reading_context=public_reading_context, **voice_options)
                 if issue:
                     return issue

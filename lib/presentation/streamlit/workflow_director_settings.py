@@ -9,6 +9,7 @@ from lib.domain.workflow_qa_director import (
 from lib.presentation.streamlit.i18n import translate_label
 from lib.presentation.streamlit.prompt_library_controls import render_prompt_library
 from lib.presentation.streamlit.human_augmentation_controls import human_snapshot
+from lib.contexts.workflows.contracts import requires_dialogue_director
 from lib.presentation.streamlit.knowledge_memory_summary import (
     knowledge_memory_context_help, knowledge_memory_retention_caption,
     knowledge_memory_tools_help,
@@ -105,14 +106,21 @@ def director_has_issue(config: dict) -> bool:
     return False
 
 
-def render_director_toggle(workspace: str, targets, *, save_field) -> dict:
-    eligible = bool(DIRECTED_TARGETS.intersection(targets))
+def render_director_requirement(workspace: str, targets, *, save_field) -> dict:
+    """Show a required design stage, keeping the old draft key compatible."""
+    required = requires_dialogue_director(targets)
     key = f"workflow-director-enabled:{workspace}"
-    st.session_state[key] = _field(workspace, key, True)
-    st.toggle("加入对话指导员", key=key, disabled=not eligible,
-              on_change=save_field, args=(workspace, key),
-              help="文档先清洗，再由指导员设计互动，交给生成节点。连续多轮按实际回应调整；模型与提示词在节点内配置。")
-    return director_snapshot(workspace, eligible=eligible)
+    if not required:
+        st.caption("当前目标不需要对话指导员。")
+        return {"enabled": False}
+    st.session_state[key] = True
+    save_field(workspace, key)
+    st.caption("对话指导员 · 新生成问答的必需步骤，模型与提示词在节点内配置。")
+    return director_snapshot(workspace)
+
+
+# Compatibility for integrations which used the previous optional control.
+render_director_toggle = render_director_requirement
 
 
 def render_director_settings(workspace: str, *, save_field) -> None:

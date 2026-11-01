@@ -56,6 +56,14 @@ def reasoning_trimmer(runtime) -> TrimReasoning:
     return TrimReasoning(StreamingReasoningAdapter(runtime), runtime.recipe)
 
 
+def native_feedback_repairer(runtime):
+    """Continue the recorded native author with saved feedback and no new judge."""
+    from lib.contexts.workflows.application.continue_native_feedback import ContinueNativeFeedback
+    from lib.contexts.workflows.infrastructure.native_feedback_adapter import NativeFeedbackAdapter
+    return ContinueNativeFeedback(NativeFeedbackAdapter(runtime),
+        guidance_version=runtime.recipe.get("native_feedback_guidance_version", 1))
+
+
 def preference_generator(runtime):
     """Build preference pairs, reusing an authenticated failed answer when suitable."""
     from lib.contexts.workflows.application.generate_preference import GeneratePreferencePair

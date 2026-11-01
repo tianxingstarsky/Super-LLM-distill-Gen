@@ -71,11 +71,15 @@ class Judge:
 
 
 def create(tmp_path, *, turns=6):
+    """A saved optional-director run exercises the ordinary user actor route."""
+    from tests.test_workflow_node_prompts import freeze_legacy_optional_director
     source = tmp_path / "guide.txt"
     source.write_text(SOURCE, encoding="utf-8")
     output = tmp_path / "output"
     run_id = engine.create_run(output, sources=[source], targets=["multiturn"], conversation_turns=turns)
-    return output, run_id, engine.run_path(output, run_id)
+    path = engine.run_path(output, run_id)
+    freeze_legacy_optional_director(path)
+    return output, run_id, path
 
 
 def record(path):
@@ -156,6 +160,9 @@ def test_batch_terminal_single_turn_bypasses_review_without_becoming_a_model_out
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe["multiturn_terminal_review_version"] = 1
+    # This fixture starts at an ordinary node's terminal result. It does not
+    # dispatch a new question through the separately tested director route.
+    recipe["qa_director"] = {"enabled": False}
     atomic_json(path / "recipe.json", recipe)
     state = engine.read_json(path / "state.json")
     state["recipe_hash"] = engine.digest(recipe)
@@ -258,9 +265,10 @@ def test_user_actor_action_preserves_literals_and_only_treats_boolean_stop_as_co
     assert user_actor_action(action) == expected and action == original
 
 
-def test_new_user_contract_has_one_schema_and_does_not_force_new_conditions_or_turns():
-    current = render(get("workflow.multiturn_user"))
-    assert get("workflow.multiturn_user").version == "1.5.0"
+@pytest.mark.parametrize("version", ["1.6.0", "1.7.0"])
+def test_new_user_contract_has_one_schema_and_does_not_force_new_conditions_or_turns(version):
+    current = render(get("workflow.multiturn_user", version=version))
+    assert get("workflow.multiturn_user").version == "1.7.0"
     assert "轮数上限" in current and "不必每轮加新条件" in current
     assert "不等于必须补全全部信息或排除真实歧义" in current
     assert "只完成一个轮次可合理停下" in current

@@ -32,6 +32,7 @@ PROMPT_LABELS = {
     "workflow.sft_styled": "风格化问答生成",
     "workflow.jev_score": "质量评审",
     "workflow.cot_generate": "风格化推理生成",
+    "workflow.cot_native_joint": "原生思考与同次回答",
     "workflow.cot_rationale": "风格化推理前缀生成",
     "workflow.cot_native_answer": "原生推理续写答案",
     "workflow.cot_prefix_check": "推理前缀核验",

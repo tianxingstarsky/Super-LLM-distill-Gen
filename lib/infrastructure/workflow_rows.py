@@ -7,6 +7,25 @@ from pathlib import Path
 from lib.domain.workflow_quality import canonical
 
 
+class MappedRows:
+    """Replay a one-to-one projection without copying a whole collection."""
+
+    def __init__(self, records, transform):
+        self.records, self.transform = records, transform
+
+    def __len__(self):
+        return len(self.records)
+
+    def __iter__(self):
+        iterator = iter(self.records)
+        try:
+            for record in iterator:
+                yield self.transform(record)
+        finally:
+            if callable(close := getattr(iterator, "close", None)):
+                close()
+
+
 class WorkflowRows:
     def __init__(self, path: Path, count: int, *, predicate=None, transform=None, limit=None):
         self.path, self.count = Path(path), count

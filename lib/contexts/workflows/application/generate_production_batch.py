@@ -5,6 +5,7 @@ from typing import Protocol
 
 from ..domain.production import evaluated_quality_stop
 from ..domain.targets import PREFERENCE_TARGETS, TARGETS
+from ..domain.native_generation import native_generation_enabled
 from lib.domain.workflow_reasoning_route import cot_updates_sft
 
 
@@ -28,6 +29,7 @@ class GenerateProductionBatch:
     def execute(self, generated, source_rows, active):
         self._port.begin()
         selected = set(active)
+        native_projection = native_generation_enabled(self.recipe, "sft") and "cot" in selected
         collections = {target: [] for target in TARGETS}
         needs_sft = bool(selected & (PREFERENCE_TARGETS | {"sft", "cot"}))
         if "cpt" in selected:
@@ -47,18 +49,18 @@ class GenerateProductionBatch:
             rows = self._port.eligible_records("sft", collections["sft"])
             pairs = self._port.run_stage("preference", rows)
             collections.update(self._port.preference_exports(pairs, selected & PREFERENCE_TARGETS))
-        if "cot" in selected or ("sft" in selected and cot_updates_sft(self.recipe)):
+        if not native_projection and ("cot" in selected or ("sft" in selected and cot_updates_sft(self.recipe))):
             rows = self._port.eligible_records("sft", collections["sft"])
             collections["cot"] = self._port.run_stage("cot", rows)
         if "gsm8k" in selected:
             collections["gsm8k"] = self._port.arithmetic_records(generated)
-        if cot_updates_sft(self.recipe):
+        if cot_updates_sft(self.recipe) or native_projection:
             self._port.finalize_reasoning(collections, selected)
         if evaluated_quality_stop(self.recipe.get("production") or {}) and selected & (PREFERENCE_TARGETS | {"cot"}):
             self._port.record_blocked_sft(collections["sft"])
         # Intermediate candidates must be processed before hiding unrequested formats.
         for target in set(collections) - selected:
             collections[target] = []
-        if not cot_updates_sft(self.recipe):
+        if not cot_updates_sft(self.recipe) and not native_projection:
             self._port.trim_reasoning(collections)
         return collections
