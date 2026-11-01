@@ -43,8 +43,9 @@ def test_preview_counts_existing_markers_once_and_preserves_defaults():
     preview = preview_control_text(config, original)
     assert preview["match_count"] == 2
     assert preview["original_text"] == original
-    assert preview["marked_text"] == original
-    assert preview["transformed_text"] == "适当展开. [[SJ_REASONING_EFFORT]]"
+    assert preview["marked_text"] == ("<reason-strength>Desired oververbosity 5</reason-strength>. "
+                                       "<reason-strength>[[SJ_REASONING_EFFORT]]</reason-strength>")
+    assert preview["transformed_text"] == "适当展开. <reason-strength>[[SJ_REASONING_EFFORT]]</reason-strength>"
     config["enabled"] = False
     preview = preview_control_text(config, original)
     assert preview["match_count"] == 0 and preview["transformed_text"] == original
@@ -60,6 +61,9 @@ def test_protocol_freeze_checkpoint_export_and_lazy_training_use_node_rules(tmp_
     configs = {node: default_control_text_config() for node in ("sft", "multiturn", "cot")}
     configs["multiturn"]["enabled"] = False
     configs["cot"]["schema"] = "shujian.control-text-adaptation/v1"
+    configs["cot"].pop("annotation_tag")
+    configs["cot"].pop("prefix_char_limit")
+    configs["cot"].pop("review_suggestions")
     request = validate_request({"protocol": PROTOCOL, "version": VERSION,
         "request_id": "node-controls", "action": "runs.create", "params": {"recipe": {
             "sources": [str(source)], "targets": ["sft", "multiturn", "cot"],
@@ -101,7 +105,7 @@ def test_protocol_freeze_checkpoint_export_and_lazy_training_use_node_rules(tmp_
     for record in exported:
         assert to_trl_sft(record)["control_text_config"] == record["control_text_config"]
     examples = list(iter_training_examples(exported, Encoder(), default_effort="high"))
-    assert examples[0]["text"].startswith("Desired oververbosity 5")
+    assert examples[0]["text"].startswith("<reason-strength>Desired oververbosity 5</reason-strength>")
     assert examples[1]["text"].startswith("Desired oververbosity 5")
     assert examples[2]["text"].startswith("[[SJ_OUTPUT_VERBOSITY:5]]")
     assert examples[0]["metadata"]["source_control_edits"] == []
@@ -119,9 +123,84 @@ def test_absent_configuration_keeps_legacy_artifact_shape():
 def test_previous_node_configuration_can_restore_v1_without_migrating_it():
     current = default_control_text_config()
     previous = {**deepcopy(current), "schema": "shujian.control-text-adaptation/v1"}
+    previous.pop("annotation_tag")
+    previous.pop("prefix_char_limit")
+    previous.pop("review_suggestions")
     draft = {"workflow-control-text:default:sft": current,
              "workflow-control-text-previous:default:sft": previous}
     assert validate_creation_draft(draft) == draft
     invalid = {"workflow-control-text-previous:default:unknown-node": previous}
     with pytest.raises(ValueError, match="invalid_creation_draft"):
         validate_creation_draft(invalid)
+
+
+def test_inline_exports_preserve_author_text_and_each_turns_own_rules():
+    config = default_control_text_config()
+    config["rules"][0]["replacement"] = "Target-model wording only"
+    disabled = {**deepcopy(config), "enabled": False}
+    original_reasoning = "Desired oververbosity 5. I should check the actual constraint."
+    sample = {"control_text_config": config, "control_text_node": "sft", "messages": [
+        {"role": "user", "content": "What is needed first?"},
+        {"role": "assistant", "content": "Confirm the constraint.", "reasoning_content": original_reasoning},
+        {"role": "user", "content": "Now explain Desired oververbosity 5 as a parameter."},
+        {"role": "assistant", "content": "It describes response detail.", "reasoning_content": original_reasoning,
+         "control_text_config": disabled, "control_text_node": "multiturn"},
+    ]}
+    before = deepcopy(sample)
+    exported = json.loads(json.dumps(preferred_training_record("multiturn", sample, annotate_controls=True)))
+    wrapped = "<reason-strength>Desired oververbosity 5</reason-strength>. I should check the actual constraint."
+    assert exported["messages"][1]["reasoning_content"] == wrapped
+    assert exported["messages"][3]["reasoning_content"] == original_reasoning
+    assert exported["messages"][3]["control_text_config"] == disabled
+    normalized = to_trl_sft(exported)
+    assert normalized["messages"][1]["thinking"] == wrapped
+    assert normalized["messages"][3]["thinking"] == original_reasoning
+    assert normalized["messages"][3]["control_text_config"] == disabled
+    assert to_trl_sft(normalized) == normalized
+    assert sample == before
+
+    class Encoder:
+        def encode_turn(self, messages, control, *, tools=None, control_text_config=None):
+            return {"text": messages[-1]["thinking"], "configuration": control_text_config}
+
+    # Read-time overrides belong to the encoder, not the TRL normalization.
+    examples = list(iter_training_examples([sample], Encoder(), default_effort="high"))
+    assert [item["text"] for item in examples] == [original_reasoning, original_reasoning]
+    assert examples[0]["configuration"] == config
+    assert examples[1]["configuration"] == disabled
+    assert examples[1]["metadata"]["control_text_node"] == "multiturn"
+
+
+def test_cot_export_marks_fragments_without_changing_answer_or_v2_records():
+    config = default_control_text_config()
+    row = {"question": "What should I check?", "answer": "The conditions.",
+           "reasoning": ["Desired oververbosity 5.", "I need to check the conditions."],
+           "control_text_config": config}
+    before = deepcopy(row)
+    exported = preferred_training_record("cot", row, annotate_controls=True)
+    assert exported["reasoning"] == ["<reason-strength>Desired oververbosity 5</reason-strength>.",
+                                     before["reasoning"][1]]
+    assert exported["answer"] == before["answer"] and row == before
+    assert to_trl_sft(exported)["messages"][-1]["thinking"] == "\n\n".join(exported["reasoning"])
+    legacy = deepcopy(row)
+    legacy["control_text_config"]["schema"] = "shujian.control-text-adaptation/v2"
+    legacy["control_text_config"].pop("annotation_tag")
+    legacy["control_text_config"].pop("prefix_char_limit")
+    legacy["control_text_config"].pop("review_suggestions")
+    assert preferred_training_record("cot", legacy, annotate_controls=True)["reasoning"] == legacy["reasoning"]
+    assert to_trl_sft(legacy)["messages"][-1]["thinking"] == "\n\n".join(legacy["reasoning"])
+
+
+def test_export_rejects_ambiguous_control_quotations_and_unbalanced_tags():
+    row = {"control_text_config": default_control_text_config(), "messages": [
+        {"role": "user", "content": "Explain Desired oververbosity 5."},
+        {"role": "assistant", "content": "It is a control expression.",
+         "reasoning_content": "Desired oververbosity 5. This is a quoted parameter."}]}
+    with pytest.raises(ValueError, match="control_text_reference_in_task_content"):
+        preferred_training_record("sft", row, annotate_controls=True)
+    with pytest.raises(ValueError, match="control_text_reference_in_task_content"):
+        to_trl_sft(row)
+    row["messages"][0]["content"] = "What is needed first?"
+    row["messages"][1]["reasoning_content"] = "<reason-strength>Desired oververbosity 5"
+    with pytest.raises(ValueError, match="control_text_unbalanced_tags"):
+        to_trl_sft(row)

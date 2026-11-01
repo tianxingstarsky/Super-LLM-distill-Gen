@@ -1,5 +1,9 @@
 # 工作流用例
 
+`GeneratePreferencePair` 仅把源候选明确携带的 v3 控制文字配置保留在复制的助手消息上，
+供成对标记导出使用；消息自身的配置优先，未知来源的负例不套用正例规则。正文仍是原始
+推理与答案，不执行文字转换，也不把新增来源配置放进生成负例的模型请求。
+
 原生 CoT、SFT 与多轮回答保留可信请求的 `generation_control`，并以 `generation_controls={version:1,assistant_turns:[...]}` 标出真实助手消息索引。多轮各轮独立绑定 `reasoning_call`；阅读场景与用户模拟调用不作为回答标签。原生返工使用实际最终回答收据，未知历史不补标。既有原生 CoT/SFT 投影保持该映射，旧请求没有收据时不新增字段。验证见 `test_provider_reasoning_sft.py`、`test_pipeline_use_cases.py`、`test_model_response_details.py`。
 
 `RegenerateWithReviewGuidance` 承接新任务 v7：复用已有评审理由，将 system 注意事项追加到真实 user 后，原作者只重新生成一次。不追加当前失败助手轮，不伪造工具或推理。完整旧稿归档；新推理、答案与可见提醒一起保留。SFT／多轮包装把提醒传入质量检查和训练记录，再次返工按真实 user 位置恢复。完成仍是 `not_assessed`，没有独立评审调用。

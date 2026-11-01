@@ -85,7 +85,7 @@ def fixture_run(tmp_path, rows, target="cot", *, status="completed", style=None,
     write_json(run / "recipe.json", recipe)
     write_json(run / "state.json", state)
     write_json(artifacts / f"{target}.records.json", rows)
-    (artifacts / f"{target}.jsonl").write_text("".join(json.dumps(preferred_training_record(target, row, sft_output_style=style), ensure_ascii=False) + "\n"
+    (artifacts / f"{target}.jsonl").write_text("".join(json.dumps(preferred_training_record(target, row, sft_output_style=style, annotate_controls=True), ensure_ascii=False) + "\n"
                                                     for row in rows if row["status"] == "eligible"), encoding="utf-8")
     write_json(artifacts / "quality.json", {"targets": state["quality"]["targets"], "input_issues": [{"huge": "never read wholesale"}]})
     seal(run, recipe)
@@ -98,6 +98,26 @@ def fixture_run(tmp_path, rows, target="cot", *, status="completed", style=None,
 def cot(index=0, **extra):
     return {"id": str(index), "status": "eligible", "question": [{"role": "user", "content": f"Real question {index}"}],
             "reasoning": f"Task-specific explanation {index}.", "answer": f"Real answer {index}.", **extra}
+
+
+def test_paired_export_report_and_rework_identity_keep_the_sealed_original(tmp_path):
+    from lib.contexts.datasets.api import default_control_text_config
+    from lib.domain.sft_review import sft_identity
+    from lib.infrastructure.rework_candidate_index import rework_candidate_index
+
+    row = {'id':'controlled','status':'eligible','control_text_config':default_control_text_config(),
+           'messages':[{'role':'user','content':'What should I check?'},
+                       {'role':'assistant','content':'The conditions.',
+                        'reasoning_content':'Desired oververbosity 5. I need to check the conditions.'}]}
+    before = deepcopy(row)
+    assert preferred_training_record('sft',row)['messages'] == row['messages']
+    app, run, _, _ = fixture_run(tmp_path,[row],target='sft')
+    projected = preferred_training_record('sft',row,annotate_controls=True)
+    assert app.samples(RID,'sft')['rows'][0]['training_body'] == projected
+    with rework_candidate_index(run,'sft') as index:
+        assert index.reviewed_candidate(sft_identity(projected)) == row['id']
+        assert index.candidates([row['id']])[row['id']] == before
+    assert json.loads((run/'artifacts'/'sft.records.json').read_text(encoding='utf-8')) == [before]
 
 
 def test_full_actual_body_and_distinct_current_review_scopes(tmp_path):

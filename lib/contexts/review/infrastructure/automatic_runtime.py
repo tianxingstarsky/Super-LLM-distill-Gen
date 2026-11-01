@@ -11,6 +11,8 @@ import hashlib
 import re
 
 from ..domain.repair import validate_review_repair, validate_repair_inputs
+from ..domain.control_text_suggestions import build_control_text_review_context
+from .control_text_suggestions import request_with_control_suggestions
 from lib.domain.workflow_quality import accepted, canonical, conversation_issue, text_issue, verdict
 from lib.contexts.workflows.contracts import (TARGETS, TRAINING_FIELDS, PREFERENCE_TARGETS, training_record,
                                          preference_score_issue, rlaif_feedback_issue)
@@ -104,23 +106,24 @@ class WorkflowReviewRepair:
         return {}
 
     def _review_payload(self, target, row):
-        from lib.contexts.datasets.contracts import preferred_training_record
+        from lib.contexts.datasets.contracts import preferred_training_record, without_control_text_metadata
         from lib.contexts.workflows.contracts import native_generation_enabled
         if (target == "sft" and "cot" in self.recipe.get("targets", ())
                 and native_generation_enabled(self.recipe, "sft")):
             # Review the full canonical reasoning even if the SFT export alone
             # is configured to omit it. The paired CoT view still contains it.
-            return training_record("sft", row)
-        if (target == "sft" and self.recipe.get("preference_design_version") in {1, 2, 3}
+            payload = training_record("sft", row)
+        elif (target == "sft" and self.recipe.get("preference_design_version") in {1, 2, 3}
                 and row.get("_complete_preference_response") is True):
-            return {key: deepcopy(row[key]) for key in ("messages", "tools") if key in row and row[key]}
-        if target == "rlaif":
+            payload = {key: deepcopy(row[key]) for key in ("messages", "tools") if key in row and row[key]}
+        elif target == "rlaif":
             payload = {key: row[key] for key in ("prompt", "chosen", "rejected")}
             if row.get("tools"):
                 payload["tools"] = row["tools"]
-            return payload
-        return preferred_training_record(target, row, self.recipe.get("generation_preferences"),
-                                         sft_output_style=self.recipe.get("sft_output_style"))
+        else:
+            payload = preferred_training_record(target, row, self.recipe.get("generation_preferences"),
+                                                sft_output_style=self.recipe.get("sft_output_style"))
+        return without_control_text_metadata(payload)
 
     def _review_evidence(self, row):
         from lib.infrastructure.workflow_repair_references import append_repair_reference_sources
@@ -283,6 +286,7 @@ class WorkflowReviewRepair:
         if version == 2:
             return self._review_blind_claim_score(target, row, evidence, key, instruction=instruction)
         payload = self._review_payload(target, row)
+        control_context = build_control_text_review_context(target, row, payload)
         requests = claim_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False),
             review_requirements=current_claim_review_requirements(self, target, row, instruction=instruction) or None)
@@ -304,7 +308,8 @@ class WorkflowReviewRepair:
                 # JEV is a normal configured chat reviewer in this project.
                 # Preserve the node's scoring-model choice; only the review
                 # contract changes from aggregate grades to concrete claims.
-                raw = self.ask(call_key, role, "workflow.review_score", call_data,
+                raw = request_with_control_suggestions(self, call_key, role, "workflow.review_score", call_data,
+                    control_context=control_context,
                     allow_reasoning_fallback=False, model_stage="review", prompt_stage="review",
                     instruction=_CLAIM_REVIEW_WIRE_PROTOCOL)
                 checkpoint = {"stage": self.stage, "key": deepcopy(call_key),
@@ -337,7 +342,8 @@ class WorkflowReviewRepair:
             "checkpoints": [deepcopy(item["checkpoint"]) for item in audit["assessments"]]}
         return self._claim_refutation_release(row, check)
 
-    def _claim_v2_call(self, request, *, prompt_id, base_key, role, validator, audit, phase, instruction):
+    def _claim_v2_call(self, request, *, prompt_id, base_key, role, validator, audit, phase, instruction,
+                       control_context=None):
         """One bounded schema retry, retaining both real request checkpoints."""
         from lib.infrastructure.workflow_store import digest
         format_version = self.recipe.get("claim_review_format_feedback_version")
@@ -431,7 +437,8 @@ class WorkflowReviewRepair:
                 feedback["instruction"] += "\nSchema-only diagnostic: " + canonical({
                     "error_code": previous_error, **boundaries, **previous_detail})
             data = request if attempt == 1 else {**request, "format_repair": feedback}
-            raw = self.ask(call_key, role, prompt_id, data, allow_reasoning_fallback=False,
+            raw = request_with_control_suggestions(self, call_key, role, prompt_id, data,
+                control_context=control_context, allow_reasoning_fallback=False,
                 model_stage="review", prompt_stage="review", instruction=call_instruction)
             reference = {"stage": self.stage, "key": deepcopy(call_key),
                 "checkpoint_sha256": digest(["call", call_key]), "request_sha256": digest(data),
@@ -472,6 +479,7 @@ class WorkflowReviewRepair:
         from lib.infrastructure.workflow_store import digest
         payload = self._review_payload(target, row)
         requirements = current_claim_review_requirements(self, target, row, instruction=instruction) or None
+        control_context = build_control_text_review_context(target, row, payload)
         condition_version = self.recipe.get("claim_review_condition_contract_version")
         inputs = challenge_review_requests(target, payload, evidence,
             reasoning_required=self.recipe.get("reasoning_required", False), review_requirements=requirements,
@@ -498,11 +506,12 @@ class WorkflowReviewRepair:
             if windowed:
                 from lib.bootstrap.automatic_review import claim_windows
                 receipt, record = claim_windows(self, role=role, audit=audit, phase="claim_challenge",
-                    instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL).execute(request)
+                    instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL, control_context=control_context).execute(request)
             else:
                 receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_reference",
                     base_key=call_key, role=role, validator=validate_challenge_review, audit=audit,
-                    phase="claim_challenge", instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL)
+                    phase="claim_challenge", instruction=_CLAIM_CHALLENGE_V4_WIRE_PROTOCOL,
+                    control_context=control_context)
                 record = {"review": deepcopy(receipt), "checkpoint": checkpoint}
             challenges.append(receipt)
             audit["challenge_reviews"].append(record)
@@ -514,11 +523,12 @@ class WorkflowReviewRepair:
             call_key = [*key, "claim_adjudication", request["scope"]["message_index"], request["scope"]["scope_sha256"]]
             if windowed:
                 receipt, record = claim_windows(self, role=role, audit=audit, phase="claim_adjudication",
-                    instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL).execute(request)
+                    instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL, control_context=control_context).execute(request)
             else:
                 receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_score",
                     base_key=call_key, role=role, validator=validate_adversarial_claim_review, audit=audit,
-                    phase="claim_adjudication", instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL)
+                    phase="claim_adjudication", instruction=_CLAIM_ADJUDICATION_V4_WIRE_PROTOCOL,
+                    control_context=control_context)
                 record = {"review": deepcopy(receipt), "checkpoint": checkpoint}
             receipts.append(receipt)
             audit["assessments"].append(record)
@@ -548,6 +558,7 @@ class WorkflowReviewRepair:
         from lib.infrastructure.workflow_store import digest
         payload = self._review_payload(target, row)
         anchored = self.recipe.get("claim_review_anchor_protocol_version") == 1
+        control_context = build_control_text_review_context(target, row, payload)
         if anchored:
             from lib.domain.anchored_claim_review import (claim_review_requests_v3, validate_claim_review_v3,
                                                          merge_claim_reviews_v3)
@@ -595,7 +606,7 @@ class WorkflowReviewRepair:
             base_key = [*key, "claim_review", request["scope"]["message_index"], request["scope"]["scope_sha256"]]
             receipt, checkpoint = self._claim_v2_call(request, prompt_id="workflow.review_score",
                 base_key=base_key, role=role, validator=validator, audit=audit,
-                phase="claim_review", instruction=grade_instruction)
+                phase="claim_review", instruction=grade_instruction, control_context=control_context)
             receipts.append(receipt)
             audit["assessments"].append({"review": deepcopy(receipt), "checkpoint": checkpoint})
         check = (merge_claim_reviews_v3 if anchored else merge_claim_reviews_v2)(payload, receipts)
@@ -671,7 +682,10 @@ class WorkflowReviewRepair:
             from lib.domain.turn_review import supervised_assistant_turns
             data["supervised_assistant_turns"] = supervised_assistant_turns(data["candidate"],
                 reasoning_required=self.recipe.get("reasoning_required", False))
+        control_context = build_control_text_review_context(target, row, data["candidate"])
         def assessed(call_key, call_data):
+            advice_context = (control_context if not call_data.get("learner_context_only")
+                and call_data.get("candidate") == data["candidate"] else None)
             rules = ({"instruction": _authored_review_rules(self.recipe)}
                      if _authored_cot(target, row) and not call_data.get("learner_context_only") else {})
             reliable_transport = self.recipe.get("claim_review_transport_version") == 1
@@ -705,9 +719,9 @@ class WorkflowReviewRepair:
                     request = call_data if not failures else {**call_data, "format_repair": {
                         "code": failures[-1]["code"],
                         "instruction": "Return the complete aggregate and every listed assistant-turn verdict. Copy the exact original indices and hashes; recheck the actual content, never fabricate a missing grade."}}
-                    value = self.ask(current_key, role, "workflow.review_score",
+                    value = request_with_control_suggestions(self, current_key, role, "workflow.review_score",
                         project_review_request(self.recipe, request, phase="review"),
-                        allow_reasoning_fallback=False, **rules)
+                        control_context=advice_context, allow_reasoning_fallback=False, **rules)
                     try:
                         result = turn_review_verdict(value, call_data["supervised_assistant_turns"])
                     except ValueError as error:
@@ -737,9 +751,9 @@ class WorkflowReviewRepair:
                         "code": "invalid_aggregate_review_response",
                         "instruction": "Return the complete score contract; judge the original candidate. Schema-only diagnostic: "
                                        + canonical(diagnostic)}}
-                    value = self.ask(actual_key, role, "workflow.review_score",
+                    value = request_with_control_suggestions(self, actual_key, role, "workflow.review_score",
                         project_review_request(self.recipe, request, phase="review"),
-                        allow_reasoning_fallback=False, **rules)
+                        control_context=advice_context, allow_reasoning_fallback=False, **rules)
                     try:
                         if not Draft202012Validator(review_grade_schema()).is_valid(value):
                             raise ValueError("invalid_aggregate_review_response")
@@ -757,9 +771,9 @@ class WorkflowReviewRepair:
                         call_key = actual_key
                         break
             else:
-                value = self.ask(call_key, role, "workflow.review_score",
+                value = request_with_control_suggestions(self, call_key, role, "workflow.review_score",
                                  project_review_request(self.recipe, call_data, phase="review"),
-                                 allow_reasoning_fallback=False, **rules)
+                                 control_context=advice_context, allow_reasoning_fallback=False, **rules)
                 try:
                     result = verdict(value)
                 except ValueError:
@@ -786,7 +800,8 @@ class WorkflowReviewRepair:
             # A repaired preference needs fresh evidence for both response scores;
             # inherited scores must never describe edited responses.
             rejected_check = assessed([*key, "rejected_score"],
-                {**data, "target": "sft", "candidate": {"messages": [*row["prompt"], *row["rejected"]]},
+                {**data, "target": "sft", "candidate": self._review_payload("sft",
+                    {"messages": [*row["prompt"], *row["rejected"]], "_complete_preference_response": True}),
                  "assessment": "Score this deliberately negative response accurately; it need not pass."})
             row["preference"] = {"dimension": "correctness", "minimum_gap": 2,
                                  "chosen": check, "rejected": rejected_check}

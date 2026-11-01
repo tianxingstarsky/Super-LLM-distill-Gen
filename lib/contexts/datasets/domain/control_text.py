@@ -13,7 +13,9 @@ import re
 
 
 SCHEMA = "shujian.control-text-adaptation/v1"
-CURRENT_SCHEMA = "shujian.control-text-adaptation/v2"
+ANNOTATION_SCHEMA = "shujian.control-text-adaptation/v2"
+PAIRED_SCHEMA = "shujian.control-text-adaptation/v3"
+CURRENT_SCHEMA = PAIRED_SCHEMA
 
 
 def _nonempty_text(value: object) -> bool:
@@ -32,7 +34,8 @@ def _literal_pattern(text: str) -> str:
 class ControlTextAdapter:
     """Snapshot caller-owned literal rules; never change source messages.
 
-    In v2, ``replacement=None`` annotates original spans without changing text.
+    V3 wraps matched original text in a configurable pair of tags. In v2,
+    ``replacement=None`` annotates original spans without changing text.
     V1 retains its historical literal-to-placeholder behavior for frozen tasks.
     Empty ``matches`` supports existing-marker adaptation. Disabling a rule
     bypasses it; disabling the configuration does not disable model thinking.
@@ -40,12 +43,20 @@ class ControlTextAdapter:
 
     def __init__(self, configuration: Mapping):
         if (not isinstance(configuration, Mapping)
-                or configuration.get("schema") not in (SCHEMA, CURRENT_SCHEMA)
+                or configuration.get("schema") not in (SCHEMA, ANNOTATION_SCHEMA, CURRENT_SCHEMA)
                 or type(configuration.get("enabled")) is not bool
-                or set(configuration) - {"schema", "enabled", "rules"}):
+                or set(configuration) - ({"schema", "enabled", "rules", "annotation_tag", "prefix_char_limit",
+                                          "review_suggestions"}
+                                         if configuration.get("schema") == CURRENT_SCHEMA
+                                         else {"schema", "enabled", "rules"})):
             raise ValueError("invalid_control_text_configuration")
         self._configuration = deepcopy(dict(configuration))
-        self._annotations_only = configuration["schema"] == CURRENT_SCHEMA
+        self._annotations_only = configuration["schema"] != SCHEMA
+        self._inline_tags = configuration["schema"] == CURRENT_SCHEMA
+        self._annotation_tag = configuration.get("annotation_tag", "reason-strength")
+        self._prefix_char_limit = configuration.get("prefix_char_limit", 512)
+        if self._inline_tags and type(configuration.get("review_suggestions", False)) is not bool:
+            raise ValueError("invalid_control_text_review_suggestions")
         self._enabled = configuration["enabled"]
         self._rules: dict[str, dict] = {}
         self._tokens: dict[str, tuple[str, bool]] = {}
@@ -55,6 +66,16 @@ class ControlTextAdapter:
         # switch must still stop adaptation without compiling those drafts.
         if not self._enabled:
             return
+        if self._inline_tags:
+            if (type(self._prefix_char_limit) is not int
+                    or not 64 <= self._prefix_char_limit <= 2048):
+                raise ValueError("invalid_control_text_prefix_limit")
+            if (not isinstance(self._annotation_tag, str)
+                    or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", self._annotation_tag)):
+                raise ValueError("invalid_control_text_annotation_tag")
+            self._opening_tag = f"<{self._annotation_tag}>"
+            self._closing_tag = f"</{self._annotation_tag}>"
+            self._tag_pattern = re.compile(re.escape(self._opening_tag) + "|" + re.escape(self._closing_tag))
         rules = self._configuration.get("rules", [])
         if not isinstance(rules, list):
             raise ValueError("invalid_control_text_rules")
@@ -98,6 +119,12 @@ class ControlTextAdapter:
             replacement = rule.get("replacement")
             if replacement is not None and any(token in replacement for token in self._tokens):
                 raise ValueError("control_text_replacement_cascade")
+            if self._inline_tags and replacement is not None and any(
+                    tag in replacement for tag in (self._opening_tag, self._closing_tag)):
+                raise ValueError("control_text_replacement_cascade")
+        if self._inline_tags and any(tag in token for token in self._tokens
+                                     for tag in (self._opening_tag, self._closing_tag)):
+            raise ValueError("control_text_rule_conflict")
         if self._tokens:
             ordered = sorted(self._tokens, key=lambda token: (-len(token), token))
             self._pattern = re.compile("|".join(_literal_pattern(token) for token in ordered))
@@ -115,6 +142,45 @@ class ControlTextAdapter:
     def configuration(self) -> dict:
         return deepcopy(self._configuration)
 
+    def _wrapped_spans(self, text: str):
+        """Locate prefix pairs; wrapper characters do not consume source scope.
+
+        A block beginning inside scope may close outside it: retain that whole
+        block, then stop. Tags appearing only in later prose are not parsed.
+        """
+        spans = []
+        opening = None
+        cursor = 0
+        plain_offset = 0
+        for token in self._tag_pattern.finditer(text):
+            if opening is None:
+                plain_offset += token.start() - cursor
+                if plain_offset >= self._prefix_char_limit:
+                    break
+                if token.group() == self._closing_tag:
+                    raise ValueError("control_text_unbalanced_tags")
+                opening = token
+            else:
+                inner_end = plain_offset + token.start() - opening.end()
+                if token.group() == self._opening_tag:
+                    if inner_end < self._prefix_char_limit:
+                        raise ValueError("control_text_unbalanced_tags")
+                    # Outside the prefix, nested-looking prose is not our input.
+                    continue
+                spans.append((opening.start(), opening.end(), token.start(), token.end()))
+                # Only a recognized control wrapper is program annotation.
+                # Unknown tag examples still consume their complete raw span.
+                known = self._pattern.fullmatch(text[opening.end():token.start()])
+                plain_offset += (token.start() - opening.end() if known
+                                 else token.end() - opening.start())
+                cursor = token.end()
+                opening = None
+                if plain_offset >= self._prefix_char_limit:
+                    break
+        if opening is not None:
+            raise ValueError("control_text_unbalanced_tags")
+        return spans
+
     def _transform(self, text: str, *, target: bool) -> tuple[str, dict, set[str]]:
         edits = []
         annotations = []
@@ -126,7 +192,7 @@ class ControlTextAdapter:
         if not self._enabled or self._pattern is None:
             return text, metadata, matched_rules
 
-        def replace(match: re.Match[str]) -> str:
+        def replace(match: re.Match[str], *, offset=0, wrapped_span=None) -> str:
             nonlocal replacements
             original = match.group()
             identity, is_marker = self._tokens[original]
@@ -135,18 +201,25 @@ class ControlTextAdapter:
             matched_rules.add(identity)
             replacement = rule.get("replacement") if target else None
             if self._annotations_only:
-                annotation = {"start": match.start(), "end": match.end(), "original": original,
+                annotation = {"start": offset + match.start(), "end": offset + match.end(), "original": original,
                               "marker": marker, "rule_id": identity,
                               "evidence_kind": "observed_self_description",
                               "upstream_control_verified": False}
                 for key in ("field", "observed_value"):
                     if key in rule:
                         annotation[key] = rule[key]
+                if self._inline_tags:
+                    annotation["annotation_tag"] = self._annotation_tag
                 annotations.append(annotation)
                 if replacement is None:
-                    return original
+                    return (self._opening_tag + original + self._closing_tag
+                            if self._inline_tags else original)
                 replacements += 1
-                edits.append({**annotation, "replacement": replacement})
+                edit = {**annotation, "replacement": replacement}
+                if wrapped_span is not None:
+                    start, end = wrapped_span
+                    edit.update(start=start, end=end, original=text[start:end])
+                edits.append(edit)
                 return replacement
             if not is_marker:
                 edit = {"start": match.start(), "end": match.end(), "original": original,
@@ -161,34 +234,76 @@ class ControlTextAdapter:
                 return replacement
             return marker
 
-        adapted = self._pattern.sub(replace, text)
+        if self._inline_tags:
+            fragments = []
+            cursor = 0
+            plain_offset = 0
+
+            def prefix_segment(start, end, source_offset):
+                segment = text[start:end]
+                remaining = self._prefix_char_limit - source_offset
+                if remaining <= 0:
+                    return segment
+                pieces = []
+                copied = 0
+                # Match against the full segment so longest-literal and numeric
+                # boundaries remain real, even when a match straddles the limit.
+                for match in self._pattern.finditer(segment):
+                    if match.end() > remaining:
+                        break
+                    pieces.extend((segment[copied:match.start()], replace(match, offset=start)))
+                    copied = match.end()
+                pieces.append(segment[copied:])
+                return "".join(pieces)
+
+            for start, content_start, content_end, end in self._wrapped_spans(text):
+                fragments.append(prefix_segment(cursor, start, plain_offset))
+                plain_offset += start - cursor
+                inner = text[content_start:content_end]
+                known = self._pattern.fullmatch(inner)
+                match = known if plain_offset + len(inner) <= self._prefix_char_limit else None
+                fragments.append(replace(match, offset=content_start, wrapped_span=(start, end))
+                                 if match else text[start:end])
+                plain_offset += len(inner) if known else end - start
+                cursor = end
+            fragments.append(prefix_segment(cursor, len(text), plain_offset))
+            adapted = "".join(fragments)
+        else:
+            adapted = self._pattern.sub(replace, text)
         metadata["control_text_replacements"] = replacements
         return adapted, metadata, matched_rules
 
-    def mark(self, text: str) -> tuple[str, list[dict]]:
-        """Return text and original-span annotations (v1: placeholder edits)."""
-        adapted, metadata, _ = self._transform(text, target=False)
+    def mark(self, text: str, *, task_contents=()) -> tuple[str, list[dict]]:
+        """Mark original text without applying target-model replacements."""
+        adapted, metadata, matched_rules = self._transform(text, target=False)
+        self._reject_task_references(matched_rules, task_contents)
         return adapted, metadata["source_control_annotations" if self._annotations_only else "source_control_edits"]
 
     def apply(self, text: str, *, task_contents=()) -> tuple[str, dict]:
         """Adapt current reasoning, rejecting references inside task content.
 
-        V2 reports original-span annotations separately from actual replacements;
-        mark-only rules never rewrite text. V1 receipts remain unchanged. The
+        V3 adds pairs around original text; v2 only records spans. Both report
+        target replacements separately from annotations. V1 receipts remain unchanged. The
         replacement count includes markers already present in the input.
         """
         adapted, metadata, matched_rules = self._transform(text, target=True)
+        self._reject_task_references(matched_rules, task_contents)
+        return adapted, metadata
+
+    def _reject_task_references(self, matched_rules, task_contents):
         if matched_rules:
             # Match every alias of relevant rules, including when this input was
             # marked previously and therefore produces no new literal edits.
             if any(self._task_patterns[identity].search(content)
                    for content in task_contents for identity in matched_rules):
                 raise ValueError("control_text_reference_in_task_content")
-        return adapted, metadata
 
 
 _DEFAULT_CONFIGURATION = {
     "schema": CURRENT_SCHEMA,
+    "annotation_tag": "reason-strength",
+    "prefix_char_limit": 512,
+    "review_suggestions": True,
     "enabled": True,
     "rules": [
         {
@@ -207,7 +322,7 @@ _DEFAULT_CONFIGURATION = {
 
 
 def default_control_text_config() -> dict:
-    """Return v2 defaults: annotate spans, never replace text implicitly."""
+    """Return v3 defaults: wrap original control text, never erase it implicitly."""
     return deepcopy(_DEFAULT_CONFIGURATION)
 
 
@@ -219,8 +334,9 @@ def validate_control_text_config(configuration: Mapping) -> dict:
 def preview_control_text(configuration: Mapping, text: str, *, task_contents=()) -> dict:
     """Preview the two adaptation phases without changing stored source text."""
     adapter = ControlTextAdapter(configuration)
-    marked, _ = adapter.mark(text)
+    marked, annotations = adapter.mark(text)
     adapted, receipt = adapter.apply(text, task_contents=task_contents)
     return {"original_text": text, "marked_text": marked, "transformed_text": adapted,
-            "match_count": sum(1 for _ in adapter._pattern.finditer(text)) if adapter._pattern else 0,
+            "match_count": (len(annotations) if adapter._inline_tags else
+                            sum(1 for _ in adapter._pattern.finditer(text)) if adapter._pattern else 0),
             "receipt": receipt}

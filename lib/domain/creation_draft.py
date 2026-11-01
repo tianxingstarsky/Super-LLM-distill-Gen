@@ -16,6 +16,11 @@ from lib.domain.human_augmentation import MAX_HUMAN_SEEDS, MAX_HUMAN_DESIGN_CHAR
 from lib.domain.workflow_quality import SECRET, canonical
 from lib.domain.agent_experience import default_experience_text
 
+
+class CreationDraftConflict(ValueError):
+    """The persisted field changed after the caller began editing it."""
+
+
 NUMBER_FIELDS = {
     'workflow-conversation-reasoning-version': (1, 3),
     'workflow-generation-review-percent': (1, 100),
@@ -240,9 +245,16 @@ def validate_creation_draft(values):
             try:
                 valid = (len(parts) == 3 and parts[2] in {'sft', 'cot', 'multiturn'}
                          and isinstance(value, dict)
-                         and not set(value) - {'schema', 'enabled', 'rules'}
+                         and not set(value) - ({'schema', 'enabled', 'rules', 'annotation_tag', 'prefix_char_limit',
+                                                'review_suggestions'}
+                                               if value.get('schema') == 'shujian.control-text-adaptation/v3'
+                                               else {'schema', 'enabled', 'rules'})
                          and value.get('schema') in ('shujian.control-text-adaptation/v1',
-                                                    'shujian.control-text-adaptation/v2')
+                                                    'shujian.control-text-adaptation/v2',
+                                                    'shujian.control-text-adaptation/v3')
+                         and isinstance(value.get('annotation_tag', ''), str)
+                         and type(value.get('prefix_char_limit', 512)) is int
+                         and type(value.get('review_suggestions', False)) is bool
                          and type(value.get('enabled')) is bool
                          and isinstance(value.get('rules', []), list)
                          and len(value.get('rules', [])) <= 128

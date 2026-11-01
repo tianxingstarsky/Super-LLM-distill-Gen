@@ -5,7 +5,7 @@ import json
 from itertools import zip_longest
 
 from lib.infrastructure.json_stream import iter_json_records
-from lib.domain.workflow_targets import training_record
+from lib.contexts.datasets.contracts import preferred_training_record
 
 
 def iter_review_rows(path, target, validate, identity, *, payload_key="row", id_key="sample_id"):
@@ -20,7 +20,7 @@ def iter_review_rows(path, target, validate, identity, *, payload_key="row", id_
                 if payload is missing or record is missing:
                     raise ValueError("rlaif_feedback_artifact_count_mismatch")
                 row = validate(record)
-                if training_record(target, row) != payload:
+                if preferred_training_record(target, row, annotate_controls=True) != payload:
                     raise ValueError("rlaif_feedback_artifact_mismatch")
                 sample_id = identity(row)
                 if sample_id in seen:

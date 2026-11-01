@@ -82,8 +82,8 @@ def prepare_review_release(path, target, prefix, index, store, *, progress=None)
             if review["decision"] == "approved":
                 payload = review["candidate"]
                 if target == "rlaif":
-                    from lib.domain.workflow_targets import training_record
-                    payload = training_record(target, payload)
+                    from lib.contexts.datasets.contracts import preferred_training_record
+                    payload = preferred_training_record(target, payload, annotate_controls=True)
                 handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True,
                                         separators=(",", ":")) + "\n")
                 written += 1

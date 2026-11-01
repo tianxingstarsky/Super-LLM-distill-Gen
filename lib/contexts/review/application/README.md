@@ -1,5 +1,11 @@
 # 审核用例
 
+`ControlTextSuggestionApplication` 提供 `list_pending(node, limit=30)`、`get(id)` 与
+`resolve(id, "applied" | "dismissed")`。列表最多 100 条，读取单项重新认证来源收据。
+返回候选原句、配置基版与增补后的配置，不暴露文件路径，也不自行保存节点配置。
+页面须先比较当前配置与基版，用户确认且节点保存成功后才标记 `applied`；取消仍为待确认。
+本用例不热改已冻结任务，不改变样本质量状态，不启动独立模型请求。
+
 v7 公开 system 注意事项重新生成与旧原生工具续写均可能在普通逐轮评审前停止；`review_guidance` 与 `tool_feedback` 按实际来源区分，完成状态仍为 `not_assessed`，不额外购买评审补状态。
 
 显式原生工具返工可能在逐轮评审前停止待审。该分支的 `review_repair.status` 与 `assessment` 均为 `not_assessed`，不能写成已经执行普通多轮审核或语义拒绝；原有局部缺陷与新稿仍保留。审核入口仅记录此次修复尝试，不为补齐状态额外购买模型评审。

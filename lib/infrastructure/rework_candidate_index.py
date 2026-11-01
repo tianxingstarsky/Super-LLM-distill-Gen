@@ -64,9 +64,11 @@ def _review_identity(target, record, projection=None):
             from lib.infrastructure.training_workflow import preferred_training_record
             projection = projection or {}
             payload = preferred_training_record(target, record, projection.get("generation_preferences"),
-                sft_output_style=projection.get("sft_output_style"))
+                sft_output_style=projection.get("sft_output_style"), annotate_controls=True)
         else:
             payload = training_record(target, record)
+            from lib.contexts.datasets.contracts import mark_training_control_text
+            payload = mark_training_control_text(payload)
     except (KeyError, TypeError, ValueError):
         return None
     identity = (corpus_identity if target == "cpt" else sft_identity if target == "sft"

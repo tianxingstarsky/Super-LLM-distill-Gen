@@ -6,4 +6,9 @@
 
 服务文件协调操作，端口文件声明消费方需要的能力。所有用例只依赖纯规则和端口，不能直接读取磁盘、创建模型客户端或导入页面。
 
+`CreationDraftApplication.compare_update(changes, expected)` 用于显式保存节点规则。
+存储端在同一锁内检查字段前置值后仅合并本次修改，返回完整已保存草稿；`expected`
+中的 `None` 表示字段必须不存在。冲突抛出 `CreationDraftConflict`，不覆盖其他会话的
+修改。旧的整表 `replace` 与增量 `update` 保持原语义。验证见 `test_creation_draft_storage.py`。
+
 迁移一个功能时一起确认规则、用例、适配器、组合根和测试，不只移动文件。新实现只保留一份，旧路径使用兼容转发。

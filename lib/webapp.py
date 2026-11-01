@@ -204,6 +204,7 @@ def page_workflow():
     from lib.bootstrap.knowledge import knowledge_application
     from lib.bootstrap.workflow_node_models import workflow_node_models_application
     from lib.bootstrap.creation_drafts import creation_draft_application
+    from lib.bootstrap.review_control_text import control_text_suggestion_application
     from lib.bootstrap.backends import backend_application
     from lib.bootstrap.manual_datasets import manual_dataset_application
     from lib.bootstrap.prompt_library import prompt_library_application
@@ -212,6 +213,7 @@ def page_workflow():
                      input_cache=local_input_application(),
                      conversation_importer=conversation_import_application(ROOT),
                      draft_application=creation_draft_application(_workspace_output_dir()),
+                     control_suggestions=control_text_suggestion_application(_workspace_output_dir()),
                      backend_application=backend_application(ROOT),
                      manual_application=manual_dataset_application(_workspace_output_dir()),
                      document_preview=document_preview_application(st.session_state["ws"]),

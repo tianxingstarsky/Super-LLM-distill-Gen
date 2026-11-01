@@ -1,10 +1,12 @@
 """Durable drafts remain bounded, isolated and safe to merge across sessions."""
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from threading import Barrier
 import pytest
 from streamlit.testing.v1 import AppTest
 
 from lib.bootstrap.creation_drafts import creation_draft_application
-from lib.domain.creation_draft import validate_creation_draft
+from lib.domain.creation_draft import CreationDraftConflict, validate_creation_draft
 from lib.infrastructure.creation_draft_file import CreationDraftFile
 from tests.test_workflow_draft import SCRIPT
 
@@ -159,6 +161,60 @@ def test_parallel_sessions_merge_independent_fields(tmp_path):
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda patch: creation_draft_application(tmp_path).update(patch), patches))
     assert creation_draft_application(tmp_path).load() == {k: v for p in patches for k, v in p.items()}
+
+
+def test_compare_update_serializes_competing_rules_and_keeps_other_session_fields(tmp_path):
+    from lib.contexts.datasets.api import default_control_text_config
+
+    rule_key = 'workflow-control-text:w:sft'
+    previous_key = 'workflow-control-text-previous:w:sft'
+    original = default_control_text_config()
+    application = creation_draft_application(tmp_path)
+    application.replace({rule_key: original, 'workflow-name:w': 'Before another edit'})
+    # An independent field changed after both rule editors loaded their base.
+    creation_draft_application(tmp_path).update({'workflow-name:w': 'Other session'})
+    first, second = deepcopy(original), deepcopy(original)
+    first['enabled'] = False
+    second['prefix_char_limit'] = 256
+    barrier = Barrier(2)
+
+    def save(configuration):
+        editor = creation_draft_application(tmp_path)
+        barrier.wait(timeout=5)
+        try:
+            return editor.compare_update({rule_key: configuration, previous_key: original},
+                                         {rule_key: original})
+        except CreationDraftConflict:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        saved = list(pool.map(save, (first, second)))
+    assert sum(value is None for value in saved) == 1
+    winner = next(value for value in saved if value is not None)
+    assert winner['workflow-name:w'] == 'Other session'
+    assert winner[previous_key] == original
+    assert winner[rule_key] in (first, second)
+    assert creation_draft_application(tmp_path).load() == winner
+    winner[rule_key]['rules'].clear()
+    assert creation_draft_application(tmp_path).load()[rule_key]['rules']
+
+
+def test_compare_update_checks_absence_and_preserves_file_on_failure(tmp_path):
+    application = creation_draft_application(tmp_path)
+    application.replace({'workflow-name:w': 'Keep this field'})
+    saved = application.compare_update({'workflow-count:w': 250}, {'workflow-count:w': None})
+    assert saved == {'workflow-name:w': 'Keep this field', 'workflow-count:w': 250}
+    path = tmp_path / '.creation-draft.json'
+    before = path.read_bytes()
+    with pytest.raises(CreationDraftConflict):
+        application.compare_update({'workflow-count:w': 500}, {'workflow-count:w': None})
+    with pytest.raises(ValueError, match='invalid_creation_draft'):
+        application.compare_update({'api-key:w': 'Not a form field'}, {'workflow-count:w': 250})
+    assert path.read_bytes() == before
+    path.write_text('Broken draft', encoding='utf-8')
+    with pytest.raises(ValueError):
+        application.compare_update({'workflow-count:w': 500}, {'workflow-count:w': 250})
+    assert path.read_text(encoding='utf-8') == 'Broken draft'
 
 
 @pytest.mark.parametrize('content', ['broken JSON', '{"version":true,"values":{}}',

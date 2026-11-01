@@ -15,6 +15,7 @@ from filelock import Timeout
 
 from lib.application.workflow_service import WorkflowApplication
 from lib.application.creation_draft_service import CreationDraftApplication
+from lib.domain.creation_draft import CreationDraftConflict
 from lib.domain.workflow_graph import execution_graph, sft_uses_cot_output, uses_shared_source_cleaning
 from lib.presentation.streamlit.i18n import UntranslatedText, translate, translate_label
 from lib.presentation.streamlit.shared import page_header, section_heading
@@ -1317,14 +1318,23 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                 + html.escape(str(reveal["serial"]), quote=True) + '" hidden></span>')
 
 
-def _commit_draft_fields(workspace, changes):
+def _commit_draft_fields(workspace, changes, *, expected=None):
     """Persist explicit edits and their recovery snapshot before publishing them."""
     draft_key = f"workflow-form-draft:{workspace}"
     candidate = {**st.session_state.get(draft_key, {}), **deepcopy(changes)}
     application = st.session_state.get(f"workflow-draft-application:{workspace}")
     try:
         if application is not None:
-            application.replace(candidate)
+            if expected is None:
+                application.replace(candidate)
+            else:
+                candidate = application.compare_update(changes, expected)
+    except CreationDraftConflict:
+        try:
+            st.session_state[draft_key] = application.load()
+        except (OSError, ValueError, Timeout):
+            pass  # Keep the edit and report the conflict when refresh is unavailable.
+        raise
     except (OSError, ValueError, Timeout):
         return False
     st.session_state[draft_key] = candidate
@@ -1619,7 +1629,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                      draft_application: CreationDraftApplication | None = None,
                      backend_application=None, input_cache=None, manual_application=None, document_preview=None,
                      knowledge_application=None, prompt_library=None, human_application=None,
-                     conversation_importer=None):
+                     conversation_importer=None, control_suggestions=None):
     page_header("数据生成工作台", "导入文档或上下文，自动生成训练数据；也可以人工制作图片与文字问答。", "CPT　·　SFT　·　DPO　·　MULTIMODAL", art_kind="hero")
     st.html(workbench_style(st.session_state.get("ui_language", "zh")))
     ws = st.session_state["ws"]
@@ -1987,7 +1997,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                     qa_director=qa_director, prompt_library=prompt_library)
             if "control_text" in node_tabs:
                 with node_tabs["control_text"]:
-                    render_control_text_settings(selected_node, ws, save_fields=_commit_draft_fields)
+                    render_control_text_settings(selected_node, ws, save_fields=_commit_draft_fields,
+                                                 suggestions=control_suggestions)
             with node_tabs["guide"]:
                 render_node_guide(selected_node)
         with workbench:

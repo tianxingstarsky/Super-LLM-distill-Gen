@@ -103,14 +103,14 @@ def _build_index(run, target, manifest, source_identity, destination, signature)
                         raise ValueError("report_training_record_mismatch")
                     body = json.loads(line)
                     expected = preferred_training_record(target, row, recipe.get("generation_preferences"),
-                                                         sft_output_style=recipe.get("sft_output_style"))
+                                                         sft_output_style=recipe.get("sft_output_style"), annotate_controls=True)
                     if body != expected:
                         raise ValueError("report_training_record_mismatch")
                     released_count += 1
                 else:
                     try:
                         body = preferred_training_record(target, row, recipe.get("generation_preferences"),
-                                                         sft_output_style=recipe.get("sft_output_style"))
+                                                         sft_output_style=recipe.get("sft_output_style"), annotate_controls=True)
                     except (KeyError, TypeError, ValueError, IndexError):
                         body = None
                 projected = report_sample(target, row, body, released=eligible, position=position)
@@ -350,7 +350,7 @@ class FilesystemWorkflowReportDriver:
         for index, row in enumerate(raw):
             try:
                 body = preferred_training_record(target, row, recipe.get("generation_preferences"),
-                                                 sft_output_style=recipe.get("sft_output_style"))
+                                                 sft_output_style=recipe.get("sft_output_style"), annotate_controls=True)
             except (KeyError, ValueError, TypeError, IndexError):
                 body = None
             rows.append(report_sample(target, row, body, released=False, position=index))

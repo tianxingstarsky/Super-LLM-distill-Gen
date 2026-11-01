@@ -138,6 +138,101 @@ def test_negative_generation_uses_correct_reference_and_explicit_design():
     assert "故意制造坏答案" not in str(kwargs)
 
 
+@pytest.mark.parametrize("schema", ["shujian.control-text-adaptation/v3", "shujian.control-text-adaptation/v2"])
+def test_preference_export_keeps_only_known_authors_annotation_rules(schema):
+    from lib.contexts.datasets.api import default_control_text_config
+    from lib.contexts.datasets.contracts import preferred_training_record
+    from lib.domain.trainer_formats import to_trl_preference
+
+    rules = default_control_text_config()
+    rules["schema"] = schema
+    if schema.endswith("/v2"):
+        rules.pop("annotation_tag")
+    rules["rules"][0]["replacement"] = "Do not apply this training replacement on export"
+    text = "Desired oververbosity 5. I need to consider whether a prior write can be undone."
+    sample = {**pair(), "messages": [*pair()["prompt"], *pair()["chosen"]],
+              "control_text_config": rules, "control_text_node": "sft"}
+    sample["messages"][-1]["reasoning_content"] = text
+    if schema.endswith("/v3"):
+        sample["messages"][-1]["control_text_config"] = deepcopy(rules)
+    before = deepcopy(sample)
+    port = Mock()
+    port.request.return_value = {"answer": "先写出，再判断。", "reasoning": text}
+    generated, = GeneratePreferencePair(port, config()).execute(sample)
+    assert sample == before
+    assert "control_text_config" not in port.request.call_args.args[3]["reference_response"]
+    assert generated["chosen"][0]["reasoning_content"] == text
+    assert generated["rejected"][0]["reasoning_content"] == text
+    assert "control_text_config" not in generated["rejected"][0]
+    expected = ("<reason-strength>Desired oververbosity 5</reason-strength>. "
+                "I need to consider whether a prior write can be undone." if schema.endswith("/v3") else text)
+    for target in ("dpo", "orpo"):
+        exported = preferred_training_record(target, generated, annotate_controls=True)
+        assert exported["chosen"][0]["reasoning_content"] == expected
+        assert exported["rejected"][0]["reasoning_content"] == text
+        normalized = to_trl_preference(exported)
+        assert normalized["chosen"][0]["thinking"] == expected
+        assert normalized["rejected"][0]["thinking"] == text
+        assert to_trl_preference(normalized) == normalized
+
+
+def test_review_and_repair_candidate_view_never_annotates_or_exposes_export_configuration():
+    from lib.contexts.datasets.api import default_control_text_config
+    from lib.contexts.review.infrastructure.automatic_runtime import WorkflowReviewRepair
+
+    source = pair()
+    source['chosen'][0].update(reasoning_content='Desired oververbosity 5. The write must be conditional.',
+        control_text_config=default_control_text_config(), control_text_node='sft')
+    source['tools'] = [{'name': 'example', 'parameters': {'properties': {'control_text_config': {'type': 'string'}}}}]
+    before = deepcopy(source)
+    runtime = WorkflowReviewRepair()
+    runtime.recipe = {'preference_design_version': 3}
+    for target in ('dpo', 'orpo', 'rlaif'):
+        payload = runtime._review_payload(target, source)
+        assert payload['chosen'][0]['reasoning_content'] == source['chosen'][0]['reasoning_content']
+        assert 'control_text_config' not in payload['chosen'][0]
+        assert 'control_text_node' not in payload['chosen'][0]
+        assert payload['tools'] == source['tools']
+    assert source == before
+
+
+@pytest.mark.parametrize('schema',['v2','v3'])
+@pytest.mark.parametrize('source_wins',[True,False])
+def test_legacy_preference_route_keeps_source_controls_with_author_after_ranking(schema,source_wins):
+    from lib.contexts.datasets.api import default_control_text_config
+    from lib.contexts.datasets.contracts import preferred_training_record
+    from lib.infrastructure.training_workflow import Workflow
+
+    controls = default_control_text_config()
+    controls['schema'] = 'shujian.control-text-adaptation/' + schema
+    if schema == 'v2':
+        controls.pop('annotation_tag')
+    text = 'Desired oververbosity 5. I need to check the order before writing.'
+    history = [{'role':'user','content':'What matters first?'},
+               {'role':'assistant','content':'Preserve the original order.','reasoning_content':text}]
+    if schema == 'v3':
+        history[-1]['control_text_config'] = {**deepcopy(controls),'enabled':False}
+    source = {**pair(),'messages':[*history,*pair()['prompt'],*pair()['chosen']],
+              'source_context':{'text':'Check before writing.'},'judge':grade(5),
+              'control_text_config':controls,'control_text_node':'sft'}
+    source['messages'][-1]['reasoning_content'] = text
+    before = deepcopy(source)
+    work = Workflow.__new__(Workflow)
+    work.recipe = {'node_models':{'sft':{'jev':'first'},'preference':{'jev':'second'}}}
+    work.ask = Mock(side_effect=[{'answer':pair()['rejected'][0]['content'],'reasoning':text},
+                                grade(1 if source_wins else 5),grade(5 if source_wins else 1)])
+    generated, = work.dpo(source)
+    exported = preferred_training_record('dpo',generated,annotate_controls=True)
+    known_side, unknown_side = ('chosen','rejected') if source_wins else ('rejected','chosen')
+    assert ('<reason-strength>' in exported[known_side][0]['reasoning_content']) == (schema == 'v3')
+    assert exported[unknown_side][0]['reasoning_content'] == text
+    assert exported['prompt'][1]['reasoning_content'] == text
+    assert source == before
+    if schema == 'v3':
+        assert generated['prompt'][1]['control_text_config']['enabled'] is False
+        assert all('control_text_config' not in str(call.args[3]) for call in work.ask.call_args_list)
+
+
 class ReviewPort:
     run_id = "run"
     authenticated_revision = False

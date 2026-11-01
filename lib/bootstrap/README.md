@@ -1,5 +1,9 @@
 # 组合根：找到服务，再选择实现
 
+`review_control_text.control_text_suggestion_application(output)` 装配评审匹配建议的读取与状态服务。
+构造和读取不会发出模型请求；只有同次自动评审产生真实原句证据时才写入待确认队列。
+节点页面使用其有界列表、认证详情和确认后状态接口，节点配置仍经 CreationDraft 保存。
+
 `datasets.qwen35_training_encoder(tokenizer, ...)` 装配可选训练加载适配器。
 调用方提供实际本地 tokenizer；该工厂不安装训练框架、不加载权重，也不改变生产导出。
 可选 `reasoning_reference_text` 设置训练读取时固定控制标记的目标文字，默认“思考已开启”。

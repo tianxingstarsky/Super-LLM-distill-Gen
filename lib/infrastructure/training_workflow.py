@@ -57,7 +57,8 @@ from lib.domain.workflow_node_prompts import (
 from lib.infrastructure.json_stream import iter_json_records, iter_source_json_records
 from lib.infrastructure.source_snapshot import snapshot_source
 from lib.infrastructure.generation_settings_file import preference_snapshot
-from lib.contexts.datasets.contracts import preferred_training_record
+from lib.contexts.datasets.contracts import (preferred_training_record, mark_training_control_text,
+                                            without_control_text_metadata, with_source_control_text)
 from lib.contexts.workflows.contracts import director_delivery_audit
 from lib.infrastructure.brave_web_research import (
     search as search_web, validate_search_document, validate_search_topic_document,
@@ -1340,8 +1341,8 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
     def judge_answer(self, key, context, message, prompt_id="workflow.jev_score", *, instruction=None,
                      allow_reasoning_fallback=True, model_stage=None, prompt_stage=None):
         # A failed schema must not become a permanent successful call checkpoint.
-        value = self.ask(key, "jev", prompt_id,
-            {"context": context, "answer": message},
+        from lib.bootstrap.review_control_text import request_answer_review
+        value = request_answer_review(self, key, context, message, prompt_id,
             **({"model_stage": model_stage} if model_stage is not None else {}),
             **({"prompt_stage": prompt_stage} if prompt_stage is not None else {}),
             **({"instruction": instruction} if instruction is not None else {}),
@@ -1483,7 +1484,7 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
             return preference_generator(self).execute(sample)
         prefix, chosen = sample["messages"][:-1], sample["messages"][-1]
         value = self.ask([sample["id"], "alternative"], "generation", "workflow.alternative",
-            {"prompt": prefix, "source": sample["source_context"],
+            {"prompt": without_control_text_metadata({"prompt": prefix})["prompt"], "source": sample["source_context"],
              **({"qa_contract": sample["qa_contract"],
                  "question_rules": self.recipe["qa_director"]["question_rules"],
                  "answer_rules": self.recipe["qa_director"]["answer_rules"]} if sample.get("qa_contract") else {})},
@@ -1494,6 +1495,8 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
         alternative = {"role": "assistant", "content": value["answer"], "reasoning_content": value["reasoning"]}
         if same_answer(chosen["content"], alternative["content"]):
             return [self.rejected(sample, "identical_dpo_answers")]
+        owned = with_source_control_text([*prefix, chosen], sample)
+        prefix, chosen = owned[:-1], owned[-1]
         if self.recipe.get("review_repair") is not None:
             return [{"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
                      "prompt": prefix, "chosen": [chosen], "rejected": [alternative], "tools": sample.get("tools", []),
@@ -2047,11 +2050,12 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                                     row.update(status="quarantined", reason="released_qa_contract_duplicate",
                                                duplicate_of=duplicate["id"], duplicate_scope=duplicate.get("duplicate_scope", "published_qa_history"))
                             if row["status"] == "eligible":
+                                export_payload = mark_training_control_text(payload)
                                 self._production_accept_row(target, row, payload)
                             if row["status"] == "eligible":
                                 if self.recipe.get("qa_agent_memory_version") == 1:
                                     self.register_final_qa_input(row, target)
-                                training.append(payload)
+                                training.append(export_payload)
                         records.append(row)
                 finally:
                     records.close()

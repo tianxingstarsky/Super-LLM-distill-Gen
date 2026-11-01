@@ -1,6 +1,7 @@
 """The real batch pipeline uses one reviewed pair for three training formats."""
 from copy import deepcopy
 import json
+import pytest
 from pathlib import Path
 from lib.infrastructure import training_workflow as engine
 from tests.test_workflow_production import model_request_data
@@ -40,12 +41,21 @@ class ContrastClient:
         raise AssertionError('Unexpected request: '+str(list(request)))
 
 
-def test_explicit_design_traverses_real_batch_review_and_native_three_format_exports(tmp_path,monkeypatch):
+@pytest.mark.parametrize("control_schema", [None, "v2", "v3"])
+def test_explicit_design_traverses_real_batch_review_and_native_three_format_exports(tmp_path,monkeypatch,control_schema):
+    from lib.contexts.datasets.api import default_control_text_config
+    controls = default_control_text_config()
+    controls["rules"][0]["matches"] = ["Inspection must follow shutdown"]
+    controls["rules"][0]["replacement"] = "Training-only replacement"
+    if control_schema == "v2":
+        controls["schema"] = "shujian.control-text-adaptation/v2"
+        controls.pop("annotation_tag")
     source=tmp_path/'source.txt';source.write_text(SOURCE,encoding='utf-8')
     output=tmp_path/'out'
     run_id=engine.create_run(output,sources=[source],targets=['dpo','orpo','rlaif'],
         cpt_processing={'mode':'native'},qa_director={'enabled':False},max_units=1,tasks=1,
-        preference_design={},review_repair={'mode':'auto','max_rounds':1})
+        preference_design={},review_repair={'mode':'auto','max_rounds':1},
+        **({"node_control_text_configs": {"sft": controls}} if control_schema else {}))
     def sft(self,unit):
         return [{'id':unit['id'],'source_id':unit['source_id'],'status':'eligible','source_context':unit,
             'messages':[{'role':'user','content':'When should I turn the power off?'},
@@ -54,6 +64,10 @@ def test_explicit_design_traverses_real_batch_review_and_native_three_format_exp
                     'Switching power off afterward cannot make the earlier inspection safe. The supported order is shutdown, inspection, then recording.'}],
             'quotes':[SOURCE],'evidence_level':'source_and_model_assessed'}]
     monkeypatch.setattr(engine.Workflow,'sft',sft)
+    # This fixture begins with a prepared SFT answer. New runs require a
+    # director even when the historical enabled flag is false; planning is
+    # outside this preference/export test, so keep the prepared-input seam.
+    monkeypatch.setattr(engine.Workflow,'directed_generation',lambda self,units,**options:None)
     client=ContrastClient()
     state=engine.Workflow(output,run_id,Path(__file__).resolve().parents[1],generator=client,judge=client).execute()
     assert state['status']=='completed',state.get('error')
@@ -65,3 +79,13 @@ def test_explicit_design_traverses_real_batch_review_and_native_three_format_exp
     assert len([request for request in client.calls if 'contrastive_design' in request and 'candidate' in request])==1
     assert all(row['preference']['chosen']['correctness']==5 and row['preference']['rejected']['correctness']==1 for row in rows)
     assert all(row['rejected'][0]['reasoning_content']==NEGATIVE_REASONING for row in rows)
+    for target in ('dpo','orpo','rlaif'):
+        exported = json.loads((run/'artifacts'/f'{target}.jsonl').read_text(encoding='utf-8'))
+        chosen = exported['responses'][0]['response'][0] if target == 'rlaif' else exported['chosen'][0]
+        assert ('<reason-strength>' in chosen['reasoning_content']) == (control_schema == 'v3')
+        assert 'Inspection must follow shutdown' in chosen['reasoning_content']
+        assert 'Training-only replacement' not in chosen['reasoning_content']
+    assert all('<reason-strength>' not in row['chosen'][0]['reasoning_content'] for row in rows)
+    if control_schema == 'v3':
+        assert 'control_text_config' not in json.dumps(client.calls)
+        assert '<reason-strength>' not in json.dumps(client.calls)

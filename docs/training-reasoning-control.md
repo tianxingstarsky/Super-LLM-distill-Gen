@@ -9,14 +9,16 @@
 ## 在节点直接编辑控制文字
 
 点击 SFT、多轮或历史 CoT 节点 → **输出适配**。默认只读，点击编辑后可开关规则、
-增删规则、改匹配文字、标记名和目标文字。先预览，通过校验后保存才生效；取消修改
+增删规则、改匹配文字、开头范围、包裹标签、回执标识和目标文字。先预览，通过校验后保存才生效；取消修改
 或保存失败保持原配置。上一版配置和默认模板也先载入编辑区，确认保存后恢复，无需改 JSON。
-新版“仅标记”完整保留正文，把命中范围和标记名另存为标注；只有明确选择替换才改训练读取文字。
+新版“仅标记”在命中文字外加成对标签，例如 `<reason-strength>Desired oververbosity 5</reason-strength>`。
+标签内保留原词句，命中范围仍另存为标注；只有明确选择替换才改训练读取的控制文字。
+默认只匹配推理开头 512 个原文字符中的完整控制片段，正文同词不改；这不是模型输出长度限制。
 本地预览不调用模型。每个节点的“使用说明”解释
 适用条件与常见故障，Agent 可查 [操作与排错指南](agent-operations.md)。
 
 配置随新配方冻结，原生训练记录携带所属节点与配置快照；训练读取器自动采用记录的规则，
-调用方显式配置优先。适配只改变读取视图，不改原生推理、回答或旧任务；
+调用方显式配置优先。v3 新任务导出和训练读取提供带标签的推理视图，不改源候选中的原生推理、回答或旧任务；
 总开关关闭只停文字适配，不关闭模型思考。未保存的编辑不会进入新任务，旧冻结配置不热改。
 
 ## 生成时：平台选择与上游参数分开
@@ -152,25 +154,30 @@ encoder = qwen35_training_encoder(
 
 ### 修改、停用和保存文字规则
 
-新配置使用 `shujian.control-text-adaptation/v2`，可从 `default_control_text_config()`
+新配置使用 `shujian.control-text-adaptation/v3`，可从 `default_control_text_config()`
 取得独立副本。节点界面优先用于日常编辑；下表和代码供训练集成使用。
 [control-text-deepseek.json](../scripts/training/control-text-deepseek.json) 保留旧 v1 示例，
-其 null 仍表示转换成占位符。不要把旧语义当成新版仅标记，或改写冻结任务来升级。
+其 null 仍表示转换成占位符。旧 v2 只记录旁路标注、不在正文加标签。两个版本的
+冻结任务保持原行为；不能通过改写历史配方来升级。已有节点需编辑并保存，或恢复默认后保存，
+随后创建的任务才采用 v3。
 
 | 配置 | 效果 |
 | --- | --- |
 | 顶层 `enabled: false` | 完全关闭控制文字适配，保留原文和已有标记 |
 | 规则的 `enabled: false` | 只停用这条规则，其它启用规则继续工作 |
 | `matches` | 精确匹配的原文列表；区分大小写，不把它当正则执行 |
-| `marker` | 标注中的稳定名称，用于定位和后续映射，不插入正文 |
-| `replacement: null` | 仅记录命中范围和标记名，正文每个字符都保留 |
-| `replacement: "目标文字"` | 同次读取时替换为该文字；空串不允许 |
-| `matches: []` | 只识别正文中已存在的标记；有明确目标文字才替换 |
+| 顶层 `annotation_tag` | 默认 `reason-strength`；用 `<reason-strength>` 与 `</reason-strength>` 包住原控制文字。只填简单标签名，不填尖括号或属性 |
+| 顶层 `prefix_char_limit` | 默认 512，可设 64–2048；匹配必须完整落在推理开头范围内。已识别的包装标签不占原文字符数 |
+| 顶层 `review_suggestions` | 新默认为 true，允许已有评审提出规则建议；false 或字段缺失表示关闭。建议确认保存前不生效 |
+| `marker` | 回执中的稳定标识，同时识别原文已有的旧标记，不拿它替换原词句 |
+| `replacement: null` | 在控制文字外加成对标签；标签内原文不变，其余推理完整保留 |
+| `replacement: "目标文字"` | 训练加载时用目标文字替换整个控制片段（含包装）；普通导出仍只标记。空串不允许 |
+| `matches: []` | 只识别开头范围内已存在的标记；有明确目标文字才替换 |
 
 ```python
 from lib.contexts.datasets.api import default_control_text_config
 
-config = default_control_text_config()  # v2, both defaults mark without replacing text.
+config = default_control_text_config()  # v3, wrap exact source text in paired tags.
 config["enabled"] = False  # Turn text adaptation off, not model thinking.
 encoder = qwen35_training_encoder(tokenizer, control_text_config=config)
 ```
@@ -185,10 +192,66 @@ encoder = qwen35_training_encoder(tokenizer, control_text_config=config)
 修改外部字典或文件只影响下一次创建的加载器，不热改当前批次。
 
 启用规则的冲突会在加载时提示。替换只扫描原输入一次，不把一条规则的输出继续交给另一条；
-重复读取也会检查任务是否正在讨论该字段。v2 的 `source_control_annotations` 保存命中
-范围、原文、规则 ID 和标记名；`source_control_edits` 只记录明确替换，
-`control_text_replacements` 记录其次数。仅标记时后两者分别为空列表和零，正文保持原样。
-原始任务、响应和导出不变。旧 v1 继续使用原有行为和回执。
+重复读取也会检查任务是否正在讨论该字段。v3 不会把已标记的片段再包一层。
+`source_control_annotations` 保存命中范围、原文、规则 ID 和回执标识；
+`control_text_replacements` 只统计明确的目标文字替换，单纯包裹不算替换。
+开头范围内的同名标签未闭合或嵌套时明确报错，不补造原文或吞掉后续推理。
+完整标记块跨越范围边界时整块保留，正文中的标签不参与这次适配。总开关关闭则原样返回，
+包括已有标签。原始候选、响应、缓存和已冻结任务保持不变。
+
+### 评审提出相似写法，确认后采用
+
+启用 `review_suggestions` 后，现有评审能看到作者节点的冻结规则和实际推理开头，
+在同一次响应中给出有出处的增补建议。新默认开启，旧配置缺少字段时按关闭处理。
+没有评审时不会为寻找别名单独调用模型；新增上下文与建议计入原评审的实际消耗。
+
+建议只增补已有、启用且仅标记规则的精确 `matches`，不允许模型改标签、替换目标、
+开关、匹配范围或质量标准。程序核对候选与配置版本、消息与原文位置、开头范围，
+并排除用户任务引用的同一文字。错误或缺失的建议不触发付费重试，质量响应仍按原合同核验。
+
+在节点中查看待确认建议、原句与标记前后预览，确认语义后保存为新规则。
+尚未保存的建议不参与任务；当前配置与建议的父版本不一致时不能覆盖。
+已有的取消、上一版恢复和冻结任务边界继续有效。字面出处正确不证明语义等价，
+规则建议与样本是否合格是两件事。
+
+### 直接读取成对标签
+
+显式启用 v3 的新任务在导出推理时加入标签，普通导出不执行目标模型的 `replacement`。
+因此一份数据仍可供多个训练器按需处理。原始候选和请求响应保留完整原生推理；
+标签是程序生成的训练视图，不冒充模型原本输出过这些标签。
+
+```text
+我先核对任务。<reason-strength>Desired oververbosity 5</reason-strength>。接着检查条件是否充分。
+```
+
+下例读取一个已标记片段，只在内存中查看；转换复用现有适配器的开头范围和引用保护，
+不重写源文件、不删推理。完整推理可能含数学比较符或代码，不要把整段当成 XML 文档解析。
+
+```python
+import re
+from lib.contexts.datasets.api import default_control_text_config, preview_control_text
+
+tag = "reason-strength"  # Use control_text_config["annotation_tag"] if customized.
+pattern = re.compile(rf"<{re.escape(tag)}>(.*?)</{re.escape(tag)}>", re.DOTALL)
+reasoning = "我先核对任务。<reason-strength>Desired oververbosity 5</reason-strength>。继续核查。"
+observed_phrases = [match.group(1) for match in pattern.finditer(reasoning)]
+assert observed_phrases == ["Desired oververbosity 5"]
+
+# Conversion keeps the adapter's prefix boundary; do not replace all prose matches.
+config = default_control_text_config()
+config["rules"][0]["replacement"] = "输出详尽程度：5"
+task_contents = ["请检查这些条件是否充分。"]  # Pass the real visible task text.
+training_view = preview_control_text(config, reasoning, task_contents=task_contents)["transformed_text"]
+assert training_view == "我先核对任务。输出详尽程度：5。继续核查。"
+```
+
+未知片段与正文范围外的内容保持原样。上面的正则只演示读取，不承担生产转换或损坏标记修复。
+`preview_control_text(config, reasoning)` 会按配置检查开头范围内的标签，不能以扩大范围修补未知截断。
+训练器也可以直接使用 `Qwen35TrainingEncoder`，复用冻结规则、任务引用保护和转换回执。
+
+`reason-strength` 是定位标签名，不认证内部文字的含义。示例中的 verbosity 5 仍只表示
+观察到的详尽程度自述，不能据此生成 `low`–`max` 标签；实际平台档位读取
+`training_control`，再按目标模型映射。
 
 适配器通过 Transformers 的 `apply_chat_template` 使用模型模板。当前接入的是文本 SFT 和多轮对话。工具、媒体、developer 角色、非开头的 system 消息不在本版支持范围内，会明确报错。连续开头的 system 内容按相同优先级合并。思考开启时目标助手缺少推理会报错，不补造；关闭时生成空 think 块，只监督答案。关闭只是本次加载视图的选择，原始记录中的完整推理不删除。
 

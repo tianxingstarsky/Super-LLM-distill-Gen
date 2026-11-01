@@ -10,10 +10,11 @@ from lib.bootstrap.preference_reviews import preference_review_application
 from lib.domain.preference_review import review_record
 from lib.domain.review_audit import validate_review_event
 from lib.domain.workflow_targets import training_record
+from lib.contexts.datasets.contracts import preferred_training_record
 from test_rlaif_targets import pair
 
 
-def fixture_app(root,count=3):
+def fixture_app(root,count=3,*,paired=False):
     run_id='c'*32
     run=root/'workflows'/run_id
     artifacts=run/'artifacts';artifacts.mkdir(parents=True)
@@ -22,8 +23,13 @@ def fixture_app(root,count=3):
         row=pair()
         row.update(id=f'rlaif-{i}',status='eligible',source_id=f'source-{i}')
         row['prompt'][0]['content']=f'Question {i}: 2+2=?'
+        if paired:
+            from lib.contexts.datasets.api import default_control_text_config
+            row['chosen'][0].update(reasoning_content='Desired oververbosity 5. Two plus two is four.',
+                                    control_text_config=default_control_text_config(), control_text_node='sft')
         rows.append(row)
-    (artifacts/'rlaif.jsonl').write_text(''.join(json.dumps(training_record('rlaif',row))+'\n' for row in rows),encoding='utf-8')
+    (artifacts/'rlaif.jsonl').write_text(''.join(json.dumps(preferred_training_record(
+        'rlaif',row,annotate_controls=True))+'\n' for row in rows),encoding='utf-8')
     (artifacts/'rlaif.records.json').write_text(json.dumps(rows),encoding='utf-8')
     refresh_manifest(artifacts)
     (run/'state.json').write_text(json.dumps({'id':run_id,'name':'RLAIF fixture','status':'completed','targets':['rlaif'],
@@ -36,8 +42,9 @@ def refresh_manifest(artifacts):
     (artifacts/'manifest.json').write_text(json.dumps({'status':'complete','sha256':hashes}),encoding='utf-8')
 
 
-def test_rlaif_review_to_real_worker_release_keeps_native_feedback(tmp_path):
-    app,run_id,rows=fixture_app(tmp_path)
+@pytest.mark.parametrize('paired',[False,True])
+def test_rlaif_review_to_real_worker_release_keeps_native_feedback(tmp_path,paired):
+    app,run_id,rows=fixture_app(tmp_path,paired=paired)
     source=(tmp_path/'workflows'/run_id/'artifacts'/'rlaif.jsonl').read_bytes()
     queue=app.queue(run_id)
     assert queue['total']==3 and queue['counts']['pending']==3
@@ -55,11 +62,14 @@ def test_rlaif_review_to_real_worker_release_keeps_native_feedback(tmp_path):
     release=result['result']
     with app.release_archive(run_id,release['id'],release['sha256']) as handle,zipfile.ZipFile(handle) as archive:
         records=[json.loads(line) for line in archive.read('rlaif.jsonl').decode().splitlines()]
-        assert records==[training_record('rlaif',row) for row in rows[:2]]
+        assert records==[preferred_training_record('rlaif',row,annotate_controls=True) for row in rows[:2]]
         assert 'responses' in records[0] and 'chosen' not in records[0]
         audit=json.loads(archive.read('review.json'))
         assert 'Arithmetic is correct.' in json.dumps(audit)
     assert (tmp_path/'workflows'/run_id/'artifacts'/'rlaif.jsonl').read_bytes()==source
+    if paired:
+        assert '<reason-strength>' in records[0]['responses'][0]['response'][0]['reasoning_content']
+        assert '<reason-strength>' not in rows[0]['chosen'][0]['reasoning_content']
 
 
 def test_rlaif_answer_revision_requires_new_feedback():

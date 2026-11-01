@@ -20,8 +20,8 @@ _THINKING_EFFORT = (
 )
 _OUTPUT_ADAPTATION = (
     "仅标记与文字替换", "Mark or replace control text",
-    "「输出适配」默认只读；编辑后先预览，保存才生效。可取消修改，也可载入上一版或默认规则后确认恢复。新版「仅标记」完整保留正文，另存命中范围和标记名；只有明确选择替换才改训练读取文字。不调用模型，不改原始推理，也不关闭模型思考。旧 v1 任务保持旧占位符行为，不自动升级。",
-    "Output rules are read-only until you edit. Preview changes, then save to apply them. Cancel to keep the saved rules, or load the previous version or defaults before confirming a restore. New Mark only rules preserve every character and record spans and marker names separately. Only explicit replacements change training-read text. No model is called; raw reasoning and model thinking stay intact. Old v1 tasks retain their placeholder behavior.",
+    "「输出适配」默认只读；编辑后先预览，保存才生效。可取消修改，也可载入上一版或默认规则后确认恢复。新版只在推理开头匹配，默认前512个原文字符，可调64–2048；正文相同词句不改。「仅标记」导出为 <reason-strength>原控制文字</reason-strength>，原词句完整保留。开启评审建议后，已有评审可查看规则并在同次调用提出有出处的新写法；建议先载入草稿试匹配，确认保存后才用于新任务。建议不能改替换内容、范围、开关或质量标准，本地验证也不证明语义等价。预览不调用模型，原始推理不改。旧 v1/v2 任务保持原行为。",
+    "Rules are read-only until edited and saved. Cancel, restore the previous version or load defaults before saving. New rules scan only the first 512 source characters, adjustable from 64 to 2048. Later reasoning stays unchanged. Mark only exports <reason-strength>original control text</reason-strength>. Existing reviews can inspect enabled rules and propose evidenced variants in the same call. Preview a suggestion, then save it for future tasks. Suggestions cannot change replacements, scope, switches or quality standards. Literal validation does not prove semantic equivalence. Preview makes no model call and raw reasoning is unchanged. Frozen v1/v2 tasks retain their behavior.",
 )
 _PROMPT_EDITING = (
     "提示词与个人模板", "Prompts and personal templates",

@@ -8,7 +8,7 @@ import stat
 import uuid
 
 from filelock import FileLock
-from lib.domain.creation_draft import validate_creation_draft
+from lib.domain.creation_draft import CreationDraftConflict, validate_creation_draft
 from lib.io_utils import atomic_json
 
 MAX_DRAFT_BYTES = 2 * 1024 * 1024
@@ -103,6 +103,31 @@ class CreationDraftFile:
             if values == previous:
                 return
             _write(self.path, {'version': 1, 'values': values})
+
+    def compare_update(self, changes: dict, expected: dict) -> dict:
+        """Atomically compare selected fields and merge only this edit.
+
+        Absence is an explicit precondition, not a null value to save. Snapshot
+        expected values before waiting for the lock so mutable caller state
+        cannot change the comparison while another session finishes its edit.
+        """
+        changes = validate_creation_draft(changes)
+        if (not isinstance(expected, dict) or len(expected) > 128
+                or any(not isinstance(key, str) or ':' not in key or len(key) > 512
+                       or any(ord(character) < 32 for character in key) for key in expected)):
+            raise ValueError('invalid_creation_draft')
+        expected = {**expected, **validate_creation_draft(
+            {key: value for key, value in expected.items() if value is not None})}
+        with self._lock():
+            previous = self.load()
+            if any((key in previous if value is None else
+                    key not in previous or previous[key] != value)
+                   for key, value in expected.items()):
+                raise CreationDraftConflict('creation_draft_conflict')
+            values = validate_creation_draft({**previous, **changes})
+            if values != previous:
+                _write(self.path, {'version': 1, 'values': values})
+            return values
 
     def _snapshot_path(self, identifier: str) -> Path:
         if not isinstance(identifier, str) or not _SNAPSHOT_ID.fullmatch(identifier):

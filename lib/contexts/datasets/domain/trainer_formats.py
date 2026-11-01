@@ -12,6 +12,9 @@ from collections.abc import Mapping
 import json
 from typing import Any
 
+from .control_text_projection import mark_training_control_text
+from .control_text import PAIRED_SCHEMA
+
 
 _ROLES = frozenset({"system", "developer", "user", "assistant", "tool"})
 _MEDIA_KEYS = ("images", "image", "image_url", "audio", "audio_url", "video", "video_url",
@@ -123,7 +126,7 @@ def _call_data(call: Mapping[str, Any]) -> tuple[str | None, str, dict[str, Any]
 
 
 def _convert_messages(messages: Any, tools: list[dict[str, Any]], *, require_user: bool,
-                      require_final_assistant: bool) -> list[dict[str, Any]]:
+                      require_final_assistant: bool, preserve_control_metadata: bool = False) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise ValueError("trl_messages_required")
     known_tools = {entry["function"]["name"]: entry["function"]["parameters"] for entry in tools}
@@ -186,6 +189,11 @@ def _convert_messages(messages: Any, tools: list[dict[str, Any]], *, require_use
         if content or not calls:
             output["content"] = content
         if role == "assistant":
+            if preserve_control_metadata and "control_text_config" in message:
+                output["control_text_config"] = _json_copy(
+                    message["control_text_config"], "invalid_control_text_configuration")
+                if "control_text_node" in message:
+                    output["control_text_node"] = message["control_text_node"]
             reasoning_values = [message[key] for key in ("reasoning_content", "reasoning", "thinking")
                                 if key in message and message[key] not in (None, "")]
             if reasoning_values:
@@ -228,7 +236,7 @@ def _convert_messages(messages: Any, tools: list[dict[str, Any]], *, require_use
     return converted
 
 
-def to_trl_sft(sample: Mapping[str, Any]) -> dict[str, Any]:
+def to_trl_sft(sample: Mapping[str, Any], *, annotate_controls: bool = True) -> dict[str, Any]:
     """Convert a complete text SFT/Agent record to TRL ``messages`` + ``tools``."""
     if not isinstance(sample, Mapping):
         raise ValueError("trl_sample_must_be_object")
@@ -249,10 +257,16 @@ def to_trl_sft(sample: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("trl_cot_reasoning_required")
         source_messages = [*prompt, {"role": "assistant", "content": sample["answer"],
                                      "reasoning_content": "\n\n".join(reasoning)}]
-    messages = _convert_messages(source_messages, tools, require_user=True,
-                                 require_final_assistant=True)
+    projected = (mark_training_control_text({**sample, "messages": source_messages})
+                 if annotate_controls else {"messages": source_messages})
+    preserve_controls = any(isinstance(item, Mapping) and isinstance(item.get("control_text_config"), Mapping)
+                            and item["control_text_config"].get("schema") == PAIRED_SCHEMA
+                            for item in [sample, *(source_messages if isinstance(source_messages, list) else [])])
+    messages = _convert_messages(projected["messages"], tools, require_user=True,
+                                 require_final_assistant=True, preserve_control_metadata=preserve_controls)
     output: dict[str, Any] = {"messages": messages}
-    # Explicit node controls travel with new exports; text remains unmodified.
+    # Only explicit v3 exports add paired annotations; author text is preserved.
+    # Legacy root metadata keeps its established shape and behavior.
     if "control_text_config" in sample:
         output["control_text_config"] = deepcopy(sample["control_text_config"])
         if "control_text_node" in sample:
@@ -270,6 +284,7 @@ def to_trl_preference(pair: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("trl_preference_must_be_object")
     if _has_media(pair):
         raise ValueError("trl_multimodal_content_unsupported")
+    pair = mark_training_control_text(pair)
     prompt, chosen, rejected = (pair.get(key) for key in ("prompt", "chosen", "rejected"))
     if all(isinstance(value, str) for value in (prompt, chosen, rejected)):
         values = {key: _nonempty_text(value, f"trl_preference_{key}_required")
@@ -282,12 +297,18 @@ def to_trl_preference(pair: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(prompt, list) or not prompt:
         raise ValueError("trl_preference_prompt_required")
     tools = _tool_schemas(pair.get("tools"))
-    prompt_messages = _convert_messages(prompt, tools, require_user=True, require_final_assistant=False)
+    preserve_controls = any(isinstance(item, Mapping) and isinstance(item.get("control_text_config"), Mapping)
+                            and item["control_text_config"].get("schema") == PAIRED_SCHEMA
+                            for item in [pair, *prompt, *(chosen if isinstance(chosen, list) else []),
+                                         *(rejected if isinstance(rejected, list) else [])])
+    prompt_messages = _convert_messages(prompt, tools, require_user=True, require_final_assistant=False,
+                                         preserve_control_metadata=preserve_controls)
     choices = []
     for field, value in (("chosen", chosen), ("rejected", rejected)):
         if isinstance(value, str):
             value = [{"role": "assistant", "content": value}]
-        messages = _convert_messages(value, tools, require_user=False, require_final_assistant=True)
+        messages = _convert_messages(value, tools, require_user=False, require_final_assistant=True,
+                                      preserve_control_metadata=preserve_controls)
         if messages[0]["role"] != "assistant":
             raise ValueError(f"trl_preference_{field}_must_start_with_assistant")
         if messages[:len(prompt_messages)] == prompt_messages:

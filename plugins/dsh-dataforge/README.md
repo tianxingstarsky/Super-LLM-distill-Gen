@@ -72,7 +72,7 @@ Manual official installation is also supported in a **new** profile. Initialize 
 npm pack
 dsh --profile dataforge-manual --from-default-profile web --dump-config
 # Set nodeLinker: isolated in this new profile's pnpm-workspace.yaml.
-dsh plugin --profile dataforge-manual add /absolute/path/to/dsh-shujian-dataforge-0.3.4.tgz --config.node-linker=isolated --config.auto-install-peers=true
+dsh plugin --profile dataforge-manual add /absolute/path/to/dsh-shujian-dataforge-0.3.5.tgz --config.node-linker=isolated --config.auto-install-peers=true
 ```
 
 The explicit pnpm flag installs the declared SDK peers into this external profile even if the machine has disabled automatic peers. Installation alone and --dump-config do not prove that an entry module can load; the release is also checked by importing the installed profile package.

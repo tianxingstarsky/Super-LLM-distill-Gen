@@ -207,3 +207,46 @@ Raw immutable packages, reports and receipts are retained locally under
 under `.dataforge/node-controls-ui-20261101/`. These runtime files remain ignored.
 No paid model call was made. Native host discovery, native tool/job execution,
 local protocol business and semantic quality remain separate evidence claims.
+
+### Paired control tags (v3)
+
+Two new context-free testers independently installed the final packages below.
+Each received only the package, source document, isolated directory and goal.
+Neither inferred usage from implementation or tests. Both created and inspected
+an SFT recipe with v3 enabled, `annotation_tag=reason-strength`, exact source
+matches and `replacement=null`. Tasks remained queued, inactive and at zero
+attempts with empty usage; neither invoked generation or a paid model.
+
+| Package | SHA256 | Created, unexecuted SFT task |
+| --- | --- | --- |
+| Codex 0.1.3 | `726fa449b3e6179059046d61f169d07f222dc015b39da7619faafaea66f324e4` | `b3667f6e2ff24a0d97cf5fa6067f109a` |
+| DSH 0.3.5 | `c5ce1df4fae762f86cd1bd8c9cdafa000924fb1d988c345e559d811fda569d0c` | `66907fe964ca42a892f4ffecc01d79e4` |
+
+Codex verification covers isolated installation, file-level skill discovery and
+real local control calls. DSH additionally covers registration through its
+official SDK. Native host automatic discovery and native tool execution were
+not tested. These cold starts do not establish generated-output quality or
+actual tag transformation; those are separate core and export regressions.
+Ignored evidence is under `.dataforge/paired-reason-strength-20261101/`.
+
+### Prefix scope and reviewer suggestions
+
+The final packages below supersede the preceding development packages. Two new
+context-free testers installed them independently and used only their bundled
+instructions to create and inspect an unexecuted SFT task. Both recovered v3,
+`reason-strength`, `prefix_char_limit=512`, `review_suggestions=true` and
+`replacement=null`. Both tasks were queued, inactive, at attempt zero and with
+empty usage. Neither tester read implementation or tests to infer usage.
+
+| Package | SHA256 | Created, unexecuted SFT task |
+| --- | --- | --- |
+| Codex 0.1.3 | `574dcf08cd555a21a0224d41aedfe784793d4498dcdd4ddf29cbae8e021b195e` | `d98946385ecf4d3d8a0f1550c4e0b87a` |
+| DSH 0.3.5 | `e1074bf4cd9a120e02f8632af54967164653edee02147e499602b25f1eb03ffa` | `a913aa3fca0f4095bb38008578d187fb` |
+
+Codex coverage is isolated installation, manual skill discovery and real local
+control calls. DSH also passed official SDK registration and skill discovery.
+Its initial runtime copy omitted untracked modules; completing that copy fixed
+the preparation error, and the failed receipts are retained. Neither test proves
+native host loading, generated-output quality, live reviewer suggestions or
+actual marker conversion. Those remain separate verification layers. Packages
+and evidence are retained under `.dataforge/prefix-control-review-20261101/`.

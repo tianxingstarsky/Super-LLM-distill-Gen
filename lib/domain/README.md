@@ -10,9 +10,16 @@
 
 `creation_draft.py` 为 SFT／多轮分别保存 `answer-mode`（普通或原生同次生成）及节点内思考要点。新节点的要点只接受协议 7；独立 CoT 的历史协议范围不变。草稿允许未完成的文本编辑，实际启动仍走节点生成合同校验，不以表单保存替代任务校验。
 
-输出适配草稿接受 v1/v2 配置，`workflow-control-text-previous:<工作区>:<节点>`
+输出适配草稿接受 v1/v2/v3 配置，`workflow-control-text-previous:<工作区>:<节点>`
 保存上一次确认的规则供撤销使用，结构与当前配置相同。历史快照不进入任务配方，
-不自动改写已有任务；新 v2 的标记行为由 datasets 域负责。
+不自动改写已有任务；v3 的可编辑 `annotation_tag` 用于成对包裹原文字段，标记和
+旧版兼容行为由 datasets 域负责，草稿层不复制标记算法。v3 草稿也保存
+`prefix_char_limit`，匹配范围的 64–2048 字符限制由 datasets 域在启用时校验；
+默认仅处理开头 512 个原文字符，不拓展到正文。
+`review_suggestions` 布尔开关供审核域决定是否提出匹配建议，缺失表示未启用，
+草稿层不会把旧配置补成启用。
+`CreationDraftConflict` 表示已保存字段不再满足编辑时的前置值；调用方据此提示重载，
+不能把冲突当成可以直接重试覆盖的保存失败。
 
 节点模板目录按可选 `conversation_reasoning.version` 冻结补充解释提示词：1 固定 `workflow.conversation_reasoning@1.1.0`；2 分别固定 `workflow.conversation_reasoning_hints@1.0.0` 和 `workflow.conversation_reasoning@2.0.0`；3 分别固定 hints 1.1.0 与正文补写 2.1.0，由程序提供当前回合的 `response_kind`。已冻结正文、自定义覆盖和未选择该策略的历史模板快照保持不变。缺失推理的业务规则位于 workflows 域，这里只维护节点模板与草稿兼容合同。
 

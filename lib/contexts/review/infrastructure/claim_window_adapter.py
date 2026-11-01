@@ -6,9 +6,10 @@ from ..domain.claim_windows import validate_review_window_response
 
 
 class CheckpointedClaimWindowAdapter:
-    def __init__(self, runtime, *, role, audit, phase, instruction):
+    def __init__(self, runtime, *, role, audit, phase, instruction, control_context=None):
         self.runtime = runtime
         self.role, self.audit, self.phase, self.instruction = role, audit, phase, instruction
+        self.control_context = control_context
 
     def check_cancel(self):
         self.runtime.check_cancel()
@@ -25,7 +26,8 @@ class CheckpointedClaimWindowAdapter:
         return self.runtime._claim_v2_call(request, prompt_id=prompt_id,
             base_key=["claim_window", self.phase, request["review_window"]["sha256"]], role=self.role,
             validator=validate_review_window_response, audit=self.audit, phase=self.phase,
-            instruction=self.instruction)
+            instruction=self.instruction, **({"control_context": self.control_context}
+                if self.control_context is not None else {}))
 
     def record_output_limit(self, request):
         from ..domain.claim_windows import request_digest

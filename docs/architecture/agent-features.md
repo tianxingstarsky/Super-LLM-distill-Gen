@@ -1,6 +1,19 @@
 # Agent 功能与维护入口
 
-初始系统的控制引用格式由 `workflow.cot_native_joint@1.6.0` 和 `lib/prompts/workflow_runtime_control.py` 持有。原生 SFT、多轮和 CoT 的首条 system 约定 `[[SJ_REASONING_EFFORT]]`，在确需提及本轮思考配置时使用，不要求每条必有。训练读取时由 datasets 按目标配置直接匹配替换，保留原记录，不经过外部 Agent、插件或评审。旧模板、冻结任务和自定义正文不热改；新建或显式恢复新版默认的节点采用。模型实际遵循率仍需实测。
+初始系统的控制引用格式由 `workflow.cot_native_joint@1.6.0` 和 `lib/prompts/workflow_runtime_control.py` 持有。原生 SFT、多轮和 CoT 的首条 system 约定 `[[SJ_REASONING_EFFORT]]`，在确需提及本轮思考配置时使用，不要求每条必有。训练读取时由 datasets 按已保存的目标配置直接匹配替换，保留原记录，不经过外部 Agent 或额外模型调用；已有评审提出匹配建议是独立职责。旧模板、冻结任务和自定义正文不热改；新建或显式恢复新版默认的节点采用。模型实际遵循率仍需实测。
+
+输出视图的控制文字标记由 datasets 的 `ControlTextAdapter` 管理，与上述模型提示词分开。
+显式启用 v3 时，程序在导出与读取视图中生成 `<reason-strength>原控制文字</reason-strength>`，
+标签名由节点 `annotation_tag` 配置；原生响应和候选正文不改，也不要求模型生成标签。
+目标文字替换只发生在训练加载时。旧 v1 占位符与 v2 旁路标注按冻结版本保留。
+此标签用于定位观测文字，不能把 verbosity 自述当作已认证的五档思考强度。
+
+v3 的 `prefix_char_limit` 默认 512、可设 64–2048，只处理完整落在推理开头的控制片段；
+正文同词不改，已识别标签不占原文字数。`review_suggestions` 新默认开启，字段缺失按关闭处理。
+已有评审可在同一次调用中查看作者的冻结规则并提出增补精确匹配；建议以独立附属协议与质量响应分开，
+不更改原质量合同，不为建议追加独立评审。review 域的 `control_text_suggestions.py` 负责出处、前缀与配置绑定，
+不认证同义关系，也不直接改配置。节点查看预览、确认保存后才对新任务生效。
+模型不能通过建议改变替换目标、标签名、匹配范围、开关或质量标准；旧冻结任务不热改。
 
 当前原生返工采用公开注意事项 v7：评审模板 `workflow.rationale_check@1.12.0` / `workflow.review_score@1.25.0` 产出可独立理解的提醒；`RegenerateWithReviewGuidance` 将提醒作为 system 放在真实 user 后，用原作者重新生成。领域合同在 `review_guidance.py`，请求复用 `NativeFeedbackAdapter`。提醒保留在训练上下文，失败稿单独归档，新原生推理不拼入人工文字。允许自然引用实际提醒，事实错误与臆造规则不豁免。仍为未评审，不增加独立评审或理由改写调用。仅改变新任务默认和新模板版本，自定义提示词及冻结任务不热改。离线协议、导出及兼容验证已完成；两条 V4.1-Flash 实测共2次调用、26.25秒，输入6245/输出3935 tokens（含2713推理），估算$0.002470，未核实账单。备用响应前提和OCR可选路径改善，但01仍出现无用户依据的verbosity 5，02仍有节选/全文范围问题。后续离线溯源确认：该谱系22个请求有21个在发送前就带具体5，02由复跑脚本补入旧reasoning_content；01初次来源仍未定，撤回直接归为幻觉的定性。SDK白名单还漏记reasoning_effort，当前离线完整HTTP重建未发现SDK加提示词或本地检查点串用。来源证据和未执行的干净对照在 `.dataforge/verbosity-leak-audit-20261101/`；旧原生推理存档不删除。已有旧返工system原样复用，不能把本轮视作干净上下文消融。完整记录见 `.dataforge/native-system-guidance-v7-live-20261101/`，结果仍待处理。
 
