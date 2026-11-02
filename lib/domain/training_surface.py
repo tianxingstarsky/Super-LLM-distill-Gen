@@ -207,6 +207,15 @@ def _article_is_visible(visible, contract):
     return isinstance(article, str) and bool(article.strip()) and article.strip() in visible
 
 
+def training_surface_internal_process_issue(reasoning, *, visible_messages=()):
+    """Expose v2's production-narration check without its source-wording policy."""
+    visible = _visible_text(visible_messages)
+    for sentence in re.split(r"[。！？!?；;\n]+|(?<=[.!?])\s+", _text(reasoning)):
+        if _production_protocol_reference(sentence, visible):
+            return "training_surface_internal_process_reference"
+    return None
+
+
 def training_surface_issue(reasoning, answer, *, visible_messages=(), contract=None, protocol_version=1,
                            knowledge_application_voice_version=None, learning_goal=None, public_reading_context=False,
                            public_system_positions=()):

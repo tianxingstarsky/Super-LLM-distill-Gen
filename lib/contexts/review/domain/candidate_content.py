@@ -5,6 +5,8 @@ import hashlib
 from lib.domain.workflow_quality import canonical, conversation_issue, text_issue
 from lib.contexts.workflows.contracts import (
     TRAINING_FIELDS, PREFERENCE_TARGETS, training_record, retire_imported_reasoning, effective_learning_goal,
+    recorded_agent_issue, valid_agent_optimization_record,
+    agent_optimization_surface_issue,
 )
 from lib.domain.math_tasks import validate_math_candidate
 from lib.domain.source_quote import quote_spans
@@ -229,6 +231,10 @@ def _payload_issue(target, row):
     except (KeyError, TypeError, ValueError):
         return "review_repair_content_unavailable"
     if target in {"sft", "multiturn", "agent"}:
+        if target == "agent" and row.get("agent_optimization", {}).get("version") == 1:
+            if not valid_agent_optimization_record(row):
+                return "agent_optimization_consistency_changed"
+            return recorded_agent_issue(payload) or agent_optimization_surface_issue(row)
         return conversation_issue(payload["messages"]) or _row_training_surface_issue(target, row)
     if target == "cot":
         question = row.get("question")

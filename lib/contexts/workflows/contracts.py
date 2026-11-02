@@ -42,3 +42,7 @@ from .domain.planned_sft_reanswer import valid_reanswer_receipt
 from .domain.planned_sft_reanswer import planned_sft_prompt, authenticated_teacher_text, reanswer_task_identity
 from .domain.native_sft_optimization import native_sft_optimization_input
 from .domain.dialogue_style_context import authenticated_record_context_positions
+from .domain.agent_trajectory_optimization import (
+    agent_optimization_enabled, recorded_agent_issue, valid_agent_optimization_record,
+    agent_optimization_surface_issue,
+)

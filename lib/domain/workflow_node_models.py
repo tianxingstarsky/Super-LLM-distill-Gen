@@ -8,7 +8,8 @@ from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
 
 
 def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_generation=None,
-                     package_review=None, cpt_processing=None, review_repair=None):
+                     package_review=None, cpt_processing=None, review_repair=None,
+                     agent_trajectory_optimization=False):
     draft = validate_node_models(draft)
     if (package_review or {}).get("node") == "jev" and "jev" not in draft and draft.get("package", {}).get("jev"):
         # Preserve the chosen terminal reviewer when opening an older draft in
@@ -33,7 +34,8 @@ def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_
     endpoints = {row["name"]: row for row in inventory.get("backends", [])}
     for node in nodes:
         for role in node_roles(node, source_mode, node_generation=node_generation,
-                               package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair):
+                               package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                               agent_trajectory_optimization=agent_trajectory_optimization):
             marker = node + ":" + role
             if marker in initialized or role in draft.get(node, {}):
                 initialized.add(marker)
@@ -77,22 +79,28 @@ def initialize_draft(nodes, source_mode, draft, initialized, inventory, *, node_
 
 
 def missing_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None,
-                     package_review=None, cpt_processing=None, review_repair=None):
+                     package_review=None, cpt_processing=None, review_repair=None,
+                     agent_trajectory_optimization=False):
     validated = validate_node_models(bindings)
     return [(node, role) for node in nodes for role in node_roles(
                 node, source_mode, node_generation=node_generation, package_review=package_review,
-                cpt_processing=cpt_processing, review_repair=review_repair)
+                cpt_processing=cpt_processing, review_repair=review_repair,
+                agent_trajectory_optimization=agent_trajectory_optimization)
             if not validated.get(node, {}).get(role) or validated[node][role]["backend"] not in endpoints]
 
 
 def binding_snapshot(nodes, source_mode, bindings, endpoints, *, node_generation=None,
-                     package_review=None, cpt_processing=None, review_repair=None):
+                     package_review=None, cpt_processing=None, review_repair=None,
+                     agent_trajectory_optimization=False):
     if missing_bindings(nodes, source_mode, bindings, endpoints, node_generation=node_generation,
-                        package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair):
+                        package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                        agent_trajectory_optimization=agent_trajectory_optimization):
         raise ValueError("请为所有需要模型的节点选择服务与模型。")
     validated = validate_node_models(bindings)
     return {node: {role: deepcopy(validated[node][role])
                    for role in node_roles(node, source_mode, node_generation=node_generation,
-                                          package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)}
+                                          package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                          agent_trajectory_optimization=agent_trajectory_optimization)}
             for node in nodes if node_roles(node, source_mode, node_generation=node_generation,
-                                            package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)}
+                                            package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                            agent_trajectory_optimization=agent_trajectory_optimization)}

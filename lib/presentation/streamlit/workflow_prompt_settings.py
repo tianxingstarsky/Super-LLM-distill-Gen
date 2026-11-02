@@ -17,6 +17,7 @@ from lib.presentation.streamlit.prompt_library_controls import (
 
 
 PROMPT_LABELS = {
+    "workflow.agent_trajectory_optimization": "轨迹流程与 CoT 优化",
     "workflow.conversation_reasoning_hints": "答案提炼为推导提示",
     "workflow.conversation_reasoning": "缺失推理补充",
     "workflow.reading_scene": "情景故事设计",
@@ -80,14 +81,16 @@ def _field(workspace: str, key: str, default):
 
 
 def node_prompt_snapshot(workspace: str, nodes, source_mode: str, *, node_generation=None, package_review=None,
-                         qa_director=None, cpt_processing=None, review_repair=None) -> dict:
+                         qa_director=None, cpt_processing=None, review_repair=None,
+                         agent_trajectory_optimization=False) -> dict:
     """Submit only active overrides; inactive edits stay in the local draft."""
     result = {}
     reasoning_version = conversation_reasoning_snapshot(workspace)["version"]
     for node in nodes:
         for prompt_id in active_node_prompt_ids(node, source_mode, node_generation=node_generation,
                                                 package_review=package_review, qa_director=qa_director, cpt_processing=cpt_processing, review_repair=review_repair,
-                                                conversation_reasoning_version=reasoning_version):
+                                                conversation_reasoning_version=reasoning_version,
+                                                agent_trajectory_optimization=agent_trajectory_optimization):
             default = builtin_node_prompt(prompt_id, conversation_reasoning_version=reasoning_version)
             body = _field(workspace, _prompt_key(workspace, node, prompt_id), default)
             if body != default:
@@ -141,6 +144,8 @@ def _import_prompt(workspace: str, node: str, prompt_id: str, save_field) -> Non
 
 def _prompt_label(prompt_id: str, node: str, language: str, source_cleaning: bool = False, answer_mode=None,
                   conversation_reasoning_version=None) -> str:
+    if prompt_id == "workflow.agent_trajectory_optimization":
+        return "Trajectory flow and CoT optimization" if language == "en" else "轨迹流程与 CoT 优化"
     if prompt_id == "workflow.conversation_reasoning" and conversation_reasoning_version in {2, 3}:
         return translate_label("正文 CoT 补写", language)
     if node == "cot" and answer_mode == "faithful_restyle" and prompt_id == "workflow.cot_rationale":
@@ -153,12 +158,13 @@ def _prompt_label(prompt_id: str, node: str, language: str, source_cleaning: boo
 def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_field,
                         node_generation=None, package_review=None, qa_director=None,
                         prompt_library=None, cpt_processing=None, review_repair=None,
-                        source_cleaning=None) -> None:
+                        source_cleaning=None, agent_trajectory_optimization=False) -> None:
     """Show the active processing prompt beside this node's model settings."""
     reasoning_version = conversation_reasoning_snapshot(workspace)["version"]
     prompts = active_node_prompt_ids(node, source_mode, node_generation=node_generation,
                                     package_review=package_review, qa_director=qa_director, cpt_processing=cpt_processing, review_repair=review_repair,
-                                    conversation_reasoning_version=reasoning_version)
+                                    conversation_reasoning_version=reasoning_version,
+                                    agent_trajectory_optimization=agent_trajectory_optimization)
     if not prompts:
         return
     language = st.session_state.get("ui_language", "zh")
@@ -220,7 +226,8 @@ def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
             else "文档资料" if recipe.get("sources") else "开放需求")
     active = active_node_prompt_ids(node, mode, node_generation=recipe.get("node_generation"),
                                    package_review=recipe.get("package_review"), qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"),
-                                   conversation_reasoning_version=(recipe.get("conversation_reasoning") or {}).get("version"))
+                                   conversation_reasoning_version=(recipe.get("conversation_reasoning") or {}).get("version"),
+                                   agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1)
     legacy_design = (node == "preference" and recipe.get("preference_design_version") in {1, 2}
                      and recipe.get("preference_design_prompt_version") is None)
     if legacy_design:

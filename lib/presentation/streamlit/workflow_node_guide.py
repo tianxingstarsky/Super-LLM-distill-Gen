@@ -255,14 +255,19 @@ _GUIDES = {
             "Agent data includes user and assistant turns, tool calls and tool observations. Treat it as more than plain chat. Calls must remain paired with their results. Intermediate failures and fixes can inform experience, but an unsuccessful trace must not be labelled a completed task.",
         ),
         (
+            "流程与 CoT 优化", "Flow and CoT optimization",
+            "新建 Agent 工作默认在本节点选择「流程与 CoT 优化」，无需本机重放。每条轨迹默认一次作者调用，只编辑最终助手 CoT；最终答案、其余推理、全部工具参数、返回和顺序由程序保持不变。流程改进建议单独保存，需要新工具、改参或无法确认删步安全时，不能当作已经执行的新轨迹。",
+            "New Agent work defaults to Flow and CoT optimization in this node, without local replay. One author call normally edits only the final assistant CoT. The program preserves the final answer, other reasoning, every tool argument, observation and ordering. Flow suggestions are saved separately. New tools, changed arguments or uncertain step removal cannot count as an executed trace.",
+        ),
+        (
             "本地与隔离验证", "Local and isolated verification",
-            "在「轨迹验证方式」选择本地或隔离验证。隔离方式需要可用的容器服务与固定镜像，重放支持的受限工具状态，不会任意执行导入记录中的代码。环境可用不等于每个工具轨迹都已验证。",
-            "Choose local or isolated verification. Isolation needs an available container service and a pinned image. It replays supported restricted-tool state, not arbitrary code from an imported record. A ready environment does not mean every tool trace has been verified.",
+            "仅在需要重放受支持工具时，将本节点切换为「工具重放验证」，再选择本地或隔离验证。隔离方式需要可用的容器服务与固定镜像，不会任意执行导入记录中的代码。环境可用不等于每个工具轨迹都已验证；复制旧任务保留原模式。",
+            "Switch this node to Tool replay verification only when replaying supported tools is needed, then choose local or isolated verification. Isolation needs an available container service and a pinned image. It does not run arbitrary imported code. A ready environment does not certify every trace. Copied legacy tasks retain their original mode.",
         ),
         (
             "缺失推理与经验", "Missing reasoning and experience",
-            "导入数据库的缺失推理处理在输入节点选择。补写内容是合成解释，应与已有原生推理区分；不能让当前回合提前知道未来的工具结果。经验提案可采用或回退，已采用版本也不代表所有旧失败都已修好。",
-            "Choose the policy for missing imported reasoning on the input node. Added text is a synthetic explanation, distinct from existing native reasoning. A turn must not assume a future tool result. Experience proposals can be adopted or reverted; adoption does not mean every previous failure has been repaired.",
+            "导入数据库的缺失推理处理仍在输入节点选择保留、补写或排除；保留模式没有最终推理时不调用编辑作者。补写是合成解释，不能冒充原生思考，也不能让早期回合提前知道未来工具结果。完整提示词与长期经验在本节点「提示词与风格」中修改，复用推理经验及 Google 学习版本，启动后不热改。",
+            "The input node still controls preserve, fill or exclude for missing reasoning. Preserve mode skips the editor when final reasoning is absent. Added text is synthetic, not recovered native thought, and cannot give earlier turns future tool results. Edit the full prompt and long-term experience in this node’s Prompts and style tab. It reuses reasoning experience and Google learning editions, frozen when the run starts.",
         ),
         (
             "轨迹无法验证时", "When a trace cannot be verified",

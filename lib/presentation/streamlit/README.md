@@ -49,6 +49,7 @@ SFT / 多轮的 `回答生成方式` 在本节点模型配置旁设置；原生 
 | 模型选择、能力和共享并发 | [`workflow_node_settings.py`](workflow_node_settings.py)、[`model_scheduling_controls.py`](model_scheduling_controls.py) | 人工声明和探测证据分开；模型运行时由 models 域负责 |
 | 文档与 DSH 会话导入 | [`docling_settings.py`](docling_settings.py)、[`conversation_import_controls.py`](conversation_import_controls.py) | 展示上传、预览、问题与确认；解析数据库不在页面实现 |
 | 导入会话的缺失推理 | [`conversation_reasoning_controls.py`](conversation_reasoning_controls.py) | 输入节点选择保留、仅补缺失或排除；复用节点模型和提示词，启动时冻结，合成解释不冒充原始思考 |
+| Agent 轨迹优化与重放选择 | [`workflow_agent_settings.py`](workflow_agent_settings.py)、[`workflow_node_settings.py`](workflow_node_settings.py) | 新空草稿默认流程与 CoT 优化；旧草稿及旧任务复制保留工具重放。模型、完整提示词与推理长期经验均在 Agent 节点，不新增设置页或调度器 |
 | CPT、指导员、偏好与生产策略 | [`workflow_cpt_settings.py`](workflow_cpt_settings.py)、[`workflow_director_settings.py`](workflow_director_settings.py)、[`workflow_preference_settings.py`](workflow_preference_settings.py)、[`workflow_production_settings.py`](workflow_production_settings.py) | 编辑当前草稿；启动时冻结，不热改已有任务 |
 | 提示词模板、导入、恢复和个人保存 | [`workflow_prompt_settings.py`](workflow_prompt_settings.py)、[`prompt_library_controls.py`](prompt_library_controls.py) | `render_node_prompts` 编辑节点实际使用的模板；`node_prompt_snapshot` 创建冻结输入 |
 | 推理方式、风格、语言、深度和修剪 | [`workflow_generation_settings.py`](workflow_generation_settings.py) | 显式推理深度与模型原生思考强度分开；关闭生成保留选择，但不伪称已生成新推理 |
@@ -57,6 +58,10 @@ SFT / 多轮的 `回答生成方式` 在本节点模型配置旁设置；原生 
 | 评分修正与打包评审 | [`workflow_review_repair_settings.py`](workflow_review_repair_settings.py)、[`workflow_package_review_settings.py`](workflow_package_review_settings.py) | 配置既有 review 域用例；不在控件中建立另一条返工循环 |
 
 模型和提示词配置都留在节点内。不要新增重复总配置页。节点前后导航按实际图计算，切换时保留草稿和角色绑定。
+
+Agent 节点的“流程与 CoT 优化”不要求本机工具重放。每条轨迹默认一次作者调用，仅编辑最终助手 CoT；最终答案、其余助手推理、全部工具参数、观察和顺序由业务合同保持不变。流程建议单独保存，不把新工具、改参或不明删步建议记成已执行轨迹。输入节点继续控制缺失推理的保留、补写与排除；保留且没有最终推理时无需作者调用。新模式冻结 `agent_trajectory_optimization_version=1`，提示词 `workflow.agent_trajectory_optimization` 绑定 Agent/generation，长期经验复用 reasoning 范围及已有 Google 学习版本。只读运行详情展示实际冻结内容，不将优化完成称为工具重放成功。
+
+`initialize_agent_processing` 在新草稿的其他默认字段写入前判断默认值，`workflow-agent-trajectory-optimization` 是持久布尔字段；复制旧配方显式写入 `False`，复制新配方按版本标记恢复。Agent-only 补写复用本节点作者，不再要求旧输入节点的两步模型；混合 SFT 工作仍保留其实际需要的输入补写。定向入口：`tests/test_agent_optimization_ui.py`、`tests/test_workflow_node_models.py` 与既有节点导航验证；依赖边界调整再运行 DDD 检查。真实桌面操作由浏览器另行验收，AppTest 不等于截图验收。
 
 指导员的新混合学习目标在画布中展示知识问答与资料问答两条轻量路线，并按已保存概率标注，最后合流到同一个 SFT／多轮生成节点。路线不伪装为额外模型阶段，也不增加调用或虚构完成计数；实际阶段与依赖仍由工作流执行图提供。历史未启用混合策略的配方保留原图。
 

@@ -10,6 +10,7 @@ from lib.prompts.workflow_conversation_reasoning import (
     CONVERSATION_REASONING, CONVERSATION_REASONING_V1_0, CONVERSATION_REASONING_V1_1,
     CONVERSATION_REASONING_V2_0, CONVERSATION_REASONING_HINTS, CONVERSATION_REASONING_HINTS_V1_0,
 )
+from lib.prompts.workflow_agent_trajectory_optimization import AGENT_TRAJECTORY_OPTIMIZATION
 from lib.prompts.workflow_spec import (
     spec,
 )

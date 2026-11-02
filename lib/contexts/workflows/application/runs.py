@@ -27,7 +27,7 @@ class WorkflowRunApplication:
         fields = {key: recipe[key] for key in (
             "targets", "max_units", "chunk_chars", "tasks", "sample_count", "concurrency",
             "batch_size", "node_models", "conversation_turns", "brief",
-            "agent_replay_mode", "evaluation_sources", "web_research", "sources",
+            "agent_replay_mode", "agent_trajectory_optimization", "evaluation_sources", "web_research", "sources",
             "node_generation", "reasoning_trim", "node_prompts", "node_control_text_configs", "package_review", "qa_director", "production",
             "cpt_processing", "review_repair", "repair_inputs", "agent_experience", "reasoning_required", "preference_design") if key in recipe}
         targets, node_models = validate_creation(**fields)
@@ -37,7 +37,8 @@ class WorkflowRunApplication:
         return self._driver.create(**{**recipe, "targets": targets, "node_models": node_models,
                                       "web_research": research,
                                       "node_generation": validate_node_generation(recipe.get("node_generation")),
-                                      "node_prompts": validate_node_prompts(recipe.get("node_prompts")),
+                                      "node_prompts": validate_node_prompts(recipe.get("node_prompts"),
+                                          agent_trajectory_optimization=recipe.get("agent_trajectory_optimization", False)),
                                       "agent_experience": validate_agent_experience(recipe.get("agent_experience")),
                                       "package_review": validate_package_review(recipe.get("package_review")),
                                       "qa_director": validate_qa_director(recipe.get("qa_director")),

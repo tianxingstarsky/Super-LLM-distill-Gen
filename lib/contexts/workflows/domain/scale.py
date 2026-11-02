@@ -17,6 +17,7 @@ NODE_ROLES = {
     "sft": ("generation", "jev"), "multiturn": ("generation", "jev"),
     "preference": ("generation", "jev"), "cot": ("generation", "jev"),
     "trim": ("generation", "jev"),
+    "agent": ("generation",),
     "package": ("jev",),
     "jev": ("jev",),
     "review": ("generation", "jev"),
@@ -25,7 +26,10 @@ NODE_ROLES = {
 
 def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None,
                package_review: dict | None = None, cpt_processing: dict | None = None,
-               review_repair: dict | None = None, recipe_version: int | None = None) -> tuple[str, ...]:
+               review_repair: dict | None = None, recipe_version: int | None = None,
+               agent_trajectory_optimization: bool = False) -> tuple[str, ...]:
+    if stage == "agent":
+        return ("generation",) if agent_trajectory_optimization is True else ()
     if stage == "director" and recipe_version is not None and recipe_version <= 19:
         # Resuming a saved run must not introduce a second model call or a new
         # required binding. New drafts configure the separated question role.

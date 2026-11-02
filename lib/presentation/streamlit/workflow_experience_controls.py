@@ -94,11 +94,21 @@ def render_pinned_experience(recipe, prompt_id, run_id):
     scope = experience_scope(prompt_id)
     if scope is None:
         return
-    pinned = recipe.get("agent_experience", {}).get("scopes", {}).get(scope, {})
+    agent_editor = (prompt_id == "workflow.agent_trajectory_optimization"
+                    and recipe.get("agent_trajectory_optimization_version") == 1)
+    pinned = (recipe.get("agent_reasoning_memory", {}) if agent_editor
+              else recipe.get("agent_experience", {}).get("scopes", {}).get(scope, {}))
     if pinned.get("enabled") is not True:
         st.caption("评审补充规则已关闭" if scope == "review" else "长期经验已关闭")
         return
     with st.popover("评审补充规则" if scope == "review" else "长期经验", width="stretch"):
-        st.caption("本次任务已固定的经验；复制为新草稿后可以修改。")
+        if agent_editor:
+            en = st.session_state.get("ui_language") == "en"
+            st.caption("Frozen experience baseline. The editing report shows the text actually retrieved for each trajectory."
+                       if en else "已固定的经验基线；每条轨迹实际召回的文字见编辑报告。")
+            if reference := pinned.get("edition_ref"):
+                st.caption(("Adopted edition: " if en else "采用经验版本：") + reference["id"])
+        else:
+            st.caption("本次任务已固定的经验；复制为新草稿后可以修改。")
         st.text_area("经验正文", value=pinned.get("text", ""), height=300, disabled=True,
                      key=f"workflow-run-experience:{run_id}:{scope}")

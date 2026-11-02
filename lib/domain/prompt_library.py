@@ -71,7 +71,8 @@ def validate_prompt_payload(scope: str, payload: dict) -> dict:
             _, stage, prompt_id = scope.split(":")
             if set(payload) != {"text"}:
                 raise ValueError("invalid_fields")
-            validate_node_prompts({stage: {prompt_id: payload["text"]}})
+            validate_node_prompts({stage: {prompt_id: payload["text"]}},
+                                  agent_trajectory_optimization=stage == "agent")
         elif scope == "director.rules":
             if set(payload) != {"question_rules", "answer_rules"}:
                 raise ValueError("invalid_fields")

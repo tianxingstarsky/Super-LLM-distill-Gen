@@ -1,5 +1,7 @@
 # 组合根：找到服务，再选择实现
 
+`agent_optimization.py` 装配免执行的已记录 Agent 编辑作者及既有 Google ReasoningBank。`freeze_agent_reasoning_memory` 在创建时固定采用版与正文基线，`recorded_agent_optimizer` 复用严格工具请求、用户经验库和本地检索；不新增经验 scope、向量库、模型调度器或自动评审/提炼循环。
+
 `review_evolution.py` 为原生 SFT 的一次评审装配既有严格工具传输，以及同次经验提案的追加保存和本地索引。它不调用 Google 提炼入口；通用提案与任务临时指令分别留痕，当前派生回答可用候选增量，冻结配方与全局采用版本不热改。
 
 `dialogue_style_context_catalog` 返回可冻结的初始交流风格目录，不启动模型。具体正文归 prompts，类型与认证归 workflows domain；目录按直接表达、情境叙述、探索讨论、协作推进和情绪交流组织，与知识领域无关。

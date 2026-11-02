@@ -1,5 +1,7 @@
 # Google ReasoningBank 原版接入
 
+已记录 Agent 轨迹的新编辑作者也可接收冻结的 `reasoning` 经验。编辑采用的版本、检索回执与实际 system 保留；旧的本地工具重放器不因此变成模型生成器。流程建议、CoT 派生编辑和结果一致性的边界见 [Agent 轨迹优化](agent-trajectory-evolution-2026-11-03.md)。
+
 采用 [Google 官方完整仓库](https://github.com/google-research/reasoning-bank)，固定 `ed80611788292ea739f1effd31f16c53823b8a0d`，Apache-2.0。源码位于 `components/reasoning-bank`。
 
 | 阶段 | 实际执行的官方代码 | 必要适配 |

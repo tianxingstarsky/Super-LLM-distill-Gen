@@ -10,6 +10,16 @@ from lib.contexts.workflows.contracts import EXPLORATORY_STYLE_V1, EXPLORATORY_S
 
 
 ZH_EN: dict[str, str] = {
+    "Agent 轨迹优化": "Agent optimization",
+    "流程与 CoT 优化": "Flow and CoT optimization",
+    "轨迹流程与 CoT 优化": "Trajectory flow and CoT optimization",
+    "轨迹 CoT 编辑模型": "Trajectory CoT editor",
+    "仅最终助手 CoT；最终答案与工具证据固定": "Final assistant CoT only; final answer and tool evidence stay fixed",
+    "单独保存，不冒充已执行轨迹": "Saved separately, not treated as an executed trace",
+    "流程建议": "Flow suggestions",
+    "编辑范围": "Editing scope",
+    "处理方式": "Processing mode",
+    "Agent 优化保留最终答案与工具证据；处理方式、模型和指令在 Agent 节点配置。": "Agent optimization preserves the final answer and tool evidence. Configure processing, model and instructions on the Agent node.",
     "缺失推理处理": "Missing reasoning",
     "保留原样": "Keep as imported",
     "仅补缺失推理": "Fill missing reasoning",

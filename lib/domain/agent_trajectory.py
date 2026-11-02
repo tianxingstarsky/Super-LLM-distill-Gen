@@ -225,8 +225,10 @@ def _prune_identical_pairs(messages: list[dict]) -> tuple[list[dict], list[str]]
                 signature = (canonical(assistant_without_calls), canonical(call_without_id),
                              canonical(result_without_link))
                 call_id = call["id"]
-                later_data = canonical(messages[index + 2:])
-                if signature == previous_signature and call_id not in later_data:
+                # Most long trajectories contain different calls. Inspect
+                # later references only when this pair could be removed.
+                if (signature == previous_signature
+                        and call_id not in canonical(messages[index + 2:])):
                     removed.append(call_id)
                     index += 2
                     continue

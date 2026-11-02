@@ -355,6 +355,8 @@ def _version(version):
 
 def experience_scope(prompt_id):
     """Map concrete processing prompts, not node names, to one matching role."""
+    if prompt_id == "workflow.agent_trajectory_optimization":
+        return "reasoning"
     return _PROMPT_SCOPES.get(prompt_id) if isinstance(prompt_id, str) else None
 
 

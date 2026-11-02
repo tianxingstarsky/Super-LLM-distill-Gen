@@ -388,6 +388,13 @@ class WorkflowQADirector:
 
     def human_package_issue(self, row, target):
         """No derived/cached sample may bypass its human-design assessment."""
+        if target == "agent" and self.recipe.get("agent_trajectory_optimization_version") == 1:
+            from lib.contexts.workflows.contracts import valid_agent_optimization_record
+            if (valid_agent_optimization_record(row)
+                    and row["agent_optimization"].get("status") in {"unchanged", "edited"}):
+                from lib.contexts.review.contracts import candidate_payload_issue
+                return candidate_payload_issue("agent", row)
+            return "agent_optimization_consistency_changed"
         from lib.contexts.review.contracts import (
             native_sft_review_evolution_enabled, native_sft_review_evolution_release_valid,
         )

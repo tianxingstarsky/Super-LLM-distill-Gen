@@ -52,7 +52,10 @@ from lib.presentation.streamlit.workflow_director_settings import (
 from lib.presentation.streamlit.knowledge_memory_summary import render_knowledge_memory_summary
 from lib.presentation.streamlit.docling_settings import docling_snapshot, docling_setup_issue, DOCLING_ERRORS
 from lib.presentation.streamlit.workflow_canvas import canvas_spec, render_canvas, node_display_label
-from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_agent_verification, render_document_parser, document_parser_mode
+from lib.presentation.streamlit.workflow_node_settings import node_bindings, render_node_models, snapshot_available_bindings, render_document_parser, document_parser_mode
+from lib.presentation.streamlit.workflow_agent_settings import (
+    agent_optimization_snapshot, initialize_agent_processing, render_agent_processing,
+)
 from lib.presentation.streamlit.workflow_cpt_settings import cpt_processing_snapshot, render_cpt_settings, cpt_vision_unconfirmed
 from lib.presentation.streamlit.workflow_preference_settings import render_preference_settings, preference_design_snapshot
 from lib.presentation.streamlit.conversation_reasoning_controls import (
@@ -79,7 +82,7 @@ KNOWLEDGE_AGENT_ERRORS = frozenset({
     "knowledge_agent_planning_timeout", "knowledge_agent_invalid_assistant", "knowledge_agent_invalid_tool_call",
     "knowledge_agent_context_exhausted", "knowledge_agent_observation_limit_reached",
 })
-TARGET_LABELS = {"cpt": "CPT 预训练语料", "sft": "SFT 指令对话", "agent": "Agent 验证轨迹",
+TARGET_LABELS = {"cpt": "CPT 预训练语料", "sft": "SFT 指令对话", "agent": "Agent 轨迹",
                  "multiturn": "多轮对话 SFT",
                  "dpo": "DPO 偏好对", "rlaif": "RLAIF AI 反馈", "gsm8k": "模板算术题（GSM8K 格式）",
                  "cot": "CoT 可见推理", "orpo": "ORPO 偏好对"}
@@ -451,7 +454,8 @@ def _stage_configuration(key, recipe, state):
         mode = "文档资料" if recipe.get("sources") else "开放需求"
         # Old CoT runs only checked an existing explanation and had no writer.
         roles = (("jev",) if key == "cot" and not (recipe.get("node_generation") or {}).get("cot")
-                 else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"), recipe_version=recipe.get("version", 0)))
+                 else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"), recipe_version=recipe.get("version", 0),
+                                 agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1))
         for role in roles:
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
             prefix = "question_" if role == "question" else "" if role == "generation" else "jev_"
@@ -498,9 +502,14 @@ def _stage_configuration(key, recipe, state):
             details.update({"每段最多轮数" if adaptive else "每段对话轮数": recipe.get("conversation_turns", 3),
                             "质检方式": "逐轮评审 + 全段一致性评审"})
         elif key == "agent":
-            details["验证方式"] = "隔离验证" if recipe.get("agent_sandbox_image") else "本地验证"
-            details["轨迹剪枝"] = "已核对的相邻重复调用；原始记录保留"
-            details["失败样本"] = "单独保存原因和执行证据，不混入训练样本"
+            if recipe.get("agent_trajectory_optimization_version") == 1:
+                details["处理方式"] = "流程与 CoT 优化"
+                details["编辑范围"] = "仅最终助手 CoT；最终答案与工具证据固定"
+                details["流程建议"] = "单独保存，不冒充已执行轨迹"
+            else:
+                details["验证方式"] = "隔离验证" if recipe.get("agent_sandbox_image") else "本地验证"
+                details["轨迹剪枝"] = "已核对的相邻重复调用；原始记录保留"
+                details["失败样本"] = "单独保存原因和执行证据，不混入训练样本"
         elif key == "preference":
             details["比较目标"] = [target.upper() for target in targets if target in {"dpo", "orpo", "rlaif"}]
             details["导出数据流"] = preference_route(key, recipe.get("review_repair"))
@@ -1056,6 +1065,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                                       language=st.session_state.get("ui_language", "zh"), live=True,
                                       review_advisory_policy_version=recipe.get("review_advisory_policy_version"),
                                       native_sft_review_evolution_version=recipe.get("native_sft_review_evolution_version"),
+                                      agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1,
                                       sft_reanswer_version=recipe.get("sft_reanswer_version", 0),
                                       reasoning_trim=reasoning_trim_enabled,
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
@@ -1083,8 +1093,10 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
         if selected_stage not in active_stages:
             selected_status, done, total, percent = "skipped", 0, 0, 0
         selected_label = (node_display_label(selected_stage, GRAPH_LABELS, recipe.get("node_generation"),
-                          source_cleaning=bool(recipe.get("source_cleaning")), recipe_version=recipe.get("version"), targets=recipe["targets"])
-                          if selected_stage in {"cot", "cpt", "preference"}
+                          source_cleaning=bool(recipe.get("source_cleaning")), recipe_version=recipe.get("version"), targets=recipe["targets"],
+                          agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1,
+                          language=st.session_state.get("ui_language", "zh"))
+                          if selected_stage in {"cot", "cpt", "preference", "agent"}
                           else str(selected_metrics.get("label", selected_stage)))
         if selected_stage == 'ingest' and selected_metrics.get('phase') == 'planning':
             passed, quarantined = done, max(0, total - done)
@@ -1654,6 +1666,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.session_state[f"workflow-draft-loaded:{ws}"] = True
             except (OSError, ValueError):
                 st.session_state[f"workflow-draft-error:{ws}"] = True
+    initialize_agent_processing(ws, save_field=_save_draft_value)
     with st.container(key="workbench-entry-bar"):
         mode_column, navigation_column = st.columns([3, 1], gap="medium", vertical_alignment="center")
     with mode_column:
@@ -1802,7 +1815,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                        if st.session_state.get("ui_language", "zh") == "en" else
                        "请点击上方「将 CoT 并入生成节点」，或把 SFT 改回普通生成。旧的独立 CoT 配置不能被静默覆盖，处理后才能启动。")
         if "agent" in targets:
-            st.caption("Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
+            st.caption("Agent 优化保留最终答案与工具证据；处理方式、模型和指令在 Agent 节点配置。"
+                       if agent_optimization_snapshot(ws) else
+                       "Agent 正例需要完整的已记录工具轨迹；请在 Agent 节点选择验证方式并查看支持范围。")
         if "multiturn" in targets:
             if generation_snapshot(ws, ["multiturn"]).get("multiturn", {}).get("reading_session"):
                 st.caption("阅读对话复用同一份资料和历史；独立评审结果与生成状态分开记录。")
@@ -1821,7 +1836,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         if style_key not in st.session_state:
             st.session_state[style_key] = st.session_state[draft_key]
         sft_output_style = st.session_state[style_key]
-    agent_capabilities = application.agent_replay_capabilities() if "agent" in targets else {}
+    agent_trajectory_optimization = "agent" in targets and agent_optimization_snapshot(ws)
+    agent_capabilities = application.agent_replay_capabilities() if "agent" in targets and not agent_trajectory_optimization else {}
     document_parser = {"mode": "native"}
     if not arithmetic_only and source_mode == "文档资料" and document_parser_mode(ws) == "docling":
         document_parser = docling_snapshot(ws)
@@ -1845,7 +1861,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             selected_node = graph_nodes[0]
         st.session_state[selection_key] = selected_node
         model_source_mode = "多模态文档" if document_parser.get("mode") == "vision" or document_parser.get("assistance") else "模型辅助文档" if document_parser.get("mode") == "model" else source_mode
-        if conversation_reasoning and conversation_reasoning["mode"] == "fill_missing":
+        if (conversation_reasoning and conversation_reasoning["mode"] == "fill_missing"
+                and not (agent_trajectory_optimization and set(targets) == {"agent"})):
             model_source_mode = "补全对话推理"
         if source_mode == "开放需求" and creation_mode == "人工问答增强":
             # The run snapshots these designs as input units. It never calls
@@ -1853,7 +1870,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             model_source_mode = "人工设计"
         bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws,
                                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                           source_cleaning=source_cleaning)
+                                           source_cleaning=source_cleaning, agent_trajectory_optimization=agent_trajectory_optimization)
         parser_role = "vision" if document_parser.get("mode") == "vision" else "generation"
         if document_parser.get("mode") in {"model", "vision"} and bindings.get("ingest", {}).get(parser_role):
             document_parser["binding"] = bindings["ingest"][parser_role]
@@ -1870,7 +1887,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 if not supports_vision(endpoints.get(vision_binding["backend"],{}),vision_binding["model"]):
                     document_parser["unconfirmed"]=True
         model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints,
-                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair)
+                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                        agent_trajectory_optimization=agent_trajectory_optimization)
     workbench = st.container(key="workbench-layout")
     if targets:
         # A real page shortcut replaces the static wizard: it never changes
@@ -1886,9 +1904,11 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                        "missing_roles": [role for issue_node, role in model_issues if issue_node == node]}
                                        for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
                                       snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints,
-                                                                  node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
+                                                                  node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                                                  agent_trajectory_optimization=agent_trajectory_optimization),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       review_advisory_policy_version=1,
+                                      agent_trajectory_optimization=agent_trajectory_optimization,
                                       native_sft_review_evolution_version=(1 if "sft" in targets
                                           and qa_director.get("enabled") is True
                                           and node_generation.get("sft", {}).get("enabled") is True
@@ -1914,7 +1934,9 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 title, expand, close = st.columns([4, 2, 1], gap="small", vertical_alignment="center")
                 with title:
                     section_heading(node_display_label(selected_node, GRAPH_LABELS, node_generation,
-                        source_cleaning=source_cleaning, recipe_version=draft_recipe_version, targets=targets), UntranslatedText("Node settings" if st.session_state.get("ui_language") == "en" else "节点配置"), STAGE_GLYPHS[selected_node])
+                        source_cleaning=source_cleaning, recipe_version=draft_recipe_version, targets=targets,
+                        agent_trajectory_optimization=agent_trajectory_optimization,
+                        language=st.session_state.get("ui_language", "zh")), UntranslatedText("Node settings" if st.session_state.get("ui_language") == "en" else "节点配置"), STAGE_GLYPHS[selected_node])
                 with expand:
                     wide_key = f"canvas-wide:setup-canvas:{ws}"
                     st.button("收窄编辑" if st.session_state.get(wide_key) else "展开编辑",
@@ -1941,10 +1963,13 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 st.caption(route)
             has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
                                                       node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                                      qa_director=qa_director))
+                                                      qa_director=qa_director, agent_trajectory_optimization=agent_trajectory_optimization))
             node_tabs = _setup_node_tabs(ws, selected_node, has_prompts=has_prompts)
             with node_tabs["settings"]:
                 render_generation_mode(selected_node, ws, save_field=_save_draft_value)
+                if selected_node == "agent":
+                    render_agent_processing(ws, agent_capabilities, getattr(application, "check_agent_sandbox", None),
+                                            save_field=_save_draft_value)
                 if selected_node in {"preference", "review", "package"} and selected_preferences(targets):
                     st.caption(preference_route(selected_node, review_repair))
                     if selected_node == "package":
@@ -1965,7 +1990,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 if selected_node == "director":
                     render_director_settings(ws, save_field=_save_draft_value)
                 if selected_node == "ingest" and source_mode == "Agent 上下文":
-                    conversation_reasoning = render_conversation_reasoning(ws, save_field=_save_draft_value)
+                    conversation_reasoning = render_conversation_reasoning(ws, save_field=_save_draft_value,
+                        agent_trajectory_optimization=agent_trajectory_optimization and set(targets) == {"agent"})
                 if selected_node == "ingest" and source_mode == "文档资料":
                     document_parser = render_document_parser(ws, bindings, endpoints,
                         backend_application=backend_application)
@@ -1993,8 +2019,6 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         help="仅影响本次任务的 SFT 训练文件，不改写审核证据或其他目标。",
                     )
                     st.caption("分字段保留推理：已有推理写入 assistant.reasoning_content；只保留答案：省略推理字段。")
-                if selected_node == "agent":
-                    render_agent_verification(ws, agent_capabilities, application.check_agent_sandbox)
                 if selected_node == "ingest" and source_mode != "知识库检索":
                     st.caption("输入解析保留来源位置；开放需求按每批最多 50 个任务规划。")
                 elif selected_node == "package":
@@ -2008,7 +2032,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     render_director_rules(ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 render_node_prompts(selected_node, model_source_mode, ws,
                                     save_field=_save_draft_value, node_generation=generation_snapshot(ws, graph_nodes), package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                    qa_director=qa_director, prompt_library=prompt_library)
+                                    qa_director=qa_director, prompt_library=prompt_library,
+                                    agent_trajectory_optimization=agent_trajectory_optimization)
             if "control_text" in node_tabs:
                 with node_tabs["control_text"]:
                     render_control_text_settings(selected_node, ws, save_fields=_commit_draft_fields,
@@ -2047,7 +2072,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     human_source_compatible = human_ready and set(targets) <= HUMAN_QA_TARGETS
     node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                       qa_director=qa_director) if targets else {}
+                                       qa_director=qa_director, agent_trajectory_optimization=agent_trajectory_optimization) if targets else {}
     prompts_invalid = node_prompt_has_issue(node_prompts)
     from lib.presentation.streamlit.workflow_experience_controls import experience_configuration, experience_has_issue
     agent_experience = experience_configuration(ws)
@@ -2310,6 +2335,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         html.escape(translate_label("返回来源设置", language)) + ' ↗</a>')
             agent_mode = st.session_state.get(f"workflow-agent-mode:{ws}", "local")
             agent_unavailable = ("agent" in targets and agent_mode == "isolated"
+                                 and not agent_trajectory_optimization
                                  and not agent_capabilities.get("isolated_configured"))
             if agent_unavailable:
                 _render_setup_issue(ws, "agent", "Agent 隔离验证环境未配置，点击检查节点", kind="agent")
@@ -2480,12 +2506,14 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                      "max_revision_depth": int(st.session_state.get(f"human-revision-limit:{ws}", 3))} if human_enabled else {}
                     run_id = create(**human_options, sources=sources, brief=brief, name=name, targets=targets,
                                         node_models=model_application.snapshot(graph_nodes, model_source_mode, bindings,
-                                                                               node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
+                                                                               node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                                                               agent_trajectory_optimization=agent_trajectory_optimization),
                                         sample_count=int(sample_count), production=production,
                                         concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),
                                         conversation_turns=int(conversation_turns),
                                         agent_replay_mode=agent_mode,
+                                        agent_trajectory_optimization=agent_trajectory_optimization,
                                         sft_output_style=sft_output_style,
                                         conversation_reasoning=conversation_reasoning,
                                         node_generation=node_generation,

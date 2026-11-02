@@ -28,23 +28,33 @@ if 'port' not in st.session_state:
     st.session_state['port']=EditorPort(ROOT/'experience-evolution'/sha256(b'fixture').hexdigest())
     st.session_state['bindings_seen']=[]
     st.session_state['google_calls']=0
+    st.session_state['google_outcomes']=[]
     st.session_state[key]='保持任务相关的依据、反例与反思。'
     st.session_state[enabled]=True
     st.session_state['workflow-node-bindings:fixture']=BINDINGS_VALUE
     st.session_state['conversation-import:fixture:preview']={'import_id':'staged'}
     if FEEDBACK_VALUE:
-        EvolveExperience(st.session_state['port']).record_observation('reasoning', {
+        feedback = {
             'id':'feedback','messages':[{'role':'user','content':'Continue.'},
                 {'role':'assistant','content':'Done.'}],
-            'review_observation':{'verdict':{'keep':True,'reason':'No new transferable evidence.'}}},
-            run_id='a'*32)
+            'review_observation':{'verdict':{'keep':True,'reason':'No new transferable evidence.'}}}
+        if FEEDBACK_VALUE == 'unknown':
+            feedback.pop('review_observation')
+            feedback.update(target='agent',agent_episode_projection_version=1,source_outcome='unknown',semantic_status='not_assessed')
+        EvolveExperience(st.session_state['port']).record_observation('reasoning', feedback, run_id='a'*32)
 class Client:
     client=SimpleNamespace(close=lambda:None)
     def chat(self, messages, **options):
         st.session_state['google_calls']+=1
         return '<no-new-memory/>'
 def google_factory(binding=None):
-    return real_google(binding,root=ROOT,user_key='fixture',client_factory=lambda selected:(Client(),'fixture'))
+    app = real_google(binding,root=ROOT,user_key='fixture',client_factory=lambda selected:(Client(),'fixture'))
+    actual_learn = app.learn
+    def learn(scope, observation, **options):
+        st.session_state['google_outcomes'].append(options.get('user_outcome'))
+        return actual_learn(scope, observation, **options)
+    app.learn = learn
+    return app
 class Importer:
     def evolution_sources(self, identity, **options):
         assert identity=='staged' and options['max_records']==8 and options['max_chars']==60000
@@ -71,13 +81,14 @@ def save_field(workspace, field):
 with patch('lib.bootstrap.experience_evolution.experience_evolution_application',factory), \\
      patch('lib.bootstrap.conversation_import.conversation_import_application',lambda:Importer()), \\
      patch('lib.bootstrap.google_reasoning_bank.google_reasoning_bank_application',google_factory):
-    render_experience_evolution('fixture','reasoning','workflow.cot_native_joint',
+    render_experience_evolution('fixture','reasoning',
+        'workflow.agent_trajectory_optimization' if FEEDBACK_VALUE == 'unknown' else 'workflow.cot_native_joint',
         text_key=key,enabled_key=enabled,save_field=save_field)
 st.text_area('Current experience',key=key)
 from lib.presentation.streamlit.workflow_experience_controls import _restore_experience
 st.button('Reset default',key='reset-default',on_click=_restore_experience,args=('fixture','reasoning',save_field))
 '''
-    binding = {"cot": {"generation": {"backend": "deepseek", "model": "deepseek-flash",
+    binding = {("agent" if feedback == "unknown" else "cot"): {"generation": {"backend": "deepseek", "model": "deepseek-flash",
         "context_window_tokens": 131072, "max_output_tokens": 32768}}} if model else {}
     script = script.replace("ROOT_VALUE", repr(tmp_path.as_posix())).replace(
         "LANGUAGE_VALUE", repr("en" if english else "zh")).replace("BINDINGS_VALUE", repr(binding)).replace(
@@ -193,6 +204,46 @@ def test_google_no_update_preserves_current_edition_and_does_not_reclaim_feedbac
     ui.button(key=prefix + ":google-learn").click().run()
     assert not ui.exception and ui.session_state["google_calls"] == 1
     assert any("暂无待学习反馈" in notice.value for notice in ui.info)
+
+
+def test_unknown_agent_feedback_needs_explicit_outcome_and_reauthenticates_released_preview(tmp_path):
+    from lib.contexts.workflows.application.experience_evolution import EvolveExperience
+
+    ui = editor(tmp_path, feedback="unknown")
+    prefix = "experience-evolution:fixture:reasoning"
+    pending_key = prefix + ":google-pending-feedback"
+    ui.button(key=prefix + ":google-learn").click().run()
+    assert not ui.exception and ui.session_state["google_calls"] == 0
+    preview = ui.session_state[pending_key]
+    app = EvolveExperience(ui.session_state["port"])
+    observation_id = preview["entries"][0]["id"]
+    source = app.get_observation(observation_id)
+    assert app.get_observation_batch(preview["id"])["status"] == "released", "closing the page cannot orphan a claim"
+    assert ui.button(key=prefix + ":google-labelled-learn").disabled
+    ui.run()
+    assert ui.session_state["google_calls"] == 0
+
+    competing = app.claim_observation_batch("reasoning", max_records=1)
+    ui.selectbox(key=prefix + ":google-feedback-outcome:" + preview["id"]).set_value("success").run()
+    ui.button(key=prefix + ":google-labelled-learn").click().run()
+    assert not ui.exception and ui.session_state["google_calls"] == 0
+    assert any("待学习记录已变更" in error.value for error in ui.error)
+    app.release_observation_batch(competing["id"])
+
+    ui.button(key=prefix + ":google-learn").click().run()
+    ui.button(key=prefix + ":google-feedback-cancel").click().run()
+    assert not ui.exception and ui.session_state["google_calls"] == 0
+    assert app.get_observation(observation_id)["collection_state"] == "pending"
+    ui.button(key=prefix + ":google-learn").click().run()
+    preview = ui.session_state[pending_key]
+    ui.selectbox(key=prefix + ":google-feedback-outcome:" + preview["id"]).set_value("success").run()
+    ui.button(key=prefix + ":google-labelled-learn").click().run(timeout=15)
+    assert not ui.exception and ui.session_state["google_calls"] == 1
+    assert ui.session_state["google_outcomes"] == ["success"]
+    current = app.get_observation(observation_id)
+    assert current["episode"] == source["episode"] and current["sha256"] == source["sha256"]
+    assert current["outcome"] == "unknown" and current["episode"]["source_outcome"] == "unknown"
+    assert current["collection_state"] == "no_update"
 
 
 def test_personal_template_default_restore_detaches_the_saved_evolution_parent(tmp_path):

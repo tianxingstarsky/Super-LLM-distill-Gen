@@ -208,6 +208,7 @@ def test_isolated_agent_environment_warning_opens_the_agent_verification_setting
     ui = AppTest.from_string(code).run()
     ui.pills(key="workflow-targets:fixture:自动推荐").set_value(["agent", "sft"]).run()
     ui.button(key="fixture-node:agent").click().run()
+    ui.radio(key="workflow-agent-processing-choice:fixture").set_value("replay").run()
     ui.selectbox(key="agent-mode-choice:fixture").set_value("isolated").run()
     ui.button(key="fixture-node:sft").click().run()
     ui.button(key="workflow-config-fix:fixture:agent:agent").click().run()

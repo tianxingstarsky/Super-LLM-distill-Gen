@@ -39,7 +39,8 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
                       web_research=None, sources=(), node_generation=None, reasoning_trim=None,
                       node_prompts=None, node_control_text_configs=None, package_review=None, qa_director=None, production=None,
                       cpt_processing=None, review_repair=None, repair_inputs=None, agent_experience=None,
-                      reasoning_required=False, preference_design=None, preparing_review_session=False):
+                      reasoning_required=False, preference_design=None, preparing_review_session=False,
+                      agent_trajectory_optimization=False):
     if type(preparing_review_session) is not bool:
         raise ValueError("invalid_review_session_phase")
     validate_preference_design(preference_design)
@@ -55,6 +56,8 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     if not targets or any(not isinstance(t, str) or t not in TARGETS for t in targets):
         raise ValueError("请选择 CPT、SFT、DPO、RLAIF、GSM8K、CoT、ORPO、Agent 或多轮对话")
     targets = list(dict.fromkeys(targets))
+    if type(agent_trajectory_optimization) is not bool or agent_trajectory_optimization and "agent" not in targets:
+        raise ValueError("invalid_agent_trajectory_optimization")
     production = validate_production(production, targets)
     if not isinstance(agent_replay_mode, str) or agent_replay_mode not in {"configured", "local", "isolated"}:
         raise ValueError("invalid_agent_replay_mode")
@@ -84,7 +87,7 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
         cot = generation.get("cot", {})
         if not cot.get("enabled") or cot.get("answer_mode") != "native_prefill":
             raise ValueError("native_regeneration_requires_native_cot_style")
-    validate_node_prompts(node_prompts)
+    validate_node_prompts(node_prompts, agent_trajectory_optimization=agent_trajectory_optimization)
     validate_node_control_text_configs(node_control_text_configs)
     validate_agent_experience(agent_experience)
     validate_package_review(package_review)

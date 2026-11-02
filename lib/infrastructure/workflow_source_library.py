@@ -211,7 +211,11 @@ class WorkflowSourceLibrary:
                             else:
                                 from lib.review_editor import normalize_sample
                                 sample = normalize_sample(row)
-                            issue = source_conversation_issue(sample, self.recipe["targets"])
+                            if self.recipe.get("agent_trajectory_optimization_version") == 1 and set(self.recipe["targets"]) == {"agent"}:
+                                from lib.contexts.workflows.contracts import recorded_agent_issue
+                                issue = recorded_agent_issue(sample)
+                            else:
+                                issue = source_conversation_issue(sample, self.recipe["targets"])
                             if issue:
                                 yield unit(index, status="quarantined", reason=issue)
                                 continue

@@ -10,7 +10,7 @@ from lib.contexts.datasets.infrastructure import archive as workflow_archive
 from lib.infrastructure import review_release_jobs
 from lib.infrastructure.json_stream import iter_json_records
 from lib.domain.dataset_assets import DIRECT_DOWNLOAD_LIMIT_BYTES
-from lib.contexts.workflows.contracts import training_record
+from lib.contexts.workflows.contracts import training_record, valid_agent_optimization_record
 from lib.contexts.datasets.domain.delivery import has_deliverable_results, delivery_manifest_matches, require_packageable
 
 
@@ -32,10 +32,11 @@ def _agent_preview_with_evidence(run: Path, rows: list[dict], offset: int) -> li
                     matches = training_record("agent", record) == native
                 except (KeyError, TypeError, ValueError):
                     matches = False
-                if not matches or not isinstance(record.get("verification"), dict):
+                optimized = isinstance(record.get("agent_optimization"), dict) and record["agent_optimization"].get("version") == 1
+                if not matches or (not valid_agent_optimization_record(record) if optimized else not isinstance(record.get("verification"), dict)):
                     raise ValueError("artifact_integrity_error")
                 fields = ("source_id", "source_name", "location", "source_location",
-                          "evidence_level", "original_messages_sha256", "verification")
+                          "evidence_level", "original_messages_sha256", "verification", "agent_optimization", "source_outcome", "semantic_status")
                 selected.append({**native, **{key: record[key] for key in fields if key in record}})
                 if len(selected) == len(rows):
                     break

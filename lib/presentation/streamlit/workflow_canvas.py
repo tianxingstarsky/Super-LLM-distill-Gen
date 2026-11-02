@@ -34,7 +34,7 @@ def _native_recipe(node_generation, recipe_version, native_generation_version=No
 
 
 def node_display_label(node, labels, node_generation=None, *, source_cleaning=False, recipe_version=None, targets=None,
-                       native_generation_version=None, language="zh"):
+                       native_generation_version=None, language="zh", agent_trajectory_optimization=False):
     """Name the dataset stage; shared corpus reuse does not erase CPT."""
     if native_generation_enabled(_native_recipe(node_generation, recipe_version, native_generation_version), node):
         base = "SFT" if node == "sft" else "Multi-turn" if language == "en" else "多轮"
@@ -49,12 +49,15 @@ def node_display_label(node, labels, node_generation=None, *, source_cleaning=Fa
         return "模板算术题"
     if node == "preference" and targets is not None:
         return preference_stage_label(targets)
+    if node == "agent" and agent_trajectory_optimization:
+        return "Agent optimization" if language == "en" else "Agent 轨迹优化"
     return labels.get(node, "评分与修正" if node == "review" else node)
 
 
 def node_description(node, source_mode, *, node_generation=None, package_review=None, cpt_processing=None,
                      review_repair=None, recipe_version=None, source_cleaning=False, targets=None,
-                     cpt_review_policy_version=0, native_generation_version=None, language="zh"):
+                     cpt_review_policy_version=0, native_generation_version=None, language="zh",
+                     agent_trajectory_optimization=False):
     """A short purpose and cost hint available on every node without another card."""
     descriptions = {
         "ingest": "读取来源并整理为可处理的文档片段或任务。",
@@ -70,7 +73,12 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         "review": "在同一节点评分、修正并重新评分；通过后才进入打包，修正不会回到 SFT 生成。",
         "package": "检查结构、去重并导出训练文件、报告与清单。",
     }
-    if native_generation_enabled(_native_recipe(node_generation, recipe_version, native_generation_version), node):
+    if node == "agent" and agent_trajectory_optimization:
+        description = ("Edit only the final assistant CoT, normally with one author call per trajectory. "
+                       "The final answer and recorded tools stay fixed. Flow suggestions are saved separately; no local replay is required."
+                       if language == "en" else
+                       "每条轨迹默认一次作者调用，仅编辑最终助手 CoT；最终答案和工具证据固定。流程建议单独保存，无需本机重放。")
+    elif native_generation_enabled(_native_recipe(node_generation, recipe_version, native_generation_version), node):
         description = ("The answering model produces native reasoning and the answer in one response. "
                        "CoT export reuses this response without another generation call."
                        if language == "en" else
@@ -104,7 +112,8 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         description += " CPT 清洗完成后直接打包，仍执行结构、隐私与去重检查；不再进入生成后的评分与修正。"
     roles = node_roles(node, source_mode, node_generation=node_generation,
                        package_review=package_review, cpt_processing=cpt_processing,
-                       review_repair=review_repair, recipe_version=recipe_version)
+                       review_repair=review_repair, recipe_version=recipe_version,
+                       agent_trajectory_optimization=agent_trajectory_optimization)
     usage = ("人工评分与修正，不发起模型请求。" if node == "review" and not roles else
              "调用模型；可能产生 API 费用。" if roles else "本地处理，不发起模型请求。")
     return description, usage
@@ -291,7 +300,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 review_repair=None, repair_only=False, source_cleaning=False,
                 arithmetic_seed_protocol_version=0, cpt_review_policy_version=0, native_generation_version=None,
                 review_advisory_policy_version=None, sft_reanswer_version=0,
-                native_sft_review_evolution_version=None):
+                native_sft_review_evolution_version=None, agent_trajectory_optimization=False):
     native_recipe = _native_recipe(node_generation, recipe_version, native_generation_version)
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
@@ -349,7 +358,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         done, total = int(metrics.get("done", 0) or 0), int(metrics.get("total", 0) or 0)
         status = metrics.get("status", "pending")
         roles = node_roles(key, source_mode, node_generation=node_generation, package_review=package_review,
-                           cpt_processing=cpt_processing, review_repair=review_repair, recipe_version=recipe_version)
+                           cpt_processing=cpt_processing, review_repair=review_repair, recipe_version=recipe_version,
+                           agent_trajectory_optimization=agent_trajectory_optimization)
         if repair_only and key == "ingest":
             roles = ()
         node_bindings = {role: binding for role, binding in (bindings or {}).get(key, {}).items()
@@ -368,6 +378,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
             role_names["generation"] = "Cleaning model" if language == "en" else "清洗模型"
         elif key == "director":
             role_names["generation"] = "Dialogue director model" if language == "en" else "对话指导员模型"
+        elif key == "agent":
+            role_names["generation"] = "Trajectory CoT editor" if language == "en" else "轨迹 CoT 编辑模型"
         missing_hint = (("Missing: " if language == "en" else "缺少：") +
                         (", " if language == "en" else "、").join(role_names[role] for role in missing_roles if role in role_names))
         subtitle = (f"{translate_label(status_label, language)} · {done:,} / {total:,}" if live else
@@ -390,6 +402,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                         title = "Clean" if language == "en" else "清洗"
                     elif key == "director" and role_key == "generation":
                         title = "Director" if language == "en" else "指导员"
+                    elif key == "agent" and role_key == "generation":
+                        title = "Edit" if language == "en" else "编辑"
                     models.append(f"{title}: {binding['backend']} · {binding['model']}")
         description = ("Verify the selected source and candidate, without another model parse." if language == "en" else
                        "核验选中的来源与候选结果，不重新调用模型解析。") if repair_only and key == "ingest" else " ".join(
@@ -397,10 +411,12 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing,
                            review_repair=review_repair, recipe_version=recipe_version, source_cleaning=shared_cleaning,
                            targets=targets, cpt_review_policy_version=0 if repair_only else cpt_review_policy_version,
-                           native_generation_version=native_recipe["native_generation_version"], language=language))
+                           native_generation_version=native_recipe["native_generation_version"], language=language,
+                           agent_trajectory_optimization=agent_trajectory_optimization))
         data.append({"id": key, "label": translate_label(node_display_label(key, labels, node_generation,
                          source_cleaning=shared_cleaning, recipe_version=recipe_version, targets=targets,
-                         native_generation_version=native_recipe["native_generation_version"], language=language), language), "glyph": glyphs.get(key, "✓"),
+                         native_generation_version=native_recipe["native_generation_version"], language=language,
+                         agent_trajectory_optimization=agent_trajectory_optimization), language), "glyph": glyphs.get(key, "✓"),
                      "x": positions[key][0], "y": positions[key][1], "status": status,
                      "description": description,
                      "subtitle": subtitle, "models": models, "percent": min(100, done * 100 / total) if total else

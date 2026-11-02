@@ -105,6 +105,50 @@ def test_replayed_multi_turn_trajectory_is_pruned_and_exported_without_model(tmp
     assert not (path / "artifacts" / "trl_agent.jsonl").exists()
 
 
+def test_distinct_tool_calls_do_not_reserialize_the_remaining_trajectory(monkeypatch):
+    from lib.domain import agent_trajectory
+
+    messages = [{"role": "user", "content": "Compute four using each distinct expression."}]
+    for index in range(40):
+        messages.extend((_call(f"call-{index}", f"{index} - {index} + 4"),
+                         _result(f"call-{index}", "4")))
+    messages.append({"role": "assistant", "content": "4"})
+    canonical = agent_trajectory.canonical
+    serialized_suffixes = []
+
+    def record_serialization(value):
+        if isinstance(value, list):
+            serialized_suffixes.append(len(value))
+        return canonical(value)
+
+    monkeypatch.setattr(agent_trajectory, "canonical", record_serialization)
+    result = agent_trajectory.assess_recorded_trajectory(messages)
+
+    assert result["status"] == "eligible"
+    assert result["messages"] == messages
+    assert result["verification"]["pruned_call_ids"] == []
+    assert len(result["verification"]["verified_call_ids"]) == 40
+    assert serialized_suffixes == []
+
+
+def test_duplicate_tool_call_referenced_by_a_later_user_is_retained():
+    from lib.domain.agent_trajectory import assess_recorded_trajectory
+
+    messages = [{"role": "user", "content": "Compute 2 + 2."},
+                _call("a", "2 + 2"), _result("a", "4"),
+                _call("b", "2 + 2"), _result("b", "4"),
+                {"role": "assistant", "content": "4"},
+                {"role": "user", "content": "Check the value from tool call b."},
+                _call("c", "2 + 2"), _result("c", "4"),
+                {"role": "assistant", "content": "4"}]
+    result = assess_recorded_trajectory(messages)
+
+    assert result["status"] == "eligible"
+    assert result["messages"] == messages
+    assert result["verification"]["verified_call_ids"] == ["a", "b", "c"]
+    assert result["verification"]["pruned_call_ids"] == []
+
+
 def test_agent_preview_rejects_evidence_from_a_different_training_row(tmp_path, monkeypatch):
     messages = [{"role": "user", "content": "2+2"}, _call("a", "2+2"),
                 _result("a", "4"), {"role": "assistant", "content": "4"}]

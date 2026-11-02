@@ -45,20 +45,30 @@ def recorded_episode(observation, user_outcome=None):
         check = {"keep": user_outcome == "success", "reason": "Outcome explicitly labelled by the operator."}
     if not isinstance(check, dict) or type(check.get("keep")) is not bool:
         raise ValueError("reasoning_bank_no_observed_outcome")
+    chronological = episode.get("agent_episode_projection_version") == 1 and episode.get("target") == "agent"
     thoughts, actions = [], []
-    for message in messages:
+    assistant_indexes = [index for index, message in enumerate(messages) if message.get("role") == "assistant"]
+    for position, index in enumerate(assistant_indexes):
+        message = messages[index]
         if message.get("role") != "assistant":
             continue
         reasoning = message.get("reasoning_content", message.get("reasoning", ""))
         thoughts.append("\n".join(reasoning) if isinstance(reasoning, list) else reasoning or "")
-        actions.append(json.dumps({key: message[key] for key in ("role", "content", "tool_calls")
-                                  if key in message}, ensure_ascii=False))
-    return {"id": episode["id"], "query": json.dumps([message for message in messages
-            if message.get("role") != "assistant"], ensure_ascii=False),
+        action = {key: message[key] for key in (("role", "content", "tool_calls", "toolCalls")
+                  if chronological else ("role", "content", "tool_calls")) if key in message}
+        if chronological:
+            end = assistant_indexes[position + 1] if position + 1 < len(assistant_indexes) else len(messages)
+            action = {"assistant_action": action, "following_recorded_observations": deepcopy(messages[index + 1:end])}
+        actions.append(json.dumps(action, ensure_ascii=False))
+    query = (messages[:assistant_indexes[0]] if chronological and assistant_indexes else
+             [message for message in messages if message.get("role") != "assistant"])
+    return {"id": episode["id"], "query": json.dumps(query, ensure_ascii=False),
         "think_list": thoughts, "action_list": actions,
         "status": "success" if check["keep"] else "fail",
         "assessment_source": {"kind": "user_label" if user_outcome else "recorded_model_autoeval", "independently_verified": False},
-        "feedback": "This is a fallible reviewer observation, not established truth.\n" + check.get("reason", "")}
+        "feedback": "This is a fallible reviewer observation, not established truth.\n" + check.get("reason", ""),
+        **({"agent_episode_projection_version": 1, "source_outcome": episode.get("source_outcome", "unknown")}
+           if chronological else {})}
 
 
 class GoogleReasoningBank:

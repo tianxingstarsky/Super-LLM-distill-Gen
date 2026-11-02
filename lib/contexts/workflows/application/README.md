@@ -1,5 +1,7 @@
 # 工作流用例
 
+`OptimizeRecordedAgent` 默认每条轨迹只处理最后一个助手轮，使用一次现有作者请求；不自动逐轮、不独立评审、不执行工具或自动学习。显式 message_index 可定位另一轮，发送该轮之前的完整原记录；原生编辑器思考仅作请求证据，不作为源 CoT。Agent-only 的 preserve/exclude 在本地执行，fill_missing 延后到选定轮；混合目标保留共享导入处理并单独说明。流程建议与实际记录分开保存，格式/一致性可交付不代表质量通过。
+
 原生生成在指导员已有调用选择上下文后，按轮加载冻结的通用与选中风格；`generate_native_turn` 保留完整历史，`GenerateNativeCot` 将实际系统上下文与原生推理一起保存。公开提醒、样本表面核验和多轮完成检查只认可精确的程序来源，不把任意 system 消息放宽为有效上下文。
 
 新建普通多轮任务采用自动建议评审时，冻结 `multiturn_advisory_review_version=1`。`GenerateMultiturnDialogue` 保留发言、响应、来源、引文、角色及完整多轮的本地校验，每轮只生成一次；逐轮内容、风格、契约和整段一致性模型检查统一延后到最终一次建议评审。记录明确写 `deferred` / `model_called=false`，不生成通过评分，已通过逐轮评审数为零。原生节点即使配置独立 `review_policy` 也只记录延后，不另购评审。缺少该标记的冻结任务及 `repair_inputs` 返工任务保留既有流程。

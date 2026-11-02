@@ -25,6 +25,13 @@ def record_advisory_review_observation(runtime, target, record, evolution):
         "actual_delivery": {"status": original.get("status"), "reason": original.get("reason")},
         "assessment_meaning": "Reviewer advice is an observation, not independently established truth. "
             "Advisory release does not prove correctness or successful learning."}
+    agent_optimization = target == "agent" and runtime.recipe.get("agent_trajectory_optimization_version") == 1
+    if agent_optimization:
+        episode.update(agent_episode_projection_version=1, source_outcome="unknown",
+            agent_optimization={key: deepcopy(value) for key, value in original.get("agent_optimization", {}).items()
+                if key in {"version", "status", "message_index", "source_messages_sha256", "derived_messages_sha256",
+                           "edits", "issues", "flow_suggestions", "reasoning_origin", "source_outcome", "semantic_status"}},
+            reasoning_provenance=deepcopy(original.get("conversation_reasoning", {})))
     for field in ("review_observation", "native_generation", "learner_context_check"):
         if field in original:
             if field == "native_generation":
@@ -42,7 +49,7 @@ def record_advisory_review_observation(runtime, target, record, evolution):
         episode["source_evidence"] = {key: deepcopy(source[key]) for key in (
             "teacher_evidence", "text", "task", "source_kind", "source_id", "source_line_ranges") if key in source}
     native = runtime.recipe.get("node_generation", {}).get(target, {}).get("answer_mode") == "native_joint"
-    scope = "cpt" if target == "cpt" else "reasoning" if target == "cot" or native else "answer"
+    scope = "cpt" if target == "cpt" else "reasoning" if target == "cot" or native or agent_optimization else "answer"
     return evolution.record_observation(scope, episode, run_id=runtime.state["id"],
         outcome="advisory_release" if original.get("status") == "eligible" else "unknown",
         evidence_status="model_assessed" if receipt.get("verdict") or original.get("review_observation") else "unverified",

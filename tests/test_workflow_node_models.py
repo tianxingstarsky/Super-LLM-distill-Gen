@@ -16,6 +16,26 @@ class Inventory:
         return self.value
 
 
+def test_recorded_agent_author_binding_is_opt_in_and_legacy_replay_stays_model_free():
+    app = WorkflowNodeModelsApplication(Inventory())
+    legacy, markers, endpoints = app.prepare_draft(["agent"], "Agent 上下文", {}, [])
+    assert legacy == {} and markers == []
+    assert app.snapshot(["agent"], "Agent 上下文", legacy) == {}
+    edited, markers, endpoints = app.prepare_draft(["agent"], "Agent 上下文", legacy, markers,
+                                                  agent_trajectory_optimization=True)
+    assert set(edited["agent"]) == {"generation"}
+    assert markers == ["agent:generation"]
+    assert not missing_bindings(["agent"], "Agent 上下文", edited, endpoints,
+                                agent_trajectory_optimization=True)
+    assert app.snapshot(["agent"], "Agent 上下文", edited,
+                        agent_trajectory_optimization=True) == edited
+    assert app.snapshot(["agent"], "Agent 上下文", edited) == {}, "replay ignores, but does not delete, remembered editor bindings"
+    cleared = {"agent": {}}
+    restored, _, _ = app.prepare_draft(["agent"], "Agent 上下文", cleared, markers,
+                                      agent_trajectory_optimization=True)
+    assert restored == cleared, "an explicitly cleared author stays empty after mode switches"
+
+
 def test_new_nodes_use_defaults_once_and_keep_explicit_choices():
     port = Inventory()
     app = WorkflowNodeModelsApplication(port)

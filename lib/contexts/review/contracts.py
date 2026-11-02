@@ -1,6 +1,7 @@
 """Public review configuration and immutable repair-input contracts."""
 from .domain.repair import validate_review_repair, validate_repair_inputs
 from .domain.candidate_content import preserve_provider_reasoning
+from .domain.candidate_content import _payload_issue as candidate_payload_issue
 from .domain.advisory_policy import advisory_release_valid
 from .domain.generation_control_history import retire_generation_controls
 from .domain.claim_windows import validate_windowed_claim_audit, project_review_window_hints

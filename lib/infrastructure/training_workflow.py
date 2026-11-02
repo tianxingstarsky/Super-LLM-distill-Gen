@@ -209,7 +209,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                conversation_reasoning=None, open_dialogue_question_mode="auto",
                reuse_initial_native_response=False, reanswer_sft=False, dialogue_style_contexts=False,
                sft_reanswer_task_instructions_version=None, sft_reanswer_task_instructions=None,
-               native_sft_review_evolution=True):
+               native_sft_review_evolution=True, agent_trajectory_optimization=False):
     if type(native_sft_review_evolution) is not bool:
         raise ValueError("invalid_native_sft_review_evolution")
     if type(dialogue_style_contexts) is not bool:
@@ -239,7 +239,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         targets=targets, max_units=max_units, chunk_chars=chunk_chars, tasks=tasks,
         sample_count=sample_count, concurrency=concurrency, batch_size=batch_size,
         node_models=node_models, conversation_turns=conversation_turns, brief=brief,
-        agent_replay_mode=agent_replay_mode, evaluation_sources=evaluation_sources,
+        agent_replay_mode=agent_replay_mode, agent_trajectory_optimization=agent_trajectory_optimization, evaluation_sources=evaluation_sources,
         web_research=web_research, sources=sources, node_generation=node_generation,
         reasoning_trim=reasoning_trim, node_prompts=node_prompts, node_control_text_configs=node_control_text_configs,
         package_review=package_review, qa_director=qa_director, production=production,
@@ -294,7 +294,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     human = qa_director.get("human_augmentation", {"enabled": False})
     cpt_processing_supplied = cpt_processing is not None
     cpt_processing = validate_cpt_processing(cpt_processing)
-    node_prompts = validate_node_prompts(node_prompts)
+    node_prompts = validate_node_prompts(node_prompts, agent_trajectory_optimization=agent_trajectory_optimization)
     from lib.domain.agent_experience import snapshot_agent_experience
     experience_snapshot = snapshot_agent_experience(agent_experience)
     if cpt_only:
@@ -379,6 +379,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         and (native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint")
         and (not repair_inputs or reanswer_sft) else None)
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+        agent_trajectory_optimization_version=1 if agent_trajectory_optimization else None,
         native_context_contract_version=native_context_contract_version,
         native_sft_review_evolution_version=native_sft_review_evolution_version,
         dialogue_style_context_version=dialogue_style_context_version,
@@ -461,8 +462,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             for index, source in enumerate(files)])
     references = snapshot_released_corpus(Path(output)) if "cpt" in targets else []
     agent_sandbox_image = (validate_sandbox_image(os.environ.get(IMAGE_ENV))
-                           if not repair_inputs and "agent" in targets and agent_replay_mode != "local" else None)
-    if not repair_inputs and "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:
+                           if not agent_trajectory_optimization and not repair_inputs and "agent" in targets and agent_replay_mode != "local" else None)
+    if not agent_trajectory_optimization and not repair_inputs and "agent" in targets and agent_replay_mode == "isolated" and not agent_sandbox_image:
         raise ValueError("agent_sandbox_not_configured")
     run_id = uuid.uuid4().hex if run_id is None else run_id
     # Human workspaces reserve this identity durably before creating the child.
@@ -563,6 +564,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         else:
             recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+            agent_trajectory_optimization_version=1 if agent_trajectory_optimization else None,
             native_context_contract_version=native_context_contract_version,
             native_sft_review_evolution_version=native_sft_review_evolution_version,
             dialogue_style_context_version=dialogue_style_context_version,
@@ -775,10 +777,17 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     memory_query = (recipe["dialogue_style_base_catalog"]["contexts"]["common"]["description"]
         if dialogue_style_context_version == 1 else "\n".join(filter(None, (name, brief, ", ".join(targets),
             qa_director.get("learning_goal", "")))))
+    if agent_trajectory_optimization:
+        from lib.bootstrap.agent_optimization import freeze_agent_reasoning_memory
+        recipe["agent_trajectory_optimization_version"] = 1
+        recipe["agent_reasoning_memory"] = freeze_agent_reasoning_memory(recipe["agent_experience"])
+        recipe["agent_input_preparation"] = {
+            "version": 1, "mode": "agent_final_author" if set(targets) == {"agent"} else "mixed_shared_ingest_unchanged"}
     memory_selection = google_reasoning_bank_application().freeze(agent_experience,
         memory_query,
         **({"excluded_scopes": ("reasoning",), "context_types": ["common"]}
-           if dialogue_style_context_version == 1 else {}))
+           if dialogue_style_context_version == 1 else {"excluded_scopes": ("reasoning",)}
+           if agent_trajectory_optimization else {}))
     if memory_selection:
         recipe["agent_experience"] = memory_selection["snapshot"]
         recipe["reasoning_bank_selection"] = memory_selection["selection_receipt"]
@@ -922,7 +931,8 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
         self._abort.clear()
         metrics = self.state["stages"][stage]
         batch_size = self.recipe.get("batch_size", 100)
-        workers = self.recipe.get("concurrency", 1) if stage not in {"ingest", "agent", "gsm8k"} else 1
+        authored_agent = stage == "agent" and self.recipe.get("agent_trajectory_optimization_version") == 1
+        workers = self.recipe.get("concurrency", 1) if authored_agent or stage not in {"ingest", "agent", "gsm8k"} else 1
         metrics.update(status="running", done=0, total=len(items), started_at=now(),
                        outputs=0, eligible=0, quarantined=0, cached=0,
                        rate_per_minute=None, eta_seconds=None,
@@ -942,7 +952,11 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
             try:
                 self.check_cancel()
                 checkpoint_key = ["item", index, digest(item)]
-                if stage == "agent":
+                if authored_agent:
+                    checkpoint_key.extend(("agent_trajectory_optimization", 1,
+                        digest(self.prompt_text("workflow.agent_trajectory_optimization", stage="agent")),
+                        self.recipe["agent_reasoning_memory"]["sha256"]))
+                elif stage == "agent":
                     checkpoint_key.extend((REPLAY_POLICY_VERSION, RUNNER_SHA256,
                                            self.recipe.get("agent_sandbox_image")))
                 cached = self.checkpoint_has(checkpoint_key)
@@ -1052,6 +1066,10 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
     def prepared_source_units(self, source):
         """Apply this run's import policy after the reusable raw source cache."""
         units = self.iter_source_units(source)
+        if (self.recipe.get("agent_trajectory_optimization_version") == 1
+                and set(self.recipe["targets"]) == {"agent"}):
+            from lib.contexts.workflows.domain.agent_trajectory_optimization import prepare_agent_input
+            return (prepare_agent_input(unit, self.recipe.get("conversation_reasoning")) for unit in units)
         if self.recipe.get("conversation_reasoning") is None:
             return units
         if self.recipe["conversation_reasoning"]["mode"] == "fill_missing":
@@ -1318,7 +1336,11 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                 else:
                     from lib.review_editor import normalize_sample
                     sample = normalize_sample(row)
-                issue = source_conversation_issue(sample, self.recipe["targets"])
+                if self.recipe.get("agent_trajectory_optimization_version") == 1 and set(self.recipe["targets"]) == {"agent"}:
+                    from lib.contexts.workflows.contracts import recorded_agent_issue
+                    issue = recorded_agent_issue(sample)
+                else:
+                    issue = source_conversation_issue(sample, self.recipe["targets"])
                 tool_snapshots = sample.get("tool_snapshots")
                 if issue:
                     yield unit(index, status="quarantined", reason=issue)
@@ -1568,6 +1590,9 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
         return dialogue_generation(self).generate(unit, style=style)
 
     def agent(self, unit):
+        if self.recipe.get("agent_trajectory_optimization_version") == 1:
+            from lib.bootstrap.agent_optimization import recorded_agent_optimizer
+            return recorded_agent_optimizer(self).execute(unit)
         from lib.contexts.workflows.contracts import imported_reasoning_metadata
         if unit.get("kind") != "conversation":
             return [self.rejected(unit, "recorded_tool_trajectory_required")]
@@ -1807,7 +1832,8 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                     for index, original in enumerate(collections[target]):
                         self.check_cancel()
                         row = deepcopy(original)
-                        if row["status"] == "eligible" and not self.skips_post_generation_review(target):
+                        if row["status"] == "eligible" and (not self.skips_post_generation_review(target)
+                                or target == "agent" and self.recipe.get("agent_trajectory_optimization_version") == 1):
                             if issue := self.human_package_issue(row, target):
                                 row.update(status="quarantined", reason=issue)
                         if row["status"] == "eligible" and target == "sft":
@@ -1965,10 +1991,19 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                                   "CPT 当前批次及同工作区已发布版本的近重复筛查不证明来源许可或事实正确",
                                   "CPT 跨批参照仅覆盖任务创建时同一工作区已发布且清单可校验的版本；不覆盖其他工作区或未审核候选",
                                   "CPT 近重复候选索引可能漏检；短于 300 字符的不同文本只做精确去重",
-                                  "Agent 默认仅重放受限整数 calculator 和录制快照上的 json_pointer；显式配置固定摘要镜像后可隔离重放受限 sandbox_ledger 状态机，仍不证明上传快照的外部真实性；其他工具隔离",
+                                  ("Agent 本轮只编辑选定原推理，保留全部原调用、参数、观察、顺序及最终答案；未执行或验证工具，来源正确性未知，一致性保留不代表质量通过"
+                                   if self.recipe.get("agent_trajectory_optimization_version") == 1 else
+                                   "Agent 默认仅重放受限整数 calculator 和录制快照上的 json_pointer；显式配置固定摘要镜像后可隔离重放受限 sandbox_ledger 状态机，仍不证明上传快照的外部真实性；其他工具隔离"),
                                   "GSM8K 是受限整数算术模板样例，不等同完整 GSM8K 基准",
                                   "TRL 格式相容不证明所选模型聊天模板或 tokenizer 可用于训练",
                                   "敏感信息规则不能覆盖所有隐私类型"]}
+        if self.recipe.get("agent_trajectory_optimization_version") == 1:
+            report["agent_optimization"] = {"version": 1, "author_scope": "final_assistant_only",
+                "tool_execution": "not_performed", "semantic_status": "not_assessed", "source_outcome": "unknown",
+                "flow_suggestions": "requires_verification_not_executed", "independent_review_calls": 0,
+                "eligible_meaning": "consistency_preserved_candidate_not_quality_pass",
+                "input_preparation": deepcopy(self.recipe.get("agent_input_preparation")),
+                "frozen_reasoning_edition": deepcopy(self.recipe.get("agent_reasoning_memory", {}).get("edition_ref"))}
         if "arithmetic_registry" in self.state:
             report["arithmetic_registry"] = deepcopy(self.state["arithmetic_registry"])
         preferences = self.recipe.get("generation_preferences")

@@ -90,6 +90,7 @@ ENUM_FIELDS.update({'workflow-document-parse-mode': frozenset({'native', 'model'
                     'workflow-director-context-mode': frozenset({'persistent', 'batch'}),
                     'workflow-director-tools-mode': frozenset({'auto', 'disabled'})})
 BOOLEAN_FIELDS = {'workflow-generation-enabled', 'workflow-reading-session', 'workflow-trim-enabled',
+                  'workflow-agent-trajectory-optimization',
                   'workflow-cot-checklist-enabled',
                   'workflow-sft-checklist-enabled', 'workflow-multiturn-checklist-enabled',
                   'workflow-preference-reuse-failures',

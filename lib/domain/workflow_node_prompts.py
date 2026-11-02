@@ -50,6 +50,7 @@ VERSION_24_NODE_PROMPT_IDS = {**VERSION_23_NODE_PROMPT_IDS,
 VERSION_25_NODE_PROMPT_IDS = {**VERSION_24_NODE_PROMPT_IDS,
                   "cot": (*VERSION_24_NODE_PROMPT_IDS["cot"], "workflow.cot_check_agent")}
 NODE_PROMPT_IDS = {**VERSION_25_NODE_PROMPT_IDS,
+                  "agent": ("workflow.agent_trajectory_optimization",),
                   "ingest": (*VERSION_25_NODE_PROMPT_IDS["ingest"], "workflow.conversation_reasoning_hints", "workflow.conversation_reasoning"),
                   "sft": (*VERSION_25_NODE_PROMPT_IDS["sft"], "workflow.cot_native_joint"),
                   "multiturn": (*VERSION_25_NODE_PROMPT_IDS["multiturn"], "workflow.reading_scene", "workflow.reading_user", "workflow.reading_answer", "workflow.cot_native_joint"),
@@ -72,7 +73,7 @@ def builtin_node_prompt(prompt_id: str, *, conversation_reasoning_version=None) 
 
 def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None,
                            package_review=None, qa_director=None, cpt_processing=None, review_repair=None,
-                           conversation_reasoning_version=None) -> tuple[str, ...]:
+                           conversation_reasoning_version=None, agent_trajectory_optimization=False) -> tuple[str, ...]:
     """Only offer templates that the selected node can actually call."""
     # Prompt editing must remain available while users are clearing a rule or
     # adjusting the final type weight. Creation validates the complete recipe.
@@ -80,6 +81,8 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
     separated = directed and qa_director.get("question_separation") is True
     human = directed and isinstance(qa_director.get("human_augmentation"), dict) and qa_director["human_augmentation"].get("enabled") is True
     human_prompt = ("workflow.human_augmentation_check",) if human else ()
+    if stage == "agent":
+        return NODE_PROMPT_IDS[stage] if agent_trajectory_optimization else ()
     if stage == "review":
         from lib.domain.review_repair import validate_review_repair
         config = validate_review_repair(review_repair)
@@ -161,7 +164,7 @@ def active_node_prompt_ids(stage: str, source_mode: str, *, node_generation=None
     return NODE_PROMPT_IDS.get(stage, ())
 
 
-def validate_node_prompts(value: dict | None) -> dict:
+def validate_node_prompts(value: dict | None, *, agent_trajectory_optimization=False) -> dict:
     """Validate literal bodies; placeholders are never interpolated or executed."""
     if value is None:
         return {}
@@ -169,6 +172,8 @@ def validate_node_prompts(value: dict | None) -> dict:
         raise ValueError("invalid_node_prompts")
     result = {}
     for stage, templates in value.items():
+        if stage == "agent" and not agent_trajectory_optimization:
+            raise ValueError("invalid_node_prompts")
         if stage not in NODE_PROMPT_IDS or not isinstance(templates, dict):
             raise ValueError("invalid_node_prompts")
         for prompt_id, text in templates.items():
@@ -187,7 +192,8 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
                     claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                     claim_review_wire_schema_version=None, claim_review_focus_version=None,
                     claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
-                    preference_design_prompt_version=None, conversation_reasoning_version=None) -> dict:
+                    preference_design_prompt_version=None, conversation_reasoning_version=None,
+                    agent_trajectory_optimization_version=None) -> dict:
     if claim_review_protocol_version is not None and (
             type(claim_review_protocol_version) is not int or claim_review_protocol_version not in {1, 2}):
         raise ValueError("invalid_claim_review_protocol_version")
@@ -231,6 +237,10 @@ def _prompt_catalog(recipe_version: int, learner_context_review_version=None,
     if recipe_version >= 42:
         for stage in ("sft", "multiturn"):
             catalog[stage] = (*catalog[stage], "workflow.cot_native_joint")
+    if agent_trajectory_optimization_version is not None:
+        if type(agent_trajectory_optimization_version) is not int or agent_trajectory_optimization_version != 1:
+            raise ValueError("invalid_agent_trajectory_optimization_version")
+        catalog = {**catalog, "agent": ("workflow.agent_trajectory_optimization",)}
     if conversation_reasoning_version is not None:
         if type(conversation_reasoning_version) is not int or conversation_reasoning_version not in {1, 2, 3}:
             raise ValueError("invalid_conversation_reasoning_version")
@@ -259,9 +269,9 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          conversation_reasoning_version=None, native_feedback_guidance_version=None,
                          claim_review_schedule_version=None, review_advisory_policy_version=None,
                          dialogue_style_context_version=None, native_sft_review_evolution_version=None,
-                         native_context_contract_version=None) -> dict:
+                         native_context_contract_version=None, agent_trajectory_optimization_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
-    overrides = validate_node_prompts(value)
+    overrides = validate_node_prompts(value, agent_trajectory_optimization=agent_trajectory_optimization_version == 1)
     if native_context_contract_version is not None and (
             type(native_context_contract_version) is not int or native_context_contract_version != 1):
         raise ValueError("invalid_native_context_contract_version")
@@ -344,7 +354,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                 claim_review_anchor_protocol_version, claim_review_adversarial_protocol_version,
                 claim_review_wire_schema_version, claim_review_focus_version,
                 claim_review_condition_contract_version, reasoning_depth_contract_version,
-                preference_design_prompt_version, conversation_reasoning_version).items()}
+                preference_design_prompt_version, conversation_reasoning_version,
+                agent_trajectory_optimization_version).items()}
 
 
 def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: int = 11, learner_context_review_version=None,
@@ -353,16 +364,18 @@ def validate_node_prompt_snapshot(value: dict, system: str, *, recipe_version: i
                                  claim_review_anchor_protocol_version=None, claim_review_adversarial_protocol_version=None,
                                  claim_review_wire_schema_version=None, claim_review_focus_version=None,
                                  claim_review_condition_contract_version=None, reasoning_depth_contract_version=None,
-                                 preference_design_prompt_version=None, conversation_reasoning_version=None) -> dict:
+                                 preference_design_prompt_version=None, conversation_reasoning_version=None,
+                                 agent_trajectory_optimization_version=None) -> dict:
     """A new recipe must carry every supported stage and its exact catalog."""
-    templates = validate_node_prompts(value)
+    templates = validate_node_prompts(value, agent_trajectory_optimization=agent_trajectory_optimization_version == 1)
     catalog = _prompt_catalog(recipe_version, learner_context_review_version, claim_review_protocol_version,
                               claim_review_format_feedback_version, claim_refutation_release_version,
                               claim_reference_policy_version, claim_review_anchor_protocol_version,
                               claim_review_adversarial_protocol_version,
                               claim_review_wire_schema_version, claim_review_focus_version,
                               claim_review_condition_contract_version, reasoning_depth_contract_version,
-                              preference_design_prompt_version, conversation_reasoning_version)
+                              preference_design_prompt_version, conversation_reasoning_version,
+                              agent_trajectory_optimization_version)
     if (set(templates) != set(catalog)
             or any(set(templates[stage]) != set(ids) for stage, ids in catalog.items())
             or not isinstance(system, str) or not system.strip() or len(system) > MAX_NODE_PROMPT_CHARS):

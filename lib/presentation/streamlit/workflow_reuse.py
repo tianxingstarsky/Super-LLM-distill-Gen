@@ -192,6 +192,7 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-cpt-review-mode:{workspace}"] = cpt_processing["review_mode"]
     # Copy only the user's verification choice. Image/container pins and
     # credentials remain owned by the immutable run and the local registry.
+    values[f"workflow-agent-trajectory-optimization:{workspace}"] = recipe.get("agent_trajectory_optimization_version") == 1
     agent_mode = recipe.get("agent_replay_mode")
     if agent_mode not in {"local", "isolated"} and "agent" in recipe.get("targets", []):
         agent_mode = "isolated" if recipe.get("agent_sandbox_image") else "local"
@@ -289,9 +290,11 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         for name, weight in director["type_weights"].items():
             values[f"workflow-director-weight:{workspace}:{name}"] = weight
     prompt_mode = ("多模态文档" if parser["mode"] == "vision" else "模型辅助文档" if parser["mode"] == "model" else mode)
-    if mode == "Agent 上下文" and reasoning_policy["mode"] == "fill_missing":
+    if (mode == "Agent 上下文" and reasoning_policy["mode"] == "fill_missing"
+            and not (recipe.get("agent_trajectory_optimization_version") == 1 and set(recipe.get("targets", [])) == {"agent"})):
         prompt_mode = "补全对话推理"
-    copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")))
+    copied_prompts = validate_node_prompts(recipe.get("node_prompt_templates", recipe.get("node_prompts")),
+        agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1)
     if recipe.get("agent_experience_version") == 1:
         experience = validate_agent_experience_snapshot(recipe.get("agent_experience"))
         for scope, guidance in experience["scopes"].items():
@@ -319,7 +322,8 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         for prompt_id in active_node_prompt_ids(node, prompt_mode, node_generation=recipe.get("node_generation"),
                                                 package_review=package_review, review_repair=review_repair,
                                                 qa_director=director, cpt_processing=cpt_processing,
-                                                conversation_reasoning_version=reasoning_policy.get("version")):
+                                                conversation_reasoning_version=reasoning_policy.get("version"),
+                                                agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1):
             if prompt_id in copied_prompts.get(node, {}):
                 values[f"workflow-node-prompt:{workspace}:{node}:{prompt_id}"] = copied_prompts[node][prompt_id]
     research = recipe.get("web_research")

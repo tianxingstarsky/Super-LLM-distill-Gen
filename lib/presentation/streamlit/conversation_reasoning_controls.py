@@ -46,7 +46,7 @@ def _save_reasoning_policy(workspace: str, save_field) -> None:
     save_field(workspace, f"workflow-conversation-reasoning:{workspace}")
 
 
-def render_conversation_reasoning(workspace: str, *, save_field) -> dict:
+def render_conversation_reasoning(workspace: str, *, save_field, agent_trajectory_optimization=False) -> dict:
     key = f"workflow-conversation-reasoning:{workspace}"
     policy = conversation_reasoning_snapshot(workspace)
     if key not in st.session_state:
@@ -65,6 +65,11 @@ def render_conversation_reasoning(workspace: str, *, save_field) -> dict:
     }
     st.caption(descriptions[mode])
     if mode == "fill_missing":
+        if agent_trajectory_optimization:
+            st.caption("Agent 轨迹优化在 Agent 节点一次补写最终助手 CoT；模型、完整模板和长期经验在该节点配置，不再调用输入节点的两步补写。其余回合保持原样，补写标记为合成解释。"
+                       if st.session_state.get("ui_language", "zh") != "en" else
+                       "Agent optimization fills only the final assistant CoT in the Agent node. Configure its model, full template and experience there. The input node’s two-step author is not called. Other turns stay unchanged; added reasoning is labelled synthetic.")
+            return {**policy, "mode": mode}
         if policy["version"] in {2, 3}:
             st.caption("正文 CoT 补写使用本节点已选模型：先从当前答案提炼推导提示，再根据当时可见上下文和提示补写正文。两步模板均可编辑。")
             st.caption("程序将补写正文保存到推理字段；本次调用的上游原生推理保留在请求证据中，不混入补写内容。已有原生推理仍原样保留。")

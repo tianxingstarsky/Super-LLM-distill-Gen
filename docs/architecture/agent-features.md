@@ -1,5 +1,7 @@
 # Agent 功能与维护入口
 
+新版 Agent 数据制作由工作流的轨迹编辑作者处理，既有工具重放仍是另一条明确用途。Google 经验进入实际 CoT 编辑请求，流程建议与原执行分开，最终答案及工具证据由程序保留。范围与材料见 [Agent 轨迹优化](agent-trajectory-evolution-2026-11-03.md)。
+
 知识问答与资料问答的逐题用途由 `workflows/domain/qa_learning_goal_routing.py` 持有；指导员在已有批次规划前固定用途，生成、可见资料、重答和审核据此投影。概率与图示在指导员节点配置，不新增选择 Agent，也不改旧配方。[接线与边界](mixed-qa-routing-2026-11-03.md) 说明默认 80/20、资料范围和历史兼容。
 
 知识问答推理的保真表述编辑由 `workflow_knowledge_reasoning.py` 的 `knowledge_reasoning_editor` 和 workflows 域 `knowledge_reasoning_editor.py` 的纯工具／补丁合同持有。1.1 使用程序生成的原稿段落 ID，1.0 的逐字定位保留；问题和答案不改，完整原生推理保留，整理正文标记为派生解释，编辑状态不代表质量通过。[真实验证与剩余问题](knowledge-reasoning-editor-2026-11-02.md) 单独记录；尚未自动接入生产节点、默认导出或另一套评审循环。

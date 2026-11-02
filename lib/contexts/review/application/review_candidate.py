@@ -24,6 +24,14 @@ class ReviewCandidate:
     def execute(self, item):
         target, original = item["target"], item["record"]
         config = validate_review_repair(self.recipe["review_repair"])
+        if target == "agent" and self.recipe.get("agent_trajectory_optimization_version") == 1:
+            from lib.contexts.workflows.contracts import valid_agent_optimization_record
+            row = deepcopy(original)
+            if row.get("status") == "eligible" and (not valid_agent_optimization_record(row)
+                    or row["agent_optimization"].get("status") not in {"unchanged", "edited"}):
+                row.update(status="needs_attention", reason="agent_optimization_consistency_changed")
+            row["_review_target"] = target
+            return [row]
         from ..domain.review_evolution import native_sft_review_evolution_enabled
         if (target == "sft" and native_sft_review_evolution_enabled(self.recipe, original)
                 and config["mode"] == "auto"):

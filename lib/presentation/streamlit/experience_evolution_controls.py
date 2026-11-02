@@ -11,7 +11,8 @@ from lib.presentation.streamlit.i18n import UntranslatedText
 
 
 def _binding(workspace, scope, prompt_id):
-    node = ("multiturn" if prompt_id.startswith("workflow.reading_") else
+    node = ("agent" if prompt_id == "workflow.agent_trajectory_optimization" else
+            "multiturn" if prompt_id.startswith("workflow.reading_") else
             "cot" if prompt_id.startswith("workflow.cot_") else
             "trim" if prompt_id == "workflow.trim" else
             st.session_state.get(f"workflow-setup-node:{workspace}"))
@@ -55,8 +56,77 @@ def _remember(prefix, record):
     st.session_state[prefix + ":text"] = record["text"]
 
 
+def _same_feedback_source(left, right):
+    return all(left.get(key) == right.get(key) for key in ("scope", "entries", "records"))
+
+
+def _learn_feedback(app, workspace, scope, prompt_id, prefix, batch, en, *, user_outcome=None):
+    from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
+    actual = app.get_observation_batch(batch["id"])
+    if actual["status"] != "claimed" or not _same_feedback_source(actual, batch):
+        raise ValueError("experience_evolution_feedback_changed")
+    with st.spinner("Running upstream induction…" if en else "正在执行原版经验提炼…"):
+        candidate = google_reasoning_bank_application(_binding(workspace, scope, prompt_id)).learn(
+            scope, actual["records"][0], parent_id=st.session_state.get(prefix + ":parent"), user_outcome=user_outcome)
+    current = app.get_observation_batch(batch["id"])
+    if current["status"] != "claimed" or not _same_feedback_source(current, actual):
+        raise ValueError("experience_evolution_feedback_changed")
+    app.complete_official_observation_batch(batch["id"], candidate if candidate.get("status") == "no_update" else candidate["id"])
+    if candidate.get("status") == "no_update":
+        st.info("Feedback processed; no new generalizable lesson this time." if en else "已学习本条反馈，本次没有新增可泛化经验。")
+    else:
+        _remember(prefix, candidate)
+
+
+def _render_unlabelled_feedback(app, workspace, scope, prompt_id, prefix, en):
+    pending_key = prefix + ":google-pending-feedback"
+    preview = st.session_state.get(pending_key)
+    if not preview:
+        return
+    st.caption("Preview released its claim. Learning reclaims and checks this same record; closing this page locks nothing."
+               if en else "预览已释放认领；学习时重新认领并核对同一条记录。关闭页面不会占用待学习队列。")
+    st.caption(UntranslatedText(("Preview batch: " if en else "预览批次：") + preview["id"]
+        + (" · Observation: " if en else " · 观测：") + preview["entries"][0]["id"]
+        + " · SHA256: " + preview["entries"][0]["sha256"]))
+    st.json(preview["records"][0], expanded=False)
+    outcome = st.selectbox("Original trajectory outcome (operator reported)" if en else "该原轨迹的实际任务结果（人工判断）",
+        [None, "success", "failure"], key=prefix + ":google-feedback-outcome:" + preview["id"],
+        format_func=lambda value: (("Unknown" if en else "尚未判断／不确定") if value is None else
+            ("Reached the goal" if en else "达成目标") if value == "success" else ("Did not reach the goal" if en else "未达成目标")))
+    st.caption("The label is operator feedback, not tool verification or a quality pass. The source observation stays unchanged."
+               if en else "标注仅作为人工学习反馈，不代表工具已验证或样本质量通过；原观测保持不变。")
+    learn, cancel = st.columns(2, gap="small")
+    if cancel.button("Cancel preview" if en else "取消预览", key=prefix + ":google-feedback-cancel", width="stretch"):
+        st.session_state.pop(pending_key, None)
+        st.rerun()
+    if learn.button("Learn from this labelled trajectory" if en else "按人工结果学习本条轨迹", key=prefix + ":google-labelled-learn",
+                    disabled=outcome is None or not _binding(workspace, scope, prompt_id), width="stretch"):
+        batch = {}
+        try:
+            batch = app.claim_observation_batch(scope, max_records=1)
+            if not _same_feedback_source(batch, preview):
+                st.session_state.pop(pending_key, None)
+                raise ValueError("experience_evolution_feedback_changed")
+            _learn_feedback(app, workspace, scope, prompt_id, prefix, batch, en, user_outcome=outcome)
+            st.session_state.pop(pending_key, None)
+        except (OSError, ValueError, RuntimeError) as error:
+            st.error(_error(error, en))
+        finally:
+            if batch.get("id") and app.get_observation_batch(batch["id"])["status"] in {"claimed", "needs_attention"}:
+                app.release_observation_batch(batch["id"])
+
+
 def _error(error, en):
     code = str(error)
+    if "experience_evolution_feedback_changed" in code:
+        return ("The pending record changed. Refresh the preview before learning; no replacement record was sent."
+                if en else "待学习记录已变更，请重新预览后再学习；没有把另一条记录送去提炼。")
+    if "reasoning_bank_no_observed_outcome" in code:
+        return ("This trajectory has no labelled task outcome, so learning is paused. "
+                "Preview recent feedback and explicitly label that trajectory as success or failure before learning. "
+                "The original observation stays pending; no outcome is inferred from a completed edit."
+                if en else "本条轨迹尚未标注任务结果，暂不提炼经验。请预览近期反馈，为该轨迹明确选择达成或未达成目标后学习；"
+                "当前优化观测仍待标注，不把编辑完成推断为任务成功。")
     if getattr(error, "code", None) in {"service_quota_exhausted", "insufficient_quota", "insufficient_balance"}:
         return ("The model provider has insufficient balance. Recharge there before proposing another edition."
                 if en else "模型上游额度不足，请在对应平台充值后再提炼。")
@@ -169,6 +239,10 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
         st.markdown("**Google ReasoningBank**")
         st.caption(("Lessons improve this generation role, using review feedback as evidence."
                     if en else "经验用于当前生成角色；评审意见仅作为学习依据。"))
+        if prompt_id == "workflow.agent_trajectory_optimization":
+            st.caption("Agent edits are collected as observations with an unknown task outcome. They do not trigger automatic learning. "
+                       "Recent feedback first opens an unpaid preview; explicitly report the task outcome before learning."
+                       if en else "Agent 优化记录会收集为任务结果未知的观测，不自动发起学习。近期反馈先打开免费预览，明确标注实际任务结果后才提炼。")
         st.caption(("Uses upstream algorithms with guidance for transferable judgment principles. "
                     "Avoids task-specific patches and forced conditions; keeps current memory when no reliable new lesson emerges. "
                     "Collected feedback: " if en else
@@ -184,16 +258,12 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
                     if not batch.get("records"):
                         st.info("No pending feedback." if en else "暂无待学习反馈。")
                     else:
-                        with st.spinner("Running upstream induction…" if en else "正在执行原版经验提炼…"):
-                            candidate = google_reasoning_bank_application(_binding(workspace, scope, prompt_id)).learn(
-                                scope, batch["records"][0], parent_id=st.session_state.get(prefix + ":parent"))
-                        if candidate.get("status") == "no_update":
-                            app.complete_official_observation_batch(batch["id"], candidate)
-                            st.info("Feedback processed; no new generalizable lesson this time."
-                                    if en else "已学习本条反馈，本次没有新增可泛化经验。")
+                        record = batch["records"][0]
+                        verdict = record.get("review_observation", {}).get("verdict") or record.get("review", {}).get("verdict")
+                        if not isinstance(verdict, dict) or type(verdict.get("keep")) is not bool:
+                            st.session_state[prefix + ":google-pending-feedback"] = deepcopy(batch)
                         else:
-                            app.complete_official_observation_batch(batch["id"], candidate["id"])
-                            _remember(prefix, candidate)
+                            _learn_feedback(app, workspace, scope, prompt_id, prefix, batch, en)
                 except (OSError, ValueError, RuntimeError) as error:
                     st.error(_error(error, en))
                 finally:
@@ -204,6 +274,7 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
             if st.button("Disable retrieved memory" if en else "停用检索记忆", key=prefix + ":google-disable", width="stretch"):
                 google.activate(scope, None)
                 st.success("Future tasks will use the editor only." if en else "后续任务仅使用编辑框中的经验。")
+        _render_unlabelled_feedback(app, workspace, scope, prompt_id, prefix, en)
         if active_id := google.active()["scopes"].get(scope):
             st.caption(("Active memory edition: " if en else "当前检索版本：") + active_id[:12])
         initial, save = st.columns(2, gap="small")

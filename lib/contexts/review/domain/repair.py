@@ -96,10 +96,13 @@ def validate_repair_inputs(value, config=None):
 
 
 def skips_post_generation_review(recipe, target):
-    """New CPT deliveries keep the cleaner's own quality result.
+    """Versioned delivery contracts can omit a separate model review.
 
-    Historical tasks and explicit repair requests retain their saved review
-    contract. This never upgrades a rejected cleaning result to eligible.
+    Agent consistency editing is unassessed, while CPT retains its cleaner's
+    own outcome. Neither branch upgrades a rejected candidate to eligible.
+    Historical recipes retain their saved review contract.
     """
+    if target == "agent" and recipe.get("agent_trajectory_optimization_version") == 1:
+        return True
     return (target == "cpt" and recipe.get("cpt_review_policy_version") == 1
             and not recipe.get("repair_inputs"))
