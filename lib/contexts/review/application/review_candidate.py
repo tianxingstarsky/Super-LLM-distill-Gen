@@ -55,6 +55,8 @@ class ReviewCandidate:
             return self._port.regenerate_native(item)
         from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
         if (target == "multiturn" and self.recipe.get("native_dialogue_continuation_version") == 1
+                and not (self.recipe.get("multiturn_advisory_review_version") == 1
+                         and not item.get("revision_context"))
                 and is_initial_native_dialogue_failure(original)):
             if not item.get("revision_context") or not self._port.authenticated_revision:
                 raise ValueError("native_dialogue_continuation_parent_not_authenticated")

@@ -131,3 +131,58 @@ def test_advisory_release_binds_candidate_configuration_and_unchanged_failed_obs
     runtime.recipe = {"review_repair": config}
     assert WorkflowQADirector.human_package_issue(runtime, row, "sft") == "review_repair_assessment_missing"
     assert row["review_observation"]["verdict"]["keep"] is False
+
+
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("passing", [False, True])
+def test_new_multiturn_local_rejection_survives_advisory_and_incomplete_drafts_spend_nothing(complete, passing):
+    from lib.contexts.review.application.review_candidate import ReviewCandidate
+    from test_pipeline_use_cases import grade
+
+    turns = [{"role": "user", "content": "Can I inspect the circuit?"},
+             {"role": "assistant", "content": "Isolate power first.", "reasoning_content": "Isolation precedes inspection."},
+             {"role": "user", "content": "What follows the inspection?"},
+             {"role": "assistant", "content": "Record the actual result.", "reasoning_content": "Use observed results only."}]
+    row = {"id": "local-failure", "status": "quarantined", "reason": "native_generation_instruction_leakage",
+        "messages": turns if complete else turns[:2],
+        "failed_turn": 2 if complete else 1, "native_generation": {},
+        "multiturn_advisory_review": {"version": 1, "status": "blocked", "model_called": False,
+            "review_stage": "review", "local_validation": "rejected"}}
+    original, calls = deepcopy(row), []
+    observation = {"status": "observed", "verdict": grade(passing)}
+    port = SimpleNamespace(payload=lambda target, record: {"messages": record["messages"]},
+        evidence=lambda record: {"text": "Actual original source."},
+        review_once=lambda *args: calls.append(args) or deepcopy(observation),
+        record_advisory_observation=lambda target, record: None)
+    recipe = {"review_advisory_policy_version": 1, "multiturn_advisory_review_version": 1,
+        "native_dialogue_continuation_version": 1,
+        "review_repair": {"mode": "auto", "max_rounds": 0, "score_threshold": .8}}
+    reviewed, = ReviewCandidate(port, recipe).execute({"target": "multiturn", "record": row})
+    assert reviewed["status"] == "quarantined" and reviewed["reason"] == original["reason"]
+    assert reviewed["messages"] == original["messages"] and row == original
+    assert reviewed["review_repair"]["status"] == "rejected"
+    assert len(calls) == int(complete)
+    if complete:
+        assert reviewed["review_observation"] == observation
+    else:
+        assert reviewed["review_observation"]["status"] == "not_called"
+        assert reviewed["review_observation"]["model_called"] is False
+    resumed, = ReviewCandidate(port, recipe).execute({"target": "multiturn", "record": reviewed})
+    assert resumed["review_observation"] == reviewed["review_observation"] and len(calls) == int(complete)
+
+
+def test_legacy_multiturn_local_failure_keeps_its_frozen_advisory_policy():
+    from lib.contexts.review.application.review_candidate import ReviewCandidate
+    from test_pipeline_use_cases import grade
+
+    row = {"id": "old-local-failure", "status": "quarantined", "reason": "existing_quality_issue",
+        "messages": [{"role": "user", "content": "Can I inspect it?"},
+                     {"role": "assistant", "content": "Isolate power first."}]}
+    calls = []
+    port = SimpleNamespace(payload=lambda target, record: {"messages": record["messages"]},
+        evidence=lambda record: None,
+        review_once=lambda *args: calls.append(args) or {"status": "observed", "verdict": grade(False)},
+        record_advisory_observation=lambda target, record: None)
+    reviewed, = ReviewCandidate(port, {"review_advisory_policy_version": 1,
+        "review_repair": {"mode": "auto", "max_rounds": 0}}).execute({"target": "multiturn", "record": row})
+    assert reviewed["status"] == "eligible" and "reason" not in reviewed and len(calls) == 1

@@ -696,7 +696,12 @@ class WorkflowQADirector:
         checkpoints while model and editable prompt are resolved at director.
         """
         from lib.contexts.workflows.contracts import director_context_authority, dialogue_constraint_reference_request
-        key = [unit["id"], "dialogue_director", len(messages) // 2, attempt, _digest(messages)]
+        # Public experience/style messages and tool exchanges are not user to
+        # assistant turns. Keep old checkpoint/request contracts unchanged.
+        completed_turns = (sum(message.get("role") == "assistant" and not
+            message.get("tool_calls", message.get("toolCalls")) for message in messages)
+            if self.recipe.get("multiturn_advisory_review_version") == 1 else len(messages) // 2)
+        key = [unit["id"], "dialogue_director", completed_turns, attempt, _digest(messages)]
         data = {
             "request_phase": "next_turn", "planning_mode": "adaptive",
             "qa_contract": unit["qa_contract"],
@@ -709,7 +714,7 @@ class WorkflowQADirector:
             **({"source_line_material_id": unit["source_line_material_id"]}
                if unit.get("source_line_material_id") else {}),
             "teacher_evidence_not_shared_understanding": True,
-            "completed_turns": len(messages) // 2,
+            "completed_turns": completed_turns,
             "maximum_turns": self.recipe.get("conversation_turns", 3),
             "question_rules": self.recipe["qa_director"]["question_rules"],
             "answer_rules": self.recipe["qa_director"]["answer_rules"], "feedback": feedback,
@@ -800,7 +805,7 @@ class WorkflowQADirector:
         validating_step = True
         try:
             value, context_selection = self._director_style_selection(value, next_turn=True)
-            validation_options = {"completed_turns": len(messages) // 2,
+            validation_options = {"completed_turns": data["completed_turns"],
                                   "natural_utterance": self.participant_utterances(),
                                   "question_brief_protocol_version": brief_version,
                                   **self._dialogue_style_context_options(),

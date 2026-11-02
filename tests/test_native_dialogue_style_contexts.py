@@ -204,3 +204,94 @@ def test_real_multiturn_use_case_passes_current_director_context_and_keeps_expor
     assert port.review_contexts[0]["dialogue_before_answer"] == row["messages"][:3]
     assert port.review_contexts[1]["dialogue_before_answer"] == row["messages"][:-1]
     assert port.review_contexts[0]["learner_system_provenance"]["dialogue_contexts"][0]["message_index"] == 2
+
+
+def test_advisory_multiturn_keeps_two_native_turns_and_defers_all_model_checks_to_one_review():
+    from types import SimpleNamespace
+    from lib.contexts.workflows.application.generate_dialogue import GenerateMultiturnDialogue
+    from lib.contexts.workflows.domain.dialogue import DialogueSource
+    from lib.contexts.review.application.review_candidate import ReviewCandidate
+    from test_generation_node_use_cases import score
+
+    class DialoguePort(MemoryGenerationPort):
+        source_reads = 0
+        prepared_sources = 0
+        director_calls = 0
+
+        def learner_prompt(self, contract):
+            return contract["question"]
+
+        def prepare_source(self, source, style):
+            self.prepared_sources += 1
+            return DialogueSource({"task": source["text"]})
+
+        def source_evidence(self, source):
+            self.source_reads += 1
+            return super().source_evidence(source)
+
+        def next_dialogue_step(self, source, messages, state, **options):
+            self.director_calls += 1
+            assert state["dialogue_contexts"] == ["direct"]
+            assert all("reasoning_content" not in message for message in messages)
+            return {"continue": True, "user_message": "Help me revise the inspection record.",
+                "response_policy": "answer", "reason": "The task now asks for a revision.",
+                "dialogue_state": {**state, "dialogue_contexts": ["iterative"]}}
+
+        def assess(self, *args, **options):
+            pytest.fail("Turn and consistency reviews must be deferred")
+
+        def check_style(self, *args, **options):
+            pytest.fail("A deferred style check must not call a model")
+
+        check_contract = check_style
+
+    frozen, source = recipe(), {**unit(), "family_id": "family"}
+    frozen.update(conversation_turns=2, multiturn_advisory_review_version=1,
+        native_dialogue_progress_version=2, review_advisory_policy_version=1,
+        review_repair={"mode": "auto", "max_rounds": 0, "score_threshold": .8})
+    port = DialoguePort([
+        {"answer": "Isolate it before inspection.", "reasoning": "  Keep the safety precondition.\n"},
+        {"answer": "Use the actual inspection result in the revised record.", "reasoning": " Revise only the requested record. "},
+    ])
+    port.styles["multiturn"] = {"instruction": "Use the actual conditions."}
+    row, = GenerateMultiturnDialogue(port, frozen).execute(source)
+    assert row["turn_count"] == 2 and row["status"] == "eligible"
+    assert (len(port.calls), port.director_calls, port.prepared_sources, port.source_reads) == (2, 1, 1, 2)
+    assert [message["reasoning_content"] for message in row["messages"] if message["role"] == "assistant"] == [
+        "  Keep the safety precondition.\n", " Revise only the requested record. "]
+    assert row["dialogue_progress"]["passed_turn_reviews"] == 0
+    assert row["dialogue_progress"]["training_admission"] == "pending_advisory_review"
+    assert row["consistency"]["status"] == "deferred" and not row["consistency"]["model_called"]
+    for turn_review in row["turn_reviews"]:
+        assert "accepted" not in turn_review and turn_review["training_eligible"] is False
+        for field in ("judge", "style_check", "qa_contract_check"):
+            assert turn_review[field]["status"] == "deferred"
+            assert turn_review[field]["model_called"] is False
+            assert "keep" not in turn_review[field] and "scores" not in turn_review[field]
+    calls = []
+    observation = {"status": "observed", "verdict": {**score(), "keep": False,
+        "reason": "The terminology could be clearer."}}
+    reviewer = SimpleNamespace(payload=lambda target, record: {"messages": record["messages"]},
+        evidence=lambda record: source, record_advisory_observation=lambda target, record: None,
+        review_once=lambda *args: calls.append(args) or deepcopy(observation))
+    released, = ReviewCandidate(reviewer, frozen).execute({"target": "multiturn", "record": row})
+    assert len(calls) == 1 and released["messages"] == row["messages"]
+    assert released["review_repair"]["status"] == "released_advisory"
+    assert released["review_observation"]["verdict"]["keep"] is False
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_multiturn_explicit_review_policy_is_deferred_only_by_new_version(enabled):
+    frozen, source = recipe(), unit()
+    frozen["node_generation"]["multiturn"]["review_policy"] = {"mode": "strict", "sample_percent": 100}
+    if enabled:
+        frozen["multiturn_advisory_review_version"] = 1
+    before = deepcopy(frozen)
+    port = MemoryGenerationPort([{"answer": "Isolate it first.", "reasoning": "Keep the necessary condition."}])
+    row = turn(port, frozen, source, [{"role": "user", "content": source["qa_contract"]["question"]}])
+    assert len(port.calls) == (1 if enabled else 2)
+    assert row["cot_review_policy"]["semantic_status"] == ("deferred" if enabled else "model_assessed")
+    if enabled:
+        assert row["cot_review_policy"]["model_called"] is False and "judge" not in row
+        assert row["cot_review_policy"]["requested_policy"] == {"mode": "strict", "sample_percent": 100}
+    assert frozen == before

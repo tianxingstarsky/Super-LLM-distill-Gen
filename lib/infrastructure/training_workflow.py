@@ -584,6 +584,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_review_condition_contract_version": 1,
               "claim_review_schedule_version": 1,
               **({"review_advisory_policy_version": 1} if review_repair and review_repair["mode"] == "auto" else {}),
+              **({"multiturn_advisory_review_version": 1}
+                 if "multiturn" in targets and not repair_inputs
+                 and review_repair and review_repair["mode"] == "auto" else {}),
               "claim_review_transport_version": 1,
               "claim_repair_feedback_version": 1,
               "claim_context_quote_feedback_version": 1,

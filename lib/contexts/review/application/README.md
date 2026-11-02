@@ -2,6 +2,8 @@
 
 当前新任务以 `review_advisory_policy_version=1` 为准：`ReleaseAdvisoryCandidate` 复用已有绑定评语或调用一次 `review_once`，保留原始拒绝/未决/错误后按策略输出，不启动返工、自检、焦点核查或付费格式重试。完整观察进入既有经验库；`released_advisory` 与评审通过分别记录。
 
+普通多轮额外冻结 `multiturn_advisory_review_version=1` 时，生成阶段的 `deferred` 表示模型未评审，不是通过。最终建议评审仍只有一次；`multiturn_advisory_review.local_validation=rejected` 的完整候选保留原始拒绝、正文和推理，即使建议评审给出通过也不解除程序阻断。不完整或没有有效响应的候选记录 `not_called`，不为补齐状态购买评审；恢复复用绑定观察。旧配方及 `repair_inputs` 不自动采用此分支，显式首答返工仍先认证全部父版本。验证见 `test_advisory_release_binding.py`、`test_native_dialogue_style_contexts.py` 和 `test_expression_profile_routing.py`。
+
 `ReviewConsolidatedClaims` 保留此前 v6 对比记录与严格协议的读取和认证。它允许明确问题的一次指定复核；当前建议式策略优先于此协议，不再走这套默认评审。原分组、展开和源校验历史不改。
 
 中断任务的 `checkpoint_context` 仅允许自动零返工重新评审。工作副本恢复已认证的作者规则，原问答、推理、来源及检查点不改。原生生成阶段的已知问题继续保留：新评分通过不等于未修改的原稿已修复。

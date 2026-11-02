@@ -191,6 +191,12 @@ class GenerateNativeCot:
         plan = cot_review_plan(config, sample) or {
             "version": 1, "selected": False, "semantic_status": "not_assessed",
             "coverage": "local_checks_only", "selection": "no_independent_review_requested"}
+        if (self.stage == "multiturn" and type(self.recipe.get("multiturn_advisory_review_version")) is int
+                and self.recipe["multiturn_advisory_review_version"] == 1):
+            plan = {"version": 1, "selected": False, "semantic_status": "deferred",
+                "model_called": False, "review_stage": "review", "coverage": "local_checks_only",
+                "selection": "single_pass_multiturn_advisory",
+                **({"requested_policy": deepcopy(config["review_policy"])} if "review_policy" in config else {})}
         if feedback_receipt is not None:
             plan = {"version": 1, "selected": False, "semantic_status": "not_assessed",
                 "coverage": "local_checks_only", "selection": (

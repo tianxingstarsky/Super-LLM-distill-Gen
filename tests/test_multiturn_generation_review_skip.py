@@ -111,6 +111,10 @@ def test_execute_keeps_real_failed_turn_shape_isolated_and_exports_no_samples(tm
                  **{key: value for key, value in failed_generation().items() if key not in {"id", "source_id"}}}]
 
     monkeypatch.setattr(engine.Workflow, "multiturn", terminal)
+    # Feed the actual saved failure through the required director boundary;
+    # planning is outside this terminal-publication regression.
+    monkeypatch.setattr(engine.Workflow, "directed_generation", lambda workflow, units, **options: {
+        "multiturn": workflow.stage_items("multiturn", units, workflow.multiturn)})
     root = Path(__file__).resolve().parents[1]
     result = engine.Workflow(output, run_id, root, generator=NoCalls(), jev=NoCalls()).execute()
     assert result["status"] == "needs_attention", result.get("error")

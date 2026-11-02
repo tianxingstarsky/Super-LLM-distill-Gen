@@ -88,6 +88,54 @@ def test_style_contexts_are_opt_in_siblings_and_constraint_projection_preserves_
         natural_utterance=True, dialogue_style_context_version=1)["dialogue_state"]["dialogue_contexts"] == []
 
 
+@pytest.mark.parametrize("new_policy", [False, True])
+@pytest.mark.parametrize("continue_dialogue", [False, True])
+def test_director_counts_actual_answers_with_public_notes_in_request_key_and_validation(new_policy, continue_dialogue):
+    from lib.bootstrap.dialogue_style_contexts import dialogue_style_context_catalog
+    from lib.contexts.workflows.domain.dialogue import DialoguePlanError
+    from lib.contexts.workflows.domain.dialogue_style_context import context_system_message
+    from lib.infrastructure.workflow_qa_director import WorkflowQADirector
+
+    class CounterProbe(WorkflowQADirector):
+        def __init__(self):
+            self.calls = []
+            self.recipe = {"conversation_turns": 2, "dialogue_style_context_version": 1,
+                "dialogue_style_context_catalog": dialogue_style_context_catalog(),
+                "qa_director": {"question_rules": "Follow actual user input.", "answer_rules": "Use actual evidence."}}
+            if new_policy:
+                self.recipe["multiturn_advisory_review_version"] = 1
+
+        def separated_questions(self, *args):
+            return False
+
+        def ask(self, key, role, prompt_id, payload, **options):
+            self.calls.append((deepcopy(key), deepcopy(payload)))
+            return {"continue": continue_dialogue, "user_message": "Update the record." if continue_dialogue else "",
+                "reason": "Respond to the actual progress.", "dialogue_state": {"dialogue_contexts": ["iterative"]}}
+
+        def _invalidate_director_call(self, key, **options):
+            pass
+
+    probe = CounterProbe()
+    note, _ = context_system_message(probe.recipe, ["direct"])
+    messages = [{"role": "system", "content": "Actual public conversation rules."},
+        {"role": "user", "content": "Prepare an inspection record."}, note,
+        {"role": "assistant", "content": "The record contains the preparation and findings."}]
+    unit = {"id": "saved-task", "kind": "document", "text": "Original authenticated source.",
+        "qa_contract": {"question": messages[1]["content"], "qa_type": "grounded", "answer_policy": "answer"}}
+    original = deepcopy(messages)
+    if new_policy and not continue_dialogue:
+        with pytest.raises(DialoguePlanError):
+            probe.next_dialogue_step(unit, messages, {})
+    else:
+        step = probe.next_dialogue_step(unit, messages, {})
+        assert step["continue"] is continue_dialogue
+    key, sent = probe.calls[0]
+    assert len(probe.calls) == 1 and messages == original
+    assert key[2] == sent["completed_turns"] == (1 if new_policy else 2)
+    assert sent["maximum_turns"] == 2 and sent["dialogue_messages"] == messages
+
+
 def test_style_context_prompt_requires_new_snapshot_flag_and_preserves_literal_overrides():
     from lib.domain.workflow_node_prompts import snapshot_node_prompts
     from lib.prompts import get, render

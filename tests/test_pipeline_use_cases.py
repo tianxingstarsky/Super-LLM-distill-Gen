@@ -103,6 +103,56 @@ def test_natural_end_cannot_purchase_an_answer_or_promote_a_single_turn():
     assert not any(call[0] == "workflow.multiturn_consistency" for call in port.calls)
 
 
+def test_old_advisory_recipe_does_not_silently_skip_turn_or_consistency_reviews():
+    port = DialogueMemory()
+    recipe = {"version": 9, "conversation_turns": 2, "review_advisory_policy_version": 1,
+        "review_repair": {"mode": "auto", "max_rounds": 0}}
+    row, = GenerateMultiturnDialogue(port, recipe).execute(
+        {"id": "task", "source_id": "brief", "kind": "brief", "text": "Maintenance guidance"})
+    assert row["status"] == "eligible" and "multiturn_advisory_review" not in row
+    assert [call[0] for call in port.calls].count("workflow.jev_score") == 2
+    assert port.calls[-1][0] == "workflow.multiturn_consistency"
+
+
+@pytest.mark.parametrize("defect,expected_calls", [("user", 1), ("answer", 2), ("quote", 2), ("repeated_user", 3)])
+def test_new_advisory_keeps_deterministic_rejections_without_second_generation(defect, expected_calls):
+    text = "Maintenance requires isolating power before inspection."
+
+    class DefectiveDialogue(DialogueMemory):
+        def request(self, key, role, prompt_id, data, **options):
+            response = super().request(key, role, prompt_id, data, **options)
+            if prompt_id == "workflow.multiturn_user":
+                if defect == "user":
+                    response["message"] = ""
+                elif defect == "repeated_user" and data["turn"] > 1:
+                    response["message"] = "How should I start?"
+            else:
+                response["quotes"] = ["Invented source quotation." if defect == "quote" else text]
+                if defect == "answer":
+                    response["answer"] = ""
+            return response
+
+        def assess(self, *args, **options):
+            pytest.fail("Program rejection must not purchase a model assessment")
+
+    recipe = {"version": 9, "conversation_turns": 2, "multiturn_advisory_review_version": 1,
+        "review_advisory_policy_version": 1, "review_repair": {"mode": "auto", "max_rounds": 0}}
+    port = DefectiveDialogue()
+    row, = GenerateMultiturnDialogue(port, recipe).execute(
+        {"id": "task", "source_id": "manual", "kind": "document", "text": text})
+    assert len(port.calls) == expected_calls and row["status"] == "quarantined"
+    assert row["reason"] == "multiturn_turn_local_validation_rejected"
+    assert row["multiturn_advisory_review"]["local_validation"] == "rejected"
+    assert row["multiturn_advisory_review"]["model_called"] is False
+    assert "accepted_prefix" not in row
+    if defect == "answer":
+        assert row["failed_generation"]["response"]["answer"] == ""
+    if defect == "quote":
+        assert row["failed_generation"]["response"]["quotes"] == ["Invented source quotation."]
+    if defect == "repeated_user":
+        assert len(row["generated_prefix"]) == 2 and len(row["turn_reviews"]) == 1
+
+
 class OpaqueRows:
     def __init__(self, count):
         self.count = count

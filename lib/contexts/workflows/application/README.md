@@ -2,6 +2,10 @@
 
 原生生成在指导员已有调用选择上下文后，按轮加载冻结的通用与选中风格；`generate_native_turn` 保留完整历史，`GenerateNativeCot` 将实际系统上下文与原生推理一起保存。公开提醒、样本表面核验和多轮完成检查只认可精确的程序来源，不把任意 system 消息放宽为有效上下文。
 
+新建普通多轮任务采用自动建议评审时，冻结 `multiturn_advisory_review_version=1`。`GenerateMultiturnDialogue` 保留发言、响应、来源、引文、角色及完整多轮的本地校验，每轮只生成一次；逐轮内容、风格、契约和整段一致性模型检查统一延后到最终一次建议评审。记录明确写 `deferred` / `model_called=false`，不生成通过评分，已通过逐轮评审数为零。原生节点即使配置独立 `review_policy` 也只记录延后，不另购评审。缺少该标记的冻结任务及 `repair_inputs` 返工任务保留既有流程。
+
+同一标记下，指导员按已完成的助手正文回答计数，system 经验／风格消息、工具调用及工具回执不计为额外轮次；请求键、`completed_turns` 与续轮校验使用同一个实际计数。最终仍要求至少两个完整轮次，自然停止一轮不能标成多轮成功。终态记录的本地诊断重排不构成新增公开自动恢复接口；诊断前保留原目录快照，原配方、资料、首轮指导和原生响应检查点均须保留。
+
 `CreatePlannedSftReanswer` 选择已封存的原生 SFT 父版本，建立只更新经验的子任务；公开入口是 `WorkflowRunApplication.reanswer_sft(parent_run_id, candidate_ids=..., agent_experience=...)`。`RegeneratePlannedSft` 复用原问题、真实历史、合同与已认证资料选区，通过既有原生端口新生成推理和答案；不调用指导员、不向作者回灌旧稿或旧推理。创建只排队，启动沿用原工作流入口；每条仅建议评审一次，不能复用旧稿评语冒充新稿评审。
 
 `ReasoningBank` 提供已认证版本索引、按任务召回与新配方冻结；算法执行和向量缓存由基础设施调用 Google 原函数。`EvolveExperience` 收集完整观察、事务认领批次，并将上游提炼版本绑定原批次；提案、按策略交付及质量通过各自记录。原版入口由 `bootstrap/google_reasoning_bank.py` 装配。

@@ -109,6 +109,10 @@ def test_execute_keeps_the_schema_failure_isolated_and_exports_no_diagnostic_mes
                  **{key: value for key, value in failed_contract().items() if key not in {"id", "source_id"}}}]
 
     monkeypatch.setattr(engine.Workflow, "multiturn", terminal)
+    # New document tasks require a director; inject the saved terminal at its
+    # generation boundary too so this regression only exercises publication.
+    monkeypatch.setattr(engine.Workflow, "directed_generation", lambda workflow, units, **options: {
+        "multiturn": workflow.stage_items("multiturn", units, workflow.multiturn)})
     root = Path(__file__).resolve().parents[1]
     result = engine.Workflow(output, run_id, root, generator=NoCalls(), jev=NoCalls()).execute()
     assert result["status"] == "needs_attention", result.get("error")
