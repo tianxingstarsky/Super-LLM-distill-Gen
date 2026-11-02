@@ -293,7 +293,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
         # Existing catalogs retain the previous aggregate body verbatim.
         if prompt_id == "workflow.review_score":
             if review_advisory_policy_version == 1:
-                return render(get(prompt_id, version="1.27.0"))
+                return render(get(prompt_id, version="1.28.0"))
             if claim_review_schedule_version == 1:
                 return render(get(prompt_id, version="1.26.0"))
             if claim_review_adversarial_protocol_version == 1:

@@ -20,7 +20,7 @@ class ExperienceEvolutionModelPort:
             raise ValueError("experience_evolution_model_required")
         binding = self.binding
         client, model = self.client_factory(binding)
-        spec = get("workflow.evolve_experience", version="1.0.0")
+        spec = get("workflow.evolve_experience", version="1.1.0")
         request = {"model": model, "endpoint": client.base_url, "api_format": client.api_format,
             "binding": binding, "prompt": {"id": spec.id, "version": spec.version, "text": render(spec)},
             "payload": payload, "submission_schema": EXPERIENCE_PROPOSAL_SCHEMA}
@@ -90,6 +90,9 @@ class ExperienceEvolutionModelPort:
 
     def complete_observation_batch(self, identifier, edition_id, request_hash):
         return self.repository.complete_observation_batch(identifier, edition_id, request_hash)
+
+    def complete_official_observation_batch(self, identifier, outcome, request_hash):
+        return self.repository.complete_official_observation_batch(identifier, outcome, request_hash)
 
     def fail_observation_batch(self, identifier, error_type):
         return self.repository.fail_observation_batch(identifier, error_type)

@@ -9,7 +9,8 @@ from lib.contexts.workflows.infrastructure.reasoning_bank_induction import Offic
 from lib.contexts.workflows.infrastructure.google_reasoning_bank import GoogleReasoningBank
 
 
-def google_reasoning_bank_application(binding=None, *, root=None, user_key=None, client_factory=None):
+def google_reasoning_bank_application(binding=None, *, root=None, user_key=None, client_factory=None,
+                                      memory_policy_version="1.0.0"):
     storage = Path.home() / ".shujian-cube" if root is None else Path(root)
     user = getpass.getuser() if user_key is None else user_key
     namespace = sha256(user.encode()).hexdigest()
@@ -23,4 +24,5 @@ def google_reasoning_bank_application(binding=None, *, root=None, user_key=None,
                 **({"reasoning": selected["reasoning"]} if "reasoning" in selected else {}))
     return GoogleReasoningBank(repository, reasoning_bank_application(root=storage,user_key=user),
         experience_evolution_application(root=storage,user_key=user),
-        OfficialReasoningBankInductor(binding or {},client_factory,repository.root),binding)
+        OfficialReasoningBankInductor(binding or {},client_factory,repository.root,
+            memory_policy_version=memory_policy_version),binding)

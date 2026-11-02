@@ -1,5 +1,7 @@
 # 组合根：找到服务，再选择实现
 
+`google_reasoning_bank_application` 为新提炼显式装配跨任务经验指导 1.0.0。原版入口、共享模型网关与检索仍复用 Google 适配器；`memory_policy_version=None` 保留旧提炼请求。构造服务不会调用模型，旧经验仅在用户明确学习并采用后才有新版本。
+
 `planned_sft_reanswer.py` 装配固定任务重答用例、原生生成端口与审核域的已封存父版选择器。这里只连接端口，不新增指导员、评审循环或模型 SDK；旧任务没有显式版本标记时维持原路由。
 
 `review_control_text.control_text_suggestion_application(output)` 装配评审匹配建议的读取与状态服务。

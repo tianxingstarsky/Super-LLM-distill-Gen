@@ -3,12 +3,16 @@ from streamlit.testing.v1 import AppTest
 import pytest
 
 
-def editor(tmp_path, *, english=False, model=True, many=False):
+def editor(tmp_path, *, english=False, model=True, many=False, feedback=False):
     script = '''from copy import deepcopy
+from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 import streamlit as st
+from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application as real_google
 from lib.contexts.workflows.application.experience_evolution import EvolveExperience
+from lib.contexts.workflows.infrastructure.experience_evolution_model import ExperienceEvolutionModelPort
 from lib.contexts.workflows.contracts import initial_experience_text
 from lib.presentation.streamlit.experience_evolution_controls import render_experience_evolution
 from tests.test_experience_evolution import Port, EPISODES
@@ -16,13 +20,31 @@ ROOT = Path(ROOT_VALUE)
 st.session_state['ui_language'] = LANGUAGE_VALUE
 key='workflow-agent-experience-text:fixture:reasoning'
 enabled='workflow-agent-experience-enabled:fixture:reasoning'
+class EditorPort(Port, ExperienceEvolutionModelPort):
+    def __init__(self, root):
+        Port.__init__(self, root)
+        ExperienceEvolutionModelPort.__init__(self, self.repo, root)
 if 'port' not in st.session_state:
-    st.session_state['port']=Port(ROOT)
+    st.session_state['port']=EditorPort(ROOT/'experience-evolution'/sha256(b'fixture').hexdigest())
     st.session_state['bindings_seen']=[]
+    st.session_state['google_calls']=0
     st.session_state[key]='保持任务相关的依据、反例与反思。'
     st.session_state[enabled]=True
     st.session_state['workflow-node-bindings:fixture']=BINDINGS_VALUE
     st.session_state['conversation-import:fixture:preview']={'import_id':'staged'}
+    if FEEDBACK_VALUE:
+        EvolveExperience(st.session_state['port']).record_observation('reasoning', {
+            'id':'feedback','messages':[{'role':'user','content':'Continue.'},
+                {'role':'assistant','content':'Done.'}],
+            'review_observation':{'verdict':{'keep':True,'reason':'No new transferable evidence.'}}},
+            run_id='a'*32)
+class Client:
+    client=SimpleNamespace(close=lambda:None)
+    def chat(self, messages, **options):
+        st.session_state['google_calls']+=1
+        return '<no-new-memory/>'
+def google_factory(binding=None):
+    return real_google(binding,root=ROOT,user_key='fixture',client_factory=lambda selected:(Client(),'fixture'))
 class Importer:
     def evolution_sources(self, identity, **options):
         assert identity=='staged' and options['max_records']==8 and options['max_chars']==60000
@@ -47,7 +69,8 @@ def save_field(workspace, field):
     form=st.session_state.get('workflow-form-draft:'+workspace,{})
     st.session_state['workflow-form-draft:'+workspace]={**form,field:st.session_state[field]}
 with patch('lib.bootstrap.experience_evolution.experience_evolution_application',factory), \\
-     patch('lib.bootstrap.conversation_import.conversation_import_application',lambda:Importer()):
+     patch('lib.bootstrap.conversation_import.conversation_import_application',lambda:Importer()), \\
+     patch('lib.bootstrap.google_reasoning_bank.google_reasoning_bank_application',google_factory):
     render_experience_evolution('fixture','reasoning','workflow.cot_native_joint',
         text_key=key,enabled_key=enabled,save_field=save_field)
 st.text_area('Current experience',key=key)
@@ -57,7 +80,8 @@ st.button('Reset default',key='reset-default',on_click=_restore_experience,args=
     binding = {"cot": {"generation": {"backend": "deepseek", "model": "deepseek-flash",
         "context_window_tokens": 131072, "max_output_tokens": 32768}}} if model else {}
     script = script.replace("ROOT_VALUE", repr(tmp_path.as_posix())).replace(
-        "LANGUAGE_VALUE", repr("en" if english else "zh")).replace("BINDINGS_VALUE", repr(binding)).replace("MANY_VALUE", repr(many))
+        "LANGUAGE_VALUE", repr("en" if english else "zh")).replace("BINDINGS_VALUE", repr(binding)).replace(
+        "MANY_VALUE", repr(many)).replace("FEEDBACK_VALUE", repr(feedback))
     return AppTest.from_string(script).run(timeout=15)
 
 
@@ -147,6 +171,28 @@ def test_next_group_proposes_from_that_cursor_without_replaying_first_group(tmp_
     assert calls[0]["source_receipt"]["after_id"] == second["after_id"]
     ui.button(key=prefix + ":first-group").click().run()
     assert ui.session_state[prefix + ":sources"]["selected_ids"] == first["selected_ids"]
+
+
+def test_google_no_update_preserves_current_edition_and_does_not_reclaim_feedback(tmp_path):
+    ui = editor(tmp_path, feedback=True)
+    prefix = "experience-evolution:fixture:reasoning"
+    text_key = "workflow-agent-experience-text:fixture:reasoning"
+    assert not ui.exception
+    ui.button(key=prefix + ":save").click().run()
+    previous = ui.session_state[prefix + ":candidate"]
+    text = ui.text_area(key=text_key).value
+    ui.button(key=prefix + ":google-learn").click().run(timeout=15)
+    assert not ui.exception
+    assert any("没有新增可泛化经验" in notice.value for notice in ui.info)
+    assert ui.session_state[prefix + ":candidate"] == previous
+    assert ui.text_area(key=text_key).value == text
+    assert ui.session_state["google_calls"] == 1
+    repository = ui.session_state["port"].repo
+    assert [version["id"] for version in repository.list_versions("reasoning")] == [previous["id"]]
+    assert repository.observation_progress("reasoning")["groups"][0]["state"] == "no_update"
+    ui.button(key=prefix + ":google-learn").click().run()
+    assert not ui.exception and ui.session_state["google_calls"] == 1
+    assert any("暂无待学习反馈" in notice.value for notice in ui.info)
 
 
 def test_personal_template_default_restore_detaches_the_saved_evolution_parent(tmp_path):

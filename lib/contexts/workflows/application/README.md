@@ -4,6 +4,8 @@
 
 `ReasoningBank` 提供已认证版本索引、按任务召回与新配方冻结；算法执行和向量缓存由基础设施调用 Google 原函数。`EvolveExperience` 收集完整观察、事务认领批次，并将上游提炼版本绑定原批次；提案、按策略交付及质量通过各自记录。原版入口由 `bootstrap/google_reasoning_bank.py` 装配。
 
+`EvolveExperience.complete_official_observation_batch` 保留版本 ID 调用，并接受已持久化、摘要认证的 `no_update` 官方学习结果。专用端口按单条观察与 scope 原子完成批次；不将无更新当成新规则，也不再释放已完成观察。普通自定义提炼的 batch_id 认证仍走原端口。
+
 `GeneratePreferencePair` 仅把源候选明确携带的 v3 控制文字配置保留在复制的助手消息上，
 供成对标记导出使用；消息自身的配置优先，未知来源的负例不套用正例规则。正文仍是原始
 推理与答案，不执行文字转换，也不把新增来源配置放进生成负例的模型请求。

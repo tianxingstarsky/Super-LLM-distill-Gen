@@ -163,8 +163,8 @@ def test_precise_fact_review_preserves_old_prompt_snapshots():
         assert "没有依据的精确细节应省略或明确保留不确定性" not in render(old)
 
 
-def test_latest_review_protocol_preserves_literal_scope_and_refuses_invented_support():
-    current = get("workflow.review_score")
+def test_review_guidance_protocol_preserves_literal_scope_and_refuses_invented_support():
+    current = get("workflow.review_score", version="1.25.0")
     assert current.version == "1.25.0"
     assert get("workflow.review_score", version="1.20.0").version == "1.20.0"
     text = render(current)
@@ -197,7 +197,7 @@ def test_review_guidance_versions_preserve_frozen_schema_and_prompt_overrides(
     import json
     from lib.domain.workflow_node_prompts import snapshot_node_prompts
 
-    current, previous = get(prompt_id), get(prompt_id, version=old_version)
+    current, previous = get(prompt_id, version=new_version), get(prompt_id, version=old_version)
     assert current.version == new_version
     frozen = json.dumps(asdict(previous), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     assert sha256(frozen.encode("utf8")).hexdigest() == old_sha

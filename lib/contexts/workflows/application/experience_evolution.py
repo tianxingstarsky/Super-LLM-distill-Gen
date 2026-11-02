@@ -21,6 +21,7 @@ class ExperienceEvolutionPort(Protocol):
     def observation_batch_guard(self, identifier: str): ...
     def bind_observation_batch_request(self, identifier: str, request_hash: str): ...
     def complete_observation_batch(self, identifier: str, edition_id: str, request_hash: str): ...
+    def complete_official_observation_batch(self, identifier: str, outcome: dict, request_hash: str): ...
     def fail_observation_batch(self, identifier: str, error_type: str): ...
 
 
@@ -73,16 +74,19 @@ class EvolveExperience:
         return self._port.get_observation(identifier)
 
     def complete_official_observation_batch(self, identifier, edition_id):
-        """Bind an upstream-produced edition to the exact claimed input."""
-        from ..domain.experience_evolution import digest
+        """Consume the exact upstream input, including a durable no-update result."""
+        validate_identifier(identifier)
+        if isinstance(edition_id, dict):
+            if edition_id.get("status") != "no_update":
+                raise ValueError("experience_evolution_official_batch_mismatch")
+            outcome = edition_id
+        else:
+            outcome = self._port.get_version(validate_identifier(edition_id))
         batch = self._port.get_observation_batch(identifier)
-        edition = self._port.get_version(edition_id)
-        if (len(batch["records"]) != 1 or edition["scope"] != batch["scope"]
-                or edition.get("source_receipt", {}).get("observation_sha256") != digest(batch["records"][0])):
+        if len(batch["records"]) != 1:
             raise ValueError("experience_evolution_official_batch_mismatch")
         request_hash = digest({"engine": "google_reasoning_bank", "source": batch["records"]})
-        self._port.bind_observation_batch_request(identifier, request_hash)
-        self._port.complete_observation_batch(identifier, edition_id, request_hash)
+        return self._port.complete_official_observation_batch(identifier, outcome, request_hash)
 
     def claim_observation_batch(self, scope, *, max_records=8, max_chars=60000, run_id=None):
         validate_scope(scope)

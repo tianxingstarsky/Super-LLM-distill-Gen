@@ -5,9 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from lib.contexts.workflows.application.experience_evolution import EvolveExperience
+from lib.contexts.workflows.domain.experience_evolution import digest
 from lib.contexts.workflows.infrastructure.experience_evolution import ExperienceEvolutionRepository
 from lib.contexts.workflows.infrastructure.experience_evolution_model import ExperienceEvolutionModelPort
 from lib.contexts.review.infrastructure.experience_observations import record_advisory_review_observation
+from lib.io_utils import atomic_json
 
 
 class ProposalPort(ExperienceEvolutionModelPort):
@@ -96,3 +98,79 @@ def test_oversized_episode_is_preserved_not_silently_clipped_or_consumed(tmp_pat
     assert result["blocked_observation_id"] == record["id"]
     assert app.get_observation(record["id"])["collection_state"] == "pending"
     assert app.claim_observation_batch("reasoning")["records"][0]["messages"] == episode()["messages"]
+
+
+def test_official_edition_completes_its_exact_observation_without_a_batch_id_in_edition(tmp_path):
+    app, port = application(tmp_path)
+    observation = app.record_observation("reasoning", episode(), run_id="a" * 32)
+    batch = app.claim_observation_batch("reasoning", max_records=1)
+    edition = app.propose("reasoning", "Check actual conditions.", batch["records"],
+        source_receipt={"observation_sha256": digest(batch["records"][0])})
+    assert "batch_id" not in edition["source_receipt"]
+    app.complete_official_observation_batch(batch["id"], edition["id"])
+    app.complete_official_observation_batch(batch["id"], edition["id"])
+    stored = app.get_observation_batch(batch["id"])
+    assert stored["status"] == "proposed" and stored["edition_id"] == edition["id"]
+    assert app.get_observation(observation["id"])["collection_state"] == "proposed"
+    assert app.claim_observation_batch("reasoning")["status"] == "empty"
+    assert port.calls == 1
+
+
+def no_update_outcome(batch, *, parent_id=None):
+    return {"status": "no_update", "scope": batch["scope"], "parent_id": parent_id,
+        "source_sha256": "b" * 64,
+        "source_receipt": {"observation_sha256": digest(batch["records"][0])},
+        "upstream_result": {"memory": {"memory_items": []}},
+        "model_request_receipt": [{"request_id": "protocol-fixture", "response_details": {
+            "usage": {"prompt_tokens": 10, "completion_tokens": 3}}}]}
+
+
+def persist_no_update(repository, outcome):
+    receipt = {**outcome, "result_sha256": digest(outcome)}
+    atomic_json(repository.root / "official-editions" / (outcome["source_sha256"] + ".json"), receipt)
+    return receipt
+
+
+def test_official_no_update_consumes_once_and_preserves_parent_and_request_receipt(tmp_path):
+    app, port = application(tmp_path)
+    parent = app.save_version("reasoning", "Keep the original experience.")
+    observation = app.record_observation("reasoning", episode(), run_id="a" * 32)
+    batch = app.claim_observation_batch("reasoning", max_records=1)
+    outcome = no_update_outcome(batch, parent_id=parent["id"])
+    with pytest.raises(ValueError, match="official_receipt_changed"):
+        app.complete_official_observation_batch(batch["id"], outcome)
+    assert app.get_observation_batch(batch["id"])["status"] == "claimed"
+    receipt = persist_no_update(port.repository, outcome)
+    app.complete_official_observation_batch(batch["id"], outcome)
+    app.complete_official_observation_batch(batch["id"], receipt)
+    restored, _ = application(tmp_path)
+    stored = restored.get_observation_batch(batch["id"])
+    assert stored["status"] == "no_update" and "edition_id" not in stored
+    assert stored["official_result_receipt"] == receipt
+    assert restored.get_observation(observation["id"])["collection_state"] == "no_update"
+    assert restored.claim_observation_batch("reasoning")["status"] == "empty"
+    assert restored.get_version(parent["id"]) == parent
+    assert [version["id"] for version in restored.list_versions("reasoning")] == [parent["id"]]
+    assert port.calls == 0
+    with pytest.raises(ValueError, match="not_releasable"):
+        restored.release_observation_batch(batch["id"])
+
+
+@pytest.mark.parametrize("mismatch", ["scope", "observation", "receipt"])
+def test_official_no_update_rejects_other_source_or_changed_receipt(tmp_path, mismatch):
+    app, port = application(tmp_path)
+    observation = app.record_observation("reasoning", episode(), run_id="a" * 32)
+    batch = app.claim_observation_batch("reasoning", max_records=1)
+    outcome = no_update_outcome(batch)
+    if mismatch == "scope":
+        outcome["scope"] = "answer"
+    elif mismatch == "observation":
+        outcome["source_receipt"]["observation_sha256"] = "f" * 64
+    persist_no_update(port.repository, outcome)
+    if mismatch == "receipt":
+        outcome["model_request_receipt"][0]["response_details"]["usage"]["completion_tokens"] += 1
+    with pytest.raises(ValueError, match="official_(batch_mismatch|receipt_changed)"):
+        app.complete_official_observation_batch(batch["id"], outcome)
+    assert app.get_observation_batch(batch["id"])["status"] == "claimed"
+    assert app.get_observation(observation["id"])["collection_state"] == "claimed"
+    assert port.calls == 0

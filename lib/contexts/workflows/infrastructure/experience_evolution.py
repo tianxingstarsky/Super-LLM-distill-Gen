@@ -89,6 +89,8 @@ class ExperienceEvolutionRepository:
         validate_scope(scope)
         metadata = []
         for path in self.root.glob("*.json"):
+            if path.name == "reasoning-bank-active.json":
+                continue
             record = self.get_version(path.stem)
             if record["scope"] == scope:
                 metadata.append({key: record[key] for key in
@@ -243,6 +245,72 @@ class ExperienceEvolutionRepository:
             body.update(status="proposed", edition_id=edition_id)
             self._save_batch(database, body)
             database.execute("UPDATE observations SET state='proposed' WHERE batch_id=?", (identifier,))
+
+    def _official_no_update_receipt(self, outcome):
+        source_hash = outcome.get("source_sha256")
+        if (not isinstance(source_hash, str) or len(source_hash) != 64
+                or any(character not in "0123456789abcdef" for character in source_hash)):
+            raise ValueError("experience_evolution_official_receipt_changed")
+        directory = self.root / "official-editions"
+        path = directory / (source_hash + ".json")
+        if self.root.is_symlink() or directory.is_symlink() or path.is_symlink():
+            raise ValueError("experience_evolution_unsafe_path")
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise ValueError("experience_evolution_official_receipt_changed") from None
+        if not isinstance(saved, dict):
+            raise ValueError("experience_evolution_official_receipt_changed")
+        body = {key: value for key, value in saved.items() if key != "result_sha256"}
+        supplied = {key: value for key, value in outcome.items() if key != "result_sha256"}
+        if (saved.get("result_sha256") != digest(body) or body != supplied
+                or outcome.get("result_sha256", saved["result_sha256"]) != saved["result_sha256"]
+                or body.get("status") != "no_update" or body.get("source_sha256") != source_hash):
+            raise ValueError("experience_evolution_official_receipt_changed")
+        return saved
+
+    def complete_official_observation_batch(self, identifier, outcome, request_hash):
+        """Publish a durable upstream outcome and consume its one exact observation."""
+        if outcome.get("status") == "no_update":
+            outcome = self._official_no_update_receipt(outcome)
+            status, receipt = "no_update", outcome
+        else:
+            outcome = self.get_version(outcome["id"])
+            if outcome.get("status") != "candidate":
+                raise ValueError("experience_evolution_official_batch_mismatch")
+            status = "proposed"
+            receipt = {"status": status, "edition_id": outcome["id"], "edition_sha256": outcome["sha256"],
+                "source_receipt": outcome.get("source_receipt", {})}
+        with self.observation_batch_guard(identifier), self._observations() as database:
+            database.execute("BEGIN IMMEDIATE")
+            body = self._batch(database, identifier)
+            if len(body["entries"]) != 1:
+                raise ValueError("experience_evolution_official_batch_mismatch")
+            entry = body["entries"][0]
+            observation, checksum, state, batch_id = self._observation(database, entry["id"])
+            episode = self._episode(observation)
+            if (checksum != entry["sha256"] or batch_id != identifier or outcome.get("scope") != body["scope"]
+                    or outcome.get("source_receipt", {}).get("observation_sha256") != digest(episode)):
+                raise ValueError("experience_evolution_official_batch_mismatch")
+            if (request_hash != digest({"engine": "google_reasoning_bank", "source": [episode]})
+                    or body.get("request_sha256", request_hash) != request_hash):
+                raise ValueError("experience_evolution_batch_request_changed")
+            if body["status"] in {"proposed", "no_update"}:
+                prior_receipt = body.get("official_result_receipt")
+                if prior_receipt is None and status == "proposed" and body.get("edition_id") == outcome["id"]:
+                    prior_receipt = receipt
+                if (body["status"] != status or state != status
+                        or prior_receipt != receipt):
+                    raise ValueError("experience_evolution_batch_changed")
+                return
+            if body["status"] not in {"claimed", "needs_attention"} or state != "claimed":
+                raise ValueError("experience_evolution_batch_not_claimed")
+            body.update(status=status, request_sha256=request_hash, official_result_receipt=deepcopy(receipt))
+            if status == "proposed":
+                body["edition_id"] = outcome["id"]
+            body.pop("error_type", None)
+            self._save_batch(database, body)
+            database.execute("UPDATE observations SET state=? WHERE batch_id=?", (status, identifier))
 
     def fail_observation_batch(self, identifier, error_type):
         with self._observations() as database:

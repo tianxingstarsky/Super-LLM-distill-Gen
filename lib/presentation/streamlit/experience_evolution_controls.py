@@ -169,7 +169,11 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
         st.markdown("**Google ReasoningBank**")
         st.caption(("Lessons improve this generation role, using review feedback as evidence."
                     if en else "经验用于当前生成角色；评审意见仅作为学习依据。"))
-        st.caption(("Original upstream induction and retrieval. Feedback: " if en else "执行 Google 原版提炼与检索。已收集反馈：")
+        st.caption(("Uses upstream algorithms with guidance for transferable judgment principles. "
+                    "Avoids task-specific patches and forced conditions; keeps current memory when no reliable new lesson emerges. "
+                    "Collected feedback: " if en else
+                    "执行上游提炼与检索算法，结合学习指引整理可迁移的判断原则。避免逐题补丁或强加条件；"
+                    "没有可靠新经验时保留当前记忆。已收集反馈：")
                    + str(progress["total"]))
         learn, pause = st.columns(2, gap="small")
         with learn:
@@ -183,12 +187,18 @@ def render_experience_evolution(workspace, scope, prompt_id, *, text_key, enable
                         with st.spinner("Running upstream induction…" if en else "正在执行原版经验提炼…"):
                             candidate = google_reasoning_bank_application(_binding(workspace, scope, prompt_id)).learn(
                                 scope, batch["records"][0], parent_id=st.session_state.get(prefix + ":parent"))
-                        app.complete_official_observation_batch(batch["id"], candidate["id"])
-                        _remember(prefix, candidate)
+                        if candidate.get("status") == "no_update":
+                            app.complete_official_observation_batch(batch["id"], candidate)
+                            st.info("Feedback processed; no new generalizable lesson this time."
+                                    if en else "已学习本条反馈，本次没有新增可泛化经验。")
+                        else:
+                            app.complete_official_observation_batch(batch["id"], candidate["id"])
+                            _remember(prefix, candidate)
                 except (OSError, ValueError, RuntimeError) as error:
                     st.error(_error(error, en))
                 finally:
-                    if batch.get("id") and app.get_observation_batch(batch["id"])["status"] != "proposed":
+                    if (batch.get("id") and app.get_observation_batch(batch["id"])["status"]
+                            in {"claimed", "needs_attention"}):
                         app.release_observation_batch(batch["id"])
         with pause:
             if st.button("Disable retrieved memory" if en else "停用检索记忆", key=prefix + ":google-disable", width="stretch"):

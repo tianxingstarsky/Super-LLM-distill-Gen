@@ -17,6 +17,8 @@
 # evidence-linked user style proposals. The native response guidance is
 # this project's own asset. Upstream commit and notices: docs/licenses/README.md.
 """Evidence-linked user experience and style proposal prompt versions."""
+from dataclasses import replace
+
 from lib.prompts.base import PromptSpec
 
 
@@ -40,3 +42,29 @@ EVOLVE_EXPERIENCE = PromptSpec(id="workflow.evolve_experience", version="1.0.0",
         "单轨迹最多三条、多轨迹最多五条", "未知结果不冒充成功或失败", "用户偏好不冒充普遍事实"),
     notes="仅复用经验提炼机制与提示词；证据核验、持久化与谱系由应用及领域层处理，不引入上游运行框架。",
     template=EVOLVE_EXPERIENCE_BODY)
+
+EVOLVE_EXPERIENCE_V1_0 = EVOLVE_EXPERIENCE
+
+GENERAL_EXPERIENCE_GUIDANCE = """长期经验面向可迁移的判断能力，不面向本题答案。寻找导致差异的通用元素：信息来自谁且适用于谁、定义或决策判据是什么、哪些证据覆盖哪些主张、哪些真实依赖会改变行动、哪些观察仍不确定。规则应说明依据什么区别作什么选择，而不是记住本题的专名、数值、结论、工具字符串或一种固定话术；原始案例和引文保留为来源，不伪装成通用规则。
+能迁移不等于写空泛口号。保留可识别的触发依据、判断操作和适用边界；去掉具体题面后，规则仍应能指导结构相似而主题不同的任务。一次评语只是可错的观察，不证明成败原因或某种修正一定有效；未做对照的解释保持待验证，不自动升级为因果规律。
+不要把每个缺陷都修成补条件、增加免责声明或要求澄清。也可能需要纠正判据、删除无依据的例外、撤回错误主张、重新核对归属，或保留已经正确的结论。只有真实缺少且会影响结论的信息才需要补充条件；规则的 when/Description 描述适用情境，不要求答案每次都写“如果”“可能”或固定步骤。
+已有经验是可修正的参考。保留仍有依据的用户意图与有效原则，合并重复规则；只有实际反例或新证据支持时才更改原原则，不为本次观察强造新经验。没有可靠新规律时允许不新增规则，也不能把旧任务的正确答案当成新规律。用户明确的个性与风格偏好按其归属保留，不扩写成适合所有人的普遍真理。"""
+
+EVOLVE_EXPERIENCE = replace(EVOLVE_EXPERIENCE_V1_0, version="1.1.0",
+    purpose="从反馈提炼可迁移的判断原则与用户风格",
+    template=EVOLVE_EXPERIENCE_BODY + "\n\n" + GENERAL_EXPERIENCE_GUIDANCE,
+    constraints=EVOLVE_EXPERIENCE_V1_0.constraints + ("不以本题补丁代替通用经验", "不强制通过补条件修正"))
+
+MEMORY_GENERALIZATION = PromptSpec(id="workflow.memory_generalization", version="1.0.0",
+    purpose="将原版 ReasoningBank 提炼适配为跨任务生成经验",
+    source="Project host adaptation of pinned Google ReasoningBank induction; upstream source remains unchanged.",
+    constraints=("保留原版算法与实际请求", "父经验只作待核对参考", "无新经验可不新增"),
+    template="""本项目适配说明：本次从实际生成任务及其已保存反馈提炼长期经验，不限于网页导航。
+上游的具体操作指导应理解为可执行的判断方法，不是保留网页步骤、题目术语或本题答案。
+按给出的 generation_scope 聚焦该生成角色；评审提供观察，不是需要被进化的角色。
+current_memory 是父版的完整经验，仅作为可修正的参考；没有父版时为空。
+""" + GENERAL_EXPERIENCE_GUIDANCE + """
+在同一次提炼中巩固父版，保留仍适用的有效条目、合并重复并仅作有依据的改动。
+输出完整合并后的 Memory Item 条目，沿用上游 Title / Description / Content 格式，每条保持完整。
+若与父版相比没有可靠变化，或没有足够依据形成任何经验，只输出 <no-new-memory/>；不凑条目，不另行评审。
+""")

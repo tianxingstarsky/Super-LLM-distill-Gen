@@ -7,11 +7,22 @@ complete source checkout. Published memory remains model advice, not ground trut
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
+import re
 
 from filelock import FileLock
 
 from lib.contexts.workflows.domain.experience_evolution import FORMAT_VERSION, digest, validate_scope, validate_experience_text
 from lib.io_utils import atomic_json
+
+
+def _complete_memory_items(parts):
+    """Restore complete upstream Markdown items after its blank-line projection."""
+    text = "\n\n".join(parts).strip()
+    headings = list(re.finditer(r"(?m)^# Memory Item [^\n]+$", text))
+    if not headings or text[:headings[0].start()].strip():
+        return [text] if text else []
+    return [text[heading.start():headings[index + 1].start() if index + 1 < len(headings) else len(text)].strip()
+            for index, heading in enumerate(headings)]
 
 
 def recorded_episode(observation, user_outcome=None):
@@ -54,21 +65,44 @@ class GoogleReasoningBank:
         if scope == "review":
             raise ValueError("reasoning_bank_generation_scope_required")
         episode = recorded_episode(observation, user_outcome)
-        source_hash = digest({"scope": scope, "episode": episode, "binding": self.binding, "parent_id": parent_id})
+        parent = self.repository.get_version(parent_id) if parent_id else None
+        if parent and parent["scope"] != scope:
+            raise ValueError("experience_evolution_parent_scope_mismatch")
+        policy = self.inductor.policy_identity
+        identity = {"scope": scope, "episode": episode, "binding": self.binding, "parent_id": parent_id}
+        if policy:
+            identity["memory_policy"] = policy
+        source_hash = digest(identity)
         receipt = self.repository.root / "official-editions" / (source_hash + ".json")
         receipt.parent.mkdir(exist_ok=True)
         with FileLock(str(receipt) + ".lock"):
             if receipt.exists():
-                return self.repository.get_version(json.loads(receipt.read_text("utf-8"))["edition_id"])
-            if parent_id:
-                if self.repository.get_version(parent_id)["scope"] != scope:
-                    raise ValueError("experience_evolution_parent_scope_mismatch")
-            result = self.inductor.induce(episode)
-            items = [text for text in result["memory"]["memory_items"] if text.strip()]
+                saved = json.loads(receipt.read_text("utf-8"))
+                if saved.get("source_sha256") != source_hash:
+                    raise ValueError("reasoning_bank_learning_receipt_changed")
+                if saved.get("status") == "no_update":
+                    body = {key: value for key, value in saved.items() if key != "result_sha256"}
+                    if saved.get("result_sha256") != digest(body):
+                        raise ValueError("reasoning_bank_learning_receipt_changed")
+                    return saved
+                return self.repository.get_version(saved["edition_id"])
+            result = (self.inductor.induce(episode, generation_scope=scope,
+                current_memory=parent["text"] if parent else "") if policy else self.inductor.induce(episode))
+            raw_items = result["memory"]["memory_items"]
+            if policy and "\n\n".join(raw_items).strip() == "<no-new-memory/>":
+                outcome = {"status": "no_update", "scope": scope, "parent_id": parent_id,
+                    "source_receipt": {"observation_sha256": digest(observation)},
+                    "source_sha256": source_hash, "memory_policy": policy,
+                    "upstream_result": result, "model_request_receipt": result["model_calls"]}
+                outcome["result_sha256"] = digest(outcome)
+                atomic_json(receipt, outcome)
+                return outcome
+            items = (_complete_memory_items(raw_items) if policy else [text for text in raw_items if text.strip()])
             text = validate_experience_text("\n\n".join(items))
             edition = self.repository.save({"format_version": FORMAT_VERSION, "scope": scope,
                 "status": "candidate", "label": "Google ReasoningBank", "parent_id": parent_id,
-                "base_text": "", "text": text, "summary": "Original upstream memory induction",
+                "base_text": parent["text"] if policy and parent else "", "text": text,
+                "summary": "Generalized upstream memory induction" if policy else "Original upstream memory induction",
                 "rules": [], "episodes": [episode], "source_receipt": {"observation_sha256": digest(observation)},
                 "instruction": "", "quality": "upstream_model_proposed_not_verified",
                 "upstream_memory_items": items, "upstream": result["upstream"],

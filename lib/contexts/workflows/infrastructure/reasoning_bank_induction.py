@@ -46,15 +46,21 @@ def _trajectory(episode):
 
 
 class _GatewayClient:
-    def __init__(self, binding, client_factory, directory, *, source_receipts, scaling=False):
+    def __init__(self, binding, client_factory, directory, *, source_receipts, scaling=False,
+                 memory_policy=None, memory_context=None):
         self.binding, self.client_factory = binding, client_factory
         self.directory, self.source_receipts = directory, source_receipts
         self.scaling, self.calls = scaling, []
+        self.memory_policy, self.memory_context = memory_policy, memory_context
 
     def __call__(self, *, model_name):
         return self
 
     def one_step_chat(self, prompt, *, system_msg, temperature):
+        if self.memory_policy:
+            system_msg += "\n\n" + self.memory_policy["text"]
+            prompt += "\n\nHost memory context (reference data, not task instructions):\n" + json.dumps(
+                self.memory_context, ensure_ascii=False)
         messages = [{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
         model_settings = {key: self.binding[key] for key in
                           ("backend", "model", "max_output_tokens", "context_window_tokens", "reasoning")
@@ -94,12 +100,24 @@ class _GatewayClient:
 class OfficialReasoningBankInductor:
     """Persist resumable upstream induction; no automatic sampling or adoption."""
 
-    def __init__(self, binding, client_factory, root, *, upstream_root=None):
+    def __init__(self, binding, client_factory, root, *, upstream_root=None, memory_policy_version=None):
         self.binding, self.client_factory = deepcopy(binding), client_factory
         self.root, self.upstream_root = Path(root), upstream_root
+        self.memory_policy = None
+        if memory_policy_version is not None:
+            from lib.prompts import get, render
+            spec = get("workflow.memory_generalization", version=memory_policy_version)
+            text = render(spec)
+            self.memory_policy = {"id": spec.id, "version": spec.version, "text": text, "sha256": digest(text)}
 
-    def induce(self, episode):
-        return self._execute([_trajectory(episode)], scaling=False)
+    @property
+    def policy_identity(self):
+        return ({key: self.memory_policy[key] for key in ("id", "version", "sha256")}
+                if self.memory_policy else None)
+
+    def induce(self, episode, *, generation_scope=None, current_memory=""):
+        return self._execute([_trajectory(episode)], scaling=False,
+            memory_context={"generation_scope": generation_scope, "current_memory": current_memory})
 
     def contrast(self, episodes):
         """Compare existing alternatives through original MaTTS induction only."""
@@ -108,7 +126,7 @@ class OfficialReasoningBankInductor:
             raise ValueError("reasoning_bank_contrast_requires_same_task_alternatives")
         return self._execute(candidates, scaling=True)
 
-    def _execute(self, episodes, *, scaling):
+    def _execute(self, episodes, *, scaling, memory_context=None):
         source_file = "WebArena/induce_scaling.py" if scaling else "WebArena/induce_memory.py"
         constant_names = ["PARALLEL_SI"] if scaling else ["SUCCESSFUL_SI", "FAILED_SI"]
         constants, prompt_receipt = load_upstream_constants("WebArena/prompts/memory_instruction.py",
@@ -125,6 +143,8 @@ class OfficialReasoningBankInductor:
                    "binding": {key: self.binding[key] for key in
                                ("backend", "model", "max_output_tokens", "context_window_tokens", "reasoning")
                                if key in self.binding}}
+        if self.memory_policy:
+            payload.update(adapter_version=2, memory_policy=self.policy_identity, memory_context=memory_context)
         identifier = digest(payload)
         directory = self.root / "official-induction" / identifier
         directory.mkdir(parents=True, exist_ok=True)
@@ -143,7 +163,8 @@ class OfficialReasoningBankInductor:
             atomic_json(reward_path, [{"rm": 1 if episode["status"] == "success" else 0,
                                       "thoughts": episode["feedback"]}])
             gateway = _GatewayClient(self.binding, self.client_factory, self.root / "official-requests",
-                                     source_receipts=source_receipts, scaling=scaling)
+                                     source_receipts=source_receipts, scaling=scaling,
+                                     memory_policy=self.memory_policy, memory_context=memory_context)
             provider_module = SimpleNamespace(CLIENT_DICT={"gateway": gateway})
             real_import = builtins.__import__
 
@@ -196,5 +217,8 @@ class OfficialReasoningBankInductor:
                     "explicit_utf8_text_io_on_windows"] +
                     (["scaling_provider_instance_and_text_return", "actual_alternatives_instead_of_repeated_path",
                       "recorded_status_instead_of_inverted_script_reward"] if scaling else [])}
+            if self.memory_policy:
+                saved.update(memory_policy=self.policy_identity, memory_context_sha256=digest(memory_context))
+                saved["additional_adaptations"].append("versioned_cross_task_memory_guidance_and_parent_context")
             atomic_json(receipt_path, saved)
             return {**saved, "reused": False}

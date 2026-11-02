@@ -4,6 +4,12 @@
 
 Google 原版入口见 `reasoning_bank_source.py`（固定源码与原函数摘要）、`reasoning_bank_induction.py`（原 main + 模型/轨迹 I/O）、`reasoning_bank.py`（原检索 + 本地嵌入）、`google_reasoning_bank.py`（个人版本、采用和停用的宿主适配）。不改上游仓库，不把云/SRE 示例回退当成功。安装和实测边界见 [接入说明](../../../../docs/architecture/google-reasoning-bank-integration.md)。
 
+新宿主适配 v2 使用 `workflow.memory_generalization@1.0.0`，在原版提炼的同一次请求中提供父经验和可迁移的判断目标；原始上游提示仍可审计，实际请求同时保存宿主指导。外层学习版本缓存与内层提炼缓存都绑定策略 ID、版本和正文摘要。完整 Memory Item 恢复为一个检索单元，不能将标题、适用范围与内容分开索引。旧适配可显式选择 `memory_policy_version=None`，已保存经验和冻结任务不改写。
+
+明确的 `<no-new-memory/>` 结果存为带摘要的 `no_update` 学习收据，不创建空规则或空经验版，也不改变当前采用版；同一观察重放复用实际请求。官方观察批次按观察摘要和业务范围完成，不能套用自定义提炼的 batch_id 要求，也不再次领取已经处理的无更新观察。
+
+经验版列表排除宿主的 `reasoning-bank-active.json` 索引文件；其他经验文件仍核对身份与内容摘要，不以跳过损坏版本恢复页面。
+
 自动经验只作用于生成角色。`review` 只提供反馈来源，禁止提炼为评审版本或激活评审记忆；冻结配方时忽略旧的 review 检索配置。原生 SFT/多轮反馈归 reasoning，普通答案反馈归 answer，CPT 归 cpt；不会把生成经验串入评审 system。
 
 指导员批量出口 `_directed_worker_batch` 与普通 `stage_items` 一样，发布前绑定实际作者节点的
