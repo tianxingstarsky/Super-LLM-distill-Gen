@@ -127,6 +127,21 @@ def render_director_settings(workspace: str, *, save_field) -> None:
     if st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning"):
         st.caption("资料解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
     language = st.session_state.get("ui_language", "zh")
+    context_key = f"workflow-dialogue-style-contexts:{workspace}"
+    st.session_state[context_key] = _field(workspace, context_key, True)
+    st.toggle("Load context by dialogue style" if language == "en" else "按对话风格调用上下文",
+        key=context_key, on_change=save_field, args=(workspace, context_key),
+        help=("Choose per turn in the existing director call. Native SFT and multi-turn answers load only selected context."
+              if language == "en" else "指导员在原有调用中按轮选择；原生 SFT 与多轮回答只加载选中的上下文，不增加分类调用。"))
+    st.caption("Common · Direct · Narrative · Exploratory · Iterative · Emotional" if language == "en"
+               else "通用 · 直接表达 · 情境叙述 · 探索讨论 · 协作推进 · 情绪交流")
+    st.caption("Styles can combine or change. They are not subject domains or permanent user profiles."
+               if language == "en" else "风格可以组合、随交流变化；不按知识领域分类，也不固定用户人设。")
+    with st.popover("Context catalog" if language == "en" else "查看上下文目录"):
+        from lib.bootstrap.dialogue_style_contexts import dialogue_style_context_catalog
+        for context in dialogue_style_context_catalog()["contexts"].values():
+            st.markdown("**" + translate_label(context["label"], language) + "** · "
+                        + translate_label(context["description"], language))
     goals = {key: translate_label(label, language) for key, label in LEARNING_GOAL_LABELS.items()}
     languages = {key: translate_label(label, language) for key, label in USER_LANGUAGE_LABELS.items()}
     goal_column, language_column = st.columns(2, gap="small")

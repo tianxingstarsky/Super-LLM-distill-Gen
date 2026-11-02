@@ -36,3 +36,4 @@ from .domain.generation_control import generation_controls_metadata
 from .domain.node_control_text import attach_node_control_text
 from .domain.reasoning_bank import ReasoningBankUnavailable
 from .domain.planned_sft_reanswer import valid_reanswer_receipt
+from .domain.dialogue_style_context import authenticated_record_context_positions

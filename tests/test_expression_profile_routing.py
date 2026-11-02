@@ -52,6 +52,57 @@ def test_only_compatible_speaker_habits_carry_to_another_turn():
     assert "clarity" not in next_turn and PROFILE == copied
 
 
+def test_style_contexts_are_opt_in_siblings_and_constraint_projection_preserves_them():
+    from lib.domain.workflow_qa_director import validate_director_task, validate_question_brief
+    from lib.contexts.workflows.contracts import validate_referenced_dialogue_step
+    source = "设备检查先断电。"
+    task = {"id": "one", "qa_type": "closed_book", "question": "检查前先做什么？",
+        "visible_context": "", "answer_policy": "answer", "guidance": "保留实际前置条件。",
+        "evidence_quotes": [source], "expression_design": {"form": "直接请求"},
+        "dialogue_contexts": ["iterative", "direct"]}
+    with pytest.raises(ValueError, match="invalid_qa_director_task"):
+        validate_director_task(task, expected_type=None, source_text=source)
+    selected = validate_director_task(task, expected_type=None, source_text=source,
+        dialogue_style_context_version=1)
+    assert selected["dialogue_contexts"] == ["direct", "iterative"]
+    assert selected["expression_design"] == task["expression_design"]
+    default_task = {key: value for key, value in task.items() if key != "dialogue_contexts"}
+    assert "dialogue_contexts" not in validate_director_task(default_task, expected_type=None)
+    assert validate_director_task(default_task, expected_type=None,
+        dialogue_style_context_version=1)["dialogue_contexts"] == []
+    brief = {"topic": "设备检查", "communication_goal": "表达本轮疑问", "dialogue_contexts": ["exploratory"]}
+    with pytest.raises(ValueError, match="invalid_question_brief"):
+        validate_question_brief(brief)
+    assert validate_question_brief(brief, dialogue_style_context_version=1)["dialogue_contexts"] == ["exploratory"]
+    messages = [{"role": "user", "content": "先处理检查记录。"}, {"role": "assistant", "content": "已经列好。"}]
+    step = {"continue": True, "user_message": "记录项呢？", "reason": "承接已经列出的内容。",
+        "user_constraint_refs": [0], "dialogue_state": {"dialogue_contexts": ["iterative"]}}
+    with pytest.raises(ValueError, match="invalid_dialogue_step"):
+        validate_referenced_dialogue_step(step, messages=messages, completed_turns=1, natural_utterance=True)
+    normalized = validate_referenced_dialogue_step(step, messages=messages, completed_turns=1,
+        natural_utterance=True, dialogue_style_context_version=1)
+    assert normalized["dialogue_state"]["dialogue_contexts"] == ["iterative"]
+    assert normalized["dialogue_state"]["active_constraints"] == [messages[0]["content"]]
+    step["dialogue_state"].pop("dialogue_contexts")
+    assert validate_referenced_dialogue_step(step, messages=messages, completed_turns=1,
+        natural_utterance=True, dialogue_style_context_version=1)["dialogue_state"]["dialogue_contexts"] == []
+
+
+def test_style_context_prompt_requires_new_snapshot_flag_and_preserves_literal_overrides():
+    from lib.domain.workflow_node_prompts import snapshot_node_prompts
+    from lib.prompts import get, render
+    from lib.prompts.workflow_planning import QA_DIRECTOR_V1_15_SPEC
+    old = snapshot_node_prompts(None, recipe_version=42)
+    new = snapshot_node_prompts(None, recipe_version=42, dialogue_style_context_version=1)
+    assert old["director"]["workflow.qa_director"] == render(QA_DIRECTOR_V1_15_SPEC)
+    assert new["director"]["workflow.qa_director"] == render(get("workflow.qa_director", "1.16.0"))
+    assert old["director"]["workflow.qa_director"] != new["director"]["workflow.qa_director"]
+    custom = '用户自定义原样保留：{"dialogue_contexts":"由本轮选择"}'
+    supplied = {"director": {"workflow.qa_director": custom}}
+    assert snapshot_node_prompts(supplied, recipe_version=42,
+        dialogue_style_context_version=1)["director"]["workflow.qa_director"] == custom
+
+
 def test_top_level_design_reaches_the_real_blind_actor_without_private_evidence(tmp_path):
     from tests.test_directed_answer_contracts import fit_workflow, question_dispatch
     workflow, aware, actor, _, unit = fit_workflow(tmp_path, source=True)
@@ -64,7 +115,34 @@ def test_top_level_design_reaches_the_real_blind_actor_without_private_evidence(
     assert "UNSELECTED_PRIVATE_V2" not in json.dumps(actor.calls, ensure_ascii=False)
 
 
-def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tmp_path):
+def test_current_style_context_reaches_blind_actor_and_does_not_inherit_previous_selection(tmp_path):
+    from lib.bootstrap.dialogue_style_contexts import dialogue_style_context_catalog
+    from tests.test_directed_answer_contracts import fit_workflow, question_dispatch
+    workflow, aware, actor, _, unit = fit_workflow(tmp_path, source=True)
+    workflow.recipe["dialogue_style_context_version"] = 1
+    workflow.recipe["dialogue_style_context_catalog"] = dialogue_style_context_catalog()
+    unit["qa_contract"]["dialogue_contexts"] = ["narrative"]
+    original = deepcopy(unit)
+    initial = workflow._closed_book_question(unit, unit["qa_contract"], key=["style-context"])
+    next_turn = workflow._closed_book_question(unit, initial, key=["style-context"], dialogue_contexts=[])
+    assert initial["dialogue_contexts"] == ["narrative"] and next_turn["dialogue_contexts"] == []
+    assert [question_dispatch(call)["question_brief"]["dialogue_contexts"] for call in actor.calls] == [["narrative"], []]
+    assert len(actor.calls) == len(aware.fit_requests) == 2 and unit == original
+    assert "UNSELECTED_PRIVATE_V2" not in json.dumps(actor.calls, ensure_ascii=False)
+    catalog = workflow.recipe["dialogue_style_context_catalog"]["contexts"]
+    first_system, next_system = actor.calls[0][0]["content"], actor.calls[1][0]["content"]
+    assert catalog["narrative"]["description"] in first_system
+    assert catalog["narrative"]["description"] not in next_system
+    assert all(item["content"] not in first_system for item in catalog.values())
+    assert all(item["description"] not in first_system for kind, item in catalog.items() if kind != "narrative")
+
+
+@pytest.mark.parametrize("malformed_contexts", [False, True])
+def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tmp_path, malformed_contexts):
+    from lib.bootstrap.dialogue_style_contexts import dialogue_style_context_catalog
+    from lib.infrastructure import training_workflow as engine
+    from lib.io_utils import atomic_json
+    from lib.prompts import get, render
     from tests.test_separated_dialogue_generation import (
         DirectorResponder, Questioner, make_run, records, task_payload, tool_payload, brief,
     )
@@ -83,6 +161,8 @@ def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tm
         {"form": "承接卡片的省略追问", "verbosity": "只提当前遗漏",
          "interaction_style": "询问刚才的记录项"},
     ]
+    current_contexts = [["direct"], ["narrative", "iterative"], []]
+    expected_contexts = [[], [], []] if malformed_contexts else current_contexts
 
     class ProfileDirector(DirectorResponder):
         def chat(self, messages, **options):
@@ -100,6 +180,9 @@ def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tm
                     result["user_constraint_refs"] = list(data["user_message_indices"])
                 if keep_going:
                     result["dialogue_state"]["expression_design"] = current_designs[completed]
+                    if current_contexts[completed]:
+                        result["dialogue_state"]["dialogue_contexts"] = (
+                            ["not-a-style"] if malformed_contexts else current_contexts[completed])
                     result["question_brief"] = brief(followup=True)
                 return json.dumps(result, ensure_ascii=False)
             if data and "question_brief" in data and "question" in data and "qa_contract" in data:
@@ -118,6 +201,7 @@ def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tm
             if "tasks" in reply:
                 for task in reply["tasks"]:
                     task["expression_design"] = deepcopy(current_designs[0])
+                    task["dialogue_contexts"] = ["not-a-style"] if malformed_contexts else current_contexts[0]
             return json.dumps(reply, ensure_ascii=False)
 
     class ContextualQuestioner(Questioner):
@@ -127,11 +211,20 @@ def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tm
             dispatch = tool_payload(messages, "dialogue_dispatch")
             turn_index = len(dispatch.get("visible_dialogue", [])) // 2
             assert dispatch["question_brief"]["expression_design"]["verbosity"] == current_designs[turn_index]["verbosity"]
+            assert dispatch["question_brief"]["dialogue_contexts"] == expected_contexts[turn_index]
             return json.dumps({"message": utterances[turn_index]}, ensure_ascii=False)
 
     director = ProfileDirector()
     worker, _, actor, _ = make_run(tmp_path, writer=director, questioner=ContextualQuestioner(),
                                   targets=["multiturn"], conversation_turns=4)
+    # The product enables this protocol for native generation. This existing
+    # role-transport fixture freezes it explicitly without changing its author.
+    worker.recipe.update(dialogue_style_context_version=1,
+        dialogue_style_context_catalog=dialogue_style_context_catalog())
+    worker.recipe["node_prompt_templates"]["director"]["workflow.qa_director"] = render(get("workflow.qa_director", "1.16.0"))
+    worker.state["recipe_hash"] = engine.digest(worker.recipe)
+    atomic_json(worker.path / "recipe.json", worker.recipe)
+    worker.save()
     state = worker.execute()
     assert state["status"] == "completed", state.get("error")
     actual_designs = [tool_payload(call, "dialogue_dispatch")["question_brief"]["expression_design"]
@@ -144,6 +237,11 @@ def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tm
         assert "clarity" not in design
     assert len(actor.calls) == len(director.answers) == len(director.fits) == 3
     assert len(director.plans) == 1 and len(director.steps) == 3
+    for call in [*director.plans, *director.steps]:
+        request = task_payload(call)
+        assert request["dialogue_style_context_version"] == 1
+        assert all(set(item) == {"id", "label", "description"}
+                   for item in request["dialogue_style_context_catalog"]["contexts"])
     assert "PRIVATE_REASONING_SENTINEL" not in json.dumps(actor.calls, ensure_ascii=False)
     row, = records(worker.path, "multiturn")
     trainer = (worker.path / "artifacts/trl_multiturn.jsonl").read_text(encoding="utf-8")
@@ -151,6 +249,16 @@ def test_multiturn_keeps_speaker_habits_and_transmits_the_current_turn_design(tm
     assert [message["content"] for message in row["messages"] if message["role"] == "user"] == utterances
     assert [step["dialogue_state"]["expression_design"] for step in row["dialogue_steps"]
             if step.get("continue")] == actual_designs
+    assert row["qa_contract"]["dialogue_contexts"] == expected_contexts[0]
+    assert [step["dialogue_state"]["dialogue_contexts"] for step in row["dialogue_steps"][1:]
+            if step.get("continue")] == expected_contexts[1:]
+    if malformed_contexts:
+        receipt = row["qa_contract"]["dialogue_context_selection"]
+        assert receipt["status"] == "invalid_selection_fallback" and receipt["fallback"] == "common"
+        assert receipt["fields"] == ["dialogue_contexts"]
+        assert row["dialogue_steps"][1]["dialogue_context_selection"]["status"] == "invalid_selection_fallback"
+        assert any("not-a-style" in path.read_text(encoding="utf-8")
+                   for path in (worker.path / "checkpoints").rglob("*.json"))
     # The initial plan precedes any actual user turn; only later step requests
     # can cite already delivered user messages.
     assert row["dialogue_steps"][0]["dialogue_state"]["active_constraints"] == []

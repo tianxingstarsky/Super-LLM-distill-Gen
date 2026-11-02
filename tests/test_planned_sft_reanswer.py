@@ -57,6 +57,26 @@ def sealed_native(tmp_path, monkeypatch):
     return tmp_path, output, rid, row
 
 
+def test_new_native_run_freezes_opt_in_style_catalog_without_upgrading_parent(sealed_native, monkeypatch):
+    from lib.bootstrap.dialogue_style_contexts import dialogue_style_context_catalog
+    from lib.bootstrap import contextual_reasoning_memory
+    monkeypatch.setattr(contextual_reasoning_memory, "contextual_reasoning_memory", lambda **kwargs: {
+        "catalog": dialogue_style_context_catalog(), "selection_receipts": {}})
+    root, output, parent_id, _ = sealed_native
+    parent_path = engine.run_path(output, parent_id) / "recipe.json"
+    original = parent_path.read_bytes()
+    parent = engine.read_json(parent_path)
+    child = engine.create_run(output, sources=[root / "source.txt"], targets=["sft"], settings_root=root,
+        node_models=parent["node_models"], node_generation=parent["node_generation"],
+        dialogue_style_contexts=True)
+    recipe = engine.read_json(engine.run_path(output, child) / "recipe.json")
+    assert recipe["dialogue_style_context_version"] == 1
+    assert recipe["dialogue_style_context_catalog"] == dialogue_style_context_catalog()
+    assert "dialogue_contexts" in recipe["node_prompt_templates"]["director"]["workflow.qa_director"]
+    assert "dialogue_style_context_version" not in parent
+    assert parent_path.read_bytes() == original
+
+
 def test_reanswer_reuses_exact_task_and_pays_only_author_and_one_review(sealed_native):
     root, output, rid, original = sealed_native
     app = workflow_application(root, output)

@@ -207,7 +207,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
                review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None,
                conversation_reasoning=None, open_dialogue_question_mode="auto",
-               reuse_initial_native_response=False, reanswer_sft=False):
+               reuse_initial_native_response=False, reanswer_sft=False, dialogue_style_contexts=False):
+    if type(dialogue_style_contexts) is not bool:
+        raise ValueError("invalid_dialogue_style_contexts")
     if type(reanswer_sft) is not bool:
         raise ValueError("invalid_sft_reanswer")
     reanswer_parent = None
@@ -252,6 +254,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         node_prompts = {**(node_prompts or {}), "sft": deepcopy(reanswer_parent["node_prompt_templates"]["sft"])}
         from lib.contexts.workflows.domain.planned_sft_reanswer import reanswer_experience
         agent_experience = reanswer_experience(reanswer_parent, agent_experience)
+        dialogue_style_contexts = reanswer_parent.get("dialogue_style_context_version") == 1
     if reuse_initial_native_response:
         from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
         if (not repair_inputs or review_repair["mode"] != "auto" or any(
@@ -346,7 +349,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                             for stage, config in node_generation.items() if stage in {"sft", "multiturn"})
     if native_generation:
         recipe_version = 42
+    dialogue_style_context_version = (1 if dialogue_style_contexts
+        and (native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint")
+        and (not repair_inputs or reanswer_sft) else None)
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+        dialogue_style_context_version=dialogue_style_context_version,
         review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
         claim_review_schedule_version=1,
         native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
@@ -509,6 +516,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         else:
             recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+            dialogue_style_context_version=dialogue_style_context_version,
             review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
             claim_review_schedule_version=1,
             native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
@@ -666,6 +674,29 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "prompts": prompt_versions()}
     if production is not None:
         recipe["production"] = production
+    if dialogue_style_context_version == 1:
+        from lib.bootstrap.dialogue_style_contexts import dialogue_style_context_catalog
+        base_catalog = (deepcopy(reanswer_parent.get("dialogue_style_base_catalog",
+            reanswer_parent["dialogue_style_context_catalog"])) if reanswer_parent else dialogue_style_context_catalog())
+        scoped_memory = None
+        if experience_snapshot["scopes"]["reasoning"]["enabled"]:
+            from lib.bootstrap.contextual_reasoning_memory import contextual_reasoning_memory
+            scoped_memory = contextual_reasoning_memory(
+                reasoning_text=experience_snapshot["scopes"]["reasoning"]["text"], base_catalog=base_catalog)
+        recipe["dialogue_style_context_version"] = 1
+        recipe["dialogue_style_base_catalog"] = base_catalog
+        recipe["dialogue_style_context_catalog"] = scoped_memory["catalog"] if scoped_memory else base_catalog
+        if scoped_memory:
+            recipe["dialogue_style_memory_selection"] = {
+                "catalog_sha256": recipe["dialogue_style_context_catalog"]["sha256"],
+                "contexts": scoped_memory["selection_receipts"]}
+            projection = scoped_memory.get("base_projection")
+            if projection:
+                agent_experience = {scope: {key: settings[key] for key in ("enabled", "text")}
+                    for scope, settings in experience_snapshot["scopes"].items()}
+                agent_experience["reasoning"]["text"] = projection["base_text"]
+                recipe["agent_experience"] = snapshot_agent_experience(agent_experience)
+                recipe["dialogue_style_memory_selection"]["base_projection"] = projection
     if review_repair is not None:
         recipe["review_repair"] = review_repair
     if repair_inputs is not None:
@@ -682,9 +713,13 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if knowledge_retrieval is not None:
         recipe["knowledge_retrieval"] = validate_knowledge_receipt(knowledge_retrieval, snapshots)
     from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
-    memory_selection = google_reasoning_bank_application().freeze(agent_experience,
-        "\n".join(filter(None, (name, brief, ", ".join(targets),
+    memory_query = (recipe["dialogue_style_base_catalog"]["contexts"]["common"]["description"]
+        if dialogue_style_context_version == 1 else "\n".join(filter(None, (name, brief, ", ".join(targets),
             qa_director.get("learning_goal", "")))))
+    memory_selection = google_reasoning_bank_application().freeze(agent_experience,
+        memory_query,
+        **({"excluded_scopes": ("reasoning",), "context_types": ["common"]}
+           if dialogue_style_context_version == 1 else {}))
     if memory_selection:
         recipe["agent_experience"] = memory_selection["snapshot"]
         recipe["reasoning_bank_selection"] = memory_selection["selection_receipt"]

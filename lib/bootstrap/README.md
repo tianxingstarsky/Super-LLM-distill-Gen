@@ -1,5 +1,9 @@
 # 组合根：找到服务，再选择实现
 
+`dialogue_style_context_catalog` 返回可冻结的初始交流风格目录，不启动模型。具体正文归 prompts，类型与认证归 workflows domain；目录按直接表达、情境叙述、探索讨论、协作推进和情绪交流组织，与知识领域无关。
+
+`contextual_reasoning_memory` 以这些风格的简短说明检索已采用的原生推理经验，在创建时冻结完整目录和来源收据。它只用本地嵌入，不学习、不激活版本、不调用生成模型；未选目录不会进入本轮作者请求。
+
 `google_reasoning_bank_application` 为新提炼显式装配跨任务经验指导 1.0.0。原版入口、共享模型网关与检索仍复用 Google 适配器；`memory_policy_version=None` 保留旧提炼请求。构造服务不会调用模型，旧经验仅在用户明确学习并采用后才有新版本。
 
 `planned_sft_reanswer.py` 装配固定任务重答用例、原生生成端口与审核域的已封存父版选择器。这里只连接端口，不新增指导员、评审循环或模型 SDK；旧任务没有显式版本标记时维持原路由。

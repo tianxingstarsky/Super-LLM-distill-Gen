@@ -18,7 +18,7 @@ from filelock import FileLock
 
 from ..domain.experience_evolution import canonical, digest
 from ..domain.reasoning_bank import (
-    ReasoningBankUnavailable, memory_text, merge_entries,
+    ReasoningBankUnavailable, memory_text, merge_entries, memory_source_matches,
 )
 from .reasoning_bank_source import load_upstream_functions
 
@@ -185,25 +185,26 @@ class ReasoningBankRepository:
                     (entry["id"], entry["scope"], canonical(entry), digest(entry), digest(text)))
         return {"indexed": indexed, "merged": merged}
 
-    def has_entries(self, scope, edition_ids=None):
+    def has_entries(self, scope, edition_ids=None, context_types=None):
         selected = None if edition_ids is None else frozenset(edition_ids)
         with self._database() as database:
             for payload, checksum in database.execute("SELECT payload,sha256 FROM memories WHERE scope=?", (scope,)):
-                if selected is None:
+                if selected is None and context_types is None:
                     return True
                 entry = self._entry(payload, checksum)
-                if any(source["edition"]["id"] in selected for source in entry["sources"]):
+                if any(memory_source_matches(source, selected, context_types) for source in entry["sources"]):
                     return True
         return False
 
-    def select_memories(self, scope, query, limit, edition_ids=None):
+    def select_memories(self, scope, query, limit, edition_ids=None, context_types=None):
         selected = None if edition_ids is None else frozenset(edition_ids)
         bank = []
         with self._database() as database:
             for payload, checksum in database.execute("SELECT payload,sha256 FROM memories WHERE scope=?", (scope,)):
                 entry = self._entry(payload, checksum)
-                if selected is not None:
-                    entry["sources"] = [source for source in entry["sources"] if source["edition"]["id"] in selected]
+                if selected is not None or context_types is not None:
+                    entry["sources"] = [source for source in entry["sources"]
+                        if memory_source_matches(source, selected, context_types)]
                     if not entry["sources"]:
                         continue
                 bank.append({"task_id": entry["id"], "query": memory_text(entry),

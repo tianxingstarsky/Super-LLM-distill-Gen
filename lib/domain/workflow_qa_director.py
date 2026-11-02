@@ -168,11 +168,14 @@ def allocate_qa_types(count: int, weights: Mapping[str, int], *, offset: int = 0
 def validate_director_task(value: dict, *, expected_type: str | None, source_text: str | None = None,
                            expected_id: str | None = None, source_materials: list | None = None,
                            learning_goal: str | None = None, user_language: str | None = None,
-                           question_brief_protocol_version=1) -> dict:
+                           question_brief_protocol_version=1, dialogue_style_context_version=None) -> dict:
     """Enforce the contract even when the editable director prompt is replaced."""
     validate_question_brief_protocol_version(question_brief_protocol_version)
     required = {"id", "qa_type", "question", "visible_context", "answer_policy", "guidance", "evidence_quotes"}
     optional = {"topic", "skill", "difficulty", "dialogue_design", "source_line_ranges", "question_brief", "expression_design", "learning_goal", "user_language"}
+    style_contexts = _dialogue_style_context_enabled(dialogue_style_context_version)
+    if style_contexts:
+        optional.add("dialogue_contexts")
     if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
         raise ValueError("invalid_qa_director_task")
     if value["qa_type"] not in QA_TYPES or (expected_type is not None and value["qa_type"] != expected_type):
@@ -239,10 +242,13 @@ def validate_director_task(value: dict, *, expected_type: str | None, source_tex
                 "source_line_focus": line_focus} if line_focus is not None else {}),
             **({"dialogue_design": validate_dialogue_design(value["dialogue_design"])}
                if "dialogue_design" in value else {}),
-            **({"question_brief": validate_question_brief(value["question_brief"], version=question_brief_protocol_version)}
+            **({"question_brief": validate_question_brief(value["question_brief"], version=question_brief_protocol_version,
+                dialogue_style_context_version=dialogue_style_context_version)}
                if "question_brief" in value else {}),
             **({"expression_design": validate_expression_design(value["expression_design"])}
-               if "expression_design" in value else {})}
+               if "expression_design" in value else {}),
+            **({"dialogue_contexts": _validated_dialogue_contexts(value.get("dialogue_contexts", []))}
+               if style_contexts else {})}
 
 
 def validate_task_controls(value, *, learning_goal=None, user_language=None):
@@ -275,13 +281,28 @@ def validate_question_brief_protocol_version(version):
     return version
 
 
-def validate_question_brief(value, *, version=1):
+def _dialogue_style_context_enabled(version):
+    if version is None:
+        return False
+    if type(version) is not int or version != 1:
+        raise ValueError("invalid_dialogue_style_context_version")
+    return True
+
+
+def _validated_dialogue_contexts(value):
+    from lib.contexts.workflows.domain.dialogue_style_context import validate_context_types
+    return validate_context_types(value)
+
+
+def validate_question_brief(value, *, version=1, dialogue_style_context_version=None):
     """A source-free editorial brief, never a copied question or answer key."""
     validate_question_brief_protocol_version(version)
     strings = {"topic": 200, "communication_goal": 1200, "speaker_role": 400,
                "listener_role": 400, "relationship": 600, "register": 400, "user_language": 2}
+    style_contexts = _dialogue_style_context_enabled(dialogue_style_context_version)
+    optional = {"behaviors", "expression_design", *({"dialogue_contexts"} if style_contexts else set())}
     if (not isinstance(value, dict) or not {"topic", "communication_goal"} <= set(value)
-            or set(value) - set(strings) - {"behaviors", "expression_design"}):
+            or set(value) - set(strings) - optional):
         raise QuestionBriefValidationError() if version == 2 else ValueError("invalid_question_brief")
     result = {}
     for key, text in value.items():
@@ -307,6 +328,8 @@ def validate_question_brief(value, *, version=1):
     result["behaviors"] = list(dict.fromkeys(behaviors))
     if "expression_design" in value:
         result["expression_design"] = validate_expression_design(value["expression_design"])
+    if style_contexts:
+        result["dialogue_contexts"] = _validated_dialogue_contexts(value.get("dialogue_contexts", []))
     return result
 
 
@@ -365,7 +388,8 @@ def validate_director_skip(value, expected_id):
 
 
 def validate_dialogue_step(value, *, completed_turns, natural_utterance=False,
-                           learning_goal=None, user_language=None, question_brief_protocol_version=1):
+                           learning_goal=None, user_language=None, question_brief_protocol_version=1,
+                           dialogue_style_context_version=None):
     """Validate only transport and minimum trace shape, not inferred meaning."""
     validate_question_brief_protocol_version(question_brief_protocol_version)
     error = "invalid_dialogue_step"
@@ -379,15 +403,22 @@ def validate_dialogue_step(value, *, completed_turns, natural_utterance=False,
     strings = {"user_intent": 2000, "progress": 2000}
     notes = {"shared_understanding", "open_issues", "active_constraints", "context_links"}
     optional = {"conversational_frame", *({"expression_design"} if natural_utterance else set())}
+    style_contexts = _dialogue_style_context_enabled(dialogue_style_context_version)
+    if style_contexts:
+        optional.add("dialogue_contexts")
     if not isinstance(state, dict) or set(state) - set(strings) - notes - optional:
         raise ValueError(error)
-    normalized = {key: validate_expression_design(text) if key == "expression_design"
+    normalized = {key: _validated_dialogue_contexts(text) if key == "dialogue_contexts"
+                  else validate_expression_design(text) if key == "expression_design"
                   else validate_conversational_frame(text, error=error) if key == "conversational_frame"
                   else _bounded_text(text, strings[key], error, empty=True)
                   if key in strings else _bounded_notes(text, error) for key, text in state.items()}
+    if style_contexts:
+        normalized.setdefault("dialogue_contexts", [])
     controls = validate_task_controls(value, learning_goal=learning_goal, user_language=user_language)
     return {"continue": value["continue"], **controls,
             "user_message": _bounded_text(value["user_message"], 6000, error, empty=not value["continue"]),
             "reason": _bounded_text(value["reason"], 2000, error), "dialogue_state": normalized,
-            **({"question_brief": validate_question_brief(value["question_brief"], version=question_brief_protocol_version)}
+            **({"question_brief": validate_question_brief(value["question_brief"], version=question_brief_protocol_version,
+                dialogue_style_context_version=dialogue_style_context_version)}
                if "question_brief" in value else {})}

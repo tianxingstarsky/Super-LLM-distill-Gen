@@ -68,3 +68,22 @@ current_memory 是父版的完整经验，仅作为可修正的参考；没有�
 输出完整合并后的 Memory Item 条目，沿用上游 Title / Description / Content 格式，每条保持完整。
 若与父版相比没有可靠变化，或没有足够依据形成任何经验，只输出 <no-new-memory/>；不凑条目，不另行评审。
 """)
+
+MEMORY_GENERALIZATION_V1_0 = MEMORY_GENERALIZATION
+
+MEMORY_GENERALIZATION = replace(MEMORY_GENERALIZATION_V1_0, version="1.1.0",
+    constraints=MEMORY_GENERALIZATION_V1_0.constraints + ("按当前交流方式标注完整经验条目", "不按知识或行业分类"),
+    template=MEMORY_GENERALIZATION_V1_0.template + """
+每个完整Memory Item再增加一行 ## Contexts，内容只能是common，或以下类别中适用项的英文ID，以英文逗号分隔：
+direct：直接表达，用户直接提问、指令或提出明确诉求；
+narrative：情境叙述，用户通过经历、背景或具体处境表达需要；
+exploratory：探索讨论，用户在试探想法、联想或尚未成形的目标；
+iterative：协作推进，用户承接前文，修正、反馈或推进已有工作；
+emotional：情绪交流，用户主要表达感受、关系需要或希望被理解。
+这些类别只描述经验适用时用户的表达和交流方式，不按知识、行业、职业或题材划分，不是永久人设、固定句长或行为配额。
+同一用户可在不同轮次采用不同或混合的表达。跨风格都适用的经验标为 ## Contexts common，
+仅对部分交流方式成立的经验标为相应ID，例如 ## Contexts narrative,iterative；common不与其他类别混写。
+类别只说明已有经验何时适用，不因此制造、拆分或改写规律。完整保留每条Title、Description和Content及原有适用条件。
+父经验没有类别标记时作为通用参考，只有实际观察支持时才将其收窄到特定交流方式。
+明确没有可靠变化时仍只返回<no-new-memory/>；不要仅为添加类别重发相同经验或声称质量已获认证。
+""")

@@ -257,9 +257,13 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          claim_review_transport_version=None, claim_repair_feedback_version=None,
                          preference_design_version=None, preference_design_prompt_version=None,
                          conversation_reasoning_version=None, native_feedback_guidance_version=None,
-                         claim_review_schedule_version=None, review_advisory_policy_version=None) -> dict:
+                         claim_review_schedule_version=None, review_advisory_policy_version=None,
+                         dialogue_style_context_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
+    if dialogue_style_context_version is not None and (
+            type(dialogue_style_context_version) is not int or dialogue_style_context_version != 1):
+        raise ValueError("invalid_dialogue_style_context_version")
     if review_advisory_policy_version is not None and (
             type(review_advisory_policy_version) is not int or review_advisory_policy_version != 1):
         raise ValueError("invalid_review_advisory_policy_version")
@@ -275,6 +279,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
             type(claim_repair_feedback_version) is not int or claim_repair_feedback_version != 1):
         raise ValueError("invalid_claim_repair_feedback_version")
     def default_body(prompt_id):
+        if prompt_id == "workflow.qa_director":
+            return render(get(prompt_id, version="1.16.0" if dialogue_style_context_version == 1 else "1.15.0"))
         if prompt_id == "workflow.cot_check_agent":
             return render(get(prompt_id, version="1.6.0" if recipe_version >= 30 else "1.5.0" if recipe_version >= 29 else "1.4.0" if recipe_version >= 28 else "1.3.0" if recipe_version >= 27 else "1.2.0" if recipe_version >= 26 else "1.0.0"))
         if prompt_id == "workflow.alternative":

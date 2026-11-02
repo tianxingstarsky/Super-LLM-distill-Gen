@@ -16,6 +16,7 @@ from ..domain.imported_reasoning import imported_reasoning_metadata
 from ..domain.native_generation import native_generation_enabled
 from ..domain.native_dialogue_continuation import native_dialogue_progress_blocker
 from ..domain.generation_control import generation_controls_metadata
+from ..domain.public_experience import public_experience_provenance
 
 
 class GenerateMultiturnDialogue:
@@ -241,7 +242,9 @@ class GenerateMultiturnDialogue:
             **({"conversational_frame": deepcopy(dialogue.dialogue_design["conversational_frame"])}
                if "conversational_frame" in dialogue.dialogue_design else {}),
             **({"expression_design": deepcopy(dialogue.contract["expression_design"])}
-               if self.recipe.get("qa_expression_version") == 2 and dialogue.contract.get("expression_design") else {})}
+               if self.recipe.get("qa_expression_version") == 2 and dialogue.contract.get("expression_design") else {}),
+            **({"dialogue_contexts": deepcopy(dialogue.contract.get("dialogue_contexts", []))}
+               if self.recipe.get("dialogue_style_context_version") == 1 else {})}
             if dialogue.adaptive_dialogue else None)
         dialogue.dialogue_end_reason = "turn_limit"
         dialogue.dialogue_end_guidance = ""
@@ -252,7 +255,9 @@ class GenerateMultiturnDialogue:
 
     def _review_recorded(self, unit, dialogue):
         dialogue.messages = deepcopy(unit["messages"])
-        dialogue.ends, issue = completed_turn_ends(dialogue.messages)
+        from ..domain.dialogue_style_context import authenticated_context_positions
+        dialogue.ends, issue = completed_turn_ends(dialogue.messages,
+            public_system_positions=authenticated_context_positions(dialogue.messages, self.recipe))
         if issue:
             return [self._port.reject(unit, issue)]
         for turn_index, end in enumerate(dialogue.ends):
@@ -374,7 +379,14 @@ class GenerateMultiturnDialogue:
                         if native_row["messages"][:-1] != answer_messages:
                             raise ValueError("native_dialogue_reused_history_mismatch")
                     else:
-                        native_row = generate_native_turn(self._port, self.recipe, stage="multiturn", unit=unit,
+                        native_unit = unit
+                        if self.recipe.get("dialogue_style_context_version") == 1:
+                            # Follow-up context is selected anew. A director
+                            # omission cannot inherit the initial contract.
+                            native_unit = {**unit, **({"dialogue_step": planned_step,
+                                "dialogue_state": current_dialogue_state} if planned_step is not None else
+                                {"dialogue_contexts": []} if turn_index else {})}
+                        native_row = generate_native_turn(self._port, self.recipe, stage="multiturn", unit=native_unit,
                             messages=answer_messages, style=style, source_text=evidence,
                             source_scope="selected_lines" if dialogue.selected_evidence_blocks is not None else "prepared_source",
                             identity=unit["id"] + ":native-turn:" + digest([turn_index, attempt, turn_identity]),
@@ -475,9 +487,15 @@ class GenerateMultiturnDialogue:
                 if issue:
                     feedback = issue
                     continue
+                learner_before_answer = [*dialogue.messages, user_message]
+                turn_system_provenance = None
+                if native and self.recipe.get("dialogue_style_context_version") == 1:
+                    learner_before_answer = native_row["messages"][:-1]
+                    turn_system_provenance = public_experience_provenance(learner_before_answer, self.recipe)
                 check = self._port.assess([unit["id"], "multiturn_turn", turn_index, attempt, *turn_identity],
-                    {**dialogue.source_context, "dialogue_before_answer": [*dialogue.messages, user_message],
+                    {**dialogue.source_context, "dialogue_before_answer": learner_before_answer,
                      "quotes": quotes, "source_text": unit.get("text"),
+                     **({"learner_system_provenance": turn_system_provenance} if turn_system_provenance else {}),
                      **({"provided_source_context": native_row["provided_source_context"]} if native else {}),
                      **({"dialogue_state": current_dialogue_state,
                          "dialogue_step": planned_step,
@@ -559,7 +577,9 @@ class GenerateMultiturnDialogue:
                          "turn_reviews": dialogue.reviews, "evidence_level": dialogue.evidence_level}]
             if dialogue.finished_dialogue:
                 break
-        dialogue.ends, issue = completed_turn_ends(dialogue.messages)
+        from ..domain.dialogue_style_context import authenticated_context_positions
+        dialogue.ends, issue = completed_turn_ends(dialogue.messages,
+            public_system_positions=authenticated_context_positions(dialogue.messages, self.recipe))
         if issue:
             participant_stop = (self.recipe.get("qa_expression_version") == 2
                                 and dialogue.adaptive_dialogue and dialogue.dialogue_end_reason == "natural_completion")
@@ -596,7 +616,6 @@ class GenerateMultiturnDialogue:
                  "dialogue_state_scope": "final_summary" if dialogue.dialogue_end_reason == "natural_completion" else "before_last_turn",
                  "dialogue_end_guidance": dialogue.dialogue_end_guidance} if dialogue.adaptive_dialogue else {})}
         key = [unit["id"], "multiturn_consistency"]
-        from ..domain.public_experience import public_experience_provenance
         if provenance := public_experience_provenance(dialogue.messages, self.recipe):
             context["learner_system_provenance"] = provenance
             # An old rejection may have been made without the public-input

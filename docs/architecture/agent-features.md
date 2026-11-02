@@ -1,5 +1,7 @@
 # Agent 功能与维护入口
 
+按需对话风格上下文由 `workflow_dialogue_contexts.py` 持有初始正文，`dialogue_style_context.py` 持有目录及来源合同。指导员 1.16 在原规划／续轮请求中选择少量粗类别；无线索发言者仅见选中卡片，原生作者加载选中正文。新任务显式冻结目录，原生推理和完整实际上下文一同保留；旧任务不迁移。使用与限制见 [对话风格上下文](../dialogue-style-contexts.md)。
+
 经验泛化由 `workflow_experience.py` 的 `workflow.memory_generalization@1.0.0` 与 `workflow.evolve_experience@1.1.0` 持有：提炼信息归属、判断判据、证据支持及行动依赖等可迁移关系，不把本题答案、专名或固定补条件话术作为长期策略。Google 新宿主适配在同一次原版提炼中提供父经验；完整条目索引，策略版本进入两层缓存。无可靠新经验时保存 `no_update` 收据并完成观察批次，不制造空经验版或热改旧任务。评审新模板 1.28 只提供实际观察，不强制写长期规则，也不增加调用。
 
 初始系统的控制引用格式由 `workflow.cot_native_joint@1.6.0` 和 `lib/prompts/workflow_runtime_control.py` 持有。原生 SFT、多轮和 CoT 的首条 system 约定 `[[SJ_REASONING_EFFORT]]`，在确需提及本轮思考配置时使用，不要求每条必有。训练读取时由 datasets 按已保存的目标配置直接匹配替换，保留原记录，不经过外部 Agent 或额外模型调用；已有评审提出匹配建议是独立职责。旧模板、冻结任务和自定义正文不热改；新建或显式恢复新版默认的节点采用。模型实际遵循率仍需实测。

@@ -8,6 +8,7 @@ from .generate_native_cot import GenerateNativeCot
 from ..domain.dialogue import dialogue_digest, without_source_reasoning
 from ..domain.dialogue_context import project_answer_context
 from ..domain.review_guidance import review_guidance_message
+from ..domain.dialogue_style_context import authenticated_context_positions
 
 
 def generate_native_turn(port, recipe, *, stage, unit, messages, style,
@@ -58,17 +59,32 @@ def generate_native_turn(port, recipe, *, stage, unit, messages, style,
     notes_receipt = row.get("native_generation", {}).get("review_guidance")
     note = (review_guidance_message(notes_receipt) if notes_receipt is not None
             and notes_receipt.get("status") == "completed" else None)
-    # The only permitted suffix is the authenticated public system note.
-    history_prompt = prompt[:-1] if note is not None and prompt[-1:] == [note] else prompt
-    extra = len(history_prompt) - len(messages)
     preserved_history = deepcopy(messages)
-    if (extra >= 0 and history_prompt[extra:] == without_source_reasoning(messages)
-            and (note is None or prompt[-1:] == [note])):
-        preserved_history = deepcopy(history_prompt[:extra]) + preserved_history
-        if note is not None:
-            preserved_history.append(deepcopy(note))
+    if recipe.get("dialogue_style_context_version") == 1:
+        public_contexts = set(authenticated_context_positions(prompt, recipe))
+        projected = without_source_reasoning(messages)
+        for extra in range(max(0, len(prompt) - len(messages)) + 1):
+            end = extra + len(messages)
+            if (prompt[extra:end] == projected and all(index in public_contexts or
+                    (note is not None and index == len(prompt) - 1 and prompt[index] == note)
+                    for index in range(end, len(prompt)))):
+                # The author request omits old private reasoning. The exported
+                # history still retains every original message and native byte.
+                preserved_history = [*deepcopy(prompt[:extra]), *preserved_history, *deepcopy(prompt[end:])]
+                break
+        else:
+            row.update(port.reject(unit, "native_history_projection_mismatch"))
     else:
-        row.update(port.reject(unit, "native_history_projection_mismatch"))
+        # Frozen tasks keep their original single-public-note projection.
+        history_prompt = prompt[:-1] if note is not None and prompt[-1:] == [note] else prompt
+        extra = len(history_prompt) - len(messages)
+        if (extra >= 0 and history_prompt[extra:] == without_source_reasoning(messages)
+                and (note is None or prompt[-1:] == [note])):
+            preserved_history = deepcopy(history_prompt[:extra]) + preserved_history
+            if note is not None:
+                preserved_history.append(deepcopy(note))
+        else:
+            row.update(port.reject(unit, "native_history_projection_mismatch"))
     reasoning = row.get("reasoning", [""])
     reasoning = reasoning[0] if isinstance(reasoning, list) and reasoning else ""
     row["messages"] = [*preserved_history, {"role": "assistant",

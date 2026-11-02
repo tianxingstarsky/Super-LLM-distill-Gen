@@ -249,6 +249,10 @@ class CheckpointedModelRequest:
                 request_messages = question_role_messages(system, request_data, transport=transport,
                     first_turn_policy_version=first_turn_version,
                     question_brief_protocol_version=runtime.recipe.get("question_brief_protocol_version", 1),
+                    **({"dialogue_style_context_version": runtime.recipe["dialogue_style_context_version"]}
+                       if runtime.recipe.get("dialogue_style_context_version") is not None else {}),
+                    **({"dialogue_style_context_catalog": runtime.recipe["dialogue_style_context_catalog"]}
+                       if runtime.recipe.get("dialogue_style_context_version") == 1 else {}),
                     **({"expression_guide_version": 2} if runtime.recipe.get("qa_expression_version") == 2 else {}))
             elif prompt_id in {"workflow.sft_answer", "workflow.multiturn_assistant"}:
                 request_messages = answer_role_messages(system, memory_context, request_data, transport=transport,

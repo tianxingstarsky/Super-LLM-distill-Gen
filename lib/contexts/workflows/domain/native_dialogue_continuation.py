@@ -5,6 +5,7 @@ from copy import deepcopy
 from .dialogue import dialogue_digest, without_source_reasoning
 from .native_feedback_provenance import authenticate_native_feedback_receipt
 from .review_guidance import authenticated_review_guidance_positions, REVIEW_GUIDANCE_PARENT_RECEIPT
+from .dialogue_style_context import authenticated_record_context_positions
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_quality import conversation_issue, text_issue
 
@@ -25,7 +26,8 @@ def native_dialogue_continuation_input(record, instruction, *, guidance_version=
     messages, prompt = record.get("messages"), record.get("question")
     user_positions = [index for index, message in enumerate(prompt or [])
                       if isinstance(message, dict) and message.get("role") == "user"] if isinstance(prompt, list) else []
-    public_notes = authenticated_review_guidance_positions(record)
+    public_notes = tuple(sorted(set(authenticated_review_guidance_positions(record)) |
+        set(authenticated_record_context_positions(record))))
     initial_user = prompt[user_positions[0]] if len(user_positions) == 1 else None
     tail_is_public = (initial_user is not None and all(index in public_notes
         for index in range(user_positions[0] + 1, len(prompt))))
@@ -190,7 +192,8 @@ def _diagnostic_response_blocker(record):
     source, provided = record.get("source_context") or {}, record.get("provided_source_context") or {}
     issues = native.get("issues")
     try:
-        public_notes = authenticated_review_guidance_positions(record)
+        public_notes = tuple(sorted(set(authenticated_review_guidance_positions(record)) |
+            set(authenticated_record_context_positions(record))))
     except ValueError:
         return None
     if (record.get("status") != "quarantined" or record.get("reason") not in _DIAGNOSTIC_QUALITY_ISSUES

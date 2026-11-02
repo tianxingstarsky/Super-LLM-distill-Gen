@@ -50,7 +50,7 @@ _PLAN_VALIDATION_CODES = frozenset({
     "source_line_ranges_required", "source_line_materials_required", "invalid_source_line_ranges",
     "source_line_material_not_found", "source_line_range_out_of_bounds", "source_line_range_empty",
     "invalid_qa_director_skip",
-    "invalid_expression_design", "invalid_dialogue_design",
+    "invalid_expression_design", "invalid_dialogue_design", "invalid_dialogue_context_types",
     "qa_director_learning_goal_mismatch", "qa_director_user_language_mismatch",
     "invalid_qa_director_learning_goal", "invalid_qa_director_user_language",
 })
@@ -59,6 +59,7 @@ _DIALOGUE_VALIDATION_CODES = frozenset({
     "invalid_dialogue_step", "dialogue_step_stopped_before_multiturn", "invalid_expression_design",
     "invalid_question_brief", "invalid_qa_director_learning_goal", "invalid_qa_director_user_language",
     "qa_director_learning_goal_mismatch", "qa_director_user_language_mismatch",
+    "invalid_dialogue_context_types",
 })
 
 
@@ -164,6 +165,56 @@ class WorkflowQADirector:
     def _question_brief_protocol_version(self):
         return validate_question_brief_protocol_version(self.recipe.get("question_brief_protocol_version", 1))
 
+    def _dialogue_style_context_options(self):
+        version = self.recipe.get("dialogue_style_context_version")
+        if version is None:
+            return {}
+        if type(version) is not int or version != 1:
+            raise ValueError("invalid_dialogue_style_context_version")
+        return {"dialogue_style_context_version": version}
+
+    def _dialogue_style_context_guidance(self):
+        options = self._dialogue_style_context_options()
+        if not options:
+            return {}
+        from lib.contexts.workflows.domain.dialogue_style_context import catalog_index
+        return {**options, "dialogue_style_context_catalog": catalog_index(self.recipe)}
+
+    def _director_style_selection(self, value, *, next_turn=False):
+        """Discard malformed optional labels after the raw response is durable.
+
+        Explicit program inputs still use the strict domain validator. A style
+        suggestion cannot purchase another plan or weaken its content checks.
+        """
+        if not self._dialogue_style_context_options() or not isinstance(value, dict):
+            return value, None
+        from lib.contexts.workflows.domain.dialogue_style_context import validate_context_types
+        paths = [("dialogue_state",)] if next_turn else [()]
+        paths.append(("question_brief",))
+        invalid = []
+        for path in paths:
+            container = value.get(path[0]) if path else value
+            if isinstance(container, dict) and "dialogue_contexts" in container:
+                try:
+                    validate_context_types(container["dialogue_contexts"])
+                except ValueError:
+                    invalid.append(path)
+        misplaced = next_turn and "dialogue_contexts" in value
+        if not invalid and not misplaced:
+            return value, None
+        normalized = deepcopy(value)
+        fields = []
+        for path in invalid:
+            container = normalized[path[0]] if path else normalized
+            container["dialogue_contexts"] = []
+            fields.append(".".join((*path, "dialogue_contexts")))
+        if misplaced:
+            normalized.pop("dialogue_contexts")
+            fields.append("dialogue_contexts")
+        return normalized, {"version": 1, "status": "invalid_selection_fallback",
+            "issue": "invalid_dialogue_context_types", "fields": fields, "fallback": "common",
+            "raw_response": "preserved_in_model_checkpoint"}
+
     def _question_dispatch_error(self, code):
         return (_QuestionDispatchValidationError(code) if self._question_brief_protocol_version() == 2
                 else ValueError(code))
@@ -193,7 +244,8 @@ class WorkflowQADirector:
                 raise self._question_dispatch_error("qa_director_user_language_mismatch")
             brief = {**brief, "user_language": contract["user_language"]}
         try:
-            brief = validate_question_brief(brief, version=self._question_brief_protocol_version())
+            brief = validate_question_brief(brief, version=self._question_brief_protocol_version(),
+                **self._dialogue_style_context_options())
         except QuestionBriefValidationError as error:
             raise _QuestionDispatchValidationError(str(error), error.feedback) from error
         body = canonical(brief)
@@ -244,7 +296,8 @@ class WorkflowQADirector:
             return
         raise self._question_dispatch_error("invalid_question_brief_assessment")
 
-    def _closed_book_question(self, unit, contract, *, key, visible_messages=None, brief=None, expression_design=None):
+    def _closed_book_question(self, unit, contract, *, key, visible_messages=None, brief=None, expression_design=None,
+                              dialogue_contexts=None):
         """Separate authorship, then verify the real question against evidence."""
         from lib.contexts.workflows.contracts import without_injected_public_experience
         from lib.infrastructure.dialogue_role_messages import visible_dialogue
@@ -252,6 +305,13 @@ class WorkflowQADirector:
         visible_messages = (visible_dialogue([*visible_messages, {"role": "user", "content": "next turn"}])[:-1]
                             if visible_messages else [])
         brief = contract.get("question_brief") if brief is None else brief
+        style_context_options = self._dialogue_style_context_options()
+        if style_context_options and isinstance(brief, dict):
+            from lib.contexts.workflows.domain.dialogue_style_context import validate_context_types
+            contexts = validate_context_types(contract.get("dialogue_contexts", [])
+                if dialogue_contexts is None else dialogue_contexts)
+            brief = {**brief, "dialogue_contexts": contexts}
+            key = [*key, "dialogue_style_context_v1", _digest(contexts)]
         if self.participant_utterances() and isinstance(brief, dict):
             from lib.domain.dialogue_expression import carry_expression_design
             inherited = contract.get("expression_design") if expression_design is None else expression_design
@@ -301,6 +361,8 @@ class WorkflowQADirector:
                            visible_turns=len(visible_messages or []) // 2)
                 return {**contract, "question": question, "answer_policy": fit["answer_policy"],
                         "question_brief": brief,
+                        **({"dialogue_contexts": deepcopy(brief["dialogue_contexts"])}
+                           if style_context_options else {}),
                         **({"expression_design": deepcopy(brief["expression_design"])}
                            if self.natural_expressions() and brief.get("expression_design") else {})}
             # Never send a source-aware judge's free text to the questioner.
@@ -654,6 +716,7 @@ class WorkflowQADirector:
             **director_context_authority(self.recipe),
             **dialogue_constraint_reference_request(self.recipe, messages),
             **self._natural_expression_guidance(),
+            **self._dialogue_style_context_guidance(),
             **_task_controls(unit["qa_contract"]),
         }
         if route := open_dialogue_question_route(self.recipe, unit):
@@ -736,13 +799,17 @@ class WorkflowQADirector:
             raise DialoguePlanError() from error
         validating_step = True
         try:
+            value, context_selection = self._director_style_selection(value, next_turn=True)
             validation_options = {"completed_turns": len(messages) // 2,
                                   "natural_utterance": self.participant_utterances(),
                                   "question_brief_protocol_version": brief_version,
+                                  **self._dialogue_style_context_options(),
                                   **_task_controls(unit["qa_contract"])}
             step = (validate_referenced_dialogue_step(value, messages=messages, **validation_options)
                     if data.get("dialogue_constraint_provenance_version") == 1
                     else validate_dialogue_step(value, **validation_options))
+            if context_selection is not None:
+                step["dialogue_context_selection"] = context_selection
             if self.participant_utterances():
                 from lib.domain.dialogue_expression import carry_expression_design
                 inherited = (previous_state or {}).get("expression_design", unit["qa_contract"].get("expression_design"))
@@ -760,7 +827,9 @@ class WorkflowQADirector:
                 dispatched = self._closed_book_question(unit, unit["qa_contract"],
                     key=followup_key, visible_messages=messages, brief=step.get("question_brief"),
                     **({"expression_design": step["dialogue_state"].get("expression_design", {})}
-                       if self.participant_utterances() else {}))
+                       if self.participant_utterances() else {}),
+                    **({"dialogue_contexts": step["dialogue_state"]["dialogue_contexts"]}
+                       if self._dialogue_style_context_options() else {}))
                 step["user_message"] = dispatched["question"]
                 step["response_policy"] = dispatched["answer_policy"]
                 if self.participant_utterances() and dispatched.get("expression_design"):
@@ -881,7 +950,8 @@ class WorkflowQADirector:
                     "history": history, "history_is_not_evidence": True,
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
-                    "targets": list(stages), **self._natural_expression_guidance()}
+                    "targets": list(stages), **self._natural_expression_guidance(),
+                    **self._dialogue_style_context_guidance()}
             if self.recipe.get("qa_batch_phase_version") == 1:
                 data.update(request_phase="batch_design", planning_mode=config.get("planning_mode", "balanced"),
                     history_role="completed_independent_examples_for_coverage_and_deduplication",
@@ -1059,6 +1129,7 @@ class WorkflowQADirector:
                             continue
                         if adaptive and "dialogue_design" not in task:
                             raise ValueError("qa_director_dialogue_design_required")
+                        task, context_selection = self._director_style_selection(task)
                         if (self.recipe.get("source_line_protocol_version") == 1
                                 and candidate.get("kind") == "document"
                                 and candidate.get("source_context_pack")
@@ -1084,7 +1155,10 @@ class WorkflowQADirector:
                             source_text=source_text,
                             expected_id=candidate["id"],
                             source_materials=self._director_evidence_materials(candidate),
-                            question_brief_protocol_version=brief_version, **controls)
+                            question_brief_protocol_version=brief_version,
+                            **self._dialogue_style_context_options(), **controls)
+                        if context_selection is not None:
+                            contracts[candidate["id"]]["dialogue_context_selection"] = context_selection
                         if (self.separated_questions(guided_by_id[candidate["id"]]) and task["qa_type"] == "closed_book"
                                 and not candidate.get("preserve_human_input")):
                             self._question_brief_boundary(candidate, contracts[candidate["id"]], task.get("question_brief"))
@@ -1127,6 +1201,11 @@ class WorkflowQADirector:
                         repair_feedback["validation"] = deepcopy(error.feedback)
                     if str(error) == "invalid_dialogue_design" and _typed_director_repair(self.recipe):
                         repair_feedback["instruction"] += _DIALOGUE_DESIGN_REPAIR
+                    if str(error) == "invalid_dialogue_context_types" and self._dialogue_style_context_options():
+                        repair_feedback["instruction"] += (
+                            "dialogue_contexts须为不重复的数组，只能含direct、narrative、exploratory、"
+                            "iterative、emotional；没有需要选择的类别时返回[]，common由程序处理。"
+                            "只按本轮用户表达与交流方式选择，不按主题或行业分类。")
                     if (evidence_context is not None
                             and _typed_director_repair(self.recipe, minimum=(1, 13, 0))
                             and str(error) in {"invalid_qa_director_task", "invalid_qa_director_evidence",

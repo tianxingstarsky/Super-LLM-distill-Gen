@@ -1,5 +1,7 @@
 # 运行时与旧基础设施
 
+创建入口可显式接收 `dialogue_style_contexts=True`，仅新原生生成冻结风格上下文。指导员在原有请求中返回粗类别，完整上下文与已采用经验经组合根装配；目录卡片不携带教师事实。关闭及缺少标记的旧任务保持原路径，具体维护入口见 [对话风格上下文](../../docs/dialogue-style-contexts.md)。
+
 `workflow_task_inventory` 识别 `sft_reanswer_version=1` 且带原候选输入的重答任务，来源显示为复用原计划；阶段清单采用同一版本的执行图，不将没有新上传文件的重答任务误报为损坏。摘要不代替执行时的父版本认证。
 
 新建配方固定 `qa_batch_phase_version=1`。指导员初始批次无论 balanced 还是 adaptive，

@@ -10,7 +10,7 @@ from lib.contexts.workflows.infrastructure.google_reasoning_bank import GoogleRe
 
 
 def google_reasoning_bank_application(binding=None, *, root=None, user_key=None, client_factory=None,
-                                      memory_policy_version="1.0.0"):
+                                      memory_policy_version="1.1.0"):
     storage = Path.home() / ".shujian-cube" if root is None else Path(root)
     user = getpass.getuser() if user_key is None else user_key
     namespace = sha256(user.encode()).hexdigest()

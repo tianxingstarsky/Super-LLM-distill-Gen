@@ -291,9 +291,10 @@ def training_record_surface_issue(target, row, *, protocol_version=None,
     version = protocol_version if protocol_version is not None else row.get("training_surface_protocol_version")
     if version != 2:
         return None
-    from lib.contexts.workflows.contracts import authenticated_review_guidance_positions
+    from lib.contexts.workflows.contracts import authenticated_review_guidance_positions, authenticated_record_context_positions
     try:
-        public_system_positions = authenticated_review_guidance_positions(row)
+        public_system_positions = tuple(sorted(set(authenticated_review_guidance_positions(row)) |
+            set(authenticated_record_context_positions(row))))
     except ValueError:
         return "review_guidance_public_context_mismatch"
     public_reading_context = False

@@ -302,3 +302,19 @@ QA_DIRECTOR = _reasoning_spec_replace(
         DIRECTOR_CONSTRAINT_PROVENANCE + "\n返回以下JSON；dialogue_state还可包含expression_design表达建议和conversational_frame，字段与上面相同。", 1,
     ).replace(DIRECTOR_EXPRESSION_DISPATCH_V2, DIRECTOR_EXPRESSION_DISPATCH_V3, 1),
 )
+
+QA_DIRECTOR_V1_15_SPEC = QA_DIRECTOR
+
+QA_DIRECTOR = context_version(QA_DIRECTOR, version="1.16.0", body="""
+当输入含dialogue_style_context_version=1时，在当前同一次设计请求中选择dialogue_contexts，
+只使用dialogue_style_context_catalog给出的direct、narrative、exploratory、iterative、emotional。
+这些宽泛类别只描述本轮用户的表达和交流方式，不按知识、行业、职业或题材分类，也不是用户的永久身份。
+直接表达、情境叙述、探索讨论、协作推进、情绪交流可以自然混合；只选本轮有用的类别，
+不需要时返回空数组，common由程序处理。类别不规定句长、思考长短、语气或固定话术。
+批次设计将dialogue_contexts数组放在每个有效任务顶层，与expression_design并列；
+question_brief如需要表达建议，可携带相同dialogue_contexts，不夹带事实、教师材料或答案。
+next_turn将本轮选择放在dialogue_state.dialogue_contexts，根据真实dialogue_messages和当前要表达的行动重新选择，
+上一轮选择只是历史建议，不自动继承，也不为展示类别强制切换或延长对话。
+expression_design继续使用开放文本表达具体建议；类别用于按需选择经验，不替代实际用户原话，
+不证明用户已经接受、经历或确认任何事情。没有版本标记时沿用原返回字段，不添加dialogue_contexts。
+""")

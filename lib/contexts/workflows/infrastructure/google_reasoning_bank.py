@@ -12,6 +12,7 @@ import re
 from filelock import FileLock
 
 from lib.contexts.workflows.domain.experience_evolution import FORMAT_VERSION, digest, validate_scope, validate_experience_text
+from lib.contexts.workflows.domain.reasoning_bank import validate_memory_context_assignment
 from lib.io_utils import atomic_json
 
 
@@ -23,6 +24,23 @@ def _complete_memory_items(parts):
         return [text] if text else []
     return [text[heading.start():headings[index + 1].start() if index + 1 < len(headings) else len(text)].strip()
             for index, heading in enumerate(headings)]
+
+
+def _dialogue_context_assignments(items):
+    """Read only explicit style metadata; untagged historical memories are common."""
+    assignments = {}
+    for item in items:
+        headings = re.findall(r"(?m)^## Contexts(?:[ \t]+([^\r\n]*))?[ \t]*$", item)
+        markers = re.findall(r"(?mi)^##[ \t]+contexts(?=[ \t:]|$)[^\r\n]*$", item)
+        if len(headings) > 1 or len(markers) != len(headings):
+            raise ValueError("reasoning_bank_invalid_dialogue_context_assignment")
+        labels = [part.strip() for part in headings[0].split(",")] if headings else ["common"]
+        try:
+            labels = validate_memory_context_assignment(labels)
+        except ValueError:
+            raise ValueError("reasoning_bank_invalid_dialogue_context_assignment") from None
+        assignments[digest(item)] = labels
+    return assignments
 
 
 def recorded_episode(observation, user_outcome=None):
@@ -99,6 +117,9 @@ class GoogleReasoningBank:
                 return outcome
             items = (_complete_memory_items(raw_items) if policy else [text for text in raw_items if text.strip()])
             text = validate_experience_text("\n\n".join(items))
+            context_assignment = ({"dialogue_context_assignment_version": 1,
+                "dialogue_context_assignments": _dialogue_context_assignments(items)}
+                if policy and policy["version"] == "1.1.0" else {})
             edition = self.repository.save({"format_version": FORMAT_VERSION, "scope": scope,
                 "status": "candidate", "label": "Google ReasoningBank", "parent_id": parent_id,
                 "base_text": parent["text"] if policy and parent else "", "text": text,
@@ -106,7 +127,8 @@ class GoogleReasoningBank:
                 "rules": [], "episodes": [episode], "source_receipt": {"observation_sha256": digest(observation)},
                 "instruction": "", "quality": "upstream_model_proposed_not_verified",
                 "upstream_memory_items": items, "upstream": result["upstream"],
-                "model_request_receipt": result["model_calls"], "upstream_result": result})
+                "model_request_receipt": result["model_calls"], "upstream_result": result,
+                **context_assignment})
             atomic_json(receipt, {"edition_id": edition["id"], "source_sha256": source_hash})
             return edition
 
@@ -138,8 +160,10 @@ class GoogleReasoningBank:
             atomic_json(path, state)
         return {"status": "active" if edition_id else "disabled", "scope": scope, "edition_id": edition_id}
 
-    def freeze(self, config, task_text):
+    def freeze(self, config, task_text, *, excluded_scopes=(), context_types=None):
+        excluded = {validate_scope(scope) for scope in excluded_scopes}
         active = {scope: identifier for scope, identifier in self.active()["scopes"].items()
-                  if scope != "review"}
+                  if scope != "review" and scope not in excluded}
+        context_filter = {"context_types": context_types} if context_types is not None else {}
         return self.bank.freeze(config, {scope: task_text for scope in active},
-            edition_ids=list(active.values())) if active else None
+            edition_ids=list(active.values()), **context_filter) if active else None

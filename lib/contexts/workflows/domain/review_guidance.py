@@ -125,6 +125,7 @@ def authenticated_review_guidance_positions(record):
     if receipt is None:
         return ()
     from .native_feedback_provenance import authenticate_native_feedback_receipt
+    from .dialogue_style_context import authenticated_record_context_positions
     try:
         authenticated = authenticate_native_feedback_receipt(receipt)
         note = authenticated["guidance_message"]
@@ -138,6 +139,7 @@ def authenticated_review_guidance_positions(record):
             visible = messages[:-1]
         if not isinstance(visible, list) or not visible or visible[-1] != note:
             raise ValueError
+        context_positions = set(authenticated_record_context_positions(record))
         if native.get("content_sha256") != checklist_digest([value["reasoning"], value["answer"]]):
             raise ValueError
         if messages is not None:
@@ -165,10 +167,11 @@ def authenticated_review_guidance_positions(record):
                 anchor, block = m, []
             elif m.get("role") == "system" and anchor is not None:
                 block.append(m)
-                if (not m.get("content", "").startswith(REVIEW_GUIDANCE_HEADER)
+                if ((i not in context_positions and not m.get("content", "").startswith(REVIEW_GUIDANCE_HEADER))
                         or not any(u == anchor and b[:len(block)] == block for u,b in actual_blocks)):
                     raise ValueError
-                positions.append(i)
+                if i not in context_positions:
+                    positions.append(i)
             elif m.get("role") in {"assistant", "tool"}:
                 anchor, block = None, []
         if len(visible)-1 not in positions:

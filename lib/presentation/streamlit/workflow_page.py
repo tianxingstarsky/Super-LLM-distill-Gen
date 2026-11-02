@@ -2481,6 +2481,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                         node_generation=node_generation,
                                         node_control_text_configs=node_control_text_configs or None,
                                         qa_director=qa_director,
+                                        dialogue_style_contexts=bool(st.session_state.get(
+                                            f"workflow-dialogue-style-contexts:{ws}",
+                                            st.session_state.get(f"workflow-form-draft:{ws}", {}).get(
+                                                f"workflow-dialogue-style-contexts:{ws}", True))),
                                         package_review={"enabled": False} if cpt_only else package_review,
                                         cpt_processing=cpt_processing, review_repair=None if cpt_only else review_repair,
                                         preference_design=preference_design_snapshot(ws) if selected_preferences(targets) else None,

@@ -8,6 +8,9 @@ from ..domain.authored_task_contract import compile_task_contract, project_task_
 from ..domain.cot_review_policy import cot_review_plan, SAMPLED_REVIEW_INSTRUCTION
 from ..domain.integrated_reflection import integrated_reflection, reflection_instruction
 from ..domain.review_guidance import review_guidance_message, authenticated_review_guidance_positions
+from ..domain.dialogue_style_context import (
+    authenticated_context_positions, context_message_provenance, context_system_message,
+)
 from ..domain.native_cot import (
     NATIVE_EXECUTION_STATE, native_execution_state, native_instruction_leakage,
     native_instruction_scope_evidence,
@@ -23,6 +26,7 @@ class GenerateNativeCot:
 
     def execute(self, sample, style, *, instruction=""):
         messages = sample.get("messages", [])
+        context_positions = authenticated_context_positions(messages, self.recipe)
         repair_session = (sample.get("native_tool_feedback") or {}).get("session") or {}
         public_note_context = (self.recipe.get("native_feedback_guidance_version") == 7
             and self.recipe.get("native_revision_context_version") == 2
@@ -30,8 +34,11 @@ class GenerateNativeCot:
             and messages and messages[-1].get("role") == "system"
             and repair_session.get("messages", [])[-1:] == messages[-1:]
             and any(message.get("role") == "user" for message in messages))
+        context_note_context = (messages and len(messages) - 1 in context_positions
+            and any(message.get("role") == "user" for message in messages))
         if not messages or (messages[-1].get("role") not in {"user", "assistant", "tool"}
-                            and not public_note_context):
+                            and not public_note_context
+                            and not context_note_context):
             return [self.port.reject(sample, "cot_missing_dialogue")]
         previous = messages[-1] if messages[-1].get("role") == "assistant" else None
         prompt = without_source_reasoning(messages[:-1] if previous else messages)
@@ -47,6 +54,25 @@ class GenerateNativeCot:
             "<working_principles>\n" + experience + "\n</working_principles>" for message in prompt))
         if not already_public:
             prompt = with_public_experience(prompt, experience)
+        if self.recipe.get("dialogue_style_context_version") is not None:
+            step = sample.get("dialogue_step")
+            if isinstance(step, dict):
+                selected = (step.get("dialogue_state") or {}).get("dialogue_contexts", [])
+            elif isinstance(sample.get("dialogue_state"), dict):
+                selected = sample["dialogue_state"].get("dialogue_contexts", [])
+            elif "dialogue_contexts" in sample:
+                selected = sample["dialogue_contexts"]
+            else:
+                selected = (sample.get("qa_contract") or {}).get("dialogue_contexts", [])
+            note, _ = context_system_message(self.recipe, selected)
+            # Tool and review-guided repairs continue the authenticated original
+            # request. They must not claim a new note absent from that session.
+            repairing = (self.recipe.get("native_revision_context_version") == 2
+                         and (previous is not None or "native_tool_feedback" in sample))
+            pending_user = max((i for i, m in enumerate(prompt) if m.get("role") == "user"), default=-1)
+            existing = [i for i in authenticated_context_positions(prompt, self.recipe) if i > pending_user]
+            if note is not None and not repairing and not existing:
+                prompt = [*prompt, deepcopy(note)]
         task = {"prompt": prompt, "source": deepcopy(sample.get("source_context"))}
         if sample.get("answer_context_scope"):
             task["answer_context_scope"] = deepcopy(sample["answer_context_scope"])
@@ -115,11 +141,15 @@ class GenerateNativeCot:
         # These fields are assembled by the transport, never parsed from LLM
         # JSON. Missing native reasoning cannot be replaced by visible prose.
         reasoning, answer = response.get("reasoning", ""), response.get("answer", "")
+        context_positions = authenticated_context_positions(prompt, self.recipe)
+        context_provenance = context_message_provenance(prompt, self.recipe)
         public_note_positions = (authenticated_review_guidance_positions({
             "question": prompt, "reasoning": [reasoning], "answer": answer,
             "native_generation": {"review_guidance": feedback_receipt,
+                                  **({"dialogue_style_contexts": context_provenance} if context_provenance else {}),
                                   "content_sha256": digest([reasoning, answer])}})
             if review_guidance is not None else ())
+        public_note_positions = tuple(sorted(set(public_note_positions) | set(context_positions)))
         issues = []
         if feedback_receipt is not None and feedback_receipt.get("status") != "completed":
             issues.append(feedback_receipt.get("issue") or "native_feedback_incomplete")
@@ -176,6 +206,7 @@ class GenerateNativeCot:
             "native_generation": {"version": 1, "channels": ["reasoning_content", "content"],
                 "content_sha256": digest([reasoning, answer]), "raw_reasoning_preserved": True,
                 "previous_candidate": deepcopy(previous), "issues": issues, "leakage_evidence": leakage,
+                **({"dialogue_style_contexts": context_provenance} if context_provenance else {}),
                 **({"author_session": deepcopy(details["author_session"])} if details.get("author_session") else {}),
                 **({("review_guidance" if feedback_receipt.get("feedback_request_origin") ==
                        "system_review_guidance" else "tool_feedback"): deepcopy(feedback_receipt),

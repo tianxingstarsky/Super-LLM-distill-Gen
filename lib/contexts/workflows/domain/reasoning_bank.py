@@ -10,6 +10,7 @@ from lib.domain.agent_experience import (
     MAX_EXPERIENCE_BYTES, snapshot_agent_experience, validate_agent_experience,
 )
 from .experience_evolution import digest, validate_scope
+from .dialogue_style_context import ALL_CONTEXT_TYPES
 
 FORMAT_VERSION = 1
 MAX_RETRIEVAL = 10
@@ -23,6 +24,32 @@ class ReasoningBankUnavailable(RuntimeError):
     """A memory dependency is unavailable; generation may continue without it."""
 
 
+def validate_memory_context_types(value):
+    """Exact source filters; None preserves the original unfiltered protocol."""
+    if value is None:
+        return None
+    if (not isinstance(value, list) or any(not isinstance(kind, str) or kind not in ALL_CONTEXT_TYPES for kind in value)
+            or len(set(value)) != len(value)):
+        raise ValueError("reasoning_bank_invalid_dialogue_context_types")
+    return [kind for kind in ALL_CONTEXT_TYPES if kind in value]
+
+
+def validate_memory_context_assignment(value):
+    contexts = validate_memory_context_types(value)
+    if not contexts or "common" in contexts and len(contexts) != 1:
+        raise ValueError("reasoning_bank_invalid_dialogue_context_assignment")
+    return contexts
+
+
+def memory_source_matches(source, edition_ids=None, context_types=None):
+    if edition_ids is not None and source["edition"]["id"] not in edition_ids:
+        return False
+    if context_types is None:
+        return True
+    assigned = validate_memory_context_assignment(source.get("context_types", ["common"]))
+    return bool(set(assigned).intersection(context_types))
+
+
 def edition_reference(edition):
     return {key: deepcopy(edition.get(key)) for key in
             ("id", "sha256", "parent_id", "scope", "status", "quality", "created_at")}
@@ -33,12 +60,20 @@ def entries_from_edition(edition):
     scope = validate_scope(edition["scope"])
     episodes = {item["id"]: item for item in edition.get("episodes", [])}
     entries = []
+    context_version = edition.get("dialogue_context_assignment_version")
+    if context_version is not None and (type(context_version) is not int or context_version != 1):
+        raise ValueError("reasoning_bank_invalid_dialogue_context_assignment")
+    assignments = edition.get("dialogue_context_assignments", {}) if context_version == 1 else {}
+    if not isinstance(assignments, dict):
+        raise ValueError("reasoning_bank_invalid_dialogue_context_assignment")
     for position, text in enumerate(edition.get("upstream_memory_items", [])):
         identity = {"scope": scope, "principle": text, "when": "", "avoid": ""}
+        contexts = ({"context_types": validate_memory_context_assignment(assignments.get(digest(text), ["common"]))}
+                    if context_version == 1 else {})
         entries.append({"format_version": FORMAT_VERSION, "id": digest(identity), **identity,
             "sources": [{"edition": edition_reference(edition), "rule_index": position,
                 "observations": [], "upstream": edition.get("upstream", []),
-                "source_receipt_sha256": digest(edition.get("source_receipt", {}))}]})
+                "source_receipt_sha256": digest(edition.get("source_receipt", {})), **contexts}]})
     for position, rule in enumerate(edition.get("rules", [])):
         content = {key: rule[key] for key in ("principle", "when", "avoid")}
         identity = {"scope": scope, **content}
