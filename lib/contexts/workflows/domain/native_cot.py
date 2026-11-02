@@ -2,6 +2,30 @@
 import re
 
 NATIVE_EXECUTION_STATE = "native_execution_state"
+NATIVE_CONTEXT_CONTRACT = "native_context_contract"
+
+
+def native_context_contract(recipe, sample, task, contract):
+    """Expose authenticated task facts without classifying the user's wording."""
+    version = recipe.get("native_context_contract_version")
+    if version is None:
+        return None
+    if type(version) is not int or version != 1:
+        raise ValueError("invalid_native_context_contract_version")
+    from lib.domain.workflow_qa_director import LEARNING_GOALS, QA_TYPES
+    from lib.domain.knowledge_voice import knowledge_voice_rules
+
+    goal = recipe.get("qa_director", {}).get("learning_goal")
+    goal = goal if goal in LEARNING_GOALS else None
+    supplied = sample.get("qa_contract")
+    qa_type = supplied.get("qa_type") if isinstance(supplied, dict) else None
+    qa_type = qa_type if qa_type in QA_TYPES else None
+    excerpt_only = contract["source_scope"] == "learner_excerpt_only"
+    source = task.get("source")
+    return {"version": 1, "learning_goal": goal, "qa_type": qa_type,
+        "teacher_source_visibility": "private" if isinstance(source, dict) and source.get("text") else "not_provided",
+        "learner_excerpt_only": excerpt_only,
+        "knowledge_application_voice": bool(knowledge_voice_rules(goal, {"qa_type": qa_type})) and not excerpt_only}
 
 _EXECUTION = re.compile(
     r"authored_task_contract|reasoning_depth_control|revision_context|revision[_ ]feedback"

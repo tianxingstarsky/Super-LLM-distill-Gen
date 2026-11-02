@@ -258,9 +258,13 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          preference_design_version=None, preference_design_prompt_version=None,
                          conversation_reasoning_version=None, native_feedback_guidance_version=None,
                          claim_review_schedule_version=None, review_advisory_policy_version=None,
-                         dialogue_style_context_version=None, native_sft_review_evolution_version=None) -> dict:
+                         dialogue_style_context_version=None, native_sft_review_evolution_version=None,
+                         native_context_contract_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
+    if native_context_contract_version is not None and (
+            type(native_context_contract_version) is not int or native_context_contract_version != 1):
+        raise ValueError("invalid_native_context_contract_version")
     if native_sft_review_evolution_version is not None and (
             type(native_sft_review_evolution_version) is not int or native_sft_review_evolution_version != 1):
         raise ValueError("invalid_native_sft_review_evolution_version")
@@ -282,6 +286,8 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
             type(claim_repair_feedback_version) is not int or claim_repair_feedback_version != 1):
         raise ValueError("invalid_claim_repair_feedback_version")
     def default_body(prompt_id):
+        if prompt_id == "workflow.cot_native_joint":
+            return render(get(prompt_id, version="1.7.0" if native_context_contract_version == 1 else "1.6.0"))
         if prompt_id == "workflow.qa_director":
             return render(get(prompt_id, version="1.16.0" if dialogue_style_context_version == 1 else "1.15.0"))
         if prompt_id == "workflow.cot_check_agent":

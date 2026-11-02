@@ -34,6 +34,7 @@ def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boun
     path = engine.run_path(output, rid)
     frozen = engine.read_json(path / "recipe.json")
     assert frozen["native_author_session_version"] == 1
+    assert frozen["native_context_contract_version"] == 1
     if not capture_author:
         # Historical queued tasks did not record an author-session envelope.
         frozen.pop("native_author_session_version")
@@ -75,6 +76,10 @@ def test_new_sft_native_uses_its_frozen_prompt_and_resumes_one_real_request_boun
             self.last_messages = deepcopy(messages)
             assert messages[-1] == {"role": "user", "content": unit["qa_contract"]["question"]}
             assert text in messages[0]["content"]
+            mode = json.loads(messages[0]["content"].split("<native_context_contract>\n", 1)[1]
+                .split("\n</native_context_contract>", 1)[0])
+            assert mode["qa_type"] == "closed_book" and mode["teacher_source_visibility"] == "private"
+            assert mode["learner_excerpt_only"] is False
             assert not options.get("json_output") and options["retries"] == 1
             if sdk:
                 return sdk.chat(messages, **options)
@@ -284,6 +289,62 @@ def test_excerpt_and_roles_not_replaced_by_editorial_draft():
     scoped = native_cot_messages("Solve the task.", {**task, NATIVE_EXECUTION_STATE: state}, "Check assumptions.")
     assert scoped[0]["content"].split("\n<native_execution_state>", 1)[0] == messages[0]["content"]
     assert scoped[1:] == messages[1:]
+
+
+def test_unmarked_native_source_request_preserves_its_literal_historical_projection():
+    from lib.contexts.workflows.domain.dialogue import dialogue_digest
+    from lib.contexts.workflows.domain.native_cot import native_context_contract
+    task = {"prompt": [{"role": "user", "content": "What should be checked before maintenance?"}],
+        "source": {"text": "Disconnect the power before checking the wiring."}}
+    unchanged = deepcopy(task)
+    assert native_context_contract({}, {}, task, compile_task_contract(task)) is None
+    wire = native_cot_messages("Frozen template.", task, "Frozen instruction.")
+    assert dialogue_digest(wire) == "4a3841ea043623938bd780ec5c099201ce9c4675441fb093399fca1719db9345"
+    assert wire[1:] == task["prompt"] and task == unchanged
+
+
+@pytest.mark.parametrize("goal,qa_type,voice", [
+    ("knowledge_application", "closed_book", True),
+    ("document_reading", "grounded", False),
+    ("mixed", "closed_book", True),
+    ("mixed", "grounded", False),
+    (None, "closed_book", False),
+])
+def test_native_context_mode_uses_frozen_goal_and_contract_without_exposing_teacher_to_learner(goal, qa_type, voice):
+    from lib.contexts.workflows.domain.native_cot import native_context_contract
+    recipe = {"native_context_contract_version": 1, "qa_director": {"learning_goal": goal}}
+    sample = {"learning_goal": "knowledge_application", "qa_contract": {"qa_type": qa_type,
+        "learning_goal": "knowledge_application"}}
+    task = {"prompt": [{"role": "user", "content": "Explain this maintenance decision."}],
+        "source": {"text": "PRIVATE_AUTHENTICATED_TEACHER"}}
+    original = deepcopy((recipe, sample, task))
+    mode = native_context_contract(recipe, sample, task, compile_task_contract(task))
+    assert mode == {"version": 1, "learning_goal": goal, "qa_type": qa_type,
+        "teacher_source_visibility": "private", "learner_excerpt_only": False,
+        "knowledge_application_voice": voice}
+    custom = "Keep my literal {template}, {{braces}}, and role instructions.\n"
+    wire = native_cot_messages(custom, {**task, "native_context_contract": mode}, "")
+    assert wire[0]["content"].startswith(custom)
+    assert json.loads(wire[0]["content"].split("<native_context_contract>\n", 1)[1]
+        .split("\n</native_context_contract>", 1)[0]) == mode
+    assert wire[1:] == task["prompt"]
+    assert "PRIVATE_AUTHENTICATED_TEACHER" not in json.dumps(wire[1:])
+    assert (recipe, sample, task) == original
+
+
+def test_native_visible_excerpt_mode_keeps_reading_scope_and_excludes_private_full_source():
+    from lib.contexts.workflows.domain.native_cot import native_context_contract
+    from lib.contexts.workflows.domain.authored_task_contract import project_task_context
+    recipe = {"native_context_contract_version": 1, "qa_director": {"learning_goal": "knowledge_application"}}
+    task = {"prompt": [{"role": "user", "content": "Source material:\nVisible evidence.\n\nUser message:\nExplain using only this passage."}],
+        "source": {"text": "UNRELATED PRIVATE FULL PAPER"}}
+    contract = compile_task_contract(task)
+    projected = project_task_context(task, contract)
+    mode = native_context_contract(recipe, {"qa_contract": {"qa_type": "grounded"}}, projected, contract)
+    assert mode["learner_excerpt_only"] is True and mode["knowledge_application_voice"] is False
+    wire = native_cot_messages("Custom reading instructions.", {**projected, "native_context_contract": mode}, "")
+    assert wire[1:] == task["prompt"]
+    assert "UNRELATED PRIVATE FULL PAPER" not in json.dumps(wire)
 
 
 def test_unsupported_tool_loop_is_not_silently_ignored():

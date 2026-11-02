@@ -13,7 +13,7 @@ from ..domain.dialogue_style_context import (
 )
 from ..domain.native_cot import (
     NATIVE_EXECUTION_STATE, native_execution_state, native_instruction_leakage,
-    native_instruction_scope_evidence,
+    native_instruction_scope_evidence, NATIVE_CONTEXT_CONTRACT, native_context_contract,
 )
 from lib.domain.workflow_quality import accepted, text_issue
 from lib.domain.training_surface import training_surface_issue
@@ -82,6 +82,9 @@ class GenerateNativeCot:
         # passage-only request never reads or carries the private full paper.
         if isinstance(task.get("source"), dict):
             task["source"] = {"text": self.port.source_evidence(task["source"])}
+        context_contract = native_context_contract(self.recipe, sample, task, contract)
+        if context_contract is not None:
+            task[NATIVE_CONTEXT_CONTRACT] = context_contract
         revision_context_version = self.recipe.get("native_revision_context_version")
         if revision_context_version is not None and (
                 type(revision_context_version) is not int or revision_context_version not in {1, 2}):

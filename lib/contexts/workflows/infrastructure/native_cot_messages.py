@@ -3,13 +3,17 @@ from copy import deepcopy
 import json
 
 from ..domain.authored_task_contract import compile_task_contract, project_task_context, task_contract_instruction
-from ..domain.native_cot import NATIVE_EXECUTION_STATE
+from ..domain.native_cot import NATIVE_EXECUTION_STATE, NATIVE_CONTEXT_CONTRACT
 
 
 def native_cot_messages(template, task, instruction):
     contract = compile_task_contract(task)
     task = project_task_context(task, contract)
     system = template + "\n" + (instruction or "") + "\n" + task_contract_instruction(contract, version=2)
+    if task.get(NATIVE_CONTEXT_CONTRACT) is not None:
+        system += ("\n<" + NATIVE_CONTEXT_CONTRACT + ">\n"
+            + json.dumps(task[NATIVE_CONTEXT_CONTRACT], ensure_ascii=False, separators=(",", ":"))
+            + "\n</" + NATIVE_CONTEXT_CONTRACT + ">")
     source = task.get("source")
     if source:
         system += "\n<knowledge>\n" + json.dumps(source, ensure_ascii=False) + "\n</knowledge>"

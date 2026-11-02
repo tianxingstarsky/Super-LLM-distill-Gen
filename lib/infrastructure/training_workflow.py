@@ -366,6 +366,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                             for stage, config in node_generation.items() if stage in {"sft", "multiturn"})
     if native_generation:
         recipe_version = 42
+    native_context_contract_version = (1 if native_generation or (
+        node_generation.get("cot", {}).get("enabled") is True
+        and node_generation["cot"].get("answer_mode") == "native_joint") else None)
     native_sft_review_evolution_version = (1 if native_sft_review_evolution
         and "sft" in targets and not repair_inputs
         and qa_director.get("enabled") is True
@@ -376,6 +379,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         and (native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint")
         and (not repair_inputs or reanswer_sft) else None)
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+        native_context_contract_version=native_context_contract_version,
         native_sft_review_evolution_version=native_sft_review_evolution_version,
         dialogue_style_context_version=dialogue_style_context_version,
         review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
@@ -540,6 +544,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         else:
             recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+            native_context_contract_version=native_context_contract_version,
             native_sft_review_evolution_version=native_sft_review_evolution_version,
             dialogue_style_context_version=dialogue_style_context_version,
             review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
@@ -610,6 +615,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_review_schedule_version": 1,
               **({"review_advisory_policy_version": 1} if review_repair and review_repair["mode"] == "auto" else {}),
               **({"native_sft_review_evolution_version": 1} if native_sft_review_evolution_version == 1 else {}),
+              **({"native_context_contract_version": 1} if native_context_contract_version == 1 else {}),
               **({"multiturn_advisory_review_version": 1}
                  if "multiturn" in targets and not repair_inputs
                  and review_repair and review_repair["mode"] == "auto" else {}),

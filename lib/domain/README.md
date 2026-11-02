@@ -1,5 +1,7 @@
 # 旧领域层
 
+`workflow_node_prompts.py` 在 `native_context_contract_version=1` 下为新原生生成快照选择 `workflow.cot_native_joint@1.7.0`；无标记仍选择 1.6，个人正文优先，旧任务不热更新。标记由创建边界冻结，不能只凭注册表最新版本改变历史请求。
+
 下游 CoT 改写沿用 SFT 上下文时，通过审核域公开合同退休已变动回答的旧生成档位；不把来源记录的收据贴到新内容上，未改轮次和原始历史仍保留。
 
 `provider_reasoning.py` 仅从候选对象的可信 `response_details` 属性读取生成控制收据。新记录通过 workflows 域的逐助手映射保存控制来源；JSON 正文里的同名键没有来源权限，旧记录与训练消息保持原合同。
