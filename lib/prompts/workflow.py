@@ -193,3 +193,4 @@ from lib.prompts.workflow_evidence_review import (
 from lib.prompts.workflow_obligation_review import (
     OBLIGATION_REVIEW,
 )
+from lib.prompts.workflow_knowledge_reasoning import KNOWLEDGE_REASONING_EDITOR, KNOWLEDGE_REASONING_EDITOR_V1_0
