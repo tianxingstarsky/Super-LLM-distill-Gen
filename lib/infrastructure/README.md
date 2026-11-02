@@ -1,5 +1,10 @@
 # 运行时与旧基础设施
 
+新建配方固定 `qa_batch_phase_version=1`。指导员初始批次无论 balanced 还是 adaptive，
+都显式声明 `request_phase=batch_design`；历史仅是其他已完成样本的覆盖与去重参考，
+不是当前用户与助手的实际对话。续轮继续使用既有 `next_turn` 合同。缺少版本标记的旧
+配方保持原请求和缓存，既有历史内容不改写。验证见 `test_director_batch_phase.py`。
+
 `CreationDraftFile.compare_update` 在同一文件锁内检查字段前置值、合并本次更改并
 原子保存，防止不同会话采用规则时互相覆盖。冲突、无效输入或不可读取的旧草稿均
 保持文件不变；未修改的字段继续保留。该接口不改变旧 `replace` 的整表自动保存语义。

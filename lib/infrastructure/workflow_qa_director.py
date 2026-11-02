@@ -878,6 +878,10 @@ class WorkflowQADirector:
                     "question_rules": config["question_rules"], "answer_rules": config["answer_rules"],
                     "requirement": self.recipe.get("brief", ""),
                     "targets": list(stages), **self._natural_expression_guidance()}
+            if self.recipe.get("qa_batch_phase_version") == 1:
+                data.update(request_phase="batch_design", planning_mode=config.get("planning_mode", "balanced"),
+                    history_role="completed_independent_examples_for_coverage_and_deduplication",
+                    history_is_current_dialogue=False)
             if any(name in config for name in ("learning_goal", "user_languages")):
                 for index, candidate in enumerate(data["candidates"]):
                     controls = _candidate_controls(config, language_offset + index, candidate.get("human_design"))
