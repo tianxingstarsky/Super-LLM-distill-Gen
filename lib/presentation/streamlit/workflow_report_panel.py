@@ -151,6 +151,8 @@ def _render_report_actions(application, run_id: str, target: str, page: dict, *,
         st.caption("此类型可在评分与修正中处理。")
     if st.session_state.pop(f"workflow-review-error:{run_id}", False):
         st.error("任务产物暂时无法校验，请返回运行过程检查。")
+    from lib.presentation.streamlit.workflow_reanswer_controls import render_sft_reanswer
+    render_sft_reanswer(application, run_id, target, page)
 
 
 def _render_workflow_report(application, run_id: str, *, embedded: bool = False, human_application=None) -> bool:

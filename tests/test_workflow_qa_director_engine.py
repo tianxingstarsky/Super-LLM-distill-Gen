@@ -354,6 +354,33 @@ def test_disabled_director_history_never_reads_recall_or_recent_stores(tmp_path,
     assert plans and all(plan["history"] == [] for plan in plans)
 
 
+def test_one_director_batch_plans_three_contracts_before_three_sft_workers(tmp_path):
+    from lib.contexts.workflows.infrastructure.execution_runtime import CheckpointedBatchRuntime
+
+    writer = Writer()
+    output, run_id, _ = make_run(tmp_path, sample_count=3,
+        options=config(batch_size=3), concurrency=1)
+    worker = engine.Workflow(output, run_id, tmp_path, generator=writer, jev=Reviewer())
+    runtime = CheckpointedBatchRuntime(worker)
+    prepared = runtime.prepare_inputs(runtime.plan())
+    generated = runtime.directed_dialogues(prepared.generation_candidates,
+                                          needs_sft=True, needs_multiturn=False)
+    requests = [request_data(call) for call in writer.calls]
+    plans = [request for request in requests if "candidates" in request]
+    workers = [request for request in requests if "qa_contract" in request and "source_context" in request]
+    assert len(plans) == 1
+    assert len(plans[0]["candidates"]) == 3
+    assert len({candidate["id"] for candidate in plans[0]["candidates"]}) == 3
+    assert len(workers) == 3
+    assert requests[0] is plans[0]
+    questions = {request["qa_contract"]["question"] for request in workers}
+    assert len(questions) == 3
+    generated_sft = list(generated["sft"])
+    assert len(generated_sft) == 3
+    assert {row["qa_contract"]["question"] for row in generated_sft} == questions
+    assert worker.state["qa_director"]["batches_planned"] == 1
+
+
 def test_duplicate_contract_registered_before_same_batch_model_calls(tmp_path):
     state, path, _, _, writer, _ = execute(tmp_path, sample_count=3,
         options=config(batch_size=3), writer=Writer(duplicate=True), concurrency=3)

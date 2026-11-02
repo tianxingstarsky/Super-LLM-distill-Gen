@@ -216,7 +216,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
                 review_repair=None, repair_only=False, source_cleaning=False,
                 arithmetic_seed_protocol_version=0, cpt_review_policy_version=0, native_generation_version=None,
-                review_advisory_policy_version=None):
+                review_advisory_policy_version=None, sft_reanswer_version=0):
     native_recipe = _native_recipe(node_generation, recipe_version, native_generation_version)
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
@@ -224,7 +224,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                   review_repair=review_repair,
                                   arithmetic_seed_protocol_version=arithmetic_seed_protocol_version,
                                   cpt_review_policy_version=cpt_review_policy_version, node_generation=node_generation,
-                                  native_generation_version=native_recipe["native_generation_version"])
+                                  native_generation_version=native_recipe["native_generation_version"],
+                                  sft_reanswer_version=sft_reanswer_version)
     shared_cleaning = (recipe_version >= 19 and source_cleaning is True
                        and any(a == "cpt" and b in {"director", "sft", "multiturn"} for a, b in edges))
     independent_arithmetic = (arithmetic_seed_protocol_version == 1 and "gsm8k" in nodes
@@ -244,7 +245,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
     clean_width = 270 if shared_cleaning else 0
     review_width = 270 if "jev" in nodes or "review" in nodes else 0
     input_offset = 0 if "ingest" in nodes else 270
-    width = ((540 if repair_only else 1080 if derived else 810) + (270 if "trim" in nodes else 0)
+    width = ((1080 if sft_reanswer_version == 1 else 540 if repair_only else 1080 if derived else 810) + (270 if "trim" in nodes else 0)
              + director_width + clean_width + review_width - input_offset)
     positions = {"ingest": (24, (height - 78) / 2), "package": (width - 242, (height - 78) / 2)}
     if "director" in nodes:
@@ -357,6 +358,12 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                          "点击节点查看配置 · 拖动平移 · Ctrl + 滚轮缩放"),
                                        "lineage": "Arrows show data dependencies. Stages run in order." if english else
                                        "连线表示实际数据依赖，阶段按顺序执行。"}}
+    if sft_reanswer_version == 1:
+        for node in result["nodes"]:
+            if node["id"] == "ingest":
+                node["label"] = "Reuse saved plan" if english else "复用原计划"
+                node["description"] = ("Verify the saved questions, source ranges and task contracts without a model call."
+                    if english else "认证已保存的问题、资料范围和任务合同，不调用模型。")
     if "review" in nodes:
         if review_advisory_policy_version == 1 and (review_repair or {}).get("mode") == "auto":
             for node in result["nodes"]:
@@ -368,6 +375,9 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                                       for text in node.get("models", [])]
             result["labels"]["lineage"] = ("Generate → one review → export. Feedback feeds experience learning."
                 if language == "en" else "生成 → 一次建议评审 → 输出；反馈用于经验学习，不自动回流。")
+            if sft_reanswer_version == 1:
+                result["labels"]["lineage"] = ("Reuse the saved plan → re-answer with current experience → one review → export."
+                    if english else "复用原问题、资料范围与合同 → 按当前经验重答 → 一次评审 → 输出。")
             return result
         if feedback_branch is None:
             phase = {"completed": "approved", "running": "reviewing", "failed": "needs_revision",

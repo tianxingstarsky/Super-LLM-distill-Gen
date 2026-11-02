@@ -1,5 +1,7 @@
 # 审核持久化
 
+显式 `sft_reanswer_version=1` 子任务在 `AuthenticatedRepairAdapter.review` 内先执行已有 SFT 原生生成，再将新候选交给单次建议评审。所有父版本在生成前整体认证；旧评语与旧稿不进入新作者。新稿证据由已认证 `sft_reanswer` 收据提供，旧 `checkpoint_context` 的 review-only 语义不改变。
+
 新默认为 `advisory_review.py::review_once`：完整候选和来源只审查一次，意见或不可用状态均先持久化，恢复后不再购买；没有逐句单元或大格式包。`experience_observations.py` 本地收集原文与意见，模型提炼由用户明确触发。下述 consolidated 设施用于旧协议/对比记录，不是当前默认。
 
 建议评审是结构化请求，只传 `structured_response_attempts=1`；原生生成专用的 `native_request_attempts` 不能用于评分请求。实际首跑发现的参数冲突在发包前中断，恢复时复用指导员与 SFT 检查点，不重购生成。

@@ -8,6 +8,24 @@ import shutil
 import subprocess
 import pytest
 
+
+def test_same_question_reanswer_graph_shows_sft_without_replanning():
+    from lib.domain.workflow_graph import execution_graph
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+    from lib.presentation.streamlit.workflow_page import GRAPH_LABELS, STAGE_GLYPHS
+    options = dict(recipe_version=42, repair_only=True,
+                   review_repair={"mode": "auto", "max_rounds": 0}, sft_reanswer_version=1)
+    nodes, edges = execution_graph(["sft"], **options)
+    assert nodes == ("ingest", "sft", "review", "package")
+    assert edges == (("ingest", "sft"), ("sft", "review"), ("review", "package"))
+    view = canvas_spec(["sft"], {}, "sft", GRAPH_LABELS, STAGE_GLYPHS,
+                       review_advisory_policy_version=1, **options)
+    assert next(node for node in view["nodes"] if node["id"] == "ingest")["label"] == "复用原计划"
+    assert len({node["x"] for node in view["nodes"]}) == 4
+    assert "director" not in nodes
+    legacy, _ = execution_graph(["sft"], recipe_version=42, repair_only=True)
+    assert legacy == ("ingest", "review", "package")
+
 ROOT = Path(__file__).resolve().parents[1]
 
 

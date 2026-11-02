@@ -1,5 +1,7 @@
 # 工作流用例
 
+`CreatePlannedSftReanswer` 选择已封存的原生 SFT 父版本，建立只更新经验的子任务；公开入口是 `WorkflowRunApplication.reanswer_sft(parent_run_id, candidate_ids=..., agent_experience=...)`。`RegeneratePlannedSft` 复用原问题、真实历史、合同与已认证资料选区，通过既有原生端口新生成推理和答案；不调用指导员、不向作者回灌旧稿或旧推理。创建只排队，启动沿用原工作流入口；每条仅建议评审一次，不能复用旧稿评语冒充新稿评审。
+
 `ReasoningBank` 提供已认证版本索引、按任务召回与新配方冻结；算法执行和向量缓存由基础设施调用 Google 原函数。`EvolveExperience` 收集完整观察、事务认领批次，并将上游提炼版本绑定原批次；提案、按策略交付及质量通过各自记录。原版入口由 `bootstrap/google_reasoning_bank.py` 装配。
 
 `GeneratePreferencePair` 仅把源候选明确携带的 v3 控制文字配置保留在复制的助手消息上，

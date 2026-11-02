@@ -30,11 +30,16 @@ class CheckpointedReviewAdapter:
         return self._runtime._review_payload(*args, **kwargs)
 
     def evidence(self, *args, **kwargs):
+        from copy import deepcopy
         row = args[0] if args else kwargs.get("row")
+        if isinstance(row, dict) and row.get("sft_reanswer"):
+            from lib.contexts.workflows.contracts import valid_reanswer_receipt
+            if not self.authenticated_revision or not valid_reanswer_receipt(row):
+                raise ValueError("sft_reanswer_parent_not_authenticated")
+            return deepcopy(row["sft_reanswer"]["parent_context"]["evidence"])
         if isinstance(row, dict) and row.get("checkpoint_context"):
             if not self.authenticated_revision:
                 raise ValueError("checkpoint_review_parent_not_authenticated")
-            from copy import deepcopy
             return deepcopy(row["checkpoint_context"]["evidence"])
         return self._runtime._review_evidence(*args, **kwargs)
 
@@ -208,6 +213,12 @@ class AuthenticatedRepairAdapter:
         # body. Ordinary review and arbitrary revision metadata cannot opt in.
         runtime._authenticated_repair_branch = True
         try:
+            if runtime.recipe.get("sft_reanswer_version") == 1:
+                from lib.bootstrap.planned_sft_reanswer import planned_sft_regenerator
+                generator = planned_sft_regenerator(runtime)
+                generated = runtime.stage_items("sft", inputs, generator.execute)
+                from lib.infrastructure.workflow_rows import MappedRows
+                inputs = MappedRows(generated, lambda row: {"target": "sft", "record": row})
             rows = runtime.stage_items("review", inputs, runtime._review_repair_item)
         finally:
             runtime._authenticated_repair_branch = False

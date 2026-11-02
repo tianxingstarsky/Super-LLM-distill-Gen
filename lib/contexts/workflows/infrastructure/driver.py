@@ -22,6 +22,10 @@ class FilesystemWorkflowRunDriver:
         from lib.infrastructure.training_workflow import create_run
         return create_run(self.output, settings_root=self.root, **recipe)
 
+    def reanswer_sft(self, parent_run_id, *, candidate_ids, agent_experience=None):
+        from lib.bootstrap.planned_sft_reanswer import create_sft_reanswer
+        return create_sft_reanswer(self.root, self.output, parent_run_id, candidate_ids, agent_experience)
+
     def default_sft_output_style(self) -> str:
         from lib.infrastructure.generation_settings_file import preference_snapshot
 

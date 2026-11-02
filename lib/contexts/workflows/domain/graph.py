@@ -53,13 +53,16 @@ def execution_graph(targets, *, reasoning_trim=False, qa_director=False,
                     package_review=None, recipe_version=16,
                     repair_only=False, source_cleaning=None,
                     review_repair=None, arithmetic_seed_protocol_version=0,
-                    cpt_review_policy_version=0, node_generation=None, native_generation_version=0
+                    cpt_review_policy_version=0, node_generation=None, native_generation_version=0,
+                    sft_reanswer_version=0
                     ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Return only stages needed for *targets*, including implicit SFT work."""
     selected = set(targets)
     unknown = selected.difference(TARGETS)
     if unknown:
         raise ValueError(f"unknown training targets: {', '.join(sorted(unknown))}")
+    if sft_reanswer_version == 1:
+        return ("ingest", "sft", "review", "package"), (("ingest", "sft"), ("sft", "review"), ("review", "package"))
     if repair_only and recipe_version >= 18:
         return ("ingest", "review", "package"), (("ingest", "review"), ("review", "package"))
 

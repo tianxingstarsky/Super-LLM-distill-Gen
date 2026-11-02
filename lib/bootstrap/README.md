@@ -1,5 +1,7 @@
 # 组合根：找到服务，再选择实现
 
+`planned_sft_reanswer.py` 装配固定任务重答用例、原生生成端口与审核域的已封存父版选择器。这里只连接端口，不新增指导员、评审循环或模型 SDK；旧任务没有显式版本标记时维持原路由。
+
 `review_control_text.control_text_suggestion_application(output)` 装配评审匹配建议的读取与状态服务。
 构造和读取不会发出模型请求；只有同次自动评审产生真实原句证据时才写入待确认队列。
 节点页面使用其有界列表、认证详情和确认后状态接口，节点配置仍经 CreationDraft 保存。

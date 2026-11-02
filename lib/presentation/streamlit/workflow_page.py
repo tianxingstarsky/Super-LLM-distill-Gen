@@ -908,6 +908,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
         attempt = int(state.get("attempt", 0))
         reasoning_trim_enabled = bool((recipe.get("reasoning_trim") or {}).get("enabled"))
         graph_nodes, _ = execution_graph(recipe["targets"], reasoning_trim=reasoning_trim_enabled,
+                                         sft_reanswer_version=recipe.get("sft_reanswer_version", 0),
                                          node_generation=recipe.get("node_generation"),
                                          qa_director=recipe.get("qa_director"), package_review=recipe.get("package_review"),
                                          recipe_version=recipe.get("version", 0), repair_only=bool(recipe.get("repair_inputs")),
@@ -1049,6 +1050,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                                       GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
                                       language=st.session_state.get("ui_language", "zh"), live=True,
                                       review_advisory_policy_version=recipe.get("review_advisory_policy_version"),
+                                      sft_reanswer_version=recipe.get("sft_reanswer_version", 0),
                                       reasoning_trim=reasoning_trim_enabled,
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
                                       qa_director=recipe.get("qa_director"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"),

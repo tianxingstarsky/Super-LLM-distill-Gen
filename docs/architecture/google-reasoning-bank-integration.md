@@ -37,7 +37,17 @@ TextEmbedding("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
 
 程序入口 `lib.bootstrap.google_reasoning_bank.google_reasoning_bank_application` 提供 `learn/activate/freeze`；原版对照入口是 `OfficialReasoningBankInductor.contrast`，只接受同任务真实备选，不自动追加采样。
 
-## 评审和交付
+## 批量规划与同题重答
+
+指导员继续使用既有有界批次规划：默认每次最多 20 条，最高 50 条；只有当前窗口装入内存。生成一条样本的验证不会自动凑满窗口，也不把无价值内容作为数量任务。当前批内先保存逐条问题、选区和合同，再分别生成 SFT。
+
+经验更新后，在已封存的原生 SFT 样本报告点击“用当前经验重答本页”，会新建待运行任务。也可以调用 `workflow_application(root, output).reanswer_sft(parent_run_id, candidate_ids=[...], agent_experience=config)`。创建不调用模型；启动后跳过指导员、解析和清洗，仅重新生成 SFT 原生推理与答案，并执行一次建议评审。
+
+重答只改变生成经验，保留父模型、端点、模板、用户原话、真实历史、选定资料字节和任务合同。全部所选父版本在发包前认证；未知 system、工具轨迹及非原生 SFT 明确拒绝，不猜测恢复。原稿、原生推理和原评语保留在父版本，不回灌作者。同题版本仅对选定父版及认证祖先授权，不关闭其他去重检查。旧评语不重买，新稿也不继承旧分数。
+
+`sft_reanswer` 收据绑定原/新任务摘要、问题、合同、实际资料摘要、经验版本和新正文。这里的“原计划复用”不是复用旧答案或把一次评审意见当作质量保证。
+
+## 评审和交付策略
 
 进化接收方是生成角色：SFT 答案生成、原生推理与同次答案、多轮等。评审仅提供意见和反例，既不作为学习目标，也不接收自动检索的生成经验。旧存储中即使存在 review 选择，新任务也会忽略它。评审模板仍可由用户手动配置。
 

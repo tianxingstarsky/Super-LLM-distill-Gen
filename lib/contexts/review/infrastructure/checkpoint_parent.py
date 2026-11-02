@@ -103,6 +103,8 @@ def _checkpoint_review_input(output, parent_run_id, target, candidate_id, *, rev
         stage = "review-" + target if reviewed else target
         record = _read_candidate(parent, stage, candidate_id)
         prior = record.get("checkpoint_context") if reviewed else None
+        if reviewed and not prior and recipe.get("sft_reanswer_version") == 1:
+            prior = (record.get("sft_reanswer") or {}).get("parent_context")
         if prior:
             selected = [item for item in recipe.get("repair_inputs", [])
                         if item.get("checkpoint_context") == prior and item.get("target") == target]

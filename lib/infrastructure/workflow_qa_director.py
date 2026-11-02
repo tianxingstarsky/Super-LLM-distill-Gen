@@ -495,6 +495,10 @@ class WorkflowQADirector:
                 and not self.qa_revision_duplicate_allowed(row, target, duplicate) else None)
 
     def qa_revision_duplicate_allowed(self, row, target, duplicate):
+        if target == "sft" and self.recipe.get("sft_reanswer_version") == 1:
+            from lib.bootstrap.planned_sft_reanswer import reanswer_duplicate_allowed
+            if reanswer_duplicate_allowed(self, row, duplicate):
+                return True
         if self.human_revision_duplicate_allowed(row["qa_contract"], duplicate):
             return True
         if self.recipe.get("training_format_lineage_version") == 1:

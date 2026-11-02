@@ -207,7 +207,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
                review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None,
                conversation_reasoning=None, open_dialogue_question_mode="auto",
-               reuse_initial_native_response=False):
+               reuse_initial_native_response=False, reanswer_sft=False):
+    if type(reanswer_sft) is not bool:
+        raise ValueError("invalid_sft_reanswer")
+    reanswer_parent = None
     from lib.contexts.workflows.contracts import validate_open_dialogue_question_mode
     open_dialogue_question_mode = validate_open_dialogue_question_mode(open_dialogue_question_mode)
     if open_dialogue_question_mode == "separated" and (qa_director is None or isinstance(qa_director, dict)):
@@ -233,6 +236,22 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         reasoning_required=reasoning_required, preference_design=preference_design)
     review_repair = validate_review_repair(review_repair)
     repair_inputs = validate_repair_inputs(repair_inputs, review_repair)
+    if reanswer_sft:
+        if (targets != ["sft"] or sources or review_repair is None
+                or review_repair["mode"] != "auto" or review_repair["max_rounds"] != 0):
+            raise ValueError("sft_reanswer_review_once_required")
+        from lib.bootstrap.planned_sft_reanswer import prepare_reanswer_parents
+        reanswer_parent = prepare_reanswer_parents(Path(output), repair_inputs)
+        author = reanswer_parent["node_models"]["sft"]["generation"]
+        supplied = node_models.get("sft", {}).get("generation")
+        if supplied is not None and supplied != author:
+            raise ValueError("sft_reanswer_author_changed")
+        node_models = {**node_models, "sft": {"generation": deepcopy(author)}}
+        node_generation = {"sft": deepcopy(reanswer_parent["node_generation"]["sft"])}
+        qa_director = deepcopy(reanswer_parent["qa_director"])
+        node_prompts = {**(node_prompts or {}), "sft": deepcopy(reanswer_parent["node_prompt_templates"]["sft"])}
+        from lib.contexts.workflows.domain.planned_sft_reanswer import reanswer_experience
+        agent_experience = reanswer_experience(reanswer_parent, agent_experience)
     if reuse_initial_native_response:
         from lib.contexts.workflows.contracts import is_initial_native_dialogue_failure
         if (not repair_inputs or review_repair["mode"] != "auto" or any(
@@ -328,7 +347,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
     if native_generation:
         recipe_version = 42
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
-        review_advisory_policy_version=1,
+        review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
         claim_review_schedule_version=1,
         native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
         learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
@@ -425,6 +444,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         # director and per-turn reviewer bindings frozen with the child.
         retained = ({stage: dict(node_models[stage]) for stage in ("director", "multiturn")
                      if stage in node_models} if continue_native else {})
+        if reanswer_sft:
+            retained["sft"] = {"generation": deepcopy(reanswer_parent["node_models"]["sft"]["generation"])}
         active_roles = ({"generation", "jev"} if package_review["enabled"] or continue_native else {"generation"}) if review_repair["mode"] == "auto" else set()
         native_bindings = (dict(node_models.get("cot", {})) if review_repair.get("native_regeneration") else {})
         bindings = {role: binding for role, binding in node_models.get("review", {}).items() if role in active_roles}
@@ -440,6 +461,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         endpoint_pins = {stage: {role: snapshot_backend_endpoint(
             Path(settings_root), binding["backend"], binding["model"])
             for role, binding in roles.items()} for stage, roles in node_models.items()}
+    if reanswer_sft:
+        endpoint_pins = {**(endpoint_pins or {}), "sft": {"generation": deepcopy(
+            reanswer_parent["endpoint_pins"]["sft"]["generation"])}}
     author_endpoint = (endpoint_pins or {}).get("cot", {}).get("generation", {})
     if (recipe_version == 35 and author_endpoint.get("endpoint_origin") == "https://api.deepseek.com"
             and author_endpoint.get("api_format") == "chat"):
@@ -485,7 +509,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         else:
             recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
-            review_advisory_policy_version=1,
+            review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
             claim_review_schedule_version=1,
             native_feedback_guidance_version=7 if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else None,
             learner_context_review_version=1, claim_review_protocol_version=2, claim_review_format_feedback_version=2,
@@ -551,7 +575,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_review_focus_version": 1,
               "claim_review_condition_contract_version": 1,
               "claim_review_schedule_version": 1,
-              "review_advisory_policy_version": 1,
+              **({"review_advisory_policy_version": 1} if review_repair and review_repair["mode"] == "auto" else {}),
               "claim_review_transport_version": 1,
               "claim_repair_feedback_version": 1,
               "claim_context_quote_feedback_version": 1,
@@ -646,6 +670,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         recipe["review_repair"] = review_repair
     if repair_inputs is not None:
         recipe["repair_inputs"] = repair_inputs
+    if reanswer_sft:
+        recipe["sft_reanswer_version"] = 1
+        recipe["node_prompt_system"] = reanswer_parent["node_prompt_system"]
+        recipe["generation_preferences"] = deepcopy(reanswer_parent["generation_preferences"])
+        recipe["node_generation_prompts"] = deepcopy(reanswer_parent.get("node_generation_prompts", {}))
     if cpt_processing_supplied:
         recipe["cpt_processing"] = cpt_processing
     if endpoint_pins is not None:

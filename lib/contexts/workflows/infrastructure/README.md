@@ -1,5 +1,7 @@
 # 工作流运行适配
 
+`planned_sft_reanswer.py` 读取已封存父版本与来源回执，认证所有选中父版后才允许作者调用。父模型绑定、端点、SFT 模板和生成配置保留，仅新经验可变；缺失来源、实际注入正文摘要不符、未知 system 或工具路径明确拒绝。原选区按已认证原始 blocks 拼接，保留作者实际收到的换行，不能用评审展示用的 strip 后文本替代。`sft_reanswer` 收据绑定前后问题、合同、选区与新正文；窄的重复授权只允许已认证选中祖先的新版本，其他同题及子任务内重复仍拒绝。
+
 Google 原版入口见 `reasoning_bank_source.py`（固定源码与原函数摘要）、`reasoning_bank_induction.py`（原 main + 模型/轨迹 I/O）、`reasoning_bank.py`（原检索 + 本地嵌入）、`google_reasoning_bank.py`（个人版本、采用和停用的宿主适配）。不改上游仓库，不把云/SRE 示例回退当成功。安装和实测边界见 [接入说明](../../../../docs/architecture/google-reasoning-bank-integration.md)。
 
 自动经验只作用于生成角色。`review` 只提供反馈来源，禁止提炼为评审版本或激活评审记忆；冻结配方时忽略旧的 review 检索配置。原生 SFT/多轮反馈归 reasoning，普通答案反馈归 answer，CPT 归 cpt；不会把生成经验串入评审 system。
