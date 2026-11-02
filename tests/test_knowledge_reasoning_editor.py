@@ -7,9 +7,10 @@ import pytest
 
 from lib.contexts.workflows.domain.knowledge_reasoning_editor import (
     EDIT_KNOWLEDGE_REASONING, EDIT_KNOWLEDGE_REASONING_SEGMENTS,
-    apply_edits, knowledge_reasoning_editor_tool, apply_segment_edits,
+    apply_edits, apply_local_edits, knowledge_reasoning_editor_tool, apply_segment_edits,
     reasoning_segments, knowledge_reasoning_segment_editor_tool, prepare_self_edit_messages,
 )
+from lib.contexts.workflows.domain.dialogue import dialogue_digest
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -196,3 +197,46 @@ def test_self_edit_rejects_missing_historical_thoughts_without_filling_synthetic
     assert "reasoning_content" not in prefix[1] and (prefix, actual) == before
     with pytest.raises(ValueError, match="native_feedback_reasoning_missing"):
         prepare_self_edit_messages([prefix[0], prefix[-1]], {"role": "assistant", "content": "只有答案。"}, "Edit.")
+
+
+def test_local_only_rejects_full_or_split_rewrites_without_changing_legacy_replay():
+    original = "\n第一条判断。\r\n \t\r\n第二条判断！\n"
+    cases = [
+        [{"old_text": original, "new_text": "完整新稿。"}],
+        [{"old_text": original.strip(), "new_text": "仅保留外侧空白的新稿。"}],
+        [{"old_text": "第一条判断", "new_text": "分类先选标签"},
+         {"old_text": "第二条判断", "new_text": "摘要先有原文"}],
+    ]
+    for edits in cases:
+        assistant = submission("edited", edits)
+        before = deepcopy(assistant)
+        with pytest.raises(ValueError, match="full_rewrite_forbidden"):
+            apply_local_edits(original, assistant)
+        legacy, receipt = apply_edits(original, assistant)
+        assert legacy != original and receipt["version"] == 1
+        assert assistant == before
+    segments = reasoning_segments(original)
+    legacy, receipt = apply_segment_edits(original, segment_submission("edited", [
+        {"segment_id": part["segment_id"], "new_text": f"新段落{index}。"}
+        for index, part in enumerate(segments)]))
+    assert legacy != original and receipt["version"] == 2
+
+
+def test_local_only_allows_scattered_phrase_edits_and_keeps_unchanged_or_pending_status():
+    original = "  据材料，分类先选标签。\r\n\r\n根据文本，摘要先有原文。\n"
+    edits = [{"old_text": "据材料，", "new_text": ""}, {"old_text": "根据文本，", "new_text": ""}]
+    answer = "固定原答案。"
+    for status, patches, issues in (
+        ("edited", edits, []),
+        ("unchanged", [], []),
+        ("needs_content_repair", edits, [{"quote": "固定原答案", "reason": "固定答案仍需核对。"}]),
+    ):
+        assistant = submission(status, patches, issues)
+        before = deepcopy(assistant)
+        derived, receipt = apply_local_edits(original, assistant, final_answer=answer)
+        assert derived == (original if not patches else "  分类先选标签。\r\n\r\n摘要先有原文。\n")
+        assert receipt["version"] == 3 and receipt["application"] == "atomic_local_replacements"
+        assert receipt["sha256"] == dialogue_digest({key: value for key, value in receipt.items() if key != "sha256"})
+        assert receipt["original_sha256"] == sha256(original.encode("utf-8")).hexdigest()
+        assert receipt["status"] == status and receipt["content_repair_required"] == (status == "needs_content_repair")
+        assert receipt["semantic_status"] == "not_assessed" and assistant == before

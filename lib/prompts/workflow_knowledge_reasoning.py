@@ -37,3 +37,16 @@ KNOWLEDGE_REASONING_SELF_EDIT = replace(KNOWLEDGE_REASONING_EDITOR_V1_0,
 本轮交付只提交 edit_knowledge_reasoning 工具补丁，暂不重复前序普通回答的正文交付。程序会把补丁应用到原 reasoning_content，保留原稿、完整新稿和固定答案。你本次为编辑所作的原生思考只作运行审计，不替代原稿；整理后的正文来自工具补丁。保留原稿中有用分析的语言、组织、探索与反思，不把全篇翻译、摘要或重写当作局部编辑。优先定位实际需要改变的来源引导、控制旁白及其附近的衔接，未受影响的文字保持原样；无需改变的内容不动，不为展示编辑而增加新解释。
 
 """ + KNOWLEDGE_REASONING_EDITOR_V1_0.template.split("\n\n", 1)[1])
+
+KNOWLEDGE_REASONING_SELF_EDIT_V1_0 = KNOWLEDGE_REASONING_SELF_EDIT
+
+KNOWLEDGE_REASONING_SELF_EDIT = replace(KNOWLEDGE_REASONING_SELF_EDIT_V1_0,
+    version="1.1.0",
+    template=KNOWLEDGE_REASONING_SELF_EDIT_V1_0.template + "\n\n"
+        "本轮使用仅局部补丁合同 v3。完整原生思考是保留的底稿，正式输出只是编辑操作的载体，不能另写一篇推理来替代底稿。"
+        "禁止将全文作为一个 old_text 替换，也禁止拆成多块覆盖全部实质原文；程序会拒绝这些提交，不会把它们转成重生成。"
+        "需要调整的来源引导或控制旁白在原位置处理，保留其余推导、探索、草稿、反例和反思，不为了统一语言或润色而重写全文。"
+        "若无法安全地用局部补丁解决，提交 needs_content_repair、空 edits，并在 issues 说明需要处理的问题。"
+        "此时原稿保留为待处理，不输出替代全文，不要求重新生成，不增加独立评审或自动重试。"
+        "本编辑规则不增加原生思考或保留推理的篇幅上限、固定长度目标；编辑范围约束不代表应缩短原推理。",
+    notes="New self-edit tasks require local-only application contract v3; 1.0.0 is retained for frozen replay.")

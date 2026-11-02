@@ -130,6 +130,26 @@ def apply_edits(original, assistant, *, final_answer=None):
     return _receipt(original, derived, patch, final_answer)
 
 
+def apply_local_edits(original, assistant, *, final_answer=None):
+    """Preserve original content outside validated local patches; reject full coverage."""
+    derived, receipt = apply_edits(original, assistant, final_answer=final_answer)
+    if receipt["edits"]:
+        spans = []
+        for edit in receipt["edits"]:
+            start = original.find(edit["old_text"])
+            spans.append((start, start + len(edit["old_text"])))
+        cursor, untouched_content = 0, False
+        for start, end in sorted(spans):
+            untouched_content |= any(character.isalnum() for character in original[cursor:start])
+            cursor = end
+        untouched_content |= any(character.isalnum() for character in original[cursor:])
+        if not untouched_content:
+            raise ValueError("knowledge_reasoning_editor_full_rewrite_forbidden")
+    body = {key: value for key, value in receipt.items() if key != "sha256"}
+    body.update(version=3, application="atomic_local_replacements")
+    return derived, {**body, "sha256": dialogue_digest(body)}
+
+
 def reasoning_segments(original):
     """Number nonblank paragraphs; original gaps retain all separator bytes."""
     _text(original, nonblank=True)
