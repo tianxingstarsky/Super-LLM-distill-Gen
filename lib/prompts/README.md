@@ -119,3 +119,6 @@
 `workflow_evidence_review.py` / `workflow.cot_check_agent@1.5.0` 绑定来源范围、用户可见段落、最终答案语言与先前推理核查记录。新增版本没有固定思考顺序；资料先于动态任务，已提供证据不要求再次检索。1.4.0 逐字保留。
 
 `workflow_obligation_review.py` 注册核查模板 1.6.0，配合证据策略 2 的实际风险检查对象；它参考 ProcessBench 的错误/正确双向评测、MultiChallenge 的实例核查、ChartCheck 的原始图表依据及 IFBench 的可验证要求。提示词可在节点覆盖，1.5.0 保留。方法借鉴不等于复现论文指标，不训练或替换教师模型。
+# 同次评审与经验增量
+
+`workflow.review_score@1.29.0` 只为新冻结 `native_sft_review_evolution_version=1` 的原生 SFT 启用。审查员在同一次严格工具提交中给出原质量判定、本题临时要求与可选的通用经验增量；Memory Item 标题和 Markdown 由程序生成。通过直接交付，没有增量允许 `no_update`；有明确问题和可执行要求时才由原作者重答一次，不再复审。原生作者收到的通用经验和临时要求保持 system 归属，不冒充用户原话；候选中的系统文字只作为受审上下文，不是审查员自己的指令。旧任务仍冻结 1.28.0 或原来的版本。

@@ -74,9 +74,23 @@ class CheckpointedDialogueAdapter:
     def request(self, *args, **kwargs):
         return self._runtime.ask(*args, **self._node_options(kwargs))
 
+    def checkpoint(self, key, action):
+        return self._runtime.checkpoint(key, action)
+
     def continue_native_feedback(self, key, session, assistant, *, findings):
         from lib.bootstrap.node_generation import native_feedback_repairer
         return native_feedback_repairer(self._runtime).execute(key, session, assistant, findings=findings)
+
+    def authorize_native_sft_optimization(self, original):
+        from .authored_edit_adapter import author_identity
+        session = (original.get("native_generation") or {}).get("author_session")
+        if (not isinstance(session, dict) or session.get("stage") != "sft"
+                or session.get("role") != "generation" or not isinstance(session.get("messages"), list)):
+            raise ValueError("native_sft_optimization_author_session_required")
+        binding = self._runtime.recipe.get("node_models", {}).get("sft", {}).get("generation", {})
+        client = self._runtime.client("generation", stage="sft")
+        if author_identity(client, binding) != session.get("author"):
+            raise ValueError("native_sft_optimization_author_changed")
 
     def _node_options(self, options):
         """Keep the authenticated dialogue node while a repair owns the stage."""

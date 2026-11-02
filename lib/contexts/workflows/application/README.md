@@ -6,7 +6,7 @@
 
 同一标记下，指导员按已完成的助手正文回答计数，system 经验／风格消息、工具调用及工具回执不计为额外轮次；请求键、`completed_turns` 与续轮校验使用同一个实际计数。最终仍要求至少两个完整轮次，自然停止一轮不能标成多轮成功。终态记录的本地诊断重排不构成新增公开自动恢复接口；诊断前保留原目录快照，原配方、资料、首轮指导和原生响应检查点均须保留。
 
-`CreatePlannedSftReanswer` 选择已封存的原生 SFT 父版本，建立只更新经验的子任务；公开入口是 `WorkflowRunApplication.reanswer_sft(parent_run_id, candidate_ids=..., agent_experience=...)`。`RegeneratePlannedSft` 复用原问题、真实历史、合同与已认证资料选区，通过既有原生端口新生成推理和答案；不调用指导员、不向作者回灌旧稿或旧推理。创建只排队，启动沿用原工作流入口；每条仅建议评审一次，不能复用旧稿评语冒充新稿评审。
+`CreatePlannedSftReanswer` 选择已封存的原生 SFT 父版本，建立更新作者经验的子任务；公开入口是 `WorkflowRunApplication.reanswer_sft(parent_run_id, candidate_ids=..., agent_experience=..., task_instructions=...)`。可选 `task_instructions` 按选中候选 ID 提供本次临时要求，单独冻结并进入作者的首条 system；不写入长期经验，不冒充实际用户发言，也不自动从评审赞语或调用错误生成。`RegeneratePlannedSft` 复用原问题、真实历史、合同与已认证资料选区，通过既有原生端口新生成推理和答案；不调用指导员、不向作者回灌旧稿或旧推理。创建只排队，启动沿用原工作流入口；每条仅建议评审一次，不能复用旧稿评语冒充新稿评审。缺少临时指令版本的冻结任务保持原请求。
 
 `ReasoningBank` 提供已认证版本索引、按任务召回与新配方冻结；算法执行和向量缓存由基础设施调用 Google 原函数。`EvolveExperience` 收集完整观察、事务认领批次，并将上游提炼版本绑定原批次；提案、按策略交付及质量通过各自记录。原版入口由 `bootstrap/google_reasoning_bank.py` 装配。
 
@@ -171,3 +171,5 @@ CoT 协议 7 在生成中完成草稿推敲：联合生成只请求一次，原�
 新冻结 `native_dialogue_progress_version=1` 将原生响应的生成进度与训练资格分开：领域规则认可的局部推理元叙述问题可进入原有全部语义检查，旧缺陷仍阻止整条训练导出。显式选择 `reuse_initial_native_response=true` 的诊断子任务直接复用已认证首答，每个新回合最多生成一次；逐轮、风格、契约及整段评审照常记录原始分数。语义拒绝作为入库阻断保留，不自动重写已发生对话，也不把拒绝当通过。完整性、角色、工具、资料范围和无效协议仍停止。该模式最终始终隔离；失败收据区分 `generated_prefix` 与 `accepted_prefix`，完整原生推理和父版本保留。未选择诊断模式的普通任务仍按原语义失败逻辑停止，历史配方不改变。
 
 冻结版本 2 的显式诊断继续以完整可读、来源清楚的实际响应推进，不再因某一种训练表面标签提前停止；全部检查、分数、未决引用和原生推理仍保留，最终始终隔离。普通路线和旧版不热改。它不扩展任意父任务恢复、不自行复制检查点；上游已认证的相同请求仍由既有请求缓存负责复用。
+
+`OptimizeNativeSft` 为冻结 `native_sft_review_evolution_version=1` 的普通指导式原生 SFT 执行一次同题重答。它认证首稿作者绑定，复用原问题、契约和已认证资料，将同次评审的候选通用经验与临时修正要求分别放入原生作者 SYSTEM 指令。原首稿和完整推理另行存档，不投喂为新的用户发言。实际作者请求与失败结果均有检查点；二稿保留全部本地校验，语义状态为 `not_assessed`，不再次购买评审，也不计入质量通过或饱和证据。旧配方及显式 `repair_inputs` 继续原合同。验证：`tests/test_native_sft_review_evolution_application.py`。

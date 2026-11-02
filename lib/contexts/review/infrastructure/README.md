@@ -1,5 +1,9 @@
 # 审核持久化
 
+新原生 SFT 的同次评审由 `review_evolution_request.py` 复用共享严格工具、模型并发和请求检查点。一次 `submit_review_evolution` 同时提交质量意见、任务临时指令和结构化经验；程序渲染 Memory Item，调用保存与本地索引不再执行模型提炼。无效或不可用响应持久化后停止，不购买格式重试。后续是否一次优化由应用用例决定，第二稿不复审，打包与恢复必须认证其独立收据。
+
+工具传输使用 `review_evolution_flat_v1`：质量值与经验字段放在参数顶层，由程序组装既有 verdict、scores 和 memory_proposal 合同，再执行原业务校验。严格 Schema 只用上游支持的关键字；字符串非空等条件继续由入口验证。协议版本进入请求身份，不能把旧的无效嵌套响应当作新协议结果。真实格式失败保留原始 SDK 响应，不截括号、不丢字段、不抽取其中的放行值。
+
 显式 `sft_reanswer_version=1` 子任务在 `AuthenticatedRepairAdapter.review` 内先执行已有 SFT 原生生成，再将新候选交给单次建议评审。所有父版本在生成前整体认证；旧评语与旧稿不进入新作者。新稿证据由已认证 `sft_reanswer` 收据提供，旧 `checkpoint_context` 的 review-only 语义不改变。
 
 新默认为 `advisory_review.py::review_once`：完整候选和来源只审查一次，意见或不可用状态均先持久化，恢复后不再购买；没有逐句单元或大格式包。`experience_observations.py` 本地收集原文与意见，模型提炼由用户明确触发。下述 consolidated 设施用于旧协议/对比记录，不是当前默认。

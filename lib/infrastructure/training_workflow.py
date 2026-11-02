@@ -207,11 +207,21 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                package_review=None, qa_director=None, production=None, cpt_processing=None, run_id=None,
                review_repair=None, repair_inputs=None, agent_experience=None, reasoning_required=False, preference_design=None,
                conversation_reasoning=None, open_dialogue_question_mode="auto",
-               reuse_initial_native_response=False, reanswer_sft=False, dialogue_style_contexts=False):
+               reuse_initial_native_response=False, reanswer_sft=False, dialogue_style_contexts=False,
+               sft_reanswer_task_instructions_version=None, sft_reanswer_task_instructions=None,
+               native_sft_review_evolution=True):
+    if type(native_sft_review_evolution) is not bool:
+        raise ValueError("invalid_native_sft_review_evolution")
     if type(dialogue_style_contexts) is not bool:
         raise ValueError("invalid_dialogue_style_contexts")
     if type(reanswer_sft) is not bool:
         raise ValueError("invalid_sft_reanswer")
+    if sft_reanswer_task_instructions_version is not None and (
+            not reanswer_sft or type(sft_reanswer_task_instructions_version) is not int
+            or sft_reanswer_task_instructions_version != 1):
+        raise ValueError("invalid_sft_reanswer_task_instructions")
+    if sft_reanswer_task_instructions is not None and sft_reanswer_task_instructions_version is None:
+        raise ValueError("invalid_sft_reanswer_task_instructions")
     reanswer_parent = None
     from lib.contexts.workflows.contracts import validate_open_dialogue_question_mode
     open_dialogue_question_mode = validate_open_dialogue_question_mode(open_dialogue_question_mode)
@@ -244,6 +254,13 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
             raise ValueError("sft_reanswer_review_once_required")
         from lib.bootstrap.planned_sft_reanswer import prepare_reanswer_parents
         reanswer_parent = prepare_reanswer_parents(Path(output), repair_inputs)
+        if sft_reanswer_task_instructions_version is not None:
+            from lib.contexts.workflows.domain.planned_sft_reanswer import validate_reanswer_task_instructions
+            sft_reanswer_task_instructions = validate_reanswer_task_instructions(
+                sft_reanswer_task_instructions,
+                [item["checkpoint_context"]["candidate_id"] for item in repair_inputs])
+            if not sft_reanswer_task_instructions:
+                sft_reanswer_task_instructions_version = None
         author = reanswer_parent["node_models"]["sft"]["generation"]
         supplied = node_models.get("sft", {}).get("generation")
         if supplied is not None and supplied != author:
@@ -349,10 +366,17 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
                             for stage, config in node_generation.items() if stage in {"sft", "multiturn"})
     if native_generation:
         recipe_version = 42
+    native_sft_review_evolution_version = (1 if native_sft_review_evolution
+        and "sft" in targets and not repair_inputs
+        and qa_director.get("enabled") is True
+        and node_generation.get("sft", {}).get("enabled") is True
+        and node_generation["sft"].get("answer_mode") == "native_joint"
+        and review_repair and review_repair["mode"] == "auto" else None)
     dialogue_style_context_version = (1 if dialogue_style_contexts
         and (native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint")
         and (not repair_inputs or reanswer_sft) else None)
     node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+        native_sft_review_evolution_version=native_sft_review_evolution_version,
         dialogue_style_context_version=dialogue_style_context_version,
         review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
         claim_review_schedule_version=1,
@@ -516,6 +540,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         else:
             recipe_version = recipe_version if recipe_version >= 20 else SOURCE_CLEANING_RECIPE_VERSION
         node_prompt_templates = snapshot_node_prompts(node_prompts, recipe_version=recipe_version,
+            native_sft_review_evolution_version=native_sft_review_evolution_version,
             dialogue_style_context_version=dialogue_style_context_version,
             review_advisory_policy_version=1 if review_repair and review_repair["mode"] == "auto" else None,
             claim_review_schedule_version=1,
@@ -584,6 +609,7 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "claim_review_condition_contract_version": 1,
               "claim_review_schedule_version": 1,
               **({"review_advisory_policy_version": 1} if review_repair and review_repair["mode"] == "auto" else {}),
+              **({"native_sft_review_evolution_version": 1} if native_sft_review_evolution_version == 1 else {}),
               **({"multiturn_advisory_review_version": 1}
                  if "multiturn" in targets and not repair_inputs
                  and review_repair and review_repair["mode"] == "auto" else {}),
@@ -706,6 +732,9 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         recipe["repair_inputs"] = repair_inputs
     if reanswer_sft:
         recipe["sft_reanswer_version"] = 1
+        if sft_reanswer_task_instructions_version is not None:
+            recipe["sft_reanswer_task_instructions_version"] = sft_reanswer_task_instructions_version
+            recipe["sft_reanswer_task_instructions"] = deepcopy(sft_reanswer_task_instructions)
         recipe["node_prompt_system"] = reanswer_parent["node_prompt_system"]
         recipe["generation_preferences"] = deepcopy(reanswer_parent["generation_preferences"])
         recipe["node_generation_prompts"] = deepcopy(reanswer_parent.get("node_generation_prompts", {}))
@@ -2179,6 +2208,9 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                             observations["unavailable"] += 1
                         observations["released"] += record.get("status") == "eligible"
                     report["targets"][target]["advisory_review"] = observations
+                if self.recipe.get("native_sft_review_evolution_version") == 1 and target in {"sft", "cot"}:
+                    from lib.contexts.review.contracts import native_sft_review_evolution_summary
+                    report["targets"][target]["native_sft_review_evolution"] = native_sft_review_evolution_summary(records)
                 if target in review_plans:
                     report["targets"][target]["package_review"] = review_plans[target]
                 if target in {"sft", "multiturn", "agent", "dpo", "orpo", "rlaif"}:

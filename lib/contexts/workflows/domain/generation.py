@@ -49,6 +49,14 @@ def task_controls(contract):
     return {key: contract[key] for key in ("learning_goal", "user_language") if key in contract}
 
 
+def directed_sft_instruction(recipe, contract):
+    """Keep the frozen initial instruction's exact bytes for a same-task answer."""
+    from lib.domain.human_augmentation import human_generation_instruction
+    return ("遵循用户的实际问题和指导员指定的回答条件，不把历史助手说法当作事实。\n"
+        + recipe["qa_director"].get("answer_rules", "") + "\n"
+        + human_generation_instruction(contract))
+
+
 def learner_prompt(contract):
     """This is the only contract projection permitted in training messages."""
     question = contract["question"]

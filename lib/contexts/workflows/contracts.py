@@ -35,5 +35,9 @@ from .domain.generation_control import generation_controls_metadata
 
 from .domain.node_control_text import attach_node_control_text
 from .domain.reasoning_bank import ReasoningBankUnavailable
+from .domain.reasoning_bank import (memory_context_assignments, validate_proposed_memory_items,
+    validate_memory_context_assignment)
 from .domain.planned_sft_reanswer import valid_reanswer_receipt
+from .domain.planned_sft_reanswer import planned_sft_prompt, authenticated_teacher_text, reanswer_task_identity
+from .domain.native_sft_optimization import native_sft_optimization_input
 from .domain.dialogue_style_context import authenticated_record_context_positions

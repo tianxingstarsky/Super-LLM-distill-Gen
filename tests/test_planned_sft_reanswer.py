@@ -118,6 +118,79 @@ def test_reanswer_reuses_exact_task_and_pays_only_author_and_one_review(sealed_n
     assert not reanswer_duplicate_allowed(worker, row, {"run_id": child, "id": child + ":another"})
 
 
+def test_reanswer_keeps_general_and_temporary_system_guidance_separate_from_reviewer_rules(sealed_native):
+    root, output, rid, original = sealed_native
+    app = workflow_application(root, output)
+    general = "通用方法：先核对实际必要条件，再依据证据形成结论。"
+    temporary = "本次必须核对断电这一前置条件。\n保留原资料范围和 {原问题}。"
+    mapping = {original["id"]: temporary}
+    parent_recipe_bytes = (engine.run_path(output, rid) / "recipe.json").read_bytes()
+    child = app.reanswer_sft(rid, candidate_ids=[original["id"]],
+        agent_experience={"reasoning": {"enabled": True, "text": general}}, task_instructions=mapping)
+    mapping[original["id"]] = "修改调用者副本不会改变已冻结任务。"
+    recipe = app.recipe(child)
+    assert recipe["sft_reanswer_task_instructions_version"] == 1
+    assert recipe["sft_reanswer_task_instructions"] == {original["id"]: temporary}
+    assert recipe["agent_experience"]["scopes"]["reasoning"]["text"] == general
+    assert recipe["agent_experience"]["scopes"]["review"] == app.recipe(rid)["agent_experience"]["scopes"]["review"]
+    assert temporary not in json.dumps(recipe["agent_experience"], ensure_ascii=False)
+
+    class CaptureClient:
+        model = "author"
+        reasoning = {"mode": "enabled"}
+        usage = {}
+
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, messages, **options):
+            self.calls.append(deepcopy(messages))
+            if len(self.calls) == 1:
+                options["response_details"].update(api_format="chat", reasoning_content="先确认实际前置条件，维护前必须断电。")
+                return "维护前必须先断电。"
+            return json.dumps({"keep": True, "grounded": True, "reasoning_valid": True, "correctness": 5,
+                "scores": {name: 5 for name in ("correctness", "reasoning", "grounding", "instruction", "safety")},
+                "reason": "回答保留来源的前置条件。"}, ensure_ascii=False)
+
+    client = CaptureClient()
+    worker = engine.Workflow(output, child, root, generator=client)
+    state = worker.execute()
+    assert state["status"] == "completed", state.get("error")
+    assert len(client.calls) == 2 and worker.state["stages"]["director"]["status"] == "skipped"
+    author_messages, review_messages = client.calls
+    assert temporary in author_messages[0]["content"]
+    assert all(m["role"] == "system" for m in author_messages if temporary in m.get("content", ""))
+    assert any(m["role"] == "system" and general in m.get("content", "") for m in author_messages)
+    assert [m for m in author_messages if m["role"] == "user"] == [m for m in original["messages"] if m["role"] == "user"]
+    assert all(message["role"] != "assistant" for message in author_messages)
+    assert original["messages"][-1]["content"] not in json.dumps(author_messages, ensure_ascii=False)
+    assert original["messages"][-1]["reasoning_content"] not in json.dumps(author_messages, ensure_ascii=False)
+    review_system = "\n".join(m.get("content", "") for m in review_messages if m["role"] == "system")
+    assert general not in review_system and temporary not in review_system
+    row, = engine.read_json(worker.path / "artifacts/sft.records.json")
+    assert row["qa_contract"] == original["qa_contract"] and valid_reanswer_receipt(row)
+    assert planned_sft_prompt(row, recipe) == planned_sft_prompt(original, app.recipe(rid))
+    assert row["provided_source_context"]["text_sha256"] == original["provided_source_context"]["text_sha256"]
+    assert row["sft_reanswer"]["task_instruction"]["text"] == temporary
+    assert temporary not in json.dumps(row["messages"], ensure_ascii=False)
+    assert (engine.run_path(output, rid) / "recipe.json").read_bytes() == parent_recipe_bytes
+    assert engine.Workflow(output, child, root, generator=client).execute()["status"] == "completed"
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize("task_instructions", [
+    {"unknown": "Only an explicitly selected candidate may receive instructions."},
+    {"fixed": ""}, {"fixed": 7}, {"fixed": "invalid\x00instruction"},
+])
+def test_reanswer_rejects_invalid_temporary_instructions_before_creating_child(sealed_native, task_instructions):
+    root, output, rid, original = sealed_native
+    before = {path.name for path in (output / "workflows").iterdir()}
+    with pytest.raises(ValueError, match="instruction"):
+        workflow_application(root, output).reanswer_sft(rid, candidate_ids=[original["id"]],
+            task_instructions=task_instructions)
+    assert {path.name for path in (output / "workflows").iterdir()} == before
+
+
 def test_reanswer_rejects_unknown_system_or_source_change_before_model(sealed_native):
     root, output, rid, original = sealed_native
     parent = workflow_application(root, output).recipe(rid)

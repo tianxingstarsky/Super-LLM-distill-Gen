@@ -381,6 +381,17 @@ class WorkflowQADirector:
 
     def human_package_issue(self, row, target):
         """No derived/cached sample may bypass its human-design assessment."""
+        from lib.contexts.review.contracts import (
+            native_sft_review_evolution_enabled, native_sft_review_evolution_release_valid,
+        )
+        if target in {"sft", "cot"} and native_sft_review_evolution_enabled(self.recipe, row):
+            try:
+                if native_sft_review_evolution_release_valid(row,
+                        self._review_payload(target, row), self.recipe.get("review_repair")):
+                    return None
+            except (KeyError, TypeError, ValueError):
+                pass
+            return "native_sft_review_evolution_receipt_missing_or_changed"
         if self.recipe.get("review_advisory_policy_version") == 1:
             from lib.contexts.review.contracts import advisory_release_valid
             try:

@@ -12,7 +12,7 @@ import re
 from filelock import FileLock
 
 from lib.contexts.workflows.domain.experience_evolution import FORMAT_VERSION, digest, validate_scope, validate_experience_text
-from lib.contexts.workflows.domain.reasoning_bank import validate_memory_context_assignment
+from lib.contexts.workflows.domain.reasoning_bank import memory_context_assignments
 from lib.io_utils import atomic_json
 
 
@@ -28,19 +28,7 @@ def _complete_memory_items(parts):
 
 def _dialogue_context_assignments(items):
     """Read only explicit style metadata; untagged historical memories are common."""
-    assignments = {}
-    for item in items:
-        headings = re.findall(r"(?m)^## Contexts(?:[ \t]+([^\r\n]*))?[ \t]*$", item)
-        markers = re.findall(r"(?mi)^##[ \t]+contexts(?=[ \t:]|$)[^\r\n]*$", item)
-        if len(headings) > 1 or len(markers) != len(headings):
-            raise ValueError("reasoning_bank_invalid_dialogue_context_assignment")
-        labels = [part.strip() for part in headings[0].split(",")] if headings else ["common"]
-        try:
-            labels = validate_memory_context_assignment(labels)
-        except ValueError:
-            raise ValueError("reasoning_bank_invalid_dialogue_context_assignment") from None
-        assignments[digest(item)] = labels
-    return assignments
+    return memory_context_assignments(items)
 
 
 def recorded_episode(observation, user_outcome=None):

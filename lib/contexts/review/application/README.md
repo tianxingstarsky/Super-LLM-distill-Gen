@@ -43,6 +43,7 @@ v7 公开 system 注意事项重新生成与旧原生工具续写均可能在普
 | 自动处理入口 | 责任 |
 | --- | --- |
 | `review_candidate.py` / `AutomaticReviewPort` | 候选输入检查、人工决定或自动评分修复循环、重复稿停止、待复核与收据绑定 |
+| `review_native_sft.py` | 新版本普通原生 SFT 仅评审首稿一次，同次收集临时修正要求及可选通用经验增量，再决定是否重答一次 |
 | `review_collections.py` / `ReviewCollectionsPort` | 流式评审集合、验证可复用的候选收据、CoT 与派生 SFT 对齐 |
 | `execute_repair.py` / `RepairBranchPort` | 全部父版本认证后才开始返工，保持独立修正分支 |
 | `review_claim_windows.py` / `ClaimWindowPort` | 有界评审返回、明确输出上限后的递归细分、完整覆盖后汇总；不截断或重写候选 |
@@ -59,5 +60,7 @@ v7 公开 system 注意事项重新生成与旧原生工具续写均可能在普
 `training_format_lineage_version=1` 只改变新返工任务的视图身份。相同认证祖先、资料及完整学习者输入共享任务 ID；同一格式一次不能选择两份冲突版本，所有父版本认证后、任何模型请求前就拒绝这种选择。多轮对话保持自己的完整输入身份，不和单轮任务合并。`claim_repair_feedback_version=1` 只给修正模型补全已认证的争议上下文，不改变未知前提的待复核停止策略。
 
 窗口用例只捕获模型域的显式 `ModelOutputLimitError`；连接、认证、取消与无效评审仍按原策略传播，不能泛捕异常后重复购买。不可再分的原文单元仍超限时保留未完成状态。检查点、模型选择与共享并发由端口实现。
+
+`native_sft_review_evolution_version=1` 冻结的普通指导式原生 SFT 采用指导员一次、作者首答一次、评审一次；首稿通过即交付。只有明确拒绝且带有可执行临时要求时，才由原作者重答一次，之后不追加语义评审。同次评审可附候选通用经验增量，沿已有经验仓库保存与索引，无需另一次模型提炼；本次重答的 SYSTEM 可使用这份明确标为候选的增量，任务的冻结公共经验与全局采用版本不热改。首稿、完整原生推理、审核、二稿和候选增量均保留，二稿显式 `not_assessed`；本地结构与来源阻断仍生效。历史配方、普通多轮最终建议策略及显式返工输入保持原流程，收据缺失或被改动时不重新购买评审。验证：`tests/test_native_sft_review_evolution_application.py`、`tests/test_review_evolution_contracts.py`。
 
 `rework_collection.py` 的 `ReviewReworkApplication` 将退回队列分批保存到持久返工集合；没有退回记录时不创建工作室。`existing_collection` 只查询已存状态，保存完全成功后页面才直接进入返工；保存本身不启动模型。验证见 `tests/test_review_rework.py` 与 `ui_tests/test_rework_collection_ui.py`。

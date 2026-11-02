@@ -57,6 +57,14 @@ class CheckpointedReviewAdapter:
         from lib.bootstrap.experience_evolution import record_advisory_review_observation
         return record_advisory_review_observation(self._runtime, target, row)
 
+    def record_review_memory(self, target, original, observation):
+        from lib.bootstrap.review_evolution import record_review_memory
+        return record_review_memory(self._runtime, target, original, observation)
+
+    def optimize_native_sft(self, original, evidence, observation, memory_receipt):
+        from lib.bootstrap.node_generation import native_sft_optimizer
+        return native_sft_optimizer(self._runtime).execute(original, evidence, observation, memory_receipt)
+
     def check_reasoning(self, record, evidence, key, config):
         from lib.bootstrap.reasoning_checklist import reasoning_checklist
         reasoning = record.get("reasoning", "")

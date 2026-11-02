@@ -216,7 +216,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
                 review_repair=None, repair_only=False, source_cleaning=False,
                 arithmetic_seed_protocol_version=0, cpt_review_policy_version=0, native_generation_version=None,
-                review_advisory_policy_version=None, sft_reanswer_version=0):
+                review_advisory_policy_version=None, sft_reanswer_version=0,
+                native_sft_review_evolution_version=None):
     native_recipe = _native_recipe(node_generation, recipe_version, native_generation_version)
     nodes, edges = execution_graph(targets, reasoning_trim=reasoning_trim, qa_director=qa_director,
                                   package_review=package_review, recipe_version=recipe_version,
@@ -378,6 +379,15 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
             if sft_reanswer_version == 1:
                 result["labels"]["lineage"] = ("Reuse the saved plan → re-answer with current experience → one review → export."
                     if english else "复用原问题、资料范围与合同 → 按当前经验重答 → 一次评审 → 输出。")
+            if native_sft_review_evolution_version == 1:
+                for node in result["nodes"]:
+                    if node["id"] == "review":
+                        node["label"] = "Review · improve if needed" if english else "评审 · 按需优化"
+                        node["description"] = ("Accept the first answer, or let its author improve it once. "
+                            "The same review supplies experience; no second review."
+                            if english else "首稿通过直接交付；有实质问题才让原模型优化一次。同次产出经验，不再复审第二稿。")
+                result["labels"]["lineage"] = ("Plan → answer → review once → export, or improve once and export without another review."
+                    if english else "指导 → 首答 → 一次评审；通过即输出，有实质问题才优化一次，第二稿不复审。")
             return result
         if feedback_branch is None:
             phase = {"completed": "approved", "running": "reviewing", "failed": "needs_revision",

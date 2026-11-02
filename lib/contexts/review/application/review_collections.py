@@ -3,6 +3,7 @@ from __future__ import annotations
 from .automatic_ports import ReviewCollectionsPort
 from ..domain.repair import validate_review_repair, skips_post_generation_review
 from ..domain.candidate_content import candidate_digest as digest
+from ..domain.review_evolution import native_sft_review_evolution_enabled
 from lib.domain.workflow_reasoning_route import cot_updates_sft
 from lib.contexts.workflows.contracts import native_generation_enabled
 
@@ -66,7 +67,11 @@ class ReviewGeneratedCollections:
             receipt = record.get("review_repair", {})
             advisory = self.recipe.get("review_advisory_policy_version") == 1
             try:
-                if advisory:
+                if item["target"] in {"sft", "cot"} and native_sft_review_evolution_enabled(self.recipe, record):
+                    from ..domain.review_evolution import native_sft_review_evolution_release_valid
+                    valid = native_sft_review_evolution_release_valid(record,
+                        port.payload(item["target"], record), self.recipe["review_repair"])
+                elif advisory:
                     from ..domain.advisory_policy import advisory_release_valid
                     valid = advisory_release_valid(record, port.payload(item["target"], record), self.recipe["review_repair"])
                 else:

@@ -118,6 +118,10 @@ def quality_assessment_valid(row):
     conflated failed shape repairs with quality rejection; remain conservative
     when they do not carry an explicit verdict or failure classification.
     """
+    if (isinstance(row.get("native_sft_review_evolution"), dict)
+            and row["native_sft_review_evolution"].get("version") == 1
+            and row.get("semantic_status") == "not_assessed"):
+        return False
     if (row.get("request_error") or row.get("generation_failure_kind") == "invalid_output"
             or row.get("reason") in {"invalid_model_result", "request_retries_exhausted",
                                      "qa_director_plan_invalid_after_repair"}):

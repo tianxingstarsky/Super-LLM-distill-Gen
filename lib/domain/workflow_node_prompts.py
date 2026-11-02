@@ -258,9 +258,12 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
                          preference_design_version=None, preference_design_prompt_version=None,
                          conversation_reasoning_version=None, native_feedback_guidance_version=None,
                          claim_review_schedule_version=None, review_advisory_policy_version=None,
-                         dialogue_style_context_version=None) -> dict:
+                         dialogue_style_context_version=None, native_sft_review_evolution_version=None) -> dict:
     """Pin built-ins and overrides before a submitted run starts."""
     overrides = validate_node_prompts(value)
+    if native_sft_review_evolution_version is not None and (
+            type(native_sft_review_evolution_version) is not int or native_sft_review_evolution_version != 1):
+        raise ValueError("invalid_native_sft_review_evolution_version")
     if dialogue_style_context_version is not None and (
             type(dialogue_style_context_version) is not int or dialogue_style_context_version != 1):
         raise ValueError("invalid_dialogue_style_context_version")
@@ -299,7 +302,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
         # Existing catalogs retain the previous aggregate body verbatim.
         if prompt_id == "workflow.review_score":
             if review_advisory_policy_version == 1:
-                return render(get(prompt_id, version="1.28.0"))
+                return render(get(prompt_id, version="1.29.0" if native_sft_review_evolution_version == 1 else "1.28.0"))
             if claim_review_schedule_version == 1:
                 return render(get(prompt_id, version="1.26.0"))
             if claim_review_adversarial_protocol_version == 1:

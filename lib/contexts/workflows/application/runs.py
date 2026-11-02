@@ -50,10 +50,12 @@ class WorkflowRunApplication:
         """Suggest the current preference when configuring a new SFT run."""
         return self._driver.default_sft_output_style()
 
-    def reanswer_sft(self, parent_run_id: str, *, candidate_ids: list[str], agent_experience=None) -> str:
+    def reanswer_sft(self, parent_run_id: str, *, candidate_ids: list[str], agent_experience=None,
+                     task_instructions: dict[str, str] | None = None) -> str:
         """Queue new answers for sealed questions; the director is not re-run."""
         return self._driver.reanswer_sft(parent_run_id, candidate_ids=candidate_ids,
-                                         agent_experience=agent_experience)
+            agent_experience=agent_experience,
+            **({"task_instructions": task_instructions} if task_instructions is not None else {}))
 
     def agent_replay_capabilities(self) -> dict:
         return self._driver.agent_replay_capabilities()

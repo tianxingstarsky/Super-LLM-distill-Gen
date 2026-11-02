@@ -24,6 +24,11 @@ class ReviewCandidate:
     def execute(self, item):
         target, original = item["target"], item["record"]
         config = validate_review_repair(self.recipe["review_repair"])
+        from ..domain.review_evolution import native_sft_review_evolution_enabled
+        if (target == "sft" and native_sft_review_evolution_enabled(self.recipe, original)
+                and config["mode"] == "auto"):
+            from .review_native_sft import ReviewNativeSft
+            return ReviewNativeSft(self._port, self.recipe, config).execute(original)
         missing_dialogue = original.get("messages") is None or original.get("messages") == []
         historical_terminal = (self.recipe.get("multiturn_terminal_review_version") == 1
             and (original.get("reason") == "multiturn_natural_end_insufficient_turns"

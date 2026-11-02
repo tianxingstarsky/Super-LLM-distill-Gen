@@ -4,7 +4,7 @@ from copy import deepcopy
 from .generation_ports import DirectedSftPort
 from ..domain.dialogue import controlled_training_messages, without_source_reasoning
 from lib.domain.workflow_quality import accepted, conversation_issue, text_issue
-from ..domain.generation import task_controls, learner_prompt
+from ..domain.generation import task_controls, learner_prompt, directed_sft_instruction
 from lib.domain.provider_reasoning import select_candidate_reasoning, reasoning_provenance
 from lib.domain.human_augmentation import human_generation_instruction
 
@@ -162,9 +162,7 @@ class GenerateDirectedSft:
         row = generate_native_turn(self._port, self.recipe, stage="sft", unit=unit,
             messages=messages, style=style, source_text=evidence,
             source_scope="selected_lines" if selected else "prepared_source",
-            instruction=("遵循用户的实际问题和指导员指定的回答条件，不把历史助手说法当作事实。\n"
-                         + self.recipe["qa_director"].get("answer_rules", "") + "\n"
-                         + human_generation_instruction(contract)))
+            instruction=directed_sft_instruction(self.recipe, contract))
         row.update(id=unit["id"], source_name=unit.get("source_name"), location=unit.get("location"),
                    source_location=unit.get("source_location"), tools=[], quotes=[],
                    source_context=deepcopy(unit), repair_attempts=0)

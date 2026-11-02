@@ -7,7 +7,7 @@ from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_applicatio
 from lib.bootstrap.reasoning_bank import reasoning_bank_application
 from lib.contexts.workflows.domain.dialogue_style_context import ALL_CONTEXT_TYPES, freeze_catalog
 from lib.contexts.workflows.domain.experience_evolution import digest
-from lib.contexts.workflows.domain.reasoning_bank import memory_text
+from lib.contexts.workflows.domain.reasoning_bank import cumulative_review_base_text, memory_text
 from lib.contexts.workflows.domain.public_experience import initial_experience_text
 
 
@@ -27,7 +27,8 @@ def contextual_reasoning_memory(*, root=None, user_key=None, embedder=None, limi
         raise ValueError("experience_evolution_parent_scope_mismatch")
     projection = None
     if reasoning_text is not None and reasoning_text == edition["text"]:
-        base_text = initial_experience_text("reasoning")
+        preserved_base = cumulative_review_base_text(edition)
+        base_text = initial_experience_text("reasoning") if preserved_base is None else preserved_base
         projection = {"edition_id": edition["id"], "edition_sha256": edition["sha256"],
             "submitted_text_sha256": sha256(reasoning_text.encode("utf-8")).hexdigest(),
             "base_text": base_text, "base_text_sha256": sha256(base_text.encode("utf-8")).hexdigest()}

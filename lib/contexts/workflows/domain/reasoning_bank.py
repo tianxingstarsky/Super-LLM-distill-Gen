@@ -5,6 +5,8 @@ This module owns only our edition provenance and frozen experience contract;
 embedding models, upstream execution and storage are ports.
 """
 from copy import deepcopy
+from hashlib import sha256
+import re
 
 from lib.domain.agent_experience import (
     MAX_EXPERIENCE_BYTES, snapshot_agent_experience, validate_agent_experience,
@@ -24,6 +26,28 @@ class ReasoningBankUnavailable(RuntimeError):
     """A memory dependency is unavailable; generation may continue without it."""
 
 
+def cumulative_review_base_text(edition):
+    """A new additive review edition preserves its exact frozen general base."""
+    version = edition.get("review_memory_cumulative_version")
+    if version is None:
+        return None
+    base = edition.get("base_text")
+    if type(version) is not int or version != 1 or not isinstance(base, str):
+        raise ValueError("review_memory_proposal_base_changed")
+    try:
+        base_sha256 = sha256(base.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError:
+        raise ValueError("review_memory_proposal_base_changed") from None
+    items = edition.get("upstream_memory_items")
+    if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
+        raise ValueError("review_memory_proposal_base_changed")
+    delta = "\n\n".join(items)
+    if (edition.get("base_text_sha256") != base_sha256
+            or edition.get("text") != base + ("\n\n" if base else "") + delta):
+        raise ValueError("review_memory_proposal_base_changed")
+    return base
+
+
 def validate_memory_context_types(value):
     """Exact source filters; None preserves the original unfiltered protocol."""
     if value is None:
@@ -39,6 +63,39 @@ def validate_memory_context_assignment(value):
     if not contexts or "common" in contexts and len(contexts) != 1:
         raise ValueError("reasoning_bank_invalid_dialogue_context_assignment")
     return contexts
+
+
+def memory_context_assignments(items):
+    """Read explicit style metadata without interpreting a task's subject."""
+    assignments = {}
+    for item in items:
+        headings = re.findall(r"(?m)^## Contexts(?:[ \t]+([^\r\n]*))?[ \t]*$", item)
+        markers = re.findall(r"(?mi)^##[ \t]+contexts(?=[ \t:]|$)[^\r\n]*$", item)
+        if len(headings) > 1 or len(markers) != len(headings):
+            raise ValueError("reasoning_bank_invalid_dialogue_context_assignment")
+        labels = [part.strip() for part in headings[0].split(",")] if headings else ["common"]
+        try:
+            assignments[digest(item)] = validate_memory_context_assignment(labels)
+        except ValueError:
+            raise ValueError("reasoning_bank_invalid_dialogue_context_assignment") from None
+    return assignments
+
+
+def validate_proposed_memory_items(items):
+    if not isinstance(items, list):
+        raise ValueError("review_evolution_invalid_memory_items")
+    for item in items:
+        if (not isinstance(item, str) or not item.strip() or "\x00" in item
+                or not re.match(r"# Memory Item[^\r\n]*", item)
+                or any(not re.search(r"(?m)^## " + field + r"(?:\s|$)", item)
+                       for field in ("Title", "Description", "Content"))):
+            raise ValueError("review_evolution_invalid_memory_items")
+        try:
+            item.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("review_evolution_invalid_memory_items") from None
+    memory_context_assignments(items)
+    return list(items)
 
 
 def memory_source_matches(source, edition_ids=None, context_types=None):

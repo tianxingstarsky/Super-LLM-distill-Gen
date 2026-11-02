@@ -1,5 +1,9 @@
 # 审核规则
 
+`review_evolution.py` 持有新原生 SFT 同次评审合同：质量决定、本题临时提醒、可选通用经验提案分别提交，字段封闭；Memory Item 的 Markdown 由程序从语义字段生成。首稿通过就结束，需要修正时只生成一份未经再次评审的新稿。新稿收据绑定首稿、完整原生推理、同次评审、经验提案及派生 system 快照，质量状态保持 `not_assessed`；打包和恢复复用精确收据，不重新购买评审。验证：`tests/test_review_evolution_contracts.py`、`tests/test_native_sft_review_evolution_application.py`。
+
+工具提交使用扁平质量字段、临时提醒和经验语义字段；程序严格核对字段后组装既有嵌套业务对象，仍执行原质量、非空内容及经验适用条件校验。供应商 Schema 不使用其不支持的长度或数组数量关键字；历史嵌套合同继续保留。
+
 `advisory_policy.py` 验证新冻结 `review_advisory_policy_version=1` 的按政策导出收据：候选正文、评审配置和完整原意见必须分别匹配哈希，状态为 `released_advisory`，不把拒绝或未决意见改成通过。结构与文件完整性仍由各边界验证；无该策略的历史配方沿用原资格判定。验证：`tests/test_advisory_release_binding.py`。
 
 `checkpoint_parent.py` 定义未封存任务的不可变检查点评审来源。

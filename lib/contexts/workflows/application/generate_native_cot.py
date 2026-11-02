@@ -197,6 +197,11 @@ class GenerateNativeCot:
                 "model_called": False, "review_stage": "review", "coverage": "local_checks_only",
                 "selection": "single_pass_multiturn_advisory",
                 **({"requested_policy": deepcopy(config["review_policy"])} if "review_policy" in config else {})}
+        if (self.stage == "sft" and self.recipe.get("native_sft_review_evolution_version") == 1):
+            plan = {"version": 1, "selected": False, "semantic_status": "deferred",
+                "model_called": False, "review_stage": "review", "coverage": "local_checks_only",
+                "selection": "single_review_with_optional_optimization",
+                **({"requested_policy": deepcopy(config["review_policy"])} if "review_policy" in config else {})}
         if feedback_receipt is not None:
             plan = {"version": 1, "selected": False, "semantic_status": "not_assessed",
                 "coverage": "local_checks_only", "selection": (

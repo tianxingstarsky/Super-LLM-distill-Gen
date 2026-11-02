@@ -22,6 +22,14 @@ def directed_sft_generator(runtime) -> GenerateDirectedSft:
     return GenerateDirectedSft(CheckpointedGenerationAdapter(runtime), runtime.recipe)
 
 
+def native_sft_optimizer(runtime):
+    """Bind one replacement to the original SFT node while review owns the stage."""
+    from lib.contexts.workflows.api import OptimizeNativeSft
+    from lib.contexts.workflows.infrastructure.dialogue_adapter import CheckpointedDialogueAdapter
+    return OptimizeNativeSft(CheckpointedDialogueAdapter(runtime, model_stage="sft"),
+        runtime.recipe, runtime.state["id"])
+
+
 def cot_generator(runtime) -> GenerateCot:
     """Build CoT generation with source lookup and optional numeric verification."""
     from .workflow_requests import workflow_request_adapter

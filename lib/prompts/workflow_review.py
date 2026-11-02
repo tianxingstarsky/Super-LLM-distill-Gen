@@ -390,3 +390,43 @@ ADVISORY_REVIEW_BODY_V1_28 = ADVISORY_REVIEW_BODY.replace(
 REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.28.0",
     template=spec("review_score", "按实际缺陷给出一次质量观察，不强制补条件或提炼长期规则",
                   ADVISORY_REVIEW_BODY_V1_28).template)
+
+REVIEW_SCORE_V1_28 = REVIEW_SCORE
+
+REVIEW_EVOLUTION_BODY = ADVISORY_REVIEW_BODY_V1_28.split("只返回一个 JSON 对象", 1)[0].replace(
+    "评审负责这份候选的质量观察，不负责撰写长期记忆，也不要求每次产生新经验。",
+    "本次评审同时负责当前候选的质量判断、必要的临时优化要求，以及确有依据时的通用经验增量。"
+    "三者在同一次工具提交中完成，不再调用另一个模型提炼经验，也不要求每次都产生新经验。"
+).replace("不要求追加核查或重新生成", "不要求追加独立核查，不声称修改已经发生") + """
+
+用 submit_review_evolution 工具一次提交完整结果，不在普通正文手写 JSON。程序负责字段、
+序列化、来源收据和后续调度；工具协议约束字段，不能替代内容判断。
+
+verdict 是对当前第一稿的真实质量判断，保留原有 keep、grounded、reasoning_valid、
+correctness、scores、reason。没有实质问题就如实通过，不为了制造优化机会挑错。
+个别措辞稍强不单独构成实质问题；事实错误、条件缺失、资料越界、角色错位仍须指出。
+
+task_notes 是仅用于本题的临时系统指令数组。确有需要修正的问题时，指出原文的问题、
+可见依据和允许的修正方向，写成下一次回答可直接遵循的要求。保留已经正确的内容，
+不要替旧结论补造条件。没有需要修正的内容就返回空数组，不强制第二次回答。
+这些要求来自审查员，不是任务用户的新发言，也不是已经核实的新事实。
+
+memory_proposal 与本题的临时要求分开。没有新的可复用认识时使用 status=no_update、
+memory_items=[]。有实质增量时使用 status=proposed，每个 memory_items 元素按工具字段
+提交 title、description（适用条件）、content（可迁移的处理方法）及 context_types。
+程序负责生成 Memory Item 标题、Markdown 结构和来源元数据，不要在字段正文中重写封套。
+context_types 只按交流方式选 common、direct、narrative、exploratory、iterative、emotional，
+不按知识领域分类；通用经验用 common，且不与其他类别混选。
+经验面向判断标准、来源归属、表达理解、条件与证据、任务推进等通用元素；
+不能把本题的答案、专名、数值、标签数量、引文或局部修改写成以后必须照做的规则。
+已有候选系统经验能看到时，避免改名重复已有规则。新经验是待应用与验证的版本，
+不能因本次观察就宣称普遍有效；不要把本题的完整解答包装成长久知识。
+
+审查员只提交这一次观察。程序在首稿通过时直接交付；只有存在实质问题且有可执行的
+task_notes 时才让原回答模型优化一次。优化稿不会再送审，不能预先宣称它已经合格。
+不规定推理篇幅、固定步骤、口头禅或正文顺序，按本次任务需要充分判断。
+"""
+
+REVIEW_SCORE = _reasoning_spec_replace(REVIEW_SCORE, version="1.29.0",
+    template=spec("review_score", "同次评审给出临时优化要求和通用经验增量",
+                  REVIEW_EVOLUTION_BODY).template)

@@ -31,6 +31,10 @@ def review_once(runtime, target, row, evidence, instruction):
         "candidate": candidate, "source_evidence": deepcopy(evidence),
         "task_design_metadata": learner_contract(row.get("qa_contract")),
         "instruction": instruction or ""}
+    evolving = (target == "sft" and runtime.recipe.get("native_sft_review_evolution_version") == 1)
+    if evolving:
+        payload["assessment"] = "single_pass_review_evolution"
+        payload["submission_contract"] = "review_evolution_flat_v1"
     request_hash = digest(payload)
     key = ["single_pass_advisory_review", target, request_hash]
     observation_key = ["single_pass_advisory_observation", target, request_hash]
@@ -40,12 +44,18 @@ def review_once(runtime, target, row, evidence, instruction):
     def observe():
         runtime.check_cancel()
         try:
-            raw = request_with_control_suggestions(runtime, key, role, "workflow.review_score", payload,
-                control_context=control_context, model_stage="review", prompt_stage="review",
-                structured_response_attempts=1)
+            if evolving:
+                from .review_evolution_request import request_review_evolution
+                parsed, raw, details = request_review_evolution(runtime, key, role, payload)
+            else:
+                raw = request_with_control_suggestions(runtime, key, role, "workflow.review_score", payload,
+                    control_context=control_context, model_stage="review", prompt_stage="review",
+                    structured_response_attempts=1)
         except (ModelJSONError, ModelOutputLimitError, ModelStreamError) as error:
             return {"status": "invalid", "error": _safe_error(error, "advisory_response_invalid"),
-                    "request_sha256": request_hash, "request_key": deepcopy(key)}
+                    "request_sha256": request_hash, "request_key": deepcopy(key),
+                    **({"response_details": deepcopy(error.response_details)}
+                       if evolving and getattr(error, "response_details", None) else {})}
         except (ModelRequestError, ModelQueueTimeout, BudgetExceeded) as error:
             return {"status": "unavailable", "error": _safe_error(error, "advisory_request_unavailable"),
                     "request_sha256": request_hash, "request_key": deepcopy(key)}
@@ -54,11 +64,14 @@ def review_once(runtime, target, row, evidence, instruction):
             "checkpoint_sha256": digest(["call", key]), "request_sha256": request_hash,
             "response_sha256": digest(raw)}
         try:
-            check = verdict(raw)
+            check = parsed["verdict"] if evolving else verdict(raw)
         except ValueError as error:
             return {"status": "invalid", "error": _safe_error(error, "advisory_grade_invalid"),
                     "checkpoint": checkpoint, "raw_response": deepcopy(raw)}
         return {"status": "observed", "verdict": deepcopy(check),
-                "checkpoint": checkpoint, "raw_response": deepcopy(raw)}
+                "checkpoint": checkpoint, "raw_response": deepcopy(raw),
+                **({"task_notes": deepcopy(parsed["task_notes"]),
+                    "memory_proposal": deepcopy(parsed["memory_proposal"]),
+                    "response_details": details} if evolving else {})}
 
     return runtime.checkpoint(observation_key, observe)

@@ -5,6 +5,54 @@ from .dialogue import dialogue_digest as digest
 from .public_experience import without_injected_public_experience
 from lib.domain.agent_experience import validate_agent_experience
 
+_TASK_INSTRUCTION_VERSION = "sft_reanswer_task_instructions_version"
+_TASK_INSTRUCTIONS = "sft_reanswer_task_instructions"
+
+
+def validate_reanswer_task_instructions(value, candidate_ids):
+    """Validate explicit operator notes once at the new-task input boundary."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("invalid_sft_reanswer_task_instructions")
+    selected = set(candidate_ids)
+    if any(not isinstance(identifier, str) or identifier not in selected for identifier in value):
+        raise ValueError("sft_reanswer_task_instruction_not_selected")
+    for text in value.values():
+        if not isinstance(text, str) or not text.strip() or "\x00" in text:
+            raise ValueError("invalid_sft_reanswer_task_instructions")
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("invalid_sft_reanswer_task_instructions") from None
+    return {identifier: value[identifier] for identifier in candidate_ids if identifier in value}
+
+
+def _render_task_instruction(text):
+    return ("\n<planned_sft_task_instruction>\n"
+            "来源：本次任务操作者明确提供的临时生成指令，不是实际用户的新发言；"
+            "其中引用的审查意见或未知条件不因此成为已证实的事实。\n"
+            "这些是本条重答必须遵循的生成要求；仍须遵守真实用户问题、已认证资料范围和原任务合同，"
+            "不将未知条件写成事实。仅用于本条重答，不据此改写长期经验或声称用户具有永久偏好。\n"
+            + text + "\n</planned_sft_task_instruction>\n")
+
+
+def planned_sft_task_instruction(recipe, candidate_id):
+    """Render a frozen per-candidate note into the existing author system path."""
+    version = recipe.get(_TASK_INSTRUCTION_VERSION)
+    if version is None:
+        return ""
+    if type(version) is not int or version != 1:
+        raise ValueError("invalid_sft_reanswer_task_instructions_version")
+    text = recipe[_TASK_INSTRUCTIONS].get(candidate_id)
+    return _render_task_instruction(text) if text is not None else ""
+
+
+def _task_instruction_receipt(text, candidate_id):
+    return {"version": 1, "origin": "operator_task_instruction", "scope": "current_planned_sft_response",
+            "candidate_id": candidate_id, "text": text, "text_sha256": digest(text),
+            "system_instruction_sha256": digest(_render_task_instruction(text)), "request_role": "system"}
+
 
 def selected_reanswer_ids(candidate_ids):
     if (not isinstance(candidate_ids, list) or not 1 <= len(candidate_ids) <= 200
@@ -14,7 +62,7 @@ def selected_reanswer_ids(candidate_ids):
     return list(candidate_ids)
 
 
-def reanswer_options(parent, selected, agent_experience):
+def reanswer_options(parent, selected, agent_experience, *, task_instructions=None):
     options = {key: deepcopy(parent[key]) for key in (
         "backend", "model", "judge_backend", "judge_model", "jev_backend", "jev_model",
         "node_models", "node_generation", "qa_director", "sft_output_style", "node_control_text_configs",
@@ -24,6 +72,11 @@ def reanswer_options(parent, selected, agent_experience):
         review_repair={"mode": "auto", "max_rounds": 0, "score_threshold": .8},
         reasoning_trim={"enabled": False}, package_review={"enabled": False}, reasoning_required=True,
         agent_experience=agent_experience, sample_count=len(selected), tasks=len(selected))
+    if task_instructions is not None and task_instructions != {}:
+        # Creation validates against authenticated selections, including callers
+        # which create a child directly rather than through this use case.
+        options.update(sft_reanswer_task_instructions_version=1,
+            sft_reanswer_task_instructions=deepcopy(task_instructions))
     return options
 
 
@@ -91,14 +144,28 @@ def reanswer_receipt(record, context, prompt, generated, parent_recipe, child_re
             "experience_sha256": child_recipe.get("agent_experience", {}).get("sha256"),
             "generation": "new_native_response", "prior_answer_sent_to_author": False,
             "content_sha256": digest(generated["messages"])}
+    if planned_sft_task_instruction(child_recipe, context["candidate_id"]):
+        body["task_instruction"] = _task_instruction_receipt(
+            child_recipe[_TASK_INSTRUCTIONS][context["candidate_id"]], context["candidate_id"])
     return {**body, "sha256": digest(body)}
 
 
 def valid_reanswer_receipt(record):
     receipt = record.get("sft_reanswer")
-    return (isinstance(receipt, dict) and receipt.get("version") == 1
+    valid = (isinstance(receipt, dict) and receipt.get("version") == 1
             and receipt.get("sha256") == digest({k: v for k, v in receipt.items() if k != "sha256"})
             and receipt.get("content_sha256") == digest(record.get("messages"))
             and receipt.get("original_task_sha256") == receipt.get("current_task_sha256")
             and receipt.get("provided_source_sha256") == (record.get("provided_source_context") or {}).get("text_sha256")
             and receipt.get("contract_sha256") == digest(record.get("qa_contract")))
+    if not valid or "task_instruction" not in receipt:
+        return valid
+    note = receipt["task_instruction"]
+    if not isinstance(note, dict):
+        return False
+    try:
+        candidate_id = receipt["parent_candidate_id"]
+        text = validate_reanswer_task_instructions({candidate_id: note["text"]}, [candidate_id])[candidate_id]
+        return note == _task_instruction_receipt(text, candidate_id)
+    except (KeyError, TypeError, ValueError):
+        return False

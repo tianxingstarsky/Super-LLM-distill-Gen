@@ -1050,6 +1050,7 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                                       GRAPH_LABELS, STAGE_GLYPHS, recipe.get("node_models"),
                                       language=st.session_state.get("ui_language", "zh"), live=True,
                                       review_advisory_policy_version=recipe.get("review_advisory_policy_version"),
+                                      native_sft_review_evolution_version=recipe.get("native_sft_review_evolution_version"),
                                       sft_reanswer_version=recipe.get("sft_reanswer_version", 0),
                                       reasoning_trim=reasoning_trim_enabled,
                                       node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"),
@@ -1883,6 +1884,10 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                                                   node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       review_advisory_policy_version=1,
+                                      native_sft_review_evolution_version=(1 if "sft" in targets
+                                          and qa_director.get("enabled") is True
+                                          and node_generation.get("sft", {}).get("enabled") is True
+                                          and node_generation.get("sft", {}).get("answer_mode") == "native_joint" else None),
                                       reasoning_trim=reasoning_trim["enabled"], node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                       qa_director=qa_director, recipe_version=draft_recipe_version, source_cleaning=source_cleaning,
                                       native_generation_version=0 if native_cot_conflict else native_generation_version,

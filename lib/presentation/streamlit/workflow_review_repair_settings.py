@@ -30,8 +30,9 @@ def render_review_repair_settings(workspace: str, package_review: dict, *, save_
             ("One advisory review" if language == "en" else "一次建议评审") if value == "auto" else "人工评分与修正", language),
         on_change=save_field, args=(workspace, mode_key))
     if mode == "auto":
-        st.caption("Review once, then export with the original findings. Feedback is saved for experience learning; no automatic repair or repeat review."
-                   if language == "en" else "只评审一次，保留原始意见后继续输出。问题存入经验库供后续学习，不自动返工或追加评审。")
+        st.caption("Review once. For native SFT, accept the first answer or improve it once if needed, without another review. "
+                   "The same review can also supply reusable experience. Other formats retain advisory delivery."
+                   if language == "en" else "只评审一次。原生 SFT 首稿通过就交付；有实质问题才优化一次，第二稿不复审。通用经验由同次评审给出，其余格式保留建议评审后输出。")
         return review_repair_snapshot(workspace)
     threshold, rounds = st.columns(2, gap="small")
     threshold_key = f"workflow-review-repair-threshold:{workspace}"

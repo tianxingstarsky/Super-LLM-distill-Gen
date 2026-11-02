@@ -100,6 +100,12 @@ class CheckpointedReasoningAgent:
                         **({"response_details": details} if capture_details else {}),
                         **({"on_stream": journal} if journal is not None else {}))
                     return {"assistant": assistant, "response_details": details} if capture_details else assistant
+                except ValueError as error:
+                    if capture_details and details.get("incomplete_response"):
+                        # Preserve the real provider snapshot for the caller's
+                        # durable invalid-response observation; never repair it.
+                        error.response_details = deepcopy(details)
+                    raise
                 finally:
                     after = getattr(client, "usage", {})
                     with runtime._lock:
