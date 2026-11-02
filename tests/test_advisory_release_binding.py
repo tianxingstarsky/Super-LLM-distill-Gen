@@ -13,6 +13,8 @@ def test_failed_advisory_is_durable_and_does_not_purchase_a_second_attempt():
     saved, calls = {}, []
 
     def ask(*args, **kwargs):
+        from lib.contexts.workflows.domain.model_request import NodeModelRequest
+        NodeModelRequest(*args, **kwargs).validate()
         calls.append(kwargs)
         raise ModelRequestError("upstream_unavailable", "upstream", 1)
 
@@ -30,7 +32,8 @@ def test_failed_advisory_is_durable_and_does_not_purchase_a_second_attempt():
     assert first["status"] == "unavailable"
     assert review_once(runtime, "sft", row, None, "") == first
     assert len(calls) == 1
-    assert calls[0]["structured_response_attempts"] == calls[0]["native_request_attempts"] == 1
+    assert calls[0]["structured_response_attempts"] == 1
+    assert "native_request_attempts" not in calls[0]
 
 
 def test_advisory_release_binds_candidate_configuration_and_unchanged_failed_observation():

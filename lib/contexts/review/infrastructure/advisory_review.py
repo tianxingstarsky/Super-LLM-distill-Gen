@@ -42,7 +42,7 @@ def review_once(runtime, target, row, evidence, instruction):
         try:
             raw = request_with_control_suggestions(runtime, key, role, "workflow.review_score", payload,
                 control_context=control_context, model_stage="review", prompt_stage="review",
-                structured_response_attempts=1, native_request_attempts=1)
+                structured_response_attempts=1)
         except (ModelJSONError, ModelOutputLimitError, ModelStreamError) as error:
             return {"status": "invalid", "error": _safe_error(error, "advisory_response_invalid"),
                     "request_sha256": request_hash, "request_key": deepcopy(key)}
