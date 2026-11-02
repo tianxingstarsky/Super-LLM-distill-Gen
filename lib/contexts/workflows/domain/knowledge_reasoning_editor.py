@@ -8,6 +8,7 @@ from jsonschema import Draft202012Validator
 
 from .authored_submission import strict_tool_schema
 from .dialogue import dialogue_digest
+from .native_feedback import native_response_issue
 
 EDIT_KNOWLEDGE_REASONING = "edit_knowledge_reasoning"
 EDIT_KNOWLEDGE_REASONING_SEGMENTS = "edit_knowledge_reasoning_segments"
@@ -182,3 +183,34 @@ def apply_segment_edits(original, assistant, *, final_answer=None):
     for start, end, replacement in sorted(replacements, reverse=True):
         derived = derived[:start] + replacement + derived[end:]
     return _receipt(original, derived, {**patch, "edits": filled}, final_answer, version=2)
+
+
+def prepare_self_edit_messages(original_messages, original_assistant, instruction):
+    """Append a real completed response and application note, never fake history."""
+    if (not isinstance(original_messages, list) or not original_messages
+            or any(not isinstance(message, dict) or message.get("role") not in {
+                "system", "developer", "user", "assistant", "tool"} for message in original_messages)):
+        raise ValueError("knowledge_reasoning_editor_invalid_original_prefix")
+    for message in original_messages:
+        if message["role"] == "assistant" and not isinstance(message.get("reasoning_content"), str):
+            raise ValueError("knowledge_reasoning_editor_history_reasoning_missing")
+    if issue := native_response_issue(original_assistant, require_answer=True):
+        raise ValueError(issue)
+    if original_assistant.get("tool_calls") not in (None, []):
+        raise ValueError("knowledge_reasoning_editor_original_tool_call_pending")
+    _text(original_assistant["reasoning_content"], nonblank=True)
+    _text(original_assistant["content"], nonblank=True)
+    _text(instruction, nonblank=True)
+    messages = [*deepcopy(original_messages), deepcopy(original_assistant),
+                {"role": "system", "content": instruction}]
+    receipt = {"version": 1, "mode": "original_context_reasoning_self_edit_preparation",
+        "prefix_sha256": dialogue_digest(original_messages), "prefix_message_count": len(original_messages),
+        "original_assistant_sha256": dialogue_digest(original_assistant),
+        "original_reasoning_sha256": sha256(original_assistant["reasoning_content"].encode("utf-8")).hexdigest(),
+        "fixed_answer_sha256": sha256(original_assistant["content"].encode("utf-8")).hexdigest(),
+        "instruction_sha256": sha256(instruction.encode("utf-8")).hexdigest(),
+        "messages_sha256": dialogue_digest(messages), "original_prefix_preserved": True,
+        "reasoning_scope": "full_original_reasoning_content", "answer_scope": "original_content_read_only",
+        "added_roles": ["assistant", "system"], "provenance_scope": "message_and_channel_hashes_only",
+        "semantic_status": "not_assessed"}
+    return messages, {**receipt, "sha256": dialogue_digest(receipt)}

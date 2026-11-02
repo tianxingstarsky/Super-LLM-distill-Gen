@@ -28,3 +28,12 @@ KNOWLEDGE_REASONING_EDITOR = replace(KNOWLEDGE_REASONING_EDITOR_V1_0, version="1
           "非任务旁白可将对应段落替换为空串；包含有效分析的段落必须保留必要论证并保持连贯，不用摘要代替推理。"
           "不在工具外输出正文。无需编辑时用 unchanged 和空 edits；有编辑用 edited；有实质内容错误用 needs_content_repair 并在 issues 中定位。"
           "这些状态只描述编辑结果，不是质量通过，不触发额外评审或自动再答。")
+
+KNOWLEDGE_REASONING_SELF_EDIT = replace(KNOWLEDGE_REASONING_EDITOR_V1_0,
+    id="workflow.knowledge_reasoning_self_edit", version="1.0.0",
+    purpose="原回答者续接原上下文并局部编辑自己的推理",
+    template="""继续编辑你刚才完成的那条助手回答。紧邻本条说明之前的真实 assistant 消息中，reasoning_content 是完整原始推理，content 是固定的最终答案；下文 original_reasoning 即此 reasoning_content，final_answer 即此 content。当前对话中的原用户消息仍是实际任务。本条 system 是应用的编辑操作说明，没有新增用户发言，也没有新的审查员。你仍是原回答者，利用已有上下文核对和编辑自己的原稿，不重新生成问题或答案。
+
+本轮交付只提交 edit_knowledge_reasoning 工具补丁，暂不重复前序普通回答的正文交付。程序会把补丁应用到原 reasoning_content，保留原稿、完整新稿和固定答案。你本次为编辑所作的原生思考只作运行审计，不替代原稿；整理后的正文来自工具补丁。保留原稿中有用分析的语言、组织、探索与反思，不把全篇翻译、摘要或重写当作局部编辑。优先定位实际需要改变的来源引导、控制旁白及其附近的衔接，未受影响的文字保持原样；无需改变的内容不动，不为展示编辑而增加新解释。
+
+""" + KNOWLEDGE_REASONING_EDITOR_V1_0.template.split("\n\n", 1)[1])

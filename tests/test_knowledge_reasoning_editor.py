@@ -8,7 +8,7 @@ import pytest
 from lib.contexts.workflows.domain.knowledge_reasoning_editor import (
     EDIT_KNOWLEDGE_REASONING, EDIT_KNOWLEDGE_REASONING_SEGMENTS,
     apply_edits, knowledge_reasoning_editor_tool, apply_segment_edits,
-    reasoning_segments, knowledge_reasoning_segment_editor_tool,
+    reasoning_segments, knowledge_reasoning_segment_editor_tool, prepare_self_edit_messages,
 )
 
 
@@ -159,3 +159,40 @@ def test_duplicate_unknown_and_stale_segment_ids_cannot_partially_apply():
         with pytest.raises(ValueError, match=error):
             apply_segment_edits(original, assistant)
         assert assistant == before
+
+
+def test_self_edit_preparation_preserves_actual_prefix_native_channels_and_roles():
+    prefix = [{"role": "system", "content": "Frozen instructions."},
+        {"role": "system", "content": "Exact teacher excerpt.\r\n"},
+        {"role": "user", "content": "Which generation order fits these two batches?"}]
+    actual = {"role": "assistant", "content": "固定原答案。",
+        "reasoning_content": "  完整原生推理。\r\n保留每一行。\n"}
+    instruction = "应用要求只提交原推理的编辑补丁，原答案保持不变。"
+    before = deepcopy((prefix, actual))
+    messages, receipt = prepare_self_edit_messages(prefix, actual, instruction)
+    assert messages[:len(prefix)] == prefix
+    assert messages[-2:] == [actual, {"role": "system", "content": instruction}]
+    assert sum(message["role"] == "user" for message in messages) == 1
+    assert all("tool_calls" not in message for message in messages)
+    assert receipt["original_reasoning_sha256"] == sha256(actual["reasoning_content"].encode("utf-8")).hexdigest()
+    assert receipt["fixed_answer_sha256"] == sha256(actual["content"].encode("utf-8")).hexdigest()
+    assert receipt["reasoning_scope"] == "full_original_reasoning_content"
+    assert receipt["provenance_scope"] == "message_and_channel_hashes_only"
+    assert receipt["semantic_status"] == "not_assessed" and "author" not in receipt
+    assert (prefix, actual) == before
+    messages[0]["content"] = "local edit"
+    messages[-2]["reasoning_content"] = "local edit"
+    assert (prefix, actual) == before
+
+
+def test_self_edit_rejects_missing_historical_thoughts_without_filling_synthetic_history():
+    prefix = [{"role": "system", "content": "Frozen instructions."},
+        {"role": "assistant", "content": "Synthetic teacher text has no native history."},
+        {"role": "user", "content": "Explain the method."}]
+    actual = {"role": "assistant", "content": "原答案。", "reasoning_content": "真实原生推理。"}
+    before = deepcopy((prefix, actual))
+    with pytest.raises(ValueError, match="history_reasoning_missing"):
+        prepare_self_edit_messages(prefix, actual, "Edit only the existing reasoning.")
+    assert "reasoning_content" not in prefix[1] and (prefix, actual) == before
+    with pytest.raises(ValueError, match="native_feedback_reasoning_missing"):
+        prepare_self_edit_messages([prefix[0], prefix[-1]], {"role": "assistant", "content": "只有答案。"}, "Edit.")

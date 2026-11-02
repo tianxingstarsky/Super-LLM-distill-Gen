@@ -2,6 +2,8 @@
 
 知识问答推理的保真表述编辑由 `workflow_knowledge_reasoning.py` 的 `knowledge_reasoning_editor` 和 workflows 域 `knowledge_reasoning_editor.py` 的纯工具／补丁合同持有。1.1 使用程序生成的原稿段落 ID，1.0 的逐字定位保留；问题和答案不改，完整原生推理保留，整理正文标记为派生解释，编辑状态不代表质量通过。[真实验证与剩余问题](knowledge-reasoning-editor-2026-11-02.md) 单独记录；尚未自动接入生产节点、默认导出或另一套评审循环。
 
+原作者自行编辑由同模块 `knowledge_reasoning_self_edit` 提供操作说明，`prepare_self_edit_messages` 保留实际原请求、真实助手的答案及原生推理，再追加应用 system 要求。它不伪造用户发言或工具历史，也不补填缺失的历史推理；纯构造器不认证账号身份或保证缓存。一次 A 实测已经命中缓存，但重复编辑思考使本次总费用高于另开编辑上下文，详见上述验证记录。
+
 原生知识应用的初始规则与用途接线见 [教师知识与角色](teacher-knowledge-roles-2026-11-02.md#初始系统规则与用途接线)。新模板 1.7 明确区分任务事实、教师辅助知识、真实阅读对象和运行控制信息；规则属于生成节点，不是新增评审，默认不为旧任务或个人提示词覆盖热更新。
 
 教师知识的消息角色对照见 [实验记录](teacher-knowledge-roles-2026-11-02.md)：同题、同文仅将 system 改为 assistant，本次仍出现来源旁白。该实验未改变生产默认，程序投放的教师块不作为真实助手历史导出。
