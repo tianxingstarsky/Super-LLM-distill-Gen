@@ -6,7 +6,7 @@
 
 `training_surface.py` 对协议 2 的记录先通过工作流合同认证 `native_generation.review_guidance`，只把匹配的公开 system 注意事项计入各助手轮当时可见的规则。提醒不会扩大资料阅读范围，不豁免后台字段或臆造篇幅设置；后来的提醒不能回溯解释旧轮泄露。`multiturn.py` 只有调用方传入认证位置才接受 user 后连续的 system 提醒；旧调用仍拒绝中途 system。验证：`test_public_review_guidance_surface.py`。
 
-`agent_experience.py` 默认经验包 v5 仅更新 reasoning 范围为“充分推敲 · 初始 v2”：按任务充分展开，不设默认简短、字数、段数或固定步骤，保留角色归属、证据与真实反思。v1–v4 文本及摘要不变；已冻结任务和个人覆盖不迁移。工作流的 `initial_experience_text` 及“使用初始”动作采用 v2，新经验版本仍由用户显式保存。验证：`test_agent_experience.py`、`test_workflow_agent_experience.py`、`test_experience_evolution_ui.py`。
+`agent_experience.py` 默认经验包 v6 将各角色共用前缀替换为通用行为、证据、角色和格式规则，移除作者署名、产品归属与开发历史说明。各角色正文和 reasoning 的“充分推敲 · 初始 v2”保留，按任务充分展开，不设默认简短、字数、段数或固定步骤。v1–v5 文本及摘要不变；已冻结任务和个人覆盖不迁移。工作流的 `initial_experience_text` 及“使用初始”动作继续采用 v2。验证：`test_agent_experience.py`。
 
 `creation_draft.py` 为 SFT／多轮分别保存 `answer-mode`（普通或原生同次生成）及节点内思考要点。新节点的要点只接受协议 7；独立 CoT 的历史协议范围不变。草稿允许未完成的文本编辑，实际启动仍走节点生成合同校验，不以表单保存替代任务校验。
 

@@ -1,8 +1,8 @@
 """Versioned procedural experience for reusable generation agents.
 
-This is editorial guidance distilled from project contracts and reviewed failure
-classes, not a store of old answers or new domain facts. Callers pin the complete
-text before a run, use the matching role only, and budget its full UTF-8 size.
+This is conditional procedural guidance, not a store of old answers or new
+domain facts. Callers pin the complete text before a run, use the matching role
+only, and budget its full UTF-8 size.
 Personal templates can retain the exact text without interpolation or selection.
 """
 from __future__ import annotations
@@ -13,11 +13,12 @@ import hashlib
 from lib.domain.workflow_quality import canonical
 
 
-AGENT_EXPERIENCE_VERSION = 5
+AGENT_EXPERIENCE_VERSION = 6
 MAX_EXPERIENCE_BYTES = 32 * 1024
 EXPERIENCE_SCOPES = ("director", "question", "answer", "reasoning", "review", "cpt")
 EXPERIENCE_KIND = "procedural_guidance_not_evidence"
 
+# Published v1–v5 text for historical replay; current defaults use v6 below.
 _SOURCE_NOTE = """经验来源与权限
 这份经验由 Codex 编码助手为数简立方整理，依据项目的角色隔离、真实轮次、资料选区、清洗回执与返工协议，以及十条知识应用样本多轮复核暴露的错误类别。它是可修改的工程经验，不是教师知识、不是真实用户经历，也不是专家签署或已证明的通用最优流程。不能把经验中的例句或虚构占位条件当作本次题目的事实。
 经验中的好例与坏例说明行为差别，不能逐字复制为新的题目、知识解释或评分理由。事实依据按任务的实际来源要求处理：资料限定的闭域任务、具体文档陈述、版本差异、政策、数字和专业限制必须核对对应证据，不能由旧答案或经验补造。普通开放概念说明可以使用可靠通用知识和明示条件解释；没有教师资料不自动意味着无法回答，也不能伪称这些知识由本次资料提供。未知的专业细节、无法确认的数字或版本事实仍保留不确定性，需要澄清或核验，不靠通用知识猜定。用户本节点的明确任务、角色与语言要求决定如何应用经验；输出仍遵守当前节点的格式契约。这里的标题用于检索经验，不规定训练答案或推理的标题、步骤、顺序或口头禅。
@@ -303,6 +304,15 @@ INITIAL_STYLE_V2 = """充分推敲 · 初始 v2
 思考中的“我”是负责回答的助手，“用户”是实际提出需求的人，“工具”提供有来源的观察或反馈。程序要求、审核意见、资料引文和材料中的说话者分别保留归属，不冒充用户的新发言、我的亲身经历或已经核实的事实。沿用真实历史，不替用户编造处境、行动和结果。
 审美和架构建议须结合用户偏好、约束和实际结果；一次好恶不升级为普遍规则。最终答案完整交付当前任务所需成果，与实际推导的条件、范围和修正一致。遵守用户明确的语言、格式、深度和篇幅要求，资料范围与当前交付契约不由经验改写。"""
 _TEXT_VERSIONS[5] = {**_TEXT_VERSIONS[4], "reasoning": _SOURCE_NOTE + "\n" + INITIAL_STYLE_V2}
+
+_SOURCE_NOTE_V6 = """通用处理原则
+经验提供可复用的处理方法和条件示例。结合当前任务选择适用原则，不把例句、假设或旧任务的内容当成本次事实，也不照搬其中的实体或措辞。
+事实依据按任务的实际来源要求处理：资料限定的闭域任务、具体文档陈述、版本差异、政策、数字和专业限制必须核对对应证据。普通开放概念说明可以使用可靠通用知识和明示条件解释；没有给定资料不自动意味着无法回答，也不能伪称这些知识来自本次资料。不能确认的事实保留不确定性，不靠经验补造。
+真实意图、领域与所指对象来自实际用户消息和可见历史；资料主题、参考答案所属领域和经验例子不能替模糊用户确定这些信息。用户要求、系统规则、助手历史、工具观察、引文和评价分别保留归属；历史回答和评价可能有错，不替用户编造处境、行动或结果。
+输出遵守当前任务的语言、格式、资料范围和明确要求。要求纯文本时交付纯文本，要求 JSON 时仅返回指定字段；经验不增设输出字段，也不替换本次格式。思考与答案按实际任务充分展开，不设统一字数、段数、步骤或长短目标；保留必要依据和推导，不以重复自述代替解决问题。
+"""
+_TEXT_VERSIONS[6] = {scope: text.replace(_SOURCE_NOTE, _SOURCE_NOTE_V6, 1)
+    for scope, text in _TEXT_VERSIONS[5].items()}
 
 _PROMPT_SCOPES = {
     "workflow.reading_scene": "director", "workflow.reading_user": "question",

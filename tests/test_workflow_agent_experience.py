@@ -53,7 +53,8 @@ def test_new_run_pins_experience_and_reuse_copies_the_exact_body(tmp_path, nativ
                             agent_experience={"answer": {"enabled": True, "text": text}})
     recipe = json.loads((engine.run_path(output, rid) / "recipe.json").read_text(encoding="utf-8"))
     assert recipe["agent_experience_version"] == 1
-    assert recipe["agent_experience"]["version"] == 5
+    assert recipe["agent_experience"]["version"] == 6
+    assert all("Codex" not in scope["text"] for scope in recipe["agent_experience"]["scopes"].values())
     assert recipe["agent_experience"]["scopes"]["reasoning"]["text"] == default_experience_text("reasoning")
     if native:
         assert recipe["native_feedback_guidance_version"] == 7

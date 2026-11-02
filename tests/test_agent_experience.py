@@ -18,13 +18,21 @@ def mock_llm_server():
     yield
 
 
-def test_builtin_experience_keeps_rich_conditional_examples_and_truthful_provenance():
+def test_current_defaults_keep_functional_boundaries_without_author_or_project_provenance():
     for scope in EXPERIENCE_SCOPES:
+        current = default_experience_text(scope)
+        for unrelated in ("Codex", "编码助手", "数简立方", "十条知识应用样本", "项目的角色隔离",
+                          "工程经验", "不是专家签署或已证明的通用最优流程", "清洗回执与返工协议"):
+            assert unrelated not in current
+        assert "不把例句、假设或旧任务的内容当成本次事实" in current
+        assert "用户要求、系统规则、助手历史、工具观察、引文和评价分别保留归属" in current
+        assert "不替用户编造处境、行动或结果" in current
+        assert "不设统一字数、段数、步骤或长短目标" in current
+        # The historical examples remain available without becoming current provenance.
         text = default_experience_text(scope, version=3)
         assert 4096 < len(text.encode("utf-8")) < MAX_EXPERIENCE_BYTES
         assert "好例：" in text and "坏例：" in text
         assert "条件经验：" in text and ("失败回顾" in text or "失败反馈" in text)
-        assert "Codex 编码助手" in text and "不是专家签署" in text
         assert "不是教师知识" in text and "不能逐字复制" in text
     assert "不规定训练答案或推理的标题、步骤、顺序" in default_experience_text("reasoning", version=3)
     assert "模糊输入用于练习澄清" in default_experience_text("question")
@@ -38,7 +46,7 @@ def test_all_roles_defer_schema_and_unknown_domain_to_the_actual_stage_and_user(
     for scope in EXPERIENCE_SCOPES:
         text = default_experience_text(scope)
         assert "要求纯文本时交付纯文本，要求 JSON 时仅返回指定字段" in text
-        assert "长期经验不新增 answer 字段" in text
+        assert "经验不增设输出字段，也不替换本次格式" in text
         assert "资料主题、参考答案所属领域和经验例子不能替模糊用户确定" in text
         assert "普通开放概念说明可以使用可靠通用知识" in text
         assert "资料限定的闭域任务" in text and "必须核对对应证据" in text
@@ -122,7 +130,7 @@ def test_invalid_scope_cannot_restore_or_export_a_different_roles_text(scope):
         experience_prompt_payload(scope)
 
 
-@pytest.mark.parametrize("version", [True, "1", 1.0, 0, 6, None])
+@pytest.mark.parametrize("version", [True, "1", 1.0, 0, 7, None])
 def test_default_version_must_be_a_known_immutable_integer(version):
     with pytest.raises(ValueError, match="invalid_agent_experience_version"):
         default_experience_text("director", version=version)
@@ -142,7 +150,7 @@ def test_text_limit_counts_exact_utf8_bytes_instead_of_character_count(text):
 
 def test_complete_snapshot_pins_version_raw_text_and_enabled_flags():
     pack = snapshot_agent_experience()
-    assert pack["version"] == AGENT_EXPERIENCE_VERSION == 5
+    assert pack["version"] == AGENT_EXPERIENCE_VERSION == 6
     assert pack["kind"] == EXPERIENCE_KIND
     assert set(pack["scopes"]) == set(EXPERIENCE_SCOPES)
     for scope, config in pack["scopes"].items():
@@ -203,7 +211,7 @@ def test_published_versions_one_to_four_keep_literal_snapshots():
         4: "e867e1a89c7c57b6e286ea0029e23f5c3258db46096eac5db0b4b98579aff32d",
     }
     packs = {version: snapshot_agent_experience(version=version) for version in hashes}
-    assert snapshot_agent_experience()["version"] == 5
+    assert snapshot_agent_experience()["version"] == 6
     for version, expected_sha in hashes.items():
         assert packs[version]["sha256"] == expected_sha
         assert validate_agent_experience_snapshot(packs[version]) == packs[version]
@@ -242,8 +250,8 @@ def test_version_five_changes_only_default_reasoning_and_keeps_frozen_public_exp
     from lib.domain.agent_experience import INITIAL_STYLE_V1, INITIAL_STYLE_V2
 
     prior = snapshot_agent_experience(version=4)
-    current = snapshot_agent_experience()
-    assert current == snapshot_agent_experience(version=5)
+    current = snapshot_agent_experience(version=5)
+    assert current["sha256"] == "2a1d090e4b969948a32cbaf4004212ca7dfbcae98860ef1ef17e5cbc4db21006"
     assert validate_agent_experience_snapshot(current) == current
     text = current["scopes"]["reasoning"]["text"]
     assert text.endswith(INITIAL_STYLE_V2)
