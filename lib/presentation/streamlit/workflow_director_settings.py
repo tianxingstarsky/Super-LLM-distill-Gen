@@ -22,9 +22,9 @@ TYPE_LABELS = {
 }
 DIRECTED_TARGETS = frozenset({"sft", "multiturn", "dpo", "orpo", "rlaif", "cot"})
 LEARNING_GOAL_LABELS = {
-    "knowledge_application": "运用已学知识",
-    "document_reading": "阅读用户资料",
-    "mixed": "兼顾两种能力",
+    "mixed": "知识为主，穿插资料",
+    "knowledge_application": "仅知识问答",
+    "document_reading": "仅资料问答",
 }
 USER_LANGUAGE_LABELS = {"zh": "中文", "en": "英文"}
 _LEGACY_RULE_DEFAULTS = {
@@ -64,9 +64,9 @@ def director_snapshot(workspace: str, *, eligible=True) -> dict:
     mode = _field(workspace, f"workflow-director-mode:{workspace}", "adaptive")
     context_mode = _field(workspace, f"workflow-director-context-mode:{workspace}", "persistent")
     languages = _field(workspace, f"workflow-director-user-languages:{workspace}", ["zh", "en"])
-    return {
+    config = {
         "enabled": True,
-        "learning_goal": _field(workspace, f"workflow-director-learning-goal:{workspace}", "knowledge_application"),
+        "learning_goal": _field(workspace, f"workflow-director-learning-goal:{workspace}", "mixed"),
         "user_languages": (list(dict.fromkeys(languages))
                            if isinstance(languages, list) and all(isinstance(item, str) for item in languages)
                            else languages),
@@ -84,6 +84,70 @@ def director_snapshot(workspace: str, *, eligible=True) -> dict:
         "answer_rules": _field(workspace, f"workflow-director-answer-rules:{workspace}", DEFAULT_ANSWER_RULES),
         "human_augmentation": human_snapshot(workspace),
     }
+    if (config["learning_goal"] == "mixed"
+            and _field(workspace, f"workflow-director-goal-mix-version:{workspace}", 1) == 1):
+        config["learning_goal_mix"] = {"version": 1, "document_reading_probability":
+            _field(workspace, f"workflow-director-reading-probability:{workspace}", 20) / 100}
+    return config
+
+
+def _save_learning_goal(workspace, key, save_field):
+    if st.session_state[key] == "mixed":
+        version_key = f"workflow-director-goal-mix-version:{workspace}"
+        st.session_state[version_key] = 1
+        save_field(workspace, version_key)
+    save_field(workspace, key)
+
+
+def _save_reading_probability(workspace, key, save_field):
+    version_key = f"workflow-director-goal-mix-version:{workspace}"
+    st.session_state[version_key] = 1
+    save_field(workspace, version_key)
+    save_field(workspace, key)
+
+
+def _render_learning_goal_controls(workspace, language, save_field):
+    goals = {key: translate_label(label, language) for key, label in LEARNING_GOAL_LABELS.items()}
+    languages = {key: translate_label(label, language) for key, label in USER_LANGUAGE_LABELS.items()}
+    goal_column, language_column = st.columns(2, gap="small")
+    with goal_column:
+        key = f"workflow-director-learning-goal:{workspace}"
+        st.session_state[key] = _field(workspace, key, "mixed")
+        goal = st.selectbox("Generation content" if language == "en" else "生成内容", tuple(goals), key=key,
+            format_func=goals.__getitem__, on_change=_save_learning_goal, args=(workspace, key, save_field))
+    with language_column:
+        key = f"workflow-director-user-languages:{workspace}"
+        st.session_state[key] = _field(workspace, key, ["zh", "en"])
+        st.multiselect("User languages" if language == "en" else "用户语言", tuple(languages), key=key,
+            format_func=languages.__getitem__, on_change=_save_user_languages, args=(workspace, key, save_field),
+            help=("New dialogue designs only; imported conversations retain their original text."
+                  if language == "en" else "用于新设计的用户表达；已有人工问答和导入对话保持原文。"))
+    if st.session_state.get(f"director-user-languages-required:{workspace}"):
+        st.caption("Keep at least one user language; the previous selection was restored." if language == "en"
+                   else "至少保留一种用户语言，已恢复上次选择。")
+    if goal == "mixed":
+        key = f"workflow-director-reading-probability:{workspace}"
+        st.session_state[key] = float(_field(workspace, key, 20.0))
+        reading = st.slider("Document Q&A probability" if language == "en" else "资料问答触发概率",
+            min_value=0.0, max_value=100.0, step=1.0, format="%g%%", key=key,
+            on_change=_save_reading_probability, args=(workspace, key, save_field),
+            help=("Approximate chance per new task, not a required batch ratio. 0% keeps knowledge Q&A; 100% selects document Q&A."
+                  if language == "en" else "逐条任务的大致触发概率，不要求每批凑足配比。0% 只生成知识问答，100% 选择资料问答。"))
+        st.caption(f"Knowledge Q&A ≈ {100-reading:g}% · Document Q&A ≈ {reading:g}%" if language == "en"
+                   else f"知识问答约 {100-reading:g}% · 资料问答约 {reading:g}%")
+        if _field(workspace, f"workflow-director-goal-mix-version:{workspace}", 1) != 1:
+            st.caption("This copied draft keeps its legacy routing until you change the probability." if language == "en"
+                       else "该草稿沿用原混合规则；调整概率后启用新的分支策略。")
+        st.caption("Knowledge Q&A keeps teacher context private. Document Q&A includes the required reading text in the training input."
+                   if language == "en" else "知识问答不向训练用户附原文；资料问答将必要阅读内容放入训练输入。")
+        st.caption("The probability adds no model call. Missing reading material is never invented."
+                   if language == "en" else "分支选择不增加模型调用；资料不足时不编造阅读内容。")
+    else:
+        st.caption(("Teacher context stays private; the training user receives no source text." if goal == "knowledge_application"
+                    else "The training user receives the required source text for reading and checking.") if language == "en"
+                   else ("教师知识用于生成与核验；训练用户消息不附原文。" if goal == "knowledge_application"
+                         else "必要原文随用户消息提供，训练阅读、引用与核对资料的能力。"))
+    return goal
 
 
 def _save_user_languages(workspace, key, save_field):
@@ -127,6 +191,7 @@ def render_director_settings(workspace: str, *, save_field) -> None:
     if st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning"):
         st.caption("资料解析 → CPT 语料处理 → 对话指导员 → SFT / 多轮对话。指导员只使用清洗合格的资料。")
     language = st.session_state.get("ui_language", "zh")
+    learning_goal = _render_learning_goal_controls(workspace, language, save_field)
     context_key = f"workflow-dialogue-style-contexts:{workspace}"
     st.session_state[context_key] = _field(workspace, context_key, True)
     st.toggle("Load context by dialogue style" if language == "en" else "按对话风格调用上下文",
@@ -142,29 +207,6 @@ def render_director_settings(workspace: str, *, save_field) -> None:
         for context in dialogue_style_context_catalog()["contexts"].values():
             st.markdown("**" + translate_label(context["label"], language) + "** · "
                         + translate_label(context["description"], language))
-    goals = {key: translate_label(label, language) for key, label in LEARNING_GOAL_LABELS.items()}
-    languages = {key: translate_label(label, language) for key, label in USER_LANGUAGE_LABELS.items()}
-    goal_column, language_column = st.columns(2, gap="small")
-    with goal_column:
-        key = f"workflow-director-learning-goal:{workspace}"
-        st.session_state[key] = _field(workspace, key, "knowledge_application")
-        learning_goal = st.selectbox("训练用途", tuple(goals), key=key,
-            format_func=goals.__getitem__, on_change=save_field, args=(workspace, key),
-            help="选择新样本要训练的能力。CPT 语料处理不代表模型已学会资料，也不保证后续训练效果。")
-    with language_column:
-        key = f"workflow-director-user-languages:{workspace}"
-        st.session_state[key] = _field(workspace, key, ["zh", "en"])
-        st.multiselect("用户语言", tuple(languages), key=key, format_func=languages.__getitem__,
-            on_change=_save_user_languages, args=(workspace, key, save_field),
-            help="至少选择一种语言，用于指导员新设计的用户表达。已有人工问答和导入对话保持原文。")
-    if st.session_state.get(f"director-user-languages-required:{workspace}"):
-        st.caption("至少保留一种用户语言，已恢复上次选择。")
-    goal_help = {
-        "knowledge_application": "教师私有资料用于生成与核验；训练用户消息不附原文。",
-        "document_reading": "必要原文随用户消息提供，训练阅读、引用与核对资料的能力。",
-        "mixed": "兼顾知识应用与文档阅读；每条样本清楚区分用户是否能看到原文。",
-    }
-    st.caption(goal_help[learning_goal])
     st.caption("每段对话使用一种主要用户语言，答案跟随用户；推理语言在 SFT、多轮或 CoT 节点独立设置。")
     if st.session_state.get(f"workflow-creation-mode:{workspace}") == "人工问答增强":
         st.caption("训练用途与语言用于新设计的互动；已有人工问答及导入对话保持原文。")
@@ -229,13 +271,15 @@ def render_director_settings(workspace: str, *, save_field) -> None:
     if learning_goal == "knowledge_application":
         st.caption("本用途只生成不附教师原文的直接任务；题型配比不改变此边界。")
         return
-    st.markdown("**问答类型配比**")
+    probability_mix = bool(director_snapshot(workspace).get("learning_goal_mix"))
+    st.markdown(("**Document Q&A types**" if language == "en" else "**资料问答内容类型**")
+                if probability_mix else "**问答类型配比**")
     if learning_goal == "document_reading":
         st.caption("仅在附有用户可见原文的题型间分配；无线索问答配比会保留，但不用于本用途。")
     language = st.session_state.get("ui_language", "zh")
     columns = st.columns(3, gap="small")
     visible_weights = [(name, default) for name, default in DEFAULT_TYPE_WEIGHTS.items()
-                       if learning_goal != "document_reading" or name != "closed_book"]
+                       if name != "closed_book" or learning_goal != "document_reading" and not probability_mix]
     for index, (name, default) in enumerate(visible_weights):
         key = f"workflow-director-weight:{workspace}:{name}"
         st.session_state[key] = _field(workspace, key, default)

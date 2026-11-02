@@ -46,7 +46,7 @@ class RegeneratePlannedSft:
             instruction += "\n" + task_instruction
         row = self.port.generate(stage="sft", unit=unit, messages=prompt,
             style=deepcopy(original.get("generation_style")),
-            source_text=authenticated_teacher_text(original, evidence),
+            source_text=authenticated_teacher_text(original, evidence, recipe=parent),
             source_scope=(original.get("provided_source_context") or {}).get("scope", "selected_lines"),
             instruction=instruction)
         row["qa_contract"] = deepcopy(original["qa_contract"])

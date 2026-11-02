@@ -52,7 +52,7 @@ def validate_qa_director(value: dict | None) -> dict:
     """Normalize a bounded, serializable director recipe without hidden fields."""
     if value is None:
         return {"enabled": False}
-    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation", "question_separation", "context_mode", "tools_mode", "learning_goal", "user_languages"}
+    allowed = {"enabled", "batch_size", "history_limit", "type_weights", "question_rules", "answer_rules", "planning_mode", "human_augmentation", "question_separation", "context_mode", "tools_mode", "learning_goal", "learning_goal_mix", "user_languages"}
     if not isinstance(value, dict) or set(value) - allowed or type(value.get("enabled", False)) is not bool:
         raise ValueError("invalid_qa_director")
     human = validate_human_augmentation(value.get("human_augmentation"))
@@ -69,6 +69,12 @@ def validate_qa_director(value: dict | None) -> dict:
         raise ValueError("invalid_qa_director_planning_mode")
     if human["enabled"]:
         planning_mode = "adaptive"
+    mix = None
+    if "learning_goal_mix" in value:
+        from lib.contexts.workflows.domain.qa_learning_goal_routing import validate_learning_goal_mix
+        mix = validate_learning_goal_mix(value["learning_goal_mix"])
+        if value.get("learning_goal") != "mixed":
+            raise ValueError("qa_director_learning_goal_mix_requires_mixed")
     if type(batch_size) is not int or not 1 <= batch_size <= 50:
         raise ValueError("invalid_qa_director_batch_size")
     if type(history_limit) is not int or not 0 <= history_limit <= 20:
@@ -77,7 +83,8 @@ def validate_qa_director(value: dict | None) -> dict:
     if (not isinstance(weights, dict) or set(weights) != set(QA_TYPES)
             or any(type(weight) is not int or not 0 <= weight <= 100 for weight in weights.values())
             or (planning_mode == "balanced" and sum(weights.values()) <= 0
-                and value.get("learning_goal") != "knowledge_application")):
+                and value.get("learning_goal") != "knowledge_application"
+                and not (mix is not None and mix["document_reading_probability"] == 0))):
         raise ValueError("invalid_qa_director_type_weights")
     rules = {}
     for name, default in (("question_rules", DEFAULT_QUESTION_RULES), ("answer_rules", DEFAULT_ANSWER_RULES)):
@@ -100,6 +107,11 @@ def validate_qa_director(value: dict | None) -> dict:
             raise ValueError("invalid_qa_director_learning_goal")
         result["learning_goal"] = value["learning_goal"]
         if (planning_mode == "balanced" and value["learning_goal"] == "document_reading"
+                and not sum(weight for kind, weight in weights.items() if kind != "closed_book")):
+            raise ValueError("invalid_qa_director_learning_goal_weights")
+    if "learning_goal_mix" in value:
+        result["learning_goal_mix"] = mix
+        if (planning_mode == "balanced" and result["learning_goal_mix"]["document_reading_probability"] > 0
                 and not sum(weight for kind, weight in weights.items() if kind != "closed_book")):
             raise ValueError("invalid_qa_director_learning_goal_weights")
     if "user_languages" in value:

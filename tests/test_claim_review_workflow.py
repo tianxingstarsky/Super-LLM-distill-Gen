@@ -140,6 +140,27 @@ def test_review_keeps_only_current_frozen_style_and_learning_goal_without_old_pl
     assert "generation_style" not in current_claim_review_requirements(probe, "multiturn", row)
 
 
+@pytest.mark.parametrize("probability,goal,qa_type", [
+    (0, "knowledge_application", "closed_book"),
+    (1, "document_reading", "grounded"),
+])
+def test_mixed_claim_review_uses_frozen_per_record_goal_in_existing_request(probability, goal, qa_type):
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    probe, row = Probe(), sample()
+    probe.recipe.update(qa_learning_goal_mix_seed="frozen-run",
+        qa_director={"enabled": True, "learning_goal": "mixed",
+            "learning_goal_mix": {"version": 1, "document_reading_probability": probability}})
+    route = learning_goal_route(probe.recipe, row["id"], reading_material_available=True)
+    row["qa_contract"] = {"id": row["id"], "qa_type": qa_type, "learning_goal": goal,
+        "learning_goal_routing": route, "guidance": "PRIVATE_DIRECTOR_PLAN"}
+    requirements = current_claim_review_requirements(probe, "sft", row)
+    assert requirements["learning_goal"] == goal
+    result = probe._review_claim_score("sft", row, probe._review_evidence(row), [row["id"]])
+    assert accepted(result) and len(probe.calls) == 1
+    assert probe.calls[0]["data"]["review_requirements"]["learning_goal"] == goal
+    assert "PRIVATE_DIRECTOR_PLAN" not in canonical(probe.calls[0]["data"])
+
+
 def test_changed_current_style_invalidates_exact_scope_even_when_body_is_unchanged():
     probe, row = Probe(audit=True), sample()
     probe.recipe["node_generation"] = {"sft": {"enabled": True, "style": "custom", "instruction": "STYLE_A"}}
@@ -322,6 +343,7 @@ def real_worker(tmp_path, client, *, jev=None, package_review=None):
     path = engine.run_path(output, run_id)
     recipe = engine.read_json(path / "recipe.json")
     recipe["claim_review_protocol_version"] = 1
+    recipe.pop("claim_review_schedule_version", None)
     recipe.pop("claim_review_quote_matching_version", None)
     recipe.pop("claim_reference_policy_version", None)
     recipe.pop("claim_review_experience_scope_version", None)

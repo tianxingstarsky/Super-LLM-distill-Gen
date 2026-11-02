@@ -8,6 +8,9 @@ from lib.domain.workflow_qa_director import (
     validate_director_task, validate_dialogue_step, validate_qa_director, validate_question_brief,
 )
 from lib.infrastructure.workflow_qa_director import WorkflowQADirector, learner_prompt
+from lib.contexts.workflows.domain.qa_learning_goal_routing import (
+    learning_goal_route, effective_learning_goal, repair_learning_goal_mix,
+)
 
 
 SOURCE = "Disconnect power before inspecting equipment."
@@ -124,6 +127,8 @@ class Planner(WorkflowQADirector):
             "qa_director": {"coverage": {kind: dict.fromkeys(("planned", "assigned", "accepted", "rejected"), 0)
                                         for kind in QA_TYPES}, "feedback": {}, "batches_planned": 0}}
         self.path, self.calls, self.events, self.cached, self.chosen = tmp_path, [], [], {}, chosen
+        if self.recipe["qa_director"].get("learning_goal_mix") is not None:
+            self.recipe["qa_learning_goal_mix_seed"] = "frozen-test-run"
     def save(self, **kwargs):
         pass
     def activate_directed_stage(self, stage):
@@ -270,3 +275,85 @@ def test_blind_questioner_fit_and_followup_share_language_without_receiving_teac
              "dialogue_state": {}, "user_language": "zh"}
     with pytest.raises(ValueError, match="user_language_mismatch"):
         validate_dialogue_step(wrong, completed_turns=1, user_language="en")
+
+
+def test_mixed_policy_is_explicit_and_validates_probability_and_reading_weights():
+    assert "learning_goal_mix" not in config(learning_goal="mixed")
+    for probability in (0, .125, .2, 1):
+        selected = config(learning_goal="mixed", learning_goal_mix={"version": 1,
+            "document_reading_probability": probability})
+        assert selected["learning_goal_mix"]["document_reading_probability"] == probability
+    for policy in ({}, {"version": 2, "document_reading_probability": .2},
+                   {"version": True, "document_reading_probability": .2},
+                   {"version": 1, "document_reading_probability": True},
+                   {"version": 1, "document_reading_probability": float("nan")},
+                   {"version": 1, "document_reading_probability": -1},
+                   {"version": 1, "document_reading_probability": 1.01}):
+        with pytest.raises(ValueError, match="invalid_qa_director_learning_goal_mix"):
+            config(learning_goal="mixed", learning_goal_mix=policy)
+    with pytest.raises(ValueError, match="mix_requires_mixed"):
+        config(learning_goal="knowledge_application", learning_goal_mix={"version": 1, "document_reading_probability": .2})
+    zero = dict.fromkeys(QA_TYPES, 0)
+    assert config(learning_goal="mixed", planning_mode="balanced", type_weights=zero,
+        learning_goal_mix={"version": 1, "document_reading_probability": 0})["type_weights"] == zero
+    with pytest.raises(ValueError, match="learning_goal_weights"):
+        config(learning_goal="mixed", planning_mode="balanced", type_weights={**zero, "closed_book": 100},
+            learning_goal_mix={"version": 1, "document_reading_probability": .2})
+
+
+@pytest.mark.parametrize("probability,goal,kind", [(0, "knowledge_application", "closed_book"), (1, "document_reading", "grounded")])
+@pytest.mark.parametrize("mode", ["adaptive", "balanced"])
+def test_mixed_route_is_frozen_before_the_existing_plan_and_preserves_learner_roles(tmp_path, probability, goal, kind, mode):
+    worker = Planner(tmp_path, {"learning_goal": "mixed", "planning_mode": mode,
+        "learning_goal_mix": {"version": 1, "document_reading_probability": probability}}, chosen=kind)
+    rows = worker._director_batch_plan(units(2), 0, worker.recipe["qa_director"], None, None, ["sft", "multiturn"])
+    assert len(worker.calls) == 1
+    candidates = worker.calls[0][1]["candidates"]
+    assert all(candidate["learning_goal"] == goal for candidate in candidates)
+    assert all(candidate["learning_goal_routing"]["learning_goal"] == goal for candidate in candidates)
+    assert all(effective_learning_goal(worker.recipe, row["qa_contract"]) == goal for row in rows)
+    assert all((SOURCE in learner_prompt(row["qa_contract"])) == (goal == "document_reading") for row in rows)
+    assert worker._director_batch_plan(units(2), 0, worker.recipe["qa_director"], None, None, ["sft", "multiturn"]) == rows
+    assert len(worker.calls) == 1
+
+
+def test_hash_mix_interleaves_one_run_without_a_type_quota_or_retry_dependency(tmp_path):
+    worker = Planner(tmp_path, {"learning_goal": "mixed",
+        "learning_goal_mix": {"version": 1, "document_reading_probability": .2}})
+    originals = [learning_goal_route(worker.recipe, f"unit-{index}", reading_material_available=True) for index in range(50)]
+    assert {receipt["learning_goal"] for receipt in originals} == {"knowledge_application", "document_reading"}
+    worker.state["production"]["attempted"] = 999
+    replay = [learning_goal_route(worker.recipe, f"unit-{index}", reading_material_available=True) for index in range(50)]
+    assert replay == originals
+    batch = [{"id": f"unit-{index}", "source_id": "source", "text": SOURCE, "kind": "document"} for index in range(12)]
+    rows = worker._director_batch_plan(batch, 0, worker.recipe["qa_director"], None, None, ["sft"])
+    assert {row["qa_contract"]["learning_goal"] for row in rows} == {"knowledge_application", "document_reading"}
+    assert len(worker.calls) == 1
+
+
+def test_mix_cannot_change_fixed_human_input_or_invent_reading_material(tmp_path):
+    options = {"learning_goal": "mixed", "learning_goal_mix": {"version": 1, "document_reading_probability": 1}}
+    worker = Planner(tmp_path, options, chosen="closed_book")
+    synthetic = [{**units(1)[0], "kind": "brief"}]
+    rows = worker._director_batch_plan(synthetic, 0, worker.recipe["qa_director"], None, None, ["sft"])
+    receipt = rows[0]["qa_contract"]["learning_goal_routing"]
+    assert receipt["selected_learning_goal"] == "document_reading"
+    assert receipt["learning_goal"] == "knowledge_application" and receipt["reason"] == "reading_material_unavailable"
+    assert learner_prompt(rows[0]["qa_contract"]) == rows[0]["qa_contract"]["question"]
+    human = Planner(tmp_path, {**options, "human_augmentation": {"enabled": True,
+        "seeds": [{"question": "Keep my actual question.", "answer": "Disconnect power."}]}}, chosen="grounded")
+    fixed = human._director_batch_plan(units(1), 0, human.recipe["qa_director"], None, None, ["sft"])
+    assert fixed[0]["qa_contract"]["question"] == "Keep my actual question."
+    assert "learning_goal_routing" not in fixed[0]["qa_contract"]
+    assert len(human.calls) == 1
+
+
+def test_fixed_task_children_keep_parent_seed_and_reject_incompatible_routed_parents():
+    parent = {"qa_learning_goal_mix_seed": "parent-run", "qa_director": config(learning_goal="mixed",
+        learning_goal_mix={"version": 1, "document_reading_probability": .2})}
+    assert repair_learning_goal_mix([parent, deepcopy(parent)]) == parent
+    assert repair_learning_goal_mix([{}, {"qa_director": {"learning_goal": "mixed"}}]) is None
+    with pytest.raises(ValueError, match="mix_incompatible_parents"):
+        repair_learning_goal_mix([parent, {**parent, "qa_learning_goal_mix_seed": "other-parent"}])
+    with pytest.raises(ValueError, match="mix_incompatible_parents"):
+        repair_learning_goal_mix([parent, {"qa_director": {"learning_goal": "knowledge_application"}}])

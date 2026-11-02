@@ -4,7 +4,7 @@ from copy import deepcopy
 import hashlib
 from lib.domain.workflow_quality import canonical, conversation_issue, text_issue
 from lib.contexts.workflows.contracts import (
-    TRAINING_FIELDS, PREFERENCE_TARGETS, training_record, retire_imported_reasoning,
+    TRAINING_FIELDS, PREFERENCE_TARGETS, training_record, retire_imported_reasoning, effective_learning_goal,
 )
 from lib.domain.math_tasks import validate_math_candidate
 from lib.domain.source_quote import quote_spans
@@ -172,7 +172,7 @@ def _row_training_surface_issue(target, row, recipe=None):
         if (recipe or {}).get("knowledge_application_voice_version") == 3:
             voice["knowledge_application_voice_version"] = 3
             if "learning_goal" in (recipe or {}).get("qa_director", {}):
-                voice["learning_goal"] = recipe["qa_director"]["learning_goal"]
+                voice["learning_goal"] = effective_learning_goal(recipe, row.get("qa_contract"))
         return training_record_surface_issue(target, row, protocol_version=2, **voice)
     if target not in {"sft", "multiturn", "agent", "cot"}:
         return None

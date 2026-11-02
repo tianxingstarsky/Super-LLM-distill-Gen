@@ -14,16 +14,21 @@ def native_context_contract(recipe, sample, task, contract):
         raise ValueError("invalid_native_context_contract_version")
     from lib.domain.workflow_qa_director import LEARNING_GOALS, QA_TYPES
     from lib.domain.knowledge_voice import knowledge_voice_rules
+    from .qa_learning_goal_routing import effective_learning_goal
 
-    goal = recipe.get("qa_director", {}).get("learning_goal")
-    goal = goal if goal in LEARNING_GOALS else None
     supplied = sample.get("qa_contract")
+    goal = effective_learning_goal(recipe, supplied)
+    goal = goal if goal in LEARNING_GOALS else None
     qa_type = supplied.get("qa_type") if isinstance(supplied, dict) else None
     qa_type = qa_type if qa_type in QA_TYPES else None
     excerpt_only = contract["source_scope"] == "learner_excerpt_only"
     source = task.get("source")
+    routed_reading = (recipe.get("qa_director", {}).get("learning_goal_mix") is not None
+        and isinstance(supplied, dict) and supplied.get("learning_goal_routing") is not None
+        and goal == "document_reading" and excerpt_only)
     return {"version": 1, "learning_goal": goal, "qa_type": qa_type,
-        "teacher_source_visibility": "private" if isinstance(source, dict) and source.get("text") else "not_provided",
+        "teacher_source_visibility": ("learner_visible" if routed_reading else
+            "private" if isinstance(source, dict) and source.get("text") else "not_provided"),
         "learner_excerpt_only": excerpt_only,
         "knowledge_application_voice": bool(knowledge_voice_rules(goal, {"qa_type": qa_type})) and not excerpt_only}
 

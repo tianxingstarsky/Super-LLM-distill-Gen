@@ -29,11 +29,12 @@ KNOWLEDGE_VOICE_RULES_V3 = (
 )
 
 
-def knowledge_voice_options(recipe):
+def knowledge_voice_options(recipe, contract=None):
     if recipe.get("knowledge_application_voice_version") != KNOWLEDGE_VOICE_VERSION:
         return {}
+    from lib.contexts.workflows.contracts import effective_learning_goal
     return {"knowledge_application_voice_version": KNOWLEDGE_VOICE_VERSION,
-            "learning_goal": recipe.get("qa_director", {}).get("learning_goal")}
+            "learning_goal": effective_learning_goal(recipe, contract)}
 
 
 def knowledge_voice_rules(learning_goal=None, contract=None):

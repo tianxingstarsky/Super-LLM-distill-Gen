@@ -7,6 +7,13 @@ from lib.domain.workflow_quality import text_issue
 from ..domain.reading_session import READING_PROMPTS, reading_request_messages
 
 
+_READING_AUTHOR_PROMPTS = frozenset({
+    "workflow.sft", "workflow.sft_styled", "workflow.sft_answer", "workflow.sft_directed",
+    "workflow.multiturn_assistant", "workflow.cot_generate", "workflow.cot_rationale",
+    "workflow.cot_native_answer", "workflow.trim",
+})
+
+
 class CheckpointedModelRequest:
     def __init__(self, runtime, hooks):
         self.runtime, self.hooks = runtime, hooks
@@ -154,8 +161,25 @@ class CheckpointedModelRequest:
         from ..domain.authored_task_contract import (
             task_contract_enabled, compile_task_contract, project_task_context, task_contract_instruction,
         )
-        task_contract = None
-        if (task_contract_enabled(self.recipe) and request.prompt_id in {
+        task_contract = reading_task_contract = None
+        if request.role == "generation" and request.prompt_id in _READING_AUTHOR_PROMPTS:
+            from ..domain.qa_learning_goal_routing import routed_reading_excerpt
+            context = data.get("context") if isinstance(data.get("context"), dict) else data
+            qa_contract = context.get("qa_contract") or data.get("qa_contract")
+            actual = context.get("learner_messages", context.get("prompt",
+                data.get("learner_messages", data.get("prompt", []))))
+            excerpt = routed_reading_excerpt(runtime.recipe, qa_contract, actual)
+            if excerpt is not None:
+                if runtime.recipe.get("source_context_pack_version") == 1:
+                    from lib.infrastructure.model_context_prefix import split_context_request
+                    # Verify the original pack and selected ranges once before
+                    # removing all teacher copies from the disposable request.
+                    split_context_request(runtime.path, request.data,
+                        protocol_version=runtime.recipe.get("source_memory_protocol_version") or 1)
+                task_contract = {**compile_task_contract({"prompt": actual}),
+                    "source_scope": "learner_excerpt_only", "visible_excerpts": [excerpt]}
+                reading_task_contract = task_contract
+        if (task_contract is None and task_contract_enabled(self.recipe) and request.prompt_id in {
                 "workflow.cot_generate", "workflow.cot_rationale", "workflow.cot_native_answer"}):
             task_contract = compile_task_contract(data)
             data = project_task_context(data, task_contract)
@@ -182,9 +206,13 @@ class CheckpointedModelRequest:
         from lib.infrastructure.workflow_node_messages import split_node_rules
         rule_system, request_data = split_node_rules(
             data, instruction=stable_instruction, qa_director=runtime.recipe.get("qa_director"),
-            knowledge_application_voice_version=runtime.recipe.get("knowledge_application_voice_version"))
+            knowledge_application_voice_version=runtime.recipe.get("knowledge_application_voice_version"),
+            recipe=runtime.recipe)
         from lib.infrastructure.document_reading_context import project_reading_context
         request_data = project_reading_context(request_data)
+        if reading_task_contract is not None:
+            from ..domain.qa_learning_goal_routing import project_routed_reading_request
+            request_data = project_routed_reading_request(request_data, reading_task_contract)
         if dynamic_review_instruction is not None:
             # Scope hashes and current ids belong after the shared
             # system/source prefix, not before its reusable memory.

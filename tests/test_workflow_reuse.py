@@ -28,6 +28,19 @@ def source(path, *, name=None):
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
 
 
+def test_copy_preserves_probability_precision_and_keeps_legacy_mixed_policy():
+    old = recipe(qa_director={'enabled': True, 'learning_goal': 'mixed'})
+    legacy = recipe_to_draft(old, 'Legacy', 'w', [])['values']
+    assert legacy['workflow-director-goal-mix-version:w'] == 0
+    current = recipe(qa_director={'enabled': True, 'learning_goal': 'mixed',
+        'learning_goal_mix': {'version': 1, 'document_reading_probability': .125}})
+    before = deepcopy(current)
+    values = recipe_to_draft(current, 'Mixed', 'w', [])['values']
+    assert values['workflow-director-goal-mix-version:w'] == 1
+    assert values['workflow-director-reading-probability:w'] == 12.5
+    assert current == before
+
+
 def test_reuse_preserves_each_native_nodes_mode_style_and_guidance_without_mutating_recipe():
     from lib.contexts.datasets.api import default_control_text_config
     from lib.contexts.workflows.contracts import checklist_from_text

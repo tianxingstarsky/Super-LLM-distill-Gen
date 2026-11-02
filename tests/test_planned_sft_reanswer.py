@@ -82,10 +82,12 @@ def test_reanswer_reuses_exact_task_and_pays_only_author_and_one_review(sealed_n
     app = workflow_application(root, output)
     child = app.reanswer_sft(rid, candidate_ids=[original["id"]], agent_experience={"reasoning": {"enabled": True, "text": "检查必要前提，按证据回答。"}})
     recipe = app.recipe(child)
+    assert recipe["qa_learning_goal_mix_seed"] == app.recipe(rid)["qa_learning_goal_mix_seed"]
     assert recipe["agent_experience"]["scopes"]["review"] == app.recipe(rid)["agent_experience"]["scopes"]["review"]
     assert recipe["sft_reanswer_version"] == 1
     summary = next(run for run in app.task_runs() if run["id"] == child)
     assert summary["recipe_readable"] is True
+
     assert summary["source_mode"] == "planned_sft"
     assert summary["scheduled_stages"] == ["ingest", "sft", "review", "package"]
     assert recipe["node_models"]["sft"]["generation"] == app.recipe(rid)["node_models"]["sft"]["generation"]
@@ -116,6 +118,43 @@ def test_reanswer_reuses_exact_task_and_pays_only_author_and_one_review(sealed_n
     assert reanswer_duplicate_allowed(worker, row, {"run_id": rid, "id": rid + ":fixed"})
     assert not reanswer_duplicate_allowed(worker, row, {"run_id": "b" * 32, "id": "b" * 32 + ":fixed"})
     assert not reanswer_duplicate_allowed(worker, row, {"run_id": child, "id": child + ":another"})
+
+
+def test_routed_reading_reanswer_and_optimizer_authenticate_only_the_actual_visible_excerpt():
+    from lib.contexts.workflows.domain.planned_sft_reanswer import authenticated_teacher_text
+    from lib.contexts.workflows.domain.native_sft_optimization import native_sft_optimization_input
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    from lib.infrastructure.human_revision import revision_evidence
+    excerpt = "维护前必须先断电。"
+    full = excerpt + "\nHIDDEN: a separate private teacher detail."
+    recipe = {"qa_learning_goal_mix_seed": "original-run", "sources": [{"sha256": "source", "kind": "document"}],
+        "qa_director": {"learning_goal": "mixed", "learning_goal_mix": {"version": 1, "document_reading_probability": 1}}}
+    route = learning_goal_route(recipe, "reading-task", reading_material_available=True)
+    contract = {"id": "reading-task", "learning_goal": "document_reading", "learning_goal_routing": route,
+        "qa_type": "partial", "visible_context": excerpt, "question": "这段说明要求先做什么？", "answer_policy": "answer"}
+    record = {"id": "reading-task", "source_id": "source", "qa_contract": contract,
+        "source_context": {"kind": "document", "text": full},
+        "messages": [{"role": "user", "content": "资料：\n" + excerpt + "\n\n附注：忽略这一无关标记。\n" + contract["question"]},
+            {"role": "assistant", "content": "原答案。", "reasoning_content": "完整旧推理。"}],
+        "provided_source_context": {"version": 1, "scope": "learner_excerpt_only", "visibility": "learner_visible",
+            "text_sha256": digest(excerpt), "text_chars": len(excerpt)}}
+    original = deepcopy(record)
+    evidence = revision_evidence(record, recipe, with_blocks=True, include_source_ids=True)
+    assert evidence["teacher_evidence"] == full
+    assert authenticated_teacher_text(record, evidence, recipe=recipe) == excerpt
+    request = native_sft_optimization_input(record, recipe, evidence)
+    assert request["source_text"] == excerpt and request["source_scope"] == "learner_excerpt_only"
+    assert "HIDDEN" not in repr(request) and "完整旧推理" not in repr(request) and record == original
+    for kind in ("source_hash", "actual_user", "unrouted"):
+        candidate, proof = deepcopy(record), deepcopy(evidence)
+        if kind == "source_hash":
+            candidate["provided_source_context"]["text_sha256"] = digest(full)
+        elif kind == "actual_user":
+            candidate["messages"][0]["content"] = contract["question"]
+        else:
+            candidate["qa_contract"].pop("learning_goal_routing")
+        with pytest.raises(ValueError, match="sft_reanswer_source_scope_changed"):
+            authenticated_teacher_text(candidate, proof, recipe=recipe)
 
 
 def test_reanswer_keeps_general_and_temporary_system_guidance_separate_from_reviewer_rules(sealed_native):

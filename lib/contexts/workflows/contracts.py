@@ -22,6 +22,7 @@ from .domain.public_experience import initial_experience_text, without_injected_
 from .domain.conversation_reasoning import validate_conversation_reasoning
 from .domain.imported_reasoning import imported_reasoning_metadata, retire_imported_reasoning
 from .domain.dialogue_creation import requires_dialogue_director, prepare_new_dialogue_director
+from .domain.qa_learning_goal_routing import effective_learning_goal, routed_reading_excerpt
 from .domain.native_generation import native_generation_enabled, native_sft_to_cot_record
 from .domain.native_cot import native_instruction_scope_evidence
 from .domain.dialogue_context import project_answer_context

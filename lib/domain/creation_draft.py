@@ -36,12 +36,14 @@ NUMBER_FIELDS = {
     'workflow-package-review-limit': (1, MAX_PACKAGE_REVIEW_SAMPLES),
     'workflow-director-batch': (1, 50), 'workflow-director-history': (0, 20),
     'workflow-director-weight': (0, 100),
+    'workflow-director-goal-mix-version': (0, 1),
     'workflow-review-repair-rounds': (0, 5),
     'workflow-review-repair-threshold': (0, 100),
     'workflow-preference-negative-chars': (20, 1000),
     'workflow-preference-negative-ratio': (5, 50),
 }
 DECIMAL_FIELDS = {'workflow-package-review-percent': (MIN_PACKAGE_REVIEW_PERCENT, 100),
+                  'workflow-director-reading-probability': (0, 100),
                   'workflow-package-review-escalation': (0, 100),
                   'workflow-production-budget': (0, 1_000_000_000)}
 TEXT_FIELDS = {'workflow-name': 100, 'workflow-open-brief': 20000, 'workflow-math-theme': 20000,
@@ -157,6 +159,7 @@ def validate_creation_draft(values):
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
                      'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
                      'workflow-director-learning-goal', 'workflow-director-user-languages',
+                     'workflow-director-reading-probability', 'workflow-director-goal-mix-version',
                      *HUMAN_FIELDS, *NATIVE_CHECKLIST_FIELDS} and len(parts) != 2 and not model_initialized:
             raise ValueError('invalid_creation_draft')
         if field in NODE_GENERATION_FIELDS:

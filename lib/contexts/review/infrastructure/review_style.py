@@ -2,7 +2,7 @@
 from __future__ import annotations
 from copy import deepcopy
 from lib.domain.workflow_quality import canonical
-from lib.contexts.workflows.contracts import TRAINING_FIELDS
+from lib.contexts.workflows.contracts import TRAINING_FIELDS, effective_learning_goal
 from ..domain.automatic_rules import _authored_cot_language_v2, _authored_reasoning_language_requirements, _authored_reasoning_warmup_scope
 
 
@@ -65,9 +65,10 @@ def current_claim_review_requirements(workflow, target, row, *, instruction=""):
         if instruction:
             requirements["revision_instruction"] = instruction
     director = workflow.recipe.get("qa_director", {})
-    if director.get("enabled") is True and director.get("learning_goal") in {
+    goal = effective_learning_goal(workflow.recipe, row.get("qa_contract"))
+    if director.get("enabled") is True and goal in {
             "knowledge_application", "document_reading", "mixed"}:
-        requirements["learning_goal"] = director["learning_goal"]
+        requirements["learning_goal"] = goal
     scope = _authored_reasoning_warmup_scope(workflow.recipe, target, row)
     if scope is not None:
         language = _authored_reasoning_language_requirements(workflow.recipe, target, row)

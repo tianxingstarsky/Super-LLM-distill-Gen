@@ -19,6 +19,7 @@ def prepare_new_dialogue_director(value, targets, *, recorded_conversations=Fals
         "question_separation": True,
         "context_mode": "persistent",
         "tools_mode": "auto",
-        "learning_goal": "knowledge_application",
+        "learning_goal": "mixed",
+        "learning_goal_mix": {"version": 1, "document_reading_probability": .2},
         "user_languages": ["zh", "en"],
     })

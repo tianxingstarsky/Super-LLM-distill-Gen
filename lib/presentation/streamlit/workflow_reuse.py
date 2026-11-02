@@ -255,6 +255,10 @@ def recipe_to_draft(recipe: dict, name: str, workspace: str, source_files: list[
         values[f"workflow-package-review-escalation:{workspace}"] = package_review.get("escalate_failure_percent", 0.0)
     director = validate_qa_director(recipe.get("qa_director"))
     supplied_director = recipe.get("qa_director") or {}
+    mix = supplied_director.get("learning_goal_mix")
+    values[f"workflow-director-goal-mix-version:{workspace}"] = 1 if mix else 0
+    if mix:
+        values[f"workflow-director-reading-probability:{workspace}"] = mix["document_reading_probability"] * 100
     # Only explicit requirements belong to a copied historical recipe.
     # Opening an old run must not silently select today's learning goal.
     if "learning_goal" in supplied_director:

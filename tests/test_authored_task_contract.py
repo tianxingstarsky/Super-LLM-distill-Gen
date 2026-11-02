@@ -71,6 +71,86 @@ def test_real_request_projection_excludes_full_source_and_retains_language(tmp_p
     assert '<authored_task_contract' not in json.dumps(writer.calls[-1])
 
 
+def _routed_author_request(worker, prompt_id, *, packed):
+    from test_source_memory_requests import request as packed_request
+    from lib.contexts.workflows.domain.generation import learner_prompt
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    worker.recipe.update(qa_learning_goal_mix_seed="frozen-run", authored_task_contract_version=3,
+        authored_role_projection_version=3, training_surface_protocol_version=2, source_memory_protocol_version=2)
+    worker.recipe["qa_director"].update(enabled=True, question_separation=True, learning_goal="mixed",
+        learning_goal_mix={"version": 1, "document_reading_probability": 1})
+    worker.recipe["node_prompt_templates"][worker.stage][prompt_id] = "Frozen author rules."
+    data = packed_request()
+    excerpt = "MX pump requires power off."
+    data["qa_contract"].update(id="unit", qa_type="partial", question="What must happen before inspection?",
+        visible_context=excerpt, answer_policy="answer", learning_goal="document_reading",
+        evidence_quotes=["Wait 10 minutes before opening."], guidance="PRIVATE_DIRECTOR_GUIDANCE_637",
+        source_line_focus=[{"text": "PRIVATE_FOCUS_927"}],
+        learning_goal_routing=learning_goal_route(worker.recipe, "unit", reading_material_available=True))
+    if not packed:
+        data.pop("source_line_scope")
+        data.pop("source_line_ranges")
+        data["source_context"].pop("source_context_pack")
+    messages = [{"role": "user", "content": learner_prompt(data["qa_contract"])}]
+    data["learner_messages" if prompt_id in {
+        "workflow.sft", "workflow.sft_styled", "workflow.sft_answer", "workflow.sft_directed",
+        "workflow.multiturn_assistant"} else "prompt"] = messages
+    return data, messages
+
+
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("prompt_id", ["workflow.sft", "workflow.sft_styled", "workflow.sft_answer",
+    "workflow.sft_directed", "workflow.multiturn_assistant", "workflow.cot_generate",
+    "workflow.cot_rationale", "workflow.cot_native_answer", "workflow.trim"])
+def test_routed_reading_author_requests_physically_exclude_private_teacher_copies(tmp_path, prompt_id, packed):
+    writer = CapturingGenerator(values=[{"ok": True}, {"ok": True}])
+    worker = workflow(tmp_path, writer)
+    worker.stage = "cot" if prompt_id in {"workflow.cot_generate", "workflow.cot_rationale",
+        "workflow.cot_native_answer", "workflow.trim"} else "sft"
+    data, messages = _routed_author_request(worker, prompt_id, packed=packed)
+    original = deepcopy(data)
+    worker.ask(["routed", prompt_id], "generation", prompt_id, data)
+    sent = json.dumps(writer.calls[-1], ensure_ascii=False)
+    for private in ("OUTSIDE_START", "OUTSIDE_END", "Wait 10 minutes before opening.",
+                    "PRIVATE_DIRECTOR_GUIDANCE_637", "PRIVATE_FOCUS_927", "FORGED"):
+        assert private not in sent
+    assert "MX pump requires power off." in sent
+    assert "What must happen before inspection?" in sent
+    if prompt_id not in {"workflow.sft", "workflow.sft_styled"}:
+        assert messages[0] in writer.calls[-1]
+    assert data == original
+    worker.recipe["qa_director"].pop("learning_goal_mix")
+    worker.ask(["frozen-legacy", prompt_id], "generation", prompt_id, data)
+    assert "Wait 10 minutes before opening." in json.dumps(writer.calls[-1], ensure_ascii=False)
+
+
+def test_routed_reading_checks_original_pack_before_projection_and_sends_nothing_on_tampering(tmp_path):
+    writer = CapturingGenerator()
+    worker = workflow(tmp_path, writer)
+    worker.stage = "sft"
+    data, _ = _routed_author_request(worker, "workflow.sft_directed", packed=True)
+    data["source_context"]["source_context_pack"]["materials"][0]["text"] += " CHANGED_TEACHER"
+    with pytest.raises(ValueError):
+        worker.ask(["changed-pack"], "generation", "workflow.sft_directed", data)
+    assert writer.calls == []
+
+
+def test_routed_reading_projects_nested_source_context_but_keeps_check_requests_source_aware(tmp_path):
+    writer = CapturingGenerator(values=[{"ok": True}, {"ok": True}])
+    worker = workflow(tmp_path, writer)
+    worker.stage = "cot"
+    data, messages = _routed_author_request(worker, "workflow.cot_generate", packed=True)
+    wrapped = {"context": data, "prompt": messages}
+    original = deepcopy(wrapped)
+    worker.ask(["nested-author"], "generation", "workflow.cot_generate", wrapped)
+    assert "Wait 10 minutes before opening." not in json.dumps(writer.calls[-1], ensure_ascii=False)
+    assert "PRIVATE_DIRECTOR_GUIDANCE_637" not in json.dumps(writer.calls[-1], ensure_ascii=False)
+    assert wrapped == original
+    worker.recipe["node_prompt_templates"][worker.stage]["workflow.cot_directed_check"] = "Check actual evidence."
+    worker.ask(["source-aware-check"], "generation", "workflow.cot_directed_check", data)
+    assert "Wait 10 minutes before opening." in json.dumps(writer.calls[-1], ensure_ascii=False)
+
+
 def test_source_pack_and_selected_range_cannot_reintroduce_excluded_source():
     current = task()
     current.update(source_context_pack={'ref': HIDDEN}, source_line_ranges=[{'text': HIDDEN}],

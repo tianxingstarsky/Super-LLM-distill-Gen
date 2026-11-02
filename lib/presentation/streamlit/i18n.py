@@ -2716,6 +2716,14 @@ ZH_EN: dict[str, str] = {
     "来源目录": "Source folder",
     "首选项": "Preferences",
     "未命名任务": "Untitled task",
+    "知识为主，穿插资料": "Mixed · knowledge first",
+    "仅知识问答": "Knowledge Q&A only",
+    "仅资料问答": "Document Q&A only",
+    "资料问答概率无效，请在指导员节点设为 0% 到 100%。": "Set the document Q&A probability between 0% and 100% in the director node.",
+    "概率分支需要混合生成，请在指导员节点选择知识问答与资料问答穿插生成。": "Select mixed knowledge and document Q&A in the director node to use probability routing.",
+    "任务的问答分支配置不完整，请保留记录并重新载入原任务。": "The task routing configuration is incomplete. Keep the records and reload the original task.",
+    "样本分支与固定任务不一致，请从原父任务恢复，不要手动修改任务记录。": "The sample route differs from the frozen task. Restore it from the original parent task without editing task records.",
+    "所选父任务使用不同的分支配置，请按父任务分别返工。": "The selected parent tasks use different routing configurations. Rework each parent task separately.",
 }
 
 

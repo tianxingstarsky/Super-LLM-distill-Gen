@@ -81,10 +81,85 @@ def test_canvas_node_navigation_and_dependency_highlight():
                              ["sft", "dpo", "cot"], list(TARGETS))]
     specs.extend(_spec(targets, reasoning_trim=trim, package_review={"enabled": True, "node": "jev"})
                  for trim in (False, True) for targets in (["cpt"], ["sft", "cot"], list(TARGETS)))
+    for language, probability, targets in (("zh", .2, ["sft"]), ("en", 0, ["sft", "multiturn"]),
+                                           ("zh", 1, ["multiturn"])):
+        from lib.presentation.streamlit.workflow_canvas import canvas_spec
+        director = {"enabled": True, "learning_goal": "mixed", "learning_goal_mix": {
+            "version": 1, "document_reading_probability": probability}}
+        labels = {key: key for key in ("ingest", "cpt", "director", "sft", "multiturn", "review", "package")}
+        specs.append(canvas_spec(targets, {}, "director", labels, labels, language=language,
+            recipe_version=42, source_cleaning=True, qa_director=director,
+            review_repair={"mode": "auto"}, review_advisory_policy_version=1))
     result = subprocess.run([node, str(ROOT / 'tests/workflow_canvas_harness.mjs'), '--check-specs'],
                             input=json.dumps(specs), cwd=ROOT, capture_output=True,
                             text=True, encoding='utf-8', timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_mixed_qa_routes_share_real_generation_nodes_and_keep_legacy_graphs():
+    from lib.domain.workflow_graph import execution_graph
+    from lib.presentation.streamlit.workflow_canvas import canvas_spec
+
+    labels = {key: key for key in ("ingest", "cpt", "director", "sft", "multiturn", "review", "package")}
+    for probability, targets, advisory in ((.2, ["sft"], True), (0, ["sft", "multiturn"], False),
+                                         (1, ["multiturn"], True)):
+        director = {"enabled": True, "learning_goal": "mixed", "learning_goal_mix": {
+            "version": 1, "document_reading_probability": probability}}
+        options = dict(recipe_version=42, source_cleaning=True, qa_director=director,
+                       review_repair={"mode": "auto"})
+        actual_nodes, actual_edges = execution_graph(targets, **options)
+        view = canvas_spec(targets, {}, "director", labels, labels,
+            review_advisory_policy_version=1 if advisory else None, **options)
+        assert [node["id"] for node in view["nodes"]] == list(actual_nodes)
+        assert view["edges"] == actual_edges
+        assert view["qa_routes"]["targets"] == [key for key in ("sft", "multiturn") if key in targets]
+        routes = view["qa_routes"]["nodes"]
+        assert [route["label"] for route in routes] == ["知识问答", "资料问答"]
+        assert all(route["select_node"] == "director" and "models" not in route for route in routes)
+        assert [route["enabled"] for route in routes] == [probability < 1, probability > 0]
+        if probability == .2:
+            assert routes[0]["subtitle"].startswith("约 80%")
+            assert routes[1]["subtitle"].startswith("约 20%")
+        for node in [*view["nodes"], *routes, *view.get("control_nodes", ())]:
+            assert 0 <= node["x"] <= view["width"] - 218
+            assert 0 <= node["y"] <= view["height"] - 78
+        if not advisory:
+            assert view["feedback_branch"]["group"]["x"] + 246 <= view["width"]
+        for old_goal in ("knowledge_application", "document_reading"):
+            legacy = canvas_spec(targets, {}, "director", labels, labels,
+                **{**options, "qa_director": {"enabled": True, "learning_goal": old_goal}})
+            assert "qa_routes" not in legacy and legacy["edges"] == actual_edges
+
+
+def test_mixed_route_click_opens_director_settings_without_resetting_normal_node_tabs():
+    from streamlit.testing.v1 import AppTest
+
+    script = '''
+import streamlit as st
+from unittest.mock import patch
+from lib.presentation.streamlit import workflow_canvas as canvas
+st.session_state.setdefault('workflow-node-tabs:fixture:director', '提示词与风格')
+st.session_state.setdefault('workflow-node-tabs:fixture:sft', '提示词与风格')
+labels = {key:key for key in ('ingest','cpt','director','sft','package')}
+director = {'enabled':True,'learning_goal':'mixed','learning_goal_mix':{'version':1,'document_reading_probability':.2}}
+spec = canvas.canvas_spec(['sft'], {}, 'director', labels, labels, recipe_version=42, qa_director=director)
+with patch.object(canvas, '_canvas', lambda **kw: st.session_state.get('event')):
+    canvas.render_canvas(spec, 'workflow-setup-node:fixture', key='mixed-route-fixture', inspector_key='fixture-inspector')
+'''
+    ui = AppTest.from_string(script).run()
+    assert not ui.exception
+    ui.session_state['event'] = {'node': 'director', 'qa_route': 'qa_document', 'tab': 'settings', 'serial': 1}
+    ui.run()
+    assert not ui.exception
+    assert ui.session_state['workflow-node-tabs:fixture:director'] == '节点设置'
+    assert ui.session_state['workflow-node-tabs:fixture:sft'] == '提示词与风格'
+    ui.session_state['workflow-node-tabs:fixture:director'] = '提示词与风格'
+    ui.session_state['event'] = {'node': 'director', 'serial': 2}
+    ui.run()
+    assert ui.session_state['workflow-node-tabs:fixture:director'] == '提示词与风格'
+    ui.session_state['event'] = {'node': 'director', 'qa_route': 'not-a-configured-route', 'tab': 'settings', 'serial': 3}
+    ui.run()
+    assert ui.session_state['workflow-node-tabs:fixture:director'] == '提示词与风格'
 
 
 def test_v18_score_repair_branch_fits_every_target_combination():

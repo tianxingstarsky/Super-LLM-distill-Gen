@@ -207,6 +207,18 @@ if(process.argv.includes('--check-specs')){
   for(const node of spec.nodes){
    assert.ok(node.y>=0&&node.y+78<=spec.height,`${node.id} outside world`);
   }
+  const routeButtons=[...d.querySelectorAll('.qa-route')];
+  assert.equal(routeButtons.length,spec.qa_routes?.nodes?.length||0,'only configured QA routes appear');
+  for(const [index,button] of routeButtons.entries()){
+   const route=spec.qa_routes.nodes[index];
+   assert.equal(button.querySelector('strong').textContent,route.label);
+   assert.equal(button.querySelector('small').textContent,route.subtitle);
+   assert.equal(button.dataset.enabled,String(route.enabled));
+   assert.equal(button.querySelector('.node-model'),null,'a route is not another model stage');
+   button.click();assert.equal(events.at(-1).value.node,'director','either route opens the actual director');
+   assert.equal(events.at(-1).value.qa_route,route.id);
+   assert.equal(events.at(-1).value.tab,spec.live?undefined:'settings','draft route opens its configuration, not a remembered prompt tab');
+  }
   // Every actual SVG control point must stay inside the world, including bypass rails.
   for(const path of d.querySelectorAll('#canvas > svg.connections path')){
    const coords=path.getAttribute('d').match(/-?\d+(?:\.\d+)?/g).map(Number);

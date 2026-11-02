@@ -32,9 +32,9 @@ def prepare_reanswer_parents(output, inputs):
                 or not context["evidence"].get("teacher_evidence")):
             raise ValueError("sft_reanswer_sealed_native_parent_required")
         planned_sft_prompt(item["record"], parent)
-        authenticated_teacher_text(item["record"], context["evidence"])
+        authenticated_teacher_text(item["record"], context["evidence"], recipe=parent)
         if first is not None and any(parent.get(key) != first.get(key) for key in (
-                "node_generation", "qa_director", "generation_prompts", "node_prompt_templates", "node_models", "endpoint_pins")):
+                "node_generation", "qa_director", "qa_learning_goal_mix_seed", "generation_prompts", "node_prompt_templates", "node_models", "endpoint_pins")):
             raise ValueError("sft_reanswer_incompatible_parents")
         first = parent
     return first

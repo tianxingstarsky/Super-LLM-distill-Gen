@@ -8,6 +8,15 @@ from ..domain.native_cot import NATIVE_EXECUTION_STATE, NATIVE_CONTEXT_CONTRACT
 
 def native_cot_messages(template, task, instruction):
     contract = compile_task_contract(task)
+    mode = task.get(NATIVE_CONTEXT_CONTRACT) or {}
+    learner_visible_source = (mode.get("learning_goal") == "document_reading"
+        and mode.get("learner_excerpt_only") is True
+        and mode.get("teacher_source_visibility") == "learner_visible")
+    if learner_visible_source:
+        # This host mode follows the application's actual-message check.
+        # Reuse its exact excerpt without repeating it in private system memory.
+        contract = {**contract, "source_scope": "learner_excerpt_only",
+            "visible_excerpts": [task["source"]["text"]]}
     task = project_task_context(task, contract)
     system = template + "\n" + (instruction or "") + "\n" + task_contract_instruction(contract, version=2)
     if task.get(NATIVE_CONTEXT_CONTRACT) is not None:
@@ -15,7 +24,7 @@ def native_cot_messages(template, task, instruction):
             + json.dumps(task[NATIVE_CONTEXT_CONTRACT], ensure_ascii=False, separators=(",", ":"))
             + "\n</" + NATIVE_CONTEXT_CONTRACT + ">")
     source = task.get("source")
-    if source:
+    if source and not learner_visible_source:
         system += "\n<knowledge>\n" + json.dumps(source, ensure_ascii=False) + "\n</knowledge>"
     # Prior output is an editable proposal, never an additional user request,
     # a verified assistant turn, or an independent source of facts.

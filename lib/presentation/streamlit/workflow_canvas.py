@@ -211,6 +211,80 @@ def extend_feedback_branch(spec, projection):
     return result
 
 
+def _with_qa_mix_routes(spec, qa_director):
+    """Project configured per-sample choices without inventing execution stages."""
+    settings = qa_director if isinstance(qa_director, dict) else {}
+    mixture = settings.get("learning_goal_mix") or {}
+    probability = mixture.get("document_reading_probability") if isinstance(mixture, dict) else None
+    if (settings.get("learning_goal") != "mixed" or not isinstance(mixture, dict)
+            or mixture.get("version") != 1 or type(probability) not in (int, float)
+            or not 0 <= probability <= 1):
+        return spec
+    by_id = {node["id"]: node for node in spec["nodes"]}
+    targets = [destination for origin, destination in spec["edges"]
+               if origin == "director" and destination in {"sft", "multiturn"}]
+    if "director" not in by_id or not targets:
+        return spec
+    result = deepcopy(spec)
+    by_id = {node["id"]: node for node in result["nodes"]}
+    director = by_id["director"]
+    shift_y = max(0, 74 - director["y"])
+    for node in result["nodes"]:
+        if node["x"] > director["x"]:
+            node["x"] += 270
+        node["y"] += shift_y
+    for node in result.get("control_nodes", ()):
+        if node["x"] > director["x"]:
+            node["x"] += 270
+        node["y"] += shift_y
+    branch = result.get("feedback_branch")
+    if branch:
+        branch["heading_x"] += 270
+        branch["heading_y"] += shift_y
+        branch["group"]["x"] += 270
+        branch["group"]["y"] += shift_y
+    result["width"] += 270
+    result["height"] += shift_y * 2
+    for name in ("data_top", "data_height"):
+        if name in result:
+            result[name] += shift_y
+    if "viewport_height" in result:
+        result["viewport_height"] = min(600, result["viewport_height"] + shift_y * 2)
+    english = result.get("language") == "en"
+    routes = []
+    for index, (key, chance, label, hint, description) in enumerate((
+        ("knowledge", 1 - probability, "Knowledge QA" if english else "知识问答",
+         "Direct user question" if english else "用户直接提问",
+         "Teacher knowledge supports generation; the training user message has no source excerpt."
+         if english else "教师知识支持生成，训练用户消息不附原文。"),
+        ("document", probability, "Document QA" if english else "资料问答",
+         "User reads supplied content" if english else "用户附阅读内容",
+         "Reading content accompanies the question and remains in the training conversation."
+         if english else "阅读内容随问题提供，并保留在训练对话中。"),
+    )):
+        percent = f"{chance * 100:g}%"
+        frequency = (("Off" if english else "不触发") if chance == 0 else
+                     ("Always" if english else "始终选择") if chance == 1 else
+                     (f"About {percent}" if english else f"约 {percent}"))
+        routes.append({"id": f"qa_{key}", "kind": key, "label": label,
+            "subtitle": f"{frequency} · {hint}", "description": description,
+            "x": director["x"] + 270, "y": director["y"] - 50 + index * 100,
+            "select_node": "director", "enabled": chance > 0})
+    result["qa_routes"] = {"version": 1, "source": "director", "targets": targets,
+        "nodes": routes, "hidden_edges": [["director", target] for target in targets],
+        "merge": {"x": min(by_id[target]["x"] for target in targets) - 22,
+                  "y": director["y"] + 39},
+        "title": "QA routing · shared generation" if english else "问答分支 · 共用生成节点",
+        "configure": (("View director output" if english else "查看指导员输出") if result.get("live") else
+                      "Configure the dialogue director" if english else "点击配置对话指导员"),
+        "explanation": "Approximate sampling, not a quota; these choices add no model calls."
+            if english else "按大致概率穿插，不强凑比例；分支选择不增加模型调用。"}
+    result["labels"]["overview"] = (f"{len(result['nodes'])} stages · 2 QA routes" if english else
+                                     f"{len(result['nodes'])} 个执行阶段 · 2 种问答路径")
+    result["labels"]["lineage"] += " " + result["qa_routes"]["explanation"]
+    return result
+
+
 def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, language="zh", live=False,
                 source_mode="文档资料", reasoning_trim=False, node_generation=None, package_review=None,
                 qa_director=None, cpt_processing=None, recipe_version=16, feedback_branch=None,
@@ -388,15 +462,15 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                             if english else "首稿通过直接交付；有实质问题才让原模型优化一次。同次产出经验，不再复审第二稿。")
                 result["labels"]["lineage"] = ("Plan → answer → review once → export, or improve once and export without another review."
                     if english else "指导 → 首答 → 一次评审；通过即输出，有实质问题才优化一次，第二稿不复审。")
-            return result
+            return _with_qa_mix_routes(result, qa_director)
         if feedback_branch is None:
             phase = {"completed": "approved", "running": "reviewing", "failed": "needs_revision",
                      "waiting_human": "editing", "needs_attention": "needs_revision"}.get(
                          stages.get("review", {}).get("status"), "waiting")
             feedback_branch = {"phase": phase, "mode": (review_repair or {}).get("mode", "auto"),
                                "stages": {"scoring": {"enabled": bool((package_review or {}).get("enabled"))}}}
-        return extend_feedback_branch(result, feedback_branch)
-    return result
+        return _with_qa_mix_routes(extend_feedback_branch(result, feedback_branch), qa_director)
+    return _with_qa_mix_routes(result, qa_director)
 
 
 def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=None, expanded=False,
@@ -449,6 +523,14 @@ def render_canvas(spec, selection_key, *, key, follow_key=None, inspector_key=No
                     st.rerun()
                 return
             st.session_state[selection_key] = event["node"]
+            route_ids = {route["id"] for route in spec.get("qa_routes", {}).get("nodes", ())
+                         if route.get("select_node") == "director"}
+            if (event.get("tab") == "settings" and event.get("action") is None
+                    and event.get("node") == "director" and event.get("qa_route") in route_ids
+                    and selection_key.startswith("workflow-setup-node:")):
+                workspace = selection_key.removeprefix("workflow-setup-node:")
+                st.session_state[f"workflow-node-tabs:{workspace}:director"] = translate_label(
+                    "节点设置", spec.get("language", "zh"))
             if event.get("action") == "feedback":
                 st.session_state[f"canvas-feedback:{key}"] = event["serial"]
             if inspector_key is not None:

@@ -115,7 +115,7 @@ def _fixed_human_input(design):
     return bool(seed.get("question") or seed.get("revision_context") or design.get("context"))
 
 
-def _candidate_controls(config, offset, design=None):
+def _candidate_controls(config, offset, design=None, *, recipe=None, candidate=None):
     """Keep fixed human input outside automatic evidence/language scheduling."""
     if not any(key in config for key in ("learning_goal", "user_languages")):
         return {}
@@ -124,7 +124,14 @@ def _candidate_controls(config, offset, design=None):
     controls = {"automatic_controls_applied": True}
     if "learning_goal" in config:
         controls["learning_goal"] = config["learning_goal"]
+        if config.get("learning_goal_mix") is not None:
+            from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+            route = learning_goal_route(recipe, candidate["id"], reading_material_available=(
+                candidate.get("kind") == "document" and bool(candidate.get("teacher_evidence", "").strip())))
+            controls.update(learning_goal=route["learning_goal"], learning_goal_routing=route)
         controls["allowed_qa_types"] = list(learning_goal_types(config["learning_goal"]))
+        if controls["learning_goal"] != config["learning_goal"]:
+            controls["allowed_qa_types"] = list(learning_goal_types(controls["learning_goal"]))
     if "user_languages" in config:
         controls["user_language"] = scheduled_user_language(config["user_languages"], offset)
     return controls
@@ -903,7 +910,7 @@ class WorkflowQADirector:
         human = config.get("human_augmentation", {})
         design_offset = offset + (self.state.get("production", {}).get("attempted", 0)
                                   if human.get("enabled") and self.production_enabled() else 0)
-        assigned = ((None,) * len(guided) if adaptive else
+        assigned = ((None,) * len(guided) if adaptive or config.get("learning_goal_mix") is not None else
                     ("closed_book",) * len(guided) if config.get("learning_goal") == "knowledge_application" else
                     allocate_qa_types(len(guided), config["type_weights"], offset=offset))
         # Language assignments are checkpointed with the plan, not inferred
@@ -974,7 +981,8 @@ class WorkflowQADirector:
                     history_is_current_dialogue=False)
             if any(name in config for name in ("learning_goal", "user_languages")):
                 for index, candidate in enumerate(data["candidates"]):
-                    controls = _candidate_controls(config, language_offset + index, candidate.get("human_design"))
+                    controls = _candidate_controls(config, language_offset + index, candidate.get("human_design"),
+                        recipe=self.recipe, candidate=candidate)
                     candidate.update(controls)
                     if controls.get("learning_goal") == "knowledge_application":
                         candidate["assigned_type"] = "closed_book"
@@ -985,7 +993,7 @@ class WorkflowQADirector:
                             raise ValueError("qa_director_learning_goal_weights_conflict")
                         candidate["assigned_type"] = allocate_qa_types(1, weights, offset=design_offset + index)[0]
                 data["assigned_types"] = [candidate["assigned_type"] for candidate in data["candidates"]]
-                data.update({name: deepcopy(config[name]) for name in ("learning_goal", "user_languages") if name in config})
+                data.update({name: deepcopy(config[name]) for name in ("learning_goal", "learning_goal_mix", "user_languages") if name in config})
                 data["automatic_controls_preserve_fixed_human_input"] = True
             if runtime:
                 data["knowledge_agent_memory"] = self._knowledge_memory(runtime[1]["knowledge_id"])
@@ -1173,6 +1181,8 @@ class WorkflowQADirector:
                             source_materials=self._director_evidence_materials(candidate),
                             question_brief_protocol_version=brief_version,
                             **self._dialogue_style_context_options(), **controls)
+                        if candidate.get("learning_goal_routing") is not None:
+                            contracts[candidate["id"]]["learning_goal_routing"] = deepcopy(candidate["learning_goal_routing"])
                         if context_selection is not None:
                             contracts[candidate["id"]]["dialogue_context_selection"] = context_selection
                         if (self.separated_questions(guided_by_id[candidate["id"]]) and task["qa_type"] == "closed_book"
@@ -1318,6 +1328,11 @@ class WorkflowQADirector:
                            "family_id": _digest([unit["source_id"], contract["question"]]),
                            "parent_id": unit.get("generation_variant", {}).get("source_unit_id", unit["id"]),
                            "director_batch": offset // config["batch_size"]})
+            if contract.get("learning_goal_routing") is not None:
+                self.event("qa_learning_goal_routed", unit_id=unit["id"],
+                    learning_goal=contract["learning_goal"],
+                    selected_learning_goal=contract["learning_goal_routing"]["selected_learning_goal"],
+                    reason=contract["learning_goal_routing"]["reason"])
             self.state["qa_director"]["coverage"][contract["qa_type"]]["planned"] += 1
             self.state["qa_director"]["coverage"][contract["qa_type"]]["assigned"] += len(stages)
             if contract.get("user_language"):
@@ -1514,7 +1529,7 @@ class WorkflowQADirector:
         }
         if any(key in config for key in ("learning_goal", "user_languages")):
             self.state["qa_director"].update({key: deepcopy(config[key])
-                for key in ("learning_goal", "user_languages") if key in config})
+                for key in ("learning_goal", "learning_goal_mix", "user_languages") if key in config})
             self.state["qa_director"]["coverage_scope"] = "current_directed_generation_actual_contracts"
             if "user_languages" in config:
                 self.state["qa_director"]["user_language_basis"] = "scheduled_request_semantically_reviewed_not_text_inference"

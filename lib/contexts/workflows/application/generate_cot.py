@@ -39,13 +39,33 @@ class GenerateCot:
         return integrated_reflection(self._checklist())
 
     def _author(self, key, prompt_id, task, instruction, **options):
-        from ..domain.authored_task_contract import task_contract_enabled, compile_task_contract, project_task_context
+        from ..domain.authored_task_contract import (
+            task_contract_enabled, compile_task_contract, project_task_context, task_contract_instruction,
+        )
         from ..domain.cot_style_transfer import style_edit_base
-        if task_contract_enabled(self.recipe) or style_edit_base(self.recipe, task) is not None:
+        lookup = self.recipe.get("node_generation", {}).get("cot", {}).get("source_lookup")
+        routed_reading = False
+        if lookup is not None and self._integrated_reflection():
+            from ..domain.qa_learning_goal_routing import routed_reading_excerpt, project_routed_reading_request
+            context = task.get("context") if isinstance(task.get("context"), dict) else task
+            actual = context.get("learner_messages", context.get("prompt",
+                task.get("learner_messages", task.get("prompt", []))))
+            excerpt = routed_reading_excerpt(self.recipe,
+                context.get("qa_contract") or task.get("qa_contract"), actual)
+            if excerpt is not None:
+                # Authenticate the original corpus before advertising tools,
+                # then index only the excerpt already visible to the learner.
+                self._port.prepare_generation_context(task)
+                contract = {**compile_task_contract({"prompt": actual}),
+                    "source_scope": "learner_excerpt_only", "visible_excerpts": [excerpt]}
+                task = project_routed_reading_request(task, contract)
+                task["source"] = {"kind": "learner_visible_excerpt", "text": excerpt}
+                instruction += "\n" + task_contract_instruction(contract, version=2, phase=prompt_id)
+                routed_reading = True
+        if not routed_reading and (task_contract_enabled(self.recipe) or style_edit_base(self.recipe, task) is not None):
             # Source tools and direct requests receive the same limited view.
             # The persisted source and the actual learner history stay intact.
             task = project_task_context(task, compile_task_contract(task))
-        lookup = self.recipe.get("node_generation", {}).get("cot", {}).get("source_lookup")
         if lookup is not None and self._integrated_reflection():
             from .generate_with_sources import GenerateWithSources
             from ..domain.authored_submission import strict_submission_enabled
@@ -409,7 +429,7 @@ class GenerateCot:
                 issue = training_surface_issue(value["reasoning"], value["answer"],
                     visible_messages=task["prompt"], contract=sample.get("qa_contract"),
                     protocol_version=self.recipe.get("training_surface_protocol_version", 1),
-                    **knowledge_voice_options(self.recipe))
+                    **knowledge_voice_options(self.recipe, sample.get("qa_contract")))
                 if issue:
                     feedback = {"training_surface": issue,
                         "repair": "解释和答案全文只围绕用户任务展开，用已掌握的事实推导；移除幕后制作过程，不删必要论证或编造经历。文章理解可引用用户实际可见的文章。"}
@@ -598,7 +618,7 @@ class GenerateCot:
         issue = training_surface_issue(rationale["reasoning"], "",
             visible_messages=task["prompt"], contract=sample.get("qa_contract"),
             protocol_version=self.recipe.get("training_surface_protocol_version", 1),
-            **knowledge_voice_options(self.recipe))
+            **knowledge_voice_options(self.recipe, sample.get("qa_contract")))
         if issue:
             return None, {"training_surface": issue, **rejected_body}
         from ..domain.authored_task_contract import task_contract_enabled, compile_task_contract, task_surface_receipt

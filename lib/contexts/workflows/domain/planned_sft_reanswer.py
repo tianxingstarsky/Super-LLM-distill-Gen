@@ -109,11 +109,27 @@ def reanswer_task_identity(prompt, contract, evidence):
                    "evidence_sha256": digest(evidence)})
 
 
-def authenticated_teacher_text(record, evidence):
+def authenticated_teacher_text(record, evidence, *, recipe=None):
     """Use the original block join, not the reviewer projection's strip()."""
     blocks = evidence.get("teacher_evidence_blocks")
     text = "\n\n".join(blocks) if isinstance(blocks, list) and blocks else evidence.get("teacher_evidence")
     provided = record.get("provided_source_context") or {}
+    if provided.get("scope") == "learner_excerpt_only":
+        from .qa_learning_goal_routing import routed_reading_excerpt
+        contract = record.get("qa_contract") or {}
+        try:
+            excerpt = routed_reading_excerpt(recipe, contract, record.get("messages", [])) if recipe is not None else None
+        except ValueError as error:
+            if str(error) != "native_reading_context_missing_or_changed":
+                raise
+            raise ValueError("sft_reanswer_source_scope_changed") from None
+        if (excerpt is None or provided.get("visibility") != "learner_visible"
+                or not isinstance(text, str) or not text
+                or provided.get("text_sha256") != digest(excerpt) or provided.get("text_chars") != len(excerpt)):
+            raise ValueError("sft_reanswer_source_scope_changed")
+        # The caller authenticates the sealed parent and its original evidence
+        # contract. Do not reinterpret wrappers or distractors as new source text.
+        return excerpt
     if (not isinstance(text, str) or not text
             or provided.get("text_sha256") != digest(text)
             or provided.get("text_chars", len(text)) != len(text)

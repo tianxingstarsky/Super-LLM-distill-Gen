@@ -1,5 +1,7 @@
 # Agent 功能与维护入口
 
+知识问答与资料问答的逐题用途由 `workflows/domain/qa_learning_goal_routing.py` 持有；指导员在已有批次规划前固定用途，生成、可见资料、重答和审核据此投影。概率与图示在指导员节点配置，不新增选择 Agent，也不改旧配方。[接线与边界](mixed-qa-routing-2026-11-03.md) 说明默认 80/20、资料范围和历史兼容。
+
 知识问答推理的保真表述编辑由 `workflow_knowledge_reasoning.py` 的 `knowledge_reasoning_editor` 和 workflows 域 `knowledge_reasoning_editor.py` 的纯工具／补丁合同持有。1.1 使用程序生成的原稿段落 ID，1.0 的逐字定位保留；问题和答案不改，完整原生推理保留，整理正文标记为派生解释，编辑状态不代表质量通过。[真实验证与剩余问题](knowledge-reasoning-editor-2026-11-02.md) 单独记录；尚未自动接入生产节点、默认导出或另一套评审循环。
 
 原作者自行编辑由同模块 `knowledge_reasoning_self_edit` 提供操作说明，`prepare_self_edit_messages` 保留实际原请求、真实助手的答案及原生推理，再追加应用 system 要求。它不伪造用户发言或工具历史，也不补填缺失的历史推理；纯构造器不认证账号身份或保证缓存。一次 A 实测已经命中缓存，但重复编辑思考使本次总费用高于另开编辑上下文，详见上述验证记录。

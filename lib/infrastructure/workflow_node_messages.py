@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-def _learning_rules(data, config):
+def _learning_rules(data, config, *, recipe=None):
     """Only finite, configured controls become rules; source prose never does."""
     if not {"learning_goal", "user_languages"}.intersection(config):
         return []
@@ -21,6 +21,9 @@ def _learning_rules(data, config):
     if contract.get("human_design") or candidates and len(manual) == len(candidates):
         return [manual_rule]
     goal = contract.get("learning_goal", config.get("learning_goal"))
+    if recipe is not None and "learning_goal_mix" in config:
+        from lib.contexts.workflows.contracts import effective_learning_goal
+        goal = effective_learning_goal(recipe, contract)
     rules = []
     if manual:
         rules.append(manual_rule + "以下自动用途与语言要求仅适用于automatic_controls_applied=true的候选，不覆盖preserve_human_input=true的候选。")
@@ -58,7 +61,8 @@ def _learning_rules(data, config):
     return rules
 
 
-def split_node_rules(data, *, instruction=None, qa_director=None, knowledge_application_voice_version=None):
+def split_node_rules(data, *, instruction=None, qa_director=None, knowledge_application_voice_version=None,
+                     recipe=None):
     """Return a stable system suffix and an unmodified-content task projection.
 
     Only the explicit workflow instruction argument and rules matched against
@@ -78,14 +82,18 @@ def split_node_rules(data, *, instruction=None, qa_director=None, knowledge_appl
         task["context"] = dict(data["context"])
         containers.append(task["context"])
     config = qa_director or {}
-    controls = _learning_rules(task, config)
+    controls = _learning_rules(task, config, recipe=recipe)
     if controls:
         sections.append("本次样本用途与语言要求（仅约束候选对话，不约束评审回执语言）：\n" + "\n".join(controls))
         if knowledge_application_voice_version == 3:
             from lib.domain.knowledge_voice import knowledge_voice_rules
             context = task.get("context") if isinstance(task.get("context"), dict) else task
             contract = context.get("qa_contract") or task.get("qa_contract")
-            if voice := knowledge_voice_rules(config.get("learning_goal"), contract):
+            goal = config.get("learning_goal")
+            if recipe is not None:
+                from lib.contexts.workflows.contracts import effective_learning_goal
+                goal = effective_learning_goal(recipe, contract)
+            if voice := knowledge_voice_rules(goal, contract):
                 sections.append(voice)
     for field, label in (("question_rules", "提问规则"), ("answer_rules", "回答规则")):
         rule = config.get(field)

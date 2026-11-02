@@ -77,10 +77,25 @@ class GenerateNativeCot:
         if sample.get("answer_context_scope"):
             task["answer_context_scope"] = deepcopy(sample["answer_context_scope"])
         contract = compile_task_contract(task)
+        from ..domain.qa_learning_goal_routing import routed_reading_excerpt
+        qa_contract = sample.get("qa_contract") or {}
+        try:
+            excerpt = routed_reading_excerpt(self.recipe, qa_contract, prompt)
+        except ValueError as error:
+            if str(error) != "native_reading_context_missing_or_changed":
+                raise
+            return [self.port.reject(sample, str(error))]
+        routed_reading = excerpt is not None
+        if routed_reading:
+            # Authenticate the original teacher context before narrowing this
+            # disposable request. The full source remains in the candidate audit.
+            if isinstance(task.get("source"), dict):
+                task["source"] = {"text": self.port.source_evidence(task["source"])}
+            contract = {**contract, "source_scope": "learner_excerpt_only", "visible_excerpts": [excerpt]}
         task = project_task_context(task, contract)
         # Authenticate cached source packs through the existing adapter. A
         # passage-only request never reads or carries the private full paper.
-        if isinstance(task.get("source"), dict):
+        if isinstance(task.get("source"), dict) and not routed_reading:
             task["source"] = {"text": self.port.source_evidence(task["source"])}
         context_contract = native_context_contract(self.recipe, sample, task, contract)
         if context_contract is not None:
@@ -163,7 +178,7 @@ class GenerateNativeCot:
         surface = training_surface_issue(reasoning, answer, visible_messages=prompt,
             contract=sample.get("qa_contract"), protocol_version=self.recipe.get("training_surface_protocol_version", 2),
             public_system_positions=public_note_positions,
-            **knowledge_voice_options(self.recipe))
+            **knowledge_voice_options(self.recipe, sample.get("qa_contract")))
         if surface:
             issues.append(surface)
         environment_version = execution_state["version"] if execution_state is not None else None
@@ -235,6 +250,11 @@ class GenerateNativeCot:
                 **({"execution_state": deepcopy(execution_state)} if execution_state is not None else {}),
                 "history_status": "unchanged_not_assessed" if any(m.get("role") == "assistant" for m in prompt) else "no_assistant_history"},
             **qa_metadata(sample)}
+        if routed_reading:
+            row["provided_source_context"] = {"version": 1, "kind": "context_provided",
+                "scope": "learner_excerpt_only", "text_sha256": digest(excerpt), "text_chars": len(excerpt),
+                "semantic_support": "not_assessed", "model_selected_quotes": False,
+                "visibility": "learner_visible"}
         from ..domain.generation_control import feedback_control_scope, generation_controls_metadata
         scope = feedback_control_scope(feedback_receipt) if feedback_receipt is not None else None
         if scope is not None and scope["status"] != "complete":

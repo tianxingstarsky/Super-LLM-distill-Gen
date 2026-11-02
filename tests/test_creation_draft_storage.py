@@ -61,6 +61,21 @@ def test_validation_returns_independent_values():
     assert original['workflow-targets:w:p'] == ['sft']
 
 
+def test_probability_draft_accepts_fractional_percentages_and_rejects_invalid_scope_or_values():
+    valid = {'workflow-director-reading-probability:w': 12.5, 'workflow-director-goal-mix-version:w': 1}
+    assert validate_creation_draft(valid) == valid
+    for key, value in (
+        ('workflow-director-reading-probability:w', -1),
+        ('workflow-director-reading-probability:w', 101),
+        ('workflow-director-reading-probability:w', float('nan')),
+        ('workflow-director-reading-probability:w', True),
+        ('workflow-director-reading-probability:w:extra', 20),
+        ('workflow-director-goal-mix-version:w', 2),
+    ):
+        with pytest.raises(ValueError, match='invalid_creation_draft'):
+            validate_creation_draft({key: value})
+
+
 def test_node_model_confirmations_survive_draft_restart(tmp_path):
     values = {'workflow-node-model-confirmations:w': {'sft': 'a' * 64, 'jev': 'b' * 64}}
     creation_draft_application(tmp_path).replace(values)

@@ -38,6 +38,10 @@ def generate_native_turn(port, recipe, *, stage, unit, messages, style,
         source_scope = sample["answer_context_scope"]["source_scope"]
     contract = sample.get("qa_contract", {})
     controls = {key: contract[key] for key in ("qa_type", "guidance", "learning_goal", "user_language", "answer_policy") if key in contract}
+    if recipe.get("qa_director", {}).get("learning_goal_mix") is not None:
+        from ..domain.qa_learning_goal_routing import effective_learning_goal
+        if contract.get("learning_goal_routing") is not None and effective_learning_goal(recipe, contract) == "document_reading":
+            controls.pop("guidance", None)
     # Request-only projection must not weaken local quality checks or replace
     # the original director contract retained in the candidate's audit trail.
     if "qa_contract" in unit:
@@ -92,10 +96,10 @@ def generate_native_turn(port, recipe, *, stage, unit, messages, style,
     from ..domain.generation_control import generation_controls_metadata
     row.update(generation_controls_metadata([(len(row["messages"]) - 1, row)]))
     row["source_context"] = deepcopy(unit)
-    row["provided_source_context"] = {
+    row.setdefault("provided_source_context", {
         "version": 1, "kind": "context_provided", "scope": source_scope,
         "text_sha256": dialogue_digest(source_text), "text_chars": len(source_text),
-        "semantic_support": "not_assessed", "model_selected_quotes": False}
+        "semantic_support": "not_assessed", "model_selected_quotes": False})
     if sample.get("answer_context_scope"):
         row["provided_source_context"]["private_scene"] = "not_provided"
     row["generation_check"] = "native_channels_and_scoped_source_context"

@@ -192,7 +192,8 @@ class WorkflowKnowledgeAgent:
         output = binding.get("max_output_tokens", 32768)
 
         def request_snapshot():
-            rules, task = split_node_rules(data, instruction=instruction, qa_director=self.recipe.get("qa_director"))
+            rules, task = split_node_rules(data, instruction=instruction,
+                qa_director=self.recipe.get("qa_director"), recipe=self.recipe)
             task = deepcopy(task)
             task["knowledge_agent_memory"] = self._knowledge_memory(knowledge)
             archive = None

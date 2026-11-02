@@ -1,7 +1,7 @@
 """Pinned semantic review controls; no provider or storage dependencies."""
 from __future__ import annotations
 import re
-from lib.contexts.workflows.contracts import PREFERENCE_TARGETS
+from lib.contexts.workflows.contracts import PREFERENCE_TARGETS, effective_learning_goal
 from lib.domain.authored_reasoning import AUTHORED_REASONING_VERSION
 from lib.domain.training_surface import training_surface_issue
 from lib.prompts.workflow_reasoning import RATIONALE_CHECK_BODY
@@ -289,7 +289,7 @@ def _knowledge_application_review_rules(recipe, row, *, phase):
     if recipe.get("knowledge_application_voice_version") != 3:
         return ""
     from lib.domain.knowledge_voice import knowledge_voice_rules
-    common = knowledge_voice_rules(recipe.get("qa_director", {}).get("learning_goal"), row.get("qa_contract"))
+    common = knowledge_voice_rules(effective_learning_goal(recipe, row.get("qa_contract")), row.get("qa_contract"))
     if not common:
         return ""
     if phase == "repair":
@@ -317,7 +317,7 @@ def _knowledge_source_narration_reason(target, row, recipe):
     from lib.domain.training_surface import training_surface_issue
     options = {"protocol_version": 2, "knowledge_application_voice_version": 3}
     if "learning_goal" in recipe.get("qa_director", {}):
-        options["learning_goal"] = recipe["qa_director"]["learning_goal"]
+        options["learning_goal"] = effective_learning_goal(recipe, row.get("qa_contract"))
     issue = "training_surface_knowledge_source_narration"
     contract = row.get("qa_contract")
     if target == "cot":

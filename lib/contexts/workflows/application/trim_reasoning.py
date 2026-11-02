@@ -59,7 +59,7 @@ class TrimReasoning:
                         visible_messages=prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}],
                         contract=row.get("qa_contract"),
                         protocol_version=self.recipe.get("training_surface_protocol_version", 1),
-                        **knowledge_voice_options(self.recipe))
+                        **knowledge_voice_options(self.recipe, row.get("qa_contract")))
                     if issue:
                         feedback = {"training_surface": issue, "repair": "保留任务推导和事实，移除隐藏来源与制作过程自述。最终答案保持不变。"}
                         continue

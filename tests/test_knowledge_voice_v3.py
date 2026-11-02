@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from lib.domain.knowledge_voice import knowledge_voice_rules
+from lib.domain.knowledge_voice import knowledge_voice_rules, knowledge_voice_options
 from lib.domain.training_surface import training_surface_issue, training_record_surface_issue
 from lib.infrastructure.workflow_node_messages import split_node_rules
 from lib.infrastructure.workflow_review_repair import _row_training_surface_issue
@@ -137,3 +137,54 @@ def test_new_generation_and_review_envelopes_get_the_same_rule_but_legacy_and_cp
     assert task == original == data and review_task == {"context": data}
     assert split_node_rules({"text": "清洗文档。"}, qa_director=config,
                             knowledge_application_voice_version=3) == ("", {"text": "清洗文档。"})
+
+
+@pytest.mark.parametrize("probability,goal,qa_type", [
+    (0, "knowledge_application", "closed_book"),
+    (1, "document_reading", "grounded"),
+])
+def test_mixed_routed_goal_reaches_generation_and_review_node_rules(probability, goal, qa_type):
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    recipe = {"knowledge_application_voice_version": 3, "qa_learning_goal_mix_seed": "frozen-run",
+        "qa_director": {"learning_goal": "mixed",
+            "learning_goal_mix": {"version": 1, "document_reading_probability": probability}}}
+    route = learning_goal_route(recipe, "unit", reading_material_available=True)
+    contract = {"id": "unit", "qa_type": qa_type, "learning_goal": goal,
+        "learning_goal_routing": route}
+    data = {"qa_contract": contract, "source_context": {"text": "PRIVATE_TEACHER_TEXT"}}
+    before = deepcopy(data)
+    assert knowledge_voice_options(recipe, contract) == {
+        "knowledge_application_voice_version": 3, "learning_goal": goal}
+    assert knowledge_voice_options(recipe) == {
+        "knowledge_application_voice_version": 3, "learning_goal": "mixed"}
+    rules, task = split_node_rules(data, qa_director=recipe["qa_director"],
+        knowledge_application_voice_version=3, recipe=recipe)
+    reviewed, review_task = split_node_rules({"context": data}, qa_director=recipe["qa_director"],
+        knowledge_application_voice_version=3, recipe=recipe)
+    assert reviewed == rules
+    assert ("知识应用正文规范 v3" in rules) is (goal == "knowledge_application")
+    assert ("本次训练用途是阅读用户提供的资料" in rules) is (goal == "document_reading")
+    assert "本次兼顾知识运用与资料阅读" not in rules
+    assert task == data == before and review_task == {"context": before}
+
+
+def test_unmarked_voice_options_keep_frozen_run_goal_over_conflicting_record_goal():
+    recipe = {"knowledge_application_voice_version": 3,
+        "qa_director": {"learning_goal": "knowledge_application"}}
+    assert knowledge_voice_options(recipe, {"learning_goal": "document_reading"}) == (
+        knowledge_voice_options(recipe))
+
+
+def test_mixed_voice_ignores_unrouted_import_goal_and_rejects_modified_host_receipt():
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    recipe = {"knowledge_application_voice_version": 3, "qa_learning_goal_mix_seed": "frozen-run",
+        "qa_director": {"learning_goal": "mixed",
+            "learning_goal_mix": {"version": 1, "document_reading_probability": 0}}}
+    imported = {"id": "imported", "qa_type": "grounded", "learning_goal": "document_reading"}
+    assert knowledge_voice_options(recipe, imported)["learning_goal"] == "mixed"
+    route = learning_goal_route(recipe, "unit", reading_material_available=True)
+    routed = {"id": "unit", "qa_type": "closed_book", "learning_goal": "knowledge_application",
+        "learning_goal_routing": route}
+    route["reason"] = "untrusted replacement"
+    with pytest.raises(ValueError, match="^invalid_qa_learning_goal_routing_receipt$"):
+        knowledge_voice_options(recipe, routed)

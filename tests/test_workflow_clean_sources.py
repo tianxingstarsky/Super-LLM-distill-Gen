@@ -617,6 +617,11 @@ def test_new_runs_require_director_for_new_questions_but_not_preserved_dialogues
         assert recipe["qa_director"]["question_separation"] is True
         assert recipe["version"] >= 20
         assert "workflow.sft_answer" in recipe["node_prompt_templates"]["sft"]
+        assert recipe["qa_director"]["learning_goal"] == "mixed"
+        assert recipe["qa_director"]["learning_goal_mix"] == {"version": 1, "document_reading_probability": .2}
+        assert recipe["qa_learning_goal_mix_seed"] == run_id
+    else:
+        assert "qa_learning_goal_mix_seed" not in recipe
     if kind == "conversation":
         copied = engine.run_path(output, run_id) / "inputs" / recipe["sources"][0]["file"]
         assert copied.read_bytes() == source.read_bytes()
@@ -642,3 +647,6 @@ def test_new_director_requirement_keeps_existing_rules_and_exempts_repair():
               "answer_rules": "Preserve the supported conditions."}
     assert prepare_new_dialogue_director(custom, ["sft"]) == validate_qa_director(custom)
     assert prepare_new_dialogue_director({"enabled": False}, ["sft"], repair=True) == {"enabled": False}
+    for goal in ("mixed", "knowledge_application", "document_reading"):
+        old = {"enabled": True, "learning_goal": goal}
+        assert "learning_goal_mix" not in prepare_new_dialogue_director(old, ["sft"])

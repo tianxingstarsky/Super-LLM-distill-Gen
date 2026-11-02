@@ -535,6 +535,25 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         repair=bool(repair_inputs))
     director_changed = prepared_director != qa_director
     qa_director = prepared_director
+    goal_mix_parent = reanswer_parent
+    if repair_inputs and not reanswer_parent:
+        parents = {}
+        for supplied in repair_inputs:
+            context = supplied.get("checkpoint_context", {})
+            if context.get("version") in {1, 2}:
+                parent_id = context["parent_run_id"]
+                parent = parents.get(parent_id)
+                if parent is None:
+                    parent = read_json(run_path(output, parent_id) / "recipe.json")
+                if digest(parent) != context["recipe_sha256"]:
+                    raise ValueError("checkpoint_review_parent_changed")
+                parents[parent_id] = parent
+        from lib.contexts.workflows.domain.qa_learning_goal_routing import repair_learning_goal_mix
+        goal_mix_parent = repair_learning_goal_mix(parents.values())
+        if goal_mix_parent is not None:
+            # Rework keeps the sealed question's original routing policy. New
+            # probabilities configure future questions, never these old tasks.
+            qa_director = deepcopy(goal_mix_parent["qa_director"])
     shared_cleaning_needed = (not repair_inputs and not source_cleaning
                               and uses_shared_source_cleaning(targets, snapshots))
     if director_changed or shared_cleaning_needed:
@@ -704,6 +723,8 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               "reasoning_trim": reasoning_trim,
               "package_review": package_review,
               "qa_director": qa_director,
+              **({"qa_learning_goal_mix_seed": (goal_mix_parent or {}).get("qa_learning_goal_mix_seed", run_id)}
+                 if qa_director.get("learning_goal_mix") is not None else {}),
               "reasoning_trim_prompt": (trim_prompt(reasoning_trim) if (reasoning_trim or {}).get("enabled") else None),
               "generation_preferences": preferences, "sft_output_style": sft_output_style,
               "prompts": prompt_versions()}
@@ -2009,7 +2030,7 @@ class TrainingWorkflowRuntime(WorkflowProduction, WorkflowQADirector, WorkflowKn
                 planning_rows="stage-results/director.jsonl",
                 noise_policy="explicit_distractor_context_and_independent_answer_policy_review")
             report["qa_director"].update({key: deepcopy(self.recipe["qa_director"][key])
-                for key in ("learning_goal", "user_languages") if key in self.recipe["qa_director"]})
+                for key in ("learning_goal", "learning_goal_mix", "user_languages") if key in self.recipe["qa_director"]})
             if "learning_goal" in self.recipe["qa_director"]:
                 report["knowledge_learning_evaluation"] = {"status": "not_performed",
                     "scope": "data_generation_and_sample_review_only",

@@ -347,6 +347,95 @@ def test_native_visible_excerpt_mode_keeps_reading_scope_and_excludes_private_fu
     assert "UNRELATED PRIVATE FULL PAPER" not in json.dumps(wire)
 
 
+@pytest.mark.parametrize("probability,goal,qa_type", [
+    (0, "knowledge_application", "closed_book"),
+    (1, "document_reading", "grounded"),
+])
+def test_native_context_uses_authenticated_per_record_goal_for_mixed_runs(probability, goal, qa_type):
+    from lib.contexts.workflows.domain.native_cot import native_context_contract
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    recipe = {"native_context_contract_version": 1, "qa_learning_goal_mix_seed": "frozen-run",
+        "qa_director": {"learning_goal": "mixed",
+            "learning_goal_mix": {"version": 1, "document_reading_probability": probability}}}
+    route = learning_goal_route(recipe, "unit", reading_material_available=True)
+    sample = {"qa_contract": {"id": "unit", "qa_type": qa_type,
+        "learning_goal": goal, "learning_goal_routing": route}}
+    task = {"prompt": [{"role": "user", "content": "Explain this maintenance decision."}],
+        "source": {"text": "PRIVATE_AUTHENTICATED_TEACHER"}}
+    original = deepcopy((recipe, sample, task))
+    mode = native_context_contract(recipe, sample, task, compile_task_contract(task))
+    assert mode["learning_goal"] == goal
+    assert mode["knowledge_application_voice"] is (goal == "knowledge_application")
+    assert (recipe, sample, task) == original
+
+
+@pytest.mark.parametrize("qa_type", ["closed_book", "grounded", "partial"])
+def test_routed_native_turns_use_actual_learner_excerpt_without_full_teacher_or_duplicate(qa_type):
+    from lib.contexts.workflows.application.native_generation import generate_native_turn
+    from lib.contexts.workflows.domain.generation import learner_prompt
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    from tests.test_generation_node_use_cases import MemoryGenerationPort
+    reading = qa_type != "closed_book"
+    excerpt = "设备维护前必须断电，断电后检查线路。VISIBLE_EVIDENCE_637"
+    full_source = excerpt + "\nPRIVATE_TEACHER_ONLY_927：检查后记录实际结果。"
+    recipe = {"native_generation_version": 1, "native_context_contract_version": 1,
+        "qa_learning_goal_mix_seed": "frozen-run", "node_generation": {"multiturn": {"enabled": True}},
+        "qa_director": {"learning_goal": "mixed", "learning_goal_mix": {
+            "version": 1, "document_reading_probability": int(reading)}}}
+    route = learning_goal_route(recipe, "unit", reading_material_available=True)
+    contract = {"id": "unit", "qa_type": qa_type, "question": "维护时先做什么？",
+        "visible_context": excerpt if reading else "", "answer_policy": "answer",
+        "guidance": "PRIVATE_GUIDANCE_314：原文之外的教师提示。", "evidence_quotes": [full_source],
+        "learning_goal": route["learning_goal"], "learning_goal_routing": route}
+    unit = {"id": "unit", "source_id": "source", "kind": "document", "text": full_source,
+        "qa_contract": contract}
+    original = deepcopy(unit)
+    class WirePort(MemoryGenerationPort):
+        def __init__(self):
+            super().__init__([{"reasoning": "检查线路前先切断电源，避免带电检查。", "answer": "先断电，再检查线路。"},
+                {"reasoning": "用户继续确认检查前的前提，断电仍须先于检查。", "answer": "确认断电后再检查。"}])
+            self.wire, self.source_reads = [], []
+        def source_evidence(self, source):
+            self.source_reads.append(source["text"])
+            return super().source_evidence(source)
+        def request(self, key, role, prompt_id, payload, **options):
+            self.wire.append(native_cot_messages("Frozen native rules.", payload, options.get("instruction")))
+            return super().request(key, role, prompt_id, payload, **options)
+    port = WirePort()
+    messages = [{"role": "user", "content": learner_prompt(contract)}]
+    first = generate_native_turn(port, recipe, stage="multiturn", unit=unit,
+        messages=messages, style={}, source_text=full_source, source_scope="prepared_source")
+    assert first["status"] == "eligible"
+    second = generate_native_turn(port, recipe, stage="multiturn", unit=unit,
+        messages=[*first["messages"], {"role": "user", "content": "也就是说，要先确认断电？"}],
+        style={}, source_text=full_source, source_scope="prepared_source", identity="unit:next")
+    assert second["status"] == "eligible" and len(port.wire) == 2
+    assert port.source_reads == [full_source, full_source]
+    for wire in port.wire:
+        body = json.dumps(wire, ensure_ascii=False)
+        users = "\n".join(message["content"] for message in wire if message["role"] == "user")
+        mode = json.loads(wire[0]["content"].split("<native_context_contract>\n", 1)[1]
+            .split("\n</native_context_contract>", 1)[0])
+        assert body.count("VISIBLE_EVIDENCE_637") == 1
+        assert (excerpt in users) is reading
+        assert ("PRIVATE_TEACHER_ONLY_927" in body) is not reading
+        assert mode["learner_excerpt_only"] is reading
+        assert mode["teacher_source_visibility"] == ("learner_visible" if reading else "private")
+        if reading:
+            assert "<knowledge>" not in wire[0]["content"]
+            assert "PRIVATE_GUIDANCE_314" not in body
+    assert ("PRIVATE_GUIDANCE_314" in json.dumps(port.wire[0], ensure_ascii=False)) is not reading
+    for row in (first, second):
+        payload = training_record("multiturn", row)
+        assert (excerpt in payload["messages"][0]["content"]) is reading
+        assert "PRIVATE_TEACHER_ONLY_927" not in json.dumps(payload, ensure_ascii=False)
+        assert row["source_context"] == original
+        receipt = row["provided_source_context"]
+        assert receipt["text_chars"] == len(excerpt if reading else full_source)
+        assert receipt["scope"] == ("learner_excerpt_only" if reading else "prepared_source")
+    assert unit == original
+
+
 def test_unsupported_tool_loop_is_not_silently_ignored():
     settings = config()
     settings["cot"]["source_lookup"] = {}

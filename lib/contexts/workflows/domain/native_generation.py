@@ -29,6 +29,7 @@ def normalize_new_reading_generation(generation: dict, director: dict | None):
         raise ValueError("invalid_qa_director")
     reading_director = deepcopy(director or {})
     reading_director.update(enabled=True, learning_goal="document_reading", question_separation=True)
+    reading_director.pop("learning_goal_mix", None)
     for key, value in {"planning_mode": "adaptive", "context_mode": "persistent",
                        "tools_mode": "auto", "user_languages": ["zh", "en"]}.items():
         reading_director.setdefault(key, value)

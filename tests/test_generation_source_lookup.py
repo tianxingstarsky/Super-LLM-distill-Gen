@@ -115,6 +115,61 @@ def test_real_source_pack_projection_enforces_selected_scope(tmp_path):
     assert search_generation_sources(sources.passages, "OUTSIDE FORGED", 3) == []
 
 
+@pytest.mark.parametrize("tamper", [False, True])
+def test_routed_reading_source_tools_authenticate_parent_then_index_only_actual_visible_excerpt(tmp_path, tamper):
+    from types import SimpleNamespace
+    from test_source_memory_requests import request
+    from lib.contexts.workflows.domain.generation import learner_prompt
+    from lib.contexts.workflows.domain.qa_learning_goal_routing import learning_goal_route
+    from lib.contexts.workflows.infrastructure.generation_adapter import CheckpointedGenerationAdapter
+    configuration = config()
+    configuration.update(source_memory_protocol_version=2, qa_learning_goal_mix_seed="frozen-run",
+        qa_director={"learning_goal": "mixed",
+            "learning_goal_mix": {"version": 1, "document_reading_probability": 1}})
+    current = request()
+    excerpt = "MX pump requires power off."
+    current["qa_contract"].update(id="unit", qa_type="partial", visible_context=excerpt,
+        question="What must happen before inspection?", answer_policy="answer", learning_goal="document_reading",
+        learning_goal_routing=learning_goal_route(configuration, "unit", reading_material_available=True),
+        guidance="PRIVATE_GUIDANCE_637", evidence_quotes=["Wait 10 minutes before opening."],
+        source_line_focus=[{"text": "PRIVATE_FOCUS_927"}])
+    current["prompt"] = [{"role": "user", "content": learner_prompt(current["qa_contract"])}]
+    if tamper:
+        current["source_context"]["source_context_pack"]["materials"][0]["text"] += " CHANGED_TEACHER"
+    original = deepcopy(current)
+    calls = tool(query="power")
+    calls["tool_calls"].append({"id": "read", "type": "function", "function": {
+        "name": "read_evidence", "arguments": json.dumps({"source_id": "source.text", "start": 0, "length": 8000})}})
+    class AuthenticatedPort(SourcePort):
+        def __init__(self):
+            super().__init__([calls, final()])
+            self.prepared = []
+            self.adapter = CheckpointedGenerationAdapter(SimpleNamespace(path=tmp_path, recipe=configuration))
+        def prepare_generation_context(self, context):
+            self.prepared.append(deepcopy(context))
+            return self.adapter.prepare_generation_context(context)
+    port = AuthenticatedPort()
+    generate = GenerateCot(port, configuration)
+    if tamper:
+        with pytest.raises(ValueError):
+            generate._author(["routed"], "workflow.cot_generate", current, "Preserve the actual task.")
+        assert not port.sent
+    else:
+        candidate, receipt = generate._author(["routed"], "workflow.cot_generate", current, "Preserve the actual task.")
+        assert candidate == body() and receipt["status"] == "completed"
+        assert port.prepared[0] == original
+        assert port.prepared[1]["source"] == {"kind": "learner_visible_excerpt", "text": excerpt}
+        observations = receipt["transcript"][0]["observations"]
+        assert observations[0]["result"]["hits"][0]["text"] == excerpt
+        assert observations[1]["result"]["text"] == excerpt
+        wire = json.dumps(port.sent, ensure_ascii=False)
+        assert "Use only the learner-visible excerpt" in wire
+        for private in ("Wait 10 minutes before opening.", "OUTSIDE_START", "OUTSIDE_END",
+                        "PRIVATE_GUIDANCE_637", "PRIVATE_FOCUS_927", "FORGED"):
+            assert private not in wire
+    assert current == original
+
+
 def test_author_looks_up_before_final_with_exact_native_history_and_no_review():
     port = SourcePort([tool(), final()])
     sample = {**conversation(), "source_context": paper()}
