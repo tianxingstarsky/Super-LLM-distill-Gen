@@ -64,6 +64,10 @@ def test_reanswer_reuses_exact_task_and_pays_only_author_and_one_review(sealed_n
     recipe = app.recipe(child)
     assert recipe["agent_experience"]["scopes"]["review"] == app.recipe(rid)["agent_experience"]["scopes"]["review"]
     assert recipe["sft_reanswer_version"] == 1
+    summary = next(run for run in app.task_runs() if run["id"] == child)
+    assert summary["recipe_readable"] is True
+    assert summary["source_mode"] == "planned_sft"
+    assert summary["scheduled_stages"] == ["ingest", "sft", "review", "package"]
     assert recipe["node_models"]["sft"]["generation"] == app.recipe(rid)["node_models"]["sft"]["generation"]
     calls = []
     worker = engine.Workflow(output, child, root)

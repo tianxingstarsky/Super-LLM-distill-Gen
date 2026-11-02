@@ -121,7 +121,7 @@ def _run_card_html(run: dict, *, language: str = "zh") -> tuple[str, str]:
                f'<i>{STATUS_GLYPHS.get(status, "?")}</i>{html.escape(LABELS.get(status, status))}</span>'
                f'<time title="{html.escape(moment, quote=True)}">{compact_moment}</time></div>')
     source_modes = {"document": "文档资料", "agent": "Agent 上下文", "brief": "开放需求",
-                    "arithmetic": "模板算术题（GSM8K 格式）"}
+                    "arithmetic": "模板算术题（GSM8K 格式）", "planned_sft": "复用原计划"}
     source_label = source_modes.get(run.get("source_mode"), "来源未知")
     source_names = run.get("source_names", [])
     source_text = "、".join(str(name) for name in source_names[:2])

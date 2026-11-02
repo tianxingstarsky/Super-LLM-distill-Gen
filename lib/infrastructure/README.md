@@ -1,5 +1,7 @@
 # 运行时与旧基础设施
 
+`workflow_task_inventory` 识别 `sft_reanswer_version=1` 且带原候选输入的重答任务，来源显示为复用原计划；阶段清单采用同一版本的执行图，不将没有新上传文件的重答任务误报为损坏。摘要不代替执行时的父版本认证。
+
 新建配方固定 `qa_batch_phase_version=1`。指导员初始批次无论 balanced 还是 adaptive，
 都显式声明 `request_phase=batch_design`；历史仅是其他已完成样本的覆盖与去重参考，
 不是当前用户与助手的实际对话。续轮继续使用既有 `next_turn` 合同。缺少版本标记的旧

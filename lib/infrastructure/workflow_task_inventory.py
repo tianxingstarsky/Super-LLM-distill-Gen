@@ -40,6 +40,9 @@ def _source_summary(recipe):
         mode = "agent" if all(isinstance(value, str) and
                               Path(value).suffix.casefold() in {".json", ".jsonl"}
                               for value in formats) else "document"
+    elif (recipe.get("sft_reanswer_version") == 1
+          and isinstance(recipe.get("repair_inputs"), list) and recipe["repair_inputs"]):
+        mode = "planned_sft"
     elif (recipe.get("arithmetic_seed_protocol_version") == 1
           and isinstance(recipe.get("targets"), list)
           and recipe["targets"] and all(target == "gsm8k" for target in recipe["targets"])):
@@ -71,6 +74,7 @@ def _summary(path, identity, recipe_identity):
     if isinstance(recipe, dict) and isinstance(recipe.get("targets"), list):
         try:
             scheduled, _ = execution_graph(recipe["targets"],
+                sft_reanswer_version=recipe.get("sft_reanswer_version", 0),
                 node_generation=recipe.get("node_generation"),
                 native_generation_version=recipe.get("native_generation_version", 0),
                 reasoning_trim=bool((recipe.get("reasoning_trim") or {}).get("enabled")),

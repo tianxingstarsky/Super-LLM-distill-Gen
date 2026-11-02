@@ -3208,6 +3208,7 @@ ZH_EN.update({
     "草稿未能保存，当前配置仍在。请检查本机存储后重试。": "Could not save the draft. Your current setup is still here. Check local storage and try again.",
     "拖入文件即保存并选中，关闭或重启后仍可使用。": "Drop files to save and select them. They remain available after closing or restarting the app.",
     "来源未知": "Unknown source",
+    "复用原计划": "Reuse saved plan",
     "任务名称、来源文件、日期或 ID": "Task name, source file, date, or ID",
     "历史任务仍已保留，暂时无法读取完整运行记录。请检查任务文件。": "This task is still saved, but its full record could not be read. Check the task files.",
     "本机缓存 · 上传即保存": "Local cache · Files saved on upload",
