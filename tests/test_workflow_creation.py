@@ -110,13 +110,33 @@ def test_generator_targets_are_normalized_once_before_driver():
     assert driver.create.call_args.kwargs['targets'] == ['sft', 'orpo']
 
 
-@pytest.mark.parametrize('targets,version', [(['sft', 'cot'], 19), (['sft'], 19), (['cot'], 19)])
+@pytest.mark.parametrize('targets,version', [(['sft', 'cot'], 20), (['sft'], 20), (['cot'], 20)])
 def test_cot_sft_route_is_frozen_in_new_recipe_version(tmp_path, targets, version):
+    from hashlib import sha256
     from lib.infrastructure import training_workflow as engine
     source = tmp_path / 'source.txt'
     source.write_text('设备维护前先断电，再检查线路，完成后记录结果。', encoding='utf-8')
     output = tmp_path / 'output'
     run_id = engine.create_run(output, sources=[source], targets=targets)
-    recipe = engine.read_json(engine.run_path(output, run_id) / 'recipe.json')
+    run_path = engine.run_path(output, run_id)
+    recipe = engine.read_json(run_path / 'recipe.json')
     assert recipe['version'] == version
     assert recipe['version'] in engine.SUPPORTED_RECIPE_VERSIONS
+    assert recipe['targets'] == targets
+    assert recipe['qa_director']['enabled'] is True
+    assert recipe['qa_director']['question_separation'] is True
+    assert recipe['source_cleaning'] is True
+    assert recipe['source_line_protocol_version'] == 1
+    assert recipe['source_context_scope_version'] == 1
+    templates = recipe['node_prompt_templates']
+    for prompt_id in ('workflow.qa_director', 'workflow.question_brief_check',
+                      'workflow.question_user', 'workflow.question_fit'):
+        assert isinstance(templates['director'][prompt_id], str) and templates['director'][prompt_id].strip()
+    assert isinstance(templates['sft']['workflow.sft_answer'], str) and templates['sft']['workflow.sft_answer'].strip()
+    assert len(recipe['sources']) == 1
+    frozen_source = recipe['sources'][0]
+    original_bytes = source.read_bytes()
+    assert {key: frozen_source[key] for key in ('name', 'file', 'bytes', 'sha256')} == {
+        'name': source.name, 'file': '0000.txt', 'bytes': len(original_bytes),
+        'sha256': sha256(original_bytes).hexdigest()}
+    assert (run_path / 'inputs' / frozen_source['file']).read_bytes() == original_bytes

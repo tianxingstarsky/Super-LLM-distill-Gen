@@ -10,6 +10,13 @@ from lib.contexts.workflows.contracts import EXPLORATORY_STYLE_V1, EXPLORATORY_S
 
 
 ZH_EN: dict[str, str] = {
+    "程序一致性核对": "Program consistency checks",
+    "检查方式": "Check method",
+    "检查范围": "Check scope",
+    "模型请求": "Model requests",
+    "最终答案、工具参数、返回和顺序与原轨迹一致": "The final answer, tool arguments, observations and order match the original trace",
+    "不调用独立评审模型；不代表任务已独立验证": "No independent review model is called; task success is not independently verified",
+    "程序核对最终答案、工具证据与原始轨迹的一致性，不调用评分或修正模型；不代表任务已独立验证。": "Program checks preserve the final answer and recorded tool evidence. No scoring or repair model is called; task success is not independently verified.",
     "Agent 轨迹优化": "Agent optimization",
     "流程与 CoT 优化": "Flow and CoT optimization",
     "轨迹流程与 CoT 优化": "Trajectory flow and CoT optimization",

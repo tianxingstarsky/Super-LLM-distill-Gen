@@ -433,6 +433,9 @@ STAGE_STATUS = {"pending": "待处理", "queued": "待启动", "running": "执�
 
 def _stage_configuration(key, recipe, state):
     targets = recipe.get("targets", [])
+    if key == "review" and recipe.get("agent_trajectory_optimization_version") == 1 and set(targets) == {"agent"}:
+        return {"检查方式": "程序一致性核对", "检查范围": "最终答案、工具参数、返回和顺序与原轨迹一致",
+                "模型请求": "不调用独立评审模型；不代表任务已独立验证"}
     if key == "ingest":
         details = {"来源": [UntranslatedText(row.get("name", row.get("file", "未知来源"))) for row in recipe.get("sources", [])] or ["开放需求"],
                 "最大处理单元": recipe.get("max_units"), "分块目标字符数": recipe.get("chunk_chars"),
@@ -455,7 +458,7 @@ def _stage_configuration(key, recipe, state):
         # Old CoT runs only checked an existing explanation and had no writer.
         roles = (("jev",) if key == "cot" and not (recipe.get("node_generation") or {}).get("cot")
                  else node_roles(key, mode, node_generation=recipe.get("node_generation"), package_review=recipe.get("package_review"), cpt_processing=recipe.get("cpt_processing"), review_repair=recipe.get("review_repair"), recipe_version=recipe.get("version", 0),
-                                 agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1))
+                                 agent_trajectory_optimization=recipe.get("agent_trajectory_optimization_version") == 1, targets=targets))
         for role in roles:
             binding = recipe.get("node_models", {}).get(key, {}).get(role, {})
             prefix = "question_" if role == "question" else "" if role == "generation" else "jev_"
@@ -1211,7 +1214,8 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                 st.html(preference_details_html(recipe["targets"], language=st.session_state.get("ui_language", "zh")))
             st.html(_config_html(_stage_configuration(selected_stage, recipe, state)))
             render_run_node_prompts(selected_stage, recipe, run_id)
-            if selected_stage == "review" and (recipe.get("review_repair") or {}).get("mode") == "human":
+            if (selected_stage == "review" and (recipe.get("review_repair") or {}).get("mode") == "human"
+                    and not (recipe.get("agent_trajectory_optimization_version") == 1 and set(recipe["targets"]) == {"agent"})):
                 st.caption("人工评分和内容修正在本节点完成。未评分候选不会导出。")
                 if human_application is not None and not active and st.button("打开人工评分与修正",
                         key=f"workflow-human-review:{run_id}", type="primary", width="stretch"):
@@ -1837,6 +1841,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.session_state[style_key] = st.session_state[draft_key]
         sft_output_style = st.session_state[style_key]
     agent_trajectory_optimization = "agent" in targets and agent_optimization_snapshot(ws)
+    agent_only_optimization = agent_trajectory_optimization and set(targets) == {"agent"}
     agent_capabilities = application.agent_replay_capabilities() if "agent" in targets and not agent_trajectory_optimization else {}
     document_parser = {"mode": "native"}
     if not arithmetic_only and source_mode == "文档资料" and document_parser_mode(ws) == "docling":
@@ -1870,7 +1875,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             model_source_mode = "人工设计"
         bindings, endpoints = node_bindings(model_application, graph_nodes, model_source_mode, ws,
                                            node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                           source_cleaning=source_cleaning, agent_trajectory_optimization=agent_trajectory_optimization)
+                                           source_cleaning=source_cleaning, agent_trajectory_optimization=agent_trajectory_optimization,
+                                           targets=targets)
         parser_role = "vision" if document_parser.get("mode") == "vision" else "generation"
         if document_parser.get("mode") in {"model", "vision"} and bindings.get("ingest", {}).get(parser_role):
             document_parser["binding"] = bindings["ingest"][parser_role]
@@ -1888,7 +1894,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     document_parser["unconfirmed"]=True
         model_issues = missing_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                        agent_trajectory_optimization=agent_trajectory_optimization)
+                                        agent_trajectory_optimization=agent_trajectory_optimization, targets=targets)
     workbench = st.container(key="workbench-layout")
     if targets:
         # A real page shortcut replaces the static wizard: it never changes
@@ -1905,7 +1911,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                        for node, _ in model_issues}, selected_node, GRAPH_LABELS, STAGE_GLYPHS,
                                       snapshot_available_bindings(graph_nodes, model_source_mode, bindings, endpoints,
                                                                   node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                                                  agent_trajectory_optimization=agent_trajectory_optimization),
+                                                                  agent_trajectory_optimization=agent_trajectory_optimization, targets=targets),
                                       language=st.session_state.get("ui_language", "zh"), source_mode=model_source_mode,
                                       review_advisory_policy_version=1,
                                       agent_trajectory_optimization=agent_trajectory_optimization,
@@ -1961,7 +1967,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             route = reasoning_route_description(selected_node, targets, draft_recipe_version, node_generation)
             if route:
                 st.caption(route)
-            has_prompts = bool(active_node_prompt_ids(selected_node, model_source_mode,
+            has_prompts = not (agent_only_optimization and selected_node == "review") and bool(active_node_prompt_ids(selected_node, model_source_mode,
                                                       node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                                       qa_director=qa_director, agent_trajectory_optimization=agent_trajectory_optimization))
             node_tabs = _setup_node_tabs(ws, selected_node, has_prompts=has_prompts)
@@ -1980,7 +1986,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                   on_click=_select_setup_node, args=(selection_key, "review"))
                     if selected_node == "package":
                         st.caption("这里生成训练数据；ORPO 训练与 RLAIF 强化学习训练在外部完成。")
-                if selected_node == "review":
+                if selected_node == "review" and not agent_only_optimization:
                     review_repair = render_review_repair_settings(ws, package_review, save_field=_save_draft_value)
                     if "rlaif" in targets:
                         st.caption("RLAIF 的 AI 评分、评语与评价维度在这里生成，并随结果保存。")
@@ -2030,16 +2036,22 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     render_trim_settings(ws, save_field=_save_draft_value, prompt_library=prompt_library)
                 elif selected_node == "director":
                     render_director_rules(ws, save_field=_save_draft_value, prompt_library=prompt_library)
-                render_node_prompts(selected_node, model_source_mode, ws,
-                                    save_field=_save_draft_value, node_generation=generation_snapshot(ws, graph_nodes), package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                    qa_director=qa_director, prompt_library=prompt_library,
-                                    agent_trajectory_optimization=agent_trajectory_optimization)
+                if not (agent_only_optimization and selected_node == "review"):
+                    render_node_prompts(selected_node, model_source_mode, ws,
+                                        save_field=_save_draft_value, node_generation=generation_snapshot(ws, graph_nodes), package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
+                                        qa_director=qa_director, prompt_library=prompt_library,
+                                        agent_trajectory_optimization=agent_trajectory_optimization)
             if "control_text" in node_tabs:
                 with node_tabs["control_text"]:
                     render_control_text_settings(selected_node, ws, save_fields=_commit_draft_fields,
                                                  suggestions=control_suggestions)
             with node_tabs["guide"]:
-                render_node_guide(selected_node)
+                if agent_only_optimization and selected_node == "review":
+                    st.caption("程序核对最终答案、工具参数、观察与顺序是否保留。不会调用评审模型，也不将一致性核对视为工具重放或任务成功认证。"
+                               if st.session_state.get("ui_language", "zh") != "en" else
+                               "The program checks preservation of the final answer, tool arguments, observations and order. No review model is called. Consistency is not tool replay or task-success verification.")
+                else:
+                    render_node_guide(selected_node)
         with workbench:
             if "rlaif" in targets and review_repair.get("mode") == "human":
                 _render_setup_issue(ws, "review", _workflow_error("rlaif_generation_requires_ai_review"),
@@ -2070,7 +2082,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
     human_mode_unavailable = human_enabled and (not qa_director.get("enabled") or not set(targets) <= HUMAN_QA_TARGETS)
     human_ready = human_enabled and not director_invalid and not human_mode_unavailable
     human_source_compatible = human_ready and set(targets) <= HUMAN_QA_TARGETS
-    node_prompts = node_prompt_snapshot(ws, graph_nodes, model_source_mode,
+    node_prompts = node_prompt_snapshot(ws, [node for node in graph_nodes if not (agent_only_optimization and node == "review")], model_source_mode,
                                        node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
                                        qa_director=qa_director, agent_trajectory_optimization=agent_trajectory_optimization) if targets else {}
     prompts_invalid = node_prompt_has_issue(node_prompts)
@@ -2507,7 +2519,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                     run_id = create(**human_options, sources=sources, brief=brief, name=name, targets=targets,
                                         node_models=model_application.snapshot(graph_nodes, model_source_mode, bindings,
                                                                                node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-                                                                               agent_trajectory_optimization=agent_trajectory_optimization),
+                                                                               agent_trajectory_optimization=agent_trajectory_optimization, targets=targets),
                                         sample_count=int(sample_count), production=production,
                                         concurrency=int(concurrency), batch_size=int(batch_size),
                                         max_units=int(maximum), chunk_chars=int(chunk_chars), tasks=int(tasks),

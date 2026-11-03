@@ -25,7 +25,14 @@ render_pinned_experience({
 
 
 def test_agent_editor_mode_keeps_model_prompt_experience_and_missing_policy_in_their_nodes():
-    ui = AppTest.from_string(SCRIPT).run()
+    from lib.domain.workflow_creation import validate_creation
+    from lib.domain.workflow_node_models import binding_snapshot
+    from lib.domain.workflow_scale import node_roles
+
+    script = SCRIPT.replace("def canvas(spec,selection_key,**kwargs):", """def canvas(spec,selection_key,**kwargs):
+    from copy import deepcopy
+    st.session_state['agent-ui-canvas'] = deepcopy(spec)""")
+    ui = AppTest.from_string(script).run()
     ui.session_state["workflow-entry-target:fixture"] = "agent"
     ui.run()
     ui.button(key="fixture-node:agent").click().run()
@@ -33,6 +40,26 @@ def test_agent_editor_mode_keeps_model_prompt_experience_and_missing_policy_in_t
     assert ui.radio(key="workflow-agent-processing-choice:fixture").value == "optimize"
     assert any(select.key == "node-model:fixture:agent:generation:backend" for select in ui.selectbox)
     assert not any(select.key == "agent-mode-choice:fixture" for select in ui.selectbox)
+    graph = ui.session_state["agent-ui-canvas"]
+    check = next(node for node in graph["nodes"] if node["id"] == "review")
+    assert check["label"] == "程序一致性核对" and check["models"] == []
+    assert "不调用独立评审模型" in check["description"]
+    assert "feedback_branch" not in graph
+    assert not any(button.key == "workflow-config-fix:fixture:model:review" for button in ui.button)
+    bindings = deepcopy(ui.session_state["workflow-node-bindings:fixture"])
+    snapshot = binding_snapshot([node["id"] for node in graph["nodes"]], "Agent 上下文", bindings, {"local": {}},
+        review_repair={"mode": "auto"}, agent_trajectory_optimization=True, targets=["agent"])
+    assert set(snapshot) == {"agent"}, "only the one author is frozen; no scoring model is required"
+    _, frozen = validate_creation(targets=["agent"], sources=["trace.jsonl"], node_models=bindings,
+                                  agent_trajectory_optimization=True)
+    assert not {"review", "jev", "package"}.intersection(frozen)
+    assert node_roles("review", "Agent 上下文", agent_trajectory_optimization=True, targets=["agent", "sft"]) == ("generation",)
+    assert node_roles("review", "Agent 上下文", targets=["agent"]) == ("generation",)
+    ui.button(key="fixture-node:review").click().run()
+    assert not ui.exception
+    assert not any(select.key.startswith("node-model:fixture:review:") for select in ui.selectbox)
+    assert not any(select.key == "workflow-node-prompt-selection:fixture:review" for select in ui.selectbox)
+    ui.button(key="fixture-node:agent").click().run()
     ui.session_state["workflow-node-tabs:fixture:agent"] = "提示词与风格"
     ui.run()
     assert ui.selectbox(key="workflow-node-prompt-selection:fixture:agent").value == "workflow.agent_trajectory_optimization"
@@ -49,6 +76,7 @@ def test_agent_editor_mode_keeps_model_prompt_experience_and_missing_policy_in_t
     assert ui.selectbox(key="agent-mode-choice:fixture").value == "local"
     assert not any(select.key == "node-model:fixture:agent:generation:backend" for select in ui.selectbox)
     assert ui.session_state["workflow-form-draft:fixture"]["workflow-agent-trajectory-optimization:fixture"] is False
+    assert next(node for node in ui.session_state["agent-ui-canvas"]["nodes"] if node["id"] == "review")["label"] == "一次建议评审"
     ui.radio(key="workflow-agent-processing-choice:fixture").set_value("optimize").run()
     assert not ui.exception
     assert ui.session_state["workflow-form-draft:fixture"]["workflow-agent-trajectory-optimization:fixture"] is True

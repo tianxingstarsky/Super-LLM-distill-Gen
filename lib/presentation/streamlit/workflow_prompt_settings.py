@@ -217,6 +217,9 @@ def render_node_prompts(node: str, source_mode: str, workspace: str, *, save_fie
 
 def render_run_node_prompts(node: str, recipe: dict, run_id: str) -> None:
     """Display the immutable prompt bodies that a started run actually uses."""
+    if (node == "review" and recipe.get("agent_trajectory_optimization_version") == 1
+            and set(recipe.get("targets", ())) == {"agent"}):
+        return
     pinned = (recipe.get("node_prompt_templates") or {}).get(node, {})
     if not isinstance(pinned, dict) or not pinned:
         return

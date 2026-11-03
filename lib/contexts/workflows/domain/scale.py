@@ -27,7 +27,10 @@ NODE_ROLES = {
 def node_roles(stage: str, source_mode: str, *, node_generation: dict | None = None,
                package_review: dict | None = None, cpt_processing: dict | None = None,
                review_repair: dict | None = None, recipe_version: int | None = None,
-               agent_trajectory_optimization: bool = False) -> tuple[str, ...]:
+               agent_trajectory_optimization: bool = False, targets=None) -> tuple[str, ...]:
+    if (agent_trajectory_optimization is True and set(targets or ()) == {"agent"}
+            and stage in {"review", "jev", "package"}):
+        return ()
     if stage == "agent":
         return ("generation",) if agent_trajectory_optimization is True else ()
     if stage == "director" and recipe_version is not None and recipe_version <= 19:

@@ -23,6 +23,7 @@ The release includes a build manifest and installation validation results.
 - Make local edits to recorded Agent CoT. Keep the saved final answer and all tool records unchanged.
 - Keep flow suggestions separate from actions that actually happened.
 - Configure the Agent editor's model and prompts on its workflow node.
+- Pure Agent editing needs only its editor model. The next stage checks consistency without a review model.
 - Use adopted reasoning experience in the editor's system context. Keep the chosen version with the task.
 - Edit knowledge reasoning with its original context. Full reasoning rewrites are rejected in local-edit mode.
 - Keep original reasoning, model responses, request records, and actual usage for inspection.

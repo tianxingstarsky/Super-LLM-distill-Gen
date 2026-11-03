@@ -37,7 +37,7 @@ _PROCESS_REVIEW_DESCRIPTIONS = {
 _PROCESS_REVIEW_HELP = "这是用于过程核对的普通大模型，并非特殊模型。可选 JEV 评分不替代这些核对。"
 
 
-def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None, source_cleaning=False, agent_trajectory_optimization=False):
+def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode, workspace, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None, source_cleaning=False, agent_trajectory_optimization=False, targets=None):
     draft_key = f"workflow-node-bindings:{workspace}"
     saved = st.session_state.get(f"workflow-form-draft:{workspace}", {}).get(draft_key, {})
     draft = deepcopy(st.session_state.get(draft_key, saved))
@@ -50,7 +50,7 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
         NODE_ROLES[node] if node in {"jev", "package"} else node_roles(
             node, source_mode, node_generation=node_generation, package_review=package_review,
             cpt_processing=cpt_processing, review_repair=review_repair,
-            agent_trajectory_optimization=agent_trajectory_optimization))]
+            agent_trajectory_optimization=agent_trajectory_optimization, targets=targets))]
     if "director" in draft and "question" not in draft["director"]:
         # The old draft schema had no question role. Initialize it once; a
         # persisted marker thereafter distinguishes an intentional clear.
@@ -60,7 +60,7 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
     draft, initialized, endpoints = application.prepare_draft(
         nodes, source_mode, draft, st.session_state.get(initialized_key, saved_markers),
         node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair,
-        agent_trajectory_optimization=agent_trajectory_optimization)
+        agent_trajectory_optimization=agent_trajectory_optimization, targets=targets)
     st.session_state[draft_key] = draft
     st.session_state[initialized_key] = sorted(initialized)
     _persist_draft_value(workspace, initialized_key, sorted(initialized))
@@ -70,6 +70,7 @@ def node_bindings(application: WorkflowNodeModelsApplication, nodes, source_mode
         "cpt_processing": deepcopy(cpt_processing), "review_repair": deepcopy(review_repair),
         "source_cleaning": source_cleaning is True,
         "agent_trajectory_optimization": agent_trajectory_optimization is True,
+        "targets": list(targets or ()),
     }
     agent_key = f"workflow-agent-mode:{workspace}"
     if agent_key not in st.session_state:
@@ -259,7 +260,7 @@ def _missing_role_copies(node: str, workspace: str, bindings: dict, endpoints: d
         for role in node_roles(target, scope["source_mode"],
                                node_generation=scope.get("node_generation"),
                                package_review=scope.get("package_review"), cpt_processing=scope.get("cpt_processing"), review_repair=scope.get("review_repair"),
-                               agent_trajectory_optimization=scope.get("agent_trajectory_optimization", False)):
+                               agent_trajectory_optimization=scope.get("agent_trajectory_optimization", False), targets=scope.get("targets")):
             source = bindings.get(node, {}).get(role, {})
             if (not bindings.get(target, {}).get(role) and source.get("backend") in endpoints
                     and source.get("model")):
@@ -539,18 +540,20 @@ def _render_service_network(backend: str, endpoint: dict, application, *, prefix
 def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                        backend_application: BackendApplication | None = None, node_generation=None, package_review=None, cpt_processing=None, review_repair=None,
                        confirmation_action=None, confirmation_args=None, source_cleaning=None,
-                       agent_trajectory_optimization=None):
+                       agent_trajectory_optimization=None, targets=None):
     if source_cleaning is None:
         source_cleaning = st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("source_cleaning", False)
     if agent_trajectory_optimization is None:
         agent_trajectory_optimization = st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("agent_trajectory_optimization", False)
+    if targets is None:
+        targets = st.session_state.get(f"workflow-node-scope:{workspace}", {}).get("targets")
     pending = st.session_state.pop(f"workflow-node-pending-binding:{workspace}:{node}", None)
-    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair, agent_trajectory_optimization=agent_trajectory_optimization):
+    if pending and pending.get("role") in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair, agent_trajectory_optimization=agent_trajectory_optimization, targets=targets):
         prefix = f"node-model:{workspace}:{node}:{pending['role']}"
         st.session_state[prefix + ":backend"] = pending["backend"]
         st.session_state[prefix + ":model:" + pending["backend"]] = pending["model"]
     previous = deepcopy(bindings)
-    roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair, agent_trajectory_optimization=agent_trajectory_optimization)
+    roles = node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair, agent_trajectory_optimization=agent_trajectory_optimization, targets=targets)
     if not roles:
         explanation = {
             "ingest": ("固定人工问答设计，保留任务来源快照；此步骤不调用模型。" if source_mode == "人工设计" else
@@ -562,7 +565,9 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
             "package": ("检查输出规则并整理产物，不调用模型。"
                         if (package_review or {}).get("node") == "jev" else
                         "核对产物清单并整理候选数据；可开启 AI 评审，再选择本节点的评审模型。"),
-            "review": "人工在本节点评分并修正内容，不需要配置模型。",
+            "review": ("程序核对最终答案、工具证据与原始轨迹的一致性，不调用评分或修正模型；不代表任务已独立验证。"
+                       if agent_trajectory_optimization and set(targets or ()) == {"agent"} else
+                       "人工在本节点评分并修正内容，不需要配置模型。"),
             "jev": "未启用额外 JEV 评分；各生成节点仍按配置进行过程核对。",
         }.get(node, "此节点不需要配置模型。")
         st.info(explanation)
@@ -712,8 +717,8 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.rerun()
 
 
-def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None, agent_trajectory_optimization=False):
-    return {node: {role: deepcopy(bindings[node][role]) for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair, agent_trajectory_optimization=agent_trajectory_optimization)
+def snapshot_available_bindings(nodes, source_mode, bindings, endpoints, *, node_generation=None, package_review=None, cpt_processing=None, review_repair=None, agent_trajectory_optimization=False, targets=None):
+    return {node: {role: deepcopy(bindings[node][role]) for role in node_roles(node, source_mode, node_generation=node_generation, package_review=package_review, cpt_processing=cpt_processing, review_repair=review_repair, agent_trajectory_optimization=agent_trajectory_optimization, targets=targets)
                    if role in bindings.get(node, {}) and bindings[node][role]["backend"] in endpoints} for node in nodes}
 
 

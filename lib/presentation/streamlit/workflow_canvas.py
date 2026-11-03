@@ -51,6 +51,8 @@ def node_display_label(node, labels, node_generation=None, *, source_cleaning=Fa
         return preference_stage_label(targets)
     if node == "agent" and agent_trajectory_optimization:
         return "Agent optimization" if language == "en" else "Agent 轨迹优化"
+    if node == "review" and agent_trajectory_optimization and set(targets or ()) == {"agent"}:
+        return "Program consistency checks" if language == "en" else "程序一致性核对"
     return labels.get(node, "评分与修正" if node == "review" else node)
 
 
@@ -73,7 +75,12 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
         "review": "在同一节点评分、修正并重新评分；通过后才进入打包，修正不会回到 SFT 生成。",
         "package": "检查结构、去重并导出训练文件、报告与清单。",
     }
-    if node == "agent" and agent_trajectory_optimization:
+    program_review = node == "review" and agent_trajectory_optimization and set(targets or ()) == {"agent"}
+    if program_review:
+        description = ("Check that the final answer and recorded tool evidence stay unchanged. "
+                       "No review model is called; this is not independent task verification."
+                       if language == "en" else "程序核对最终答案和工具证据与原轨迹一致，不调用独立评审模型；不代表任务已独立验证。")
+    elif node == "agent" and agent_trajectory_optimization:
         description = ("Edit only the final assistant CoT, normally with one author call per trajectory. "
                        "The final answer and recorded tools stay fixed. Flow suggestions are saved separately; no local replay is required."
                        if language == "en" else
@@ -113,8 +120,9 @@ def node_description(node, source_mode, *, node_generation=None, package_review=
     roles = node_roles(node, source_mode, node_generation=node_generation,
                        package_review=package_review, cpt_processing=cpt_processing,
                        review_repair=review_repair, recipe_version=recipe_version,
-                       agent_trajectory_optimization=agent_trajectory_optimization)
-    usage = ("人工评分与修正，不发起模型请求。" if node == "review" and not roles else
+                       agent_trajectory_optimization=agent_trajectory_optimization, targets=targets)
+    usage = ("No model request." if language == "en" else "不发起模型请求。") if program_review else (
+             "人工评分与修正，不发起模型请求。" if node == "review" and not roles else
              "调用模型；可能产生 API 费用。" if roles else "本地处理，不发起模型请求。")
     return description, usage
 
@@ -359,7 +367,7 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
         status = metrics.get("status", "pending")
         roles = node_roles(key, source_mode, node_generation=node_generation, package_review=package_review,
                            cpt_processing=cpt_processing, review_repair=review_repair, recipe_version=recipe_version,
-                           agent_trajectory_optimization=agent_trajectory_optimization)
+                           agent_trajectory_optimization=agent_trajectory_optimization, targets=targets)
         if repair_only and key == "ingest":
             roles = ()
         node_bindings = {role: binding for role, binding in (bindings or {}).get(key, {}).items()
@@ -389,6 +397,8 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                     translate_label("请选择可用模型", language) if status == "configuration_required" else
                     f"{role['backend']} · {role['model']}" if role else
                     translate_label("点击配置节点", language))
+        if not live and key == "review" and agent_trajectory_optimization and set(targets) == {"agent"}:
+            subtitle = "No review model · program checks" if language == "en" else "无需评审模型 · 程序核对"
         models = []
         if not live:
             for role_key, zh, en in (("generation", "生成", "Generate"), ("question", "无线索提问", "Question"), ("jev", "评审", "Review"), ("vision", "识别", "Read")):
@@ -456,6 +466,10 @@ def canvas_spec(targets, stages, selected, labels, glyphs, bindings=None, *, lan
                 node["description"] = ("Verify the saved questions, source ranges and task contracts without a model call."
                     if english else "认证已保存的问题、资料范围和任务合同，不调用模型。")
     if "review" in nodes:
+        if agent_trajectory_optimization and set(targets) == {"agent"}:
+            result["labels"]["lineage"] = ("Edit recorded CoT → program consistency checks → package. No independent review call."
+                if english else "轨迹 CoT 编辑 → 程序一致性核对 → 打包；不增加独立评审调用。")
+            return result
         if review_advisory_policy_version == 1 and (review_repair or {}).get("mode") == "auto":
             for node in result["nodes"]:
                 if node["id"] == "review":

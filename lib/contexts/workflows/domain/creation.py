@@ -3,7 +3,7 @@ from pathlib import PurePath
 from .node_control_text import validate_node_control_text_configs
 from lib.contexts.workflows.domain.targets import TARGETS
 from lib.domain.workflow_quality import text_issue
-from lib.contexts.workflows.domain.scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, validate_node_models
+from lib.contexts.workflows.domain.scale import MAX_CANDIDATES, MAX_CONCURRENCY, MAX_BATCH_SIZE, validate_node_models, node_roles
 from lib.domain.web_research import validate_web_research
 from lib.domain.workflow_generation import validate_node_generation
 from lib.domain.reasoning_trim import validate_reasoning_trim
@@ -73,6 +73,10 @@ def validate_creation(*, targets=("cpt", "sft", "dpo"), max_units=100,
     if type(batch_size) is not int or not 1 <= batch_size <= MAX_BATCH_SIZE:
         raise ValueError("invalid_workflow_batch_size")
     node_models = validate_node_models(node_models)
+    if agent_trajectory_optimization and set(targets) == {"agent"}:
+        node_models = {stage: roles for stage, roles in node_models.items()
+            if stage not in {"review", "jev", "package"} or node_roles(stage, "Agent 上下文",
+                agent_trajectory_optimization=True, targets=targets)}
     review_config = validate_review_repair(review_repair)
     repair_rows = validate_repair_inputs(repair_inputs, review_config)
     if (review_config or {}).get("reference_sources"):
