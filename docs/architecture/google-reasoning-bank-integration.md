@@ -15,6 +15,8 @@
 
 ## 安装
 
+以下命令在 Git 源码检出目录及其 Python 环境内执行。Windows 预览安装器不包含该可选组件、学习依赖或 Git 元数据；需要此能力时使用独立的源码安装环境，不能在 EXE 安装目录直接执行子模块命令。目前没有安装器内的一键添加入口。
+
 ```bash
 git submodule update --init components/reasoning-bank
 python -m pip install -r requirements-reasoning-bank.txt

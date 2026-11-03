@@ -59,8 +59,8 @@ From the repository, using the existing development environment:
 
 `--source-ref` may name a commit or an explicitly prepared Git tree. Final release
 builds must use the committed release revision. Builds and tools stay under
-`.dataforge/releases/v0.0.2/`. The output includes
-`ShuJian-Cube-0.0.2-Windows-x64-Setup.exe`, `SHA256SUMS.txt`, and a build manifest.
+`.dataforge/releases/v0.0.4/`. The output includes
+`ShuJian-Cube-0.0.4-Windows-x64-Setup.exe`, `SHA256SUMS.txt`, and a build manifest.
 The manifest records source tree, commit, package lock, and tool hashes.
 
 Pinned download archives from an earlier release's `tools/` folder can be copied

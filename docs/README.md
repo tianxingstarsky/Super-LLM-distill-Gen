@@ -1,6 +1,7 @@
 # 维护文档导航
 
-- [V0.0.2 发布说明](release-v0.0.2.md)：当前预览、缺失推理补写待完善状态与社区参与方向。
+- [V0.0.4 发布说明](release-v0.0.4.md)：当前预览、混合知识问答、Agent 轨迹编辑及安装边界。
+- [V0.0.2 发布说明](release-v0.0.2.md)：缺失推理补写的历史验证与社区参与方向。
 - [V0.0.1 发布说明](release-v0.0.1.md)：初始预览的历史验证记录。
 - [Agent 功能维护地图](architecture/agent-features.md)：按功能查找提示词、用例、状态和共享设施。
 - [Agent 安装与调度](agent-setup.md)：DeepSeek Harness 与 Codex 的独立接入和可交给 agent 的安装任务。
