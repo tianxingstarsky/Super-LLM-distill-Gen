@@ -78,6 +78,10 @@ def extract_source(ref: str, archive: Path, payload: Path) -> str:
         for item in bundle.infolist():
             if item.is_dir():
                 continue
+            # Optional upstream checkouts may include tracked source files.
+            # Exclude them from the app, while still rejecting private files.
+            if PurePosixPath(item.filename).parts[0] == "components":
+                continue
             if not source_path_allowed(item.filename) or stat.S_ISLNK(item.external_attr >> 16):
                 raise ValueError(f"Release source contains an excluded path: {item.filename}")
             target = payload.joinpath(*PurePosixPath(item.filename).parts)

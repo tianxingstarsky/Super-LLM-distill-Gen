@@ -10,6 +10,9 @@ The first installation needs an internet connection.
 - `build_windows.py` reads one Git tree, creates an isolated payload, verifies
   downloaded build tools, and invokes Inno Setup. It never copies the working
   `.venv`, ignored files, local configuration, or dirty submodules.
+  Tracked optional source under `components/` is deliberately omitted as well.
+  Other excluded committed paths still stop the build; this is not a fallback
+  that silently accepts local settings or runtime data.
   The repository `VERSION` is the single release-version source. The selected
   Git tree must have the same version. The builder passes that value to Inno
   Setup; installed verification compares it with the release manifest after
