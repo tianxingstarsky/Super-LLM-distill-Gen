@@ -1055,6 +1055,10 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="df", description="Super-LLM-distill-Gen CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    from lib.presentation.training_cli import configure as configure_training_validation
+    configure_training_validation(sub.add_parser("train-validate",
+        help="本地原模型/SFT/CPT→SFT 对照（需独立训练环境，默认仅预检）"))
+
     p_import = sub.add_parser("import", help="导入 rollout 数据（需 G1 闸门）")
     p_import.add_argument("--limit", type=int, default=0)
     p_import.add_argument("--export-limit", type=int, default=200)

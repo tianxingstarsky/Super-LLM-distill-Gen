@@ -2,7 +2,7 @@
 
 数简立方采用 **DDD 模块化单体**。按业务职责组织代码，保留一个 Python 主运行时和既有持久化格式。页面和插件负责交互，应用用例协调动作，领域规则决定什么操作有效，基础设施负责磁盘、数据库和外部服务。
 
-当前建立了五个业务边界。原有 `lib/domain/`、`lib/application/`、`lib/infrastructure/` 仍包含未迁移模块及兼容入口。代码导航见 [lib/README.md](../lib/README.md)，维护名称见 [命名与职责](architecture/naming.md)。
+当前建立了六个业务边界。原有 `lib/domain/`、`lib/application/`、`lib/infrastructure/` 仍包含未迁移模块及兼容入口。代码导航见 [lib/README.md](../lib/README.md)，维护名称见 [命名与职责](architecture/naming.md)。
 
 ## 从哪里开始找代码
 
@@ -13,6 +13,7 @@
 | 审核 | `lib/contexts/review/` | SFT、CPT、偏好对和 Agent 审核；候选身份、决定、来源校验和审核发布 | `review/api.py` |
 | 模型 | `lib/contexts/models/` | 服务配置、能力证据、推理和并发配置、文本/JSON/工具请求策略 | `models/api.py` |
 | 文档 | `lib/contexts/documents/` | 内容规范化、结构分块、TeX 保留、本地语料准备、Docling 适配 | `documents/api.py` |
+| 训练验证（可选） | `lib/contexts/training/` | 固定训练数据、单次遍历、原模型与适配器对照、断点和完整生成报告 | `training/api.py` |
 | 组合根 | `lib/bootstrap/` | 为用例注入具体实现 | 各业务工厂 |
 | 展示层 | `lib/presentation/`、`lib/webapp.py`、`lib/cli.py` | 页面、输入、展示和入口路由 | 调用应用用例 |
 | 外部插件 | `plugins/` | 独立版本、安装、上游 SDK 适配和外部调度 | `dataforge.control` 协议 |
@@ -78,6 +79,8 @@ CPT 重复判定保留在纯领域规则中；SQLite 索引负责存储和候选
 **文档准备**通过 `DocumentTextPort` 取得文本，`PrepareDocumentCorpus` 使用纯分块和 TeX 规则构造语料。原生格式读取与 Docling SDK 留在文档基础设施。Docling 的公式、表格、图片和阅读顺序实现集中在 `documents/infrastructure/docling/`，解析策略版本和缓存签名未因目录移动而变化。
 
 ## 兼容与迁移
+
+**训练验证**由 `RunTrainingValidation` 串行提交预检、原模型评测、SFT 及 CPT→SFT 的训练与评测收据。两个训练分支均从同一原权重开始；CPT→SFT 在一次有序遍历中先读取语料块，再读取与 SFT 分支相同的问题。领域层约束 epoch、题目隔离和监督范围；文件驱动复用 datasets 的训练加载 API，模型与优化器由独立环境的 Transformers Trainer、PEFT 和 bitsandbytes 承担，不进入普通控制台启动和安装包依赖。具体操作见 [本地训练验证](local-training-validation.md)。
 
 `WorkflowApplication` 和 `FilesystemWorkflowDriver` 保留给旧调用方。生产装配已分别注入运行、数据集和审核适配器。已移动的 Domain/Application 文件保留导入别名，不再拥有实现。
 

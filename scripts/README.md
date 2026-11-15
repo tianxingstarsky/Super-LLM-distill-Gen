@@ -14,6 +14,6 @@
 
 [release](release/README.md) 从固定 Git 版本构建 Windows x64 预览安装器，记录运行时、依赖与文件校验，不承接产品业务逻辑。
 
-[training](training/README.md) 预览训练加载时的 Qwen3.5 控制转换、完整目标和监督掩码。只读同一份 JSONL，不下载权重、不启动训练或写另一份数据集。
+[training](training/README.md) 提供 Qwen3.5 训练加载预览，以及显式启动的本地训练验证入口。预览只读 JSONL；`validate_local.py` 在独立训练环境中运行固定的三组对照。
 
 真实任务可能访问外部服务，执行前核对脚本配置和本次授权。日志、密钥、用户资料与模型权重不得提交。Windows 后台启动保持隐藏窗口，并明确进程所有权。

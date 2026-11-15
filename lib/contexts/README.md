@@ -7,6 +7,7 @@
 | [review](review/README.md) | 与候选身份、来源哈希绑定的审核决定 | `api.py` |
 | [models](models/README.md) | 服务配置、能力证据、受控请求与完整响应 | `api.py` |
 | [documents](documents/README.md) | 文档内容、保留结构的分块、解析来源证据 | `api.py` |
+| [training](training/README.md) | 固定输入与模板下的单次训练、完整生成和可恢复对照 | `api.py` |
 
 每个目录中的 `domain/` 放纯规则，`application/` 放用例与消费方端口，`infrastructure/` 放外部实现。`contracts.py` 只导出需要跨域共享的纯合同。其他域不能导入内部文件；组合根例外，因为它负责选择实现。
 

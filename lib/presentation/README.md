@@ -7,3 +7,5 @@
 代码整理不应改变界面路由和历史链接。确实修改 UI 时，遵循根目录 AGENTS.md，并打开真实页面验收。
 
 `file_sizes.py` 统一控制台与 HTML 报告的大小展示，按 1,024 进位显示 B、KB、MB、GB 等单位。仅格式化文字；清单、统计下载和排序仍使用原始字节整数。
+
+`training_cli.py` 提供可选的 `df train-validate` 参数与退出码。它只把参数交给 `RunTrainingValidation`，默认仅预检；模型加载、训练和文件持久化不在展示入口实现。独立脚本和环境说明见 [本地训练验证](../../docs/local-training-validation.md)。

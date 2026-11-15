@@ -53,6 +53,7 @@ DeepSeek 详尽程度自述；`verbosity_reference_text` 可再选择目标文�
 | 查看样本、统计分布、打包和下载 | [datasets.py](datasets.py) · `dataset_application` | `DatasetApplication`；读取已有产物，不创建生成引擎 |
 | 查找可复用资料与已生成文件 | [asset_catalog.py](asset_catalog.py) · `asset_catalog_application` | `AssetCatalogApplication`；资料目录和版本身份校验 |
 | 查看任务完整报告 | [workflow_reports.py](workflow_reports.py) · `workflow_report_application` | `WorkflowReportApplication`；便携报告读取与生成 |
+| 运行本地原模型、SFT、CPT→SFT 对照 | [training_validation.py](training_validation.py) · `training_validation_application` | `RunTrainingValidation`；可选训练环境、预检、单次课程遍历、断点与完整输出报告；构造不加载权重 |
 | 导入 DSH 会话数据库 | [conversation_import.py](conversation_import.py) · `conversation_import_application` | `ImportConversations`；外部转换、预览、明确确认后保存到资料缓存 |
 | 按选项补充导入会话的缺失推理 | [conversation_reasoning.py](conversation_reasoning.py) · `conversation_reasoning_preparer` | `PrepareConversationReasoning`；复用输入节点的冻结模型、提示词及检查点，构造不调用模型 |
 | 缓存上传文件 | [local_inputs.py](local_inputs.py) · `local_input_application` | `LocalInputApplication`；持久输入缓存 |

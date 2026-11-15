@@ -1,5 +1,7 @@
 # 维护文档导航
 
+- [本地训练验证](local-training-validation.md)：原模型、SFT、CPT→SFT 的单次遍历对照、监督检查、断点与评测证据。
+
 - [Beta 原生 CoT 续写](architecture/native-prefix-continuation-2026-11-15.md)：已有推理和评审复用、一次续写、来源与费用证据。
 
 - [V0.0.4 发布说明](release-v0.0.4.md)：当前预览、混合知识问答、Agent 轨迹编辑及安装边界。

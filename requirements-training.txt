@@ -1,0 +1,13 @@
+# Optional local training environment; do not merge into the desktop runtime.
+# Install the official CUDA-enabled torch wheel for your GPU first.
+# The experiment used torch 2.8.0+cu128; ==2.8.0 also accepts that local version.
+torch==2.8.0
+transformers==5.23.0
+peft==0.21.3
+accelerate==1.15.0
+datasets==5.2.0
+bitsandbytes==0.50.2
+Pillow==13.0.0
+PyYAML==6.0.3
+filelock==4.2.10
+jsonschema==4.26.0

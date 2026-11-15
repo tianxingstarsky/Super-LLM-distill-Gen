@@ -6,7 +6,7 @@
 
 | 目录 | 找什么 |
 | --- | --- |
-| [contexts](contexts/README.md) | 工作流、数据集、审核、模型配置、文档处理的正式业务边界 |
+| [contexts](contexts/README.md) | 工作流、数据集、审核、模型配置、文档处理与可选训练验证的正式业务边界 |
 | [bootstrap](bootstrap/README.md) | 创建用例，注入文件、数据库、运行时实现 |
 | [presentation](presentation/README.md) | 页面和交互，不承担业务判断 |
 | [domain](domain/README.md) | 尚未迁入 context 的纯规则，以及旧导入别名 |
