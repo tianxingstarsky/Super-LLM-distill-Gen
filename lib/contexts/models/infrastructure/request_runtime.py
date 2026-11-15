@@ -56,13 +56,14 @@ def chat_json(
     allow_reasoning_fallback: bool = True,
     response_details: dict | None = None,
     reasoning_prefix: str | None = None,
+    reasoning_prefix_mode: str = "answer",
 ) -> Dict[str, Any]:
     """Compatibility entry for the structured response application use case."""
     from lib.bootstrap.model_requests import json_response_request
     return json_response_request(client).execute(messages, temperature=temperature,
         retries=retries, thinking=thinking, max_tokens=max_tokens, on_stream=on_stream,
         allow_reasoning_fallback=allow_reasoning_fallback, response_details=response_details,
-        reasoning_prefix=reasoning_prefix)
+        reasoning_prefix=reasoning_prefix, reasoning_prefix_mode=reasoning_prefix_mode)
 
 
 from lib.contexts.models.domain.request_errors import BudgetExceeded
@@ -412,13 +413,15 @@ class ChatClient:
                  allow_reasoning_fallback: bool = True,
                  response_details: dict | None = None,
                  reasoning_prefix: str | None = None,
+                 reasoning_prefix_mode: str = "answer",
                  cancel_check=None) -> tuple[str, int, int]:
         if response_details is not None:
             response_details.clear()
             allow_reasoning_fallback = False
         messages, prefill_metadata = prepare_reasoning_prefill(messages, reasoning_prefix,
             api_format=self.api_format, base_url=getattr(self, "base_url", ""),
-            reasoning=getattr(self, "reasoning", None), thinking=thinking)
+            reasoning=getattr(self, "reasoning", None), thinking=thinking,
+            reasoning_prefix_mode=reasoning_prefix_mode)
         capture_details = response_details is not None or reasoning_prefix is not None
         transport_diagnostics = RequestDiagnostics()
         def create_request(create, kwargs):
@@ -479,9 +482,12 @@ class ChatClient:
                 result = consume_stream(stream, self.api_format, emit,
                     allow_reasoning_fallback=allow_reasoning_fallback,
                     cancel_check=cancel_check if cancel_check is not None else self.cancel_check,
+                    **({"capture_finish_reason": True} if reasoning_prefix is not None else {}),
                     **({"response_details": request_details} if capture_details else {}))
             except Exception as error:
                 transport_diagnostics.failure(error, "stream")
+                if getattr(error, "response_details", None):
+                    error.response_details = {**error.response_details, **prefill_metadata, **control_metadata}
                 raise
             commit_response_details(response_details, {**request_details, **prefill_metadata, **control_metadata})
             return result
@@ -490,6 +496,20 @@ class ChatClient:
                 reject_tool_action(response)
             details = (extract_response_details(response, self.api_format)
                        if capture_details else {})
+            if reasoning_prefix is not None:
+                details["finish_reason"] = stop_reason
+            if stop_reason in {"length", "max_tokens", "max_output_tokens"} and (on_stream or capture_details):
+                from ..domain.request_errors import ModelOutputLimitError
+                error = ModelOutputLimitError()
+                incomplete = {"version": 1, "status": "truncated", "finish_reason": stop_reason,
+                    "content": result[0], "usage": {"prompt_tokens": result[1], "completion_tokens": result[2]}}
+                if self.api_format == "chat":
+                    incomplete["content"] = get_field(response.choices[0].message, "content", "") or ""
+                if hasattr(response, "model_dump"):
+                    incomplete["provider_response"] = response.model_dump(mode="json")
+                error.response_details = {**details, **prefill_metadata, **control_metadata,
+                                          "incomplete_response": incomplete}
+                raise error
             result = self._full_result(result, on_stream, stop_reason, allowed,
                                       verify_complete=capture_details, details=details)
             commit_response_details(response_details, {**details, **prefill_metadata, **control_metadata})
@@ -680,13 +700,15 @@ class ChatClient:
         allow_reasoning_fallback: bool = True,
         response_details: dict | None = None,
         reasoning_prefix: str | None = None,
+        reasoning_prefix_mode: str = "answer",
     ) -> str:
         """Compatibility entry for the admitted text request application use case."""
         from lib.bootstrap.model_requests import model_request
         return model_request(self).execute(messages, max_tokens=max_tokens,
             temperature=temperature, retries=retries, thinking=thinking, json_mode=json_mode,
             on_stream=on_stream, allow_reasoning_fallback=allow_reasoning_fallback,
-            response_details=response_details, reasoning_prefix=reasoning_prefix)
+            response_details=response_details, reasoning_prefix=reasoning_prefix,
+            reasoning_prefix_mode=reasoning_prefix_mode)
 
 
 def _is_format_unsupported(err: Exception) -> bool:

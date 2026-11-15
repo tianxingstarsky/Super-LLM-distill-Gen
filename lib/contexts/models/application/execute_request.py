@@ -2,9 +2,10 @@
 from __future__ import annotations
 from .retry_port import RetryDirective, RetryPort
 from contextlib import ExitStack
+from copy import deepcopy
 from typing import Any, Dict, List
 from .request_ports import ModelRequestPort, StreamCallback
-from ..domain.request_errors import BudgetExceeded, ModelQueueTimeout, ModelRequestError, ModelStreamError
+from ..domain.request_errors import BudgetExceeded, ModelQueueTimeout, ModelRequestError, ModelStreamError, ModelOutputLimitError
 
 
 class ExecuteModelRequest:
@@ -24,6 +25,7 @@ class ExecuteModelRequest:
         allow_reasoning_fallback: bool = True,
         response_details: dict | None = None,
         reasoning_prefix: str | None = None,
+        reasoning_prefix_mode: str = "answer",
     ) -> str:
         """Admit, execute and settle one text request under bounded retry rules."""
         port = self.port
@@ -37,7 +39,8 @@ class ExecuteModelRequest:
         if type(retries) is not int or not 1 <= retries <= 10:
             raise ValueError("invalid_model_request_attempts")
         request_max_tokens, reservation_usd = port.prepare_request(
-            messages, max_tokens, reasoning_prefix=reasoning_prefix, thinking=thinking)
+            messages, max_tokens, reasoning_prefix=reasoning_prefix, thinking=thinking,
+            **({"reasoning_prefix_mode": reasoning_prefix_mode} if reasoning_prefix_mode != "answer" else {}))
         last_err: Exception | None = None
         callback_error = None
         cancel_error = None
@@ -82,8 +85,10 @@ class ExecuteModelRequest:
                     messages, max_tokens=request_max_tokens, temperature=temperature,
                     thinking=thinking, json_mode=json_mode,
                     **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
-                    **({"response_details": attempt_details} if response_details is not None else {}),
+                    **({"response_details": attempt_details}
+                       if response_details is not None or reasoning_prefix is not None else {}),
                     **({"reasoning_prefix": reasoning_prefix} if reasoning_prefix is not None else {}),
+                    **({"reasoning_prefix_mode": reasoning_prefix_mode} if reasoning_prefix_mode != "answer" else {}),
                     **({"on_stream": notify} if on_stream else {}),
                     **({"cancel_check": check_cancel} if port.cancel_check else {}))
                 port.account_usage(prompt_tokens, completion_tokens, reservations, reservation_usd)
@@ -91,11 +96,22 @@ class ExecuteModelRequest:
                     port.commit_details(response_details, attempt_details)
                     return content
                 if not allow_reasoning_fallback:
-                    raise ValueError("model_visible_output_missing")
+                    error = ValueError("model_visible_output_missing")
+                    if reasoning_prefix is not None:
+                        # Paid reasoning-only responses remain failure evidence,
+                        # never a successful answer or an automatic retry seed.
+                        error.response_details = deepcopy(attempt_details)
+                    raise error
                 last_err = ValueError("empty completion")
             except BudgetExceeded:
                 raise
             except ValueError as error:
+                if (error is not callback_error and error is not cancel_error
+                        and isinstance(error, ModelOutputLimitError) and getattr(error, "response_details", None)):
+                    incomplete = error.response_details.get("incomplete_response", {})
+                    usage = incomplete.get("usage", {})
+                    port.account_usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                                       reservations, reservation_usd)
                 if (error is callback_error or error is cancel_error or not isinstance(error, ModelStreamError)
                         or str(error) not in {"model_stream_idle_timeout", "model_stream_interrupted"}):
                     raise

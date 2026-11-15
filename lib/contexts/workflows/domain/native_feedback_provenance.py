@@ -31,6 +31,9 @@ def authenticate_native_feedback_receipt(receipt):
 
 def _authenticate_receipt(receipt):
     if receipt.get("feedback_request_origin") == "system_review_guidance":
+        if type(receipt.get("guidance_version")) is int and receipt["guidance_version"] == 8:
+            from .native_prefix_feedback import authenticate_native_prefix_feedback_receipt
+            return authenticate_native_prefix_feedback_receipt(receipt)
         from .review_guidance import authenticate_review_guidance_receipt
         return authenticate_review_guidance_receipt(receipt)
     session, revised = receipt["continuation_session"], receipt["revised_assistant"]

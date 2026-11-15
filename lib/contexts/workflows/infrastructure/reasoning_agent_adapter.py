@@ -58,8 +58,16 @@ class CheckpointedReasoningAgent:
         return self.prepared_tool_turn(key, role, prepared, tools,
             recover_arguments=runtime.recipe.get("node_generation", {}).get("cot", {}).get("self_check", {}).get("version") in (4, 5, 6))
 
+    def prepared_prefix_turn(self, key, role, prepared, *, reasoning_prefix,
+                             request_options, model_stage, reasoning_prefix_mode="reasoning"):
+        """Use the same durable request facility for a reasoning-prefix response."""
+        return self.prepared_tool_turn(key, role, prepared, [], final=True,
+            request_options=request_options, capture_details=True, model_stage=model_stage,
+            reasoning_prefix=reasoning_prefix, reasoning_prefix_mode=reasoning_prefix_mode)
+
     def prepared_tool_turn(self, key, role, prepared, tools, *, recover_arguments=False, final=False, strict=False,
-                           request_options=None, capture_details=False, model_stage="cot"):
+                           request_options=None, capture_details=False, model_stage="cot", reasoning_prefix=None,
+                           reasoning_prefix_mode="reasoning"):
         """Transport a prepared author or reviewer turn; never add role instructions here."""
         runtime = self.runtime
         call_key = [*key, checklist_digest(prepared), checklist_digest(tools)]
@@ -76,6 +84,12 @@ class CheckpointedReasoningAgent:
             call_key.append("strict_tools_v1")
         if request_options is not None or capture_details:
             call_key.extend(["author_continuation_v1", checklist_digest(request_options), capture_details])
+        if reasoning_prefix is not None:
+            if tools or strict or recover_arguments or not final or not capture_details:
+                raise ValueError("native_prefix_invalid_transport_options")
+            call_key.extend(["native_reasoning_prefix_v1", checklist_digest(reasoning_prefix)])
+            if reasoning_prefix_mode != "reasoning":
+                call_key.extend(["prefix_continuation_mode", reasoning_prefix_mode])
         journal = None
 
         def invoke():
@@ -91,14 +105,33 @@ class CheckpointedReasoningAgent:
                 try:
                     # tool_turn already uses ExecuteToolTurn and the model's shared concurrency/cooldown limits.
                     details = {}
-                    assistant = client.tool_turn(deepcopy(prepared), deepcopy(tools),
-                        **(request_options if request_options is not None else
-                           {"max_tokens": binding.get("max_output_tokens", 32768)}),
-                        **({"recover_arguments": True} if recover_arguments else {}),
-                        **({"tool_choice": "none"} if final and not strict else {}),
-                        **({"strict": True, "retries": 1} if strict else {}),
-                        **({"response_details": details} if capture_details else {}),
-                        **({"on_stream": journal} if journal is not None else {}))
+                    if reasoning_prefix is not None:
+                        try:
+                            content = client.chat(deepcopy(prepared),
+                                **request_options, reasoning_prefix=reasoning_prefix,
+                                reasoning_prefix_mode=reasoning_prefix_mode, response_details=details,
+                                allow_reasoning_fallback=False, on_stream=journal)
+                        except ValueError as error:
+                            from lib.contexts.models.contracts import ModelOutputLimitError
+                            if ((str(error) != "model_visible_output_missing"
+                                    and not isinstance(error, ModelOutputLimitError))
+                                    or not getattr(error, "response_details", None)):
+                                raise
+                            # Persist the completed, paid response even when it
+                            # cannot supply a candidate. Resume must not rebuy it.
+                            details.update(deepcopy(error.response_details))
+                            content = details.get("incomplete_response", {}).get("content", "")
+                        assistant = {"role": "assistant", "content": content,
+                            "reasoning_content": details.get("reasoning_content", "")}
+                    else:
+                        assistant = client.tool_turn(deepcopy(prepared), deepcopy(tools),
+                            **(request_options if request_options is not None else
+                               {"max_tokens": binding.get("max_output_tokens", 32768)}),
+                            **({"recover_arguments": True} if recover_arguments else {}),
+                            **({"tool_choice": "none"} if final and not strict else {}),
+                            **({"strict": True, "retries": 1} if strict else {}),
+                            **({"response_details": details} if capture_details else {}),
+                            **({"on_stream": journal} if journal is not None else {}))
                     return {"assistant": assistant, "response_details": details} if capture_details else assistant
                 except ValueError as error:
                     if capture_details and details.get("incomplete_response"):

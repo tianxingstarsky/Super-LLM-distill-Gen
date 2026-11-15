@@ -5,6 +5,7 @@ from copy import deepcopy
 from .dialogue import dialogue_digest, without_source_reasoning
 from .native_feedback_provenance import authenticate_native_feedback_receipt
 from .review_guidance import authenticated_review_guidance_positions, REVIEW_GUIDANCE_PARENT_RECEIPT
+from .native_prefix_feedback import NATIVE_PREFIX_PARENT_RECEIPT
 from .dialogue_style_context import authenticated_record_context_positions
 from lib.domain.multiturn import completed_turn_ends
 from lib.domain.workflow_quality import conversation_issue, text_issue
@@ -43,11 +44,13 @@ def native_dialogue_continuation_input(record, instruction, *, guidance_version=
             or not source.get("qa_contract")
             or source["qa_contract"].get("question") != initial_user.get("content")):
         raise ValueError("native_dialogue_continuation_incomplete_parent")
-    if not isinstance(instruction, str) or guidance_version not in {2, 3, 4, 5, 6, 7} and not instruction.strip():
+    if not isinstance(instruction, str) or guidance_version not in {2, 3, 4, 5, 6, 7, 8} and not instruction.strip():
         raise ValueError("native_dialogue_continuation_feedback_required")
     native = record["native_generation"]
     if "tool_feedback" in native or "review_guidance" in native:
         previous, session = _recorded_feedback_author(record)
+        if (guidance_version == 8 and native.get("review_guidance", {}).get("guidance_version") == 8):
+            session = {**deepcopy(session), NATIVE_PREFIX_PARENT_RECEIPT: deepcopy(native["review_guidance"])}
         if guidance_version == 7 and "tool_feedback" in native:
             # Preserve the authenticated old continuation for explicit recovery;
             # the new use case chooses its certified original request envelope.
@@ -55,7 +58,7 @@ def native_dialogue_continuation_input(record, instruction, *, guidance_version=
     else:
         previous, session = messages[-1], native.get("author_session")
     feedback_findings = (_saved_native_review_findings(record, previous, instruction)
-                         if guidance_version in {2, 3, 4, 5, 6, 7} else None)
+                         if guidance_version in {2, 3, 4, 5, 6, 7, 8} else None)
     if feedback_findings == []:
         raise ValueError("native_dialogue_continuation_feedback_required")
     return {"source": deepcopy(source), "prompt_messages": deepcopy(prompt),

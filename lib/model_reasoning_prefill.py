@@ -16,21 +16,27 @@ from urllib.parse import urlsplit
 DEEPSEEK_PREFILL_BASE_URL = "https://api.deepseek.com/beta"
 
 
-def validate_prefill_client(client, *, thinking=None):
+def validate_prefill_client(client, *, thinking=None, reasoning_prefix_mode="answer"):
     """Check known protocol conditions without fetching or probing a model."""
     prepare_reasoning_prefill([{"role": "user", "content": "."}], ".",
         api_format=getattr(client, "api_format", None),
         base_url=getattr(client, "base_url", ""),
-        reasoning=getattr(client, "reasoning", None), thinking=thinking)
+        reasoning=getattr(client, "reasoning", None), thinking=thinking,
+        reasoning_prefix_mode=reasoning_prefix_mode)
 
 
 def prepare_reasoning_prefill(messages, reasoning_prefix, *, api_format,
-                              base_url, reasoning=None, thinking=None):
+                              base_url, reasoning=None, thinking=None,
+                              reasoning_prefix_mode="answer"):
     """Validate before admission, then append an immutable assistant prefix.
 
     Ordinary historical native reasoning remains historical reasoning. A
     caller cannot bypass this explicit capability through a message flag.
     """
+    if reasoning_prefix_mode not in ("answer", "reasoning"):
+        raise ValueError("invalid_model_reasoning_prefix_mode")
+    if reasoning_prefix is None and reasoning_prefix_mode != "answer":
+        raise ValueError("model_reasoning_prefix_required")
     if reasoning_prefix is not None and (not isinstance(messages, list) or not messages
             or any(not isinstance(message, dict) for message in messages)):
         raise ValueError("invalid_model_reasoning_prefill_messages")
@@ -65,15 +71,16 @@ def prepare_reasoning_prefill(messages, reasoning_prefix, *, api_format,
         # Callers must choose an explicitly labelled source transport before
         # building the request; this boundary never drops or rewrites tools.
         raise ValueError("model_reasoning_prefill_tools_unsupported")
-    # A nonempty visible prefix selects the answer continuation boundary.
-    # The official beta currently returns reasoning-only EOS for an empty
-    # content prefix on some V4.1-Flash requests. Whitespace adds no answer
-    # claim and leaves the authored reasoning bytes untouched.
-    prepared = [*deepcopy(messages), {"role": "assistant", "content": "\n",
+    # Historical answer completion keeps its nonempty visible boundary.
+    # Reasoning continuation explicitly leaves that boundary unopened. A
+    # reasoning-only response still does not satisfy a request for an answer.
+    visible_prefix = "" if reasoning_prefix_mode == "reasoning" else "\n"
+    prepared = [*deepcopy(messages), {"role": "assistant", "content": visible_prefix,
         "prefix": True, "reasoning_content": reasoning_prefix}]
-    return prepared, {"reasoning_prefill": {"version": 2,
+    return prepared, {"reasoning_prefill": {"version": 3 if reasoning_prefix_mode == "reasoning" else 2,
         "transport": "deepseek_chat_beta",
-        "visible_prefix": "\n",
+        "visible_prefix": visible_prefix,
+        **({"continuation_mode": "reasoning"} if reasoning_prefix_mode == "reasoning" else {}),
         "prefix_sha256": hashlib.sha256(prefix_bytes).hexdigest(),
         "prefix_utf8_bytes": len(prefix_bytes),
         "response_reasoning": "provider_continuation"}}

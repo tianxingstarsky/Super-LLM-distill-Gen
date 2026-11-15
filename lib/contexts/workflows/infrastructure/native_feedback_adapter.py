@@ -12,6 +12,45 @@ class NativeFeedbackAdapter:
     def check_reasoning_cancel(self):
         self.runtime.check_cancel()
 
+    def continue_prefix(self, key, session, pending_messages, *, reasoning_prefix):
+        """Continue the bound author's native reasoning without a tool round."""
+        return self._prefix_response(key, session, pending_messages,
+            reasoning_prefix=reasoning_prefix, mode="reasoning")
+
+    def finalize_prefix(self, key, session, pending_messages, *, reasoning_prefix):
+        """Finish an authenticated saved reasoning response at the answer boundary."""
+        return self._prefix_response(key, session, pending_messages,
+            reasoning_prefix=reasoning_prefix, mode="answer")
+
+    def _prefix_response(self, key, session, pending_messages, *, reasoning_prefix, mode):
+        if (session.get("version") != 1 or session.get("role") != "generation"
+                or session.get("stage") not in {"sft", "multiturn", "cot"}):
+            raise ValueError("native_feedback_original_session_invalid")
+        original = session.get("messages")
+        if not original or pending_messages[:len(original)] != original:
+            raise ValueError("native_feedback_original_prefix_changed")
+        options = session.get("request_options")
+        if not isinstance(options, dict) or set(options) != {"max_tokens", "temperature"}:
+            raise ValueError("native_feedback_request_options_invalid")
+        runtime, stage = self.runtime, session["stage"]
+        client = runtime.client("generation", stage=stage)
+        binding = runtime.recipe.get("node_models", {}).get(stage, {}).get("generation", {})
+        if author_identity(client, binding) != session.get("author"):
+            raise ValueError("native_feedback_original_model_changed")
+        from lib.model_reasoning_prefill import prepare_reasoning_prefill
+        request_messages, _ = prepare_reasoning_prefill(pending_messages, reasoning_prefix,
+            api_format=getattr(client, "api_format", None), base_url=getattr(client, "base_url", ""),
+            reasoning=getattr(client, "reasoning", None), thinking=True, reasoning_prefix_mode=mode)
+        response = CheckpointedReasoningAgent(runtime).prepared_prefix_turn(
+            [*key, session["author"]], "generation", pending_messages,
+            reasoning_prefix=reasoning_prefix, reasoning_prefix_mode=mode, model_stage=stage,
+            request_options={**deepcopy(options), "retries": 1})
+        return {**response, "request_messages": request_messages,
+            "author_continuation": {"version": 1, "author": session["author"],
+                "model_stage": stage, "message_prefix_preserved": True,
+                "tools_preserved": session.get("tools") == [],
+                "transport": "deepseek_chat_beta"}}
+
     def turn(self, key, session, messages, tools, *, final=False):
         """Transport one bounded turn; the application owns tool calls and findings."""
         if (not isinstance(session, dict) or type(session.get("version")) is not int

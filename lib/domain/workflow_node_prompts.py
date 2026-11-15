@@ -324,7 +324,7 @@ def snapshot_node_prompts(value: dict | None, *, recipe_version: int = 11, learn
             if claim_review_adversarial_protocol_version == 1:
                 if claim_review_condition_contract_version == 1:
                     if claim_review_transport_version == 1:
-                        return render(get(prompt_id, version="1.25.0" if native_feedback_guidance_version == 7 else "1.22.0"))
+                        return render(get(prompt_id, version="1.25.0" if native_feedback_guidance_version in {7, 8} else "1.22.0"))
                     return render(get(prompt_id, version="1.20.0" if reasoning_depth_contract_version == 1 else "1.19.0"))
                 return render(get(prompt_id, version="1.18.0"))
             version = {1: "1.12.0", 2: ("1.17.0" if claim_review_anchor_protocol_version == 1 else

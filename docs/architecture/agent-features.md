@@ -1,5 +1,7 @@
 # Agent 功能与维护入口
 
+原生 CoT 返工 v8 使用 DeepSeek Beta 前缀续写：`ContinueNativePrefix` 复用原推理与已有评审，`NativeFeedbackAdapter.continue_prefix` 绑定原作者，模型设施以空 `assistant.content`、`prefix=true` 和完整 `reasoning_content` 发送一次请求。评审意见保留 system 归属，原推理与本次新增推理分别存档，训练正文逐字组合；不调用反馈工具、不增加独立评审。新建且所有原生作者均固定为官方 DeepSeek Chat 的任务采用 v8，其他供应商及旧冻结任务保留原协议。实际工具历史不能经删除伪装成无工具续写。使用、验证与限制见 [Beta 原生续写](native-prefix-continuation-2026-11-15.md)。下文的 v7 及工具反馈段落记录历史协议，不覆盖 v8 接线。
+
 新版 Agent 数据制作由工作流的轨迹编辑作者处理，既有工具重放仍是另一条明确用途。Google 经验进入实际 CoT 编辑请求，流程建议与原执行分开，最终答案及工具证据由程序保留。范围与材料见 [Agent 轨迹优化](agent-trajectory-evolution-2026-11-03.md)。
 
 知识问答与资料问答的逐题用途由 `workflows/domain/qa_learning_goal_routing.py` 持有；指导员在已有批次规划前固定用途，生成、可见资料、重答和审核据此投影。概率与图示在指导员节点配置，不新增选择 Agent，也不改旧配方。[接线与边界](mixed-qa-routing-2026-11-03.md) 说明默认 80/20、资料范围和历史兼容。
@@ -37,7 +39,7 @@ v3 的 `prefix_char_limit` 默认 512、可设 64–2048，只处理完整落在
 不认证同义关系，也不直接改配置。节点查看预览、确认保存后才对新任务生效。
 模型不能通过建议改变替换目标、标签名、匹配范围、开关或质量标准；旧冻结任务不热改。
 
-当前原生返工采用公开注意事项 v7：评审模板 `workflow.rationale_check@1.12.0` / `workflow.review_score@1.25.0` 产出可独立理解的提醒；`RegenerateWithReviewGuidance` 将提醒作为 system 放在真实 user 后，用原作者重新生成。领域合同在 `review_guidance.py`，请求复用 `NativeFeedbackAdapter`。提醒保留在训练上下文，失败稿单独归档，新原生推理不拼入人工文字。允许自然引用实际提醒，事实错误与臆造规则不豁免。仍为未评审，不增加独立评审或理由改写调用。仅改变新任务默认和新模板版本，自定义提示词及冻结任务不热改。离线协议、导出及兼容验证已完成；两条 V4.1-Flash 实测共2次调用、26.25秒，输入6245/输出3935 tokens（含2713推理），估算$0.002470，未核实账单。备用响应前提和OCR可选路径改善，但01仍出现无用户依据的verbosity 5，02仍有节选/全文范围问题。后续离线溯源确认：该谱系22个请求有21个在发送前就带具体5，02由复跑脚本补入旧reasoning_content；01初次来源仍未定，撤回直接归为幻觉的定性。SDK白名单还漏记reasoning_effort，当前离线完整HTTP重建未发现SDK加提示词或本地检查点串用。来源证据和未执行的干净对照在 `.dataforge/verbosity-leak-audit-20261101/`；旧原生推理存档不删除。已有旧返工system原样复用，不能把本轮视作干净上下文消融。完整记录见 `.dataforge/native-system-guidance-v7-live-20261101/`，结果仍待处理。
+历史原生返工采用公开注意事项 v7：评审模板 `workflow.rationale_check@1.12.0` / `workflow.review_score@1.25.0` 产出可独立理解的提醒；`RegenerateWithReviewGuidance` 将提醒作为 system 放在真实 user 后，用原作者重新生成。领域合同在 `review_guidance.py`，请求复用 `NativeFeedbackAdapter`。提醒保留在训练上下文，失败稿单独归档，新原生推理不拼入人工文字。允许自然引用实际提醒，事实错误与臆造规则不豁免。仍为未评审，不增加独立评审或理由改写调用。仅改变新任务默认和新模板版本，自定义提示词及冻结任务不热改。离线协议、导出及兼容验证已完成；两条 V4.1-Flash 实测共2次调用、26.25秒，输入6245/输出3935 tokens（含2713推理），估算$0.002470，未核实账单。备用响应前提和OCR可选路径改善，但01仍出现无用户依据的verbosity 5，02仍有节选/全文范围问题。后续离线溯源确认：该谱系22个请求有21个在发送前就带具体5，02由复跑脚本补入旧reasoning_content；01初次来源仍未定，撤回直接归为幻觉的定性。SDK白名单还漏记reasoning_effort，当前离线完整HTTP重建未发现SDK加提示词或本地检查点串用。来源证据和未执行的干净对照在 `.dataforge/verbosity-leak-audit-20261101/`；旧原生推理存档不删除。已有旧返工system原样复用，不能把本轮视作干净上下文消融。完整记录见 `.dataforge/native-system-guidance-v7-live-20261101/`，结果仍待处理。
 
 v5/v6 反馈续写（历史显式试验）通过 `ContinueNativeFeedback.execute_from_feedback` 显式复用已认证的真实工具回执，保持原会话前缀后仅追加一次原作者调用。`native_feedback_provenance.py` 统一认证旧回执及嵌套父版本；完整父推理和旧答案保留，本次完整原生响应不裁剪。新指导要求思考业务依赖和证据范围，不播报内部审查；完整性不等于语义合格。普通页面不会自动选择旧回执。2026-11-01 两条真实 v5/v6 尝试保留全部推理，节选范围修正，但内部旁白和臆造篇幅仍存在；未解决项保留，不通过默认升级掩盖。
 

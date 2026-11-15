@@ -69,7 +69,9 @@ def native_feedback_repairer(runtime):
     from lib.contexts.workflows.application.continue_native_feedback import ContinueNativeFeedback
     from lib.contexts.workflows.infrastructure.native_feedback_adapter import NativeFeedbackAdapter
     return ContinueNativeFeedback(NativeFeedbackAdapter(runtime),
-        guidance_version=runtime.recipe.get("native_feedback_guidance_version", 1))
+        guidance_version=runtime.recipe.get("native_feedback_guidance_version", 1),
+        prefix_reflection_seed=runtime.recipe.get("native_prefix_reflection_seed", ""),
+        finalize_empty_answer=runtime.recipe.get("native_prefix_finalize_empty_answer") is True)
 
 
 def preference_generator(runtime):

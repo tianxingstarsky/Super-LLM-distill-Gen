@@ -501,6 +501,10 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
         endpoint_pins = {**(endpoint_pins or {}), "sft": {"generation": deepcopy(
             reanswer_parent["endpoint_pins"]["sft"]["generation"])}}
     author_endpoint = (endpoint_pins or {}).get("cot", {}).get("generation", {})
+    from lib.contexts.workflows.domain.native_prefix_feedback import (
+        native_feedback_guidance_version, DEFAULT_NATIVE_REFLECTION_SEED,
+    )
+    feedback_guidance_version = native_feedback_guidance_version(node_generation, endpoint_pins)
     if (recipe_version == 35 and author_endpoint.get("endpoint_origin") == "https://api.deepseek.com"
             and author_endpoint.get("api_format") == "chat"):
         # Freeze only the provider/protocol whose strict grammar is supported.
@@ -697,8 +701,11 @@ def create_run(output, *, sources=(), brief="", targets=("cpt", "sft", "dpo"),
               **({"native_generation_version": 1} if native_generation else {}),
               **({"native_author_session_version": 1}
                  if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else {}),
-              **({"native_feedback_guidance_version": 7}
+              **({"native_feedback_guidance_version": feedback_guidance_version}
                  if native_generation or node_generation.get("cot", {}).get("answer_mode") == "native_joint" else {}),
+              **({"native_prefix_reflection_seed": DEFAULT_NATIVE_REFLECTION_SEED,
+                  "native_prefix_finalize_empty_answer": True}
+                 if feedback_guidance_version == 8 else {}),
               **({"native_dialogue_continuation_version": 1} if native_generation else {}),
               **({"native_dialogue_progress_version": 2} if native_generation else {}),
               **({"reuse_initial_native_response": True} if reuse_initial_native_response else {}),

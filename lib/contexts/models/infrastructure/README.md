@@ -28,6 +28,12 @@ Chat 的 `finish_reason=length`、Anthropic 的 `max_tokens` 和 Responses 明�
 
 DeepSeek beta 原生推理前缀的传输收据版本 2 使用一个换行作为 assistant.content 的可见续写起点，reasoning_content 原样发送。真实 V4.1-Flash 对空 content 的部分请求仅返回 reasoning_content 后 stop；同一实际问题与推理换成非空空白起点后恢复了可见答案。此修复不把推理通道当答案、不清洗或补写模型答案；恢复答案仍需原有评审。版本 1 的历史收据仍可读取，不改旧缓存或导出字段。回归见 `test_reasoning_prefill.py`、`test_reasoning_prefill_history.py`。
 
+原生返工可显式传入 `reasoning_prefix_mode="reasoning"`，使用空 `assistant.content` 保持推理续写边界；完整 `reasoning_content` 前缀不裁剪。该请求仍经同一客户端的局部 `/beta` 地址、共享并发、结算和流式通道，不构造工具调用。收据版本 3 记录 `continuation_mode="reasoning"` 与精确前缀摘要；默认 answer 模式和版本 2 收据保持原样。模型返回的新增推理与输入前缀分别记录；只有推理而没有答案的响应仍失败，不自动改边界重买，不以推理冒充答案。此类已计费用响应的完整推理与前缀收据保存在异常 `response_details`，不能发布成成功结果。参数、实际 SDK 发包、流式捕获及拒绝行为由 `test_reasoning_prefill.py` 验证。
+
+两种前缀响应另记录上游实际 `finish_reason`：非流式直接读取 choice，流式读取实际终止 choice，不从本地成功判断猜造 `stop`。默认无前缀请求的详情字段保持原样，前缀收据本身的版本与字段不变。
+
+明确的 token 截断也在 `ModelOutputLimitError.response_details` 保留完整已收推理、可见片段、供应商终止原因和已报告用量，流式终止事件中的最后增量不能丢失。用量只结算一次，成功详情不发布，不将截断误当断线重试。应用可据此把已付费失败保存为无效检查点；恢复不能重买同一请求。非流式响应额外保留供应商响应快照，真实完整发包仍由调用方的独立审计记录提供。
+
 `SDKToolRequestAdapter.response_details` 保留上游明确截断的响应正文，供应用层标记为未完成诊断。原始正文可包含未完成的工具参数，不能回放为可执行调用；不包含请求头。完整响应的字段合同保持不变。
 
 配置读取不发送生成请求。密钥只留在服务端配置或受控环境中，不进入任务导出、报表或错误文本。不要让 application 导入供应商 SDK。

@@ -101,7 +101,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                    allow_reasoning_fallback: bool = True,
                    response_details: dict | None = None,
                    cancel_check: Callable[[], None] | None = None,
-                   idle_timeout_seconds: float | None = None) -> tuple[str, int, int]:
+                   idle_timeout_seconds: float | None = None,
+                   capture_finish_reason: bool = False) -> tuple[str, int, int]:
     """Consume SDK-decoded SSE events, closing the HTTP response on every exit.
 
     A balanced JSON prefix is insufficient evidence of a completed response.
@@ -123,6 +124,8 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
     prompt_tokens = completion_tokens = 0
     terminal = False
     stopped = False
+    truncation_reason = None
+    observed_finish_reason = None
     watchdog = _StreamWatchdog(stream, idle_timeout_seconds, cancel_check)
     watchdog.start()
     try:
@@ -157,7 +160,9 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                     delta_reasoning = _get(delta, "reasoning_content", "") or ""
                     finish = _get(choice, "finish_reason")
                     if finish is not None:
+                        observed_finish_reason = finish
                         if finish == "length":
+                            truncation_reason = finish
                             raise ModelOutputLimitError()
                         if finish != "stop":
                             raise ModelStreamError("model_stream_incomplete")
@@ -182,6 +187,11 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                 elif kind in {"response.incomplete", "response.failed", "error"}:
                     if (kind == "response.incomplete" and _get(_get(_get(event, "response"),
                             "incomplete_details"), "reason") == "max_output_tokens"):
+                        response = _get(event, "response")
+                        usage = _get(response, "usage")
+                        prompt_tokens = _get(usage, "input_tokens", 0) or 0
+                        completion_tokens = _get(usage, "output_tokens", 0) or 0
+                        truncation_reason = "max_output_tokens"
                         raise ModelOutputLimitError()
                     raise ModelStreamError("model_stream_incomplete")
             elif api_format == "anthropic":
@@ -202,13 +212,14 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
                         delta_reasoning = _get(delta, "thinking", "")
                 elif kind == "message_delta":
                     reason = _get(_get(event, "delta"), "stop_reason")
+                    completion_tokens = _get(_get(event, "usage"), "output_tokens", 0) or 0
                     if reason is not None:
                         if reason == "max_tokens":
+                            truncation_reason = reason
                             raise ModelOutputLimitError()
                         if reason not in {"end_turn", "stop_sequence"}:
                             raise ModelStreamError("model_stream_incomplete")
                         stopped = True
-                    completion_tokens = _get(_get(event, "usage"), "output_tokens", 0) or 0
                 elif kind == "message_stop":
                     terminal = stopped
                 elif kind == "error":
@@ -233,9 +244,28 @@ def consume_stream(stream, api_format: str, emit: StreamCallback, *,
         content = "".join(text).strip()
         if not content and api_format == "chat" and allow_reasoning_fallback:
             content = "".join(reasoning).strip()
-        commit_response_details(response_details, build_response_details(api_format,
+        details = build_response_details(api_format,
             reasoning_content="".join(reasoning) or completed_details.get("reasoning_content", ""),
-            reasoning_summary="".join(summary) or completed_details.get("reasoning_summary", "")))
+            reasoning_summary="".join(summary) or completed_details.get("reasoning_summary", ""))
+        if capture_finish_reason and observed_finish_reason is not None:
+            details["finish_reason"] = observed_finish_reason
+        commit_response_details(response_details, details)
         return content, prompt_tokens, completion_tokens
+    except ModelOutputLimitError as error:
+        if truncation_reason is None:
+            raise  # Preserve an observer's own exception unchanged.
+        # A terminal token limit is a paid, invalid response. Preserve the
+        # already received buffers, including a delta in the terminal event,
+        # without publishing a completion or treating partial text as an answer.
+        pending = lambda value: value if isinstance(value, str) else ""
+        error.response_details = {**build_response_details(api_format,
+            reasoning_content="".join(reasoning) + pending(delta_reasoning),
+            reasoning_summary="".join(summary) + pending(delta_summary)),
+            **({"finish_reason": truncation_reason} if capture_finish_reason else {}),
+            "incomplete_response": {"version": 1, "status": "truncated",
+                "finish_reason": truncation_reason,
+                "content": "".join(text) + pending(delta_text),
+                "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}}}
+        raise
     finally:
         watchdog.finish()

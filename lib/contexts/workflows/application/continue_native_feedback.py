@@ -16,11 +16,24 @@ from ..domain.native_feedback_provenance import (
 class ContinueNativeFeedback:
     """The port owns author authentication, request admission and durable checkpoints."""
 
-    def __init__(self, port, *, guidance_version=1):
+    def __init__(self, port, *, guidance_version=1, prefix_reflection_seed="", finalize_empty_answer=False):
         self.port = port
         self.guidance_version = guidance_version
+        self.prefix_reflection_seed = prefix_reflection_seed
+        self.finalize_empty_answer = finalize_empty_answer
+
+    def execute_from_incomplete(self, key, previous_receipt):
+        if type(self.guidance_version) is not int or self.guidance_version != 8:
+            raise ValueError("native_prefix_finalization_requires_v8")
+        from .continue_native_prefix import ContinueNativePrefix
+        return ContinueNativePrefix(self.port).execute_from_incomplete(key, previous_receipt)
 
     def execute(self, key, session, assistant, *, findings):
+        if type(self.guidance_version) is int and self.guidance_version == 8:
+            from .continue_native_prefix import ContinueNativePrefix
+            return ContinueNativePrefix(self.port, reflection_seed=self.prefix_reflection_seed,
+                finalize_empty_answer=self.finalize_empty_answer).execute(
+                key, session, assistant, findings=findings)
         if type(self.guidance_version) is int and self.guidance_version == 7:
             from .regenerate_with_review_guidance import RegenerateWithReviewGuidance
             return RegenerateWithReviewGuidance(self.port).execute(key, session, assistant, findings=findings)

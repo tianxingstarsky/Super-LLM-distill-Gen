@@ -24,6 +24,7 @@ class RequestJSONResponse:
         allow_reasoning_fallback: bool = True,
         response_details: dict | None = None,
         reasoning_prefix: str | None = None,
+        reasoning_prefix_mode: str = "answer",
     ) -> Dict[str, Any]:
         """Decode JSON, retrying only invalid JSON or completed invisible output."""
         if response_details is not None:
@@ -55,6 +56,7 @@ class RequestJSONResponse:
                                   **({"allow_reasoning_fallback": False} if not allow_reasoning_fallback else {}),
                                   **({"response_details": attempt_details} if response_details is not None else {}),
                                   **({"reasoning_prefix": reasoning_prefix} if reasoning_prefix is not None else {}),
+                                  **({"reasoning_prefix_mode": reasoning_prefix_mode} if reasoning_prefix_mode != "answer" else {}),
                                   **({"on_stream": forward_stream} if on_stream else {}))
             except (ValueError, ModelRequestError) as error:
                 if error is callback_error:

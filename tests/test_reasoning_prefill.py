@@ -174,13 +174,140 @@ def test_real_sdk_uses_beta_same_model_credentials_pool_and_separate_capture():
         assert "response_format" not in payload
         assert client.json_supported is None
         assert details == {"api_format": "chat", "reasoning_content": "Additional provider reasoning.",
-                           "reasoning_prefill": metadata()}
+                           "reasoning_prefill": metadata(), "finish_reason": "stop"}
         assert PREFIX not in details["reasoning_content"]
         assert client.client is original and original._client is original_http
         assert str(original.base_url) == "https://api.deepseek.com/v1/"
         assert client.base_url == "https://api.deepseek.com/v1"
         assert client.scheduler is scheduler
         assert MESSAGES[-1]["role"] == "user"
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_reasoning_continuation_uses_empty_visible_prefix_and_preserves_native_suffix(streaming):
+    calls, events, details = [], [], {}
+    def handle(request):
+        calls.append(request)
+        return sse_response(stream_reply()) if streaming else httpx.Response(200, json=full_reply())
+    client = client_for(handle)
+    original = deepcopy(MESSAGES)
+    try:
+        answer = client.chat(MESSAGES, reasoning_prefix=PREFIX, reasoning_prefix_mode="reasoning",
+            response_details=details, retries=1, **({"on_stream": events.append} if streaming else {}))
+        assert answer == '{"answer":"ok"}'
+        assert len(calls) == client.usage["calls"] == 1
+        assert str(calls[0].url) == "https://api.deepseek.com/beta/chat/completions"
+        payload = json.loads(calls[0].content)
+        assert payload["messages"] == [*original, {"role": "assistant", "content": "",
+            "prefix": True, "reasoning_content": PREFIX}]
+        assert payload["thinking"] == {"type": "enabled"}
+        assert "response_format" not in payload and "tools" not in payload
+        assert MESSAGES == original
+        assert details["reasoning_content"] == (
+            "Actual continuation." if streaming else "Additional provider reasoning.")
+        assert details["finish_reason"] == "stop"
+        assert details["reasoning_prefill"] == {**metadata(), "version": 3,
+            "visible_prefix": "", "continuation_mode": "reasoning"}
+        assert str(client.client.base_url) == "https://api.deepseek.com/v1/"
+        if streaming:
+            assert any(event.get("channel") == "reasoning" for event in events)
+            assert PREFIX not in json.dumps(events, ensure_ascii=False)
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("prefix,mode,issue", [
+    (PREFIX, "unknown", "invalid_model_reasoning_prefix_mode"),
+    (None, "reasoning", "model_reasoning_prefix_required"),
+])
+def test_invalid_continuation_mode_is_rejected_before_queue_or_network(prefix, mode, issue):
+    client = client_for(lambda request: pytest.fail("must not send a request"))
+    class Scheduler:
+        def acquire(self, **kwargs):
+            pytest.fail("invalid mode must not acquire a slot")
+    client.scheduler = Scheduler()
+    try:
+        with pytest.raises(ValueError, match="^" + issue + "$"):
+            client.chat(MESSAGES, reasoning_prefix=prefix, reasoning_prefix_mode=mode)
+        assert client.usage["calls"] == 0
+    finally:
+        client.client.close()
+
+
+def test_reasoning_continuation_rejection_never_falls_back_to_answer_or_tool_turn():
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(400, json={"error": {"message": "unsupported prefix"}})
+    client = client_for(handle)
+    try:
+        with pytest.raises(ValueError, match="^model_reasoning_prefill_rejected$"):
+            client.chat(MESSAGES, reasoning_prefix=PREFIX, reasoning_prefix_mode="reasoning", retries=1)
+        assert len(calls) == 1
+        assert json.loads(calls[0].content)["messages"][-1]["content"] == ""
+    finally:
+        client.client.close()
+
+
+def test_reasoning_continuation_requires_visible_answer_without_rebuying_or_substitution():
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, json=full_reply(text="", native="Only continued reasoning."))
+    client = client_for(handle)
+    details = {"stale": True}
+    try:
+        with pytest.raises(ValueError, match="^model_visible_output_missing$") as error:
+            client.chat(MESSAGES, reasoning_prefix=PREFIX, reasoning_prefix_mode="reasoning", retries=1,
+                        response_details=details)
+        assert len(calls) == client.usage["calls"] == 1
+        assert details == {}
+        assert error.value.response_details == {"api_format": "chat",
+            "reasoning_content": "Only continued reasoning.",
+            "finish_reason": "stop",
+            "reasoning_prefill": {**metadata(), "version": 3, "visible_prefix": "",
+                                  "continuation_mode": "reasoning"}}
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_reasoning_continuation_retains_paid_truncation_without_success_or_retry(streaming):
+    from lib.contexts.models.contracts import ModelOutputLimitError
+    calls, events, details = [], [], {"stale": True}
+    def handle(request):
+        calls.append(request)
+        if not streaming:
+            return httpx.Response(200, json=full_reply(
+                text=" partial answer ", native="Earlier thought.\nTerminal thought.", finish="length"))
+        def event(delta, finish=None, usage=None):
+            return "data: " + json.dumps({"id": "truncated-prefix", "object": "chat.completion.chunk",
+                "created": 1, "model": "deepseek-flash", "choices": [{"index": 0,
+                "delta": delta, "finish_reason": finish}], "usage": usage}) + "\n\n"
+        raw = event({"reasoning_content": "Earlier thought.\n"})
+        raw += event({"reasoning_content": "Terminal thought.", "content": " partial answer "}, "length",
+                     {"prompt_tokens": 17, "completion_tokens": 8, "total_tokens": 25})
+        return sse_response(raw.encode())
+    client = client_for(handle)
+    try:
+        with pytest.raises(ModelOutputLimitError) as caught:
+            client.chat(MESSAGES, reasoning_prefix=PREFIX, reasoning_prefix_mode="reasoning",
+                response_details=details, retries=3, **({"on_stream": events.append} if streaming else {}))
+        assert len(calls) == client.usage["calls"] == 1
+        assert client.usage["prompt_tokens"] == 17 and client.usage["completion_tokens"] == 8
+        assert details == {}
+        evidence = caught.value.response_details
+        assert evidence["reasoning_content"] == "Earlier thought.\nTerminal thought."
+        assert evidence["finish_reason"] == "length"
+        assert evidence["reasoning_prefill"] == {**metadata(), "version": 3,
+            "visible_prefix": "", "continuation_mode": "reasoning"}
+        assert {key: value for key, value in evidence["incomplete_response"].items()
+                if key != "provider_response"} == {"version": 1, "status": "truncated",
+            "finish_reason": "length", "content": " partial answer ",
+            "usage": {"prompt_tokens": 17, "completion_tokens": 8}}
+        assert not any(event.get("type") == "response_completed" for event in events)
     finally:
         client.client.close()
 
@@ -304,7 +431,7 @@ def test_stream_capture_separates_prefix_and_only_commits_completed_response(com
             assert chat_json(client, MESSAGES, reasoning_prefix=PREFIX,
                 response_details=details, on_stream=events.append) == {"answer": "ok"}
             assert details == {"api_format": "chat", "reasoning_content": "Actual continuation.",
-                               "reasoning_prefill": metadata()}
+                               "reasoning_prefill": metadata(), "finish_reason": "stop"}
         assert any(event.get("channel") == "reasoning" for event in events)
         assert PREFIX not in json.dumps(events, ensure_ascii=False)
     finally:
@@ -313,9 +440,16 @@ def test_stream_capture_separates_prefix_and_only_commits_completed_response(com
 
 def test_native_reasoning_is_never_returned_as_visible_prefilled_answer():
     client = client_for(lambda request: httpx.Response(200, json=full_reply(text="")))
+    details = {"stale": True}
     try:
-        with pytest.raises(ValueError, match="^model_visible_output_missing$"):
-            client.chat(MESSAGES, reasoning_prefix=PREFIX, allow_reasoning_fallback=True)
+        with pytest.raises(ValueError, match="^model_visible_output_missing$") as error:
+            client.chat(MESSAGES, reasoning_prefix=PREFIX, allow_reasoning_fallback=True,
+                        response_details=details)
+        assert details == {}
+        assert error.value.response_details == {"api_format": "chat",
+            "reasoning_content": "Additional provider reasoning.", "reasoning_prefill": metadata(),
+            "finish_reason": "stop"}
+        assert client.usage["calls"] == 1
     finally:
         client.client.close()
 
@@ -328,7 +462,7 @@ def test_plain_prefilled_answer_with_no_native_continuation_remains_plain_text()
     try:
         assert client.chat(MESSAGES, reasoning_prefix=PREFIX,
                            response_details=details) == answer
-        assert details == {"api_format": "chat", "reasoning_prefill": metadata()}
+        assert details == {"api_format": "chat", "reasoning_prefill": metadata(), "finish_reason": "stop"}
         assert "reasoning_content" not in details
     finally:
         client.client.close()

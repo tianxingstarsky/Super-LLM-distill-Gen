@@ -105,10 +105,12 @@ class SDKModelRequestAdapter(ClientRequestAdmission):
     def json_supported(self, value):
         self.client.json_supported = value
 
-    def prepare_request(self, messages, max_tokens, *, reasoning_prefix, thinking):
+    def prepare_request(self, messages, max_tokens, *, reasoning_prefix, thinking,
+                        reasoning_prefix_mode="answer"):
         context_messages, _ = self.runtime.prepare_reasoning_prefill(messages, reasoning_prefix,
             api_format=self.client.api_format, base_url=getattr(self.client, "base_url", ""),
-            reasoning=getattr(self.client, "reasoning", None), thinking=thinking)
+            reasoning=getattr(self.client, "reasoning", None), thinking=thinking,
+            reasoning_prefix_mode=reasoning_prefix_mode)
         return self.client._budget_request_bound(context_messages, max_tokens)
 
     def request(self, messages, **options):

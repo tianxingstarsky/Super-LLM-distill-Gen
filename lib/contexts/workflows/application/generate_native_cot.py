@@ -28,7 +28,7 @@ class GenerateNativeCot:
         messages = sample.get("messages", [])
         context_positions = authenticated_context_positions(messages, self.recipe)
         repair_session = (sample.get("native_tool_feedback") or {}).get("session") or {}
-        public_note_context = (self.recipe.get("native_feedback_guidance_version") == 7
+        public_note_context = (self.recipe.get("native_feedback_guidance_version") in {7, 8}
             and self.recipe.get("native_revision_context_version") == 2
             and sample.get("native_previous_candidate") is not None
             and messages and messages[-1].get("role") == "system"
@@ -223,7 +223,8 @@ class GenerateNativeCot:
         if feedback_receipt is not None:
             plan = {"version": 1, "selected": False, "semantic_status": "not_assessed",
                 "coverage": "local_checks_only", "selection": (
-                    "explicit_review_guidance_regeneration_no_new_review" if review_guidance is not None
+                    "explicit_beta_prefix_continuation_no_new_review" if feedback_receipt.get("guidance_version") == 8
+                    else "explicit_review_guidance_regeneration_no_new_review" if review_guidance is not None
                     else "explicit_tool_feedback_repair_no_new_review")}
         row = {"id": sample["id"], "source_id": sample["source_id"], "status": "eligible",
             "question": prompt, "reasoning": [reasoning], "answer": answer,
@@ -265,7 +266,8 @@ class GenerateNativeCot:
             row["generation_control"] = deepcopy(details["generation_control"])
             row.update(generation_controls_metadata([(len(prompt), row)]))
         if feedback_receipt is not None:
-            row["reasoning_origin"] = ("provider_reasoning_review_guided_regeneration" if
+            row["reasoning_origin"] = ("provider_reasoning_prefix_continuation" if feedback_receipt.get("guidance_version") == 8
+                else "provider_reasoning_review_guided_regeneration" if
                 review_guidance is not None else "provider_reasoning_tool_continuation")
             row.update(self.port.reject(sample, "native_feedback_rewrite_not_assessed"))
         if issues:

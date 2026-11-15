@@ -1,5 +1,7 @@
 # Python 回归
 
+Beta 原生返工的协议、模型适配、生成及训练投影分别见 `test_native_prefix_feedback.py`、`test_native_prefix_adapter.py`、`test_native_prefix_generation.py`。模型边界用 `test_reasoning_prefill.py` 核对真实 SDK 最终请求格式。离线检查覆盖一次请求、无工具/新增评审、精确原推理前缀、付费无答案响应持久化及恢复不重购；这些结果不代表生成内容已通过语义评审。
+
 `test_configurable_control_text.py` 检查控制文字配置的总开关、逐条停用、自定义规则、
 配置快照、重复读取及任务引用边界；关闭适配不应执行旧标记的隐式替换。
 

@@ -1,5 +1,7 @@
 # 工作流规则
 
+`native_prefix_feedback.py` 持有原生返工 v8 的纯合同：认证已有评审出处、原推理前缀及一次新增原生响应，重建消息、合并正文和收据。`native_feedback_guidance_version` 仅对全部活动原生作者均固定到官方 DeepSeek Chat 的新任务选择 v8，其他配置保持 v7。真实工具历史不删减，不伪造工具或用户发言；前缀来自原响应，新增片段来自本次响应，完成不认证语义质量。
+
 `agent_trajectory_optimization.py` 持有免重放的已记录轨迹编辑合同 v1：校验角色、调用/观察配对和完整结束，接受合法空 system、工具调用助手的 null 正文及完整长观察；不调用工具，不使用旧 80k/训练文本过滤来判来源质量。严格提交只能编辑选定助手的 CoT 局部位置，已有推理复用原子局部替换；缺失只在显式 fill_missing 时补写。原调用、参数、观察、顺序、工具定义和最终答案由程序保留并重新绑定摘要；流程建议仅为 requires_verification，来源结果及语义质量保持 unknown/not_assessed。旧冻结重放路线不迁移。验证：`tests/test_agent_trajectory_optimization.py`。
 
 `qa_learning_goal_routing.py` 为显式 `qa_director.learning_goal_mix` v1 按冻结运行种子与候选 ID 选择知识应用或资料阅读，默认阅读概率为 0.2，允许 0–1。它是逐题哈希采样，不是批次配额；实际资料不可用时显式退回知识应用，不伪造可见原文或追加检索。指导员请求前保存具体目标及收据，既有题型、逐字资料校验、角色和导出规则据此执行。消费者只接受匹配的宿主收据覆盖运行目标；无策略的历史任务不变。固定任务返工保留认证父策略与种子，不同父种子的混合返工须拆分；不重新抽取目标。验证：`tests/test_director_learning_goals.py` 及原生上下文、知识表达与评审回归。

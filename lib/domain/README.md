@@ -1,5 +1,7 @@
 # 旧领域层
 
+`workflow_node_prompts.py` 为原生反馈 v8 复用 v7 已有评审提醒模板；前缀续写调度与来源合同归 workflows 域，不在这里增加第二份提示词或模型身份。
+
 `workflow_node_prompts.py` 在 `native_context_contract_version=1` 下为新原生生成快照选择 `workflow.cot_native_joint@1.7.0`；无标记仍选择 1.6，个人正文优先，旧任务不热更新。标记由创建边界冻结，不能只凭注册表最新版本改变历史请求。
 
 下游 CoT 改写沿用 SFT 上下文时，通过审核域公开合同退休已变动回答的旧生成档位；不把来源记录的收据贴到新内容上，未改轮次和原始历史仍保留。
