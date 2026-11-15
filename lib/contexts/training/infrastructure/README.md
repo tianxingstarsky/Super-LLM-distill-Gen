@@ -1,5 +1,13 @@
 # Local training adapters
 
+`filesystem.py` freezes source and model identities, reuses the datasets API for
+encoding, authenticates completed stage artifacts and commits receipts before
+advancing. Existing experiment manifests are not overwritten during recovery.
+`report.py` reads those receipts and complete per-case checkpoints, checks
+externally supplied assessment identities and renders the full local report.
+Completeness and usability rules remain in domain; an unreviewed output is
+never presented as a semantic pass.
+
 `transformers_backend.py` implements the optional local validation port with
 Hugging Face Transformers `Trainer`, PEFT and bitsandbytes. It consumes already
 encoded examples and preserves their labels; it does not create training data,

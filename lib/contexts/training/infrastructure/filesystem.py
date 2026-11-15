@@ -121,12 +121,16 @@ class FilesystemTrainingValidation:
         self.identity = fingerprint([sources, model_facts["files"], model_facts["dependencies"],
             self.encoder.provenance, self.configuration, plan.system_message, plan.cpt_block_size])
         frozen = self.output / "experiment.json"
-        if frozen.exists() and json.loads(frozen.read_text(encoding="utf-8"))["identity"] != self.identity:
-            raise ValueError("training_validation_frozen_experiment_changed")
-        write_json(frozen, {"schema_version": 1, "identity": self.identity, "configuration": asdict(plan),
+        manifest = {"schema_version": 1, "identity": self.identity, "configuration": asdict(plan),
+            "runtime_configuration": self.configuration,
             "sources": sources, "model": model_facts, "epoch_policy": "one_ordered_pass_over_each_arm_union",
             "sft_source_kind": "recorded_authored_reasoning_not_assumed_native",
-            "evaluation_scope": "within_paper_heldout_tasks_not_unseen_knowledge"})
+            "evaluation_scope": "within_paper_heldout_tasks_not_unseen_knowledge"}
+        if frozen.exists():
+            if json.loads(frozen.read_text(encoding="utf-8"))["identity"] != self.identity:
+                raise ValueError("training_validation_frozen_experiment_changed")
+        else:
+            write_json(frozen, manifest)
         self.preflight = {"passed": True, "identity": self.identity, "train_records": len(train),
             "validation_records": len(validation), "test_cases": len(self.cases),
             "sft_training_examples": len(self.sft_examples), "cpt_training_blocks": len(self.cpt_examples),

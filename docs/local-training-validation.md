@@ -74,6 +74,8 @@ Windows 可以使用这里的 CUDA 路径。本次环境未安装可选的 `caus
 
 终止正确、存在正式答案、思考闭合和答案正确是不同指标。达到输出上限、只有思考没有答案或终止异常必须单列，不能算作通过。格式完成率、训练 loss 和教师自评分都不是事实正确率。语义判断必须有逐题标准和实际输出证据，注明谁做的判断，不能把助手离线审阅冒充经过校准的人类基准。
 
+程序默认不购买评审，也不自动宣称语义通过。人工或外部评测可另存 `semantic-assessment.json`：顶层使用本实验的 `experiment_identity`，`cases` 每项提供 `case_id`、相对的 `artifact`、实际文件 `output_sha256`、0–2 的 `semantic_score`、`reasoning_material_contradiction`、`combined_usable`、原文证据和说明。`reasoning_material_contradiction=null` 表示未定。报告核验输出身份、摘要和评分字段；综合可用必须同时满足答案2分、未发现实质推理矛盾、非空推理和答案、思考闭合、EOS及未截断，不能靠外部直接写 `true` 放行。未知结果保持待复核。评分解释应在生成前固定，程序不代替用户建立金标准。本次真实结果见 [Qwen3.5-4B 单轮对照](local-training-validation-2026-11-16.md)。
+
 同论文留出题只能测试这一小批任务的迁移。原始 Qwen3.5-4B 是已后训练模型，可能本来就知道经典论文；这里的“原模型”并非另外下载的 `Qwen3.5-4B-Base`。小数据、单随机种子的结果不能证明通用知识提升、规模收益或生产质量。
 
 实现入口：`lib/contexts/training/api.py`；组合根：`lib/bootstrap/training_validation.py`。验证运行 `tests/test_training_validation.py`、`tests/test_training_validation_backend.py` 和 `tests/test_ddd_architecture.py`，不因此启动全仓回归。

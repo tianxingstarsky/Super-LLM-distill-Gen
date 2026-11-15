@@ -1,6 +1,7 @@
 # 维护文档导航
 
 - [本地训练验证](local-training-validation.md)：原模型、SFT、CPT→SFT 的单次遍历对照、监督检查、断点与评测证据。
+- [Qwen3.5-4B 单轮实测](local-training-validation-2026-11-16.md)：同题三组真实输出、loss 与语义质量差异、精度校准和实际资源。
 
 - [Beta 原生 CoT 续写](architecture/native-prefix-continuation-2026-11-15.md)：已有推理和评审复用、一次续写、来源与费用证据。
 

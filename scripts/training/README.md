@@ -9,7 +9,7 @@
 | 在自己的训练器中复用加载器 | [训练强度转换说明](../../docs/training-reasoning-control.md) | 惰性读取与保留 labels 的接入示例 |
 | 运行本地原模型、SFT、CPT→SFT 对照 | `validate_local.py` | 预检、单次遍历的 LoRA 训练、完整留出生成、断点与 HTML 报告；见 [操作说明](../../docs/local-training-validation.md) |
 
-这里仅有文件读取和示例组合。训练控制规则归 datasets domain；逐轮转换归 datasets application；模型模板和 tokenization 归 datasets infrastructure，经 `lib.bootstrap.datasets` 装配。产品页面不能反向依赖本目录。
+这里保留训练加载示例，并提供显式启动训练验证的薄入口。训练控制规则归 datasets domain；逐轮转换归 datasets application；模型模板和 tokenization 归 datasets infrastructure，经 `lib.bootstrap.datasets` 装配。训练验证用例归 training context，经 `lib.bootstrap.training_validation` 装配。产品页面不能反向依赖本目录。
 
 从仓库根目录运行，路径换成已有文件和本地 tokenizer 目录：
 

@@ -70,3 +70,22 @@ def validate_supervision(example, *, eos_token_id, trailing_whitespace_ids=()):
     return {"input_tokens": len(ids), "prompt_tokens": supervised[0],
             "supervised_tokens": len(supervised), "eos_token_id": eos_token_id,
             "eos_position": ends[-1]}
+
+
+def complete_reasoned_generation(generation):
+    """The fixed thinking-enabled comparison needs both complete output fields."""
+    if any(not isinstance(generation.get(field), str) or not generation[field].strip()
+           for field in ("answer", "reasoning")):
+        return False
+    return (generation.get("thinking_closed") is True and generation.get("ended_with_eos") is True
+            and generation.get("truncated") is False)
+
+
+def assessment_usability(generation, score, contradiction):
+    """Derive the report metric; a review cannot certify itself by writing true."""
+    if type(score) is not int or score not in (0, 1, 2) or (contradiction is not None and type(contradiction) is not bool):
+        raise ValueError("training_report_assessment_invalid_rating")
+    complete = complete_reasoned_generation(generation)
+    if score == 2 and complete and contradiction is None:
+        return None
+    return score == 2 and complete and contradiction is False
