@@ -140,6 +140,8 @@ Start with one goal. Combine goals when your collection needs more than one form
 
 [Explore the nine data goals](assets/showcase/data-goals.svg) · [View the full product flow](assets/showcase/workflow-map.svg)
 
+Optional developer checks compare local training results. The [data training check](docs/local-training-validation.md) runs separately from the desktop app. The [RL adapter](docs/local-grpo-validation.md) remains experimental.
+
 ## Keep your own reasoning style
 
 Keep native thinking and the answer from the same response. Create reading conversations with the source material included. Inspect the full conversation, not just its last reply.

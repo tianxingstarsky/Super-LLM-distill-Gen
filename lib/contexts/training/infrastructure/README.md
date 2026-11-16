@@ -47,3 +47,30 @@ evaluation cases and an optional prompt renderer. This directory does not
 download weights, call paid APIs, select experiments or publish artifacts.
 Validation combines the scoped application tests with an actual local model
 preflight and the resulting private training/evaluation receipts.
+
+`grpo_validation.py` freezes verifiable task splits, authenticates stage artifacts
+and applies exact final-answer verification to held-out outputs. `trl_grpo_backend.py`
+reuses the local loader/evaluation adapter and delegates policy rollouts, group
+advantages and optimization to TRL `GRPOTrainer`. It does not implement GRPO itself.
+Native thinking, raw token IDs, sampled rewards and bounded single-pass checkpoints
+remain available. `grpo_report.py` renders actual before/after generations, numeric
+correctness, separate structural completeness and resource receipts. It does not
+certify reasoning semantics from an exact numeric match.
+
+`grpo_tasks.py` reads the explicitly selected, pinned GSM8K source through
+Hugging Face datasets, or constructs the offline synthetic fixture. It samples
+the original train/test splits before evaluation, keeps source row identities,
+and never puts gold explanations or answers into generation messages.
+
+`trl_reward.py` delegates formal-answer equivalence to TRL's official
+`accuracy_reward` and Math-Verify. Its supported non-main-thread execution avoids
+Windows nested timeout-process failures; an unknown verifier outcome stops the
+stage rather than silently skipping or accepting it. Raw native reasoning is
+kept outside this answer-only reward input.
+
+`grpo_checkpoint.py` authenticates explicit capacity-only continuations. Model,
+tasks, sampling and total epoch budgets stay fixed. Native HF optimizer/RNG
+checkpoints retain the consumed step offset, so a larger output ceiling cannot
+start a second pass. It shares evaluation bindings with the existing backend,
+reuses every early-EOS baseline regardless of correctness, and regenerates caps.
+Original packets and native reasoning remain unchanged with explicit provenance.

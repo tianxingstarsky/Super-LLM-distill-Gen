@@ -1,5 +1,12 @@
 # Python 回归
 
+`test_grpo_domain.py`、`test_grpo_validation.py`、`test_grpo_report.py` 验证可选 TRL
+对照的 epoch／采样约束、留出隔离、失败不推进、收据防篡改与未知结果展示。
+`test_trl_grpo_reward.py` 验证官方数学奖励的 Windows 执行边界及不可判定结果阻断。
+`test_grpo_capacity_checkpoint.py` 覆盖容量增加、父检查点认证、观察到的新进度拒绝，
+以及完整错误回答也复用、截断不复用的缓存规则，避免重置训练配额或按质量筛选基线。
+它们不替代真实本机训练；实际效果由固定题目的训练前后输出和资源收据报告。
+
 Beta 原生返工的协议、模型适配、生成及训练投影分别见 `test_native_prefix_feedback.py`、`test_native_prefix_adapter.py`、`test_native_prefix_generation.py`。模型边界用 `test_reasoning_prefill.py` 核对真实 SDK 最终请求格式。离线检查覆盖一次请求、无工具/新增评审、精确原推理前缀、付费无答案响应持久化及恢复不重购；这些结果不代表生成内容已通过语义评审。
 
 `test_configurable_control_text.py` 检查控制文字配置的总开关、逐条停用、自定义规则、

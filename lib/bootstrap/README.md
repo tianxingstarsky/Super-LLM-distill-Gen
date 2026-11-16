@@ -119,3 +119,7 @@ DeepSeek 详尽程度自述；`verbosity_reference_text` 可再选择目标文�
 - 现有工厂名是公开导入合同。说明与局部命名可以改进，不能为了统一外观让旧调用方失效。
 
 修改依赖装配后运行 `tests/test_ddd_architecture.py` 和对应业务回归。纯说明修改不跑业务测试；已有验证通过且没有新疑点时停止追加测试。
+
+`training_validation.py` 的 `grpo_validation_application` 延迟装配
+`RunGrpoValidation`、文件收据和可选 TRL 后端。工厂本身不加载模型或启动训练；
+`training_validation_application` 继续提供原有 SFT／CPT→SFT 对照。

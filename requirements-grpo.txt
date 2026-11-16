@@ -1,0 +1,6 @@
+# Optional reinforcement-learning runtime; not a desktop application dependency.
+-r requirements-training.txt
+trl[math_verify]==1.18.0
+math-verify==0.9.0
+latex2sympy2-extended==1.11.0
+antlr4-python3-runtime==4.13.2

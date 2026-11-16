@@ -1058,6 +1058,9 @@ def build_parser():
     from lib.presentation.training_cli import configure as configure_training_validation
     configure_training_validation(sub.add_parser("train-validate",
         help="本地原模型/SFT/CPT→SFT 对照（需独立训练环境，默认仅预检）"))
+    from lib.presentation.grpo_cli import configure as configure_grpo_validation
+    configure_grpo_validation(sub.add_parser("train-grpo",
+        help="实验性本地 TRL GRPO 对照（端到端待验证，默认仅预检）"))
 
     p_import = sub.add_parser("import", help="导入 rollout 数据（需 G1 闸门）")
     p_import.add_argument("--limit", type=int, default=0)

@@ -14,3 +14,14 @@ def training_validation_application():
     backend = TransformersTrainingBackend(prompt_renderer=render,
         progress=lambda event: print(json.dumps(event, ensure_ascii=False, default=str), flush=True))
     return RunTrainingValidation(FilesystemTrainingValidation(backend, qwen35_training_encoder))
+
+
+def grpo_validation_application():
+    """Compose TRL GRPO lazily; constructing this service never starts training."""
+    from lib.contexts.training.api import RunGrpoValidation
+    from lib.contexts.training.infrastructure.grpo_validation import FilesystemGrpoValidation
+    from lib.contexts.training.infrastructure.trl_grpo_backend import TrlGrpoBackend
+    import json
+
+    backend = TrlGrpoBackend(progress=lambda event: print(json.dumps(event, ensure_ascii=False, default=str), flush=True))
+    return RunGrpoValidation(FilesystemGrpoValidation(backend))

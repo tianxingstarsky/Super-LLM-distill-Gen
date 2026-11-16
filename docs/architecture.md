@@ -82,6 +82,11 @@ CPT 重复判定保留在纯领域规则中；SQLite 索引负责存储和候选
 
 **训练验证**由 `RunTrainingValidation` 串行提交预检、原模型评测、SFT 及 CPT→SFT 的训练与评测收据。两个训练分支均从同一原权重开始；CPT→SFT 在一次有序遍历中先读取语料块，再读取与 SFT 分支相同的问题。领域层约束 epoch、题目隔离和监督范围；文件驱动复用 datasets 的训练加载 API，模型与优化器由独立环境的 Transformers Trainer、PEFT 和 bitsandbytes 承担，不进入普通控制台启动和安装包依赖。具体操作见 [本地训练验证](local-training-validation.md)。
 
+`RunGrpoValidation` 在同一可选业务域提供独立 RL 对照，使用固定的可验证任务与 TRL
+`GRPOTrainer`，最多一轮题目遍历、每批 rollout 只优化一次。奖励合同和拆分归 domain，
+阶段推进归 application，模型／文件／HTML 归 infrastructure；不改生成任务或原有导出格式。
+参考答案只提供给奖励函数，原生推理和真实采样记录保留。见 [本地 GRPO 验证](local-grpo-validation.md)。
+
 `WorkflowApplication` 和 `FilesystemWorkflowDriver` 保留给旧调用方。生产装配已分别注入运行、数据集和审核适配器。已移动的 Domain/Application 文件保留导入别名，不再拥有实现。
 
 `lib/infrastructure/workflow_store.py` 是既有运行目录和清单格式的文件边界。它不导入生成引擎。数据读取、统计、打包和运行查询通过它复用路径、哈希和锁语义。

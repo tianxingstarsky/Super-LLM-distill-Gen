@@ -30,6 +30,11 @@ def _file_digest(path):
     return digest.hexdigest()
 
 
+def evaluation_identity(model_files, adapter_files, cases, config, validation_examples=None):
+    """Keep the established evaluation binding shared by cache import and execution."""
+    return _digest([model_files, adapter_files, cases, config, validation_examples])
+
+
 def _write(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -354,7 +359,7 @@ class TransformersTrainingBackend:
         model_facts = self.inspect(model_path)
         adapter_files = [{"file": file.name, "sha256": _file_digest(file)}
                          for file in sorted(Path(adapter_path).glob("adapter*")) if file.is_file()] if adapter_path else []
-        identity = _digest([model_facts["files"], adapter_files, evaluation_cases, config, validation_examples])
+        identity = evaluation_identity(model_facts["files"], adapter_files, evaluation_cases, config, validation_examples)
         started = time.monotonic()
         model, tokenizer, _ = self._load(model_path, config, adapter_path=adapter_path, trainable=False)
         load_seconds = time.monotonic() - started

@@ -10,3 +10,9 @@ Transformers、PEFT、量化及 CUDA 只在可选基础设施执行时加载。
 
 目录说明见各层 README，命令入口为 `scripts/training/validate_local.py`。
 验证覆盖单次遍历约束、完整推理与 system、结束标记、失败阶段不冒充完成及恢复不重复训练。
+
+`RunGrpoValidation` 提供独立的可选 TRL GRPO 对照：固定可验证任务、原模型评测、
+最多一轮的策略优化与同题留出评测。`df train-grpo` / `scripts/training/validate_grpo.py`
+显式启动，默认预检；额外依赖见 `requirements-grpo.txt`。数值正确奖励与推理质量分开说明。
+当前仅完成单步运行与离线接线验证，32K 端到端尚未完成；不作为稳定训练功能或效果提升宣传。
+维护与使用见 [本地 GRPO 验证](../../../docs/local-grpo-validation.md)。

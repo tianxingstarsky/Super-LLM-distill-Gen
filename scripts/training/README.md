@@ -8,6 +8,7 @@
 | 修改或停用控制文字适配 | `--control-text-config control-text-deepseek.json` | 使用可保存的逐条规则；`--no-control-text` 临时全部关闭 |
 | 在自己的训练器中复用加载器 | [训练强度转换说明](../../docs/training-reasoning-control.md) | 惰性读取与保留 labels 的接入示例 |
 | 运行本地原模型、SFT、CPT→SFT 对照 | `validate_local.py` | 预检、单次遍历的 LoRA 训练、完整留出生成、断点与 HTML 报告；见 [操作说明](../../docs/local-training-validation.md) |
+| 运行本地可验证奖励的 RL 对照 | `validate_grpo.py` | 可选 TRL GRPO、最多一轮、训练前后完整推理与资源报告；见 [操作说明](../../docs/local-grpo-validation.md) |
 
 这里保留训练加载示例，并提供显式启动训练验证的薄入口。训练控制规则归 datasets domain；逐轮转换归 datasets application；模型模板和 tokenization 归 datasets infrastructure，经 `lib.bootstrap.datasets` 装配。训练验证用例归 training context，经 `lib.bootstrap.training_validation` 装配。产品页面不能反向依赖本目录。
 
