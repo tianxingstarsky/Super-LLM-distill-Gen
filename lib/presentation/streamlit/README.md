@@ -61,6 +61,9 @@ SFT / 多轮的 `回答生成方式` 在本节点模型配置旁设置；原生 
 
 模型和提示词配置都留在节点内。不要新增重复总配置页。节点前后导航按实际图计算，切换时保留草稿和角色绑定。
 
+资料库的“用于生成”在保存来源时，同时持久化自动生成模式与关闭人工增强；重新打开草稿
+不能恢复成旧的人工模式。先保存成功再同步会话状态，保留已有目标、节点模型和来源选择。
+
 Agent 节点的“流程与 CoT 优化”不要求本机工具重放。每条轨迹默认一次作者调用，仅编辑最终助手 CoT；最终答案、其余助手推理、全部工具参数、观察和顺序由业务合同保持不变。流程建议单独保存，不把新工具、改参或不明删步建议记成已执行轨迹。输入节点继续控制缺失推理的保留、补写与排除；保留且没有最终推理时无需作者调用。新模式冻结 `agent_trajectory_optimization_version=1`，提示词 `workflow.agent_trajectory_optimization` 绑定 Agent/generation，长期经验复用 reasoning 范围及已有 Google 学习版本。只读运行详情展示实际冻结内容，不将优化完成称为工具重放成功。
 
 `initialize_agent_processing` 在新草稿的其他默认字段写入前判断默认值，`workflow-agent-trajectory-optimization` 是持久布尔字段；复制旧配方显式写入 `False`，复制新配方按版本标记恢复。Agent-only 补写复用本节点作者，不再要求旧输入节点的两步模型；混合 SFT 工作仍保留其实际需要的输入补写。定向入口：`tests/test_agent_optimization_ui.py`、`tests/test_workflow_node_models.py` 与既有节点导航验证；依赖边界调整再运行 DDD 检查。真实桌面操作由浏览器另行验收，AppTest 不等于截图验收。

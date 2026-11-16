@@ -35,13 +35,17 @@ def use_library_source(source: dict, workspace: str, draft_application) -> None:
     if len(sources) > 200:
         raise ValueError("generation_source_limit_exceeded")
     mode_key = f"workflow-source-mode:{workspace}"
-    values = validate_creation_draft({**current, mode_key: mode, sources_key: sources})
+    creation_key = f"workflow-creation-mode:{workspace}"
+    human_key = f"workflow-human-enabled:{workspace}"
+    values = validate_creation_draft({**current, mode_key: mode, sources_key: sources,
+                                     creation_key: "自动生成", human_key: False})
     draft_application.replace(values)
     st.session_state[draft_key] = values
     st.session_state[mode_key] = mode
     st.session_state[sources_key] = sources
     st.session_state[f"workflow-draft-loaded:{workspace}"] = True
-    st.session_state[f"workflow-creation-mode:{workspace}"] = "自动生成"
+    st.session_state[creation_key] = values[creation_key]
+    st.session_state[human_key] = values[human_key]
     st.session_state[f"workflow-setup-node:{workspace}"] = "ingest"
     st.session_state.pop(f"workflow-entry-target:{workspace}", None)
     st.session_state.pop(f"workflow-draft-error:{workspace}", None)

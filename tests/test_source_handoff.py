@@ -12,24 +12,32 @@ def test_handoff_merges_and_persists_sources_without_changing_targets_or_models(
     application = creation_draft_application(tmp_path)
     saved = {"workflow-preset:w": "自选目标", "workflow-targets:w:自选目标": ["sft", "dpo"],
              "workflow-count:w": 50000, "workflow-source-mode:w": "开放需求",
+             "workflow-creation-mode:w": "人工问答增强", "workflow-human-enabled:w": True,
              "workflow-open-brief:w": "Keep this brief", "workflow-sources:w:文档资料": ["first.txt"],
              "workflow-sources:w:Agent 上下文": ["history.jsonl"]}
     application.replace(saved)
     models = {"sft": {"generation": {"backend": "local", "model": "writer"}}}
     state = {"workflow-node-bindings:w": deepcopy(models), "nav": "数据管理",
-             "workflow-creation-mode:w": "人工制作图文"}
+             "workflow-creation-mode:w": "人工问答增强", "workflow-human-enabled:w": True}
     monkeypatch.setattr(source_handoff.st, "session_state", state)
     item = {"path": "second.md", "source_mode": "文档资料"}
     source_handoff.use_library_source(item, "w", application)
     source_handoff.use_library_source(item, "w", application)
     expected = {**saved, "workflow-source-mode:w": "文档资料",
+                "workflow-creation-mode:w": "自动生成", "workflow-human-enabled:w": False,
                 "workflow-sources:w:文档资料": ["first.txt", "second.md"]}
     assert creation_draft_application(tmp_path).load() == expected
     assert state["workflow-form-draft:w"] == expected
     assert state["workflow-node-bindings:w"] == models
     assert state["workflow-creation-mode:w"] == "自动生成"
+    assert state["workflow-human-enabled:w"] is False
     assert state["workflow-setup-node:w"] == "ingest"
     assert state["nav"] == "自动工作流"
+    # A fresh session recovers the handoff's mode, not the previous human mode.
+    monkeypatch.setattr(source_handoff.st, "session_state", {})
+    recovered = creation_draft_application(tmp_path).load()
+    assert recovered["workflow-creation-mode:w"] == "自动生成"
+    assert recovered["workflow-human-enabled:w"] is False
 
 
 def test_handoff_preserves_unsaved_session_edits_and_uses_current_source_selection(tmp_path, monkeypatch):
@@ -40,6 +48,7 @@ def test_handoff_preserves_unsaved_session_edits_and_uses_current_source_selecti
     monkeypatch.setattr(source_handoff.st, "session_state", state)
     source_handoff.use_library_source({"path": "new.json", "source_mode": "Agent 上下文"}, "w", application)
     assert application.load() == {"workflow-count:w": 50000, "workflow-source-mode:w": "Agent 上下文",
+                                  "workflow-creation-mode:w": "自动生成", "workflow-human-enabled:w": False,
                                   "workflow-sources:w:Agent 上下文": ["current.jsonl", "new.json"]}
 
 
@@ -58,6 +67,7 @@ def test_image_handoff_preserves_targets_models_and_explicit_parser_choice(tmp_p
     source_handoff.use_library_source({"path": "scan" + suffix, "source_mode": "文档资料"}, "w", application)
 
     expected = {**saved, "workflow-source-mode:w": "文档资料",
+                "workflow-creation-mode:w": "自动生成", "workflow-human-enabled:w": False,
                 "workflow-sources:w:文档资料": ["guide.md", "scan" + suffix]}
     assert application.load() == expected
     assert state["workflow-form-draft:w"] == expected
