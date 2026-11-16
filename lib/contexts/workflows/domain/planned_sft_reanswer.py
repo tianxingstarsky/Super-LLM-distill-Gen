@@ -62,6 +62,26 @@ def selected_reanswer_ids(candidate_ids):
     return list(candidate_ids)
 
 
+def validate_planned_sft_reanswer_record(parent, record):
+    """Check frozen configuration and dialogue capability, without authorizing I/O."""
+    if (parent.get("native_generation_version") != 1
+            or parent.get("node_generation", {}).get("sft", {}).get("answer_mode") != "native_joint"
+            or not parent.get("node_models", {}).get("sft", {}).get("generation")
+            or not parent.get("endpoint_pins", {}).get("sft", {}).get("generation")
+            or not record.get("native_generation")):
+        raise ValueError("sft_reanswer_sealed_native_parent_required")
+    planned_sft_prompt(record, parent)
+
+
+def supports_planned_sft_reanswer(parent, record):
+    """A display prefilter; sealed parents and sources still require authentication."""
+    try:
+        validate_planned_sft_reanswer_record(parent, record)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
 def reanswer_options(parent, selected, agent_experience, *, task_instructions=None):
     options = {key: deepcopy(parent[key]) for key in (
         "backend", "model", "judge_backend", "judge_model", "jev_backend", "jev_model",

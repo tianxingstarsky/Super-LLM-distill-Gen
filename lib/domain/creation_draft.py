@@ -157,6 +157,7 @@ def validate_creation_draft(values):
             raise ValueError('invalid_creation_draft')
         if field in {'workflow-node-bindings', 'workflow-node-model-confirmations', 'workflow-document-parse-mode', 'workflow-agent-mode',
                      'workflow-conversation-reasoning', 'workflow-conversation-reasoning-version', 'workflow-conversation-format',
+                     'workflow-conversation-imports',
                      'workflow-cpt-processing-mode', 'workflow-cpt-review-mode', 'workflow-creation-mode',
                      'workflow-review-repair-mode', 'workflow-review-repair-rounds', 'workflow-review-repair-threshold',
                      'workflow-director-learning-goal', 'workflow-director-user-languages',
@@ -222,6 +223,13 @@ def validate_creation_draft(values):
             valid = isinstance(value, list) and len(value) <= len(TARGETS) and all(isinstance(v, str) and v in TARGETS for v in value)
         elif field == 'workflow-sources':
             valid = isinstance(value, list) and len(value) <= 500 and all(isinstance(v, str) and len(v) <= 4096 for v in value)
+        elif field == 'workflow-conversation-imports':
+            from lib.contexts.workflows.contracts import validate_import_references
+            try:
+                validate_import_references(value)
+                valid = True
+            except ValueError:
+                valid = False
         elif field == 'workflow-human-seeds':
             valid = _human_seeds(value)
         elif field == 'workflow-director-user-languages':

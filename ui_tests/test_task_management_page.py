@@ -133,7 +133,8 @@ def test_task_status_filter_and_resume_operation(tmp_path):
     app = AppTest.from_function(task_screen, args=(str(output), "filters"), default_timeout=15)
     app.run()
     assert not app.exception
-    next(item for item in app.button if item.label == "继续执行 / 从断点重试").click().run()
+    assert app.button(key=f"resume:{queued}").label == "开始执行"
+    app.button(key=f"resume:{queued}").click().run()
     assert app.session_state["task_commands"][-1][-1] == queued
 
     next(item for item in app.segmented_control if item.label == "筛选任务").set_value("已完成").run()

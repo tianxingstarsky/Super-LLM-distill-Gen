@@ -20,6 +20,7 @@ from .domain.reading_session import has_public_reading_context
 from .domain.review_guidance import authenticated_review_guidance_positions
 from .domain.public_experience import initial_experience_text, without_injected_public_experience, public_experience_provenance
 from .domain.conversation_reasoning import validate_conversation_reasoning
+from .domain.conversation_import import validate_import_references
 from .domain.imported_reasoning import imported_reasoning_metadata, retire_imported_reasoning
 from .domain.dialogue_creation import requires_dialogue_director, prepare_new_dialogue_director
 from .domain.qa_learning_goal_routing import effective_learning_goal, routed_reading_excerpt
@@ -40,6 +41,7 @@ from .domain.reasoning_bank import (memory_context_assignments, validate_propose
     validate_memory_context_assignment)
 from .domain.planned_sft_reanswer import valid_reanswer_receipt
 from .domain.planned_sft_reanswer import planned_sft_prompt, authenticated_teacher_text, reanswer_task_identity
+from .domain.planned_sft_reanswer import supports_planned_sft_reanswer
 from .domain.native_sft_optimization import native_sft_optimization_input
 from .domain.dialogue_style_context import authenticated_record_context_positions
 from .domain.agent_trajectory_optimization import (

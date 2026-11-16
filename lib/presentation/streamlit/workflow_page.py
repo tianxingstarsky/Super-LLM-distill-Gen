@@ -1017,7 +1017,8 @@ def _render_run_progress(application, run_id, begin, *, embedded=False, draft_ap
                 if st.button("停止后续步骤", key=f"stop:{run_id}", width="stretch"):
                     application.cancel(run_id)
                     st.info("已请求停止；排队与退避会及时结束，正在输出的请求在下一段输出或请求返回后停止。已保存断点保留。")
-            elif st.button("继续执行 / 从断点重试", type="primary", key=f"resume:{run_id}", width="stretch",
+            elif st.button("开始执行" if status == "queued" else "继续执行 / 从断点重试",
+                           type="primary", key=f"resume:{run_id}", width="stretch",
                            help="继续执行沿用本次来源快照与节点配方。已保存的逐条断点会校验后复用；修改模型或生成参数，请创建新任务。"):
                 begin(["workflow", "--action", "resume", "--run-id", run_id])
     elif draft_application is not None:
@@ -1681,8 +1682,12 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
             st.session_state[creation_key] = saved.get(creation_key, "人工问答增强" if saved.get(f"workflow-human-enabled:{ws}") else "自动生成")
         if st.session_state[creation_key] not in modes:
             st.session_state[creation_key] = "自动生成"
-        if creation_key not in saved:
-            _save_draft_value(ws, creation_key)
+        # Home shortcuts set the entry mode before this widget is rendered.
+        # Keep that explicit choice durable even when an older mode is saved.
+        _save_draft_value(ws, creation_key)
+        human_key = f"workflow-human-enabled:{ws}"
+        st.session_state[human_key] = st.session_state[creation_key] == "人工问答增强"
+        _save_draft_value(ws, human_key)
         creation_mode = st.segmented_control(
             "制作方式", modes, default=None, key=creation_key,
             label_visibility="collapsed", on_change=_change_creation_mode, args=(ws,),
@@ -1723,6 +1728,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
         help="按来源选择合适的输入；文档或 Agent 记录还可以附加生成要求。",
     ) or "文档资料"
     recorded_conversations = False
+    conversation_import_unavailable = False
     # Keep the actual source selection before its processing graph. Populate
     # this slot after parser settings are known without duplicating inputs.
     source_slot = st.container(key="workbench-source-entry")
@@ -1772,11 +1778,20 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                       key=f"workflow-integrate-cot:{ws}", on_click=integrate_cot_draft,
                       args=(ws, target_key, _save_draft_value))
         receipt = st.session_state.get(f"conversation-import:{ws}:confirmed")
-        if (source_mode == "Agent 上下文" and creation_mode == "自动生成"
-                and isinstance(receipt, dict)
-                and receipt.get("target") == ("agent" if set(targets) == {"agent"} else "sft")):
-            recorded_paths = {row["path"] for row in receipt.get("rows", []) if isinstance(row, dict) and "path" in row}
-            recorded_conversations = bool(saved_sources) and set(saved_sources).issubset(recorded_paths)
+        if source_mode == "Agent 上下文" and creation_mode == "自动生成":
+            import_target = "agent" if set(targets) == {"agent"} else "sft"
+            references = st.session_state.get(f"workflow-form-draft:{ws}", {}).get(
+                f"workflow-conversation-imports:{ws}", {})
+            selected_references = {path: references[path] for path in saved_sources if path in references}
+            if selected_references and conversation_importer is not None:
+                try:
+                    conversation_importer.authenticate_sources(selected_references, target=import_target)
+                    recorded_conversations = set(saved_sources) <= set(selected_references)
+                except (OSError, ValueError, RuntimeError, Timeout):
+                    conversation_import_unavailable = True
+            elif isinstance(receipt, dict) and receipt.get("target") == import_target:
+                recorded_paths = {row["path"] for row in receipt.get("rows", []) if isinstance(row, dict) and "path" in row}
+                recorded_conversations = bool(saved_sources) and set(saved_sources).issubset(recorded_paths)
         arithmetic_only = set(targets) == {"gsm8k"}
         cpt_only = set(targets) == {"cpt"}
         if "gsm8k" in targets:
@@ -2175,9 +2190,15 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                         def select_imported_sources(rows):
                             source_key = f"workflow-sources:{ws}:{source_mode}"
                             selected_paths = st.session_state.get(source_key, [])
-                            st.session_state[source_key] = list(dict.fromkeys([
-                                *selected_paths, *(row["path"] for row in rows)]))
-                            _save_draft_value(ws, source_key)
+                            reference_key = f"workflow-conversation-imports:{ws}"
+                            references = st.session_state.get(f"workflow-form-draft:{ws}", {}).get(reference_key, {})
+                            import_id = st.session_state[f"conversation-import:{ws}:preview"]["import_id"]
+                            changes = {source_key: list(dict.fromkeys([
+                                *selected_paths, *(row["path"] for row in rows)])),
+                                reference_key: {**{path: references[path] for path in selected_paths if path in references},
+                                                **{row["path"]: import_id for row in rows}}}
+                            if not _commit_draft_fields(ws, changes):
+                                raise OSError("conversation_import_confirmation_not_saved")
                         render_conversation_import(conversation_importer, ws, select_imported_sources, targets=targets,
                             selected_paths=st.session_state.get(f"workflow-sources:{ws}:{source_mode}", []))
                         uploaded = []
@@ -2210,6 +2231,8 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                 else:
                     selected = []
                 upload_error = None if use_dsh else st.session_state.get(f"workflow-upload-error:{ws}:{source_mode}")
+                if conversation_import_unavailable:
+                    st.error("导入确认记录未能恢复，请重新导入并确认。当前资料选择仍保留。")
                 if upload_error:
                     st.error(_upload_cache_error(upload_error))
                 with brief_column:
@@ -2470,7 +2493,7 @@ def render_workbench(application: WorkflowApplication, begin, model_application,
                                       or human_mode_unavailable
                                       or ("rlaif" in targets and review_repair.get("mode") == "human")
                                       or agent_source_missing or source_limit_exceeded or source_size_exceeded
-                                      or source_unavailable or not targets or bool(model_issues)
+                                      or source_unavailable or conversation_import_unavailable or not targets or bool(model_issues)
                                       or agent_unavailable or web_unavailable
                                       or bool(generation_invalid) or bool(control_text_invalid) or trim_invalid or prompts_invalid or director_invalid
                                       or parser_unavailable or cpt_vision_blocked

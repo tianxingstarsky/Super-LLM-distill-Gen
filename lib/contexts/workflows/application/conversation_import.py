@@ -2,11 +2,21 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
+from threading import Lock
 from typing import Protocol
 
 from ..domain.conversation_import import (
-    MAX_IMPORT_BYTES, import_digest, import_eligibility, inspect_import, iter_import_records, validate_import_name,
+    MAX_IMPORT_BYTES, authenticate_imported_source, import_digest, import_eligibility, inspect_import,
+    iter_import_records, validate_import_name, validate_import_references,
 )
+
+
+# Streamlit recreates application objects on redraw. Keep only successful,
+# fingerprint-bound decisions, never source bytes or conversion records.
+_AUTHENTICATED_SOURCES = OrderedDict()
+_AUTHENTICATION_LOCK = Lock()
+_AUTHENTICATION_CACHE_LIMIT = 512
 
 
 class ConversationImportPort(Protocol):
@@ -14,11 +24,40 @@ class ConversationImportPort(Protocol):
     def stage(self, name: str, source_sha256: str, normalized: bytes, report: dict) -> str: ...
     def load(self, import_id: str) -> tuple[dict, bytes, dict]: ...
     def store_source(self, name: str, content: bytes) -> list[dict]: ...
+    def read_source(self, path: str) -> bytes: ...
+    def source_signature(self, path: str, import_id: str) -> tuple: ...
 
 
 class ImportConversations:
     def __init__(self, port: ConversationImportPort):
         self._port = port
+
+    def authenticate_sources(self, references: dict, *, target: str = "sft") -> None:
+        """Restore intake eligibility from durable receipts and actual sources.
+
+        This is read-only: no converter, source writes, or model requests run.
+        A reference alone never substitutes for authenticating both contents.
+        """
+        grouped = {}
+        for path, identity in validate_import_references(references).items():
+            signature = self._port.source_signature(path, identity)
+            key = (target, identity, signature)
+            with _AUTHENTICATION_LOCK:
+                if key in _AUTHENTICATED_SOURCES:
+                    _AUTHENTICATED_SOURCES.move_to_end(key)
+                    continue
+            grouped.setdefault(identity, []).append((path, signature, key))
+        for identity, sources in grouped.items():
+            metadata, normalized, report = self._port.load(identity)
+            inspect_import(normalized, report, metadata["source_sha256"], preview_limit=1)
+            for path, signature, key in sources:
+                authenticate_imported_source(normalized, self._port.read_source(path), target)
+                if self._port.source_signature(path, identity) != signature:
+                    raise ValueError("conversation_import_changed_during_authentication")
+                with _AUTHENTICATION_LOCK:
+                    _AUTHENTICATED_SOURCES[key] = True
+                    while len(_AUTHENTICATED_SOURCES) > _AUTHENTICATION_CACHE_LIMIT:
+                        _AUTHENTICATED_SOURCES.popitem(last=False)
 
     def preview(self, name: str, content: bytes, *, preview_limit: int = 3) -> dict:
         validate_import_name(name)

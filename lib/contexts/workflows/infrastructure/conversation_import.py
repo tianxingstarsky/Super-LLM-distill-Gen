@@ -163,3 +163,18 @@ class ExternalConversationImporter:
 
     def store_source(self, name: str, content: bytes) -> list[dict]:
         return self._source_store.store([(name, content)])
+
+    def read_source(self, path: str) -> bytes:
+        return self._read(Path(path))
+
+    def source_signature(self, path: str, import_id: str) -> tuple:
+        """Invalidate successful intake checks when source or receipt changes."""
+        from lib.infrastructure.local_input_cache import _assert_unlinked
+        directory = self._directory(import_id)
+        signatures = []
+        for file in (Path(path), directory / "ready.json", directory / "report.json", directory / "normalized.jsonl"):
+            _assert_unlinked(file)
+            info = file.stat()
+            signatures.append((str(file.absolute()), info.st_dev, info.st_ino, info.st_size,
+                               info.st_mtime_ns, info.st_ctime_ns))
+        return tuple(signatures)

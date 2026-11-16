@@ -135,18 +135,21 @@ def _render_report_actions(application, run_id: str, target: str, page: dict, *,
     actions = st.columns(1 + int(can_review) + int(can_correct), gap="small")
     actions[0].button("导出训练数据", on_click=open_package, args=(run_id, target),
                      kwargs={"from_fragment": True}, key=f"workflow-report-package:{run_id}:{target}",
-                     type="primary", width="stretch")
+                     type="primary", width="stretch",
+                     help="导出本任务的已校验产物；不会重新生成样本。")
     index = 1
     if can_review:
-        actions[index].button("审核当前类型", on_click=open_verified_review,
+        actions[index].button("人工审核与发布", on_click=open_verified_review,
                               args=(application, run_id, target), kwargs={"from_fragment": True},
-                              key=f"workflow-report-review:{run_id}:{target}", width="stretch")
+                              key=f"workflow-report-review:{run_id}:{target}", width="stretch",
+                              help="逐条通过、退回或编辑候选，并发布人工审核版本。")
         index += 1
     if can_correct:
-        actions[index].button("评分与修正", on_click=open_verified_correction,
+        actions[index].button("评分、修正与返工", on_click=open_verified_correction,
                               args=(application, human_application, run_id, target),
                               kwargs={"from_fragment": True},
-                              key=f"workflow-report-correct:{run_id}:{target}", width="stretch")
+                              key=f"workflow-report-correct:{run_id}:{target}", width="stretch",
+                              help="评分和编辑候选，保存问题后创建返工子任务，保留原稿。")
     if not can_review and can_correct:
         st.caption("此类型可在评分与修正中处理。")
     if st.session_state.pop(f"workflow-review-error:{run_id}", False):

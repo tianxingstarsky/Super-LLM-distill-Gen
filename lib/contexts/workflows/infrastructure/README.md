@@ -122,6 +122,8 @@ SQLite 事务认领批次，避免并行进化拿到同一份待处理材料。�
 
 `ExternalConversationImporter` 不解释厂商事件格式。DSH 读取器位于 `plugins/dsh-dataforge`，核心只校验规范 JSONL 和版本化收据。临时输入与输出目录隔离，导入不执行记录中的工具或调用模型。`tests/test_conversation_import.py` 覆盖收据、篡改、重复导入、路径和文件名碰撞；`test_dsh_import_ingestion.py` 覆盖后续训练输入规则。
 
+`read_source` 与 `source_signature` 为重启后的导入认证提供有界、拒绝链接的来源读取，以及来源和既有 `ready.json` / `report.json` / `normalized.jsonl` 的路径、文件身份、大小与修改时间指纹；任一文件变化使应用层成功缓存失效，恢复不调用转换器、不写入第二份会话。
+
 配方 29 对应显式 `evidence_policy=1`，冻结核查模板 1.5.0。资料原件认证只读取当前运行 inputs 快照并比较冻结 SHA-256，不相信传入的已认证标记。核查的稳定资料前缀与动态任务分离，复用供应商前缀缓存；完整收据使用现有原子检查点。旧配方 28 仍固定 1.4.0。
 
 证据策略 2 仍通过当前模型端口及文件检查点运行；配方 30 冻结模板 1.6.0。引用与数量规则位于 domain，不在 SDK 适配层猜测单位或修补模型结论。

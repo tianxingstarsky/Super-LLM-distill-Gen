@@ -14,6 +14,35 @@ def import_digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def validate_import_references(references: dict) -> dict:
+    """Bound durable source-to-conversion references; they grant no approval."""
+    if (not isinstance(references, dict) or len(references) > 500
+            or any(not isinstance(path, str) or not path or len(path) > 4096
+                   or not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity)
+                   for path, identity in references.items())):
+        raise ValueError("conversation_import_invalid_references")
+    return dict(references)
+
+
+def authenticate_imported_source(normalized: bytes, source: bytes, target: str) -> None:
+    """Require an unchanged, eligible, ordered subset of the staged records."""
+    if target not in {"sft", "agent"}:
+        raise ValueError("conversation_import_invalid_target")
+    selected = iter_import_records(source)
+    current = next(selected, None)
+    matched = 0
+    for original in iter_import_records(normalized):
+        if current is not None and current.get("id") == original["id"]:
+            if current != original:
+                raise ValueError("conversation_import_source_mismatch")
+            if training_issues(current)[target]:
+                raise ValueError("conversation_import_training_ineligible")
+            matched += 1
+            current = next(selected, None)
+    if not matched or current is not None:
+        raise ValueError("conversation_import_source_mismatch")
+
+
 def validate_import_name(name: str) -> None:
     if (not isinstance(name, str) or not name or len(name) > 240
             or name in {".", ".."} or name.endswith((".", " "))

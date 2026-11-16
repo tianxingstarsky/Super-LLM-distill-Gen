@@ -9,7 +9,7 @@ import pytest
 from lib.bootstrap.conversation_import import conversation_import_application
 from lib.contexts.workflows.application.conversation_import import ImportConversations
 from lib.contexts.workflows.domain.conversation_import import (
-    COUNT_FIELDS, import_digest, inspect_import, validate_import_record,
+    COUNT_FIELDS, authenticate_imported_source, import_digest, inspect_import, validate_import_record,
 )
 from lib.contexts.workflows.infrastructure.conversation_import import ExternalConversationImporter
 from lib.bootstrap.local_inputs import local_input_application
@@ -253,6 +253,71 @@ def test_external_converter_persists_only_after_confirmation_and_reuses_cache(tm
     third = app.preview("session.jsonl.zstd", b"original untouched source")
     assert third["import_id"] != first["import_id"]
     assert len(script.with_suffix(".calls").read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("selection", [None, ["2", "0"]])
+def test_restart_authenticates_existing_import_receipt_and_selected_source_without_writing(tmp_path, selection):
+    output = normalized([record(str(index)) for index in range(3)])
+    report = {**receipt(b"original source", output), "conversion_adapter_sha256": "a" * 64}
+    driver = ExternalConversationImporter(tmp_path, (), local_input_application(tmp_path))
+    identity = driver.stage("session.jsonl", import_digest(b"original source"), output, report)
+    source = ImportConversations(driver).confirm(identity, selection)[0]["path"]
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    reopened = ImportConversations(ExternalConversationImporter(tmp_path, (), local_input_application(tmp_path)))
+    reopened.authenticate_sources({source: identity}, target="sft")
+    assert {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+    content = Path(source).read_bytes()
+    Path(source).write_bytes(content.replace(b"Disconnect", b"Connect"))
+    with pytest.raises(ValueError, match="source_mismatch"):
+        reopened.authenticate_sources({source: identity}, target="sft")
+    Path(source).write_bytes(content)
+    (tmp_path / "data/conversation-imports" / identity / "normalized.jsonl").write_bytes(
+        output.replace(b"Disconnect", b"Connect"))
+    with pytest.raises(ValueError, match="receipt_mismatch"):
+        reopened.authenticate_sources({source: identity}, target="sft")
+
+
+def test_import_authentication_rejects_changed_order_unknown_records_and_ineligible_target():
+    records = [record(str(index)) for index in range(3)]
+    output = normalized(records)
+    for selected in ([records[1], records[0]], [record("unknown")]):
+        with pytest.raises(ValueError, match="source_mismatch"):
+            authenticate_imported_source(output, normalized(selected), "sft")
+    blocked = record("blocked")
+    blocked["messages"].insert(0, {"role": "developer", "content": "Recorded instruction."})
+    with pytest.raises(ValueError, match="training_ineligible"):
+        authenticate_imported_source(normalized([blocked]), normalized([blocked]), "sft")
+
+
+@pytest.mark.parametrize("changed", ["source", "ready.json", "report.json", "normalized.jsonl", "target"])
+def test_import_authentication_cache_survives_new_application_and_invalidates_file_or_target_changes(tmp_path, monkeypatch, changed):
+    import os
+    from unittest.mock import Mock
+
+    output = normalized([record()])
+    report = {**receipt(b"source", output), "conversion_adapter_sha256": "a" * 64}
+    driver = ExternalConversationImporter(tmp_path, (), local_input_application(tmp_path))
+    identity = driver.stage("session.jsonl", import_digest(b"source"), output, report)
+    source = ImportConversations(driver).confirm(identity)[0]["path"]
+    references = {source: identity}
+    ImportConversations(driver).authenticate_sources(references)
+    fresh = ExternalConversationImporter(tmp_path, (), local_input_application(tmp_path))
+    load, read = Mock(wraps=fresh.load), Mock(wraps=fresh.read_source)
+    monkeypatch.setattr(fresh, "load", load)
+    monkeypatch.setattr(fresh, "read_source", read)
+    reopened = ImportConversations(fresh)
+    reopened.authenticate_sources(references)
+    assert not load.called and not read.called
+    if changed == "target":
+        reopened.authenticate_sources(references, target="agent")
+    else:
+        file = Path(source) if changed == "source" else tmp_path / "data/conversation-imports" / identity / changed
+        info = file.stat()
+        os.utime(file, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+        reopened.authenticate_sources(references)
+    assert load.call_count == 1 and read.call_count == 1
+    reopened.authenticate_sources(references, target="agent" if changed == "target" else "sft")
+    assert load.call_count == 1 and read.call_count == 1
 
 
 def test_uploaded_output_filename_cannot_collide_with_converter_output(tmp_path):

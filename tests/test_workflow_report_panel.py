@@ -1,5 +1,6 @@
 """Report paging and view changes must not generate or lose the selected run."""
 from streamlit.testing.v1 import AppTest
+import pytest
 
 
 SCRIPT = '''
@@ -70,6 +71,97 @@ def initial_choice_screen():
         st.caption("Another page")
     else:
         render_run_report_choice(Application(), "run-a")
+
+
+def reanswer_selection_screen():
+    import streamlit as st
+    from lib.domain.workflow_report import report_sample
+    from lib.presentation.streamlit.workflow_reanswer_controls import render_sft_reanswer
+    st.session_state.setdefault("ws", "fixture")
+    st.session_state.setdefault("calls", [])
+
+    class Application:
+        def state(self, run_id):
+            return {"status": st.session_state.get("status", "completed"),
+                    "production": {"partial_export": True}}
+
+        def recipe(self, run_id):
+            return {"native_generation_version": 1,
+                    "node_generation": {"sft": {"answer_mode": "native_joint"}},
+                    "node_models": {"sft": {"generation": {"model": "offline"}}},
+                    "endpoint_pins": {"sft": {"generation": {"model": "offline"}}}}
+
+        def reanswer_sft(self, run_id, **options):
+            st.session_state["calls"].append((run_id, options))
+            if st.session_state.get("source_changed"):
+                raise ValueError("checkpoint_review_parent_changed")
+            return "child"
+
+    messages = [{"role": "user", "content": "What is required?"},
+                {"role": "assistant", "content": "Disconnect power.", "reasoning_content": "Check safety."}]
+    base = {"status": "eligible", "messages": messages, "qa_contract": {"qa_type": "grounded"}}
+    records = [{**base, "id": "native", "native_generation": {"version": 1}},
+               {**base, "id": "imported", "reasoning_origin": "source"},
+               {**base, "id": "tools", "native_generation": {"version": 1},
+                "tools": [{"type": "function", "function": {"name": "read_file"}}]}]
+    if st.session_state.get("imported_only"):
+        records = records[1:2]
+    rows = [report_sample("sft", record, {key: record[key] for key in ("messages", "tools") if key in record},
+                          released=True, position=index) for index, record in enumerate(records)]
+    render_sft_reanswer(Application(), "run-a", "sft", {"rows": rows, "offset": 0})
+
+
+def test_reanswer_reports_native_subset_and_excludes_imports_and_tool_dialogues_before_click():
+    app = AppTest.from_function(reanswer_selection_screen).run()
+    assert not app.exception
+    assert app.session_state["calls"] == []
+    assert any("可重答 1 条原生样本；2 条导入或不兼容记录保持不变" in item.value for item in app.caption)
+    assert app.button(key="sft-reanswer-page:run-a:0").label == "重答本页原生样本"
+    app.text_area(key="sft-reanswer-instructions:run-a:0").set_value("Check the sources.").run()
+    app.button(key="sft-reanswer-page:run-a:0").click().run()
+    assert not app.exception
+    run_id, options = app.session_state["calls"][0]
+    assert run_id == "run-a"
+    assert options["candidate_ids"] == ["native"]
+    assert options["task_instructions"] == {"native": "Check the sources."}
+    assert app.session_state["workflow-open-run"] == {"workspace": "fixture", "run_id": "child"}
+
+
+def test_imported_only_report_explains_zero_native_samples_without_a_dead_reanswer_action():
+    app = AppTest.from_function(reanswer_selection_screen)
+    app.session_state["imported_only"] = True
+    app.run()
+    assert not app.exception and not app.button and not app.text_area
+    assert [item.value for item in app.caption] == ["本页为导入会话或不支持重答的记录，可进入评分、修正与返工处理。"]
+    assert app.session_state["calls"] == []
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "running", "queued"])
+def test_noncompleted_report_does_not_offer_reanswer_even_with_partial_exports(status):
+    app = AppTest.from_function(reanswer_selection_screen)
+    app.session_state["status"] = status
+    app.run()
+    assert not app.exception and not app.button and not app.text_area
+    assert app.session_state["calls"] == []
+
+
+def test_report_native_prefilter_keeps_source_authentication_at_the_create_action():
+    app = AppTest.from_function(reanswer_selection_screen).run()
+    app.session_state["source_changed"] = True
+    app.button(key="sft-reanswer-page:run-a:0").click().run()
+    assert not app.exception and app.error
+    assert app.session_state["calls"][0][1]["candidate_ids"] == ["native"]
+    assert "workflow-open-run" not in app.session_state
+
+
+def test_reanswer_subset_count_and_button_are_english_when_requested():
+    app = AppTest.from_function(reanswer_selection_screen)
+    app.session_state["ui_language"] = "en"
+    app.run()
+    assert not app.exception
+    assert any("Re-answer 1 native samples on this page; 2 imported or incompatible records stay unchanged." in item.value
+               for item in app.caption)
+    assert app.button(key="sft-reanswer-page:run-a:0").label == "Re-answer native samples on this page"
 
 
 def test_completed_run_opens_report_but_explicit_process_choice_survives_navigation():

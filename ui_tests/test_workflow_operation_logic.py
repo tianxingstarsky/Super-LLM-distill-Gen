@@ -28,6 +28,100 @@ st.checkbox('Show workbench'""")
                         "WorkflowNodeModelsApplication(Inventory()), draft_application=MemoryDraft())")
 
 
+@pytest.mark.parametrize("entry", ["overview:文档资料", "overview-target:sft"])
+def test_home_automatic_entry_replaces_saved_human_mode_after_restart(tmp_path, entry):
+    source = tmp_path / "source.txt"
+    source.write_text("Keep these source facts.", encoding="utf-8")
+    code = _script(source).replace(
+        "st.checkbox('Show workbench',value=True,key='fixture-show')\nif st.session_state['fixture-show']:",
+        """from lib.presentation.streamlit.home_page import render_overview
+class Home:
+    def task_runs(self): return []
+    def list_releases(self): return []
+if st.session_state.get('nav', 'home') == 'home':
+    render_overview(Home(), 'fixture', [], 0, 0, 'input', 'output',
+        navigate=lambda route: st.session_state.update(nav=route), job_status=lambda: None)
+else:""")
+    ui = AppTest.from_string(code)
+    ui.session_state["fixture-durable"] = {
+        MODE: "人工问答增强", "workflow-human-enabled:fixture": True,
+        SOURCE: "文档资料", PRESET: "自选目标",
+        "workflow-targets:fixture:自选目标": ["sft"],
+        "workflow-sources:fixture:文档资料": [str(source)]}
+    ui.run().button(key=entry).click().run()
+    assert not ui.exception
+    assert ui.segmented_control(key=MODE).value == "自动生成"
+    saved = deepcopy(ui.session_state["fixture-durable"])
+    assert saved[MODE] == "自动生成"
+    assert saved["workflow-human-enabled:fixture"] is False
+    reopened = AppTest.from_string(code)
+    reopened.session_state["nav"] = "自动工作流"
+    reopened.session_state["fixture-durable"] = saved
+    reopened.run()
+    assert not reopened.exception
+    assert reopened.segmented_control(key=MODE).value == "自动生成"
+    assert reopened.multiselect(key="workflow-sources:fixture:文档资料").value == [str(source)]
+
+
+def test_confirmed_dsh_sources_keep_director_bypass_after_navigation_and_restart(tmp_path, monkeypatch):
+    import io
+    import sys
+    import streamlit as st
+    from pathlib import Path
+    from lib.bootstrap.conversation_import import conversation_import_application
+    from tests.test_conversation_import import fake_converter
+
+    script = fake_converter(tmp_path)
+    importer = conversation_import_application(tmp_path, command=(sys.executable, str(script)))
+    original = b"original DSH event log"
+    preview = importer.preview("session.jsonl", original)
+    source = Path(importer.confirm(preview["import_id"])[0]["path"])
+    code = _script(source).replace("draft_application=MemoryDraft())",
+        "draft_application=MemoryDraft(), conversation_importer=st.session_state['fixture-importer'])")
+    uploaded = {"visible": True}
+    def uploader(*args, **kwargs):
+        if kwargs.get("key") == "conversation-import:fixture:file" and uploaded["visible"]:
+            stream = io.BytesIO(original)
+            stream.name = "session.jsonl"
+            return stream
+        return [] if kwargs.get("accept_multiple_files") else None
+    monkeypatch.setattr(st, "file_uploader", uploader)
+    ui = AppTest.from_string(code)
+    ui.session_state["fixture-importer"] = importer
+    ui.session_state["fixture-durable"] = {
+        SOURCE: "Agent 上下文", PRESET: "自选目标",
+        "workflow-targets:fixture:自选目标": ["sft"],
+        "workflow-conversation-format:fixture": "DSH 会话库",
+        "workflow-node-bindings:fixture": {"director": {}},
+        "workflow-node-bindings:fixture:initialized": ["director:generation", "director:question"]}
+    ui.run().button(key="conversation-import:fixture:confirm").click().run()
+    assert not ui.exception
+    assert not ui.button(key="workflow-create:fixture").disabled
+    reference_key = "workflow-conversation-imports:fixture"
+    assert ui.session_state["fixture-durable"][reference_key] == {str(source): preview["import_id"]}
+    uploaded["visible"] = False
+    ui.checkbox(key="fixture-show").uncheck().run()
+    ui.checkbox(key="fixture-show").check().run()
+    assert not ui.exception
+    assert "conversation-import:fixture:confirmed" not in ui.session_state
+    assert not ui.button(key="workflow-create:fixture").disabled
+    saved = deepcopy(ui.session_state["fixture-durable"])
+    reopened = AppTest.from_string(code)
+    reopened.session_state["fixture-durable"] = saved
+    reopened.session_state["fixture-importer"] = conversation_import_application(tmp_path, command=())
+    reopened.run()
+    assert not reopened.exception
+    assert not any(button.key == "fixture-node:director" for button in reopened.button)
+    assert not reopened.button(key="workflow-create:fixture").disabled
+    assert script.with_suffix(".calls").read_text().splitlines() == ["called"]
+    source.write_bytes(source.read_bytes().replace(b"Disconnect", b"Connect"))
+    reopened.run()
+    assert not reopened.exception
+    assert reopened.button(key="workflow-create:fixture").disabled
+    assert any("导入确认记录未能恢复" in item.value for item in reopened.error)
+    assert reopened.multiselect(key="workflow-sources:fixture:Agent 上下文").value == [str(source)]
+
+
 def test_mode_roundtrip_restores_both_choices_after_navigation_and_restart(tmp_path):
     source = tmp_path / "source.txt"
     source.write_text("Keep these source facts.", encoding="utf-8")

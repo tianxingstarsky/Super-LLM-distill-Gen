@@ -34,6 +34,9 @@ from tests.test_workflow_draft import SCRIPT
     ('workflow-node-model-confirmations:w', {'unknown': 'a' * 64}),
     ('workflow-node-model-confirmations:w', {'sft': 'A' * 64}),
     ('workflow-node-model-confirmations:w:sft', {'sft': 'a' * 64}),
+    ('workflow-conversation-imports:w', {'saved.jsonl': True}),
+    ('workflow-conversation-imports:w', {'saved.jsonl': 'invalid'}),
+    ('workflow-conversation-imports:w:extra', {'saved.jsonl': 'a' * 64}),
     ('workflow-review-repair-mode:w', 'manual'),
     ('workflow-review-repair-mode:w:review', 'human'),
     ('workflow-review-repair-rounds:w', -1), ('workflow-review-repair-rounds:w', 6),
@@ -52,6 +55,15 @@ from tests.test_workflow_draft import SCRIPT
 def test_draft_rejects_invalid_or_non_form_values(key, value):
     with pytest.raises(ValueError, match='invalid_creation_draft'):
         validate_creation_draft({key: value})
+
+
+def test_draft_keeps_only_import_receipt_references_across_restart(tmp_path):
+    values = {'workflow-conversation-imports:w': {f'saved-{index}.jsonl': 'a' * 64 for index in range(500)}}
+    creation_draft_application(tmp_path).replace(values)
+    assert creation_draft_application(tmp_path).load() == values
+    with pytest.raises(ValueError, match='invalid_creation_draft'):
+        validate_creation_draft({'workflow-conversation-imports:w': {
+            **values['workflow-conversation-imports:w'], 'one-more.jsonl': 'a' * 64}})
 
 
 def test_validation_returns_independent_values():

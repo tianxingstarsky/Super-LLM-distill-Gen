@@ -732,7 +732,8 @@ def test_run_inspector_keeps_resume_and_stop_controls(tmp_path, monkeypatch):
     assert overview and "已完成节点 <b>0 / 3</b>" in overview[0]
     assert "sft" not in {node["id"] for node in canvas(app, f"live-canvas:{run_id}")["nodes"]}
     assert "继续执行沿用本次来源快照与节点配方" in app.button(key=f"resume:{run_id}").proto.help
-    next(item for item in app.button if item.label == "继续执行 / 从断点重试").click().run()
+    assert app.button(key=f"resume:{run_id}").label == "开始执行"
+    app.button(key=f"resume:{run_id}").click().run()
     assert commands and commands[-1][-1] == run_id
 
     monkeypatch.setattr(FilesystemWorkflowRunDriver, "is_active", lambda self, _run_id: True)

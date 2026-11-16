@@ -1,7 +1,7 @@
 """Use sealed parent selections with the existing native runtime and checkpoints."""
 from lib.infrastructure.workflow_store import read_json, digest
-from lib.contexts.workflows.domain.planned_sft_reanswer import (planned_sft_prompt, valid_reanswer_receipt,
-                                                            authenticated_teacher_text)
+from lib.contexts.workflows.domain.planned_sft_reanswer import (valid_reanswer_receipt,
+    authenticated_teacher_text, validate_planned_sft_reanswer_record)
 
 
 def parent_recipe(output, context):
@@ -24,14 +24,9 @@ def prepare_reanswer_parents(output, inputs):
         if actual != item:
             raise ValueError("checkpoint_review_parent_changed")
         parent = parent_recipe(output, context)
-        if (parent.get("native_generation_version") != 1
-                or parent.get("node_generation", {}).get("sft", {}).get("answer_mode") != "native_joint"
-                or not parent.get("node_models", {}).get("sft", {}).get("generation")
-                or not parent.get("endpoint_pins", {}).get("sft", {}).get("generation")
-                or not item["record"].get("native_generation")
-                or not context["evidence"].get("teacher_evidence")):
+        validate_planned_sft_reanswer_record(parent, item["record"])
+        if not context["evidence"].get("teacher_evidence"):
             raise ValueError("sft_reanswer_sealed_native_parent_required")
-        planned_sft_prompt(item["record"], parent)
         authenticated_teacher_text(item["record"], context["evidence"], recipe=parent)
         if first is not None and any(parent.get(key) != first.get(key) for key in (
                 "node_generation", "qa_director", "qa_learning_goal_mix_seed", "generation_prompts", "node_prompt_templates", "node_models", "endpoint_pins")):

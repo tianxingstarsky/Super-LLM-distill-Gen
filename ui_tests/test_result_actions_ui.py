@@ -117,7 +117,7 @@ def test_export_handoff_remembers_report_type_without_starting_packaging():
 def test_report_actions_are_translated():
     app = screen(ui_language="en")
     assert [button.label for button in app.button] == [
-        "Export training data", "Review this dataset type", "Scoring and correction"]
+        "Export training data", "Review and publish", "Score, edit and rework"]
 
 
 @pytest.mark.parametrize("view", ["运行过程", "样本报告"])
