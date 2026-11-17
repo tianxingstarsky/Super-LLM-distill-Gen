@@ -57,6 +57,37 @@ def normalize_messages(messages: list[dict]) -> tuple[list[dict], list[str]]:
     return normalized, changes
 
 
+def auxiliary_provenance(path: Path, description: dict, *, model: Path,
+                         latent_steps: int, auxiliary_sha: str) -> dict:
+    """Distinguish a declared architecture from authenticated completed training."""
+    metadata = description.get("metadata") or {}
+    provenance = {"architecture": metadata.get("architecture", "unspecified"),
+        "identity": metadata.get("identity"), "status": "training_origin_unverified",
+        "inference_performs_training": False, "complete_base_weight_digest_bound": False}
+    if metadata.get("architecture") != "differentiable_shared_state_latent_feedback/v1":
+        return provenance
+    config_path = path.with_name("auxiliary-config.json")
+    config = json.loads(config_path.read_text("utf-8"))
+    model_config = json.loads((model / "config.json").read_text("utf-8"))
+    width = model_config.get("text_config", model_config)["hidden_size"]
+    if (config.get("identity") != metadata.get("identity")
+            or config.get("architecture") != metadata["architecture"]
+            or config.get("width") != width or config.get("latent_steps") != latent_steps
+            or config.get("rank") != description["shapes"]["adapters.0.1.weight"][0]):
+        raise ValueError("shared_checkpoint_config_does_not_match_requested_model_or_loop")
+    provenance.update(status="shared_loop_checkpoint_loaded", config_sha256=file_sha(config_path))
+    receipt_path = path.with_name("training-receipt.json")
+    if receipt_path.exists():
+        receipt = json.loads(receipt_path.read_text("utf-8"))
+        if (receipt.get("identity") != metadata["identity"] or receipt.get("status") != "completed"
+                or receipt.get("auxiliary_file_sha256") != auxiliary_sha):
+            raise ValueError("shared_checkpoint_training_receipt_mismatch")
+        provenance.update(status="verified_completed_shared_loop_training",
+            receipt_sha256=file_sha(receipt_path), actual_epoch=receipt["actual_epoch"],
+            optimizer_steps=receipt["global_steps"], train_records=receipt["train_records"])
+    return provenance
+
+
 def prepare_cases(*, model: str | Path, auxiliary: str | Path,
                   output: str | Path, messages: str | Path | None = None,
                   cases: str | Path | None = None, latent_steps: int = 3) -> tuple[Any, list[dict]]:
@@ -82,6 +113,8 @@ def prepare_cases(*, model: str | Path, auxiliary: str | Path,
     with safe_open(auxiliary, framework="pt", device="cpu") as handle:
         auxiliary_description = {"metadata": handle.metadata(), "keys": list(handle.keys()),
             "shapes": {key: list(handle.get_slice(key).get_shape()) for key in handle.keys()}}
+    provenance = auxiliary_provenance(auxiliary, auxiliary_description, model=model,
+        latent_steps=latent_steps, auxiliary_sha=auxiliary_sha)
     output.mkdir(parents=True, exist_ok=True)
     if not archived_source.exists():
         archived_source.write_bytes(source_bytes)
@@ -117,8 +150,8 @@ def prepare_cases(*, model: str | Path, auxiliary: str | Path,
             "identity": identity, **identity_payload, "prefix_tokens": len(prefix_ids),
             "source_input_sha256": hashlib.sha256(source_bytes).hexdigest(),
             "message_adaptations": adaptations, "source_extra_fields_are_not_prompt": True,
-            "auxiliary": auxiliary_description, "new_architecture_training_performed": False,
-            "old_auxiliary_role": "initialization_only_not_shared_loop_training"}
+            "auxiliary": auxiliary_description, "auxiliary_provenance": provenance,
+            "inference_performs_training": False}
         write_json(previous, manifest)
         prepared.append({"case_id": case_id, "output": case_output, "prefix_ids": prefix_ids,
             "boundary_ids": boundary_ids, "manifest": manifest})
@@ -166,31 +199,12 @@ def load_frozen_model(model: str | Path, *, device: str = "cuda:0") -> tuple[Any
 
 
 def load_auxiliary(auxiliary: str | Path, *, width: int, device: str) -> Any:
-    """Keep old checkpoint names; all heads now read one identical shared h."""
-    import torch
-    from safetensors.torch import load_file
-
-    state = load_file(str(auxiliary), device="cpu")
-    rank = state["adapters.0.1.weight"].shape[0]
-
-    class SharedDirectionHeads(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.adapters = torch.nn.ModuleList([torch.nn.Sequential(
-                torch.nn.LayerNorm(width, elementwise_affine=False),
-                torch.nn.Linear(width, rank, bias=False), torch.nn.SiLU(),
-                torch.nn.Linear(rank, width, bias=False)) for _ in PURPOSES])
-            self.fusion = torch.nn.Linear(5 * width, width)
-            self.gain = torch.nn.Parameter(torch.tensor(1.0))
-
-        def forward(self, hidden):
-            heads = torch.stack([hidden + adapter(hidden) for adapter in self.adapters], dim=1)
-            feature_cat = torch.cat(list(heads.unbind(1)), dim=-1)
-            return heads, feature_cat, self.fusion(feature_cat)
-
-    auxiliary_module = SharedDirectionHeads()
-    auxiliary_module.load_state_dict(state, strict=True)
-    return auxiliary_module.to(device=device, dtype=torch.float32).requires_grad_(False).eval()
+    """Compatibility entry; training and inference use the same head module."""
+    try:
+        from .latent_feedback import load_auxiliary as load_shared
+    except ImportError:  # Direct script execution.
+        from latent_feedback import load_auxiliary as load_shared
+    return load_shared(auxiliary, width=width, device=device)
 
 
 def tensor_sha(tensor: Any) -> str:
@@ -267,6 +281,10 @@ def run_shared_case(base: Any, tokenizer: Any, auxiliary: Any, prepared: dict,
     """One prefill, one cache, simultaneous heads, actual fused feedback."""
     import torch
     from safetensors.torch import save_file
+    try:
+        from .latent_feedback import project_shared_hidden
+    except ImportError:
+        from latent_feedback import project_shared_hidden
 
     folder = prepared["output"]
     if (folder / "loop-complete.json").exists():
@@ -297,9 +315,7 @@ def run_shared_case(base: Any, tokenizer: Any, auxiliary: Any, prepared: dict,
         write_json(folder / "prefill.json", prefill_record)
         for step in range(prepared["manifest"]["latent_steps"]):
             before = hidden
-            heads, feature_cat, fused = auxiliary(before.float())
-            injected = fused * reference_rms / fused.square().mean(-1, keepdim=True).sqrt().clamp_min(1e-8)
-            injected = (injected * auxiliary.gain).to(realized.dtype).unsqueeze(1)
+            heads, feature_cat, fused, injected = project_shared_hidden(auxiliary, before, reference_rms, realized.dtype)
             position = int(realized.shape[1])
             realized = torch.cat((realized, injected), dim=1)
             mask = torch.ones(realized.shape[:2], device=device, dtype=torch.long)
@@ -334,7 +350,8 @@ def run_shared_case(base: Any, tokenizer: Any, auxiliary: Any, prepared: dict,
             "elapsed_seconds": elapsed, "peak_cuda_allocated_bytes": torch.cuda.max_memory_allocated(device),
             "peak_cuda_reserved_bytes": torch.cuda.max_memory_reserved(device),
             "same_cache_object_throughout": all(item["cache"]["object_id"] == id(cache) for item in steps),
-            "new_architecture_training_performed": False, "training_status": "old_auxiliary_initialization_only",
+            "inference_performs_training": False,
+            "auxiliary_provenance": prepared["manifest"]["auxiliary_provenance"],
             "full_prefix_replay_enabled": verify_replay})
     return SharedCaseState(cache, realized, mask, hidden, prefix_tokens,
         prepared["boundary_ids"], folder, prepared["manifest"], verify_replay)
@@ -492,6 +509,7 @@ def main() -> None:
     parser.add_argument("--execute", action="store_true", help="Load weights and run inference; default is tokenizer-only preparation")
     parser.add_argument("--verify-replay", action="store_true")
     parser.add_argument("--decode", action="store_true", help="Also run native HF answer generation; no external presence helper")
+    parser.add_argument("--inspect-vectors", action="store_true", help="Inspect saved heads and local last-step fusion interventions; no extra generated answers")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     tokenizer, prepared = prepare_cases(model=args.model, auxiliary=args.auxiliary,
@@ -505,6 +523,12 @@ def main() -> None:
         device=str(base.get_input_embeddings().weight.device))
     for case in prepared:
         state = run_shared_case(base, tokenizer, auxiliary, case, verify_replay=args.verify_replay)
+        if args.inspect_vectors:
+            try:
+                from .inspection import inspect_vectors
+            except ImportError:
+                from inspection import inspect_vectors
+            inspect_vectors(base, auxiliary, tokenizer, state)
         if args.decode:
             decode_answer(base, tokenizer, state, seed=args.seed)
         del state
