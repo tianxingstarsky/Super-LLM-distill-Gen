@@ -1,14 +1,41 @@
 # Five latent heads with one shared cache
 
-This is an isolated research experiment. Five continuous streams and independent
-endings can now be observed, but complementary reasoning directions and useful
-learned fusion have **not** been established. Two full-text variants each
-completed an independent one-epoch run and failed readable free generation.
-Successful optimization or EOS is not quality approval.
+This is an isolated research experiment. The primary goal is continuous hidden
+vectors with text used only as an observation window. Complementary reasoning
+directions and useful learned fusion have **not** been established. Two full-text
+variants each completed an independent one-epoch run and failed readable free
+generation. Successful optimization or EOS is not quality approval.
 
-## Current readable observation path
+## Primary experiment: hidden feedback, text observation only
 
-The working path uses probability-weighted input embeddings from
+The default runner and observer retain this information path:
+
+```text
+complete conversation -> one prefill -> shared h
+    -> five continuous residual head vectors
+    -> masked feature CAT -> dense fusion -> RMS alignment
+    -> one continuous input position -> the SAME backbone and cache
+
+head vectors -> observation map / LM head -> visible text and ending detection
+```
+
+The vocabulary distribution and displayed token embeddings do not feed the
+primary feedback path. Text is an observation, not a replacement for the hidden
+vectors. An ending signal may deactivate a route; its later CAT slots are zero.
+Keep `--soft-embeddings` absent for this experiment. The current direct-hidden
+checkpoints still produce poor free text; readable text and direction diversity
+remain unresolved. A readable result from a different feedback space cannot be
+reported as completion of this goal.
+
+The legacy `runner.py` loop defaults to three positions. Full-attention
+keys/values and GDN convolution/recurrent states remain in one Transformers
+`DynamicCache`. There are no private branch caches. Ordinary causal attention
+can still read the conversation prefix. This does not imply lossless,
+unlimited memory. The variable-length observer is documented below.
+
+## Readable soft-input comparison
+
+This separate, opt-in comparison uses probability-weighted input embeddings from
 [Soft Thinking](https://github.com/UCSB-AI/Soft-Thinking), pinned at
 `b97407c60d5e971da4a4fe76f405d6e236d0ddfa`. The local adapter uses native HF
 temperature/top-k/top-p/min-p operators and PyTorch embedding contraction.
@@ -23,7 +50,9 @@ Each route predicts a probability distribution. Its continuous input vector is
 a weighted mixture of retained pretrained token embeddings. The top token is
 displayed for observation; it is not re-embedded as the feedback input. The five
 resulting vectors enter feature CAT and a dense fusion matrix before updating
-the single cache. This differs from reusing last-layer hidden states directly.
+the single cache. The vocabulary distribution therefore influences feedback.
+Although continuous, this is a different mechanism from the primary hidden
+feedback experiment; it is not a text-only observation of that experiment.
 
 The initializer loads no backbone and performs no training. It creates small
 separate residual heads and a dense trainable CAT matrix initialized with five
@@ -43,21 +72,6 @@ about soft-thinking quality on small models.
 If a soft concept already consumed `</think>`, only its whitespace separator
 is appended. Unfinished routes do not silently pass to answer generation.
 The real handoff and complete raw answer are archived.
-
-`runner.py` checks a concrete information path:
-
-```text
-complete conversation -> one prefill -> shared h
-    -> five residual direction heads, all reading that same h
-    -> CAT (5 * hidden width) -> learned dense projection
-    -> RMS alignment to input embeddings -> one new continuous position
-    -> the SAME backbone and cache -> next shared h
-```
-
-The loop defaults to three positions. Full-attention keys/values and GDN
-convolution/recurrent states remain in one Transformers `DynamicCache`. There
-are no private branch caches. Ordinary causal attention can still read the
-conversation prefix. This does not imply lossless, unlimited memory.
 
 ## Run
 
