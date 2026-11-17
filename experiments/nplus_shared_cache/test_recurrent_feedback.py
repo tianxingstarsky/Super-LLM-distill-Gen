@@ -1,4 +1,5 @@
 """CPU protocol checks on a real tiny HF Qwen backbone; no quality/training claim."""
+import sys
 import unittest
 
 import torch
@@ -11,6 +12,60 @@ from experiments.nplus_shared_cache.recurrent_heads import RecurrentDirectionHea
 
 
 class RecurrentFeedbackProtocolTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows sharing-lock protocol")
+    def test_replace_waits_for_native_windows_read_handle_without_delete_sharing(self):
+        import ctypes
+        from ctypes import wintypes
+        import json
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from threading import Timer
+        from experiments.nplus_shared_cache.runner import replace_with_retry
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel32.CreateFileW
+        create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        create.restype = wintypes.HANDLE
+        close = kernel32.CloseHandle
+        close.argtypes, close.restype = [wintypes.HANDLE], wintypes.BOOL
+        with TemporaryDirectory(prefix="nplus-native-sharing-") as directory:
+            target = Path(directory) / "progress.json"
+            source = target.with_suffix(".json.tmp")
+            target.write_text('{"stage":"old"}', encoding="utf-8")
+            expected = {"stage": "new", "round": 8, "label": "共享缓存"}
+            encoded = json.dumps(expected, ensure_ascii=False)
+            source.write_text(encoded, encoding="utf-8")
+            # GENERIC_READ + FILE_SHARE_READ, intentionally no FILE_SHARE_DELETE.
+            handle = create(str(target), 0x80000000, 1, None, 3, 0x80, None)
+            if handle == ctypes.c_void_p(-1).value:
+                raise ctypes.WinError(ctypes.get_last_error())
+            closed, errors = [], []
+
+            def release():
+                if not close(handle):
+                    errors.append(ctypes.get_last_error())
+                closed.append(True)
+
+            timer = Timer(.05, release)
+            try:
+                # Establish that the real OS handle actually prevents replace.
+                with self.assertRaises(PermissionError) as locked:
+                    source.replace(target)
+                self.assertIn(locked.exception.winerror, (5, 32, 33))
+                timer.start()
+                replace_with_retry(source, target)
+                self.assertEqual(json.loads(target.read_text("utf-8")), expected)
+                self.assertEqual(target.read_text("utf-8"), encoded)
+                self.assertFalse(source.exists())
+            finally:
+                if timer.ident is not None:
+                    timer.join()
+                else:
+                    release()
+            self.assertTrue(closed, "The native handle must have been released")
+            self.assertFalse(errors, errors)
+
     def test_real_qwen_four_steps_match_block_values_and_input_gradients(self):
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(17)

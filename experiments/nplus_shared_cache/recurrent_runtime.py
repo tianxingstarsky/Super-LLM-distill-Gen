@@ -72,6 +72,26 @@ def _goals(base, tokenizer):
     return torch.stack(states)
 
 
+def known_prefix_hidden(base, prefixes):
+    """Encode original questions/direction instructions, not teacher outputs.
+
+    No branch cache survives these temporary, frozen, uncached forwards.
+    """
+    import torch
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+    device = base.get_input_embeddings().weight.device
+    vectors = []
+    with torch.no_grad(), sdpa_kernel(SDPBackend.MATH):
+        for ids in prefixes:
+            inputs = base.get_input_embeddings()(torch.tensor([ids], device=device))
+            out = base.model.language_model(inputs_embeds=inputs,
+                attention_mask=torch.ones((1, len(ids)), dtype=torch.long, device=device),
+                position_ids=torch.arange(len(ids), device=device)[None], use_cache=False)
+            vectors.append(out.last_hidden_state[0, -1].float().clone())
+            del out
+    return torch.stack(vectors)[None]
+
+
 def _inject(auxiliary, vectors, active, reference_rms, dtype):
     import torch
     masked = torch.where(active[None, :, None], vectors, torch.zeros_like(vectors))
@@ -149,7 +169,7 @@ def _save(auxiliary, folder, manifest, *, step, completed_records):
     save_file({k: v.detach().cpu().contiguous().clone() for k, v in auxiliary.state_dict().items()},
         str(temporary), metadata={"format": "pt", "architecture": "recurrent_hidden_five_route/v4",
             "identity": manifest["identity"]})
-    temporary.replace(folder / "auxiliary.safetensors")
+    runner.replace_with_retry(temporary, folder / "auxiliary.safetensors")
     runner.write_json(folder / "auxiliary-config.json", {"identity": manifest["identity"],
         "architecture": "recurrent_hidden_five_route/v4",
         **manifest["binding"], "global_steps": step, "completed_records": completed_records,
@@ -233,6 +253,8 @@ def train(args, tokenizer, manifest, records, *, validate_only=False):
             before_prefix = runner.cache_snapshot(cache, len(record["prefix_ids"]))
             reference = prefix.float().square().mean().sqrt()
             previous, memory = auxiliary.initialize(shared.float())
+            initial_residual = previous - shared.float()[:, None]
+            previous = known_prefix_hidden(base, record["teacher_prefix_ids"]) + initial_residual
             count = len(tensors["labels"])
             for begin in range(0, count, 2 * args.block_size):
                 if (output / "STOP").exists():

@@ -40,6 +40,10 @@ PyTorch GRU cell. Each route retains its previous width-D vector and a 512-wide
 memory; this is not five backbone caches. Known direction descriptions are
 encoded by the unchanged local Qwen without answers. They condition each route
 along with its learned route code and the last committed shared state.
+The current initialization also recomputes each route's last hidden state from
+the original question/dialogue plus its direction instruction, then adds the
+learned initialization residual. These frozen, uncached forwards retain no
+branch cache. They do not read a cached teacher hidden state or any path token.
 
 ```text
 own previous vector + own GRU memory + known direction + shared h
@@ -121,6 +125,14 @@ uncached forwards. It never reads teacher paths or observed text. The ordinary
 shared cache, recurrent weights and stopping rules stay the same. This replaces
 the learned initialization with one not used during optimization; any result
 must be labelled an initialization intervention, not learned specialization.
+
+Current checkpoints declare
+`route_initialization=native_question_and_direction_hidden_plus_learned_residual`;
+their observer automatically follows the trained initialization instead. The
+earlier v4d/v4e checkpoints used only the common shared state plus a learned
+goal residual. Switching the initialization on unseen remaining training
+records is recorded as a curriculum change, not a uniform-protocol full pass.
+There is no replay of previously used records to train this change.
 
 The three scoped recurrent checks use a real tiny HF hybrid backbone for cached
 block/single-step values and gradients, route memory isolation and EOS padding:

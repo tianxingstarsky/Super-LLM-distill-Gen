@@ -52,7 +52,8 @@ def contextual_initialization(base, tokenizer, prepared):
 
 
 def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
-            max_rounds=32768, decode_answer=True, contextual_init=False):
+            max_rounds=32768, decode_answer=True, contextual_init=False,
+            trained_contextual_init=False):
     import torch
     from safetensors.torch import save_file
     from experiments.nplus_shared_cache.parallel_observer import route_transition
@@ -60,10 +61,12 @@ def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
     folder = prepared["output"]
     if (folder / "observer-started.json").exists():
         raise ValueError("observation_already_started_use_new_output")
+    initialization = ("native_question_and_direction_hidden_plus_learned_residual" if trained_contextual_init
+        else "known_context_direction_intervention" if contextual_init else "learned_initialization")
     runner.write_json(folder / "observer-started.json", {"identity": prepared["manifest"]["identity"],
         "block_size": block_size, "max_rounds": max_rounds,
-        "initialization": "known_context_direction_intervention" if contextual_init else "learned_initialization",
-        "contextual_initialization_was_training_protocol": False,
+        "initialization": initialization,
+        "contextual_initialization_was_training_protocol": trained_contextual_init,
         "feedback": "pure_continuous_hidden_vectors", "text_feedback": False,
         "source_code_sha256": {name: runner.file_sha(Path(__file__).with_name(name)) for name in
             ("recurrent_observer.py", "recurrent_runtime.py", "recurrent_heads.py")}})
@@ -88,7 +91,7 @@ def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
         value = {"identity": prepared["manifest"]["identity"], "stage": stage,
             "rounds": rounds, "routes": visible, "all_routes_ended": all(r["ended"] for r in routes),
             "elapsed_seconds": time.perf_counter() - started, "block_size": block_size,
-            "initialization": "known_context_direction_intervention" if contextual_init else "learned_initialization",
+            "initialization": initialization,
             "text_feedback": False, "paid_api_calls": 0, **extra}
         runner.write_json(folder / "parallel-streams.json", value)
         return value
@@ -99,7 +102,10 @@ def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
         prefix_length = len(prepared["prefix_ids"])
         runner.write_json(folder / "parallel-prefill.json", runner.cache_snapshot(cache, prefix_length))
         previous, memory = auxiliary.initialize(shared.float())
-        if contextual_init:
+        if trained_contextual_init:
+            residual = previous - shared.float()[:, None]
+            previous = contextual_initialization(base, tokenizer, prepared) + residual
+        elif contextual_init:
             previous = contextual_initialization(base, tokenizer, prepared)
         alive = torch.ones(5, dtype=torch.bool, device=device)
         capacity = getattr(base.config, "text_config", base.config).max_position_embeddings
@@ -206,7 +212,9 @@ def main():
     for case in cases:
         r = observe(base, tokenizer, auxiliary, case, block_size=config["block_size"],
             ending_id=config["ending_token_id"], max_rounds=args.max_rounds,
-            decode_answer=not args.without_answer, contextual_init=args.contextual_initialization)
+            decode_answer=not args.without_answer, contextual_init=args.contextual_initialization,
+            trained_contextual_init=config.get("route_initialization") ==
+                "native_question_and_direction_hidden_plus_learned_residual")
         print(json.dumps({"case": case["case_id"], "rounds": r["rounds"], "stop": r["stop_cause"]}), flush=True)
 
 

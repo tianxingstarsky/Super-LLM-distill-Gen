@@ -108,24 +108,44 @@ def _continuation(checkpoint: Path, failure_path: Path, *, model_binding: dict,
                             ("cell.weight_ih", [3 * memory_width, memory_width])):
             if stored.get_slice(name).get_shape() != shape:
                 raise ValueError("continuation_checkpoint_shape_changed:" + name)
-    last, count, previous_step = None, 0, None
-    for row in training.jsonl_records(history_path):
-        if previous_step is not None and row["global_step"] != previous_step + 1:
-            raise ValueError("continuation_parent_loss_history_not_ordered")
-        previous_step, last, count = row["global_step"], row, count + 1
-    if (last is None or any(last.get(k) != progress.get(k) for k in
-            ("record_index", "record_key", "begin", "end", "global_step"))
-            or progress["optimizer_steps"] != last["global_step"] + 1
-            or failure["optimizer_steps"] != progress["optimizer_steps"]
-            or failure["completed_records"] != progress["completed_records"]):
+    last, previous, last_bytes, count = None, None, None, 0
+    with history_path.open("rb") as history:
+        for raw_line in history:
+            if not raw_line.strip():
+                continue
+            row = json.loads(raw_line)
+            if last is not None and row["global_step"] != last["global_step"] + 1:
+                raise ValueError("continuation_parent_loss_history_not_ordered")
+            previous, last, last_bytes, count = last, row, raw_line, count + 1
+    total_steps = failure["optimizer_steps"]
+    fields = ("record_index", "record_key", "begin", "end", "global_step")
+    progress_matches = lambda row: row is not None and all(row.get(k) == progress.get(k) for k in fields)
+    progress_current = progress_matches(last) and progress["optimizer_steps"] == total_steps
+    progress_lagged = (progress_matches(previous) and progress["optimizer_steps"] == total_steps - 1)
+    if last is None or last["global_step"] + 1 != total_steps or not (progress_current or progress_lagged):
         raise ValueError("continuation_failure_progress_or_loss_history_disagree")
-    seen_index, saved_records = progress["record_index"], config["completed_records"]
+    parent_continuation = parent_binding.get("continuation") or {}
+    prior_start = parent_continuation.get("start_record", 0)
+    prior_seen = parent_continuation.get("parent_seen_fraction_of_epoch", 0.)
+    seen_index, saved_records = last["record_index"], config["completed_records"]
     start_record = seen_index + 1
-    saved_steps, total_steps = config["global_steps"], failure["optimizer_steps"]
-    if (not 0 <= saved_records <= progress["completed_records"] <= seen_index < len(records)
+    saved_steps = config["global_steps"]
+    if (not 0 <= saved_records <= seen_index < len(records)
+            or not 0 <= prior_start <= seen_index
             or start_record >= len(records) or not 0 <= saved_steps <= total_steps
-            or records[seen_index]["record_key"] != progress["record_key"]):
+            or records[seen_index]["record_key"] != last["record_key"]
+            or failure["completed_records"] != seen_index - prior_start
+            or progress["completed_records"] != progress["record_index"] - prior_start):
         raise ValueError("continuation_seen_record_or_checkpoint_counters_invalid")
+    rounds = records[seen_index]["rounds"]
+    if not 0 <= last["begin"] < last["end"] <= rounds:
+        raise ValueError("continuation_last_successful_block_outside_original_record")
+    seen_fraction = prior_seen + (seen_index - prior_start + last["end"] / rounds) / len(records)
+    progress_fraction = prior_seen + (progress["record_index"] - prior_start
+        + progress["end"] / records[progress["record_index"]]["rounds"]) / len(records)
+    if (abs(progress_fraction - progress["fraction_of_one_epoch"]) > 1e-12
+            or seen_fraction + (len(records) - start_record) / len(records) > 1.000001):
+        raise ValueError("continuation_cumulative_seen_fraction_exceeds_original_one_epoch")
     sources = {"auxiliary.safetensors": checkpoint, "auxiliary-config.json": config_path,
         "failure.json": failure_path, "progress.json": progress_path,
         "loss-history.jsonl": history_path, "manifest.json": parent_manifest_path}
@@ -137,7 +157,12 @@ def _continuation(checkpoint: Path, failure_path: Path, *, model_binding: dict,
         "parent_checkpoint_completed_records": saved_records, "checkpoint_global_steps": saved_steps,
         "parent_completed_records": failure["completed_records"], "parent_optimizer_steps": total_steps,
         "parent_last_seen_record_index": seen_index, "parent_loss_history_rows": count,
-        "parent_seen_fraction_of_epoch": progress["fraction_of_one_epoch"],
+        "parent_start_record": prior_start, "parent_seen_fraction_of_epoch": seen_fraction,
+        "progress_lagged_one_successful_update": bool(progress_lagged),
+        "last_successful_loss_record": last,
+        "last_successful_loss_record_sha256": training.digest(last),
+        "last_successful_loss_line_sha256": hashlib.sha256(last_bytes).hexdigest(),
+        "last_loss_snapshot": "manifest.binding.continuation.last_successful_loss_record",
         "start_record": start_record, "remaining_records": len(records) - start_record,
         "skipped_seen_record_indices": list(range(start_record)),
         "discarded_uncheckpointed_updates": total_steps - saved_steps,
@@ -225,6 +250,7 @@ def prepare_training(model: Path, prepared: Path, initial_auxiliary: Path, outpu
         "hidden_alignment_weight": alignment_weight, "goal_descriptions": GOAL_DESCRIPTIONS,
         "source_code_sha256": code, "feedback": "blockwise_shared_continuous_hidden",
         "route_inputs": "own_previous_q_private_recurrent_memory_current_shared_h_known_goal_hidden",
+        "route_initialization": "native_question_and_direction_hidden_plus_learned_residual",
         "gold_usage": "labels_alignment_and_route_lifetime_only_never_model_or_recurrent_inputs",
         "observation_feedback": False, "discrete_token_feedback": False,
         "initial_fusion_only_warm_start": continuation is None, "new_recurrent_parameters": continuation is None,

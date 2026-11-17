@@ -19,11 +19,24 @@ PURPOSES = ("forward", "backward", "alternatives", "constraints", "counterexampl
 BOUNDARY = "\n</think>\n\n"
 
 
+def replace_with_retry(source: Path, target: Path) -> None:
+    """Keep atomic writes during a brief Windows reader/virus-scanner lock."""
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            source.replace(target)
+            return
+        except PermissionError as error:
+            if getattr(error, "winerror", None) not in {5, 32, 33} or time.monotonic() >= deadline:
+                raise
+            time.sleep(.02)
+
+
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    replace_with_retry(temporary, path)
 
 
 def file_sha(path: Path) -> str:
