@@ -53,7 +53,7 @@ def contextual_initialization(base, tokenizer, prepared):
 
 def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
             max_rounds=32768, decode_answer=True, contextual_init=False,
-            trained_contextual_init=False):
+            trained_contextual_init=False, diagnostic_answer_on_partial=False):
     import torch
     from safetensors.torch import save_file
     from experiments.nplus_shared_cache.parallel_observer import route_transition
@@ -68,6 +68,7 @@ def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
         "initialization": initialization,
         "contextual_initialization_was_training_protocol": trained_contextual_init,
         "feedback": "pure_continuous_hidden_vectors", "text_feedback": False,
+        "diagnostic_answer_on_partial": diagnostic_answer_on_partial,
         "source_code_sha256": {name: runner.file_sha(Path(__file__).with_name(name)) for name in
             ("recurrent_observer.py", "recurrent_runtime.py", "recurrent_heads.py")}})
     device = base.get_input_embeddings().weight.device
@@ -169,7 +170,8 @@ def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
             tensor_sampling="first_and_each_route_ending_transition",
             direction_semantics_not_established_by_vector_distance=True)
         save_file(sample_tensors, str(folder / "parallel-tensor-samples.safetensors"))
-        if decode_answer and not partial:
+        if decode_answer and (not partial or diagnostic_answer_on_partial):
+            from torch.nn.attention import SDPBackend, sdpa_kernel
             # Observing an ending through a hidden-state probe has not consumed
             # its token embedding. Close thought mode explicitly for the answer.
             state = runner.SharedCaseState(cache=cache, realized_embeddings=realized,
@@ -177,7 +179,10 @@ def observe(base, tokenizer, auxiliary, prepared, *, block_size, ending_id,
                 last_hidden=shared, prefix_tokens=prefix_length,
                 boundary_ids=prepared["boundary_ids"], output=folder,
                 manifest=prepared["manifest"], verify_replay=False)
-            receipt["final_answer"] = runner.decode_answer(base, tokenizer, state)
+            with sdpa_kernel(SDPBackend.MATH):
+                receipt["final_answer"] = runner.decode_answer(base, tokenizer, state)
+            receipt["answer_role"] = ("diagnostic_after_unfinished_routes_not_completed_workflow"
+                if partial else "after_all_natural_route_endings")
         elif decode_answer:
             receipt["final_answer_status"] = "skipped_unfinished_routes"
         runner.write_json(folder / "observer-receipt.json", receipt)
@@ -191,6 +196,8 @@ def main():
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--max-rounds", type=int, default=32768)
     parser.add_argument("--without-answer", action="store_true")
+    parser.add_argument("--diagnostic-answer-on-partial", action="store_true",
+        help="Explicit diagnostic answer from unfinished vectors; never marks routes complete")
     parser.add_argument("--contextual-initialization", action="store_true",
         help="Explicit inference-only initial-vector intervention; not the trained initialization")
     args = parser.parse_args()
@@ -213,6 +220,7 @@ def main():
         r = observe(base, tokenizer, auxiliary, case, block_size=config["block_size"],
             ending_id=config["ending_token_id"], max_rounds=args.max_rounds,
             decode_answer=not args.without_answer, contextual_init=args.contextual_initialization,
+            diagnostic_answer_on_partial=args.diagnostic_answer_on_partial,
             trained_contextual_init=config.get("route_initialization") ==
                 "native_question_and_direction_hidden_plus_learned_residual")
         print(json.dumps({"case": case["case_id"], "rounds": r["rounds"], "stop": r["stop_cause"]}), flush=True)

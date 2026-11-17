@@ -134,12 +134,49 @@ goal residual. Switching the initialization on unseen remaining training
 records is recorded as a curriculum change, not a uniform-protocol full pass.
 There is no replay of previously used records to train this change.
 
-The three scoped recurrent checks use a real tiny HF hybrid backbone for cached
-block/single-step values and gradients, route memory isolation and EOS padding:
+The scoped recurrent checks use a real tiny HF hybrid backbone for cached
+block/single-step values and gradients, route memory isolation and EOS padding.
+A Windows check also holds a real file handle while exercising bounded atomic
+replacement retries:
 
 ```powershell
 python -m unittest experiments.nplus_shared_cache.test_recurrent_feedback
 ```
+
+### Actual recurrent result and unresolved quality
+
+The first recurrent campaign consumed less than one pass: 0.993115 record-epoch
+equivalents, including work before two interruptions. Already-seen records were
+not replayed. The final continuation completed 91 unseen records, taking about
+18.6 minutes with a CUDA allocated peak of 10.46 GiB. Earlier interrupted work
+and zero-update diagnostics are separate. Rollbacks lost 119 and then 5 updates;
+this is not a fully retained, uniform-protocol pass over all 128 records.
+
+Two real observations reached autonomous endings on all routes. The training
+reconstruction ended at rounds 329/471/773/237/945; the known conversation probe
+ended at 90/111/83/85/87. Recorded inactive CAT slots were zero and each formal
+answer used the same live cache. The final arithmetic value and conversation
+facts were correct. These are mechanism checks, not an accuracy benchmark.
+
+**Readable complementary reasoning failed.** The reconstruction emitted space
+token 220 in 2,726 of 2,755 observed tokens (98.95%), versus 4,601 of 124,078
+teacher target tokens (3.71%). Its five windows contain almost only whitespace
+and a few repeated words. The conversation windows also collapsed. Independent
+endings and different vectors do not turn these into five meaningful directions.
+
+A separate, frozen post-hoc decoder probe replayed the full hidden trajectory.
+Its six archived tensor checkpoints matched exactly. Four single-route views
+produced generic solution text, one returned only EOS, and a same-length zero-CAT
+control also answered 105. These texts are not the original observed CoT, and
+they do not establish faithful decoding or direction specialization. Nor does
+that control prove that the vectors contain no information. Raw failures remain
+preserved. No further optimization or paid model API calls were used for it.
+
+`--diagnostic-answer-on-partial` is an explicit observer-only option for a future
+unfinished run. It preserves all unfinished route flags and labels the answer
+diagnostic, never a completed workflow. Normal observation requires all route
+endings before the answer. Both actual observations above ended naturally;
+neither needed the partial-run option.
 
 ## Readable soft-input comparison
 
