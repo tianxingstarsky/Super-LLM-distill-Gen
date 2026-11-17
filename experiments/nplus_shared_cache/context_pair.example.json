@@ -1,0 +1,78 @@
+{
+  "schema": "shared-cache-context-pair/v1",
+  "scope": "Two fixed multi-turn context probes; not a reasoning benchmark",
+  "cases": [
+    {
+      "case_id": "context-a",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是认真处理对话的助手。依据对话中最新确认的事实回答；对未说明的信息坦诚说明未知，不凭空补充。"
+        },
+        {
+          "role": "user",
+          "content": "我把岚桥站这单记一下：代号Q7M4，周二取件，交接人黎舟。"
+        },
+        {
+          "role": "assistant",
+          "content": "我记下了代号、取件日期和交接人。"
+        },
+        {
+          "role": "user",
+          "content": "日期改成周四，其他不变。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，取件日期改为周四。"
+        },
+        {
+          "role": "user",
+          "content": "告诉我代号、哪天去、找谁；费用是多少？"
+        }
+      ],
+      "expected_observations": {
+        "code": "Q7M4",
+        "current_day": "周四",
+        "contact": "黎舟",
+        "fee": "not_specified",
+        "superseded_day": "周二"
+      }
+    },
+    {
+      "case_id": "context-b",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是认真处理对话的助手。依据对话中最新确认的事实回答；对未说明的信息坦诚说明未知，不凭空补充。"
+        },
+        {
+          "role": "user",
+          "content": "我把岚桥站这单记一下：代号Q8M5，周二取件，交接人黎舟。"
+        },
+        {
+          "role": "assistant",
+          "content": "我记下了代号、取件日期和交接人。"
+        },
+        {
+          "role": "user",
+          "content": "日期改成周四，其他不变。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，取件日期改为周四。"
+        },
+        {
+          "role": "user",
+          "content": "告诉我代号、哪天去、找谁；费用是多少？"
+        }
+      ],
+      "expected_observations": {
+        "code": "Q8M5",
+        "current_day": "周四",
+        "contact": "黎舟",
+        "fee": "not_specified",
+        "superseded_day": "周二"
+      }
+    }
+  ]
+}
