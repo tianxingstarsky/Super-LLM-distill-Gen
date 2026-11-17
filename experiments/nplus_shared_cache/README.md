@@ -33,6 +33,102 @@ keys/values and GDN convolution/recurrent states remain in one Transformers
 can still read the conversation prefix. This does not imply lossless,
 unlimited memory. The variable-length observer is documented below.
 
+## Recurrent pure-hidden experiment
+
+The v4 research variant adds private continuous route state and a shared native
+PyTorch GRU cell. Each route retains its previous width-D vector and a 512-wide
+memory; this is not five backbone caches. Known direction descriptions are
+encoded by the unchanged local Qwen without answers. They condition each route
+along with its learned route code and the last committed shared state.
+
+```text
+own previous vector + own GRU memory + known direction + shared h
+    -> five new continuous vectors -> masked CAT -> fusion/RMS
+    -> commit 8 positions into one Qwen cache -> next shared h
+
+predicted vectors -> frozen native LM head -> observation / ending signal
+```
+
+The last committed shared state stays constant within a block of eight route
+updates. Two committed blocks retain one gradient graph before backward and
+history detachment. This gives the second block's token loss a real path through
+Qwen to the preceding fusion. It changes the global feedback cadence from the
+older per-position experiment; it is not claimed equivalent to that experiment.
+The cache retains all history values after gradient truncation.
+
+```powershell
+python -m experiments.nplus_shared_cache.recurrent_runtime --action prepare --model path/to/local-model --prepared path/to/pre-target-teacher-cache --initial-auxiliary path/to/v2/auxiliary.safetensors --output path/to/new-recurrent-run
+python -m experiments.nplus_shared_cache.recurrent_runtime --action capacity --model path/to/local-model --prepared path/to/pre-target-teacher-cache --initial-auxiliary path/to/v2/auxiliary.safetensors --output path/to/new-recurrent-run
+python -m experiments.nplus_shared_cache.recurrent_runtime --action train --model path/to/local-model --prepared path/to/pre-target-teacher-cache --initial-auxiliary path/to/v2/auxiliary.safetensors --output path/to/new-recurrent-run
+python -m experiments.nplus_shared_cache.recurrent_observer --model path/to/local-model --checkpoint path/to/new-recurrent-run/training --cases experiments/nplus_shared_cache/context_pair.example.json --output path/to/new-observation --execute
+```
+
+Preparation authenticates the complete existing pre-target cache, source
+records, tokenizer, base shards and warm-start fusion. Training makes one
+ordered pass, at most one epoch. It freezes the pretrained backbone and native
+LM head; only the new recurrence/initialization and existing fusion/gain train.
+It warms only fusion/gain from the v2 auxiliary, not failed text-decoder weights.
+Teacher vectors never become recurrent or backbone inputs. They provide native
+hidden-state alignment targets, text labels and training lifetime masks.
+
+Each training unit uses its actual predicted route vectors and live cache. The
+full final answer and EOS remain supervised through that cache. Native PyTorch
+`save_on_cpu` offloads the long answer's saved autograd tensors without deleting
+answer positions. The native SDPA math backend is selected for training and
+observation after a real CUDA fused-attention mask-stride backward failure.
+No Qwen attention or GDN equations are reimplemented. The small cache subclass
+only protects saved convolution buffers and publishes recurrent states without
+in-place modification of earlier graphs. This adapter currently requires the
+reviewed Transformers 5.23 Torch fallback; optimized kernels are not verified.
+
+`capacity` performs zero optimizer steps on the longest answer's first two
+predicted blocks plus its complete answer. It verifies resource capacity and
+gradient paths, not a complete trajectory or answer quality. `validate` does
+the corresponding check on the first record. Training histories, source
+snapshots, actual parameter changes and one-epoch completion are archived.
+Repeated execution of a started run is rejected, including after failure;
+there is no silent restart or second epoch.
+
+An explicit recovery can select a completed auxiliary checkpoint and the
+interrupted run's failure receipt with `--continue-from path/to/checkpoint`
+and `--continuation-failure path/to/training/failure.json`, using a new output.
+The input contract authenticates the parent sources, progress and checkpoint.
+It skips every already-seen record, including the remaining part of an
+interrupted record, to stay below one pass. This is not exact resume: optimizer
+state resets and updates newer than the checkpoint are lost and reported.
+Latest auxiliary weights are now saved after each completed record. Partial
+records and lost updates cannot be counted as a fully retained training pass.
+
+During inference, every route ends on its own observed EOS or thought-end.
+Its ending-round vector is committed; subsequent CAT slots are exactly zero.
+No all-padding round is added. Text IDs and vocabulary distributions never
+enter recurrent or backbone feedback. The formal answer starts from the same
+cache only once all routes have ended. This pure-hidden representation has
+not consumed the displayed ending's token embedding, so the native thought
+boundary is explicitly inserted before answer generation.
+
+Training uses gold lifetime masks whereas free observation uses autonomous
+endings. Online truncated gradients also leave cache values created by earlier
+parameter versions. These are explicit limitations, not full-trajectory BPTT
+or a fixed-weight rollout during optimization. Distinct vectors or route names
+do not establish meaningful direction specialization. Readability, natural
+completion and actual direction content require the saved free texts.
+
+`recurrent_observer --contextual-initialization` is an optional inference-only
+intervention. It recomputes five initial hidden vectors from the complete
+original messages plus each known direction, then discards the temporary
+uncached forwards. It never reads teacher paths or observed text. The ordinary
+shared cache, recurrent weights and stopping rules stay the same. This replaces
+the learned initialization with one not used during optimization; any result
+must be labelled an initialization intervention, not learned specialization.
+
+The three scoped recurrent checks use a real tiny HF hybrid backbone for cached
+block/single-step values and gradients, route memory isolation and EOS padding:
+
+```powershell
+python -m unittest experiments.nplus_shared_cache.test_recurrent_feedback
+```
+
 ## Readable soft-input comparison
 
 This separate, opt-in comparison uses probability-weighted input embeddings from
