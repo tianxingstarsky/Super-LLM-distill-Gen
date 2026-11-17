@@ -8,7 +8,7 @@ PURPOSES = ("forward", "backward", "alternatives", "constraints", "counterexampl
 class SharedDirectionHeads(torch.nn.Module):
     """All heads read the same h; checkpoint names retain the original contract."""
 
-    def __init__(self, width: int, rank: int):
+    def __init__(self, width: int, rank: int, with_observation: bool = False):
         super().__init__()
         self.width, self.rank = width, rank
         self.adapters = torch.nn.ModuleList([torch.nn.Sequential(
@@ -17,6 +17,11 @@ class SharedDirectionHeads(torch.nn.Module):
             torch.nn.Linear(rank, width, bias=False)) for _ in PURPOSES])
         self.fusion = torch.nn.Linear(5 * width, width)
         self.gain = torch.nn.Parameter(torch.tensor(1.0))
+        if with_observation:
+            # A post-token hidden state needs a current-token observation map;
+            # the original LM head was trained to predict the following token.
+            self.observation = torch.nn.Linear(width, width, bias=False)
+            torch.nn.init.eye_(self.observation.weight)
 
     def forward(self, hidden):
         heads = torch.stack([hidden + adapter(hidden) for adapter in self.adapters], dim=1)
@@ -25,13 +30,22 @@ class SharedDirectionHeads(torch.nn.Module):
 
     def parameter_groups(self):
         return {**{name: list(adapter.parameters()) for name, adapter in zip(PURPOSES, self.adapters)},
-            "fusion": list(self.fusion.parameters()), "gain": [self.gain]}
+            "fusion": list(self.fusion.parameters()), "gain": [self.gain],
+            **({"observation": list(self.observation.parameters())} if hasattr(self, "observation") else {})}
 
 
-def load_auxiliary(path, *, width: int, device: str, trainable: bool = False):
+def load_auxiliary(path, *, width: int, device: str, trainable: bool = False,
+                   with_observation: bool = False):
     state = load_file(str(path), device="cpu")
-    module = SharedDirectionHeads(width, state["adapters.0.1.weight"].shape[0])
-    module.load_state_dict(state, strict=True)
+    saved_observation = "observation.weight" in state
+    module = SharedDirectionHeads(width, state["adapters.0.1.weight"].shape[0],
+        with_observation=with_observation or saved_observation)
+    if with_observation and not saved_observation:
+        missing, unexpected = module.load_state_dict(state, strict=False)
+        if set(missing) != {"observation.weight"} or unexpected:
+            raise ValueError("warm_start_may_initialize_only_the_new_observation_map")
+    else:
+        module.load_state_dict(state, strict=True)
     module.to(device=device, dtype=torch.float32).requires_grad_(trainable)
     return module.train(trainable)
 

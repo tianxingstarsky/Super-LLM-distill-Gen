@@ -1,5 +1,49 @@
 # Five latent heads with one shared cache
 
+This is an isolated research experiment. Five continuous streams and independent
+endings can now be observed, but complementary reasoning directions and useful
+learned fusion have **not** been established. Two full-text variants each
+completed an independent one-epoch run and failed readable free generation.
+Successful optimization or EOS is not quality approval.
+
+## Current readable observation path
+
+The working path uses probability-weighted input embeddings from
+[Soft Thinking](https://github.com/UCSB-AI/Soft-Thinking), pinned at
+`b97407c60d5e971da4a4fe76f405d6e236d0ddfa`. The local adapter uses native HF
+temperature/top-k/top-p/min-p operators and PyTorch embedding contraction.
+It does not install their patched SGLang engine or claim its performance.
+
+```powershell
+python -m experiments.nplus_shared_cache.initialization --model path/to/local-model --output path/to/new-native-initialization
+python experiments/nplus_shared_cache/parallel_observer.py --model path/to/local-model --auxiliary path/to/new-native-initialization/auxiliary.safetensors --cases experiments/nplus_shared_cache/context_pair.example.json --output path/to/new-private-output --execute --initialization-probe --soft-embeddings --decode-final-answer
+```
+
+Each route predicts a probability distribution. Its continuous input vector is
+a weighted mixture of retained pretrained token embeddings. The top token is
+displayed for observation; it is not re-embedded as the feedback input. The five
+resulting vectors enter feature CAT and a dense fusion matrix before updating
+the single cache. This differs from reusing last-layer hidden states directly.
+
+The initializer loads no backbone and performs no training. It creates small
+separate residual heads and a dense trainable CAT matrix initialized with five
+identity blocks divided by five plus small dense jitter. The demonstrated
+fusion remains an **initialization**, not a trained multi-purpose fusion.
+Hidden-space-trained fusion weights are not calibrated for this input space;
+they produced degeneration in the local experiment.
+
+Two fixed conversation probes produced 907 and 817 tokens per route, all ending
+naturally. Their texts retained the updated date, code, contact and unknown fee.
+Routes were highly similar and included system-instruction restatement and
+small textual artifacts. These are readable observations, not approved training
+records or evidence of five-way diversity. The upstream project also warns
+about soft-thinking quality on small models.
+
+`--decode-final-answer` uses the same live cache only after all routes end.
+If a soft concept already consumed `</think>`, only its whitespace separator
+is appended. Unfinished routes do not silently pass to answer generation.
+The real handoff and complete raw answer are archived.
+
 `runner.py` checks a concrete information path:
 
 ```text
@@ -67,6 +111,139 @@ intervention. Add `--verify-replay` separately to measure cached/full-prefix
 numerical differences.
 
 ## What the weights mean
+
+### Five continuous text observations
+
+Without `--soft-embeddings`, `parallel_observer.py` observes a longer
+shared-state trajectory. Each round reads all five actual head vectors through
+the same pretrained LM head and appends each active route's selected token to
+its own complete ID sequence. It does not concatenate five pieces of text into
+the backbone input, create five private backbone caches, or feed the selected
+discrete tokens back as text. The continuous vectors still enter CAT and the
+single shared-cache update. This is continuous-state emission, not five
+ordinary independently autoregressive language models.
+
+```powershell
+python experiments/nplus_shared_cache/parallel_observer.py --model path/to/local-model --auxiliary path/to/training/auxiliary.safetensors --cases experiments/nplus_shared_cache/context_pair.example.json --output path/to/new-private-output --execute --initialization-probe
+```
+
+Preparation without `--execute` uses the tokenizer only. Legacy three-position
+checkpoints have no per-route token/EOS supervision, so execution requires the explicit
+`--initialization-probe` flag. Their earlier shared-loop training remains real;
+they are an initialization for this new observation mode, not trained readable
+five-route CoT checkpoints. No extra training occurs in this command.
+
+Each route ends on its own EOS or existing `</think>` token. A route emitting
+its ending participates in that current round's CAT. Starting with the next
+round, its entire vector slot is exactly zero and no more tokens are appended.
+Token ID zero is not padding: it is an ordinary vocabulary token. If all routes
+end in one round, that last active round completes its cache update and the loop
+exits; no extra all-padding round is injected through the fusion bias.
+
+The default ceiling is 32,768 shared rounds, potentially five emitted tokens per
+round but only one new backbone position. This is a capacity limit, not a target
+length. EOS completion, round-cap exhaustion, context exhaustion, and explicit
+`STOP` are recorded separately. An unfinished route never receives an invented
+EOS. `parallel-streams.json` and five purpose-named `.txt` files expose each
+complete actual stream; the per-round JSONL records route masks, emitted IDs,
+CAT slot norms, and cache lengths. Actual tensor samples cover the first and
+last rounds and every route-ending transition, rather than claiming that all
+intermediate tensors were archived.
+
+The first local observation with a three-position checkpoint reached actual EOS
+on all routes after 377 rounds. Its streams were highly similar and disfluent.
+This verifies neither readable reasoning nor useful specialization. Increasing
+the observation length alone does not add the missing language supervision.
+
+The full-token training entry below gives this observation mode a separate
+training contract. It does not silently reuse three proxy targets as complete
+text supervision or start training from the observer command. A completed
+full-token checkpoint can be observed without `--initialization-probe`;
+the original legacy checkpoint still requires that flag. The observer follows
+the trained checkpoint's ending-token ID in the full-token mode.
+
+Run the observer's targeted EOS/padding protocol regression with:
+
+```powershell
+python -m unittest experiments.nplus_shared_cache.test_parallel_observer
+```
+
+Its scripted tiny model checks state transitions, not real model text quality.
+
+### Full-token continuous text training
+
+The full-text experiments retain continuous head-vector feedback. They do
+**not** replace it with decoded-token embeddings.
+It reuses the pretrained Qwen backbone, the existing auxiliary weights as an
+explicit warm start, and the already-generated complete five teacher texts.
+
+```powershell
+python experiments/nplus_shared_cache/teacher_states.py --model path/to/local-model --records path/to/verified-train.jsonl --heldout path/to/heldout.jsonl --output path/to/new-teacher-cache --execute
+python experiments/nplus_shared_cache/continuous_text_training.py --model path/to/local-model --initial-auxiliary path/to/previous/auxiliary.safetensors --initial-sha256 CHECKPOINT_SHA256 --prepared path/to/new-teacher-cache --output path/to/new-training-run --action train
+```
+
+This default is the v2 pre-target-state experiment. For the separate v3
+post-target-state experiment, add `--state-position post_target` to the encoder
+and use new cache and training directories. v3 includes each current token and
+EOS in the encoder input, selects its post-consumption state, and trains a
+shared observation map to recover the current token through the frozen LM head.
+It adds a teacher-state decoding CE term. The native LM head predicts the
+following token; shifting labels alone would not resolve this distinction.
+
+Both commands prepare only by default; the model encoder requires `--execute`
+and optimization requires `--action train`. The encoder never trains or calls
+a remote model. Complete record identities, held-out questions, base weight
+shards, template, source bytes, target digests and executed code are bound.
+Completed teacher encodings are reused after authentication. Neither original
+records nor completed older training runs are rewritten.
+
+`teacher_states.py` encodes every original path token once with frozen local
+Qwen. For a path of N tokens, it saves N+1 hidden states: the last prefix state
+predicts token zero, subsequent states precede each next target, and the state
+after the full body predicts the appended ending. These are local-Qwen teacher
+states, not the remote teacher's private reasoning states. Each route ends
+independently; later hidden slots are exactly zero and later labels are ignored.
+
+Training uses teacher forcing in the **continuous hidden space**:
+
+```text
+gold teacher heads s[t, route] -> masked CAT -> fusion/RMS -> z[t]
+one causal Qwen forward over prefix + all z + boundary + answer[:-1]
+h[P - 1 + t] -> five heads -> each route's token/EOS loss
+h[answer_start - 1 + k] -> full answer/EOS loss
+```
+
+`z[t]` is placed at P+t, after the state predicting target t. Reading that
+target from the state after `z[t]` would leak the target information. The first
+actual training forward checks that its first token cannot depend on any
+current or future gold feedback. It separately records token-loss gradients
+to all five heads and answer-loss gradients to fusion, gain and early feedback.
+Under teacher forcing, the answer loss does not directly traverse the predicted
+heads; it must not be reported as full free-rollout backpropagation.
+
+All five complete token/EOS targets and the complete answer/EOS are supervised.
+A small unit-normalized squared-L2 hidden alignment term supplements CE.
+PyTorch non-reentrant checkpointing chunks the vocabulary losses to avoid
+materializing the entire `[rounds, 5, vocabulary]` tensor. Native HF Trainer
+owns the single ordered epoch, accumulation, scheduling and resume checkpoints.
+The backbone remains frozen and differentiable with respect to the continuous
+inputs. Only auxiliary parameters are updated and saved.
+
+This is an experimental latent teacher-forcing method. At inference, its gold
+continuous inputs are replaced by the student's predicted heads. That exposure
+difference is real: low teacher-forced loss does not establish coherent free
+generation. Inspect the five complete free-running texts, each real ending,
+any unfinished routes and the actual resource receipts before making a quality
+claim. The new entry does not extend or relabel the completed v1 epoch.
+
+The v2 pre-target feedback does not uniquely contain the actual sampled prior
+word; it is not standard token-embedding teacher forcing. The v3 post-state
+targets remove that particular timing ambiguity, but its observation map and
+student states still failed readable free rollout locally. Both results and
+their full losses are retained. Repeating the same teacher-forced loss does
+not establish that this failure has been solved.
+
+### Auxiliary checkpoint identity
 
 `runner.py --auxiliary` is required. The five low-rank residual modules, dense
 fusion, and gain load the existing keys `adapters.*`, `fusion.*`, and `gain`

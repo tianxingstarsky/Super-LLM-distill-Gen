@@ -64,7 +64,10 @@ def auxiliary_provenance(path: Path, description: dict, *, model: Path,
     provenance = {"architecture": metadata.get("architecture", "unspecified"),
         "identity": metadata.get("identity"), "status": "training_origin_unverified",
         "inference_performs_training": False, "complete_base_weight_digest_bound": False}
-    if metadata.get("architecture") != "differentiable_shared_state_latent_feedback/v1":
+    architecture = metadata.get("architecture")
+    if architecture not in {"differentiable_shared_state_latent_feedback/v1",
+                            "teacher_forced_continuous_five_route/v2",
+                            "teacher_forced_continuous_five_route/v3"}:
         return provenance
     config_path = path.with_name("auxiliary-config.json")
     config = json.loads(config_path.read_text("utf-8"))
@@ -72,10 +75,36 @@ def auxiliary_provenance(path: Path, description: dict, *, model: Path,
     width = model_config.get("text_config", model_config)["hidden_size"]
     if (config.get("identity") != metadata.get("identity")
             or config.get("architecture") != metadata["architecture"]
-            or config.get("width") != width or config.get("latent_steps") != latent_steps
+            or config.get("width") != width
+            or (architecture == "differentiable_shared_state_latent_feedback/v1"
+                and config.get("latent_steps") != latent_steps)
             or config.get("rank") != description["shapes"]["adapters.0.1.weight"][0]):
         raise ValueError("shared_checkpoint_config_does_not_match_requested_model_or_loop")
     provenance.update(status="shared_loop_checkpoint_loaded", config_sha256=file_sha(config_path))
+    if architecture in {"teacher_forced_continuous_five_route/v2", "teacher_forced_continuous_five_route/v3"}:
+        if (config.get("feedback") != "continuous_head_vectors"
+                or config.get("text_supervision") != "full_per_route_tokens_and_EOS"):
+            raise ValueError("continuous_text_checkpoint_contract_mismatch")
+        if architecture.endswith("/v3"):
+            if (config.get("observation") != "current_token_from_post_state"
+                    or config.get("state_position") != "post_target"
+                    or description["shapes"].get("observation.weight") != [width, width]):
+                raise ValueError("post_state_checkpoint_requires_its_trained_observation_map")
+        if (config.get("model_config_sha256") != file_sha(model / "config.json")
+                or config.get("template_sha256") != file_sha(model / "chat_template.jinja")):
+            raise ValueError("continuous_text_checkpoint_base_configuration_changed")
+        weights = config.get("model_weights_sha256")
+        if not weights:
+            raise ValueError("continuous_text_checkpoint_base_weight_binding_missing")
+        for name, expected_sha in weights.items():
+            relative = Path(name)
+            if relative.is_absolute() or ".." in relative.parts or file_sha(model / relative) != expected_sha:
+                raise ValueError("continuous_text_checkpoint_base_weight_binding_changed")
+        provenance.update(complete_base_weight_digest_bound=True,
+            text_supervision=config["text_supervision"], feedback=config["feedback"],
+            ending_token_id=config["ending_token_id"],
+            observation=config.get("observation", "native_next_token_head"),
+            state_position=config.get("state_position", "pre_target"))
     receipt_path = path.with_name("training-receipt.json")
     if receipt_path.exists():
         receipt = json.loads(receipt_path.read_text("utf-8"))
@@ -132,7 +161,7 @@ def prepare_cases(*, model: str | Path, auxiliary: str | Path,
         boundary_ids = tokenizer.encode(BOUNDARY, add_special_tokens=False)
         identity_payload = {"prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
             "auxiliary_sha256": auxiliary_sha, "config_sha256": file_sha(model / "config.json"),
-            "latent_steps": latent_steps, "boundary_ids": boundary_ids,
+            "latent_steps": (None if provenance["architecture"].endswith("/v3") else latent_steps), "boundary_ids": boundary_ids,
             "mechanism": "shared_h_five_residual_heads_feature_cat_single_cache/v1"}
         identity = hashlib.sha256(json.dumps(identity_payload, sort_keys=True).encode()).hexdigest()
         case_output = output / case_id
@@ -281,6 +310,9 @@ def run_shared_case(base: Any, tokenizer: Any, auxiliary: Any, prepared: dict,
     """One prefill, one cache, simultaneous heads, actual fused feedback."""
     import torch
     from safetensors.torch import save_file
+    if prepared["manifest"].get("auxiliary_provenance", {}).get("architecture") in {
+            "teacher_forced_continuous_five_route/v2", "teacher_forced_continuous_five_route/v3"}:
+        raise ValueError("use_parallel_observer_for_variable_length_text_supervised_checkpoint")
     try:
         from .latent_feedback import project_shared_hidden
     except ImportError:
