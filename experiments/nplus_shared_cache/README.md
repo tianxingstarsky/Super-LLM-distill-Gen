@@ -211,6 +211,45 @@ horizons. This first-block intervention did not establish weekday-specific
 route specialization. Later writes and tasks that need derived information
 remain untested.
 
+### Frozen decoder: one or five positions per step
+
+`handoff_probe.py` separates trajectory generation from answer readout. The
+source is the existing trained CAT loop throughout. It reuses an archived full
+arithmetic trace and collects the six matched pickup traces once; each decoder
+arm then sees exactly the same source vectors, endings and question. No arm
+feeds its answers back into the trajectories.
+
+```powershell
+python -m experiments.nplus_shared_cache.handoff_probe --model path/to/model --checkpoint path/to/training --replay path/to/frozen-readout-probe/replay --fixtures experiments/nplus_shared_cache/route_swap_cases.json --output path/to/new-handoff
+```
+
+The original input at each step is a projection of the concatenated slots.
+The probe splits that trained projection into five contributions, sharing the
+bias among active slots and preserving the common normalization. Before BF16
+rounding, their sum must reconstruct the original vector. The decoder reads
+these contributions as five consecutive positions. A length-matched control
+divides the same fused vector among the same active slots; other controls
+reverse active contributions, repeat the fused vector, insert zeros, or omit
+the latent prefix. Ended slots stay zero, but an explicit zero position still
+advances the decoder cache. Five positions cost five times as many latent
+sequence positions per step.
+
+Results are conditional log probabilities of the specified alternatives,
+given the original prompt and a fixed answer cue. They are not free-answer
+accuracy. Only the one-position interface was trained with the recurrent
+heads. This inference-only comparison cannot decide which interface would
+learn better under matched training.
+
+Actual readout on these seven inputs: every arm preferred the specified
+weekday and surname in all six dialogues and 105 over 104 on the archived
+arithmetic item, even without latent inputs. Relative to equally splitting
+the fused vector across the active positions, giving the five projected
+contributions separately reduced the weekday margin on six of six dialogues
+(mean change -0.333) and increased the surname margin on five of six (mean
+change +0.073). There was no consistent advantage. Maximum relative error
+when summing the contributions in FP32 was below 0.000002. The successful
+local run covered 56 case/arm combinations in 181 seconds with no updates.
+
 ## Readable soft-input comparison
 
 This separate, opt-in comparison uses probability-weighted input embeddings from
