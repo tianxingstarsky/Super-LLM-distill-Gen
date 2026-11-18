@@ -8,7 +8,10 @@ generation. Successful optimization or EOS is not quality approval.
 
 ## Full-corpus training
 
-This experiment starts both students from the same local Qwen3.5-4B weights. The
+This experiment starts both students from the same local Qwen3.5 weights. The
+0.8B and 4B releases use different hidden widths. When switching sizes, use
+a fresh run directory for teacher targets, students, optimizers and evaluation
+results. The pinned source mirror and external questions can be shared. The
 manifest pins all 120 Parquet shards and their 1,200,000 physical rows. Each arm
 has one ordered cursor. A durable update records exactly which source rows it
 consumed. A held row advances the source cursor without an optimizer update.

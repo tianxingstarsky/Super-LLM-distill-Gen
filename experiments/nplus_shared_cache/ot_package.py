@@ -67,7 +67,12 @@ def assemble(output, single, five, license_file):
     shutil.copyfile(sources.parents[1] / "LICENSE", output / "LICENSE")
     if is_long:
         card = (sources / "OT_LONG_MODEL_CARD.md").read_text(encoding="utf-8").rstrip()
+        native_config = json.loads((single / "base" / "config.json").read_text(encoding="utf-8"))
+        text = native_config["text_config"]
+        vision = native_config["vision_config"]
         lines = ["", "", "## Checkpoint progress", "",
+                 f"The native backbone has {text['num_hidden_layers']} text layers, a text hidden width "
+                 f"of {text['hidden_size']:,}, and {vision['depth']} vision layers.", "",
                  "| Routes | Training status | Dataset rows examined | Rows with a parameter update | Official dataset rows |",
                  "| ---: | --- | ---: | ---: | ---: |"]
         for _, _, receipt in variants:

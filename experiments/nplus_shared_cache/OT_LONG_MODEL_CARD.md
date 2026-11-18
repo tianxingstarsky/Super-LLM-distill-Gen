@@ -1,4 +1,4 @@
-# Qwen3.5-4B with variable-duration continuous routes
+# Qwen3.5 with variable-duration continuous routes
 
 The `single` and `five` folders each contain native Qwen3.5 weights, tokenizer, and a matching recurrent route module. The progress table at the end reports the training status and source cursor for the exact pair in this package. Each arm follows the same pinned order in OpenThoughts3-1.2M.
 
@@ -40,4 +40,4 @@ The source teacher reads available original reasoning in order. For each contigu
 
 Records containing answers receive supervision on the complete original answer and EOS. Source reasoning that ends before a closing marker supplies observed reasoning segments only. Rows containing only an answer provide ordinary language supervision. See the checkpoint's training progress for the number of records actually used.
 
-The package verifies native weights, tokenizer and route weights against the training receipt. `SHA256.json` lists the files shipped. Each variant includes the upstream model license in `base/LICENSE`. Sources are [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) and [OpenThoughts3-1.2M](https://huggingface.co/datasets/open-thoughts/OpenThoughts3-1.2M).
+The package verifies native weights, tokenizer and route weights against the training receipt. `SHA256.json` lists the files shipped. Each variant includes the upstream model license in `base/LICENSE`. Sources are [Qwen model releases](https://huggingface.co/Qwen) and [OpenThoughts3-1.2M](https://huggingface.co/datasets/open-thoughts/OpenThoughts3-1.2M).

@@ -288,7 +288,10 @@ def _digest_path(path, size, modified):
 
 
 def _base_identity(path, *, include_processor=True):
-    names = ["config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json"]
+    names = ["config.json", "tokenizer.json", "tokenizer_config.json"]
+    # HF derives defaults from the native model config when this optional file is absent.
+    if (path / "generation_config.json").is_file():
+        names.append("generation_config.json")
     optional = ["chat_template.jinja", "model.safetensors.index.json"]
     if include_processor:
         optional.extend(("preprocessor_config.json", "video_preprocessor_config.json", "processor_config.json"))
