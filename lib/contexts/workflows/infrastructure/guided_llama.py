@@ -66,7 +66,11 @@ class GuidedChatEndpoint:
             data=None if body is None else wire_body(body),
             headers=self.headers,
         )
-        with urlopen(request, timeout=3600) as response:
+        # Native loopback chat sends its first response bytes after decoding.
+        # A 32K generation on CPU can exceed an hour without a network fault.
+        loopback_chat = (self.local and urlsplit(self.url).hostname in {"localhost", "127.0.0.1", "::1"}
+                         and url == self.root + "/v1/chat/completions")
+        with urlopen(request, timeout=None if loopback_chat else 3600) as response:
             return json.load(response)
 
     def validate(self):

@@ -496,3 +496,22 @@ def test_reviewed_set_survives_a_zero_prefix_with_its_source_and_no_unfound_chec
         assert not checked_progress([rule], draft_fragment(wrong, 1)[0], wrong), wrong
     reordered = "所以 k ∈ {7,1,4}。"
     assert checked_progress([rule], draft_fragment(reordered, 1)[0], reordered)
+
+
+def test_only_native_loopback_chat_waits_for_the_full_decode(monkeypatch):
+    import io
+    from lib.contexts.workflows.infrastructure import guided_llama
+
+    received = []
+    def open_request(request, timeout):
+        received.append((request.full_url, timeout))
+        return io.BytesIO(b'{}')
+
+    monkeypatch.setattr(guided_llama, "urlopen", open_request)
+    for host, local in (("127.0.0.1", True), ("example.test", False), ("example.test", True)):
+        base = f"http://{host}/v1"
+        endpoint = guided_llama.GuidedChatEndpoint(base, "example", None, 32768,
+                                                  local=local, context=131072, pool=None)
+        endpoint.http(endpoint.root + "/slots")
+        endpoint.http(base + "/chat/completions", {"messages": []})
+    assert [timeout for _, timeout in received] == [3600, None, 3600, 3600, 3600, 3600]
