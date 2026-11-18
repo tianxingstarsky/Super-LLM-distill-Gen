@@ -4,6 +4,8 @@
 
 独立的 `GenerateGuidedAnswer` 以当前保留稿、学生已确认的发现和已经披露的线索为快照生成续写。使用 `python -m lib.guided_answers --help` 查看导入、运行和离线导出入口。原生日志和撤回稿保存在各题档案中。只有答案键匹配且解题说明通过审核的样本进入 `accepted.jsonl`；只有原推理的来源可补写正式答复，保存在 `unverified.jsonl`。回归见 `tests/test_guided_answers.py`。
 
+从 3.4 起，程序可从单行加粗的结论标题提取数值，也能核对英文计数题结尾重述的数量和唯一 `\boxed{…}` 值。重述的数量须与原题一致。题目范围、条件或备选值不明确时保留未判，解题说明继续交由指导员核查。已有运行按清单中的协议版本恢复。
+
 - 对外使用 [api.py](api.py) 中的 `WorkflowRunApplication`。
 - [application](application/README.md) 决定执行顺序；[domain](domain/README.md) 决定依赖和状态含义。
 - [infrastructure](infrastructure/README.md) 承担持久化、锁和阶段操作。

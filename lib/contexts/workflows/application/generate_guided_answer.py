@@ -34,9 +34,10 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         skip_acquired = protocol_version != "3.0.0"
-        single_decision = protocol_version == "3.3.0"
+        marked_finals = protocol_version == "3.4.0"
+        single_decision = protocol_version in {"3.3.0", "3.4.0"}
         anchored = single_decision or protocol_version == "3.2.0"
-        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3"}[protocol_version]
+        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         mode = "answer_key" if gold is not None else "source_reasoning_only"
         attempts = []
@@ -118,7 +119,8 @@ class GenerateGuidedAnswer:
                 break
             suffix = student["content"]
             public.append({"role": "assistant", "content": suffix})
-            new_segments, answer_line = draft_fragment(suffix, index, preserve_list_items=single_decision)
+            new_segments, answer_line = draft_fragment(suffix, index, preserve_list_items=single_decision,
+                                                       marked_finals=marked_finals)
             for piece in new_segments:
                 piece["reuses_student_findings"] = [
                     sid
@@ -128,7 +130,8 @@ class GenerateGuidedAnswer:
             submitted = [*active, *new_segments]
             text = assemble(submitted, answer_line)
             final_text = text
-            check = inspect_answer(text, gold, parse_count_sentence=skip_acquired)
+            check = inspect_answer(text, gold, parse_count_sentence=skip_acquired,
+                                   marked_finals=marked_finals, question=question)
             if gold is None and not any(
                 tag in text.lower()
                 for tag in ("<think>", "</think>", "<|im_start|>", "<|im_end|>")

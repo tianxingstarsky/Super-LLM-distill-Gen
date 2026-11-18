@@ -406,6 +406,49 @@ def test_numeric_sentence_is_read_only_as_an_unqualified_single_declared_final()
         assert result["answer"] is None and result["answer_matches"] is None
 
 
+def test_v34_recognizes_both_recorded_terminal_answers_without_certifying_the_steps():
+    question = "How many positive three-digit integers with each digit greater than 4 are divisible by 6?"
+    statement = r"The number of positive three-digit integers with each digit greater than 4 that are divisible by 6 is \boxed{16}."
+    original = "Counting these, we get 16 numbers.\n\n### Final Answer:\n" + statement
+    bold = "Let me present the final answer clearly.\n\n**Final Answer: 16**"
+    gold = {"kind": "number", "value": "16"}
+    for text, surface in ((original, statement), (bold, "16")):
+        check = inspect_answer(text, gold, question=question)
+        assert (check["answer"], check["answer_surface"], check["answer_matches"]) == ("16", surface, True)
+        assert inspect_answer(text, {"kind": "number", "value": "15"}, question=question)["answer_matches"] is False
+        assert not inspect_answer(text, gold, question=question, marked_finals=False)["format_ok"]
+
+    def request(role, index, messages, schema):
+        if role == "student":
+            return {"content": bold, "reasoning_content": "", "finish_reason": "stop"}
+        return {"content": json.dumps({"decision": "a1.s1", "diagnosis": "The cited step does not prove the count.",
+                                       "reusable": []}), "reasoning_content": "", "finish_reason": "stop"}
+
+    source = validate_source({"id": "count", "question": question, "gold": gold})
+    for version, expected in (("3.3.0", None), ("3.4.0", True)):
+        result = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 1, protocol_version=version)
+        assert result["attempts"][0]["check"]["answer_matches"] is expected
+        assert result["status"] == "quarantine"
+
+
+def test_v34_leaves_nonterminal_conditional_negated_or_competing_numeric_answers_ungraded():
+    question = "How many records are divisible by 6?"
+    heading = "We enumerated the records.\n### Final Answer:\n"
+    for statement in (
+        r"If the list is complete, the answer is \boxed{16}.",
+        r"The number of records that are divisible by 6 is not \boxed{16}.",
+        r"The number of records that are divisible by 6 is either \boxed{16} or 17.",
+        r"The number of records that are divisible by 6 is \boxed{16} if repetitions are allowed.",
+        r"The number of records that are divisible by 5 is \boxed{16}.",
+        r"The answer is \boxed{15} or \boxed{16}.",
+        "**Final Answer: 16**\nFinal Answer: 17",
+    ):
+        check = inspect_answer(heading + statement, {"kind": "number", "value": "16"}, question=question)
+        assert not check["format_ok"] and check["answer_matches"] is None
+    assert inspect_answer("A code example follows.\n```text\n**Final Answer: 16**",
+                          {"kind": "number", "value": "16"}, question=question)["answer_matches"] is None
+
+
 def test_reviewed_set_survives_a_zero_prefix_with_its_source_and_no_unfound_checks():
     rule = {
         "id": "counts",

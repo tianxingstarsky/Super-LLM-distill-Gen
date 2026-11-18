@@ -134,12 +134,25 @@ def validate_source(row):
     }
 
 
-def answer_tail(text):
+def answer_tail(text, *, marked_finals=True):
     lines = text.splitlines(keepends=True)
     headers = []
     offset = 0
+    fence = ""
     for i, line in enumerate(lines):
+        if marked_finals:
+            marker = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
+            if fence or marker:
+                if not fence:
+                    fence = marker[1]
+                elif marker and marker[1].startswith(fence) and not marker[2].strip():
+                    fence = ""
+                offset += len(line)
+                continue
         visible = re.sub(r"^#{1,6}\s+", "", line.strip())
+        if marked_finals:
+            # The entire declaration can be bold, e.g. **Final Answer: 16**.
+            visible = re.sub(r"^(\*\*|__)([^*_]+)\1$", r"\2", visible)
         visible = re.sub(
             r"^([*_]{1,3})(final answer|最终答案|答案)(\s*[:：]?)\1",
             r"\2\3",
@@ -189,8 +202,30 @@ def numerical_statement(answer):
     return None
 
 
-def inspect_answer(text, gold, *, parse_count_sentence=True):
-    start, answer = answer_tail(text)
+def _boxed_numerical_statement(answer, question):
+    """Accept one exact scalar in a terminal assertion with an identified subject."""
+    line = unicodedata.normalize("NFKC", answer).strip()
+    box = re.fullmatch(r"([^\\${}]*?)(\$?)\\boxed\{(.+)\}\2\.?", line)
+    if not box or number(box[3]) is None:
+        return None
+    prefix = " ".join(box[1].lower().split())
+    if not prefix or re.fullmatch(r"the (?:final )?(?:answer|total|result|count) is", prefix):
+        return box[3]
+    # Allow a declarative count only when its subject echoes the actual question.
+    # Other numbers in that subject can be genuine constraints, e.g. divisibility by 6.
+    quantity = re.fullmatch(r"the (?:number|count) of ([a-z0-9 -]+) is", prefix)
+    asked = re.fullmatch(r"how many ([a-z0-9 -]+)\?", " ".join((question or "").lower().split()))
+    if not quantity or not asked or re.search(
+        r"\b(?:if|unless|assuming|provided|supposing|otherwise|or|either|neither|nor|not|never|"
+        r"may|might|could|would|perhaps|possibly|probably|approximately|roughly|alternatively)\b", quantity[1]
+    ):
+        return None
+    subject = re.sub(r"\b(?:that|which) (?=are\b|were\b|have\b)", "", quantity[1])
+    return box[3] if subject == asked[1] else None
+
+
+def inspect_answer(text, gold, *, parse_count_sentence=True, marked_finals=True, question=None):
+    start, answer = answer_tail(text, marked_finals=marked_finals)
     if start is None:
         return dict(
             format_ok=False,
@@ -222,6 +257,8 @@ def inspect_answer(text, gold, *, parse_count_sentence=True):
     elif gold["kind"] == "number":
         if parse_count_sentence and number(candidate) is None:
             candidate = numerical_statement(answer)
+            if candidate is None and marked_finals:
+                candidate = _boxed_numerical_statement(answer, question)
             if candidate is None:
                 return dict(
                     format_ok=False,
@@ -508,9 +545,9 @@ def prior_clue_evidence(clue, retained, findings, disclosed):
     return None
 
 
-def draft_fragment(text, attempt, *, preserve_list_items=True):
+def draft_fragment(text, attempt, *, preserve_list_items=True, marked_finals=True):
     """Keep exact source spans. A terminal answer is replaceable separately from the derivation."""
-    terminal, _ = answer_tail(text)
+    terminal, _ = answer_tail(text, marked_finals=marked_finals)
     work = text[:terminal] if terminal is not None else text
     pieces = []
     start = 0
