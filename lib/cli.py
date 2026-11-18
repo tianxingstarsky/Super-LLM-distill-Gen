@@ -1058,6 +1058,8 @@ def build_parser():
     from lib.presentation.training_cli import configure as configure_training_validation
     configure_training_validation(sub.add_parser("train-validate",
         help="本地原模型/SFT/CPT→SFT 对照（需独立训练环境，默认仅预检）"))
+    from lib.presentation.full_sft_cli import configure as configure_full_sft
+    configure_full_sft(sub.add_parser("train-sft", help="本地 Qwen3.5 语言模型全参 SFT，单轮，默认预检"))
     from lib.presentation.grpo_cli import configure as configure_grpo_validation
     configure_grpo_validation(sub.add_parser("train-grpo",
         help="实验性本地 TRL GRPO 对照（端到端待验证，默认仅预检）"))

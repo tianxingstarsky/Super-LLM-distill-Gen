@@ -1,5 +1,20 @@
 # 本地训练验证
 
+## Qwen3.5 语言模型全参 SFT
+
+在配好下方独立训练环境后，从项目根目录运行。将三个参数替换为本机 Qwen3.5 模型目录、已核验的 UTF-8 `messages` JSONL 和独立训练工作目录。
+
+```powershell
+python -m lib.cli train-sft --model path/to/qwen35 --sft path/to/accepted.jsonl --output .dataforge/native-sft
+python -m lib.cli train-sft --model path/to/qwen35 --sft path/to/accepted.jsonl --output .dataforge/native-sft --action run
+```
+
+第一条做 CPU 预检，输出源文件 SHA-256、实际助手轮数、带推理与仅答案的轮数、监督 token 数及最长输入。每行保留原始对话和已有 system。单轮或多轮对话中的每个助手轮都是一个训练目标。有独立 `reasoning_content` 的轮次监督推理、回答和结束标记。仅有答案的轮次屏蔽 Qwen 模板的空思考前缀，监督回答和结束标记。超过原生上下文或显式 `--max-length` 上限会报告源行号。指导生成导出的 `accepted.jsonl` 可以直接使用，标为 `unverified` 或 `quarantine` 的记录会在预检时被拒绝。
+
+第二条在 CUDA 上单次遍历目标并训练全部语言参数，视觉权重随包保留。默认梯度累积 8，学习率 `8e-6`，可用 `--gradient-accumulation`、`--learning-rate`、`--seed` 指定。运行期使用输出目录内的临时编码文件。训练和断点位于 `full-training/`，完成后 `model/` 包含可独立加载的模型和核验收据。按相同模型、来源、设置和输出路径重新运行会核对身份并复用已有进度。运行中可在 `full-training/` 创建 `STOP` 文件申请在检查点暂停，删除这个标记后使用同一命令继续。
+
+## 原模型、SFT、CPT→SFT 对照
+
 这个入口把已导出的文本训练记录接到真实模型验证：原模型、SFT、CPT→SFT 使用同一份固定测试题，保存完整提示、原生输出、思考、答案和训练收据。它不重写生成任务、缓存或原始导出文件，也不调用付费模型 API。
 
 这是固定小批量的下游回归入口。当前文件适配器在内存中编码实验输入，适合这里的百条级对照；不把它宣传为百万条训练器。既有百万级生成批次仍使用原流式端口，没有改成列表。

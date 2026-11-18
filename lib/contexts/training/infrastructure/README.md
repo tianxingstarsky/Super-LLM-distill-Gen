@@ -14,10 +14,11 @@ encoded examples and preserves their labels; it does not create training data,
 discard system messages or rewrite reasoning. Optional ML packages are imported
 only when a method is called.
 
-The ordered sampler is a Trainer extension for a single curriculum pass over
+For the adapter-validation experiment, the ordered sampler is a Trainer extension for a single curriculum pass over
 CPT examples followed by SFT examples. The standard Trainer owns optimization,
-gradient accumulation, checkpoint writing and the epoch counter. No custom
-optimizer or training loop is maintained here.
+gradient accumulation, checkpoint writing and the epoch counter for this experiment.
+
+For native full-language SFT, `full_sft_inputs.py` indexes complete assistant turns on disk. `full_language.py` updates the language backbone with bitsandbytes AdamW and writes recoverable progress. `qwen35_weights.py` preserves the checkpoint's Gated DeltaNet precision on load and export. The native checkpoint includes the original visual and auxiliary tensors. The training receipt records parameter coverage and the exact input digest.
 
 Training writes a model/example/config identity before loading weights. Standard
 Trainer checkpoints default to every optimizer step, retaining two, and include adapter digests. They are resumed
