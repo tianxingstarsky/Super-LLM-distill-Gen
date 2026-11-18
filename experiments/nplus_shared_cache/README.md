@@ -6,6 +6,63 @@ directions and useful learned fusion have **not** been established. Two full-tex
 variants each completed an independent one-epoch run and failed readable free
 generation. Successful optimization or EOS is not quality approval.
 
+## Full-corpus training
+
+This experiment starts both students from the same local Qwen3.5-4B weights. The
+manifest pins all 120 Parquet shards and their 1,200,000 physical rows. Each arm
+has one ordered cursor. A durable update records exactly which source rows it
+consumed. A held row advances the source cursor without an optimizer update.
+Download counts, source annotation counts and committed optimizer updates are
+reported separately. [OpenThoughts3 pinned source](https://huggingface.co/datasets/open-thoughts/OpenThoughts3-1.2M/tree/61bcf9d4eb38b30295efc2021227a63cc5bb34c8)
+
+The frozen teacher processes the complete prompt and every available reasoning
+token in order. It averages its final-layer states over contiguous groups of up
+to 128 tokens. Five routes receive adjacent groups from the same original trace
+at each recurrent step. They can stop independently. An inactive slot contributes
+zero to the concatenation. A one-route control consumes those groups in order.
+These targets are compressed states of published text. Optional vocabulary
+projections are observations and can be unreadable.
+
+Both students use full-model gradients with bounded backpropagation through
+time. The complete question remains in the forward cache. A short prompt suffix
+and each subsequent training block receive gradients. Periodically a text
+rendering of the question also exercises the vision encoder. When an answer is
+present, every answer token and its terminal EOS receive supervision. When
+the source ends mid-thought, the observed prefix supplies hidden-state targets
+and no final answer or terminal halt is invented.
+
+Use an empty local run directory on a volume with room for the source mirror,
+gradient scratch file, both models, optimizers and checkpoint rotation. The
+mirror needs roughly 28.2 GB by itself. The current trainer is a single-GPU
+research implementation. It does one full-model update per eligible source
+row per arm. Measure local throughput before planning a full pass.
+
+```console
+python -m experiments.nplus_shared_cache.ot_full_targets --action register --output RUN
+python -m experiments.nplus_shared_cache.ot_corpus_mirror --root RUN
+python -m experiments.nplus_shared_cache.ot_corpus_audit --root RUN
+python -m experiments.nplus_shared_cache.ot_corpus_job run --root RUN --base BASE_MODEL --evaluation HOLDOUT.jsonl
+python -m experiments.nplus_shared_cache.ot_corpus_job status --root RUN
+python -m experiments.nplus_shared_cache.ot_corpus_job pause --root RUN
+python -m experiments.nplus_shared_cache.ot_corpus_job resume --root RUN --base BASE_MODEL --evaluation HOLDOUT.jsonl
+```
+
+Replace the uppercase placeholders with local paths. Mirroring and source
+auditing can run alongside training. Use `--watch` on the audit to include
+shards as they arrive. The coordinator consumes the verified mirror in bounded
+windows. Stop requests take effect at a row boundary. On restart the latest
+authenticated checkpoints define each arm's next source row. The previous
+checkpoint and the compressed row receipts remain available. Review holds
+are recorded without producing teacher targets or student updates.
+
+Each arm's `current.json` points to its loadable `snapshot/model` directory.
+The external evaluation takes JSONL records with unique `id`, `question` and
+numerical `reference`. It records real answer text, independent route stops,
+elapsed time, peak allocated CUDA memory and backbone calls. Natural runs
+share a budget. Padded replays measure equal call counts and disclose every
+padding call. A budget-exhausted route is marked unfinished. The command and
+loader are documented in the [model card](OT_LONG_MODEL_CARD.md).
+
 ## Primary experiment: hidden feedback, text observation only
 
 The default runner and observer retain this information path:

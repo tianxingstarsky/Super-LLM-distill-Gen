@@ -10,6 +10,7 @@ comparison, not completion of the primary goal.
 
 | Goal | Entry | Scope |
 | --- | --- | --- |
+| Train from the complete OpenThoughts3 source release | [Full-corpus training](nplus_shared_cache/README.md#full-corpus-training) | Ordered, resumable one-pass training with complete observed targets, separate single/five-route snapshots and external evaluation |
 | Compare trained one-route and five-route models on held-out OpenThoughts questions | [OpenThoughts matched comparison](nplus_shared_cache/README.md#openthoughts-matched-comparison) | Matched full-model fine-tuning, continuous route feedback, optional text projection, exact backbone call accounting and portable checkpoints |
 | Keep five hidden-vector predictions with text observation only | [primary contract](nplus_shared_cache/README.md#primary-experiment-hidden-feedback-text-observation-only) | Default hidden-vector CAT and shared cache; free-text quality and direction specialization remain unresolved |
 | Train private continuous route memory with real shared feedback | [recurrent pure-hidden experiment](nplus_shared_cache/README.md#recurrent-pure-hidden-experiment) | Native GRU, eight-position commits and two-block gradients; one ordered epoch, actual free outputs still determine quality |

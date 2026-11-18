@@ -252,7 +252,7 @@ class OffloadedGradients:
             grad = self.gradients.pop(name)
             if update:
                 param = self.params[name]
-                param.grad = grad.to(param.device)
+                param.grad = grad.to(device=param.device, dtype=param.dtype)
                 self.optimizers[name].step()
                 param.grad = None
         return count

@@ -42,13 +42,20 @@ class LatentRoutes(nn.Module):
         self.cell = nn.GRUCell(rank, rank)
         self.direction = nn.Linear(rank, width, bias=False)
         self.halt = nn.Linear(rank, 1)
-        self.step_signal = nn.Parameter(torch.zeros(config.max_rounds, rank))
+        self.step_signal = self._make_clock(config)
         self.merge = nn.Linear(rank * config.routes, rank, bias=False)
         self.merge_output = nn.Linear(rank, width, bias=False)
         self.route_codes = nn.Parameter(torch.empty(config.routes, rank))
         nn.init.normal_(self.route_codes, std=.025)
         nn.init.constant_(self.halt.bias, -1.)
         self.gain = nn.Parameter(torch.tensor(1.))
+
+    @staticmethod
+    def _make_clock(config):
+        return nn.Parameter(torch.zeros(config.max_rounds, config.rank))
+
+    def _clock(self, index):
+        return self.step_signal[index]
 
     def initial_state(self, hidden):
         seed = self.condition(functional.rms_norm(hidden.float(), (self.config.width,)))
@@ -57,7 +64,7 @@ class LatentRoutes(nn.Module):
     def step(self, hidden, state, active, index, embedding_rms):
         batch = hidden.shape[0]
         anchor = functional.rms_norm(hidden.float(), (self.config.width,))
-        signal = self.condition(anchor)[:, None] + self.route_codes + self.step_signal[index]
+        signal = self.condition(anchor)[:, None] + self.route_codes + self._clock(index)
         updated = self.cell(signal.reshape(-1, self.config.rank),
                             state.reshape(-1, self.config.rank)).reshape_as(state)
         logits = self.halt(updated).squeeze(-1)
@@ -299,6 +306,11 @@ def _base_identity(path, *, include_processor=True):
 
 
 def save_bundle(bundle_dir, heads, base_dir, *, base_ref="base", metadata=None):
+    return _save_bundle(bundle_dir, heads, base_dir, base_ref=base_ref, metadata=metadata,
+                        schema="open_thoughts_continuous_routes/v2")
+
+
+def _save_bundle(bundle_dir, heads, base_dir, *, base_ref, metadata, schema):
     root, base_dir = Path(bundle_dir), Path(base_dir)
     if Path(base_ref).is_absolute() or (root / base_ref).resolve() != base_dir.resolve():
         raise ValueError("the portable base reference must resolve to the supplied model")
@@ -313,7 +325,7 @@ def save_bundle(bundle_dir, heads, base_dir, *, base_ref="base", metadata=None):
         save_file({name: value.detach().cpu().contiguous() for name, value in heads.state_dict().items()},
                   str(weights))
         staged_receipt = Path(staging) / receipt.name
-        runner.write_json(staged_receipt, dict(schema="open_thoughts_continuous_routes/v2",
+        runner.write_json(staged_receipt, dict(schema=schema,
             config=asdict(heads.config), base_ref=base_ref, base_sha256=identity,
             adapter_sha256=runner.file_sha(weights), metadata=metadata or {}))
         runner.replace_with_retry(weights, path)
@@ -321,20 +333,26 @@ def save_bundle(bundle_dir, heads, base_dir, *, base_ref="base", metadata=None):
 
 
 def load_bundle(bundle_dir, *, base_dir=None, device="cuda:0"):
+    return _load_bundle(bundle_dir, base_dir=base_dir, device=device,
+                        schemas={"open_thoughts_continuous_routes/v1", "open_thoughts_continuous_routes/v2"},
+                        config_class=RouteConfig, heads_class=LatentRoutes)
+
+
+def _load_bundle(bundle_dir, *, base_dir, device, schemas, config_class, heads_class):
     from transformers import AutoTokenizer
     root = Path(bundle_dir)
     receipt = json.loads((root / "route_model.json").read_text(encoding="utf-8"))
-    if receipt["schema"] not in {"open_thoughts_continuous_routes/v1", "open_thoughts_continuous_routes/v2"}:
+    if receipt["schema"] not in schemas:
         raise ValueError("unsupported checkpoint schema")
     base_path = Path(base_dir) if base_dir is not None else root / receipt["base_ref"]
-    if receipt["base_sha256"] != _base_identity(base_path, include_processor=receipt["schema"].endswith("/v2")):
+    if receipt["base_sha256"] != _base_identity(base_path, include_processor=receipt["schema"] != "open_thoughts_continuous_routes/v1"):
         raise ValueError("native model, tokenizer, or processor differs from this trained route bundle")
     path = root / "route_model.safetensors"
     if receipt["adapter_sha256"] != runner.file_sha(path):
         raise ValueError("route weights differ from manifest")
     base, _ = runner.load_frozen_model(base_path, device=device)
     tokenizer = AutoTokenizer.from_pretrained(base_path, local_files_only=True, trust_remote_code=False)
-    heads = LatentRoutes(RouteConfig(**receipt["config"])).to(device).eval()
+    heads = heads_class(config_class(**receipt["config"])).to(device).eval()
     heads.load_state_dict(load_file(str(path)), strict=True)
     return base, tokenizer, heads
 
