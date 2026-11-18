@@ -6,6 +6,8 @@
 
 从 3.4 起，程序可从单行加粗的结论标题提取数值，也能核对英文计数题结尾重述的数量和唯一 `\boxed{…}` 值。重述的数量须与原题一致。题目范围、条件或备选值不明确时保留未判，解题说明继续交由指导员核查。已有运行按清单中的协议版本恢复。
 
+从 3.5 起，学生可见正文因输出上限截断时，整题仍进入隔离。题目预先登记的 `finite_set` 规则可以核对正文中完整、肯定的变量取值集合，原文跨度、规则来源和轮次保存在该次尝试的 `program_confirmed` 中。再次写出同一结论时会关联最早确认的段落。其他小计和整段推导保存在原始回执中，截断不会触发新调用。
+
 - 对外使用 [api.py](api.py) 中的 `WorkflowRunApplication`。
 - [application](application/README.md) 决定执行顺序；[domain](domain/README.md) 决定依赖和状态含义。
 - [infrastructure](infrastructure/README.md) 承担持久化、锁和阶段操作。

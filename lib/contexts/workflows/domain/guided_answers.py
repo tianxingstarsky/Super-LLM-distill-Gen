@@ -7,6 +7,9 @@ import unicodedata
 from lib.prompts.workflow_guided_answers import HINTS
 
 
+_PRIVATE_MARKERS = re.compile(r"</?think>|<\|im_(?:start|end)\|>", re.I)
+
+
 def number(value):
     value = unicodedata.normalize("NFKC", str(value)).strip().strip("$").strip()
     value = value.replace("−", "-").replace(r"\,", "").strip()
@@ -134,6 +137,15 @@ def validate_source(row):
     }
 
 
+def _code_fence(line, opened):
+    marker = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
+    if not opened:
+        return marker[1] if marker else ""
+    if marker and marker[1].startswith(opened) and not marker[2].strip():
+        return ""
+    return opened
+
+
 def answer_tail(text, *, marked_finals=True):
     lines = text.splitlines(keepends=True)
     headers = []
@@ -141,12 +153,9 @@ def answer_tail(text, *, marked_finals=True):
     fence = ""
     for i, line in enumerate(lines):
         if marked_finals:
-            marker = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
-            if fence or marker:
-                if not fence:
-                    fence = marker[1]
-                elif marker and marker[1].startswith(fence) and not marker[2].strip():
-                    fence = ""
+            was_fenced = bool(fence)
+            fence = _code_fence(line, fence)
+            if was_fenced or fence:
                 offset += len(line)
                 continue
         visible = re.sub(r"^#{1,6}\s+", "", line.strip())
@@ -241,7 +250,7 @@ def inspect_answer(text, gold, *, parse_count_sentence=True, marked_finals=True,
             answer_matches=None,
             issue="missing_checkable_explanation",
         )
-    if re.search(r"<\/?think>|<\|im_(?:start|end)\|>", text, re.I):
+    if _PRIVATE_MARKERS.search(text):
         return dict(
             format_ok=False,
             answer=answer,
@@ -365,7 +374,7 @@ def affirmative_membership(left, right):
     )
 
 
-def checked_progress(checks, pieces, suffix):
+def checked_progress(checks, pieces, suffix, *, truncated=False):
     """Attribute only a complete, affirmative, variable-bound exact set membership to its actual author."""
     found = {}
     for rule in checks:
@@ -397,6 +406,9 @@ def checked_progress(checks, pieces, suffix):
                 newline = re.search(r"[\r\n]", suffix[end:])
                 line_end = end + newline.start() if newline else len(suffix)
                 line = suffix[line_start:line_end]
+                if truncated and line_end == len(suffix) and not line.rstrip().endswith((".", "。", "!", "！")):
+                    # The decoder can stop between a membership and its qualification.
+                    continue
                 prior = suffix[:line_start].rstrip().splitlines()
                 scope = prior[-1] if prior and prior[-1].endswith((":", "：")) else ""
                 left = suffix[line_start:start].rstrip().rstrip("$").rstrip()
@@ -424,6 +436,23 @@ def checked_progress(checks, pieces, suffix):
         if eligible and not conflict:
             found["check:" + rule["id"]] = eligible[0]
     return found
+
+
+def checked_truncated_progress(checks, text, attempt):
+    if not checks or not text.strip() or _PRIVATE_MARKERS.search(text):
+        return {}
+    pieces, _ = draft_fragment(text, attempt)
+    # A formula inside a quoted code sample does not assert the student's result.
+    if "```" in text or "~~~" in text:
+        fence = ""
+        own_lines = []
+        for line in text.splitlines(keepends=True):
+            was_fenced = bool(fence)
+            fence = _code_fence(line, fence)
+            own_lines.append(re.sub(r"[^\r\n]", " ", line) if was_fenced or fence else line)
+        text = "".join(own_lines)
+        pieces = [dict(piece, text=text[piece["start"]:piece["end"]]) for piece in pieces]
+    return checked_progress(checks, pieces, text, truncated=True)
 
 
 def shared_findings(proposed, segments, prefix, question, *, exclude_list_markers=False):

@@ -541,6 +541,69 @@ def test_reviewed_set_survives_a_zero_prefix_with_its_source_and_no_unfound_chec
     assert checked_progress([rule], draft_fragment(reordered, 1)[0], reordered)
 
 
+def test_length_limit_archives_only_declared_progress_and_attributes_this_occurrence():
+    rule = {"id": "ones-residue", "kind": "finite_set", "source": "independent enumeration",
+            "variable": "k", "values": [1, 4, 7], "meaning": "k 的候选总数已由枚举核对。"}
+    source = validate_source({"id": "sequences", "question": "计算满足条件的序列个数。",
+                              "gold": {"kind": "number", "value": "99"}, "progress_checks": [rule]})
+    first = r"所以，$k \in \{1, 4, 7\}$。" + "\n没有验证其余情况。\nFinal answer: 274"
+    truncated = (
+        r"2. 1 的总数除以 3 余 1（即 1 的总数 $k \in \{1, 4, 7\}$）。"
+        "\n- **小计：9 种**。\n- **小计：90 种**。\n如果 0 的位置是"
+    )
+    calls = []
+
+    def request(role, index, messages, schema):
+        calls.append((role, index))
+        if role == "coach":
+            assert index == 1
+            content = json.dumps({"decision": "revise:a1.s1", "diagnosis": "Check the count.", "reusable": []})
+        else:
+            content = first if index == 1 else truncated
+        return {"content": content, "reasoning_content": "", "finish_reason": "length" if index == 2 else "stop"}
+
+    for version in ("3.4.0", "3.5.0"):
+        calls.clear()
+        row = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 4, protocol_version=version)
+        assert calls == [("student", 1), ("coach", 1), ("student", 2)]
+        assert row["status"] == "quarantine" and row["answer"] is None
+        attempt = row["attempts"][-1]
+        assert attempt["coach"] is None and attempt["check"]["answer_matches"] is None
+        first_fact, = row["shared_student_findings"]
+        assert first_fact["segment_id"].startswith("a1.") and attempt["student"]["content"] == truncated
+        if version == "3.4.0":
+            assert "program_confirmed" not in attempt
+            continue
+        fact, = attempt["program_confirmed"]
+        start, end = fact["source_span"]
+        assert truncated[start:end] == fact["text"] == r"k \in \{1, 4, 7\}"
+        assert (fact["source_attempt"], fact["check_id"], fact["reviewed_source"]) == (2, rule["id"], rule["source"])
+        assert fact["previously_confirmed_segment_id"] == first_fact["segment_id"]
+        assert fact["previous_disclosure_ids"] == [clue["id"] for clue in row["disclosures"]]
+
+
+def test_length_limit_never_promotes_native_thinking_or_unchecked_statements():
+    rule = {"id": "k-set", "kind": "finite_set", "source": "enumeration",
+            "variable": "k", "values": [1, 4, 7], "meaning": "该变量的取值经过枚举核对。"}
+    source = validate_source({"id": "partial", "question": "计算序列个数。", "gold": {"kind": "number", "value": "99"},
+                              "progress_checks": [rule]})
+    positive = "所以，k ∈ {1,4,7}。\n其余情况待核对。"
+    for content, reasoning, finish, expected in (
+        (positive, "", "length", 1), (positive, "private analysis", "length", 0),
+        ("<think>\n" + positive, "", "length", 0), ("", "", "length", 0),
+        ("Example:\n```text\n" + positive + "\n```", "", "length", 0),
+        ("若 k ∈ {1,4,7}，则……", "", "length", 0), ("所以，k ∈ {1,4,7}", "", "length", 0),
+        ("两项小计是 9 和 90。", "", "length", 0), (positive, "", "cancelled", 0),
+    ):
+        def request(role, index, messages, schema):
+            assert role == "student" and index == 1
+            return {"content": content, "reasoning_content": reasoning, "finish_reason": finish}
+
+        row = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 4)
+        assert row["status"] == "quarantine" and row["answer"] is None
+        assert row["attempts"][0]["coach"] is None and len(row["shared_student_findings"]) == expected
+
+
 def test_only_native_loopback_chat_waits_for_the_full_decode(monkeypatch):
     import io
     from lib.contexts.workflows.infrastructure import guided_llama

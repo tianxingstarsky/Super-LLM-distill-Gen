@@ -5,6 +5,7 @@ import json
 from ..domain.guided_answers import (
     assemble,
     checked_progress,
+    checked_truncated_progress,
     disclosure_bank,
     draft_fragment,
     inspect_answer,
@@ -34,10 +35,11 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         skip_acquired = protocol_version != "3.0.0"
-        marked_finals = protocol_version == "3.4.0"
-        single_decision = protocol_version in {"3.3.0", "3.4.0"}
+        truncated_progress = protocol_version == "3.5.0"
+        marked_finals = truncated_progress or protocol_version == "3.4.0"
+        single_decision = marked_finals or protocol_version == "3.3.0"
         anchored = single_decision or protocol_version == "3.2.0"
-        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4"}[protocol_version]
+        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4", "3.5.0": "v3.5"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         mode = "answer_key" if gold is not None else "source_reasoning_only"
         attempts = []
@@ -116,6 +118,18 @@ class GenerateGuidedAnswer:
                 attempt["check"] = dict(
                     format_ok=False, answer=None, answer_matches=None, issue=issue
                 )
+                if truncated_progress and student["finish_reason"] == "length" and not student.get("reasoning_content"):
+                    certified = checked_truncated_progress(
+                        source.get("progress_checks", []), student["content"], index
+                    )
+                    for key, item in certified.items():
+                        item["source_attempt"] = index
+                        item["previous_disclosure_ids"] = [d["id"] for d in disclosed]
+                        if key in findings:
+                            item["previously_confirmed_segment_id"] = findings[key]["segment_id"]
+                        else:
+                            findings[key] = item
+                    attempt["program_confirmed"] = list(certified.values())
                 break
             suffix = student["content"]
             public.append({"role": "assistant", "content": suffix})

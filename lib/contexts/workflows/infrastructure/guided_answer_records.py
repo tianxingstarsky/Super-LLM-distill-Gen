@@ -111,7 +111,7 @@ def run_guided_cases(
         template_version = (
             frozen_config["template_version"] if frozen_config else VERSION
         )
-        if template_version not in {"3.0.0", "3.1.0", "3.2.0", "3.3.0", VERSION}:
+        if template_version not in {"3.0.0", "3.1.0", "3.2.0", "3.3.0", "3.4.0", VERSION}:
             raise ValueError(
                 "unsupported frozen generator version; use offline export or its original release"
             )
