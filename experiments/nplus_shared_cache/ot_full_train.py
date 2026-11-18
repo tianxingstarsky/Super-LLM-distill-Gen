@@ -302,6 +302,16 @@ def train_case(args, base, heads, owner, tokenizer, processor, ordinal, record, 
                 gradient_tensors=grads, losses=sums, seconds=time.perf_counter()-started,
                 peak_cuda_bytes=torch.cuda.max_memory_allocated(device))
 
+def account_training_calls(entry, answer_chunk):
+    """Count each actual native prefill, latent commit and answer forward."""
+    contextual_prefix = entry["prefix_tokens"] - entry["prompt_gradient_tokens"]
+    prefix_calls = math.ceil(contextual_prefix / 256) + 1
+    answer_calls = math.ceil(entry["terminal_answer_labels"] / answer_chunk)
+    return dict(call_accounting="native-forward-count/v2", prefix_backbone_calls=prefix_calls,
+                latent_backbone_calls=entry["round_count"], answer_backbone_calls=answer_calls,
+                backbone_calls=prefix_calls + entry["round_count"] + answer_calls)
+
+
 def coverage(base, named, owner, initial):
     groups, nonzero, changed = {}, [], []
     for name, param in named:
@@ -530,6 +540,7 @@ def run_locked(args, arm):
                 print(f"Starting {args.arm} routes, ordinal {ordinal}, {len(ends)} segments, "
                       f"{receipt['n_answer_tokens']} answer tokens.", flush=True)
                 entry = train_case(args, base, heads, owner, tokenizer, processor, ordinal, row, targets, ends)
+                entry.update(account_training_calls(entry,args.answer_chunk))
                 state["source_completion_counts"][entry["source_completion"]] += 1
                 eos_count = int(entry["native_eos"] is not None)
                 if entry["terminal_answer_labels"] != receipt["n_answer_tokens"]+eos_count or entry["answer_sha256"] != receipt["answer_sha256"]:

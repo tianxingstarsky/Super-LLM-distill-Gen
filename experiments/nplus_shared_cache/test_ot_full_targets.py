@@ -10,7 +10,7 @@ import torch
 from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5TextConfig
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel
 
-from . import (
+from experiments.nplus_shared_cache import (
     ot_corpus_scope as scope,
     ot_full_targets as targets,
     ot_full_train,
