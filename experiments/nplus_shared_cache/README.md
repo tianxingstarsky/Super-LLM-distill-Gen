@@ -260,6 +260,35 @@ without any source signal. Restoring the original source text without vectors
 gave 6/6. This tests direct transfer to a new decoder prompt; it cannot rule
 out information elsewhere in the trace or learnability of a trained readout.
 
+### Reference readout: official LOTUS natural-language weights
+
+[LOTUS](https://github.com/yingfan-bot/lotus) is a separate Llama-based
+experiment. Use its [natural-language stage-2 weights](https://huggingface.co/yingfanbot/gsm-lotus-llama3b-nl)
+and its inference dependencies in an isolated environment; the Qwen experiment
+uses a different Transformers version. The model card specifies six latent
+blocks of 50 positions and six refinement iterations. Stage-1 CoT weights and
+ordinary text generation do not exercise this trained latent interface.
+
+```powershell
+python -m experiments.nplus_shared_cache.lotus_readout_probe --upstream path/to/pinned-lotus --model path/to/local-nl-checkpoint --question "A shop has 4 boxes of 6 cups each. It sells 7 cups. How many cups are left?" --output path/to/new-readout.json
+```
+
+The probe checks both shard hashes and the upstream generation source revision,
+uses the authors' batch-one generation path, and records the final loop's six
+raw word-head readouts and the separately decoded answer. Every block has 50
+positions. Text remaining after a coherent phrase may be unsupervised padding
+positions: no gold step length is available at inference, so the receipt does
+not trim the suffix or count it as a separate reasoning step. Blocks correspond
+to supervised steps, not independently ending solution directions.
+
+With the official NL checkpoint, changing four boxes of six cups to five
+changed the first block's readable inventory calculation from 24 to 30.
+After selling seven cups the separate greedy answers were 17 and 23, both
+with EOS. Later readout positions repeated digits, words and punctuation;
+they did not form six clean, complementary explanations. These two local
+examples demonstrate a responsive intermediate readout, not benchmark
+replication or a causal test of whether the answer needs that block.
+
 ## Readable soft-input comparison
 
 This separate, opt-in comparison uses probability-weighted input embeddings from
