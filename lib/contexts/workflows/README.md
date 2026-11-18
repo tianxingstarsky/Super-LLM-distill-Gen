@@ -2,6 +2,8 @@
 
 管理一次生成任务的创建、执行、恢复、停止和过程查询。数据集交付与人工审核分别属于 datasets 和 review。
 
+独立的 `GenerateGuidedAnswer` 以当前保留稿、学生已确认的发现和已经披露的线索为快照生成续写。使用 `python -m lib.guided_answers --help` 查看导入、运行和离线导出入口。原生日志和撤回稿保存在各题档案中。只有答案键匹配且解题说明通过审核的样本进入 `accepted.jsonl`；只有原推理的来源可补写正式答复，保存在 `unverified.jsonl`。回归见 `tests/test_guided_answers.py`。
+
 - 对外使用 [api.py](api.py) 中的 `WorkflowRunApplication`。
 - [application](application/README.md) 决定执行顺序；[domain](domain/README.md) 决定依赖和状态含义。
 - [infrastructure](infrastructure/README.md) 承担持久化、锁和阶段操作。

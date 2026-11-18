@@ -43,6 +43,10 @@ def reasoning_request(reasoning, *, api_format: str, base_url: str = "", model_i
             raise ValueError("model_reasoning_effort_required")
         return {"reasoning": {"effort": "none" if mode == "disabled" else effort}}
     if api_format == "chat":
+        if scheme == "llama_cpp_qwen":
+            if effort is not None:
+                raise ValueError("model_reasoning_effort_unsupported")
+            return {"extra_body": {"chat_template_kwargs": {"enable_thinking": mode == "enabled"}}}
         if scheme == "deepseek":
             result = {"extra_body": {"thinking": {"type": mode}}}
             if effort is not None:

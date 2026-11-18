@@ -96,18 +96,26 @@ def _endpoint_form(application: BackendApplication, *, inline: bool = False) -> 
         api_format = st.selectbox("API 协议", API_FORMATS, key="backend-add-api-format",
                                   format_func=lambda value: _API_FORMAT_LABELS[value],
                                   help="选择端点实际支持的调用协议。")
+        qwen_template = api_format == "chat" and st.checkbox(
+            "本地 llama.cpp · Qwen 原生聊天模板", key="backend-add-qwen-template",
+            help="适用于启用 Jinja 且支持 enable_thinking 的 Qwen 模型。节点可逐次开启或关闭思考。",
+        )
+        form_key = "llama-cpp-qwen" if qwen_template else api_format
         with st.form("backend-add"):
             left, right = st.columns(2)
-            name = left.text_input("后端名", _DEFAULT_NAMES[api_format],
-                                   key=f"backend-add-name:{api_format}")
-            base_url = right.text_input("服务 API 地址", _DEFAULT_URLS[api_format],
-                                        key=f"backend-add-base-url:{api_format}")
+            name = left.text_input("后端名", "llama_cpp" if qwen_template else _DEFAULT_NAMES[api_format],
+                                   key=f"backend-add-name:{form_key}")
+            base_url = right.text_input("服务 API 地址", "http://127.0.0.1:8080/v1" if qwen_template else _DEFAULT_URLS[api_format],
+                                        key=f"backend-add-base-url:{form_key}")
             models = st.text_input("模型名（逗号分隔）",
-                                   "qwen2.5:7b-instruct" if api_format == "chat" else "",
-                                   key=f"backend-add-models:{api_format}",
+                                   "qwen2.5:7b-instruct" if api_format == "chat" and not qwen_template else "",
+                                   key=f"backend-add-models:{form_key}",
                                    placeholder="填写所选服务提供的模型名")
-            mode = st.radio("密钥来源", ["环境变量（推荐）", "写入本地配置"], horizontal=True)
-            secret = st.text_input("密钥（环境变量名 或 密钥值）", type="password")
+            key_modes = ["环境变量（推荐）", "写入本地配置"]
+            if qwen_template:
+                key_modes.insert(0, "本地免密")
+            mode = st.radio("密钥来源", key_modes, horizontal=True)
+            secret = "" if mode == "本地免密" else st.text_input("密钥（环境变量名 或 密钥值）", type="password")
             overwrite = st.checkbox("覆盖同名后端")
             submit = st.form_submit_button("保存端点", type="primary")
         if submit:
@@ -117,12 +125,13 @@ def _endpoint_form(application: BackendApplication, *, inline: bool = False) -> 
                 prices_obj = deepcopy((application.merged_backends().get(name.strip()) or {}).get("prices") or None)
                 model_names = [part.strip() for part in models.split(",") if part.strip()]
                 default_env = "ANTHROPIC_API_KEY" if api_format == "anthropic" else "OPENAI_API_KEY"
+                options = {"qwen_chat_template": True, "network_route": "direct"} if qwen_template else {}
                 if mode.startswith("环境变量"):
                     application.save_endpoint(name, base_url, model_names, api_key_env=secret or default_env,
-                                     prices=prices_obj, explicit_replace=overwrite, api_format=api_format)
+                                     prices=prices_obj, explicit_replace=overwrite, api_format=api_format, **options)
                 else:
                     application.save_endpoint(name, base_url, model_names, api_key=secret,
-                                     prices=prices_obj, explicit_replace=overwrite, api_format=api_format)
+                                     prices=prices_obj, explicit_replace=overwrite, api_format=api_format, **options)
                 st.toast(f"已保存 {name}，原文件已备份")
                 st.rerun()
             except (ValueError, FileExistsError) as error:

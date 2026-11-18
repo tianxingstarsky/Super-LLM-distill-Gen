@@ -283,8 +283,10 @@ class BackendApplication:
     def save_endpoint(self, name: str, base_url: str, models: list[str],
                       api_key: str = "", api_key_env: str = "", prices: dict[str, float] | None = None,
                       explicit_replace: bool = False, api_format: str = "chat",
-                      network_route: str = "system") -> str:
+                      network_route: str = "system", qwen_chat_template: bool = False) -> str:
         validate_endpoint(name, base_url, models, api_format)
+        if qwen_chat_template and api_format != "chat":
+            raise ValueError("Qwen 原生聊天模板需要 Chat Completions 端点")
         network_route = validate_network_route(network_route)
         if api_key and api_key_env:
             raise ValueError("api_key 与 api_key_env 二选一；推荐环境变量方式")
@@ -298,6 +300,11 @@ class BackendApplication:
         entry: dict[str, Any] = {"base_url": base_url, "models": list(models),
                                  "api_format": api_format, "network_route": network_route,
                                  "model_capabilities": {}}
+        if qwen_chat_template:
+            entry["model_capabilities"] = {
+                model: {"manual": {"reasoning_format": "llama_cpp_qwen", "reasoning_disabled": True}}
+                for model in models
+            }
         if api_key:
             entry["api_key"] = api_key
         else:

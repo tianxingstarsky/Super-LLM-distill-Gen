@@ -13,6 +13,7 @@ from lib.domain.workflow_scale import (DEFAULT_CONTEXT_WINDOW_TOKENS,
                                        MAX_CONTEXT_WINDOW_TOKENS, NODE_ROLES, node_roles,
                                        validate_node_models)
 from lib.model_protocols import API_FORMATS
+from lib.presentation.streamlit.guided_answer_controls import render_guided_answer_cli
 from lib.presentation.streamlit.i18n import UntranslatedText, translate_label
 from lib.presentation.streamlit.model_scheduling_controls import render_model_scheduling
 from lib.presentation.streamlit.workflow_model_capabilities import (
@@ -712,6 +713,9 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
         st.caption(UntranslatedText("、".join(targets)))
     st.caption("同一模型可用于指导与提问。两者使用独立上下文与输出上限，共享模型并发额度。" if node == "director" else
                "同一模型可用于生成和评审。上下文与输出上限按角色保存，并发额度在全部节点与任务间共享。")
+    if node == "sft":
+        render_guided_answer_cli(bindings.get(node, {}).get("generation", {}), endpoints,
+                                 key=f"guided-answer-example:{workspace}")
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()

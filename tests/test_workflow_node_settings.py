@@ -1,6 +1,7 @@
 """A model service can be connected without leaving the selected workflow node."""
 import pytest
 from copy import deepcopy
+import json
 
 from streamlit.testing.v1 import AppTest
 
@@ -30,6 +31,27 @@ render_node_models('sft', '文档资料', 'demo', bindings, endpoints,
 '''
 
 TOKEN_LIMITS = {'context_window_tokens': 131_072, 'max_output_tokens': 32_768}
+
+
+def test_guided_command_uses_the_selected_local_sft_model_and_cli_source_contract():
+    from lib.contexts.workflows.domain.guided_answers import validate_source
+
+    model = "reader's-qwen"
+    ui = AppTest.from_string(SCRIPT)
+    ui.session_state['fixture-local'] = {'backends': {'local': {
+        'base_url': 'http://localhost:8080/v1', 'models': [model],
+        'model_capabilities': {model: {'manual': {'reasoning_format': 'llama_cpp_qwen'},
+                                       'max_concurrency': 2}},
+    }}}
+    ui.session_state['workflow-node-bindings:demo'] = {
+        'sft': {'generation': {'backend': 'local', 'model': model, **TOKEN_LIMITS}}}
+    ui.run()
+    assert not ui.exception
+    command = next(item.value for item in ui.code if 'python -m lib.guided_answers' in item.value)
+    assert "--student-url 'http://localhost:8080/v1' --student-model 'reader''s-qwen'" in command
+    assert '--context-tokens 131072 --max-tokens 32768 --workers 2 --coach-thinking' in command
+    sample = next(item.value for item in ui.code if 'notebook-01' in item.value)
+    assert validate_source(json.loads(sample))['gold'] == {'kind': 'number', 'value': '4'}
 
 
 def _field(ui, label):

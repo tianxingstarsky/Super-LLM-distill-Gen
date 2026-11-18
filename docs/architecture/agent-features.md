@@ -184,3 +184,26 @@ API 一词豁免整个推理；无来源的数值要求仍拦截，未决也不�
 整理前后用真实注册表在独立 Python 进程中比较全部 `PromptSpec` 字段，并检查 `workflow` 的全部既有 `PromptSpec` 别名及既有提示词模块的字符串/模板导出。基线为 **86 个 ID、279 个版本、247 个 workflow 模板别名**；比较包括 purpose、source、template、variables、constraints、notes，而非只比较 ID。v2/v3 导入补写和用户本轮已有改动均包含在整理前基线中。
 
 业务验证复用 `tests/test_prompts.py`、`tests/test_workflow_node_prompts.py` 与相关已有功能回归；跨目录依赖仍检查 `tests/test_ddd_architecture.py`。本次注册表等值检查不调用模型，也不证明模型效果；不为文件拆分新增大量镜像测试。
+
+## 分段指导作答
+
+`lib/prompts/workflow_guided_answers.py` 持有作答者、无答案来源补写和私有指导员的角色模板。`GenerateGuidedAnswer` 运行两种来源用例，共享状态、线索次序、原文段落身份和答案键判定由 `workflows/domain/guided_answers.py` 维护。组合根 `lib/bootstrap/guided_answers.py` 接入 llama-server 原生非思考模板、审核请求、逐调用收据和 JSONL 投影。
+
+输入 `gold` 可采用精确数值、单选字母或字面文本。没有独立答案键时需提供 `source_reasoning`。可选 `disclosure_hints` 按文件顺序提供预审的事实、思路或演算步骤，由程序在需要时逐条发布。每次模型请求都从当前进度重新构造；私人诊断、撤回稿和未来线索保留在审计边界。实际请求与完整响应存于每题目录，按 `student_request_messages` 重建单轮作答者所见内容。
+
+JSONL 每行是一道题，`id` 是文件内唯一的字符串，`source` 保留出处。下列两行分别演示已知答案和只有来源推理的资料。
+
+```jsonl
+{"id":"groups","question":"把两组互不重叠的物品合并，原有两件和三件，合并后有几件？","gold":{"kind":"number","value":"5"},"source":{"name":"示例题"},"disclosure_hints":[{"id":"relation","kind":"idea","text":"合并互不重叠的集合时，元素数量可以相加。","source":"题目编辑"}]}
+{"id":"demo","question":"给出保存项目的演示清单。","source":{"reasoning_author":"原回答模型"},"source_reasoning":"可以依次检查项目名称、保存操作与重新打开后的内容。","gold":null}
+```
+
+运行入口为 `python -m lib.guided_answers --input sources.jsonl --output .dataforge/guided-run --student-url http://localhost:8080/v1 --student-model MODEL_ID`。`--workers` 允许 1 至 4，实际并发取决于模型槽数。原生服务按槽验证至少 90,000 个 token 的上下文并为每次输出预留至少 32,768 个 token。`--max-attempts` 限制每题的学生作答次数，`--experience` 接受带版本的学生经验文件。
+
+指导员按学生原文段编号划定可保留前缀，程序可另外核验错误位置之后的独立发现。程序按清单顺序披露下一条线索。3.1 版遇到与已确认学生原文或既有披露完整匹配的清单项，会记录原作者和证据并继续寻找下一条。匹配仅规范 Unicode 组合形式和空白，保留符号、大小写和标点。没有题级线索的题目使用一般方法提醒。每轮实际发出的模型请求保存在逐调用收据中，`case.json` 的 `clue_ledger`、`draft_versions` 和 `shared_student_findings` 可追溯披露、撤回、复用及最终正文的原作者。
+
+同一输入和配置可在同一输出目录恢复。请求结果未明时使用 `--retry-interrupted` 显式重试。使用 `--export-only` 可离线重建 `accepted.jsonl`、`unverified.jsonl`、`quarantine.jsonl` 和逐轮 `feedback.jsonl`。有键题只有在程序核验答案且指导员确认正文成立时通过。无键补写即使通过正文审核也保留待核验状态。
+
+3.2 版由指导员指定第一个无法成立的原文段。程序按段编号计算保留边界。可以为每题加入 `progress_checks`，如 `[{"id":"possible-k","kind":"finite_set","variable":"k","values":[1,4,7],"meaning":"k 表示序列中 1 的个数。","source":"独立枚举"}]`。只有学生以明确肯定的归属关系写出相同变量和完整整数集合时，程序才向下一轮投影其原文公式及审定含义。被撤回段里的其他说法留在档案，未命中的规则留在输入端。程序保存原稿段编号、字符偏移和当时已发布的线索编号。
+
+使用 `--reuse-first-from OLD_RUN` 可在新运行复测同一份首答。程序核对旧任务和原请求的摘要、题目标识、端点与模型，并比较实际发送 JSON 的 UTF-8 字节。匹配成功后，首份学生收据记录原始摘要和重放来源，后续指导与学生续写使用新协议发起实际调用。任一不匹配即报告中断。`summary.json` 的 `model_calls` 分别统计本次运行完成的请求、重放的首答以及结果未明或失败的请求。

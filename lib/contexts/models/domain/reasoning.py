@@ -10,7 +10,7 @@ from .reasoning_control import (
 )
 
 
-REASONING_FORMATS = ("deepseek", "anthropic_adaptive", "anthropic_budget")
+REASONING_FORMATS = ("deepseek", "anthropic_adaptive", "anthropic_budget", "llama_cpp_qwen")
 
 
 def valid_effort(value) -> bool:

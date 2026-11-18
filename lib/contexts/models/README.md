@@ -13,3 +13,9 @@
 `lib/llm_client.py` 和 `lib/model_tool_calls.py` 只保留模块身份兼容别名。其他 `lib/model_*` 仍提供共享调度、流式消费、报文与诊断辅助；它们不拥有文本和工具请求的主重试循环。既有端点身份、计费和并发台账、响应字段都保持兼容。
 
 验证：`tests/test_model_request_use_cases.py`、`tests/test_llm_client.py`、`tests/test_model_*`、`tests/test_ddd_architecture.py`。协议测试使用本地模拟服务，不调用付费 API。
+
+## llama.cpp 的 Qwen 聊天模板
+
+在「系统设置 → 服务连接与用量 → 配置端点」选择 Chat Completions 并勾选「本地 llama.cpp · Qwen 原生聊天模板」，填写本机服务的 `/v1` 地址和 `/v1/models` 返回的模型 ID。节点的开启和关闭思考通过每次请求的 `chat_template_kwargs.enable_thinking` 传给 Jinja 模板，自动模式沿用模板默认值。模型名本身不用于判断协议。节点输出上限按请求设置，共享并发应与实际服务槽数一致。模型列表含 llama.cpp 的 `meta.n_ctx` 时仅采用该运行时上下文容量。
+
+定向验证见 `tests/test_backend_page.py` 与 `tests/test_model_reasoning_controls.py`。

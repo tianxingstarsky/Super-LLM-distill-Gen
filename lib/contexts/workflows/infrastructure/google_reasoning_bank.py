@@ -45,7 +45,9 @@ def recorded_episode(observation, user_outcome=None):
         check = {"keep": user_outcome == "success", "reason": "Outcome explicitly labelled by the operator."}
     if not isinstance(check, dict) or type(check.get("keep")) is not bool:
         raise ValueError("reasoning_bank_no_observed_outcome")
-    chronological = episode.get("agent_episode_projection_version") == 1 and episode.get("target") == "agent"
+    agent_trace = episode.get("agent_episode_projection_version") == 1 and episode.get("target") == "agent"
+    guided_trace = episode.get("guided_answer_projection_version") == 1
+    chronological = agent_trace or guided_trace
     thoughts, actions = [], []
     assistant_indexes = [index for index, message in enumerate(messages) if message.get("role") == "assistant"]
     for position, index in enumerate(assistant_indexes):
@@ -65,10 +67,13 @@ def recorded_episode(observation, user_outcome=None):
     return {"id": episode["id"], "query": json.dumps(query, ensure_ascii=False),
         "think_list": thoughts, "action_list": actions,
         "status": "success" if check["keep"] else "fail",
-        "assessment_source": {"kind": "user_label" if user_outcome else "recorded_model_autoeval", "independently_verified": False},
+        "assessment_source": {"kind": ("user_label" if user_outcome else
+                                       "program_key_and_tutor" if guided_trace else "recorded_model_autoeval"),
+                              "independently_verified": False},
         "feedback": "This is a fallible reviewer observation, not established truth.\n" + check.get("reason", ""),
         **({"agent_episode_projection_version": 1, "source_outcome": episode.get("source_outcome", "unknown")}
-           if chronological else {})}
+           if agent_trace else {}),
+        **({"guided_answer_projection_version": 1} if guided_trace else {})}
 
 
 class GoogleReasoningBank:

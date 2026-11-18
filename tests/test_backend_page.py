@@ -126,6 +126,19 @@ def test_service_registration_saves_through_application_port():
     assert 'prices' not in saved
 
 
+def test_llama_cpp_qwen_preset_saves_a_direct_keyless_endpoint_and_template_controls():
+    ui = AppTest.from_string(SCRIPT).run()
+    ui.checkbox(key="backend-add-qwen-template").check().run()
+    assert ui.text_input(key="backend-add-base-url:llama-cpp-qwen").value == "http://127.0.0.1:8080/v1"
+    ui.text_input(key="backend-add-models:llama-cpp-qwen").set_value("local-model")
+    next(button for button in ui.button if button.label == "Save endpoint").click().run()
+    assert not ui.exception
+    saved = ui.session_state["fixture-local"]["backends"]["llama_cpp"]
+    assert saved["api_key_env"] == "" and saved["network_route"] == "direct"
+    assert saved["model_capabilities"]["local-model"]["manual"] == {
+        "reasoning_format": "llama_cpp_qwen", "reasoning_disabled": True}
+
+
 @pytest.mark.parametrize(('api_format', 'base_url', 'key_env', 'label'), [
     ('responses', 'https://api.openai.com/v1', 'OPENAI_API_KEY', 'OpenAI Responses'),
     ('anthropic', 'https://api.anthropic.com', 'ANTHROPIC_API_KEY', 'Anthropic Messages'),

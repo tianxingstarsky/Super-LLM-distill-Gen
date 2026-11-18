@@ -66,3 +66,15 @@ TextEmbedding("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
 V4.1-Flash 已通过原 `main` 提炼两条真实经验，由原 `select_memory/screening` 配合本地 384 维多语种向量召回。缓存恢复不增加调用。这证明链路工作，不证明整体质量已经提高。MaTTS 的宿主协议仅离线验证，未购买额外多稿实跑。
 
 Chrysalis 完整源目录也已保存。它是 SRE 参考工程，包含缓存与流量控制示例；未运行的云服务、热补丁及拓扑演化不计为数据生成能力。
+
+## 从分段续写中学习
+
+已结束的指导任务在每个样本目录保存 `case.json`。选择一个有参考答案、结果明确的尝试，在本地后端学习通用解题经验。例如在仓库根目录运行
+
+```sh
+python -m lib.guided_experience --case example-run/cases/CASE_HASH/case.json --attempt 2 --query "Keep useful intermediate results when continuing a partly correct derivation" --backend LOCAL_BACKEND --model LOCAL_MODEL --library personal-memory --output next-experience.json
+```
+
+把示例里的目录、模型和后端名换成实际值。若向量模型缓存位于个人经验库以外，用 `--embedding-cache` 指向已安装的缓存。后续批次使用 `python -m lib.guided_answers … --experience next-experience.json`。经验供答题方使用。指导方当轮能披露的信息仍由题目约定和已取得的解题进展决定。运行中的题目使用启动时冻结的版本。
+
+只有答案键明确不匹配，或答案键匹配且推导得到肯定评定的尝试，才能成为此入口的学习依据。未完成推导、格式失败和缺少答案键的任务仍可查阅。程序按发生顺序保存实际学生发言与当时公开的内容。提炼调用和检索版本写入回执；需要评估迁移效果时，把候选用于另一个批次做对照。用 `--parent` 延续同一经验库的旧版本。

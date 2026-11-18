@@ -44,6 +44,7 @@ def normalize_model_info(model: str, value: dict, source: str) -> dict:
     parameters = value.get("supported_parameters")
     result = empty_model_info(model)
     result["context_window_tokens"] = _positive(
+        _mapping(value.get("meta")).get("n_ctx") if value.get("owned_by") == "llamacpp" else None,
         value.get("context_window_tokens"), value.get("context_window"), value.get("context_length"),
         value.get("contextWindow"), value.get("max_input_tokens"), limit.get("context"))
     result["max_output_tokens"] = _positive(

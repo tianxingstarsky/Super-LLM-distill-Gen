@@ -312,7 +312,11 @@ class ChatClient:
         else:
             from openai import OpenAI, Timeout  # delayed import keeps offline domain tests lightweight
 
-            self.client = OpenAI(base_url=base_url, api_key=api_key, max_retries=0,
+            sdk_key = api_key
+            if not sdk_key and urlsplit(base_url).hostname in {"127.0.0.1", "::1", "localhost"}:
+                # Keyless loopback servers still need a nonempty SDK credential.
+                sdk_key = "sk-local"
+            self.client = OpenAI(base_url=base_url, api_key=sdk_key, max_retries=0,
                                  timeout=Timeout(MODEL_READ_IDLE_TIMEOUT_SECONDS,
                                      connect=MODEL_CONNECT_TIMEOUT_SECONDS,
                                      write=MODEL_WRITE_TIMEOUT_SECONDS, pool=MODEL_POOL_TIMEOUT_SECONDS),
@@ -519,6 +523,8 @@ class ChatClient:
         # Preserve the old per-call opt-out, but its absence must never turn
         # thinking off. Node choices take priority over legacy call defaults.
         legacy_disable = not explicit_reasoning and thinking is False and self.api_format == "chat"
+        if legacy_disable and getattr(self, "model_info", {}).get("reasoning_format") == "llama_cpp_qwen":
+            choice, explicit_reasoning, legacy_disable = {"mode": "disabled"}, True, False
         reasoning_kwargs = reasoning_request(choice, api_format=self.api_format,
             base_url=getattr(self, "base_url", ""), model_info=getattr(self, "model_info", {}),
             max_tokens=max_tokens or (ANTHROPIC_DEFAULT_MAX_TOKENS if self.api_format == "anthropic" else None))
@@ -526,7 +532,7 @@ class ChatClient:
         control_metadata = {"generation_control": control} if control is not None else {}
         def check_reasoning_rejection(error):
             if explicit_reasoning and any(_is_parameter_unsupported(error, parameter) for parameter in
-                    ("thinking", "reasoning_effort", "reasoning.effort", "output_config", "budget_tokens")):
+                    ("thinking", "chat_template_kwargs", "enable_thinking", "reasoning_effort", "reasoning.effort", "output_config", "budget_tokens")):
                 raise ValueError("model_reasoning_parameter_unsupported") from None
         if self.api_format == "anthropic":
             kwargs = anthropic_request(messages, json_mode=json_mode)
@@ -887,7 +893,9 @@ def load_backend(
 
     reasoning = validate_reasoning(reasoning)
     model_info = {}
-    if (reasoning["mode"] != "auto" and not base_url
+    declaration = (b.get("model_capabilities") or {}).get(model) or {}
+    qwen_template = (declaration.get("manual") or declaration).get("reasoning_format") == "llama_cpp_qwen"
+    if ((reasoning["mode"] != "auto" or qwen_template) and not base_url
             and not (allow_global_endpoint_override and os.environ.get("LLM_BASE_URL"))):
         from lib.bootstrap.backends import backend_application
         # Reads the credential-bound discovery cache only; no model request.

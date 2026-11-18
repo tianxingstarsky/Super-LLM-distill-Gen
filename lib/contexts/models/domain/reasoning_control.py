@@ -55,6 +55,10 @@ def standard_reasoning(effort, *, model_info, api_format="chat", max_output_toke
                 raise ValueError("model_reasoning_budget_exceeds_output")
             mapping = {level: {"mode": "enabled", "budget_tokens": min(budget, max_output_tokens - 1)}
                        for level, budget in zip(STANDARD_REASONING_EFFORTS, (1024, 2048, 4096, 8192, 16384))}
+        elif scheme == "llama_cpp_qwen" and api_format == "chat":
+            # The native template has a boolean switch even if a model catalog
+            # advertises effort levels for another deployment of these weights.
+            mapping = {level: {"mode": "enabled"} for level in STANDARD_REASONING_EFFORTS}
         elif levels:
             if any(level not in STANDARD_REASONING_EFFORTS for level in levels):
                 raise ValueError("reasoning_provider_mapping_required")

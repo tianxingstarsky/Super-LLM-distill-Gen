@@ -7,6 +7,33 @@ import pytest
 
 from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
 from lib.bootstrap.reasoning_bank import reasoning_bank_application
+from lib.contexts.workflows.api import learn_guided_experience
+from lib.contexts.workflows.application.guided_experience import observed_attempt
+from lib.contexts.workflows.infrastructure.google_reasoning_bank import recorded_episode
+
+
+def test_guided_learning_observes_only_feedback_available_at_selected_attempt():
+    attempts = [
+        {"check": {"answer_matches": False}, "coach": {"diagnosis": "Check the bound"}},
+        {"check": {"answer_matches": True, "format_ok": True}, "coach": {"verdict": "supported"}},
+    ]
+    trace = [{"role": role, "content": text} for role, text in [
+        ("user", "Count the possibilities"), ("assistant", "Six possibilities"),
+        ("tool", "Retain the cases at the boundary"), ("assistant", "Seven possibilities")]]
+    case = {"id": "count", "gold": {"kind": "number", "value": "7"}, "attempts": attempts,
+            "public_dialogue": trace, "binding": "frozen"}
+    before = recorded_episode(observed_attempt(case, 1))
+    after = recorded_episode(observed_attempt(case, 2))
+    assert before["status"] == "fail" and after["status"] == "success"
+    assert "boundary" not in before["query"] + str(before["action_list"])
+    assert "boundary" not in after["query"]
+    assert json.loads(after["action_list"][0])["following_recorded_observations"] == [trace[2]]
+    with pytest.raises(ValueError, match="reference"):
+        learn_guided_experience(None, {**case, "gold": None}, 1, "boundary checks")
+    attempts[1].update(student_request_messages=[trace[0], trace[2]], student=trace[3])
+    reset = recorded_episode(observed_attempt(case, 2))
+    assert "boundary" in reset["query"] and len(reset["action_list"]) == 1
+    assert "Six possibilities" not in str(reset)
 
 
 @pytest.fixture(scope="session", autouse=True)

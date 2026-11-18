@@ -14,6 +14,33 @@ from model_streaming_fixtures import sdk_client
 DEEPSEEK = {"effort": {"supported_levels": ["low", "high", "max"], "default_level": "high"}}
 
 
+@pytest.mark.parametrize(("mode", "legacy_flag", "expected"), [
+    ("enabled", None, True), ("disabled", None, False), ("auto", False, False),
+    ("auto", None, None),
+])
+def test_llama_cpp_qwen_template_controls_reach_native_wire(mode, legacy_flag, expected):
+    captured = []
+    def handler(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json=_response("chat"))
+    client = sdk_client("chat", handler)
+    client.model_info = {"reasoning_format": "llama_cpp_qwen", "reasoning_disabled": True}
+    client.reasoning = {"mode": mode}
+    if mode == "enabled":
+        from lib.contexts.models.contracts import standard_reasoning
+        client.model_info["reasoning_efforts"] = ["low", "high"]
+        client.reasoning = standard_reasoning("high", model_info=client.model_info,
+                                               api_format="chat", max_output_tokens=32768)
+    try:
+        client.chat([{"role": "user", "content": "What is 2+2?"}], max_tokens=32768, thinking=legacy_flag)
+    finally:
+        client.client.close()
+    payload = captured[0]
+    assert payload.get("chat_template_kwargs") == (None if expected is None else {"enable_thinking": expected})
+    assert "thinking" not in payload and "reasoning_effort" not in payload
+    assert payload["max_tokens"] == 32768
+
+
 @pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
 def test_canonical_effort_is_saved_while_only_mapped_effort_reaches_wire(protocol):
     from copy import deepcopy

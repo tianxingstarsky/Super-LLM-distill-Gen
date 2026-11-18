@@ -299,7 +299,7 @@ def _request(client, kwargs):
                 rejection.definite_rejection = rejected_before_generation(error)
                 raise rejection from None
             if client.reasoning.get("mode") != "auto" and any(_is_parameter_unsupported(error, key) for key in
-                    ("thinking", "reasoning_effort", "reasoning.effort", "output_config", "budget_tokens")):
+                    ("thinking", "chat_template_kwargs", "enable_thinking", "reasoning_effort", "reasoning.effort", "output_config", "budget_tokens")):
                 rejection = ValueError("model_reasoning_parameter_unsupported")
                 rejection.definite_rejection = rejected_before_generation(error)
                 raise rejection from None
