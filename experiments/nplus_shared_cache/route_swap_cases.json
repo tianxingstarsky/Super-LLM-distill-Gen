@@ -1,0 +1,40 @@
+{
+  "pairs": [
+    {
+      "id": "pickup-reschedule",
+      "messages": [
+        {"role": "user", "content": "我预约周一取件，联系人姓林。"},
+        {"role": "assistant", "content": "记下了。"},
+        {"role": "user", "content": "改到周{day}，联系人不变。确认一下取件日和联系人姓什么。"}
+      ],
+      "days": ["四", "五"],
+      "date_prefix": "取件日：",
+      "contact_prefix": "联系人姓",
+      "contacts": ["林", "陈"]
+    },
+    {
+      "id": "pickup-confirmation",
+      "messages": [
+        {"role": "user", "content": "取件人的联系人姓陈，等我确认时间。"},
+        {"role": "assistant", "content": "好。"},
+        {"role": "user", "content": "时间定在周{day}。取件是哪天，联系人姓什么？"}
+      ],
+      "days": ["二", "三"],
+      "date_prefix": "取件日：",
+      "contact_prefix": "联系人姓",
+      "contacts": ["陈", "林"]
+    },
+    {
+      "id": "pickup-check",
+      "messages": [
+        {"role": "user", "content": "这单周{day}取件，联系人姓王。"},
+        {"role": "assistant", "content": "收到。"},
+        {"role": "user", "content": "帮我核对一下取件的星期和联系人的姓。"}
+      ],
+      "days": ["六", "一"],
+      "date_prefix": "取件日：",
+      "contact_prefix": "联系人姓",
+      "contacts": ["王", "李"]
+    }
+  ]
+}

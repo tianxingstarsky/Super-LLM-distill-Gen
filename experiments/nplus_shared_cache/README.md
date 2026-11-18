@@ -178,6 +178,39 @@ diagnostic, never a completed workflow. Normal observation requires all route
 endings before the answer. Both actual observations above ended naturally;
 neither needed the partial-run option.
 
+### Matched route-swap probe
+
+`route_swap_probe.py` tests the trained v4f checkpoint without optimization.
+Three synthetic pickup dialogues each differ by one weekday token; both swap
+directions retain the recipient's full prompt and unchanged contact. Only the
+first eight continuous writes at the fusion input are replaced. Private states
+are not transplanted. Subsequent hidden states and shared-cache values are
+recomputed. Interventions reuse the recipient's baseline lifetime masks to
+keep the number of positions and active slots identical in each comparison.
+
+```powershell
+python -m experiments.nplus_shared_cache.route_swap_probe --model path/to/model --checkpoint path/to/training --fixtures experiments/nplus_shared_cache/route_swap_cases.json --output path/to/new-probe
+python -m experiments.nplus_shared_cache.route_swap_report path/to/new-probe
+```
+
+The two independent answer cues score complete weekday and surname tokens.
+The HTML uses pre-rounding two-token log-odds; the raw receipt also includes
+native BF16 output margins. All controls use the same number of positions:
+self-transplant must match exactly, all-slot transplant measures the combined
+channel, and zero CAT retains the fusion bias. A positive change toward the
+donor does not by itself reverse the answer. Effects under these prompts test
+use of redundant information, not whether every route encodes the date.
+
+In the three-pair run, all six unchanged inputs preferred their original
+weekday. At matched recipient endings, single-slot transplantation reversed
+none of 30 binary weekday choices; all 30 still preferred the correct surname.
+The largest absolute single-slot weekday margin change was 0.0553 (rounded up),
+versus a minimum baseline weekday margin of 4.916. All five slots transplanted
+together also reversed none of six choices. Self-transplants were exact at both
+horizons. This first-block intervention did not establish weekday-specific
+route specialization. Later writes and tasks that need derived information
+remain untested.
+
 ## Readable soft-input comparison
 
 This separate, opt-in comparison uses probability-weighted input embeddings from
