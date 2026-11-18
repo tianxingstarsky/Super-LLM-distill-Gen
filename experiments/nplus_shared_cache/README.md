@@ -250,6 +250,16 @@ change +0.073). There was no consistent advantage. Maximum relative error
 when summing the contributions in FP32 was below 0.000002. The successful
 local run covered 56 case/arm combinations in 181 seconds with no updates.
 
+An additional `blind_handoff_probe` control removes the source facts from the
+answer decoder's text. It reuses the saved dialogue tensors with a common
+query and the same first 64 all-active steps on both sides. Run it as above,
+substituting `--handoff path/to/completed-handoff` for `--replay` and a fresh
+output directory. The model favored the same weekday on both variants of each
+pair for CAT, separate and matched split positions: 3/6 was obtained even
+without any source signal. Restoring the original source text without vectors
+gave 6/6. This tests direct transfer to a new decoder prompt; it cannot rule
+out information elsewhere in the trace or learnability of a trained readout.
+
 ## Readable soft-input comparison
 
 This separate, opt-in comparison uses probability-weighted input embeddings from
