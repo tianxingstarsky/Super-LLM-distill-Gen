@@ -30,19 +30,26 @@ def _forward(base, cache, inputs):
     import torch
     from torch.nn.attention import SDPBackend, sdpa_kernel
     position = cache.get_seq_length()
+    positions = torch.arange(position, position + inputs.shape[1], device=inputs.device)[None]
+    # After an image the next text token's rotary position can differ from
+    # its physical KV slot. Keep this offset with the cache it belongs to.
+    offset = getattr(cache, "image_rope_delta", None)
+    if offset is not None:
+        spatial = (positions + offset).unsqueeze(0).expand(3, -1, -1)
+        positions = torch.cat((positions.unsqueeze(0), spatial))
     # A real long-answer CUDA backward exposed an upstream fused-mask stride
     # restriction. Select the supported native math backend in both phases.
     with sdpa_kernel(SDPBackend.MATH):
         out = base.model.language_model(inputs_embeds=inputs,
             attention_mask=torch.ones((1, position + inputs.shape[1]), dtype=torch.long, device=inputs.device),
-            position_ids=torch.arange(position, position + inputs.shape[1], device=inputs.device)[None],
+            position_ids=positions,
             past_key_values=cache, use_cache=True)
     if out.past_key_values is not cache:
         raise RuntimeError("backbone_replaced_shared_cache")
     return out.last_hidden_state
 
 
-def _prefill(base, prefix_ids, *, differentiable):
+def _prefill(base, prefix_ids, *, differentiable, train_prefix=False):
     import torch
     from transformers.cache_utils import DynamicCache
     from experiments.nplus_shared_cache.differentiable_cache import DifferentiableQwen35Cache
@@ -52,7 +59,7 @@ def _prefill(base, prefix_ids, *, differentiable):
         base.model.rope_deltas = None
     config = getattr(base.config, "text_config", base.config)
     cache = DifferentiableQwen35Cache(config) if differentiable else DynamicCache(config=config)
-    with torch.no_grad():
+    with torch.set_grad_enabled(torch.is_grad_enabled() and differentiable and train_prefix):
         embeds = base.get_input_embeddings()(ids)
         hidden = _forward(base, cache, embeds)[:, -1].clone()
     return cache, hidden, embeds

@@ -682,6 +682,48 @@ the earlier prototype weights. It does not establish a benchmark improvement.
 Mathematical accuracy evaluation is stopped for this phase, and baseline
 comparisons are deferred. Current inspection commands add no training.
 
+## OpenThoughts matched comparison
+
+The OpenThoughts experiment compares one and five continuous routes around
+two full Qwen3.5-4B models initialized from the same weights. Both arms use
+the same question split and answer format. Each fits the backbone and its
+recurrent module for at most one pass. A live route can halt independently. Its slot in the concatenation
+becomes zero on later steps. Text projection is optional and never enters the
+cache. See the [packaged model guide](OT_MODEL_CARD.md) for inference.
+
+`ot_latent_model.py` owns the shared runtime and checkpoint loader.
+`ot_latent_run.py` trains the two route configurations and measures answers,
+elapsed time and peak allocated CUDA memory under matched backbone budgets.
+The benchmark records real padding calls separately from the work needed to
+produce an answer. Padding after the final live latent step uses a disposable
+cache so that those extra calls cannot condition the answer.
+
+`ot_package.py` packages both complete trained variants with local runtime
+code. The loader verifies checkpoint and
+base hashes and resolves the base relative to the selected variant.
+
+Reconstruct the independently checked question split from the pinned original
+parquet rows, then run the two-arm trainer. Use a fresh output directory.
+
+```console
+python -m experiments.nplus_shared_cache.ot_handoff_data --output ot-data
+python -m experiments.nplus_shared_cache.ot_latent_run --base Qwen3.5-4B --train ot-data/train-verified.jsonl --eval ot-data/eval-verified.jsonl --output ot-run
+python -m experiments.nplus_shared_cache.ot_latent_report ot-run
+```
+
+If the answer budget cuts off the first paired example, use
+`python -m experiments.nplus_shared_cache.ot_latent_extend --run ot-run --ceiling 2048`
+to compare that same question under a larger budget. It checks the overlapping
+token prefix and balances actual backbone calls. Render the report again to
+include the separate result.
+
+The [source records and grading notes](ot3_verified_math.json) pin all 32
+training and 24 held-out questions. The trainer uses a text prompt for most
+training inputs and renders four questions as images to exercise the vision
+encoder and merger. The official HF model's text, vision and output weights
+are optimized along with the route modules. Its standard generation path
+does not instantiate the upstream speculative MTP head.
+
 ## Upstream references
 
 - [Transformers cache interface](https://huggingface.co/docs/transformers/main/en/cache_explanation)

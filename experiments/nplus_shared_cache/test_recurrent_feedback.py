@@ -139,6 +139,59 @@ class RecurrentFeedbackProtocolTests(unittest.TestCase):
             torch.testing.assert_close(stepped, blocked, rtol=1e-5, atol=1e-6)
             torch.testing.assert_close(stepped_gradient, blocked_gradient, rtol=1e-5, atol=1e-6)
 
+    def test_answer_gradient_reaches_image_prompt_and_native_rotary_positions_continue(self):
+        from transformers import Qwen3_5Config, Qwen3_5ForConditionalGeneration
+        from experiments.nplus_shared_cache import ot_latent_model as routes
+        from experiments.nplus_shared_cache.recurrent_runtime import _forward
+
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(19)
+            config = Qwen3_5Config(image_token_id=7, video_token_id=10, vision_start_token_id=6,
+                vision_end_token_id=8, text_config=dict(vocab_size=32, hidden_size=16,
+                intermediate_size=32, num_hidden_layers=2, num_attention_heads=2, head_dim=8,
+                num_key_value_heads=1, layer_types=["linear_attention", "full_attention"],
+                linear_num_key_heads=2, linear_num_value_heads=2, linear_key_head_dim=8,
+                linear_value_head_dim=8, linear_conv_kernel_dim=4,
+                rope_parameters={"rope_type":"default", "rope_theta":10000.,
+                    "partial_rotary_factor":.5, "mrope_section":[1,1,0]}),
+                vision_config=dict(depth=1, hidden_size=16, intermediate_size=32, num_heads=2,
+                out_hidden_size=16, num_position_embeddings=64, patch_size=4))
+            base = Qwen3_5ForConditionalGeneration(config).float().eval()
+            heads = routes.LatentRoutes(routes.RouteConfig(5, 16, 8, max_rounds=2))
+            inputs = dict(input_ids=torch.tensor([[5,6,7,7,7,7,8,9]]),
+                attention_mask=torch.ones(1,8,dtype=torch.long),
+                mm_token_type_ids=torch.tensor([[0,0,1,1,1,1,0,0]]),
+                pixel_values=torch.randn(16,3*2*4*4), image_grid_thw=torch.tensor([[1,4,4]]))
+            teacher_mask = torch.ones((2,5), dtype=torch.bool)
+            input_embeddings = []
+            def capture_prompt(module, args, embeddings):
+                if torch.equal(args[0], inputs["input_ids"]):
+                    embeddings.retain_grad()
+                    input_embeddings.append(embeddings)
+            handle = base.get_input_embeddings().register_forward_hook(capture_prompt)
+            try:
+                roll = routes.latent_rollout(base, heads, None, teacher_alive=teacher_mask, multimodal_inputs=inputs)
+            finally:
+                handle.remove()
+            answer_input = base.get_input_embeddings()(torch.tensor([[11]]))
+            expected = base.model.compute_3d_position_ids(None, answer_input, past_key_values=roll.cache)
+            self.assertLess(roll.cache.image_rope_delta.item(), 0)
+            captured = []
+            def inspect(module, args, kwargs):
+                captured.append(kwargs["position_ids"])
+            handle = base.model.language_model.register_forward_pre_hook(inspect, with_kwargs=True)
+            try:
+                answer = _forward(base, roll.cache, answer_input)
+            finally:
+                handle.remove()
+            torch.testing.assert_close(captured[0][1:], expected)
+            torch.nn.functional.cross_entropy(base.lm_head(answer[0]), torch.tensor([17])).backward()
+            for name, parameter in base.model.visual.named_parameters():
+                self.assertIsNotNone(parameter.grad, name)
+                self.assertGreater(parameter.grad.norm().item(), 0, name)
+            self.assertGreater(input_embeddings[0].grad[0,0].norm().item(), 0)
+            self.assertGreater(heads.merge.weight.grad.norm().item(), 0)
+
     def test_ending_participates_then_next_cat_slot_and_gradient_are_zero(self):
         heads = torch.arange(1., 1+5*4).reshape(1, 5, 4).requires_grad_()
         alive = torch.ones(5, dtype=torch.bool)

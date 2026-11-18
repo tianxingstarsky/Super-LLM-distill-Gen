@@ -1,0 +1,524 @@
+{
+  "dataset": "open-thoughts/OpenThoughts3-1.2M",
+  "revision": "61bcf9d4eb38b30295efc2021227a63cc5bb34c8",
+  "license": "Apache-2.0",
+  "train_sha256": "4060e6e94df2bae054c24066f94e112806efb6decf313fe6604524513d5f60a1",
+  "eval_sha256": "60e2e212d633966b77e4fb7684c474ecd0479fb9f734412d5e9c8acc33513bab",
+  "selection": "4,000 original rows (first 2,000 from each of shards 25 and 50); numeric English questions with complete teacher text. Normalized question/template and near-prompt duplicate exclusions before partition. Mathematically audited train and held-out selections before predictions. Unknown base-model pretraining exposure.",
+  "quarantined_initial_eval": [
+    {
+      "id": "ce974e6f5a5353cdfa7294a2f8ec456ed80fce890bdfa4c54710324f529fdc2e",
+      "reason": "Both admissible real values of sin(x) solve 9s^4+18s^3+16s^2-18s-16=0. Since sec(x)-cot(x)=-5/(3s), the requested single rational is unsupported."
+    },
+    {
+      "id": "ca19a5aed4f1bb24e66e97fc860c620abafb0e0f9a4009689432a26b72c81e73",
+      "reason": "Painting after slicing does not specify whether rings are stacked, individually painted, or which newly exposed surfaces are painted."
+    },
+    {
+      "id": "a2785376e0d66823acaf26a234f6e96c2416881158acf3b69c7c2b556b83befd",
+      "reason": "Polynomial factors as (x-3)(x^2+x-4), hence three distinct real roots despite the premise about a conjugate pair."
+    },
+    {
+      "id": "48813f606ac189c162e415985836060bf509428d74cb017f7b15295d7bc75410",
+      "reason": "All three pairwise products equal to nonzero 24 imply equal roots. Their sum forces each to be 4, contradicting 24."
+    },
+    {
+      "id": "a285e7e7953b0ffb1ba2fe676df711fd7eeb0bcde5448bf57d743cdcdf2a7743",
+      "reason": "Discriminant of 5x^2+3x-1 is 29=7 mod 11, a quadratic nonresidue. In any event a solvable congruence cannot have a largest positive representative."
+    },
+    {
+      "id": "c8daeaa55c9ce8ddafaa1211f35f88f8683cd505f0f907007f4c09ed338c647d",
+      "reason": "Numerical optimization consistent with 2 but lacking an independent global upper bound in this audit."
+    },
+    {
+      "id": "ef15249c6c53053fa0720643b4a32095051a01ff4e6309a5177bf13ccf56c518",
+      "reason": "There are 96 cookies and two-fifths of 96 is not an integer."
+    },
+    {
+      "id": "73de2b345723ad31bf6af0171da556979ce1719ed44fda5af956eab9b1fbc7ba",
+      "reason": "y=3 or 17, each with x=5 +/- sqrt(51). Four points exist, not three."
+    },
+    {
+      "id": "1236124101379a313a58b8f6226909cd2fae177779e56febd545d2f6db38fd96",
+      "reason": "Three successive 90-degree interior angles force four equal consecutive edges of a simple pentagon to close a square, making A=E."
+    },
+    {
+      "id": "100030ba209f98a4bbf5793a8e0f2db90feab5d747a65812c42962e06c2bb562",
+      "reason": "2007 assumes positive occupancy on every shelf. If a shelf can be empty and zero is a multiple, 2011 can all be on the first shelf."
+    },
+    {
+      "id": "c01d855991ccd8dc3b76be56a0526c0f4b5564bf5c026b2b0121106a4f3f0111",
+      "reason": "Tangent lengths from B must agree, but BP=20 and BQ=12."
+    },
+    {
+      "id": "539a75bced761718c8b0800978fcda5f730475fcdd0f670420ccf020a42c50ac",
+      "reason": "Range ambiguity: 316 if zero sales of a type are allowed, 280 if all types must sell."
+    },
+    {
+      "id": "4dab3179358b9c00a20b46f71579a6ec859694bd7ac309ee4bd567cdbcf0da12",
+      "reason": "Iterates start 0,1,-1,3,19 and then grow without bound. Under the power interpretation the proposed sum also diverges."
+    },
+    {
+      "id": "9ab91f24335484b039f7613c2178fa1c0e0471789e300d70dda59541527f8606",
+      "reason": "Search finds n=1, but a bounded search does not establish the full set of integer points on this cubic."
+    },
+    {
+      "id": "d9770c01563cb559931cc54b84b71d9f5980f02df1f7b8f4adeccadc9572ab60",
+      "reason": "Concatenating two copies as stated gives seven ones for f(3); the displayed example gives three. Last digits happen to agree under both interpretations."
+    }
+  ],
+  "splits": {
+    "train": [
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 741,
+        "question_sha256": "c75902e8c1d2c30b5c11eecf0bfbd2e64969abdcf6ff9523e3e45ba4bb797970",
+        "response_sha256": "1cd35f66ff0b7a4489f6743e1d943999a7c67c97fcafe485be3f449642f85fbe",
+        "reference": "0",
+        "basis": "Enumerated 100..999 with exact digit reversal and divisibility."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1989,
+        "question_sha256": "192880bff739be5b8d9009c0d387bad9d7624ac76a7f845993a0aa0c25ba7c0f",
+        "response_sha256": "0923854bb54521f63f1cb1ab89a996374ae760b56ce5ec9e3b9c7d4a45db2c9c",
+        "reference": "60",
+        "basis": "Let G=tY and I=uZ in coordinates based at X. H lies on YZ so t+u=1. Perimeter=2*(30t+30u)=60."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 820,
+        "question_sha256": "8ff612937683660598edd0cef322d67ca6fc8d642d4abfa43152ec8bcf8e6359",
+        "response_sha256": "149ae1e442a67b4a045898a797a9035202c85ea4122d055295af3247bdce16a5",
+        "reference": "0",
+        "basis": "For three strictly positive integers, (a+b+c)^3 > a^3+b^3+c^3."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1120,
+        "question_sha256": "be351bfa56bafeb650060929e23da6bab052bb8f0062f50ab831e81786736229",
+        "response_sha256": "1bd4c6adf270cec54226aeade3c8f70c0e3cbc7a16f89b27d5fef1a88b68df61",
+        "reference": "-7",
+        "basis": "|x(x-6)|=t has three distinct real roots exactly when t=9, at the interior vertex. Thus 2-k=9."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1669,
+        "question_sha256": "27e9e6770dd5674e3dafaae85cff921d0366d704bf7a61c02ecf18f0f7f53a6f",
+        "response_sha256": "6e28bdac7049807385159b744eefb05a2bd7461a813edb999d15124f54d53414",
+        "reference": "2",
+        "basis": "Among three consecutive integers one is odd, giving a factor 2; the gcd of products for n=1..11 is 2."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 185,
+        "question_sha256": "7c75ce936148b99067210632021bc2ad423eea1aa8cf642fc68d9b9d936e2e55",
+        "response_sha256": "55f001f5fb630e58d86f1aced010a5ee269ffb2a79af0d7fdd8852e5ef3eff90",
+        "reference": "0",
+        "basis": "Any integer root divides 1. At +1 the value is 2b+1; at -1 it is 1."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1767,
+        "question_sha256": "3c4df2ae8afed43de9ba3783ce140adb92ace5c3e2307443ef65028eb86cc66b",
+        "response_sha256": "9e9ef0faa482532500090584a738af2b5d5d6d688a92cdf487e0c64cc5faa555",
+        "reference": "9",
+        "basis": "All nine single digits qualify. For k>=2, digit product <= leading digit *9^(k-1), strictly below the entire integer even ignoring zeros."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 104,
+        "question_sha256": "9a2a85624655e25f645b64b30c63148795e7a491d2ee2119ecba913f67eb6fdb",
+        "response_sha256": "2fcbbce7578005b0125613ab736daf80ced86357d28916ca612be06f50dc61b0",
+        "reference": "23",
+        "basis": "Tested increasing m with integer bounds 3a>m and 5a<2m."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1861,
+        "question_sha256": "8f158b6730220b51a4037a1bdeb845aa021931bb8c348437dde355cc9808dbfb",
+        "response_sha256": "c4931078e7e054ff7862bbaea352b55bc48cbe104f78c59fd47880572f05f6ff",
+        "reference": "47",
+        "basis": "The cubic factors (x-1)^2(x-5); evaluated the four recurrence steps for each root."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 463,
+        "question_sha256": "578e8bf840856e8836532bd4db931a5b7ceefa26c4c90664abe927ffeceb10a2",
+        "response_sha256": "0e04fbbd3c63577383cac56447576703916b9179508aee9a293c8ba0ed5c80ec",
+        "reference": "16",
+        "basis": "Enumerated ordered four positive integers; each <=9 follows from total 12."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1844,
+        "question_sha256": "eb56aaf743110a1ce18d596a402cf58b1eed84fcb9b4b0e414806bed54b3e3fe",
+        "response_sha256": "3ac8610b3e4c0db88abd7918e6be047ab6117a8b81e0c5cf0136454f3776f6e4",
+        "reference": "10",
+        "basis": "Enumerated all positive three-digit multiples of 7 with digit sum 15."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1216,
+        "question_sha256": "41908f037976735c50fe099ab60721f7bd766f43ebde8c886504673323547c45",
+        "response_sha256": "638480fcb9b1bd0704a8b9bbf49523bc5d1158c95c1ce64fd9263f631b718819",
+        "reference": "0",
+        "basis": "A reversed k-digit integer is <10^k<=10N and cannot equal 15N."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 250,
+        "question_sha256": "51925b0b4f1e69c192d4c9dd92c864cc140c77151b0fbb801dd458f6203460b0",
+        "response_sha256": "ea78d9154529d7c4fe560d6ce60f4c3e7b076c4838f7e5ca08947fcba5b457bf",
+        "reference": "54",
+        "basis": "Enumerated a<=b<=c with n<=100 (all roots <=10) and selected the first n with three representations."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1576,
+        "question_sha256": "90d51d5987ee298fbb94b2787fb7d013fd6f7b489c1bb10546c6e152188c1dd2",
+        "response_sha256": "ca60573a5f9493f1d7311b96b92be3ecd41e7e4d68acd9c80d212ea30c97b8c7",
+        "reference": "4",
+        "basis": "Set A=|x+y|, B=|x-y|. There is one strictly positive pair with A-B=4 and A^2+B^2=50, giving four independent sign pairs."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 529,
+        "question_sha256": "5c587d253ffad9d510739797feee03472429823e163300f4e789f1bcc407d469",
+        "response_sha256": "53a83c1f30b43ceaaebd2115f4428bc2f6210e1db55c8e0c91b721f89f7916cf",
+        "reference": "32",
+        "basis": "u+v=8 implies u^2+v^2>=32, attained at x=z with y/x solving t+1+1/t=4."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 802,
+        "question_sha256": "25bc339142b833a347de1d52b0bd39e5ad75f9712335ed9287d2c85905f8023a",
+        "response_sha256": "5dcc92c09077f6315b4f00fce91f3ec9bf43227e9e52a6e4ef2ba470b17e2d95",
+        "reference": "13",
+        "basis": "The convex cone diameter is the maximum of base diameter 10 and the tip-to-rim distance sqrt(144+25)=13."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 47,
+        "question_sha256": "deacaf78ed3c8c5998d081a7932c7d0e3984f3d8cc0d836985d76fb227901e54",
+        "response_sha256": "000140fa3051f0bd7d5b08eea3fd09830a8bfd048dc31bee3040eb4af0169ab0",
+        "reference": "5",
+        "basis": "Three fixed values are <=5; picking x>=5 attains 5."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1494,
+        "question_sha256": "c979f51f619f5b921d6f2a25626ab8f537156d2e26c146471875b4c8d3f661de",
+        "response_sha256": "46471564f8f7d2916eb71869d46e893e1a2db4249e627533a598d61af6efa75a",
+        "reference": "2",
+        "basis": "Enumerated ordered-in-size edge triples with ab+bc+ca=60 (max edge <=29)."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1627,
+        "question_sha256": "42a85e197bbada1b9da1518ca9c8d0c16f9e6545eb2ded8c42dce7a92cf42650",
+        "response_sha256": "a417a5dff3788d437b566509872705a31e8062e38117bdb165dcb3bc13c4eb97",
+        "reference": "18",
+        "basis": "Similarity makes the distance ratio sqrt(180/80)=3/2; difference 6 implies larger distance 18."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1739,
+        "question_sha256": "b25e863be8d226027bbc12439bed66baae3c0a972874c93991ccc8e59b67ca69",
+        "response_sha256": "943d50d08d72301c5441c56fd580d62d0d87824e4f5f7e36dd05e9c8734b1ccc",
+        "reference": "1",
+        "basis": "Apply AM-GM separately to the four numbers and to their complements, then sum. Equal arguments attain the bound 1."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1533,
+        "question_sha256": "92ced5b6b28498c1e1e3484e0cb0f73c5c98a697b601965bc940b02eb5d9c1aa",
+        "response_sha256": "32ad27401dd7107aa460a0424936fe7d4401804139a720eba8e5589b29561356",
+        "reference": "8568",
+        "basis": "Enumerated Pascal rows n=0..19."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1151,
+        "question_sha256": "84fcfe9258ba41f8931f75243f992eb52fa696e7b183d775a33377553a867bb8",
+        "response_sha256": "4d12aa8fc6897648eb65086b28897520240cfe8aa94991f8065471903e32bd97",
+        "reference": "57",
+        "basis": "Burnside on 24 cube rotations with face cycles 6 (identity), 3 (six quarter-turns), 4 (three face half-turns), 2 (eight vertex turns), 3 (six edge turns)."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1175,
+        "question_sha256": "7055d199a9f1f2842866394139e0f95cac5000969fcdf552ebc34055ab5fc166",
+        "response_sha256": "629f5e5b89e3462dfac0ffb85864442dbb13abbb719d7baf0d3eb6cf77d66d0a",
+        "reference": "48",
+        "basis": "The angle in the semicircle makes BD the altitude to AC. AC=2*240/10."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 619,
+        "question_sha256": "492a558b650bfe6bb81d226e6b54822ce4ffe38673b6c569e9f6a24fbc503875",
+        "response_sha256": "59ab07eb8567e41a2a20d4a1d4d3bd138ec133eae3abb67806260dc01762dbe1",
+        "reference": "34",
+        "basis": "Enumerated 1<=y<x<=100 using exact integer square roots."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 187,
+        "question_sha256": "bd25fe71db7459aed98dd6f36541026b75747460f086b629099e21969bb964db",
+        "response_sha256": "23f2a0ab535480119179129657986d4271790ed9f11279f7518f2001ecd3b0c8",
+        "reference": "10440",
+        "basis": "Used exact prime factorization of 198721."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1681,
+        "question_sha256": "ee26711497bc794a29e25853b1b73ee2a6e568ff41e695442b15438efce86166",
+        "response_sha256": "407ff3fdd2dede76aa69e76646697b090154557656c5f650920258687ba17c47",
+        "reference": "653",
+        "basis": "Exact prime factorization of both evaluated products after addition."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1916,
+        "question_sha256": "2dd6d9763f1600141a59e21c468d732bb87cf2361142b9053ffd356c01d37860",
+        "response_sha256": "67543ad94b68a075bc0f2a05e9c5b2ee40472972d156c6074ce662da98b840af",
+        "reference": "4",
+        "basis": "Enumerated the three-digit integers comparing digit product and sum of squares."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1212,
+        "question_sha256": "e3c980ca2f402deac7a75ab0e1931d25e9f86fdde7003e7dcf6715126ae4116b",
+        "response_sha256": "9763ac4ae1c3053865f973a60c28219fbddaebd1c46cd482163ad08be59569a1",
+        "reference": "1",
+        "basis": "Exact Euclidean polynomial gcd."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1572,
+        "question_sha256": "4dd46f27ab6e7d705d2ad3c77528c726a32987ecabae9aad1c591a5167d60c49",
+        "response_sha256": "b52f58c65c35a56dbab86e9f12fdd23f55164aa2e331d2e570471ca7a9d5c5ec",
+        "reference": "13717421",
+        "basis": "Factorized and enumerated all composite divisors coprime to 3 and 5."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 721,
+        "question_sha256": "5a52a13e08feaee3570d52479bc7f98218dfbe087c1f309a6891504abd353f19",
+        "response_sha256": "4ed74330f95209c991d78d64e5b5d076123a5ce608ea350ec5eeddee00cee3dd",
+        "reference": "21",
+        "basis": "Computed the exact decimal concatenation and reduced modulo 26."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 919,
+        "question_sha256": "aa76f69cb5400f35d4e3d771baba9cde2287feb6361ed71213d659be237175d6",
+        "response_sha256": "d851cabfb647fbe9bf786671c4aba1a128b3135788b43d33616d6de9290c409d",
+        "reference": "15",
+        "basis": "The product evaluated at -1 equals the given polynomial evaluated at -1, namely 1+2+4+8."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 498,
+        "question_sha256": "efb188c38a8add152872b86cb43a70357fb2231908f291a2c2ff917889391ffa",
+        "response_sha256": "7afe94835978f4f8760689f41a18a5f698c3a655cc0bdf6575ee8f564cda32d7",
+        "reference": "1250",
+        "basis": "Summed the 2500 given matrix entries exactly."
+      }
+    ],
+    "eval": [
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1438,
+        "question_sha256": "4adea2099ef775314d144264fe034aa44cec678b0fa9584d37c8df67bf9ea1f8",
+        "response_sha256": "a3906a289f0042ec425bbfa68cb461030ec64f5cb116b4e79f4316e0a2c2602f",
+        "reference": "3",
+        "basis": "Only n<=10 can have a nonzero tenths digit. Exact long division and 2,5-only prime factors yield n=2,5,10."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 457,
+        "question_sha256": "1f807d564d07fa9df5ff38ddb4a96d7d8e118a16a00f79a03075a0778416d7b0",
+        "response_sha256": "cf956a216126805c404050aa265131c6cb76b5d79991f63715121e75f422ad01",
+        "reference": "6",
+        "basis": "For unit direction with horizontal component c>=0 the maximum projection of D-C is 2c+sqrt(1+8c^2)+sqrt(4-3c^2). Negative c is dominated by positive c. Derivative is >=2+c*(8/3-3)>0, hence largest at c=1, value 6."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1832,
+        "question_sha256": "77ef5d8e76a1f8496ce0cae5f1f57709483c499f939a402e9cedb1578a6f4f9d",
+        "response_sha256": "61188d0e72cf943da32392b02ad05c70e43d239c22743b6ab402d4ae608da5de",
+        "reference": "300",
+        "basis": "Enumerated the integers 1000..4999 and all four digit conditions."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 131,
+        "question_sha256": "da9aa3e236bfaa1feb7e434986cfc78403801383ccf948d1231819334585a082",
+        "response_sha256": "278bc6b8141277ce5bebdcc556df1552cb9d9372fb0d505e8c380fd26012f8cb",
+        "reference": "120",
+        "basis": "Angles at A/2 and B/2 sum to 60 degrees. The third angle in triangle ADB is 120 degrees."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 917,
+        "question_sha256": "3c4539d0d7e57c6f0a1711cdde00a11c994aaaf059c448f3876909861fefcb1b",
+        "response_sha256": "417a86edd8d53c883380cfe2d9bc23d66fb992e5d5f73776fcab7091c5307ae7",
+        "reference": "35",
+        "basis": "Enumerated 1..999 for divisibility by seven and a digit of multiplicity exactly two."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 340,
+        "question_sha256": "2481ffa1f017b2b811254b7a416dd00f18395cbce514ac7ef4b3c981cb5875d9",
+        "response_sha256": "81b1290f4d68822c116117c7ff54873587fa1e27f1196320c63299e0453cd31a",
+        "reference": "15",
+        "basis": "Enumerated every disallowed/equal digit exclusion with a in 1..9, b in 0..9. Remainders are 0..13 and 15."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1295,
+        "question_sha256": "a5dac88eda13f82679e47e4e3597c6495dff34b47e17345bf78c0c05908a9290",
+        "response_sha256": "17ea344cb95cebef6b665e99b6a3732685055fe89d20574fceaf1763dbd71ed4",
+        "reference": "0",
+        "basis": "With all five digits distinct, the first and last digits can never be equal in any permutation."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1971,
+        "question_sha256": "7e168c3022cd8a48f30eb8a1b1b85b329529799c197f58f0bbacb95a137fb9d2",
+        "response_sha256": "4f3aaf1ccab0bcf47bb2c440950ba0c05a4c92d24e5b6202564f0d4ce2112f06",
+        "reference": "1",
+        "basis": "1! is odd; 2! through 10! are even. The sum is odd so only 1! divides among positive factorials."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 63,
+        "question_sha256": "e875b50df67a268fcaab990e0e36840bd50c7ad8a833e9ab56abd1b9941c02cb",
+        "response_sha256": "907e6bbfecf2e9964586584223d894fc106819b0e68314941f20465afcc8a0f7",
+        "reference": "298",
+        "basis": "Third smallest c>=15 because the three smallest have sum <=3c-3. Remaining 12 sum >=12c+78. The bound 40+12*15+78 is attained by 12,13,15,...,27."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 248,
+        "question_sha256": "ec3493d7338222e4f530da735be3698b44687cfe122a580743149488412e6c8d",
+        "response_sha256": "8af32b031d3e5006e4c9a67e3722f0b2e53f8d9b350f6c9d5b784ad17065ba74",
+        "reference": "100",
+        "basis": "C(100,1)=100, a three-digit square, and no three-digit integer is smaller."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 516,
+        "question_sha256": "97dfd62075781b00308be7b7aafe13ed87ef4b431af2006742b0f78bac483c30",
+        "response_sha256": "6d81b28cdc013f792a6df04e732c5a17686c1ae4be7f14da0ef9e1673d3e708e",
+        "reference": "1239",
+        "basis": "1234=9*137+1, hence the explicitly given second identity gives 9*137+6=1239."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 418,
+        "question_sha256": "09d7826371d4b1efd7e8cee0dbc86a42cf1fd57979a3facb09b699a9f4915e00",
+        "response_sha256": "eb84ee5ef34ef7da0c56880800ef7169e4f8e9f30d17c9854970ef3ebbe6f569",
+        "reference": "7",
+        "basis": "The radius bound forces both coordinates into -4..4. Enumerated every such integer pair with strict inequalities."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1612,
+        "question_sha256": "6200577d4fdf795c8773d63ba8f7bf15fd40f52e3f723a1f805ef0acfb3823aa",
+        "response_sha256": "31bf4e07ff19d414cbb4d2a70e4d2c7732ff0f057d8853547dd9109a12aa25ed",
+        "reference": "9900",
+        "basis": "Enumerated all four-digit multiples of lcm(3,4,9)=36, filtering for two distinct digits."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1761,
+        "question_sha256": "31a4c3670128087972a5928740f4651dd3303b7732fab6569ecff3bd96db7dab",
+        "response_sha256": "123e99d8306a448c4bf9c209f9fe1bff86bed5a33f97b18431ee135b6e907581",
+        "reference": "0",
+        "basis": "Opposite colors a,b require (a+1)(b+1)=22, impossible with a,b in 1..6."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 1705,
+        "question_sha256": "16273b08a8c39d78bcc0e797204a83ae69d2b63066ac7f385e2485b21dd99149",
+        "response_sha256": "73e81e1186fa54d88563e6e8c3fddb89e3ddb9e105c14b067fe54d56f3cc1e3e",
+        "reference": "33",
+        "basis": "Over the integers the irreducible monic factorization is (x^2+2)(x^4+2x^2+8), as verified with exact polynomial factorization. Each factor is even, giving 3*11."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1454,
+        "question_sha256": "254cb2e00de0c8b04c7669ca845a00faa9149d9e4c516a680246d1211df70f02",
+        "response_sha256": "63ff17653608e557eaf7e9fba024059d1eeb964c3e04cf6bebdc1398843b551a",
+        "reference": "100",
+        "basis": "1+x+...+x^99 has 100 coefficients equal to 1, independent of the unrelated polynomial root."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 991,
+        "question_sha256": "618258c638f52ddae00700fcdb348c27f93e4f9a7db9a57f8729f150796826b3",
+        "response_sha256": "b7c715082c2bdbb85254da24606ccdde9c7163913931e50e00b311976c241182",
+        "reference": "-1",
+        "basis": "Set a=-pi/2 and b=pi/4. The constraint holds and sin(a) attains its universal lower bound."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 267,
+        "question_sha256": "0cc8cc04f0824a7462084c455b327f1055186dfe08484055607db54b3aefd2bd",
+        "response_sha256": "e223c4d0d5a1bf3176ea0c3b9ad26ce4395ddd4dfacd7d5f004e4aef95a13b64",
+        "reference": "2",
+        "basis": "Foot-to-vertex lengths are (2001^2+2002^2-2003^2)/(2*2002)=999 and 1003. The two tangent distances from the right-angle point are the inradii; their difference has magnitude |(999-2001)-(1003-2003)|/2=1, so p+q=2."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 570,
+        "question_sha256": "593de3dd8793851462473e24cd20b047eb7ef9eb56163604f81f52f67c942366",
+        "response_sha256": "fc8e98d016540dcda0ff7a51f2b17bc27ee816f3067f642787bc37bde3e56df2",
+        "reference": "2",
+        "basis": "From x^4+y^4=1 both absolute values are <=1. If either is negative their cubes cannot sum to 1. On [0,1], u^3>=u^4, equal only at 0,1. Solutions (1,0),(0,1)."
+      },
+      {
+        "file": "data/train-00025-of-00120.parquet",
+        "row": 162,
+        "question_sha256": "5a97dbc042ad7285f778a0ecded7713a6ddf93f7ecf8c245243659f422f5738a",
+        "response_sha256": "5116566d708a3fea3d32d9018b15973bba65afa63ea29e6c45916f10cf2902c9",
+        "reference": "11",
+        "basis": "Checked successive positive integers in ascending order using exact modular arithmetic."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 769,
+        "question_sha256": "5ea8f9e63bae8478f66de105fab0f14611f9d077301745532f4a1e74d4239227",
+        "response_sha256": "00d9e1e174d24ca26210ec8b0f04d7414d557828cc81d86148991f6f3119f5f4",
+        "reference": "1",
+        "basis": "1 divides f(n) and every n for all integers, so the implication holds and no smaller positive k exists. The teacher wrote 2."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 19,
+        "question_sha256": "e89f2d2cc3f818570395b5c9a2cef9286d76628434191eaf0c6fd58384ba68b2",
+        "response_sha256": "7c5cc71e2058a110ab7a01d4020f145411e374d474ce4efdde591e35a70bf8df",
+        "reference": "408",
+        "basis": "Enumerated 1..9999 for three distinct digits and at least two digits equal to five."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1538,
+        "question_sha256": "46ee6117c9b3831a5eae2f5c79b9c281e63de93e50c8adceab0ab1c727ecd1a4",
+        "response_sha256": "f65ab9c850d6cbc2be3c44b45e7a92359e0419973c2d5bbbef14a4b963b28343",
+        "reference": "0",
+        "basis": "Product of prime factors, with either distinct factors or multiplicity, is <=n. Iterating gives <=n<n^2+1."
+      },
+      {
+        "file": "data/train-00050-of-00120.parquet",
+        "row": 1481,
+        "question_sha256": "8d8f7ff32f711bab44b9211f5fc73bf3134b1937e5c1119ecf2a11940f7e826e",
+        "response_sha256": "25ab465337b10311948dde2684adfc154e250d675afec097013135646dcde085",
+        "reference": "0",
+        "basis": "x=0 gives 0 for every y, and absolute value is nonnegative."
+      }
+    ]
+  }
+}
