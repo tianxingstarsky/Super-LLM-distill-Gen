@@ -15,6 +15,7 @@ from ..domain.guided_answers import (
 from lib.prompts.workflow_guided_answers import (
     ANCHORED_REVIEW,
     COACH,
+    SINGLE_DECISION_REVIEW,
     review_schema,
     SOURCE_COMPLETION_STUDENT,
     STUDENT,
@@ -33,8 +34,10 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         skip_acquired = protocol_version != "3.0.0"
-        anchored = protocol_version == "3.2.0"
-        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2"}[protocol_version]
+        single_decision = protocol_version == "3.3.0"
+        anchored = single_decision or protocol_version == "3.2.0"
+        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3"}[protocol_version]
+        tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         mode = "answer_key" if gold is not None else "source_reasoning_only"
         attempts = []
         status = "quarantine"
@@ -115,7 +118,7 @@ class GenerateGuidedAnswer:
                 break
             suffix = student["content"]
             public.append({"role": "assistant", "content": suffix})
-            new_segments, answer_line = draft_fragment(suffix, index)
+            new_segments, answer_line = draft_fragment(suffix, index, preserve_list_items=single_decision)
             for piece in new_segments:
                 piece["reuses_student_findings"] = [
                     sid
@@ -215,7 +218,7 @@ class GenerateGuidedAnswer:
                 [
                     {
                         "role": "system",
-                        "content": ANCHORED_REVIEW if anchored else COACH,
+                        "content": tutor_instruction,
                     },
                     {
                         "role": "user",
@@ -223,7 +226,7 @@ class GenerateGuidedAnswer:
                     },
                 ],
                 review_schema(
-                    version["submitted_ids"], bool(answer_line), anchored=anchored
+                    version["submitted_ids"], bool(answer_line), anchored=anchored, single_decision=single_decision
                 ),
             )
             attempt["coach_response"] = coach
@@ -236,6 +239,7 @@ class GenerateGuidedAnswer:
                     submitted,
                     answer_line,
                     anchored=anchored,
+                    single_decision=single_decision,
                 )
                 count = review["verified_prefix_count"]
                 if not 0 <= count <= len(submitted) or (
@@ -271,7 +275,8 @@ class GenerateGuidedAnswer:
                     or f["basis_id"] in active_ids
                 )
             }
-            extracted = shared_findings(review["reusable"], submitted, active, question)
+            extracted = shared_findings(review["reusable"], submitted, active, question,
+                                        exclude_list_markers=single_decision)
             findings.update(extracted)
             version.update(
                 retained_after=[s["id"] for s in active],

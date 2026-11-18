@@ -245,7 +245,20 @@ def inspect_answer(text, gold, *, parse_count_sentence=True):
     )
 
 
-def validated_review(review, segments, answer_line, *, anchored=False):
+def validated_review(review, segments, answer_line, *, anchored=False, single_decision=False):
+    if single_decision:
+        if not isinstance(review, dict) or set(review) != {"decision", "diagnosis", "reusable"}:
+            raise ValueError("expected one tutor decision")
+        decision = review["decision"]
+        if not isinstance(decision, str):
+            raise ValueError("invalid tutor decision")
+        verdict, _, anchor = decision.partition(":")
+        if decision == "supported":
+            anchor = "complete"
+        elif verdict not in {"revise", "uncertain"} or anchor == "complete":
+            raise ValueError("unknown tutor decision")
+        review = {"verdict": verdict, "first_unresolved_id": anchor,
+                  "diagnosis": review["diagnosis"], "reusable": review["reusable"]}
     fields = {
         "verdict",
         "diagnosis",
@@ -376,7 +389,7 @@ def checked_progress(checks, pieces, suffix):
     return found
 
 
-def shared_findings(proposed, segments, prefix, question):
+def shared_findings(proposed, segments, prefix, question, *, exclude_list_markers=False):
     """Only an authenticated student span is published. Unsupported proposals remain in the private review."""
     valid = {s["id"]: s["text"] for s in prefix}
     later = {s["id"]: s for s in segments[len(prefix) :]}
@@ -399,6 +412,8 @@ def shared_findings(proposed, segments, prefix, question):
         if not all(isinstance(k, str) and k in valid for k in deps):
             continue
         text = later[sid]["text"].strip().rstrip(".。")
+        if exclude_list_markers and re.fullmatch(r"[\s\d.、()（）\-*#]*", text):
+            continue
         if basis == "arithmetic" and not deps:
             match = re.fullmatch(
                 r"\s*([+-]?\d+(?:/\d+)?)\s*([+*/×÷−-])\s*([+-]?\d+(?:/\d+)?)\s*=\s*([+-]?\d+(?:/\d+)?)\s*",
@@ -493,15 +508,20 @@ def prior_clue_evidence(clue, retained, findings, disclosed):
     return None
 
 
-def draft_fragment(text, attempt):
+def draft_fragment(text, attempt, *, preserve_list_items=True):
     """Keep exact source spans. A terminal answer is replaceable separately from the derivation."""
     terminal, _ = answer_tail(text)
     work = text[:terminal] if terminal is not None else text
     pieces = []
     start = 0
-    boundaries = [
-        m.end() for m in re.finditer(r"(?<=[。！？.!?])[ \t]+|(?:\r\n|\n|\r)+", work)
-    ]
+    boundaries = []
+    for match in re.finditer(r"(?<=[。！？.!?])[ \t]+|(?:\r\n|\n|\r)+", work):
+        if preserve_list_items and work[match.start() - 1:match.start()] == ".":
+            # The period in a Markdown ordered-list marker belongs to the next words.
+            line_start = max(work.rfind("\n", 0, match.start()), work.rfind("\r", 0, match.start())) + 1
+            if re.fullmatch(r"[ \t>]*\d{1,9}\.", work[line_start:match.start()]):
+                continue
+        boundaries.append(match.end())
     for end in [*boundaries, len(work)]:
         if work[start:end].strip():
             pieces.append(

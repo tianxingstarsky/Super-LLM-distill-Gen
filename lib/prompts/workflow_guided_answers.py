@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "3.2.0"
+VERSION = "3.3.0"
 STUDENT = """Solve the user's question in its language. Write a solution whose evidence and calculations a reader can check. When the solution is complete end with a separate 'Final answer:' line. On receiving feedback, continue from the retained passage shown there. Write only the missing or replacement continuation. Use the supplied clue where it helps. The retained passage already forms the beginning of the solution. Deliver the work itself."""
 SOURCE_COMPLETION_STUDENT = """Answer the real user's request in its language and requested format. The supplied source author's reasoning is attributed supporting material. Check its claims and produce the missing formal response or requested artifact. Use natural paragraphs, tables, code or lists when the task calls for them. When a retained passage is supplied, write the missing continuation after it. Deliver the work itself."""
 COACH = """You are the private solution tutor, helping the author piece together a derivation as clues are revealed. Read the problem, source solution if available, successive contributions, disclosed clues and the current assembled draft. Source reasoning is attributed material and can be mistaken. A supplied key can check the result. Without a key, examine the evidence without certifying correctness. Identify the longest consecutive prefix of sound student segments in the current ordered segment list. Return its segment count as verified_prefix_count (zero when the first step fails). Reconsider an earlier step if new evidence invalidates it. Use 'supported' only if every segment and the final answer form a sound, self-contained solution; use 'revise' or 'uncertain' otherwise. Cite the supplied evidence_id for your diagnosis. You may identify a later independent finding by its segment_id, basis_id (question, arithmetic or a sound prefix segment), and all prior segment dependencies in depends_on. Leave reusable empty if it requires a faulty step. The program controls which fact, idea or worked step is released next. Keep private assessments separate from the author's work."""
@@ -45,7 +45,10 @@ HINTS = {
 ANCHORED_REVIEW = """You are the private solution tutor. Help the author build a coherent solution to the user's actual task. Check the source reasoning independently. A supplied key checks the result. Without a key, assess the evidence and requested deliverable without certifying correctness. Inspect the ordered retained and new student segments from the start. Select the FIRST unsupported segment as first_unresolved_id. A sound excerpt can survive a faulty segment. Preserve earlier sound steps even when the conclusion fails. If every derivation segment is sound and the conclusion is absent, wrong or ambiguous, select 'final_answer'. Select 'complete' with verdict 'supported' only when the entire response is justified and answers the task. Otherwise report 'revise' or 'uncertain' and explain your selected anchor. That one anchor determines the program's prefix and evidence citation. A later independent finding can be named by its segment_id, basis_id (question, arithmetic or a sound prefix segment) and all necessary dependencies in depends_on. Leave reusable empty for steps that rely on a false premise. The program controls disclosure. Keep your diagnosis private."""
 
 
-def review_schema(segment_ids, has_answer, *, anchored=False):
+SINGLE_DECISION_REVIEW = """You are the private tutor. Compare the learner's current solution with the task and the available evidence. A correct final number needs a sound derivation. Select one decision. Choose supported for a complete solution. For a demonstrated defect choose revise at the first affected segment. Where the evidence is inconclusive choose uncertain at that segment. Use final_answer for an issue limited to the final answer. Explain the judgment privately. A later independent finding can be saved by its segment ID, basis and dependencies. The program releases the next piece of information. In a task with no key, assess whether the requested deliverable is supported by the available material."""
+
+
+def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=False):
     ref = {
         "type": "string",
         "enum": [*segment_ids, *(["answer"] if has_answer else [])],
@@ -80,6 +83,14 @@ def review_schema(segment_ids, has_answer, *, anchored=False):
         fields["first_unresolved_id"] = {
             "type": "string",
             "enum": [*segment_ids, "final_answer", "complete"],
+        }
+    if single_decision:
+        del fields["first_unresolved_id"]
+        del fields["verdict"]
+        fields["decision"] = {
+            "type": "string",
+            "enum": ["supported", *(f"{verdict}:{anchor}" for verdict in ("revise", "uncertain")
+                                    for anchor in (*segment_ids, "final_answer"))],
         }
     return {
         "type": "object",

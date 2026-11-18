@@ -11,8 +11,23 @@ from lib.contexts.workflows.domain.guided_answers import (
     checked_progress,
     draft_fragment,
     inspect_answer,
+    shared_findings,
+    validated_review,
     validate_source,
 )
+
+
+def test_list_numbers_stay_attached_and_never_become_evidence():
+    text = "1. 连续的 1 最多有两个。\n2. 总数应为 1 模 3。\nFinal answer: 99"
+    pieces, _ = draft_fragment(text, 1)
+    assert [piece["text"].strip() for piece in pieces] == ["1. 连续的 1 最多有两个。", "2. 总数应为 1 模 3。"]
+    old, _ = draft_fragment(text, 1, preserve_list_items=False)
+    assert old[0]["text"].strip() == "1."
+    offer = [{"segment_id": old[0]["id"], "basis_id": "question", "depends_on": []}]
+    assert not shared_findings(offer, old, [], "总数除以3余1", exclude_list_markers=True)
+    review = validated_review({"decision": "uncertain:a1.s2", "diagnosis": "Check the congruence",
+                               "reusable": []}, pieces, True, anchored=True, single_decision=True)
+    assert review["verdict"] == "uncertain" and review["verified_prefix_count"] == 1
 
 
 def test_three_round_http_history_uses_only_published_clues_and_freezes_resume(
@@ -82,10 +97,7 @@ def test_three_round_http_history_uses_only_published_clues_and_freezes_resume(
                             else []
                         ),
                         "diagnosis": "Private diagnostic label.",
-                        "first_unresolved_id": "a1.s2"
-                        if one
-                        else ("complete" if ok else "a2.s2"),
-                        "verdict": "supported" if ok else "revise",
+                        "decision": "supported" if ok else "revise:a1.s2" if one else "revise:a2.s2",
                     }
                 )
             self.reply(
@@ -265,9 +277,8 @@ def test_answer_key_is_mandatory_for_acceptance_and_explanation_has_independent_
             if role == "student"
             else json.dumps(
                 {
-                    "verdict": "supported",
+                    "decision": "supported",
                     "diagnosis": "The source supports the reasoning.",
-                    "first_unresolved_id": "complete",
                     "reusable": [],
                 }
             )
@@ -352,9 +363,8 @@ def test_reasoning_only_source_receives_missing_natural_artifact_without_numeric
             if role == "student"
             else json.dumps(
                 {
-                    "verdict": "supported",
+                    "decision": "supported",
                     "diagnosis": "Delivers both artifacts.",
-                    "first_unresolved_id": "complete",
                     "reusable": [],
                 }
             )
@@ -433,8 +443,7 @@ def test_reviewed_set_survives_a_zero_prefix_with_its_source_and_no_unfound_chec
         else:
             content = json.dumps(
                 dict(
-                    verdict="revise" if index == 1 else "supported",
-                    first_unresolved_id="a1.s1" if index == 1 else "complete",
+                    decision="revise:a1.s1" if index == 1 else "supported",
                     diagnosis="Check the filter.",
                     reusable=[],
                 )
