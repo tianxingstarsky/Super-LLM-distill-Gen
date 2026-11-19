@@ -9,14 +9,45 @@ Submit decision deliver, an explanation, and the actual public conclusion. The c
 TEACHER_FINAL_NECESSITY = """Match the strength of each public claim to its proof. Checking a candidate against the conditions establishes that it works. If the claim is that something is forced, unique, earliest or optimal, consider what other possibility the cited premises still allow. Show which conditions rule out the remaining alternatives, or give a bound that the candidate attains. Testing one alternative can expose a missing premise; ruling out one alternative settles the claim only if it exhausts what remains. Include the decisive link in the public explanation when the user wants reasons. If only a feasible example is requested, give one and show it satisfies the conditions."""
 
 
-def teacher_final_schema(step_ids):
+TEACHER_FINAL_BY_DELIVERY = {
+    "worked_solution": (
+        "This user requests a worked solution. Deliver the reasoning in the public explanation, "
+        "the result in conclusion, and the reviewed step IDs that support it in evidence_ids. "
+        "If the available steps cannot justify the result, choose insufficient, leave explanation, "
+        "conclusion and evidence_ids empty, and name the gap in reason."
+    ),
+    "final_only": (
+        "This user requests only the result. On deliver, give it in conclusion, keep explanation empty, "
+        "and cite its reviewed step IDs in evidence_ids. On insufficient, leave all three empty and give the reason."
+    ),
+}
+
+
+def teacher_final_schema(step_ids, delivery=None):
     fields = {
         "decision": {"type": "string", "enum": ["deliver", "insufficient"]},
         "explanation": {"type": "string"}, "conclusion": {"type": "string"},
         "evidence_ids": {"type": "array", "items": {"type": "string", "enum": list(step_ids)}},
         "reason": {"type": "string"},
     }
-    return {"type": "object", "properties": fields, "required": list(fields), "additionalProperties": False}
+    if delivery is None:
+        return {"type": "object", "properties": fields, "required": list(fields), "additionalProperties": False}
+    if delivery not in {"worked_solution", "final_only"}:
+        raise ValueError("unknown guided final-answer delivery")
+    empty = {"const": ""}
+    text = {"type": "string", "minLength": 1}
+    envelope = {"type": "object", "required": list(fields), "additionalProperties": False}
+    insufficient = {**envelope, "properties": {
+        "decision": {"const": "insufficient"}, "explanation": empty, "conclusion": empty,
+        "evidence_ids": {"const": []}, "reason": text,
+    }}
+    if not fields["evidence_ids"]["items"]["enum"]:
+        return insufficient
+    deliver = {**envelope, "properties": {
+        "decision": {"const": "deliver"}, "explanation": text if delivery == "worked_solution" else empty,
+        "conclusion": text, "evidence_ids": {**fields["evidence_ids"], "minItems": 1}, "reason": empty,
+    }}
+    return {"anyOf": [deliver, insufficient]}
 
 STUDENT_TASK_ANALYSIS = """Work from what the user actually asks and what the problem establishes. Use any distinction that changes the solution: who or what a condition applies to, its scope, an exception, a quantity or unit, or the form the user wants to receive. A proposed approach is worth carrying forward even if its execution later went wrong. Use the sound part and work out the missing inference. A hint suggests a move to try; check what it establishes before using its result. When the evidence leaves alternatives open, keep them open. Explain the reasoning needed to settle this particular task, in your own words."""
 

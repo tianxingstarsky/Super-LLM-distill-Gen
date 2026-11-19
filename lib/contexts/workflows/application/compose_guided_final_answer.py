@@ -6,8 +6,8 @@ import re
 
 from ..domain.guided_answers import assemble, check_direct_answer, read_teacher_submission
 from ..domain.guided_final_experience import adopted_final_teacher_text
-from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, inspect_teacher_delivery, requested_delivery
-from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_NECESSITY, VERSION, teacher_final_schema
+from ..domain.guided_teacher_delivery import QWEN_SAMPLING_VERSIONS, TEACHER_FINAL_VERSIONS, inspect_teacher_delivery, requested_delivery
+from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_BY_DELIVERY, TEACHER_FINAL_NECESSITY, VERSION, teacher_final_schema
 
 
 def compose_guided_final_answer(request, source, index, segments, verified_conclusion, *, reasoning_trace=None,
@@ -19,6 +19,8 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
         system += "\n\n" + TEACHER_FINAL_NECESSITY
     elif protocol_version != "4.4.0":
         raise ValueError("unsupported teacher final-answer protocol")
+    if protocol_version == "4.8.1":
+        system += "\n\n" + TEACHER_FINAL_BY_DELIVERY[form]
     teacher_instruction = adopted_final_teacher_text(final_teacher_experience or {}, protocol_version)
     if teacher_instruction:
         system += "\n\n" + teacher_instruction
@@ -49,7 +51,7 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
         {"role": "system", "content": system},
         {"role": "user", "content": source["question"]},
         {"role": "tool", "content": json.dumps(materials, ensure_ascii=False)},
-    ], teacher_final_schema(steps))
+    ], teacher_final_schema(steps, form if protocol_version == "4.8.1" else None))
     proposal = None
     if response["finish_reason"] == "stop":
         try:
@@ -57,7 +59,7 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
         except (ValueError, TypeError):
             pass
     check, public = inspect_teacher_delivery(
-        proposal, source, steps, form, protect_evidence_ids=protocol_version in {"4.7.0", "4.7.1", "4.8.0"}
+        proposal, source, steps, form, protect_evidence_ids=protocol_version in QWEN_SAMPLING_VERSIONS
     )
     if response["finish_reason"] != "stop":
         check["issue"] = "teacher_final_incomplete"

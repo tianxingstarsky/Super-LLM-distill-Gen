@@ -1,10 +1,14 @@
 # 工作流运行适配
 
+`--case-id ID` 可重复指定，用于从同一冻结分片派发指定题目。全分片摘要仍显示所有待处理题，`selection_complete` 单独表示选定题是否都有终态。更换终稿协议时，可同时指定实际完成学生首答的来源和相同模型的逐调用来源。程序核对来源身份与实际请求正文后才会复用回执。
+
 更换教师后，在新输出目录使用 `--reuse-worked-first-from OLD_RUN`，可以接续同一分片中已有的独立解题首答。程序在旧分片空闲时冻结收据清单，逐题核对学生端点、请求正文和原始响应收据。旧分片尚未派发的题照常作答，已派发但结果不明的题记录中断。教师的指导和审核归属新运行。
 
 教师排队而学生模型有空槽时，可在计划运行的完整输入和输出目录上执行 `python -m lib.guided_answers … --prefetch-worked-first`。带数量（如 `--prefetch-worked-first 2`）只预取输入顺序中前两道有答案键的 `worked_solution` 题。原始响应直接存入各题的 `001-student.json`，包括因输出上限截断的回复。随后用相同配置和路径去掉该选项，正常流程读取已存首答、审核完整解释，必要时逐步指导。整份分片共用一把运行锁；当前分片执行时可预取另一个空闲分片。预取返回的 `prefetch_complete` 只表示选中题目的首答阶段已结束，合格记录由正常流程生成。
 
 4.8 的普通学生继续使用 `--student-model`。可用 `--continuation-model <较强的模型名>` 配置难题接管；独立 llama.cpp 服务另传 `--continuation-url <服务地址>`。教师负责披露、核查和正式交付；较强学生使用答题模式，复用原学生实际收到的消息。共用同一服务时，两种职责共享物理槽。检查 `case.json` 的 `attempts[].verified_stage` 看学生有何进展，`continuation_provenance.deliveries` 给出收件轮次、实际模型和对应请求文件。
+
+新建本地任务时可加 `--protocol-version 4.8.1`。程序按实际题意选择教师的正式交付格式。要求展示推导时，`deliver` 须提交公开解释、结论及至少一个已核查步骤编号。只要求末答时，解释留空。依据不足时，`insufficient` 须说明缺口，公开字段和编号留空。步骤归属、公开解释的内容及结论仍由原有业务校验检查。
 
 如果教师写出的末答与已经核准的结论冲突，`teacher_final_answer` 保存首稿，`teacher_final_correction` 保存同一教师的纠正请求与响应。`python -m lib.guided_experience --prepare-final-assessment` 默认选择该轮最后实际交付的版本。使用 `--original-delivery` 可指定首稿，分别学习失误和修正经验。
 

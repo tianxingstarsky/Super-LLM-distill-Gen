@@ -11,6 +11,9 @@ def main():
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--input", type=Path, required=True)
     cli.add_argument("--output", type=Path, required=True)
+    cli.add_argument("--case-id", dest="case_ids", action="append",
+                     help="Schedule this case from the unchanged input shard. Repeat to select more cases. "
+                          "The shard summary still counts every source row.")
     cli.add_argument("--student-url")
     cli.add_argument("--student-model")
     cli.add_argument("--coach-url")
@@ -97,7 +100,7 @@ def main():
         )
     result = generate_guided_cases(source, output, **args)
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result.get("complete") or result.get("first_pass_complete") or result.get("prefetch_complete") else 2
+    return 0 if any(result.get(key) for key in ("complete", "selection_complete", "first_pass_complete", "prefetch_complete")) else 2
 
 
 if __name__ == "__main__":

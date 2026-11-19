@@ -3,13 +3,49 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+from jsonschema import Draft202012Validator
 
+from lib.contexts.workflows.application.compose_guided_final_answer import compose_guided_final_answer
 from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
 from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
 from lib.contexts.workflows.domain.guided_teacher_delivery import inspect_teacher_delivery, requested_delivery
 from lib.contexts.workflows.domain.guided_teaching_steps import (
     certified_complete_disclosure, complete_solution_digest, verified_steps_digest,
 )
+
+def test_worked_delivery_cannot_emit_the_empty_explanation_and_evidence_seen_in_a_live_response():
+    incomplete = {"decision": "deliver", "explanation": "", "conclusion": "1250 ounces",
+                  "evidence_ids": [], "reason": ""}
+    worked = {**incomplete, "explanation": "150 packets give 37500 ml. Dividing by 30 gives 1250 ounces.",
+              "evidence_ids": ["a1.s6", "a1.s15"]}
+    insufficient = {"decision": "insufficient", "explanation": "", "conclusion": "", "evidence_ids": [],
+                    "reason": "The conversion factor is missing from the reviewed steps."}
+    steps = [{"id": "a1.s6", "text": "150 packets of 250 ml give 37500 ml."},
+             {"id": "a1.s15", "text": "37500 ml divided by 30 ml per ounce gives 1250 ounces."}]
+    schemas = []
+
+    def capture(role, attempt, messages, schema):
+        assert role == "teacher_final_answer"
+        assert len(json.loads(messages[-1]["content"])["reviewed_student_steps"]) == 2
+        schemas.append(Draft202012Validator(schema))
+        return {"content": json.dumps(incomplete), "finish_reason": "stop"}
+
+    source = {"gold": {"kind": "number", "value": "1250"}}
+    for version, instruction in (("4.8.0", "Show why the result follows."),
+                                 ("4.8.1", "Show why the result follows."),
+                                 ("4.8.1", "Give the number only.")):
+        outcome = compose_guided_final_answer(capture, {**source, "question": instruction}, 1, steps,
+                                              "1250", protocol_version=version)
+        assert outcome["check"]["issue"] == "teacher_final_unbound_evidence"
+    old, explained, final_only = schemas
+    assert old.is_valid(incomplete) and not explained.is_valid(incomplete)
+    assert explained.is_valid(worked) and not explained.is_valid({**worked, "evidence_ids": []})
+    assert not explained.is_valid({**worked, "evidence_ids": ["unreviewed"]})
+    assert not explained.is_valid({**worked, "explanation": ""})
+    assert not final_only.is_valid(worked) and final_only.is_valid({**worked, "explanation": ""})
+    assert explained.is_valid(insufficient) and final_only.is_valid(insufficient)
+    assert not explained.is_valid({**insufficient, "evidence_ids": ["a1.s6"]})
+    assert not explained.is_valid({**insufficient, "reason": ""})
 
 
 def test_full_disclosure_needs_its_own_attestation_for_this_task_and_worked_solution():

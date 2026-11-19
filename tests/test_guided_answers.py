@@ -780,9 +780,25 @@ def test_worked_prefetch_bounds_the_same_shard_and_preserves_inflight_and_trunca
     assert not list(migrated.glob("cases/*/case.json"))
     assert run_guided_cases(path, migrated, endpoints, {"version":"test"}, 2, **migration)["prefetch_complete"]
     assert len(calls) == 2
+    with pytest.raises(ValueError, match="absent from the frozen input"):
+        run(case_ids=["unknown-case"])
+    overlay = tmp_path / "selected-replay"
+    selection = {**migration, "reuse_matching_from": migrated}
+    for ident in ("one", "two"):
+        selected = run_guided_cases(path, overlay, endpoints, {"version":"test"}, 2, case_ids=[ident], **selection)
+        assert selected["eligible_worked_questions"] == 1 and selected["prefetch_complete"]
+    # These answers came from two different parents. Both receipts must name
+    # the run that actually dispatched the original request.
+    selected_sources = {json.loads(p.read_bytes())["origin"]["kind"] for p in overlay.glob("cases/*/001-student.json")}
+    assert selected_sources == {"replayed_first", "replayed_matching_call"} and len(calls) == 2
     assert run(prefetch_worked_first=True)["eligible_worked_questions"] == 2 and len(calls) == 3
     assert (output/"manifest.json").read_bytes() == manifest and checkpoint.read_bytes() == saved
     assert not list(output.glob("cases/*/case.json")) and not list(output.glob("*.jsonl"))
+    ep.complete = lambda payload: {"content":"5", "reasoning_content":"", "finish_reason":"stop"}
+    selected = run(case_ids=["direct"])
+    assert selected["selection_complete"] and not selected["complete"]
+    assert selected["counts"]["accepted"] == 1 and selected["counts"]["pending"] == 3
+    assert (output/"manifest.json").read_bytes() == manifest
 
 
 def test_direct_admission_does_not_strip_proofs_or_relabel_guided_and_incomplete_answers():

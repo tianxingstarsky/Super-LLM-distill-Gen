@@ -11,7 +11,7 @@ from .repair_guided_student_evidence import check_or_repair_student_findings
 from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
 )
-from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
+from ..domain.guided_teacher_delivery import EVIDENCED_PROGRESS_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
 from ..domain.guided_teaching_steps import certified_complete_disclosure
 
 from ..domain.guided_answers import (
@@ -64,7 +64,7 @@ class GenerateGuidedAnswer:
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
-        evidenced_progress = protocol_version == "4.8.0"
+        evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
         if (trusted_solution_receipts or continuation_model is not None) and not evidenced_progress:
             raise ValueError("complete-disclosure teaching requires guided protocol 4.8")
         skip_acquired = protocol_version != "3.0.0"
@@ -86,7 +86,7 @@ class GenerateGuidedAnswer:
         if paired:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
                                   tried=tried_verified_steps, task_analysis=task_analysis,
-                                  quoted_premises=protocol_version in {"4.7.1", "4.8.0"})
+                                  quoted_premises=protocol_version == "4.7.1" or evidenced_progress)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
         direct_protocol = record_guided_reasoning or protocol_version == "3.6.0"
         truncated_progress = direct_protocol or protocol_version == "3.5.0"
@@ -98,7 +98,7 @@ class GenerateGuidedAnswer:
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
-                    "4.7.1": "v4.7.1", "4.8.0": "v4.8"}[protocol_version]
+                    "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW

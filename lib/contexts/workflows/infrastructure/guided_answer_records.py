@@ -17,7 +17,7 @@ from lib.contexts.models.contracts import ModelQueueTimeout
 from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
-from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
+from ..domain.guided_teacher_delivery import EVIDENCED_PROGRESS_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
 from ..domain.guided_final_experience import adopted_final_teacher_text
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
 from .guided_historical_answer import (
@@ -209,6 +209,7 @@ def run_guided_cases(
     export_only=False,
     first_pass_only=False,
     prefetch_worked_first=False,
+    case_ids=None,
     protocol_version=None,
     until_correct=None,
     retry_interrupted=False,
@@ -225,6 +226,10 @@ def run_guided_cases(
         raise ValueError("worked first-answer prefetch count must be positive")
     if prefetch_worked_first and (first_pass_only or export_only or retry_interrupted):
         raise ValueError("worked first-answer prefetch cannot also export, run final-only admission or retry an unresolved request")
+    if case_ids is not None and (not isinstance(case_ids, (list, tuple, set, frozenset))
+                                 or not case_ids or not all(isinstance(ident, str) and ident for ident in case_ids)):
+        raise ValueError("case selection requires one or more source IDs")
+    selected = frozenset(case_ids) if case_ids is not None else None
     output.mkdir(parents=True, exist_ok=True)
     with FileLock(str(output / "run.lock"), timeout=0):
         manifest = output / "manifest.json"
@@ -233,9 +238,9 @@ def run_guided_cases(
         historical_mode = historical_first_from is not None or bool((frozen_config or {}).get("historical_first"))
         if historical_first_input is not None and not historical_mode:
             raise ValueError("the historical input file requires a historical source run")
-        if reuse_worked_first_from and (reuse_first_from or reuse_matching_from):
+        if reuse_worked_first_from and reuse_first_from:
             raise ValueError("worked first-answer replay requires a single source run")
-        if historical_mode and (reuse_first_from or reuse_worked_first_from or reuse_matching_from):
+        if historical_mode and (reuse_first_from or reuse_worked_first_from):
             raise ValueError("choose historical first answers or exact request replay")
         if protocol_version and protocol_version != template_version:
             raise ValueError("the requested protocol differs from the frozen run")
@@ -262,6 +267,8 @@ def run_guided_cases(
                 raise ValueError("the independent first pass requires final_only on every input question and its delivery instructions")
         if not seen:
             raise ValueError("empty source file")
+        if selected and selected - seen:
+            raise ValueError(f"case IDs absent from the frozen input: {sorted(selected - seen)}")
         if export_only:
             if read(manifest)["input_sha256"] != source_sha:
                 raise ValueError("input differs from frozen guided run")
@@ -286,7 +293,7 @@ def run_guided_cases(
             raise ValueError(
                 "unsupported frozen generator version; use offline export or its original release"
             )
-        if "continuation" in endpoints and template_version != "4.8.0":
+        if "continuation" in endpoints and template_version not in EVIDENCED_PROGRESS_VERSIONS:
             raise ValueError("a stronger continuation student requires guided protocol 4.8")
         if frozen_config and endpoints.keys() != frozen_config["endpoints"].keys():
             raise ValueError("configured roles differ from the frozen run endpoints")
@@ -556,7 +563,7 @@ def run_guided_cases(
                     until_correct=until_correct,
                     **({"continuation_model": stronger["model"] if stronger else None,
                         "trusted_solution_receipts": trusted}
-                       if template_version == "4.8.0" else {}),
+                       if template_version in EVIDENCED_PROGRESS_VERSIONS else {}),
                 )
             except Exception as error:
                 atomic_json(
@@ -588,6 +595,8 @@ def run_guided_cases(
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
                 pending = set()
                 for source in inputs(input_path, template_version, trusted):
+                    if selected is not None and source["id"] not in selected:
+                        continue
                     if prefetch_worked_first:
                         if prefetch_limit is not None and scheduled >= prefetch_limit:
                             break
@@ -627,7 +636,11 @@ def run_guided_cases(
                 atomic_json(output / "summary.json", first_summary)
                 return first_summary
         run_pass(False)
-        return export(input_path, output)
+        summary = export(input_path, output)
+        if selected is not None:
+            summary = {**summary, "selection_complete": all((location(output, ident) / "case.json").is_file() for ident in selected),
+                       "selected_case_count": len(selected)}
+        return summary
 
 
 def export(input_path, output):
@@ -827,7 +840,7 @@ def export(input_path, output):
         "counts": counts,
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
-        **({"accepted_after_full_disclosure": disclosed_outcomes} if manifest["template_version"] == "4.8.0" else {}),
+        **({"accepted_after_full_disclosure": disclosed_outcomes} if manifest["template_version"] in EVIDENCED_PROGRESS_VERSIONS else {}),
         **({"historical_first_outcomes": historical_outcomes} if "historical_first" in manifest else {}),
         **({"historical_first_usage": historical_tokens} if historical_tokens else {}),
         **({"admission_timeouts": admission_timeouts} if admission_timeouts else {}),
