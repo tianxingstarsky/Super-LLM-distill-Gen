@@ -43,3 +43,29 @@ def test_uncertain_wrong_copied_or_final_work_cannot_authenticate_an_interior_ex
     assert recovered_student_calculations(source, pieces, prior_hints=["Compute the games in four groups."])
     assert not recovered_student_calculations({**source, "gold": None}, pieces)
     assert not recovered_student_calculations(source, [dict(piece, author="teacher") for piece in pieces])
+
+
+def test_units_need_the_students_own_local_quantity_and_the_source_annotation():
+    draft = "Green = 6 rooms.\nPaint Green = $(3/5) \\times 10 = 6$.\nPurple Rooms = $10 - 6 = 4$.\n"
+    source = {"question": "How many walls in the remaining rooms?", "gold": {"kind": "number", "value": "32"},
+              "source_reasoning": "Green: <<3/5*10=6>>6 rooms. Purple: <<10-6=4>>4 rooms."}
+    pieces, _ = draft_fragment(draft, 1)
+    found = recovered_student_calculations(source, pieces, pair_result_units=True)
+    assert [v["quantity_unit"]["text"] for v in found.values()] == ["6 rooms", "4 rooms"]
+    for item in found.values():
+        unit = item["quantity_unit"]
+        assert draft[slice(*unit["student_unit_span"])].lower() == unit["unit"]
+        assert draft[slice(*unit["student_amount_span"])] == unit["amount_text"]
+        assert source["source_reasoning"][slice(*unit["source_span"])] == unit["source_quote"]
+        assert item["text"].endswith(unit["text"])
+    assert all("quantity_unit" not in f for f in recovered_student_calculations(source, pieces).values())
+
+    for unrelated in (
+        "Green = 6 walls.\nPaint Green = $(3/5) * 10 = 6$.",
+        "Blue = 6 rooms.\nPaint Green = $(3/5) * 10 = 6$.",
+        "Green = 6 rooms.\nAnother claim.\nPaint Green = $(3/5) * 10 = 6$.",
+        "Purple Rooms = $10 - 6 = 4$ walls.",
+        "10 - 6 = 4 rooms per floor.",
+    ):
+        findings = recovered_student_calculations(source, draft_fragment(unrelated, 1)[0], pair_result_units=True)
+        assert findings and all("quantity_unit" not in item for item in findings.values())

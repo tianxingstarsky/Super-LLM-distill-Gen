@@ -12,6 +12,24 @@ from lib.contexts.workflows.domain.guided_teacher_delivery import inspect_teache
 from lib.contexts.workflows.domain.guided_teaching_steps import (
     certified_complete_disclosure, complete_solution_digest, verified_steps_digest,
 )
+from lib.prompts.workflow_guided_answers import disclosure_author_schema, disclosure_draft_decision_schema
+
+
+def test_disclosure_decision_separates_public_work_from_a_private_insufficiency():
+    # Captured shape of a rewrite: the author withheld the hint but still sent its question quote.
+    withheld = {"decision": "insufficient", "bridge": "", "hint": "",
+                "reason": "The starting count is unverified.", "question_quote": "The school has 14 boys and 10 girls."}
+    assert Draft202012Validator(disclosure_author_schema(grounded=True)).is_valid(withheld)
+    offer = {**withheld, "decision": "offer", "bridge": "Read the counts separately.",
+             "hint": "Which count describes the boys before the change?"}
+    for options in ([], ["step-1"]):
+        schema = Draft202012Validator(disclosure_draft_decision_schema(grounded=True, step_ids=options))
+        assert not schema.is_valid(withheld) and not schema.is_valid({**offer, "decision": "insufficient"})
+        assert schema.is_valid({**withheld, "question_quote": ""}) and schema.is_valid(offer)
+        assert not schema.is_valid({**offer, "hint": ""}) and not schema.is_valid({**offer, "reason": ""})
+        selection = {"decision": "select:step-1", "reason": "The operation targets the mistaken count."}
+        assert schema.is_valid(selection) == bool(options)
+        assert not schema.is_valid({**selection, "decision": "select:missing"})
 
 def test_worked_delivery_cannot_emit_the_empty_explanation_and_evidence_seen_in_a_live_response():
     incomplete = {"decision": "deliver", "explanation": "", "conclusion": "1250 ounces",

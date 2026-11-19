@@ -5,7 +5,7 @@ import unicodedata
 
 from .guided_answers import check_direct_answer, contains_chat_control, number
 
-STRICT_DELIVERY_VERSIONS = frozenset({"4.8.1", "4.8.2"})
+STRICT_DELIVERY_VERSIONS = frozenset({"4.8.1", "4.8.2", "4.8.3"})
 EVIDENCED_PROGRESS_VERSIONS = frozenset({"4.8.0"}) | STRICT_DELIVERY_VERSIONS
 QWEN_SAMPLING_VERSIONS = frozenset({"4.7.0", "4.7.1"}) | EVIDENCED_PROGRESS_VERSIONS
 TRUNCATED_TUTORING_VERSIONS = frozenset({"4.6.0"}) | QWEN_SAMPLING_VERSIONS

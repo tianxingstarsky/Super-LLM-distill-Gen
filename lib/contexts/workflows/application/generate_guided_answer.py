@@ -46,6 +46,7 @@ from lib.prompts.workflow_guided_answers import (
     RESULT_ONLY_DELIVERY,
     STUDENT_TASK_ANALYSIS,
     STUDENT_PROGRESS_REVIEW, STUDENT_REASONING_PROGRESS, STUDENT_REASONING_PROGRESS_ZH,
+    STUDENT_CONTINUE_SOLUTION, STUDENT_CONTINUE_SOLUTION_ZH,
     TUTOR_DISCLOSURE_PROGRESS, TUTOR_DISCLOSURE_PROGRESS_ZH,
     WORKED_ANSWER_DELIVERY,
     SINGLE_DECISION_REVIEW,
@@ -68,7 +69,8 @@ class GenerateGuidedAnswer:
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
-        carry_progress = protocol_version == "4.8.2"
+        continue_solution = protocol_version == "4.8.3"
+        carry_progress = continue_solution or protocol_version == "4.8.2"
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
@@ -98,6 +100,8 @@ class GenerateGuidedAnswer:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress)
+            if continue_solution:
+                assess_hint = partial(assess_hint, strict_author_decisions=True)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
         direct_protocol = record_guided_reasoning or protocol_version == "3.6.0"
         truncated_progress = direct_protocol or protocol_version == "3.5.0"
@@ -109,7 +113,8 @@ class GenerateGuidedAnswer:
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
-                    "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1", "4.8.2": "v4.8.2"}[protocol_version]
+                    "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
+                    "4.8.2": "v4.8.2", "4.8.3": "v4.8.3"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -221,6 +226,9 @@ class GenerateGuidedAnswer:
                         view["supported_prior_student_approaches"] = view.pop("supported_approaches_from_your_own_work")
                 if carry_progress and not send_full:
                     continuation = render_student_continuation(view, approaches, chinese=chinese)
+                    if continue_solution and (active or findings):
+                        instruction = STUDENT_CONTINUE_SOLUTION_ZH if chinese else STUDENT_CONTINUE_SOLUTION
+                        messages[0] = {"role": "system", "content": instruction + student_experience + task_suffix}
                 else:
                     continuation = "Continue the solution from this current view.\n" + json.dumps(view, ensure_ascii=False)
                 messages.append({"role": "tool", "content": continuation})
@@ -367,7 +375,10 @@ class GenerateGuidedAnswer:
                     # The unfinished trailing line can still qualify or negate an equation.
                     complete_lines = suffix[:suffix.rfind("\n") + 1]
                     pieces, _ = draft_fragment(complete_lines, index)
-                for item in recovered_student_calculations(source, pieces, prior_hints=(h["text"] for h in disclosed)).values():
+                calculated = recovered_student_calculations(
+                    source, pieces, prior_hints=(h["text"] for h in disclosed), pair_result_units=continue_solution,
+                )
+                for item in calculated.values():
                     certified["calculation:" + item["calculation_key"]] = item
             # Keep the original discovery when a later response repeats it.
             additions = {

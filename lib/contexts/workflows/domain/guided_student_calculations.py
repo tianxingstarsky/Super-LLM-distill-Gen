@@ -91,7 +91,65 @@ def _student_equations(text):
             yield equation, expr, start
 
 
-def recovered_student_calculations(source, pieces, *, prior_hints=()):
+_SOURCE_QUANTITY = re.compile(r"(?P<amount>\d+(?:\.\d+)?)\s+(?P<unit>[a-z][a-z-]{1,24})\b", re.ASCII)
+_PROSE_UNIT = re.compile(r"[ \t]*\$*[ \t]+(?P<unit>[A-Za-z][A-Za-z-]{1,24})\b")
+_UNIT_QUALIFIER = re.compile(r"\s*(?:/|\b(?:per|squared|cubed|as|times|each|apiece|for (?:each|every))\b)", re.I)
+
+
+def _paired_result_unit(source, annotation, pieces, index, at, quote):
+    """Bind the unit printed alongside the source result to a local student quantity or equation label."""
+    reasoning = source["source_reasoning"]
+    supplied = _SOURCE_QUANTITY.match(reasoning, annotation.end())
+    if not supplied:
+        return None
+    amount, unit = supplied.group("amount", "unit")
+    rhs = quote.rsplit("=", 1)[-1].strip()
+    if (amount != rhs or not re.search(r"\b" + re.escape(unit) + r"\b", source["question"], re.I)
+            or unit in {"times", "plus", "minus", "more", "less", "extra", "square", "cubic",
+                        "is", "was", "does", "has", "equals", "means", "gives", "leaves", "remains"}
+            or not (unit.endswith("s") or unit in {"feet", "mice", "kg", "km", "cm", "ml"})
+            or _UNIT_QUALIFIER.match(reasoning, supplied.end())):
+        return None
+    piece = pieces[index]
+    text = piece["text"]
+    end = at + len(quote)
+    amount_start, amount_end = end - len(rhs), end
+    suffix = _PROSE_UNIT.match(text, end)
+    if suffix:
+        if suffix["unit"].casefold() != unit or _UNIT_QUALIFIER.match(text, suffix.end()):
+            return None
+        unit_start, unit_end = suffix.span("unit")
+    else:
+        label = re.search(r"\b(?P<unit>" + re.escape(unit) + r")[ \t]*[=:][ \t]*\$*$", text[:at], re.I)
+        if label:
+            unit_start, unit_end = label.span("unit")
+            if re.search(r"(?:/|\b(?:per|square|cubic))\s*$", text[:unit_start], re.I):
+                return None
+        elif index and (label := re.fullmatch(r"\s*([A-Za-z][A-Za-z ]{0,48}?)\s*=\s*\$*", text[:at])):
+            # Accept “Green = 6 rooms. Paint Green = (3/5) ...” only with a matching local label.
+            previous = pieces[index - 1]
+            evidence = re.fullmatch(
+                r"\s*(?P<label>[A-Za-z][A-Za-z ]{0,48}?)\s*=\s*\$?(?P<amount>" + re.escape(amount)
+                + r")\$?\s+(?P<unit>" + re.escape(unit) + r")[.!]?\s*", previous["text"], re.I)
+            if (not evidence or previous["author"] != "student" or previous["end"] != piece["start"]
+                    or _NONASSERTION.search(previous["text"])
+                    or not (" " + label[1].strip().casefold()).endswith(" " + evidence["label"].strip().casefold())):
+                return None
+            piece, text = previous, previous["text"]
+            amount_start, amount_end = evidence.span("amount")
+            unit_start, unit_end = evidence.span("unit")
+        else:
+            return None
+    start, stop = min(unit_start, amount_start), max(unit_end, amount_end)
+    offset = piece["start"]
+    return {"amount_text": amount, "unit": unit, "text": f"{amount} {unit}", "student_segment_id": piece["id"],
+            "student_quote": text[start:stop], "student_span": [offset + start, offset + stop],
+            "student_amount_span": [offset + amount_start, offset + amount_end],
+            "student_unit_span": [offset + unit_start, offset + unit_end],
+            "source_quote": supplied.group(), "source_span": list(supplied.span())}
+
+
+def recovered_student_calculations(source, pieces, *, prior_hints=(), pair_result_units=False):
     """Return one authenticated arithmetic finding per student segment for protocol 4.8.2."""
     gold = source.get("gold") or {}
     answer = number(gold.get("value")) if gold.get("kind") == "number" else None
@@ -130,5 +188,10 @@ def recovered_student_calculations(source, pieces, *, prior_hints=()):
                 "basis_id": "arithmetic", "depends_on": [], "calculation_key": digest(key),
                 "evidence_level": "source_verified_student_calculation", "faithfulness_checked": True,
             }
+            if pair_result_units:
+                quantity = _paired_result_unit(source, annotation, pieces, index, at, quote)
+                if quantity:
+                    found[sid]["quantity_unit"] = quantity
+                    found[sid]["text"] += " " + quantity["unit"]
             break
     return found

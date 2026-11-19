@@ -1286,7 +1286,7 @@ def test_verified_source_operations_require_external_identity_and_independent_co
         assert reviewed["status"] == "accepted"
 
 
-@pytest.mark.parametrize("protocol,carry", [("4.8.1", False), ("4.8.2", True)])
+@pytest.mark.parametrize("protocol,carry", [("4.8.1", False), ("4.8.2", True), ("4.8.3", True)])
 def test_wrong_song_answer_preserves_only_the_students_checked_subtotal_for_tutor_and_next_student(protocol, carry):
     quote = "Recording takes 12 minutes per song"
     question = f"{quote}. There are 10 songs and 300 minutes in total. How much time remains? Show your work."
@@ -1315,6 +1315,11 @@ def test_wrong_song_answer_preserves_only_the_students_checked_subtotal_for_tuto
         return dict(content=json.dumps(reply), reasoning_content="", finish_reason="stop")
 
     case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version=protocol)
+    if protocol == "4.8.3":
+        from lib.prompts.workflow_guided_answers import STUDENT_CONTINUE_SOLUTION, STUDENT_REASONING_PROGRESS
+        assert STUDENT_REASONING_PROGRESS in calls["student", 1][0]["content"]
+        assert calls["student", 2][0]["content"] == STUDENT_CONTINUE_SOLUTION
+        assert calls["student", 2][1] == calls["student", 1][1]
     teacher_packet = json.loads(calls["disclosure_draft", 1][-1]["content"])
     facts = teacher_packet["established_evidence"]
     if carry:

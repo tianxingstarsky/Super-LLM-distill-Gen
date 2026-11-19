@@ -5,7 +5,7 @@ import json
 from lib.prompts.workflow_guided_answers import (
     AUTHORED_DISCLOSURE_REVIEW, DISCLOSURE_AUTHOR, DISCLOSURE_REVIEW, GROUNDED_AUTHOR_GUIDANCE,
     GROUNDED_HINT_REVIEW, TUTOR_TASK_ANALYSIS, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
-    DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_review_schema, verified_choice_schema,
+    DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_draft_decision_schema, disclosure_review_schema, verified_choice_schema,
     verified_choice_review_schema, with_disclosure_pairing,
 )
 from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
@@ -198,7 +198,7 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
 
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
-                           task_analysis=False, quoted_premises=False):
+                           task_analysis=False, quoted_premises=False, strict_author_decisions=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -228,6 +228,10 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         author_system += "\n\n" + TUTOR_TASK_ANALYSIS
         reviewer_system += "\n\n" + TUTOR_TASK_ANALYSIS
     author_system += "\n\n" + teacher_experience if teacher_experience else ""
+    if strict_author_decisions:
+        draft_schema = disclosure_draft_decision_schema(grounded=grounded, step_ids=options)
+    else:
+        draft_schema = verified_choice_schema(options) if options else disclosure_author_schema(grounded=grounded)
     for revision in range(2):
         entry = {"revision": revision, "private_reference": reference["text"], "latest_disclosure_id": previous_id}
         history.append(entry)
@@ -235,7 +239,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         draft = request(role, attempt["attempt"], [
             {"role": "system", "content": author_system},
             {"role": "user", "content": json.dumps(material, ensure_ascii=False)},
-        ], verified_choice_schema(options) if options else disclosure_author_schema(grounded=grounded))
+        ], draft_schema)
         entry["draft_response"] = draft
         if draft["finish_reason"] != "stop":
             entry["issue"] = "disclosure_draft_incomplete"
@@ -342,7 +346,8 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
 
 
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
-                                   *, teacher_experience, tried, task_analysis=False, quoted_premises=False):
+                                   *, teacher_experience, tried, task_analysis=False, quoted_premises=False,
+                                   strict_author_decisions=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation"):
         history = attempt["disclosure_work"] = []
@@ -351,7 +356,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
         approved, issue = author_next_disclosure(
             request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
             grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
-            quoted_premises=quoted_premises,
+            quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions,
         )
         history = attempt["disclosure_work"]
         tried.update(entry["verified_operation"]["id"] for entry in history if "verified_operation" in entry)

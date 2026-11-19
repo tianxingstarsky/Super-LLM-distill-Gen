@@ -14,6 +14,17 @@ STUDENT_REASONING_PROGRESS_ZH = (
     "换一种思路时，写出它具体解决了什么，或排除了哪种可能。"
 )
 
+STUDENT_CONTINUE_SOLUTION = (
+    "Finish the user's solution in their language. Use the result already obtained in the remaining "
+    "inference. Show how it leads to the quantity or conclusion the user asked for. End there, with the answer on a "
+    "separate 'Final answer:' line."
+)
+
+STUDENT_CONTINUE_SOLUTION_ZH = (
+    "接着已经得到的结果解这道题，说明由此能怎样推出用户所问的量或结论。"
+    "最后单起一行写“最终答案：”和结果，到此结束。"
+)
+
 TUTOR_DISCLOSURE_PROGRESS = (
     "Build on a result the learner has justified, or on a given fact if they have yet to establish "
     "one. A direct statement with the calculation, observation or premise behind it can make a useful "
@@ -98,6 +109,27 @@ def disclosure_author_schema(*, grounded=False):
     if grounded:
         fields["question_quote"] = {"type": "string"}
     return {"type": "object", "additionalProperties": False, "required": list(fields), "properties": fields}
+
+
+def disclosure_draft_decision_schema(*, grounded, step_ids=()):
+    """Decode the tutor's decision before allocating fields for public guidance."""
+    text = {"type": "string", "minLength": 1}
+    empty = {"const": ""}
+    public = ["bridge", "hint", *(["question_quote"] if grounded else [])]
+    choices = [f"select:{sid}" for sid in step_ids]
+
+    def branch(decision, public_text, required):
+        fields = {"decision": decision, "reason": text, **dict.fromkeys(public, public_text)}
+        return {"type": "object", "properties": fields, "additionalProperties": False,
+                "required": ["decision", "reason", *required]}
+
+    branches = [
+        branch({"const": "offer"}, text, public),
+        branch({"const": "insufficient"}, empty, [] if choices else public),
+    ]
+    if choices:
+        branches.append(branch({"type": "string", "enum": choices}, empty, []))
+    return {"anyOf": branches}
 
 
 GROUNDED_AUTHOR_GUIDANCE = """When the learner submits only a candidate answer, you know what was submitted, not how it was obtained. A missing derivation does not prevent you from teaching from the problem. Look for one relation, condition or operation in the original task that the learner can test next. In question_quote copy the exact clause or data expression supporting your suggestion. In bridge connect that evidence to what can actually be checked; in hint leave the check or local calculation for the learner. If one choice violates an explicit condition, start with that comparison rather than asking for an entire solution. If the source of an error is unknown, leave it unknown. A wrong guess is not an established intermediate result. Praise only a finding identified as established and consistent with your evidence. Offer a small, useful next action whenever these materials support one. Insufficient means no defensible next action can be found; in that case leave question_quote, bridge and hint empty. When revising, change the actual public suggestion in response to the defect."""
