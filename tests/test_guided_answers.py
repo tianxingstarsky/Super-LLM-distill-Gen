@@ -61,6 +61,66 @@ def test_local_answer_continuation_emits_only_tokens_after_the_closed_thinking_b
     assert len(calls) == 3
 
 
+def test_lease_timeout_resumes_only_unsent_guided_requests(tmp_path):
+    from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
+    from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
+    from lib.model_request_scheduler import SharedModelScheduler, model_pool_identity
+
+    pool = SharedModelScheduler(tmp_path, model_pool_identity("http://localhost/v1", "", "student"),
+                                policy={"max_concurrency": 1, "request_queue_timeout_seconds": 1})
+    endpoint = GuidedChatEndpoint("http://localhost/v1", "student", None, 32768, local=False,
+                                  context=98304, pool=pool)
+    source = tmp_path / "questions.jsonl"
+    source.write_text(json.dumps({"id": "sum", "question": "What is 2 + 3?", "answer_requirement": "final_only",
+                                  "gold": {"kind": "number", "value": "5"}}), "utf8")
+    requests = []
+    def respond(_url, body):
+        requests.append(body)
+        return {"choices": [{"message": {"content": "5"}, "finish_reason": "stop"}]}
+    endpoint.http = respond
+
+    def run(root, **options):
+        return run_guided_cases(source, root, {"student": endpoint, "coach": endpoint}, {"version": "test"}, 2,
+                                protocol_version="4.2.1", workers=1, first_pass_only=True, **options)
+
+    root = tmp_path / "original"
+    with pool.acquire():
+        blocked = run(root)
+    assert not requests and not blocked["first_pass_complete"] and not blocked["complete"]
+    assert blocked["admission_timeouts"] == blocked["counts"]["awaiting_capacity"] == 1
+    assert not any(blocked["model_calls"].values()) and (root / "quarantine.jsonl").read_bytes() == b""
+    checkpoint = next(root.glob("cases/*/001-student.json"))
+    event = json.loads(checkpoint.read_bytes())
+    assert event["attempts"][-1]["model_request_sent"] is False
+
+    # Reproduce the exact pre-fix on-disk receipt issued by the shared scheduler.
+    previous = {"status": "interrupted", "error": "ModelQueueTimeout", "http_status": "model_request_queue_timeout"}
+    event.update(status="interrupted", attempts=[previous])
+    checkpoint.write_text(json.dumps(event), "utf8")
+    stop = checkpoint.with_name("interruption.json")
+    old = json.loads(stop.read_bytes())
+    old.update(status="interrupted", error="ModelQueueTimeout", detail="model_request_queue_timeout")
+    old.pop("checkpoint")
+    stop.write_text(json.dumps(old), "utf8")
+    exported = run(root, export_only=True)
+    assert exported["counts"]["awaiting_capacity"] == 1 and not any(exported["model_calls"].values())
+    resumed = run(root)
+    assert resumed["complete"] and resumed["accepted_by_route"]["nonthinking_direct"] == 1
+    assert resumed["model_calls"]["new_completed"] == 1 and resumed["admission_timeouts"] == 1
+    assert json.loads(checkpoint.read_bytes())["attempts"][0] == previous and len(requests) == 1
+    assert run(root) == resumed and len(requests) == 1
+
+    def lost_response(_url, body):
+        requests.append(body)
+        raise TimeoutError("response deadline")
+    endpoint.http = lost_response
+    unknown = tmp_path / "unknown"
+    assert run(unknown)["model_calls"]["interrupted_or_pending"] == 1
+    endpoint.http = respond
+    assert run(unknown)["counts"]["interrupted"] == 1 and len(requests) == 2
+    assert run(unknown, retry_interrupted=True)["complete"] and len(requests) == 3
+
+
 def test_three_round_http_history_uses_only_published_clues_and_freezes_resume(
     tmp_path,
     monkeypatch,

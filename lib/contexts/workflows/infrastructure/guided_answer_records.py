@@ -12,10 +12,11 @@ from threading import BoundedSemaphore
 
 from filelock import FileLock
 
+from lib.contexts.models.contracts import ModelQueueTimeout
 from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
-from .guided_llama import DIRECT_ANSWER_GRAMMARS, wire_body
+from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
@@ -63,6 +64,39 @@ def verified_step_registry(output, receipt_path, frozen_config):
 
 def location(root, ident):
     return root / "cases" / hashlib.sha256(ident.encode()).hexdigest()
+
+
+def unsent_admission(attempt):
+    # Old guided transports could raise this typed scheduler code only on lease entry.
+    return attempt == {"status": "interrupted", "error": "ModelQueueTimeout", "http_status": ModelQueueTimeout.code} or (
+        attempt.get("status") == "awaiting_capacity" and attempt.get("model_request_sent") is False
+        and attempt.get("code") == ModelQueueTimeout.code
+    )
+
+
+def can_resume_admission(receipt, binding, ident, role, index):
+    attempts = receipt.get("attempts")
+    return (
+        receipt.get("status") in {"interrupted", "awaiting_capacity"} and "response" not in receipt
+        and "origin" not in receipt and receipt.get("role") == role and receipt.get("attempt") == index
+        and isinstance(receipt.get("request"), dict)
+        and receipt.get("identity") == digest({"binding": binding, "id": ident, "payload": receipt["request"]})
+        and bool(attempts) and all(unsent_admission(item) for item in attempts)
+    )
+
+
+def capacity_stop(stop, outstanding, binding, ident):
+    if not outstanding or not all(outstanding.values()):
+        return False
+    if not stop:
+        return True
+    if stop.get("binding") != binding or stop.get("id") != ident:
+        return False
+    if "checkpoint" in stop and stop["checkpoint"] not in outstanding:
+        return False
+    return (stop.get("status") == "awaiting_capacity"
+            or (stop.get("error") == "ModelQueueTimeout" and stop.get("detail") == ModelQueueTimeout.code)
+            or stop.get("detail") == "request outcome unresolved; explicit retry required")
 
 
 def disclosure_delivery(case, attempt, folder):
@@ -134,6 +168,8 @@ def replay_matching_call(root, ident, role, index, payload, prior_binding):
         return None
     if prior.get("origin"):
         raise ValueError("matching receipt is itself a replay; use its original run for this call")
+    if can_resume_admission(prior, prior_binding, ident, role, index):
+        return None
     if prior["status"] != "complete" or prior["attempts"][-1]["status"] != "complete":
         raise ValueError("identical prior call has no confirmed response")
     return prior["response"], {
@@ -280,13 +316,18 @@ def run_guided_cases(
         def process(source, first_pass):
             folder = location(output, source["id"])
             receipt = folder / "case.json"
+            interruption = folder / "interruption.json"
+            current_checkpoint = None
+            resumed_interruption = False
             if receipt.exists():
                 if read(receipt)["binding"] != binding:
                     raise ValueError("completed case has different run binding")
                 return
 
             def request(role, index, messages, schema):
+                nonlocal current_checkpoint, resumed_interruption
                 checkpoint = folder / f"{index:03}-{role}.json"
+                current_checkpoint = checkpoint.name
                 serving_role = "student" if role in ("student", "final_answer") else "coach"
                 endpoint = endpoints[serving_role]
                 payload = (endpoint.final_answer_payload(messages) if role == "final_answer"
@@ -302,9 +343,15 @@ def run_guided_cases(
                     raise ValueError("request differs from its saved checkpoint")
                 if saved.get("status") == "complete":
                     return saved["response"]
-                if saved and not retry_interrupted:
+                if saved and not retry_interrupted and not can_resume_admission(saved, binding, source["id"], role, index):
                     raise RuntimeError(
                         "request outcome unresolved; explicit retry required"
+                    )
+                if saved and interruption.exists():
+                    prior_stop = read(interruption)
+                    resumed_interruption = (
+                        prior_stop.get("binding") == binding and prior_stop.get("id") == source["id"]
+                        and prior_stop.get("checkpoint", current_checkpoint) == current_checkpoint
                     )
                 previous = saved.get("attempts", [])
                 replayed = None
@@ -330,7 +377,7 @@ def run_guided_cases(
                             status="complete",
                             origin=origin,
                             response=response,
-                            attempts=[{"status": "replayed", "new_model_calls": 0}],
+                            attempts=[*previous, {"status": "replayed", "new_model_calls": 0}],
                         ),
                     )
                     return response
@@ -346,12 +393,20 @@ def run_guided_cases(
                 try:
                     with server_limits[role_servers[serving_role]]:
                         response = endpoint.complete(payload)
+                except GuidedAdmissionTimeout:
+                    event["status"] = "awaiting_capacity"
+                    event["attempts"][-1] = {
+                        "status": "awaiting_capacity", "code": ModelQueueTimeout.code, "model_request_sent": False,
+                    }
+                    atomic_json(checkpoint, event)
+                    raise
                 except Exception as err:
                     event["status"] = "interrupted"
                     event["attempts"][-1] = {
                         "status": "interrupted",
                         "error": type(err).__name__,
                         "http_status": getattr(err, "code", None),
+                        "dispatch": "unknown",
                     }
                     atomic_json(checkpoint, event)
                     raise
@@ -374,22 +429,25 @@ def run_guided_cases(
                 )
             except Exception as error:
                 atomic_json(
-                    folder / "interruption.json",
+                    interruption,
                     dict(
                         id=source["id"],
                         binding=binding,
                         error=type(error).__name__,
                         detail=str(error),
-                        status="interrupted",
+                        status="awaiting_capacity" if isinstance(error, GuidedAdmissionTimeout) else "interrupted",
+                        checkpoint=current_checkpoint,
                     ),
                 )
                 return source["id"]
             if result is None:
+                if resumed_interruption:
+                    interruption.unlink(missing_ok=True)
                 return
             atomic_json(
                 receipt, {**result, "binding": binding, "source_sha256": digest(source)}
             )
-            (folder / "interruption.json").unlink(missing_ok=True)
+            interruption.unlink(missing_ok=True)
 
         failed_first = set()
         def run_pass(first_pass):
@@ -416,7 +474,7 @@ def run_guided_cases(
             run_pass(True)
             first_summary = export(input_path, output)
             if first_pass_only:
-                first_summary["first_pass_complete"] = first_summary["counts"]["interrupted"] == 0
+                first_summary["first_pass_complete"] = not failed_first
                 atomic_json(output / "summary.json", first_summary)
                 return first_summary
         run_pass(False)
@@ -435,6 +493,7 @@ def export(input_path, output):
         accepted_routes["guided_reasoning"] = 0
         accepted_routes["unaided_reasoning"] = 0
     calls = dict(new_completed=0, replayed_first=0, interrupted_or_pending=0)
+    admission_timeouts = 0
     with TemporaryDirectory(dir=output) as temp:
         scratch = Path(temp)
         with ExitStack() as stack:
@@ -455,11 +514,17 @@ def export(input_path, output):
 
             for source in inputs(input_path, manifest["template_version"], trusted):
                 folder = location(output, source["id"])
+                outstanding = {}
                 for cp in folder.glob("[0-9]*-*.json"):
                     event = read(cp)
+                    if event["status"] != "complete":
+                        serial, role = cp.stem.split("-", 1)
+                        outstanding[cp.name] = can_resume_admission(event, binding, source["id"], role, int(serial))
                     for item in event["attempts"]:
                         status = item["status"]
-                        if status == "replayed":
+                        if unsent_admission(item):
+                            admission_timeouts += 1
+                        elif status == "replayed":
                             kind = ("replayed_matching" if event.get("origin", {}).get("kind") == "replayed_matching_call"
                                     else "replayed_first")
                             calls[kind] = calls.get(kind, 0) + 1
@@ -468,11 +533,14 @@ def export(input_path, output):
                         elif status in {"interrupted", "pending"}:
                             calls["interrupted_or_pending"] += 1
                 if not (folder / "case.json").exists():
-                    broken = (folder / "interruption.json").exists()
-                    status = "interrupted" if broken else "pending"
-                    counts[status] += 1
-                    if broken:
-                        emit("quarantine", read(folder / "interruption.json"))
+                    path = folder / "interruption.json"
+                    stop = read(path) if path.exists() else {}
+                    if capacity_stop(stop, outstanding, binding, source["id"]):
+                        counts["awaiting_capacity"] = counts.get("awaiting_capacity", 0) + 1
+                    else:
+                        counts["interrupted" if stop or outstanding else "pending"] += 1
+                        if stop:
+                            emit("quarantine", stop)
                     continue
                 case = read(folder / "case.json")
                 if case["binding"] != binding or case["source_sha256"] != digest(
@@ -562,7 +630,8 @@ def export(input_path, output):
         "counts": counts,
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
-        "complete": counts["pending"] == counts["interrupted"] == 0,
+        **({"admission_timeouts": admission_timeouts} if admission_timeouts else {}),
+        "complete": counts["pending"] == counts["interrupted"] == counts.get("awaiting_capacity", 0) == 0,
     }
     atomic_json(output / "summary.json", summary)
     return summary

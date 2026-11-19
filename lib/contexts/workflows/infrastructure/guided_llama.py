@@ -2,10 +2,11 @@
 
 import json
 import os
-from contextlib import nullcontext
+from contextlib import ExitStack
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from lib.contexts.models.contracts import ModelQueueTimeout
 from lib.prompts.workflow_guided_answers import FINAL_DELIVERY
 
 MIN_CONTEXT = 90_000
@@ -27,6 +28,10 @@ DIRECT_ANSWER_GRAMMARS = {
 
 def wire_body(value):
     return json.dumps(value, ensure_ascii=False).encode("utf-8")
+
+
+class GuidedAdmissionTimeout(ModelQueueTimeout):
+    """The generation request was never sent because a lease was not granted."""
 
 
 class GuidedChatEndpoint:
@@ -179,9 +184,14 @@ class GuidedChatEndpoint:
 
     def _generate(self, path, data):
         # A full native server must not consume the global allowance while queuing.
-        with self.slot_pool.acquire() if self.slot_pool is not None else nullcontext():
-            with self.pool.acquire():
-                return self.http(self.root + path, data)
+        with ExitStack() as leases:
+            try:
+                if self.slot_pool is not None:
+                    leases.enter_context(self.slot_pool.acquire())
+                leases.enter_context(self.pool.acquire())
+            except ModelQueueTimeout as error:
+                raise GuidedAdmissionTimeout(ModelQueueTimeout.code) from error
+            return self.http(self.root + path, data)
 
     def complete(self, data):
         if "prompt" in data:

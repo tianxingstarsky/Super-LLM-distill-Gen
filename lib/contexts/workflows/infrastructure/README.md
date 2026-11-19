@@ -136,6 +136,12 @@ SQLite 事务认领批次，避免并行进化拿到同一份待处理材料。�
 
 证据策略 2 仍通过当前模型端口及文件检查点运行；配方 30 冻结模板 1.6.0。引用与数量规则位于 domain，不在 SDK 适配层猜测单位或修补模型结论。
 
+## 分段指导作答的租约与恢复
+
+`guided_llama.py` 在获取端点与全局租约后才发送生成请求。某个租约未能按时取得时，`guided_answer_records.py` 将该题列入 `awaiting_capacity`，单列 `admission_timeouts`。下次运行同一批次会使用原请求重新排队。请求、每次等候和最终响应保存在同一检查点。
+
+旧收据必须匹配冻结任务、题目、角色和轮次，且所有历史尝试均明确记录了调度器的 `ModelQueueTimeout` 与 `model_request_queue_timeout` 代码，才能自动续排。HTTP 读取超时、缺失响应的在途请求和带有此类历史尝试的检查点，仍需确认后使用 `--retry-interrupted`。运行 `tests/test_guided_answers.py` 可验证占满租约后的恢复及读取超时的处理。
+
 ## 显式原生多轮续跑
 
 `CheckpointedDialogueAdapter(model_stage="multiturn")` 在已认证返工分支中固定原作者节点，复用现有请求、并发、用量和检查点，绝不切换共享运行时的全局 stage。指导员继续使用原有 director 请求入口；每轮与整段校验仍由现有用例执行。支持范围、旧稿和复用摘要见 `ContinueNativeDialogue`；不把一般 terminal resume 当成重生成。
