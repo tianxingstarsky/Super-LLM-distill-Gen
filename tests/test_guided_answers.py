@@ -733,7 +733,7 @@ def test_wrong_direct_value_stays_an_observation_and_unchanged_withheld_hint_is_
                             "reason": "The quoted premises identify a local check." if release else "Needs a smaller action."}
                 content = json.dumps(data)
             return {"content": content, "reasoning_content": "", "finish_reason": "stop"}
-        return GenerateGuidedAnswer(call).run(source, {"version": "initial"}, 2), roles
+        return GenerateGuidedAnswer(call).run(source, {"version": "initial"}, 2, protocol_version="4.0.0"), roles
     blocked, roles = run(False)
     assert roles == ["student", "disclosure_draft", "disclosure", "disclosure_rewrite"]
     attempt = blocked["attempts"][0]
@@ -849,6 +849,146 @@ def test_verified_source_operations_require_external_identity_and_independent_co
     for second in ("BC", None):
         reviewed, _ = run(second_result=second)
         assert reviewed["status"] == "accepted"
+
+
+def test_public_disclosure_quotes_are_paired_exact_and_separate_from_teacher_inferences():
+    from lib.contexts.workflows.domain.guided_disclosure_text import locate_authored_task_citations, render_teacher_text
+    question = 'The sign reads "left at dusk". 两组成员之间互不重叠。标签为“入口”。'
+    text = 'Compare the route with “The sign reads "left at dusk"”. 两组成员之间互不重叠，先分别记数。'
+    rendered, quotes = render_teacher_text(text, question)
+    assert '“两组成员之间互不重叠”，先分别记数' in rendered
+    assert [c["quote"] for c in quotes] == ['The sign reads "left at dusk"', '两组成员之间互不重叠']
+    nested, citations = render_teacher_text('"标签为“入口”"并不代表出口。', question)
+    assert nested.startswith('"标签为“入口”"') and citations[0]["quote"] == '标签为“入口”'
+    for c in quotes:
+        assert question[slice(*c["source_span"])] == rendered[slice(*c["public_span"])] == c["quote"]
+    for malformed in ('“left at noon”', '”left at dusk“', '"left at dusk', '题面写道：两个社团重复。'):
+        with pytest.raises(ValueError):
+            render_teacher_text(malformed, question)
+    assert render_teacher_text("Draw a diagram.", question) == ("Draw a diagram.", [])
+    repeated = "Gate A: mark one blue item. Gate B: mark one blue item."
+    anchor = "one blue item"
+    second = repeated.rindex(anchor)
+    span = [second, second + len(anchor)]
+    for body in ("blue item", anchor, "mark one blue item"):
+        _, positions = render_teacher_text(f'Count “{body}”.', repeated, anchor, anchor_span=span)
+        start = repeated.rindex(body)
+        assert positions[0]["source_span"] == [start, start + len(body)]
+    with pytest.raises(ValueError, match="ambiguous"):
+        render_teacher_text('Count “blue item”.', repeated, anchor)
+    premise = "Gate B: mark one blue item"
+    _, positions = render_teacher_text('Count “blue item”.', repeated, premise)
+    assert positions[0]["source_span"][0] == repeated.rindex("blue item")
+    old = dict(evidence_id="question", quote="blue item", span=[17, 26])
+    assert locate_authored_task_citations([old], repeated, premise)[0]["span"] == positions[0]["source_span"]
+    with pytest.raises(ValueError, match="ambiguous"):
+        locate_authored_task_citations([old], repeated, anchor)
+
+
+def test_freewritten_teacher_quote_is_checked_before_review_and_delivery():
+    question = "The first basket contains two red apples. How many red apples are there?"
+    premise = "The first basket contains two red apples"
+    source = validate_source(dict(id="baskets", question=question, gold=dict(kind="number", value="2"),
+                                  answer_requirement="final_only"))
+    def run(bad):
+        delivered, reviewed = [], []
+        def request(role, index, messages, schema):
+            if role == "student" and index == 1:
+                return dict(content="8", reasoning_content="", finish_reason="stop")
+            if role == "student":
+                delivered.append(json.loads(messages[-1]["content"].split("\n", 1)[1])["new_clue"])
+                return dict(content="", reasoning_content="", finish_reason="length")
+            packet = json.loads(messages[-1]["content"])
+            if role in {"disclosure_draft", "disclosure_rewrite"}:
+                qualifier = '“there are eight red apples”' if bad else premise
+                value = dict(decision="offer", question_quote=premise, bridge=qualifier + ".",
+                             hint="Mark only the apples of the requested colour.", reason="Count the relevant items.")
+            else:
+                assert role == "disclosure" and packet["student_attempt"] == 1
+                candidate = packet["proposed_next_teacher_disclosure"]
+                reviewed.append(candidate["public_text"])
+                value = dict(decision="release", citations=[dict(evidence_id="question", quote=premise)],
+                             bridge=candidate["bridge"], reason="The action checks the colour the student must count.",
+                             pairing=dict(student_fit=True, evidence_support=True, history_fit="first"))
+            return dict(content=json.dumps(value), reasoning_content="", finish_reason="stop")
+        out = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version="4.2.0")
+        return out, reviewed, delivered
+    out, reviewed, delivered = run(False)
+    assert reviewed == delivered == [out["disclosures"][0]["text"]]
+    assert reviewed[0].startswith("“" + premise + "”.")
+    out, reviewed, delivered = run(True)
+    assert out["status"] == "awaiting_guidance" and reviewed == delivered == []
+
+
+def test_recommend_remaining_verified_steps_until_correct_with_paired_reviews_and_distinct_checkpoints():
+    from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
+    q = "两组成员之间互不重叠。第一组有一项，第二组有两项。求这两组的总数。"
+    gold = {"kind": "number", "value": "3"}
+    operations = []
+    for sid, quote, action in (
+        ("irrelevant", "第一组有一项", "检查第一组的标签。"),
+        ("first", "第一组有一项", "第一组有一项，先给这一组画圈。"),
+        ("second", "第二组有两项", "把另一组的成员分开标记。"),
+        ("delivery", "求这两组的总数", "核对最终填入的数是否统计了所有圈出的成员。"),
+    ):
+        start = q.index(quote)
+        operations.append(dict(id=sid, kind="operation", quote=quote, span=[start, start + len(quote)],
+                               operation=action, verification="Independent fixture check of the set counts."))
+    receipt = verified_steps_digest("groups", q, gold, operations)
+    source = validate_source(dict(id="groups", question=q, gold=gold, answer_requirement="final_only",
+                                  verified_teaching_steps=dict(receipt_id=receipt, steps=operations)),
+                             allow_verified_teaching_steps=True, trusted_step_receipts={receipt})
+    def run(veto=False):
+        calls, received, proposals = [], [], []
+        def request(role, index, messages, schema):
+            calls.append((role, index))
+            if role == "student":
+                if index > 1:
+                    public = json.loads(messages[-1]["content"].split("\n", 1)[1])
+                    received.append(public["new_clue"])
+                    if index == 4:
+                        assert public["your_last_formal_answer"] == "2"
+                text = ("5", "Still working on the group totals.\nFinal answer: 4",
+                        "1 + 2 = 3.\nFinal answer: 3", "I count both groups together.\nFinal answer: 3")[index - 1]
+            elif role == "coach":
+                text = json.dumps(dict(decision="revise:a2.s1" if index == 2 else "supported",
+                                       reusable=[], diagnosis="Check the group totals."))
+            elif role == "final_answer":
+                text = {3: "2", 4: "3"}[index]
+            else:
+                packet = json.loads(messages[-1]["content"])
+                if role == "disclosure_draft":
+                    text = json.dumps(dict(decision="insufficient", reason="I cannot choose between these operations."))
+                else:
+                    assert role == "disclosure_candidate_review"
+                    candidate = packet["proposed_next_teacher_disclosure"]
+                    assert candidate["step_id"] == operations[index - 1]["id"]
+                    assert packet["student_attempt"] == (1 if veto else (1, 1, 2, 3)[index - 1])
+                    if index == 4 and not veto:
+                        assert packet["current_difficulty"]["observed_text_end"] == "2"
+                        assert packet["current_difficulty"]["submitted_answer_status"] == "incorrect"
+                    previous = packet["latest_disclosure_id"]
+                    proposals.append(candidate["public_text"])
+                    text = json.dumps(dict(decision="release", reason="Checked the premise, next action and current obstacle.",
+                                           evidence_ids=[candidate["task_evidence_id"], *([previous] if previous else [])],
+                                           pairing=dict(student_fit=not veto and index != 1, evidence_support=True,
+                                                        history_fit="continuous" if previous else "first")))
+            return dict(content=text, reasoning_content="", finish_reason="stop")
+        case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 1, protocol_version="4.2.0",
+                                                 until_correct=True)
+        return case, calls, received, proposals
+    result, calls, received, reviewed = run()
+    assert result["status"] == "accepted", (result["issue"], calls)
+    assert [i for role, i in calls if role == "disclosure_candidate_review"] == [1, 2, 3, 4]
+    assert received == reviewed[1:] == [item["text"] for item in result["disclosures"]]
+    assert received[0].startswith("“第一组有一项”")
+    assert [item["review_checkpoint"] for item in result["disclosures"]] == [
+        dict(role="disclosure_candidate_review", index=ordinal, student_attempt=ordinal-1) for ordinal in (2, 3, 4)]
+    assert [p["attempt"] for p in result["finalization"]] == [3, 4]
+    assert result["messages"][-1]["content"] == "3" and received[-1] in result["messages"][-1]["reasoning_content"]
+    rejected, calls, received, _ = run(veto=True)
+    assert rejected["status"] == "awaiting_guidance" and not received and not rejected["disclosures"]
+    assert calls[-4:] == [("disclosure_candidate_review", i) for i in range(1, 5)]
 
 
 def test_unaided_visible_derivation_becomes_thinking_and_only_real_corrections_change_its_route():

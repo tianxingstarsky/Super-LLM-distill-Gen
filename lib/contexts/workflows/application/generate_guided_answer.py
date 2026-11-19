@@ -3,7 +3,9 @@
 import json
 from functools import partial
 
-from .review_guided_disclosure import author_next_disclosure, review_next_disclosure
+from .review_guided_disclosure import (
+    author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
+)
 
 from ..domain.guided_answers import (
     assemble,
@@ -47,7 +49,8 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         skip_acquired = protocol_version != "3.0.0"
-        show_outcome = protocol_version == "4.1.1"
+        paired = protocol_version == "4.2.0"
+        show_outcome = paired or protocol_version == "4.1.1"
         allow_catalog = show_outcome or protocol_version == "4.1.0"
         grounded = allow_catalog or protocol_version == "4.0.0"
         authored_hints = grounded or protocol_version == "3.9.0"
@@ -57,13 +60,17 @@ class GenerateGuidedAnswer:
         assess_hint = (partial(author_next_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
                                grounded=grounded, allow_catalog=allow_catalog, show_outcome=show_outcome)
                        if authored_hints else review_next_disclosure)
+        tried_verified_steps = set()
+        if paired:
+            assess_hint = partial(review_or_recommend_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
+                                  tried=tried_verified_steps)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
         direct_protocol = record_guided_reasoning or protocol_version == "3.6.0"
         truncated_progress = direct_protocol or protocol_version == "3.5.0"
         marked_finals = truncated_progress or protocol_version == "3.4.0"
         single_decision = marked_finals or protocol_version == "3.3.0"
         anchored = single_decision or protocol_version == "3.2.0"
-        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4", "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9", "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1"}[protocol_version]
+        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4", "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9", "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -357,9 +364,14 @@ class GenerateGuidedAnswer:
             if until_correct:
                 current_findings = {f.get("check_id") or f["text"].strip() for f in findings.values()}
                 grew = len(active) > greatest_verified_prefix or bool(current_findings - seen_findings)
+                if paired and index > 1 and attempts[-2].get("disclosure", {}).get("source_step_receipt"):
+                    grew = True
                 greatest_verified_prefix = max(greatest_verified_prefix, len(active))
                 seen_findings.update(current_findings)
                 stalled_rounds = 0 if grew else stalled_rounds + int(index > 1)
+                if (paired and stalled_rounds >= max_attempts
+                        and eligible_teaching_steps(source, active, findings, disclosed, tried_verified_steps)):
+                    attempt["recommend_verified_operation"] = True
             version.update(
                 retained_after=[s["id"] for s in active],
                 reusable=list(extracted),
@@ -399,7 +411,7 @@ class GenerateGuidedAnswer:
                             or not final_text.strip() or contains_chat_control(final_text)):
                             break
                         if index == attempt_limit:
-                            if until_correct and stalled_rounds >= max_attempts:
+                            if until_correct and stalled_rounds >= max_attempts and not attempt.get("recommend_verified_operation"):
                                 status, issue = "awaiting_guidance", "no_new_verified_student_progress"
                                 break
                             if not until_correct and (index != max_attempts or len(formal_history) != 1
@@ -433,7 +445,7 @@ class GenerateGuidedAnswer:
                 break
             issue = check["issue"] or "explanation_requires_review"
             if until_correct and index == attempt_limit:
-                if stalled_rounds >= max_attempts:
+                if stalled_rounds >= max_attempts and not attempt.get("recommend_verified_operation"):
                     status, issue = "awaiting_guidance", "no_new_verified_student_progress"
                     break
                 attempt_limit += 1

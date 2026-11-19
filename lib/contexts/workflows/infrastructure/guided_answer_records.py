@@ -19,7 +19,7 @@ from .guided_llama import DIRECT_ANSWER_GRAMMARS, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"}
+VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1", "4.2.0"}
 TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"} | VERIFIED_STEP_VERSIONS
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS
 FINAL_CONTINUATION_VERSIONS = {"3.7.0"} | DIRECT_SYNTAX_VERSIONS
@@ -64,6 +64,30 @@ def location(root, ident):
     return root / "cases" / hashlib.sha256(ident.encode()).hexdigest()
 
 
+def disclosure_delivery(case, attempt, folder):
+    """Pair a published hint with the exact next student request and completed response."""
+    hint = attempt.get("disclosure")
+    if not hint:
+        return None
+    index = attempt["attempt"] + 1
+    filename = f"{index:03}-student.json"
+    receipt = read(folder / filename)
+    payload = receipt["request"]
+    if (receipt["identity"] != digest({"binding": case["binding"], "id": case["id"], "payload": payload})
+            or receipt["status"] != "complete" or receipt["role"] != "student" or receipt["attempt"] != index):
+        raise ValueError("next student response is not bound to the published disclosure")
+    frame = payload["messages"][-1]
+    prefix = "Continue the solution from this current view.\n"
+    if frame["role"] != "tool" or not frame["content"].startswith(prefix):
+        raise ValueError("next student request is missing its disclosure")
+    view = json.loads(frame["content"][len(prefix):])
+    previous = [h["text"] for h in case["disclosures"][:hint["ordinal"] - 1]]
+    if view["new_clue"] != hint["text"] or view["previously_disclosed_clues"] != previous:
+        raise ValueError("student request differs from its reviewed disclosure history")
+    return {"ordinal": hint["ordinal"], "student_attempt": index, "student_receipt": filename,
+            "student_finish_reason": receipt["response"]["finish_reason"]}
+
+
 def replay_first(path, ident, payload, prior_binding):
     relative = location(Path("."), ident) / "001-student.json"
     receipt_bytes = (path / relative).read_bytes()
@@ -104,7 +128,7 @@ def run_guided_cases(
     export_only=False,
     first_pass_only=False,
     protocol_version=None,
-    until_correct=False,
+    until_correct=None,
     retry_interrupted=False,
     workers=4,
     reuse_first_from=None,
@@ -117,11 +141,13 @@ def run_guided_cases(
         template_version = frozen_config["template_version"] if frozen_config else (protocol_version or VERSION)
         if protocol_version and protocol_version != template_version:
             raise ValueError("the requested protocol differs from the frozen run")
+        if until_correct is None:
+            until_correct = frozen_config.get("until_correct", False) if frozen_config else template_version == "4.2.0"
         if until_correct and template_version not in TEACHER_DISCLOSURE_VERSIONS:
             raise ValueError("progress-based continuation requires guided protocol 3.9.0 or later")
         registry, trusted = verified_step_registry(output, verified_step_receipts, frozen_config)
         if registry and template_version not in VERIFIED_STEP_VERSIONS:
-            raise ValueError("verified teaching steps require a supported 4.1 protocol")
+            raise ValueError("verified teaching steps require guided protocol 4.1 or later")
         with input_path.open("rb") as fp:
             source_sha = hashlib.file_digest(fp, "sha256").hexdigest()
         seen = set()
@@ -440,7 +466,13 @@ def export(input_path, output):
                     },
                 )
                 for attempt in case["attempts"]:
+                    paired_protocol = manifest["template_version"] == "4.2.0"
+                    delivery = disclosure_delivery(case, attempt, folder) if paired_protocol else None
                     for work in attempt.get("disclosure_work", []):
+                        published = bool(work.get("validated_citations") and attempt.get("disclosure"))
+                        if paired_protocol:
+                            published = bool(delivery and work.get("review_checkpoint")
+                                             == attempt["disclosure"]["review_checkpoint"])
                         emit("teacher_feedback", {
                             "id": case["id"], "case_archive": (folder / "case.json").relative_to(output).as_posix(),
                             "attempt": attempt["attempt"], "revision": work["revision"],
@@ -448,7 +480,10 @@ def export(input_path, output):
                             **({"verified_operation": work["verified_operation"]} if "verified_operation" in work else {}),
                             "validated_citations": work.get("validated_citations", []),
                             "issue": work.get("issue"),
-                            "published": bool(work.get("validated_citations") and attempt.get("disclosure")),
+                            "published": published,
+                            **({key: work[key] for key in ("review_checkpoint", "public_text", "question_quotations")
+                                if key in work} if paired_protocol else {}),
+                            **({"delivery": delivery} if paired_protocol and published else {}),
                             "experience_version": case["experience_version"],
                         })
                     review = attempt.get("coach") or {}

@@ -295,6 +295,17 @@ class SharedModelScheduler:
             self._signal.notify()
         return summary
 
+    def set_observed_capacity(self, slots: int) -> None:
+        """Apply a native server's observed slot count without dropping live leases."""
+        limit = validate_model_scheduling({"max_concurrency": slots})["max_concurrency"]
+        with self._locked():
+            state = self._state()
+            if state["max_concurrency"] == limit:
+                return
+            state["max_concurrency"] = limit
+            atomic_json(self.path, state)
+        self._signal.notify()
+
     def snapshot(self) -> dict:
         with self._locked():
             state = self._state()

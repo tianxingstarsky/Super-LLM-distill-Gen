@@ -29,7 +29,8 @@ def main():
         help="Declared remote tutor capacity; native slots are measured",
     )
     cli.add_argument("--max-tokens", type=int, default=32768)
-    cli.add_argument("--max-attempts", type=int, default=3)
+    cli.add_argument("--max-attempts", type=int, default=3,
+                     help="Consecutive rounds without verified progress in continuous mode; total attempts in bounded mode")
     cli.add_argument(
         "--workers",
         "--concurrency",
@@ -48,8 +49,9 @@ def main():
     cli.add_argument("--protocol-version", help="Pin a supported protocol when creating a new run")
     cli.add_argument("--verified-step-receipts", type=Path,
                      help="Trust teaching microsteps independently checked by the nominated source verifier. The run freezes its receipt registry.")
-    cli.add_argument("--until-correct", action="store_true",
-                     help="Continue guided reasoning while it advances; preserve stalled cases for new evidence")
+    cli.add_argument("--until-correct", action=argparse.BooleanOptionalAction, default=None,
+                     help="Continue while verifiable guidance is available (default for new 4.2 runs). "
+                          "Use --no-until-correct for a bounded experiment")
     cli.add_argument(
         "--reuse-first-from",
         type=Path,

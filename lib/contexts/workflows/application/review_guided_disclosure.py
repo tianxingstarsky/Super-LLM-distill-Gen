@@ -5,9 +5,11 @@ import json
 from lib.prompts.workflow_guided_answers import (
     AUTHORED_DISCLOSURE_REVIEW, DISCLOSURE_AUTHOR, DISCLOSURE_REVIEW, GROUNDED_AUTHOR_GUIDANCE,
     GROUNDED_HINT_REVIEW, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
-    disclosure_review_schema, verified_choice_schema, verified_choice_review_schema,
+    DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_review_schema, verified_choice_schema,
+    verified_choice_review_schema, with_disclosure_pairing,
 )
 from ..domain.guided_answers import prior_clue_evidence
+from ..domain.guided_disclosure_text import checked_reviewer_pairing, locate_authored_task_citations, render_teacher_text
 from ..domain.guided_teaching_steps import checked_step_review, checked_step_selection
 from ..domain.guided_disclosure import (
     checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote,
@@ -69,7 +71,24 @@ def review_next_disclosure(request, source, attempt, retained, findings, disclos
     return {**candidate, **approved}, None
 
 
-def _review_verified_step(request, attempt, history, material, evidence, previous_id, reference, receipt, step):
+def eligible_teaching_steps(source, retained, findings, disclosed, tried=()):
+    catalog = source.get("verified_teaching_steps", {})
+    known = {h.get("source_step_id") for h in disclosed} | set(tried)
+    return {s["id"]: s for s in catalog.get("steps", ()) if s["id"] not in known
+            and not prior_clue_evidence({"text": s["operation"]}, retained, findings, disclosed)}
+
+
+def _add_measured_outcome(material, source, attempt, retained, findings):
+    submission = attempt.get("formal_answer", {}).get("check", attempt["check"])
+    match = submission.get("answer_matches") if source["gold"] and submission.get("format_ok") else None
+    material["current_difficulty"].update(
+        submitted_answer_status={True: "correct", False: "incorrect", None: "not_checked"}[match],
+        derivation_available=bool(attempt["derivation_available"] or retained or findings),
+    )
+
+
+def _review_verified_step(request, attempt, history, material, evidence, previous_id, reference, receipt, step,
+                          *, paired=False, recommended_index=None):
     entry = history[-1]
     entry["verified_operation"] = {"id": step["id"], "receipt_id": receipt, "operation": step["operation"]}
     if (entry["revision"] and history[0].get("verified_operation") == entry["verified_operation"]
@@ -86,33 +105,54 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
         "task_evidence_id": anchor, "quote": step["quote"], "span": step["span"],
     }
     reviewer = "disclosure_recheck" if entry["revision"] else "disclosure"
+    request_index = attempt["attempt"]
+    public_text = step["operation"]
+    if paired:
+        packet["student_attempt"] = attempt["attempt"]
+        if recommended_index is not None:
+            reviewer, request_index = "disclosure_candidate_review", recommended_index
+        try:
+            public_text, quotes = render_teacher_text(public_text, evidence["question"]["text"], step["quote"],
+                                                     anchor_span=step["span"])
+        except ValueError as exc:
+            return None, str(exc)
+        packet["proposed_next_teacher_disclosure"]["operation"] = public_text
+        packet["proposed_next_teacher_disclosure"]["public_text"] = public_text
+        entry.update(public_text=public_text, question_quotations=quotes,
+                     review_checkpoint={"role": reviewer, "index": request_index, "student_attempt": attempt["attempt"]})
     # Only catalogue IDs and the actual dialogue observations go into the model's context.
     references = [anchor, *(ref for ref in evidence if ref != "question")]
     system = VERIFIED_STEP_REVIEW
     if "submitted_answer_status" in material["current_difficulty"]:
         system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
-    response = request(reviewer, attempt["attempt"], [
+    schema = verified_choice_review_schema(references)
+    if paired:
+        system += "\n\n" + QUOTED_DISCLOSURE + "\n\n" + DISCLOSURE_PAIRING
+        schema = with_disclosure_pairing(schema)
+    response = request(reviewer, request_index, [
         {"role": "system", "content": system}, {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}
-    ], verified_choice_review_schema(references))
+    ], schema)
     entry["review_response"] = response
     if response["finish_reason"] != "stop":
         return None, "disclosure_review_incomplete"
     try:
         assessment = json.loads(response["content"])
         entry["assessment"] = assessment
-        citations = checked_step_review(assessment, step, evidence, previous_id)
+        checked = checked_reviewer_pairing(assessment, previous_id) if paired else assessment
+        citations = checked_step_review(checked, step, evidence, previous_id)
     except (ValueError, TypeError) as exc:
         return None, str(exc)
     if citations is None:
         return None, "teacher_disclosure_withheld"
     entry["validated_citations"] = citations
     return {**reference, "source": "verified_teaching_step", "source_step_id": step["id"],
-            "source_step_receipt": receipt, "kind": step["kind"], "text": step["operation"],
-            "candidate_text": step["operation"], "citations": citations}, None
+            "source_step_receipt": receipt, "kind": step["kind"], "text": public_text,
+            "candidate_text": public_text, "citations": citations,
+            **({"question_quotations": quotes, "review_checkpoint": entry["review_checkpoint"]} if paired else {})}, None
 
 
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
-                           *, grounded=False, allow_catalog=False, show_outcome=False):
+                           *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=()):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -125,22 +165,19 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         author_system += "\n\n" + GROUNDED_AUTHOR_GUIDANCE
         reviewer_system += "\n\n" + GROUNDED_HINT_REVIEW
     catalog = source.get("verified_teaching_steps") if allow_catalog else None
-    known = {h.get("source_step_id") for h in disclosed}
-    options = {s["id"]: s for s in catalog["steps"] if s["id"] not in known
-               and not prior_clue_evidence({"text": s["operation"]}, retained, findings, disclosed)} if catalog else {}
+    options = eligible_teaching_steps(source, retained, findings, disclosed, tried) if catalog else {}
     if options:
         author_system = VERIFIED_STEP_AUTHOR
         material["available_operations"] = [
             {k: step[k] for k in ("id", "kind", "quote", "span", "operation")} for step in options.values()]
     if show_outcome:
-        submission = attempt.get("formal_answer", {}).get("check", attempt["check"])
-        match = submission.get("answer_matches") if source["gold"] and submission.get("format_ok") else None
-        material["current_difficulty"].update(
-            submitted_answer_status={True: "correct", False: "incorrect", None: "not_checked"}[match],
-            derivation_available=bool(attempt["derivation_available"] or retained or findings),
-        )
+        _add_measured_outcome(material, source, attempt, retained, findings)
         author_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
         reviewer_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
+    if paired:
+        material["student_attempt"] = attempt["attempt"]
+        author_system += "\n\n" + QUOTED_DISCLOSURE
+        reviewer_system += "\n\n" + QUOTED_DISCLOSURE + "\n\n" + DISCLOSURE_PAIRING
     author_system += "\n\n" + teacher_experience if teacher_experience else ""
     for revision in range(2):
         entry = {"revision": revision, "private_reference": reference["text"], "latest_disclosure_id": previous_id}
@@ -167,12 +204,18 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             if not step and wording is None:
                 entry["issue"] = "teacher_needs_more_evidence"
                 return None, entry["issue"]
+            if paired and wording:
+                bridge_text, _ = render_teacher_text(wording[0], source["question"], proposal["question_quote"])
+                hint_text, _ = render_teacher_text(wording[1], source["question"], proposal["question_quote"])
+                wording = (bridge_text, hint_text)
+                entry["public_text"], entry["question_quotations"] = render_teacher_text(
+                    bridge_text + "\n" + hint_text, source["question"], proposal["question_quote"])
         except (TypeError, ValueError) as exc:
             entry["issue"] = str(exc)
         else:
             if step:
                 approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
-                                                        reference, catalog["receipt_id"], step)
+                                                        reference, catalog["receipt_id"], step, paired=paired)
                 if approved:
                     return approved, None
                 entry["issue"] = issue
@@ -197,10 +240,16 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             if grounded:
                 packet["proposed_next_teacher_disclosure"]["question_quote"] = proposal["question_quote"]
             reviewer = "disclosure_recheck" if revision else "disclosure"
+            schema = disclosure_review_schema(list(evidence))
+            if paired:
+                packet["proposed_next_teacher_disclosure"]["public_text"] = entry["public_text"]
+                entry["review_checkpoint"] = {"role": reviewer, "index": attempt["attempt"],
+                                              "student_attempt": attempt["attempt"]}
+                schema = with_disclosure_pairing(schema)
             response = request(reviewer, attempt["attempt"], [
                 {"role": "system", "content": reviewer_system},
                 {"role": "user", "content": json.dumps(packet, ensure_ascii=False)},
-            ], disclosure_review_schema(list(evidence)))
+            ], schema)
             entry["review_response"] = response
             if response["finish_reason"] != "stop":
                 entry["issue"] = "disclosure_review_incomplete"
@@ -208,7 +257,8 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             try:
                 assessment = json.loads(response["content"])
                 entry["assessment"] = assessment
-                approved = checked_disclosure(assessment, evidence, previous_id, candidate, source["gold"])
+                checked = checked_reviewer_pairing(assessment, previous_id) if paired else assessment
+                approved = checked_disclosure(checked, evidence, previous_id, candidate, source["gold"])
                 if approved is None:
                     raise ValueError("teacher_disclosure_withheld")
                 if grounded and not any(c["evidence_id"] == "question" and is_substantive_question_quote(c["quote"])
@@ -216,6 +266,12 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                     raise ValueError("review_needs_a_specific_verbatim_task_premise")
                 if approved["bridge"] != bridge:
                     raise ValueError("reviewer_changed_the_authored_bridge")
+                if paired:
+                    if approved["text"] != entry["public_text"]:
+                        raise ValueError("approved_text_differs_from_reviewed_disclosure")
+                    approved["citations"] = locate_authored_task_citations(
+                        approved["citations"], source["question"], proposal["question_quote"])
+                    approved.update(question_quotations=entry["question_quotations"], review_checkpoint=entry["review_checkpoint"])
                 entry["validated_citations"] = approved["citations"]
                 return {**candidate, **approved}, None
             except (TypeError, ValueError) as exc:
@@ -226,3 +282,44 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         material["requested_revision"] = {"prior_draft": entry.get("draft"), "issue": entry["issue"],
                                           "private_reviewer_reason": assessment.get("reason")
                                           if isinstance(assessment, dict) else None}
+
+
+def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
+                                   *, teacher_experience, tried):
+    """Try each remaining externally verified possibility at most once, still requiring independent release."""
+    if attempt.get("recommend_verified_operation"):
+        history = attempt["disclosure_work"] = []
+        issue = "no_new_verified_student_progress"
+    else:
+        approved, issue = author_next_disclosure(
+            request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
+            grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried,
+        )
+        history = attempt["disclosure_work"]
+        tried.update(entry["verified_operation"]["id"] for entry in history if "verified_operation" in entry)
+        if approved or issue in {"disclosure_review_incomplete", "disclosure_draft_incomplete"}:
+            return approved, issue
+    remaining = eligible_teaching_steps(source, retained, findings, disclosed, tried)
+    if not remaining:
+        return None, issue
+    catalog = source["verified_teaching_steps"]
+    material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
+    ceiling = material.pop("proposed_next_teacher_disclosure")
+    material["private_reference_ceiling"] = ceiling if reference["text"] else None
+    _add_measured_outcome(material, source, attempt, retained, findings)
+    for ordinal, step in enumerate(catalog["steps"], 1):
+        if step["id"] not in remaining:
+            continue
+        entry = {"revision": len(history), "proposed_by": "program", "latest_disclosure_id": previous_id,
+                 "trigger": issue, "draft": {"decision": "recommend:" + step["id"], "hint": step["operation"]}}
+        history.append(entry)
+        tried.add(step["id"])
+        approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
+                                                reference, catalog["receipt_id"], step, paired=True,
+                                                recommended_index=ordinal)
+        if approved:
+            return approved, None
+        entry["issue"] = issue
+        if issue == "disclosure_review_incomplete":
+            return None, issue
+    return None, "verified_teaching_operations_exhausted"

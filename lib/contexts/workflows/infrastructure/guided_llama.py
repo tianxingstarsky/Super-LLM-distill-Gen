@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import nullcontext
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -40,6 +41,7 @@ class GuidedChatEndpoint:
         context,
         pool,
         thinking=False,
+        slot_pool_factory=None,
     ):
         self.url = url.rstrip("/")
         parts = urlsplit(self.url)
@@ -56,6 +58,8 @@ class GuidedChatEndpoint:
             )
         self.local = local
         self.pool = pool
+        self.slot_pool_factory = slot_pool_factory
+        self.slot_pool = None
         self.root = self.url.removesuffix("/v1")
         self.model = model
         self.cap = output_cap
@@ -108,6 +112,8 @@ class GuidedChatEndpoint:
                 raise ValueError("native context per parallel slot is below 90000")
         if self.context <= self.cap:
             raise ValueError("generation cap leaves no prompt space")
+        if self.local and self.slot_pool_factory is not None:
+            self.slot_pool = self.slot_pool_factory(self.root, self.slots)
         return dict(
             url=self.url,
             model=self.model,
@@ -171,10 +177,15 @@ class GuidedChatEndpoint:
         return {"model": self.model, "prompt": tokens, "n_predict": self.cap,
                 "temperature": 0, "cache_prompt": True, "stream": False}
 
+    def _generate(self, path, data):
+        # A full native server must not consume the global allowance while queuing.
+        with self.slot_pool.acquire() if self.slot_pool is not None else nullcontext():
+            with self.pool.acquire():
+                return self.http(self.root + path, data)
+
     def complete(self, data):
         if "prompt" in data:
-            with self.pool.acquire():
-                raw = self.http(self.root + "/completion", data)
+            raw = self._generate("/completion", data)
             if raw.get("truncated") or raw.get("tokens_evaluated") != len(data["prompt"]):
                 raise ValueError("llama-server changed the supplied answer prefix")
             if raw.get("stop_type") not in {"eos", "limit"} or not isinstance(raw.get("content"), str):
@@ -212,8 +223,7 @@ class GuidedChatEndpoint:
                 raise ValueError(
                     "complete transcript plus output reservation exceeds the native slot"
                 )
-        with self.pool.acquire():
-            raw = self.http(self.root + "/v1/chat/completions", data)
+        raw = self._generate("/v1/chat/completions", data)
         chosen = raw["choices"][0]
         msg = chosen["message"]
         content = msg.get("content") or ""

@@ -431,3 +431,65 @@ def test_expired_waiter_does_not_start_when_capacity_later_becomes_free(tmp_path
         with pytest.raises(ModelQueueTimeout):
             future.result(5)
     assert item.snapshot()["active"] == item.snapshot()["queued"] == 0
+
+
+def test_queued_tutor_does_not_hold_global_lease(tmp_path):
+    from functools import partial
+    from lib.bootstrap.guided_answers import _native_slot_pool
+    from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
+
+    global_id = model_pool_identity("guided://local", "", "guided-answers")
+    global_policy = {"max_concurrency": 2, "request_queue_timeout_seconds": 10}
+    release = threading.Event()
+    started = threading.Event()
+
+    def endpoint(host, model, slots, block=False):
+        shared = SharedModelScheduler(tmp_path, global_id, policy=global_policy)
+        client = GuidedChatEndpoint(
+            f"http://{host}/v1", model, None, 32768, local=True, context=98304,
+            pool=shared, slot_pool_factory=partial(_native_slot_pool, tmp_path),
+        )
+
+        def serve(url, data=None):
+            if url.endswith("/slots"):
+                return [{"n_ctx": 98304}] * slots
+            if url.endswith("/models"):
+                return {"data": [{"id": model}]}
+            if url.endswith("/apply-template"):
+                return {"prompt": "question"}
+            if url.endswith("/tokenize"):
+                return {"tokens": [1]}
+            if block:
+                started.set()
+                assert release.wait(10)
+            if url.endswith("/completion"):
+                return {"content": "yes", "stop_type": "eos", "tokens_evaluated": 1, "tokens_predicted": 1}
+            assert url.endswith("/chat/completions")
+            return {"choices": [{"message": {"content": "yes"}, "finish_reason": "stop"}]}
+
+        client.http = serve
+        client.validate()
+        return client
+
+    tutor = endpoint("localhost:9001", "tutor", 1, block=True)
+    second_run = endpoint("127.0.0.1:9001", "alias", 1)
+    student = endpoint("localhost:9002", "learner", 3)
+    chat = tutor.payload([{"role": "user", "content": "question"}], None)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        first = executor.submit(tutor.complete, chat)
+        try:
+            assert started.wait(5)
+            queued = executor.submit(second_run.complete, {"prompt": [1]})
+            eventually(lambda: tutor.slot_pool.snapshot()["queued"] == 1)
+            assert tutor.pool.snapshot()["active"] == 1
+            question = student.payload(chat["messages"], None)
+            assert executor.submit(student.complete, question).result(timeout=5)["content"] == "yes"
+            assert not queued.done()
+        finally:
+            release.set()
+        assert first.result()["content"] == queued.result()["content"] == "yes"
+    assert tutor.pool.snapshot()["active"] == tutor.slot_pool.snapshot()["active"] == 0
+    with student.slot_pool.acquire():
+        restored = endpoint("127.0.0.1:9002", "learner", 1)
+        snapshot = restored.slot_pool.snapshot()
+        assert snapshot["max_concurrency"] == 1 and snapshot["active"] == 1

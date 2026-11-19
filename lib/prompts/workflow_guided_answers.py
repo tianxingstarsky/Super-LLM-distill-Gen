@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.1.1"
+VERSION = "4.2.0"
 DISCLOSURE_AUTHOR = """You are the tutor writing your own next contribution to a learner's developing solution. Read your previous published hints in order. Use the problem and what the learner has actually established to decide what small piece is still missing. In bridge, explain in the learner's language how the previous step and its particular evidence bring the learner to this point. In hint, contribute just the next useful idea, fact or operation; leave its application to the learner. Where supplied, the private reference bounds how much may be disclosed and is not a script. When no reference is supplied, work from the cited problem and learner evidence. Do not announce the result, invent a premise, describe private review, or repeat a hint in new words. If asked to revise, address the recorded reason for withholding the draft by reducing the step or grounding it more carefully. Put a private explanation of your choice in reason. Return decision offer with both public fields, or insufficient with empty public fields when no justified next step is available."""
 
 
@@ -23,6 +23,19 @@ VERIFIED_STEP_AUTHOR = """Select the smallest useful next teaching operation fro
 VERIFIED_STEP_REVIEW = """Assess this one proposed teaching operation at the current point in the dialogue. The cited premise and the operation have already been checked against the original task. Independently judge whether this operation makes one useful move from the learner's actual situation, fits the previous published guidance, and leaves the conclusion to the learner. A wrong bare answer is enough context to start testing a task condition. Withhold an unsuitable, redundant, unsupported or answer-revealing move. Select release or withhold and give a specific private reason. For release cite the supplied question evidence ID and the latest published step ID if one exists. The learner will receive the proposed operation exactly; there is no need to rewrite or reproduce it. The raw wrong answer is not an established discovery."""
 
 VERIFIED_OUTCOME_CONTEXT = """submitted_answer_status records an independent final-value check. Incorrect establishes that the submitted value is wrong, while its cause can remain unknown. If derivation_available is false, use a condition or operation from the original problem as a starting point; no learner work is required to justify checking a stated premise. Decide whether one of the offered moves actually helps here. Preserve uncertainty about how the learner reached the original value."""
+
+QUOTED_DISCLOSURE = """Use paired double quotation marks solely for words copied exactly from this question. Keep your own suggestion or inference outside the quotation. A teaching move can be entirely your own words and need no quotation. A premise being nearby or occurring earlier does not show that it supports the inference."""
+
+DISCLOSURE_PAIRING = """Assess the exact public_text that the learner would see. In pairing record whether the proposed move gives this learner a useful next action, whether the cited premises actually justify that action, and whether it builds on the last published teaching move. Use first only when no preceding hint has been published. An exact citation proves the source of the words, not the proposed implication. A program recommendation still needs an independent judgment. A weak operation can deliberately leave the result of its check for the learner."""
+
+
+def with_disclosure_pairing(schema):
+    fields = {"student_fit": {"type": "boolean"}, "evidence_support": {"type": "boolean"},
+              "history_fit": {"type": "string", "enum": ["first", "continuous", "disconnected"]}}
+    schema["properties"]["pairing"] = {"type": "object", "additionalProperties": False,
+                                       "required": list(fields), "properties": fields}
+    schema["required"].append("pairing")
+    return schema
 
 
 def verified_choice_schema(step_ids):
