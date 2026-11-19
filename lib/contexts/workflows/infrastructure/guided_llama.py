@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 from jsonschema import Draft202012Validator
 
 from lib.contexts.models.contracts import ModelQueueTimeout
-from ..domain.guided_teacher_delivery import QWEN_SAMPLING_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_REASONING_VERSIONS
+from ..domain.guided_teacher_delivery import CHECKED_TUTOR_VERSIONS, QWEN_SAMPLING_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_REASONING_VERSIONS
 from lib.prompts.workflow_guided_answers import FINAL_DELIVERY
 
 MIN_CONTEXT = 90_000
@@ -137,7 +137,7 @@ class GuidedChatEndpoint:
         elif frozen_endpoint is not None:
             self.thinking = bool(frozen_endpoint.get("enable_thinking"))
         else:
-            self.thinking = self.local and self.record_teacher_reasoning and version != "4.9.1"
+            self.thinking = self.local and self.record_teacher_reasoning and version not in CHECKED_TUTOR_VERSIONS
 
     def validate(self):
         if self.local:

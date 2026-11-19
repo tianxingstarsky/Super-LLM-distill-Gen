@@ -21,3 +21,4 @@ from .application.optimize_native_sft import OptimizeNativeSft
 from .application.generate_guided_answer import GenerateGuidedAnswer
 from .application.guided_experience import adopt_final_teacher_edition, learn_guided_experience
 from .domain.guided_final_experience import recorded_final_proposal
+from .domain.guided_plan_authoring import prepare_calculation_plan_candidate

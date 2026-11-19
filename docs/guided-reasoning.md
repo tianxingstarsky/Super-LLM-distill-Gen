@@ -1,0 +1,54 @@
+# 使用披露式推理生成框架
+
+这套流程适合制作两种不同的练习。一种要求学生直接回答原题，另一种教学生利用逐步给出的信息完成推导。导出时可以按练习类型选择训练目标，评估独立解题能力时应单独使用未见题。
+
+## 跑第一题
+
+准备一个使用原生 Qwen 聊天模板的本机 llama.cpp 学生端点，以及一个可用的教师端点。在本机模型服务的配置中找到地址和实际加载的模型名，分别设置为 `STUDENT_URL`、`STUDENT_MODEL`、`COACH_URL` 和 `COACH_MODEL`。若同一端点用于两种角色，两组变量可以相同。每个本地槽位至少需要 90,000 tokens 的上下文，输出上限至少 32,768。模型设置也可在工作流 SFT 节点的“本地指导训练资料（CLI）”里查看。
+
+在仓库根目录激活项目环境后运行以下 PowerShell 命令。
+
+```powershell
+python -m lib.guided_answers --input configs/guided-calculation-plan.example.jsonl --verified-step-receipts configs/guided-calculation-plan.receipts.json --output .dataforge/ribbon-tutoring --student-url $env:STUDENT_URL --student-model $env:STUDENT_MODEL --coach-url $env:COACH_URL --coach-model $env:COACH_MODEL
+```
+
+公开例题询问还剩几米丝带。只要求末答且学生第一次就给出 12 时，框架保存这次独立回答。若用户要求解释，即使第一次猜中数值，也要继续交付完整的运算及单位。
+
+## 学生答错后会看到什么
+
+以丝带题为例。第一步先问剪下的丝带总长，向学生展示题中关于三条丝带的原句。学生可提交自己的算式、连续提交尚能完成的几个算式，或请求帮助。程序核对算式的运算和运算数的来历，再用精确有理数执行它。例如 `2*3` 可以证明剪下了 6 米，碰巧也等于 6 的 `5+1` 无法证明这件事。
+
+本步卡住时，才揭示 `3*2`。学生可采用它或继续请求示范。示范完成后，已验证的 6 米进入下一步，学生在新会话中继续处理剩余长度。每一步都保留学生提交的原文，并注明运算由谁提出、数值由谁计算。另一条数学上可行但未获当前计划认证的解法，会被记为尚未核实。
+
+最后由同一个学生模型读出所求量。程序同时核对题源答案、末步计算和学生实际提交。一次完整的错误读出可再纠正一次。要求展示解法时，程序把已核实的各步、单位和实际提交的数值组合为公开解答。不同题型、精度、有效数字或表达格式若超出数值合同，使用常规师生披露流程。
+
+若希望两次读错后由更强模型接手，可在新运行中配置 `--continuation-model` 和 `--continuation-url`。只有全链核实、原学生确实交出两次错误数值时，才调用该模型一次。它接收已证步骤，做最后的数值读出。其答案也须核验，训练行在 `answer_author` 标为 `strong_continuation`，原学生两次错稿保存在同一案例。默认没有这项配置时，这类题留待指导。已有批次可以选择新目录，保留原题、注册表、模型、采样和经验设置，加上 `--reuse-matching-from` 指向原目录。程序逐个认证实际请求，重复的已完成调用可直接复用。
+
+## 怎样引入自己的题库
+
+带有可靠题源解、独立数值答案和经过核验的算术步骤的题目，可走 4.10.0 的精确核验路径。原题的量、单位、引用范围、每一运算数从何而来，以及末步是否确实回答原题，都由来源核验方确认。程序负责定位原句、检查依赖、复算等式和绑定冻结收据。批量准备器会单列引文有歧义、缺少运算依据或无法复算的记录。[标注字段、候选生成命令与可运行示例](../configs/README.md#从原文引文批量准备计划)
+
+常规题可以直接输入原题、参考解和可用的答案键。它们沿用教师逐步拟稿、提示与题面配对、学生续答和交付核验。总结这类结果时，应区分模型审核与可重复的程序验算。无独立答案键的记录进入待验证数据。模型评语、候选计划和题目自己携带的摘要均不能给自己签发可信收据。
+
+如果学生先写了“最终答案”，随后又反问或改口，教师会同时看到带位置的候选原话和实际结尾。候选只供判断困难所在。学生走入死路时，教师可以从一条题面事实重新引导，已经核实的进展继续保留。若教师仍找不到可靠提示，案例会注明原因并停在待指导区。此时可在新批次中提供经过独立审核的教学步骤，原始失败可以继续复查。
+
+## 查看产物与恢复
+
+| 文件或字段 | 用途 |
+| --- | --- |
+| `training-targets.jsonl` | 可供训练的单助手轮。每条含输入、正式回答及可用的推导。 |
+| `guided_training_target.objective` | `independent_answer` 表示独立首答。认证算术分支中，`assisted_calculation` 表示至少有一步由学生提出，`calculation_demonstration` 表示所有运算都已提供。 |
+| `guided_training_target.operations` | 每步的来源、学生收据和数值执行方。这个分支的推理文本是可复现的解题过程。模型逐次原文另存于案例档案。 |
+| `summary.json` | 已接收、待指导、隔离的数量，训练目标类别，按角色分开的新增与复用调用及端点实际报告的 token。 |
+| `accepted.jsonl`、`awaiting_guidance.jsonl` | 按题索引通过和待处理的案例。通过 `case_archive` 打开原题、原始回答及每次披露。 |
+| `case.json` 中的 `calculation_tutoring` | `actions` 保留学生收到的题面、已公开步骤和实际回复，`steps` 保存核验结果，`final_delivery` 保存最终读出及可能发生的纠正。 |
+
+统计已导出的算术练习时，`summary.training_targets.calculation_operations_by_origin` 按步骤计数，`calculation_readouts_by_role` 按最终读出者计题。顶层的 `accepted_after_full_disclosure` 单独统计常规流程里实际公开了整份参考解的题。比较学生能力时，独立作答、采用已给算式和强模型接手应分别报告。
+
+中断后用相同的输入、模型、运行目录和配置恢复。已有的完成收据可复用。只重建导出文件时，可直接执行下列命令，无需启动模型服务。冻结的题目文件及原运行目录必须保留。
+
+```powershell
+python -m lib.guided_answers --input configs/guided-calculation-plan.example.jsonl --output .dataforge/ribbon-tutoring --export-only
+```
+
+若导出报告收据与记录不一致，保留原始运行目录，核查报告指出的题号和请求文件，使用可信备份恢复。训练时选择 `training-targets.jsonl`。[训练输入与监督范围](local-training-validation.md)

@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.9.1"
+VERSION = "4.10.0"
 
 STUDENT_REASONING_PROGRESS = (
     "State what you have established with the evidence for it. Use that result to work out "
@@ -150,7 +150,15 @@ VERIFIED_STEP_REVIEW = """Assess this one proposed teaching operation at the cur
 
 VERIFIED_OUTCOME_CONTEXT = """submitted_answer_status records an independent final-value check. Incorrect establishes that the submitted value is wrong, while its cause can remain unknown. If derivation_available is false, use a condition or operation from the original problem as a starting point; no learner work is required to justify checking a stated premise. Decide whether one of the offered moves actually helps here. Preserve uncertainty about how the learner reached the original value."""
 
+MARKED_DRAFT_CONTEXT = """The marked candidate quotes what the learner actually wrote. A later qualification or an ambiguous ending can leave the formal answer unconfirmed. Read the candidate and the tail together to locate the point of doubt. An earlier answer leaves tutoring open. Keep independently supported progress. When the learner's path provides no sound starting point, start from an explicit fact in the question and connect it to one applicable rule or operation. The learner can test that single inference without first accepting or extending their mistaken conjecture. Withhold the move if its premises or applicability cannot be established."""
+
 BARE_ANSWER_OPERATION_VERSION = "task-grounded-operation/v1"
+
+CALCULATION_ESTIMATE = """Give your current numerical estimate of the quantity asked for, using the original task alone. This is the initial estimate inside a solving session. The worked explanation and final answer will be produced after the calculations are checked."""
+
+CALCULATION_EXPRESSION = """Find the quantity named in the calculator message. Use the original problem, its quoted condition and any established results. Enter the numeric expression to calculate that quantity. For example, three boxes of eight items calls for 3*8. If you have worked out all remaining operations you may enter multiple expressions separated by semicolons in dependency order. If you need one more hint, enter ?. The calculator performs arithmetic. Leave the public answer for the final delivery."""
+
+CALCULATION_SOLVER = """Work on the user's original task. A calculator is available. The current tool message names the quantity to find and lists the results already established. Choose the arithmetic that produces that quantity, using the right objects, units and prior results. Submit calculate with one plain arithmetic expression such as 12/3. The calculator evaluates the expression. Use numbers, parentheses, +, -, *, /; write the operands and operation, without an equals sign or a guessed result. If you can solve the entire remainder, choose finish with its expressions in dependency order. If the next operation is unclear, choose request_hint with an empty list. When the tool shows an operation, select use_shown_operation to run it if it addresses the quantity. If you still need a demonstration, choose request_hint. These two choices have empty expression lists. The calculator's prior observations distinguish your own proposed operations from worked tutor demonstrations. Your action is part of solving the task. The public answer will be delivered separately."""
 
 BARE_ANSWER_OPERATION_AUTHOR = """The learner submitted a checked wrong value and showed no derivation. Find a next action they can carry out from the problem and the published steps. For a useful verified operation, select its ID and explain which task condition it tests. Leave the computation to the learner. You have no evidence of their private mistake. The requested final-answer format governs their final submission."""
 

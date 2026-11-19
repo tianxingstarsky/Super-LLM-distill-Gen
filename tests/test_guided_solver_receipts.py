@@ -18,7 +18,7 @@ def endpoint(model, port):
 
 
 @pytest.mark.parametrize("version,override,frozen,expected", [
-    ("4.9.1", None, None, False), ("4.9.0", None, None, True),
+    ("4.10.0", None, None, False), ("4.9.1", None, None, False), ("4.9.0", None, None, True),
     ("4.9.1", True, None, True), ("4.9.0", False, None, False),
     ("4.9.1", None, {"enable_thinking": True}, True), ("4.9.0", None, {"enable_thinking": False}, False),
 ])
@@ -99,7 +99,7 @@ def test_native_final_receipt_follows_the_reviewed_solver_and_requested_format(t
     summary = run_guided_cases(source, output, endpoints, {"version": "test"}, 2, **options)
     assert summary["counts"]["accepted"] == 1
     manifest = json.loads((output / "manifest.json").read_bytes())
-    assert manifest["template_version"] == (protocol or "4.9.1")
+    assert manifest["template_version"] == (protocol or "4.10.0")
     assert manifest.get("bare_answer_operation_version") == (None if protocol == "4.9.0" else "task-grounded-operation/v1")
     assert len(chats) == len(script) and len(finals) == 1
     solver = endpoints["continuation" if handoff else "student"]

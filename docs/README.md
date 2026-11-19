@@ -1,5 +1,6 @@
 # 维护文档导航
 
+- [披露式推理生成](guided-reasoning.md)涵盖本地模型、逐步披露、批量准备、训练导出和恢复。
 - [本地训练验证](local-training-validation.md)：原模型、SFT、CPT→SFT 的单次遍历对照、监督检查、断点与评测证据。
 - [Qwen3.5-4B 单轮实测](local-training-validation-2026-11-16.md)：同题三组真实输出、loss 与语义质量差异、精度校准和实际资源。
 

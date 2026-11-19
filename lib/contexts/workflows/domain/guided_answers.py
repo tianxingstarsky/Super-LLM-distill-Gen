@@ -41,7 +41,7 @@ def number(value):
 
 
 def validate_source(row, *, allow_answer_requirement=True, allow_task_system=True, allow_direct_syntax=True,
-                    allow_verified_teaching_steps=False, trusted_step_receipts=None):
+                    allow_verified_teaching_steps=False, trusted_step_receipts=None, allow_calculation_plan=False):
     if (
         not isinstance(row, dict)
         or not isinstance(row.get("id"), str)
@@ -147,6 +147,10 @@ def validate_source(row, *, allow_answer_requirement=True, allow_task_system=Tru
     if allow_verified_teaching_steps and "verified_teaching_steps" in row:
         verified = validate_verified_steps(row, trusted_step_receipts)
         public_texts.extend(s["operation"] for s in verified["steps"])
+    plan = None
+    if allow_calculation_plan and "verified_calculation_plan" in row:
+        from .guided_calculation_plan import validate_calculation_plan
+        plan = validate_calculation_plan(row, trusted_step_receipts)
     for visible in public_texts:
         validate_public_guidance(visible, gold)
     return {
@@ -161,6 +165,7 @@ def validate_source(row, *, allow_answer_requirement=True, allow_task_system=Tru
         **({"direct_answer_syntax": syntax} if syntax is not None else {}),
         **({"progress_checks": checks} if checks else {}),
         **({"verified_teaching_steps": verified} if verified else {}),
+        **({"verified_calculation_plan": plan} if plan else {}),
     }
 
 
@@ -190,9 +195,7 @@ def _code_fence(line, opened):
     return opened
 
 
-def answer_tail(text, *, marked_finals=True):
-    lines = text.splitlines(keepends=True)
-    headers = []
+def _answer_declarations(lines, marked_finals):
     offset = 0
     fence = ""
     for i, line in enumerate(lines):
@@ -216,8 +219,38 @@ def answer_tail(text, *, marked_finals=True):
             r"(?:final answer|最终答案|答案)\s*(?:[:：]\s*(.*))?", visible, re.I
         )
         if match:
-            headers.append((i, offset, match[1] or ""))
+            yield i, offset, match[1] or ""
         offset += len(line)
+
+
+def latest_marked_draft_candidate(text):
+    """Locate the solver's latest labelled, unconfirmed statement in its original output."""
+    lines = text.splitlines(keepends=True)
+    declarations = list(_answer_declarations(lines, True))
+    if not declarations:
+        return None
+    line, start, inline = declarations[-1]
+    end = start + len(lines[line].rstrip("\r\n"))
+    if not inline:
+        # A detached heading without a nearby body is insufficient to identify a claim.
+        end = start + len(lines[line])
+        for following in lines[line + 1:line + 3]:
+            if following.strip():
+                if following.lstrip().startswith(("```", "~~~", ">")):
+                    return None
+                end += len(following.rstrip("\r\n"))
+                break
+            end += len(following)
+        else:
+            return None
+    stop = min(end, start + 480)
+    return {"quote": text[start:stop], "span": [start, stop], "excerpted": stop < end,
+            "source": "student_response", "status": "unconfirmed_draft_candidate"}
+
+
+def answer_tail(text, *, marked_finals=True):
+    lines = text.splitlines(keepends=True)
+    headers = list(_answer_declarations(lines, marked_finals))
     if len(headers) != 1:
         return None, None
     i, start, inline = headers[0]

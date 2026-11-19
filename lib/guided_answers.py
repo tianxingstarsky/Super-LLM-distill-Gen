@@ -30,7 +30,7 @@ def main():
     cli.add_argument(
         "--coach-thinking",
         action=argparse.BooleanOptionalAction, default=None,
-        help="Enable or disable native reasoning for every local teacher role. The 4.9.1 default is off. Resumed runs use their frozen setting.",
+        help="Enable or disable native reasoning for the local tutor. New runs default to off. Resumed runs use their frozen setting.",
     )
     cli.add_argument(
         "--context-tokens",
@@ -67,9 +67,9 @@ def main():
     cli.add_argument("--historical-first-input", type=Path,
                      help="Original full input JSONL for a subset of a historical first-pass run. "
                           "Its file digest must match the source manifest.")
-    cli.add_argument("--protocol-version", help="Pin a protocol for a new run. The default checks literal arithmetic in student work, hints and solver delivery. Existing runs use their manifest.")
+    cli.add_argument("--protocol-version", help="Pin a protocol for a new run. The default 4.10.0 supports source-verified calculation plans. Existing runs use their manifest.")
     cli.add_argument("--verified-step-receipts", type=Path,
-                     help="Trust teaching microsteps independently checked by the nominated source verifier. The run freezes its receipt registry.")
+                     help="Load a separate verifier's registry of approved teaching operations or calculation plans. The run freezes this registry.")
     cli.add_argument("--reuse-matching-from", type=Path,
                      help="Reuse completed calls from another run of the same input, experience and endpoints "
                           "when the exact request bytes, role and checkpoint match")

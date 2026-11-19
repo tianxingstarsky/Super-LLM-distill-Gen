@@ -79,6 +79,15 @@ def verified_equation_result(text):
     return equation[1] if equation else None
 
 
+def matches_calculation_expression(expected, proposed):
+    """Compare arithmetic structure as well as value, permitting commuted sums and products."""
+    if not isinstance(proposed, str):
+        return False
+    left = _expression_value(_normalized_equation(expected).strip(), require_operation=True)
+    right = _expression_value(_normalized_equation(proposed).strip(), require_operation=True)
+    return left is not None and left == right
+
+
 _NONSTANDARD_NUMBERS = re.compile(
     r"\b(?:mod(?:ulo)?|modular|remainder|integer division|base[\s-]*(?:\d+|two|eight|sixteen)|binary|octal|hexadecimal|clock arithmetic|"
     r"rounded?|rounding|approximately|approximation|significant figures?)\b|\\(?:approx|pmod)|[≈≃]"

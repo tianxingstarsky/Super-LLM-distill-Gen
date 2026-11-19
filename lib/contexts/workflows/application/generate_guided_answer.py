@@ -5,6 +5,8 @@ import json
 from functools import partial
 
 from .compose_guided_final_answer import compose_guided_final_answer, delivery_correction
+from .guided_verified_delivery import deliver_verified_calculation
+from .solve_guided_calculations import solve_guided_calculations
 from .review_guided_disclosure import (
     author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
 )
@@ -16,7 +18,7 @@ from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
 )
 from ..domain.guided_teacher_delivery import (
-    EVIDENCED_PROGRESS_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS,
+    CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS,
     inspect_solver_delivery, requested_delivery, uses_direct_first,
 )
 from ..domain.guided_teaching_steps import certified_complete_disclosure
@@ -32,6 +34,7 @@ from ..domain.guided_answers import (
     formal_delivery_hint,
     inspect_answer,
     inspect_formal_answer,
+    latest_marked_draft_candidate,
     prior_clue_evidence,
     read_teacher_submission,
     rooted_prefix_count,
@@ -43,7 +46,7 @@ from ..domain.guided_answers import (
 from lib.prompts.workflow_guided_answers import (
     ANCHORED_REVIEW,
     COACH,
-    DIRECT_STUDENT,
+    DIRECT_STUDENT, CALCULATION_ESTIMATE,
     GROUNDED_STUDENT_REVIEW,
     ORDERED_STUDENT_EVIDENCE,
     REVIEW_TASK_ANALYSIS,
@@ -70,11 +73,13 @@ class GenerateGuidedAnswer:
 
     def run(self, source, experience, max_attempts, *, protocol_version=VERSION, first_pass_only=False,
             stop_after_first_student_receipt=False,
-            until_correct=False, continuation_model=None, trusted_solution_receipts=(), bare_answer_operations=False):
+            until_correct=False, continuation_model=None, trusted_solution_receipts=(), bare_answer_operations=False,
+            expression_input=True, allow_strong_calculation_readout=True, expected_first_model=None,
+            observe_draft_candidates=True):
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
-        check_arithmetic = protocol_version == "4.9.1"
+        check_arithmetic = protocol_version in CHECKED_TUTOR_VERSIONS
         continue_solution = protocol_version == "4.8.3"
         carry_progress = protocol_version in RENDERED_CONTINUATION_VERSIONS
         language = str(source.get("source", {}).get("language") or "").lower()
@@ -108,7 +113,7 @@ class GenerateGuidedAnswer:
                                   tried=tried_verified_steps, task_analysis=task_analysis,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
                                   check_arithmetic=check_arithmetic,
-                                  bare_answer_operations=protocol_version == "4.9.1" and bare_answer_operations)
+                                  bare_answer_operations=check_arithmetic and bare_answer_operations)
             if continue_solution:
                 assess_hint = partial(assess_hint, strict_author_decisions=True)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
@@ -123,7 +128,8 @@ class GenerateGuidedAnswer:
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
-                    "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1"}[protocol_version]
+                    "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
+                    "4.10.0": "v4.10.0"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -185,6 +191,11 @@ class GenerateGuidedAnswer:
         direct_match = None
         training_reasoning = ""
         formal_history = []
+        calculation_tutoring = None
+        plan = source.get("verified_calculation_plan") if protocol_version == "4.10.0" else None
+        if plan and plan["receipt_id"] not in trusted_solution_receipts:
+            raise ValueError("calculation teaching requires its independent plan receipt")
+        needs_worked_calculation = bool(plan and require_explanation)
         full_reference = certified_complete_disclosure(source, trusted_solution_receipts) if evidenced_progress else None
         send_full = False
         next_solver = "student"
@@ -204,9 +215,10 @@ class GenerateGuidedAnswer:
                 else:
                     last_full_input_evidence = (list(active), dict(findings), dict(approaches))
             messages = list(initial_messages)
-            direct_first = index == 1 and direct_protocol and uses_direct_first(source, protocol_version)
+            direct_first = index == 1 and direct_protocol and (needs_worked_calculation or uses_direct_first(source, protocol_version))
             if direct_first:
-                messages[0] = {"role": "system", "content": DIRECT_STUDENT + student_experience + task_suffix}
+                request_estimate = CALCULATION_ESTIMATE if needs_worked_calculation else DIRECT_STUDENT
+                messages[0] = {"role": "system", "content": request_estimate + student_experience + task_suffix}
             if disclosed:
                 view = {
                     "retained_solution": assemble(active),
@@ -276,6 +288,11 @@ class GenerateGuidedAnswer:
             if evidenced_progress:
                 attempt["verified_stage"] = {"assessed": False, "comparable": False, "state": "not_assessed",
                                              "hints_received": len(disclosed), "student_advanced": None}
+            if plan and index == 1 and (not student.get("model")
+                                        or expected_first_model is not None and student["model"] != expected_first_model):
+                status, issue = "awaiting_guidance", "solver_identity_unverified"
+                attempt["check"] = dict(format_ok=False, answer=None, answer_matches=None, issue=issue)
+                break
             if next_solver == "strong_continuation" and student.get("model") != continuation_model:
                 status, issue = "awaiting_guidance", "continuation_model_unverified"
                 attempt["check"] = dict(format_ok=False, answer=None, answer_matches=None, issue=issue)
@@ -351,6 +368,10 @@ class GenerateGuidedAnswer:
             if repeated is not None:
                 check.update(format_ok=False, issue="repeated_retained_segment")
             attempt["check"] = check
+            if protocol_version == "4.10.0" and observe_draft_candidates and not check["format_ok"]:
+                draft_candidate = latest_marked_draft_candidate(suffix)
+                if draft_candidate:
+                    attempt["marked_draft_candidate"] = draft_candidate
             attempt["candidate_content"] = text
             version = dict(
                 attempt=index,
@@ -363,7 +384,7 @@ class GenerateGuidedAnswer:
                 first_unresolved=None,
             )
             versions.append(version)
-            if direct_match:
+            if direct_match and not needs_worked_calculation:
                 if evidenced_progress:
                     attempt["verified_stage"] = verified_student_stage(check, findings, attempts[:-1], len(disclosed), direct=True)
                 status, issue = "accepted", None
@@ -372,6 +393,40 @@ class GenerateGuidedAnswer:
                 # The request port has persisted the original draft. A later full pass
                 # reuses those exact bytes and starts tutoring without redrawing it.
                 return None
+            if plan and index == 1 and (needs_worked_calculation or direct and direct["answer_matches"] is False):
+                attempt["student_assessment_source"] = "independent_answer_key"
+                attempt["explanation_required_after_estimate"] = needs_worked_calculation
+                calculation_tutoring = solve_guided_calculations(
+                    self.request, source, action_limit=None if until_correct else max_attempts - index,
+                    expression_input=expression_input, expected_solver=student["model"])
+                steps = calculation_tutoring["steps"]
+                actions = calculation_tutoring["actions"]
+                for action in actions:
+                    move_message = action["request_messages"][-1]
+                    move = json.loads(move_message["content"])["target"]
+                    prompt = {"id": move["step_id"], "ordinal": len(disclosed) + 1, "kind": "operation",
+                              "source": "verified_calculation_plan", "source_step_receipt": plan["receipt_id"],
+                              "text": move.get("operation", move["quantity"]), "question_span": move["question_span"],
+                              "delivered_in": action["receipt"], "operation_disclosed": action["operation_disclosed"]}
+                    disclosed.append(prompt)
+                    clue_ledger.append({**prompt, "status": "disclosed"})
+                    public.extend([move_message, {"role": "assistant", "content": action["response"]["content"]}])
+                final_text = ""
+                status, issue = "awaiting_guidance", "verified_calculation_pending"
+                if actions and actions[-1]["issue"] == "solver_identity_unverified":
+                    issue = actions[-1]["issue"]
+                elif len(steps) == len(plan["steps"]):
+                    delivery = deliver_verified_calculation(
+                        self.request, source, steps, len(actions) + 1, expected_solver=student["model"],
+                        continuation_model=continuation_model if allow_strong_calculation_readout else None)
+                    calculation_tutoring["final_delivery"] = delivery
+                    final_text = delivery["public_answer"]
+                    if delivery["check"]["format_ok"] and delivery["check"]["answer_matches"] is True:
+                        status, issue = "accepted", None
+                        training_reasoning = "\n".join(s["text"] for s in steps)
+                    else:
+                        issue = delivery["check"]["issue"] or "verified_calculation_delivery_unconfirmed"
+                break
             certified = (
                 checked_progress(
                     source.get("progress_checks", []), new_segments, suffix
@@ -871,6 +926,12 @@ class GenerateGuidedAnswer:
         terminal_check = last.get("formal_answer", {}).get("check", last["check"])
         if teacher_delivery and final_provenance:
             terminal_check = last["teacher_final_answer"]["check"]
+        if calculation_tutoring is not None:
+            terminal_check = calculation_tutoring.get("final_delivery", {}).get(
+                "check", {"answer_matches": None, "answer": None})
+        raw_teacher_verdict = (last.get("coach") or {}).get("verdict")
+        draft_only_review = bool(last.get("marked_draft_candidate") and raw_teacher_verdict == "supported"
+                                 and terminal_check.get("answer_matches") is not True)
         route = "reviewed_solution"
         correctness = "unverified"
         if status == "accepted":
@@ -882,11 +943,14 @@ class GenerateGuidedAnswer:
                 route, correctness = "nonthinking_direct", "unaided_direct_key_match"
             else:
                 correctness = "key_matched_and_explanation_reviewed"
+            if calculation_tutoring is not None:
+                route, correctness = "guided_reasoning", "verified_calculations_and_solver_delivery"
         return {
             **source,
             "protocol": "guided-draft-snapshot/" + protocol,
             "mode": mode,
             "attempts": attempts,
+            **({"calculation_tutoring": calculation_tutoring} if calculation_tutoring is not None else {}),
             "status": status,
             **({"continuation": {"reason": issue, "last_student_round": last["attempt"],
                                  "published_hints": len(disclosed), "experience_version": experience["version"]}}
@@ -903,7 +967,9 @@ class GenerateGuidedAnswer:
                 status == "accepted" or issue == "repetitive_truncated_trajectory_requires_review") else {}),
             "verification": {
                 "answer_key_check": terminal_check["answer_matches"],
-                "explanation_review": (last.get("coach") or {}).get("verdict"),
+                "explanation_review": ("source_attested_calculations" if calculation_tutoring and status == "accepted"
+                                       else "unconfirmed" if draft_only_review else raw_teacher_verdict),
+                **({"raw_teacher_explanation_verdict": raw_teacher_verdict} if draft_only_review else {}),
                 "correctness": correctness,
                 "issue": issue,
             },

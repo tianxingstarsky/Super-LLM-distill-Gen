@@ -15,11 +15,13 @@ from filelock import FileLock
 
 from lib.contexts.models.contracts import ModelQueueTimeout
 from ..application.generate_guided_answer import GenerateGuidedAnswer
+from ..application.guided_verified_delivery import validate_completed_calculation
+from ..application.solve_guided_calculations import EXPRESSION_INPUT
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_teacher_delivery import (
-    EVIDENCED_PROGRESS_VERSIONS, GUIDED_DELIVERY_VERSIONS, SOLVER_FINAL_VERSIONS,
+    CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, GUIDED_DELIVERY_VERSIONS, SOLVER_FINAL_VERSIONS,
     TRUNCATED_TUTORING_VERSIONS, requested_delivery, uses_direct_first,
 )
 from ..domain.guided_final_experience import adopted_final_teacher_text
@@ -64,7 +66,8 @@ def inputs(path, protocol_version=VERSION, trusted_step_receipts=frozenset()):
             if line.strip():
                 yield validate_source(json.loads(line), allow_answer_requirement=protocol_version in FIRST_ANSWER_VERSIONS,
                                       allow_task_system=protocol_version in FINAL_CONTINUATION_VERSIONS,
-                                      allow_direct_syntax=protocol_version in DIRECT_SYNTAX_VERSIONS, **verified_options)
+                                      allow_direct_syntax=protocol_version in DIRECT_SYNTAX_VERSIONS,
+                                      allow_calculation_plan=protocol_version == "4.10.0", **verified_options)
 
 
 def verified_step_registry(output, receipt_path, frozen_config):
@@ -389,9 +392,18 @@ def run_guided_cases(
         )
         if template_version in TEACHER_DISCLOSURE_VERSIONS:
             config["until_correct"] = until_correct
+        if (template_version == "4.10.0"
+                and (frozen_config is None or "draft_candidate_observation" in frozen_config)):
+            config["draft_candidate_observation"] = "marked-student-draft/v1"
         if registry:
             config["verified_step_registry_id"] = digest(registry)
-            if (template_version == "4.9.1"
+            if (template_version == "4.10.0"
+                    and (frozen_config is None or "student_calculation_format" in frozen_config)):
+                config["student_calculation_format"] = EXPRESSION_INPUT
+            if (template_version == "4.10.0" and stronger
+                    and (frozen_config is None or "strong_calculation_readout" in frozen_config)):
+                config["strong_calculation_readout"] = "two-verified-mismatches/v1"
+            if (template_version in CHECKED_TUTOR_VERSIONS
                     and (frozen_config is None or "bare_answer_operation_version" in frozen_config)):
                 config["bare_answer_operation_version"] = BARE_ANSWER_OPERATION_VERSION
         historical_rows = None
@@ -422,12 +434,24 @@ def run_guided_cases(
                 pending_manifest = archived_manifest.with_suffix(".pending")
                 pending_manifest.write_bytes(prior_bytes)
                 pending_manifest.replace(archived_manifest)
+        matching_roles = set()
         if reuse_matching_from:
             if reuse_matching_from.resolve() == output.resolve():
                 raise ValueError("cross-run replay requires a different source run")
             prior_bytes = (reuse_matching_from / "manifest.json").read_bytes()
             prior = json.loads(prior_bytes)
-            for key in ("endpoints", "input_sha256", "experience", "verified_step_registry_id"):
+            prior_endpoints = prior["endpoints"]
+            matching_roles = set(prior_endpoints)
+            comparable = config["endpoints"]
+            # A new optional reader has no historical calls. Keep every original role and
+            # capability identical, then authenticate each reused request against its receipt.
+            if (template_version == "4.10.0" and prior["template_version"] == template_version
+                    and set(prior_endpoints) == {"student", "coach"}
+                    and set(comparable) == {"student", "coach", "continuation"}):
+                comparable = {role: comparable[role] for role in prior_endpoints}
+            if prior_endpoints != comparable:
+                raise ValueError("cross-run replay requires the same endpoints for every previously configured role")
+            for key in ("input_sha256", "experience", "verified_step_registry_id"):
                 if prior.get(key) != config.get(key):
                     raise ValueError(f"cross-run replay requires the same {key}")
             config["reuse_matching"] = {"source_binding": digest(prior),
@@ -497,7 +521,9 @@ def run_guided_cases(
                 checkpoint = folder / f"{index:03}-{role}.json"
                 current_checkpoint = checkpoint.name
                 native_final = role in {"final_answer", "strong_final_answer"}
-                serving_role = {"student": "student", "final_answer": "student",
+                serving_role = {"student": "student", "student_step": "student", "final_answer": "student",
+                                "verified_answer": "student", "verified_answer_retry": "student",
+                                "verified_strong_answer": "continuation",
                                 "strong_continuation": "continuation", "strong_final_answer": "continuation"}.get(role, "coach")
                 endpoint = endpoints[serving_role]
                 payload = (endpoint.final_answer_payload(messages) if native_final
@@ -506,7 +532,11 @@ def run_guided_cases(
                 first_direct = role == "student" and index == 1 and uses_direct_first(source, template_version)
                 final_grammar = native_final and (template_version not in SOLVER_FINAL_VERSIONS
                                                   or requested_delivery(source) == "final_only")
-                if syntax and (first_direct or final_grammar):
+                calculation_probe = (template_version == "4.10.0" and role == "student" and index == 1
+                                     and source.get("verified_calculation_plan") and requested_delivery(source) == "worked_solution")
+                if role in {"verified_answer", "verified_answer_retry", "verified_strong_answer"} or calculation_probe:
+                    payload["grammar"] = DIRECT_ANSWER_GRAMMARS["keyed_rational"]
+                elif syntax and (first_direct or final_grammar):
                     payload["grammar"] = DIRECT_ANSWER_GRAMMARS[syntax]
                 identity = digest(
                     {"binding": binding, "id": source["id"], "payload": payload}
@@ -554,7 +584,7 @@ def run_guided_cases(
                     parent = config["reuse_worked_first"]
                     replayed = replay_first(reuse_worked_first_from, source["id"], payload, parent["source_binding"],
                                             expected_receipt_sha256=parent["receipts"][source["id"]])
-                elif reuse_matching_from:
+                elif reuse_matching_from and serving_role in matching_roles:
                     replayed = replay_matching_call(reuse_matching_from, source["id"], role, index, payload,
                                                     config["reuse_matching"]["source_binding"])
                     # Legacy native receipts may have copied the requested model into the response.
@@ -624,6 +654,10 @@ def run_guided_cases(
                     stop_after_first_student_receipt=bool(prefetch_worked_first),
                     until_correct=until_correct,
                     bare_answer_operations="bare_answer_operation_version" in config,
+                    expression_input=config.get("student_calculation_format") == EXPRESSION_INPUT,
+                    observe_draft_candidates="draft_candidate_observation" in config,
+                    allow_strong_calculation_readout="strong_calculation_readout" in config,
+                    expected_first_model=capabilities["student"]["model"] if template_version == "4.10.0" else None,
                     **({"continuation_model": stronger["model"] if stronger else None,
                         "trusted_solution_receipts": trusted}
                        if template_version in EVIDENCED_PROGRESS_VERSIONS else {}),
@@ -719,6 +753,15 @@ def _target_receipts(case):
             if attempt["formal_answer"].get("provenance", {}).get("receipt") != name:
                 raise ValueError("solver delivery points to a different receipt")
             expected[name] = (delivery, index, attempt["formal_answer"]["response"], None)
+    course = case.get("calculation_tutoring")
+    if course:
+        for action in course["actions"]:
+            expected[action["receipt"]] = (action["role"], action["index"], action["response"], action["request_messages"])
+        delivery = course["final_delivery"]
+        prior = delivery.get("prior") or {}
+        for item in (prior.get("prior"), prior, delivery):
+            if item:
+                expected[item["receipt"]] = (item["role"], item["index"], item["response"], item["messages"])
     return expected
 
 
@@ -729,7 +772,7 @@ def _check_target_receipt(event, expectation, case, protocol):
             or event["identity"] != digest({"binding": case["binding"], "id": case["id"], "payload": payload})
             or guided_port_response(event["response"], payload, role, protocol) != response
             or (messages is not None and payload.get("messages") != messages)):
-        raise ValueError("guided training case differs from its archived model receipt")
+        raise ValueError(f"guided training case {case['id']} differs from its archived model receipt {index:03}-{role}.json")
 
 
 def export(input_path, output, *, selected=None):
@@ -748,7 +791,9 @@ def export(input_path, output, *, selected=None):
     _, trusted = verified_step_registry(output, None, manifest)
     binding = digest(manifest)
     project_targets = manifest["template_version"] in GUIDED_TARGET_VERSIONS
-    target_counts, target_holds = {}, {}
+    target_counts, target_holds, evidence_counts = {}, {}, {}
+    calculation_operations, calculation_readers = {}, {}
+    usage_by_role = {}
     counts = dict(accepted=0, unverified=0, quarantine=0, interrupted=0, pending=0)
     accepted_routes = dict(nonthinking_direct=0, reviewed_solution=0)
     if manifest["template_version"] in TEACHER_DISCLOSURE_VERSIONS:
@@ -791,6 +836,18 @@ def export(input_path, output, *, selected=None):
                 historical_origin = None
                 for cp in folder.glob("[0-9]*-*.json"):
                     event = read(cp)
+                    if manifest["template_version"] == "4.10.0" and event["status"] == "complete":
+                        group = "reused" if event.get("origin") else "new"
+                        roles = usage_by_role.setdefault(group, {})
+                        totals = roles.setdefault(event["role"], {"responses": 0, "usage_unreported": 0,
+                                                                 "prompt_tokens": 0, "completion_tokens": 0})
+                        totals["responses"] += 1
+                        usage = event["response"].get("usage") or {}
+                        if all(type(usage.get(k)) is int and usage[k] >= 0 for k in ("prompt_tokens", "completion_tokens")):
+                            totals["prompt_tokens"] += usage["prompt_tokens"]
+                            totals["completion_tokens"] += usage["completion_tokens"]
+                        else:
+                            totals["usage_unreported"] += 1
                     if cp.name in expected:
                         _check_target_receipt(event, expected.pop(cp.name), case, manifest["template_version"])
                     if history and cp.name == "001-student.json":
@@ -818,7 +875,7 @@ def export(input_path, output, *, selected=None):
                         elif status in {"interrupted", "pending"}:
                             calls["interrupted_or_pending"] += 1
                 if expected:
-                    raise ValueError("missing archived model receipt for guided training")
+                    raise ValueError(f"missing archived model receipt for guided training case {source['id']}: {', '.join(sorted(expected))}")
                 if case is None:
                     path = folder / "interruption.json"
                     stop = read(path) if path.exists() else {}
@@ -880,9 +937,16 @@ def export(input_path, output, *, selected=None):
                 if project_targets and status == "accepted":
                     if any(case.get(key) != value for key, value in source.items()):
                         raise ValueError("guided training case differs from its frozen question or reference")
+                    if (source.get("verified_calculation_plan")
+                            and case["attempts"][0]["student"].get("model") != manifest["endpoints"]["student"]["model"]):
+                        raise ValueError("guided calculation first solver differs from the frozen student endpoint")
                     target_info = {"training_target_file": GUIDED_TARGET_FILE}
                     try:
-                        target = guided_training_target(case, archive_ref, trusted)
+                        strong_reader = (manifest["endpoints"].get("continuation", {}).get("model")
+                                         if manifest.get("strong_calculation_readout") == "two-verified-mismatches/v1" else None)
+                        steps = (validate_completed_calculation(case, trusted, continuation_model=strong_reader)
+                                 if "calculation_tutoring" in case else None)
+                        target = guided_training_target(case, archive_ref, trusted, calculation_steps=steps)
                     except GuidedTargetHeld as hold:
                         reason = str(hold)
                         target_info["training_target_held"] = reason
@@ -892,6 +956,16 @@ def export(input_path, output, *, selected=None):
                         target_info["training_target_sha256"] = digest(target)
                         objective = target["guided_training_target"]["objective"]
                         target_counts[objective] = target_counts.get(objective, 0) + 1
+                        if manifest["template_version"] == "4.10.0":
+                            origin = target["guided_training_target"]
+                            basis = origin["evidence_basis"]
+                            evidence_counts[basis] = evidence_counts.get(basis, 0) + 1
+                            if "operations" in origin:
+                                reader = origin["answer_author"]
+                                calculation_readers[reader] = calculation_readers.get(reader, 0) + 1
+                                for step in origin["operations"]:
+                                    kind = step["operation_origin"]
+                                    calculation_operations[kind] = calculation_operations.get(kind, 0) + 1
                         emit(Path(GUIDED_TARGET_FILE).stem, target)
                 emit(
                     status,
@@ -956,8 +1030,13 @@ def export(input_path, output, *, selected=None):
         "counts": counts,
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
+        **({"usage_by_role": usage_by_role} if manifest["template_version"] == "4.10.0" else {}),
         **({"training_targets": {"schema": GUIDED_TARGET_SCHEMA, "file": GUIDED_TARGET_FILE,
-                                 "by_objective": target_counts, "held_by_reason": target_holds}}
+                                 "by_objective": target_counts, "held_by_reason": target_holds,
+                                 **({"by_evidence_basis": evidence_counts,
+                                     "calculation_operations_by_origin": calculation_operations,
+                                     "calculation_readouts_by_role": calculation_readers}
+                                    if manifest["template_version"] == "4.10.0" else {})}}
            if project_targets else {}),
         **({"accepted_after_full_disclosure": disclosed_outcomes} if manifest["template_version"] in EVIDENCED_PROGRESS_VERSIONS else {}),
         **({"historical_first_outcomes": historical_outcomes} if "historical_first" in manifest else {}),

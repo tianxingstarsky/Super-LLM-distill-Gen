@@ -9,7 +9,7 @@ from .guided_teaching_steps import certified_complete_disclosure
 
 GUIDED_TARGET_FILE = "training-targets.jsonl"
 GUIDED_TARGET_SCHEMA = "guided-training-target/v1"
-GUIDED_TARGET_VERSIONS = frozenset({"4.9.1"})
+GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0"})
 
 
 class GuidedTargetHeld(ValueError):
@@ -66,7 +66,49 @@ def _correction_prompt(question, attempts, chinese):
     return question + "\n\n" + instruction + "\n" + json.dumps(history, ensure_ascii=False, indent=2)
 
 
-def guided_training_target(case, case_archive, trusted_solution_receipts):
+def _calculation_target(case, steps, provenance):
+    course = case["calculation_tutoring"]
+    delivery = course["final_delivery"]
+    if not steps:
+        raise ValueError("verified calculation training requires replayed solver actions")
+    # Make the offline exercise self-contained. Supplied operations are visible context.
+    # Numeric results in the target are calculator executions, including self-proposed expressions.
+    moves = []
+    for action in course["actions"]:
+        move = json.loads(action["request_messages"][-1]["content"])["target"]
+        moves.append(move["quantity"] if "operation" not in move
+                     else f"{move['quantity']}: {move['operation']}")
+    question = case["question"]
+    chinese = str(case.get("source", {}).get("language", "")).lower().startswith("zh") or any(
+        "\u4e00" <= char <= "\u9fff" for char in question)
+    title = "辅导时提供的计算目标和提示" if chinese else "Calculation goals and guidance supplied during tutoring"
+    question += "\n\n" + title + "\n" + "\n".join(dict.fromkeys(moves))
+    suggested = sum(s["operation_disclosed"] for s in steps)
+    reader = "strong_continuation" if delivery["role"] == "verified_strong_answer" else "student"
+    readout_only = delivery["public_answer"] == delivery["response"]["content"].strip()
+    target = {"role": "assistant", "reasoning_content": "\n".join(s["text"] for s in steps),
+              "content": delivery["public_answer"]}
+    messages = [{"role": "system", "content": case["task_system"]}] if case.get("task_system") else []
+    if any(contains_chat_control(t) for t in (question, target["reasoning_content"], target["content"])):
+        raise GuidedTargetHeld("chat_delimiter_in_training_text")
+    return {"id": case["id"], "status": "eligible",
+            "messages": [*messages, {"role": "user", "content": question}, target],
+            "guided_training_target": {**provenance,
+                "objective": "calculation_demonstration" if suggested == len(steps) else "assisted_calculation",
+                "reasoning_origin": "verified_tutoring_operations_and_calculator",
+                "evidence_basis": "externally_attested_plan_and_exact_execution",
+                "guidance_received": True, "independent_solution": False,
+                "answer_author": reader, "answer_model": delivery["response"]["model"],
+                "answer_assembly": f"{reader}_readout" if readout_only else f"verified_steps_with_{reader}_readout",
+                "answer_receipt": delivery["receipt"], "plan_receipt": course["receipt_id"],
+                "student_proposed_operations": len(steps) - suggested, "supplied_operations": suggested,
+                "student_used_disclosed_operations": sum(s["operation_origin"] == "student_used_disclosed_operation" for s in steps),
+                "demonstrated_operations": sum(s["operation_origin"] == "verified_teaching_demonstration" for s in steps),
+                "operations": [{k: s[k] for k in ("id", "student_receipt", "operation_disclosed", "operation_origin", "value_source")}
+                               for s in steps]}}
+
+
+def guided_training_target(case, case_archive, trusted_solution_receipts, *, calculation_steps=None):
     """Use the keyed decision and source spans; never supervise a serialized tutoring transcript."""
     attempts = case["attempts"]
     last = attempts[-1]
@@ -82,6 +124,8 @@ def guided_training_target(case, case_archive, trusted_solution_receipts):
             raise ValueError("independent training requires the original question without tutor material")
     provenance = {"schema": GUIDED_TARGET_SCHEMA, "case_archive": case_archive,
                   "case_binding": case["binding"], "source_sha256": case["source_sha256"]}
+    if "calculation_tutoring" in case:
+        return _calculation_target(case, calculation_steps, provenance)
     target = {"role": "assistant", "content": answer}
     if case["training_route"] == "nonthinking_direct":
         if not independent or answer != last["student"]["content"] or last["check"]["answer_matches"] is not True:
@@ -123,6 +167,10 @@ def guided_training_target(case, case_archive, trusted_solution_receipts):
     if any(contains_chat_control(text) for text in (question, target.get("reasoning_content", ""), answer)):
         raise GuidedTargetHeld("chat_delimiter_in_training_text")
     messages = [{"role": "system", "content": case["task_system"]}] if case.get("task_system") else []
+    if case.get("protocol") == "guided-draft-snapshot/v4.10.0":
+        provenance["evidence_basis"] = {"independent_answer": "independent_answer_key",
+                                        "teacher_demonstration": "verified_source_solution"}.get(
+                                            objective, "answer_key_and_tutor_review")
     return {"id": case["id"], "status": "eligible",
             "messages": [*messages, {"role": "user", "content": question}, target],
             "guided_training_target": {**provenance, "objective": objective, "guidance_received": not independent,

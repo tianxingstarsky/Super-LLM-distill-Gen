@@ -3,7 +3,7 @@
 import json
 
 from lib.prompts.workflow_guided_answers import (
-    BARE_ANSWER_OPERATION_AUTHOR, BARE_ANSWER_OPERATION_REVIEW,
+    BARE_ANSWER_OPERATION_AUTHOR, BARE_ANSWER_OPERATION_REVIEW, MARKED_DRAFT_CONTEXT,
     AUTHORED_DISCLOSURE_REVIEW, DISCLOSURE_AUTHOR, DISCLOSURE_REVIEW, GROUNDED_AUTHOR_GUIDANCE,
     GROUNDED_HINT_REVIEW, TUTOR_TASK_ANALYSIS, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
     DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_draft_decision_schema, disclosure_review_schema, verified_choice_schema,
@@ -93,6 +93,10 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
             formal_value_matches_key=formal["check"]["answer_matches"],
             formal_format_ok=formal["check"]["format_ok"],
         )
+    if candidate_observation := attempt.get("marked_draft_candidate"):
+        # An ambiguous conclusion identifies a difficulty. It never establishes a premise.
+        material["current_difficulty"]["latest_marked_student_candidate"] = candidate_observation
+        material["current_difficulty"]["student_response_tail"] = attempt["student"]["content"][-600:]
     return material, evidence, previous_id
 
 
@@ -256,6 +260,9 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                 material["current_difficulty"]["answer_format_issue"] = attempt["check"].get("issue")
         author_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
         reviewer_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
+        if "latest_marked_student_candidate" in material["current_difficulty"]:
+            author_system += "\n\n" + MARKED_DRAFT_CONTEXT
+            reviewer_system += "\n\n" + MARKED_DRAFT_CONTEXT
     if paired:
         material["student_attempt"] = attempt["attempt"]
         author_system += "\n\n" + QUOTED_DISCLOSURE
