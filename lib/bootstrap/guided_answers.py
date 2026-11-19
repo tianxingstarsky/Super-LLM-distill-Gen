@@ -39,6 +39,8 @@ def generate_guided_cases(
     context_tokens=131072,
     max_tokens=32768,
     coach_thinking=None,
+    student_sampling=None,
+    coach_sampling=None,
     experience=None,
     export_only=False,
     first_pass_only=False,
@@ -71,6 +73,7 @@ def generate_guided_cases(
             local=True,
             context=context_tokens,
             thinking=False,
+            sampling=student_sampling,
             pool=pool,
             slot_pool_factory=slot_pool,
         )
@@ -88,6 +91,7 @@ def generate_guided_cases(
             local=coach_local,
             context=context_tokens,
             thinking=coach_thinking,
+            sampling=coach_sampling,
             pool=pool,
             slot_pool_factory=slot_pool,
         )

@@ -40,6 +40,13 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
                                "excerpted": len(observed) > 1200},
         "proposed_next_teacher_disclosure": {"kind": candidate["kind"], "text": candidate["text"]},
     }
+    if attempt.get("truncated_observation"):
+        material["current_difficulty"] = {"at": anchor, **attempt["truncated_observation"],
+                                          "status": "output_limit_without_final_answer"}
+        material["private_source_reference"] = {
+            "answer_key": source["gold"], "attributed_source_reasoning": source["source_reasoning"],
+            "use": "Check the direction privately. Ground the next hint in the user's question and previously established facts.",
+        }
     if source.get("task_system"):
         material["task_instructions"] = source["task_system"]
     if attempt.get("supported_student_approaches"):
@@ -111,6 +118,8 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
                                        "latest_disclosure_id", "current_difficulty", "private_reference_ceiling")}
     if "task_instructions" in material:
         packet["task_instructions"] = material["task_instructions"]
+    if "private_source_reference" in material:
+        packet["private_source_reference"] = material["private_source_reference"]
     if "supported_student_approaches" in material:
         packet["supported_student_approaches"] = material["supported_student_approaches"]
     packet["proposed_next_teacher_disclosure"] = {

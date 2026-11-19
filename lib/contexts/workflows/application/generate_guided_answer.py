@@ -9,7 +9,7 @@ from .review_guided_disclosure import (
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
 from ..domain.guided_student_evidence import checked_student_approaches
-from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, uses_direct_first
+from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
 
 from ..domain.guided_answers import (
     assemble,
@@ -27,6 +27,7 @@ from ..domain.guided_answers import (
     rooted_prefix_count,
     shared_findings,
     student_reasoning_trace,
+    truncated_student_observation,
     validated_review,
 )
 from lib.prompts.workflow_guided_answers import (
@@ -87,7 +88,7 @@ class GenerateGuidedAnswer:
                     "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9",
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
-                    "4.5.0": "v4.5", "4.5.1": "v4.5.1"}[protocol_version]
+                    "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -193,6 +194,7 @@ class GenerateGuidedAnswer:
                 hint_to_student=None,
             )
             attempts.append(attempt)
+            incomplete = None
             if (
                 student["finish_reason"] != "stop"
                 or student.get("reasoning_content")
@@ -214,12 +216,18 @@ class GenerateGuidedAnswer:
                         else:
                             findings[key] = item
                     attempt["program_confirmed"] = list(certified.values())
-                break
+                if protocol_version in TRUNCATED_TUTORING_VERSIONS:
+                    incomplete = truncated_student_observation(student, gold, index)
+                if not incomplete:
+                    break
+                attempt["truncated_observation"] = incomplete
             suffix = student["content"]
             public.append({"role": "assistant", "content": suffix})
-            direct = check_direct_answer(suffix, gold, include_mismatch=grounded) if direct_first else None
+            direct = check_direct_answer(suffix, gold, include_mismatch=grounded) if direct_first and not incomplete else None
             direct_match = direct if direct and direct["answer_matches"] else None
-            if direct:
+            if incomplete:
+                new_segments, answer_line = [], ""
+            elif direct:
                 new_segments, answer_line = [], suffix
             else:
                 new_segments, answer_line = draft_fragment(suffix, index, preserve_list_items=single_decision,
@@ -235,8 +243,9 @@ class GenerateGuidedAnswer:
                 attempt["derivation_available"] = bool(active or new_segments and (answer_line or len(new_segments) > 1))
             text = assemble(submitted, answer_line)
             final_text = text
-            check = direct or inspect_answer(text, gold, parse_count_sentence=skip_acquired,
-                                                   marked_finals=marked_finals, question=question)
+            check = (dict(format_ok=False, answer=None, answer_matches=None, issue="student_output_limit_before_answer")
+                     if incomplete else direct or inspect_answer(text, gold, parse_count_sentence=skip_acquired,
+                                                                  marked_finals=marked_finals, question=question))
             if gold is None and not any(
                 tag in text.lower()
                 for tag in ("<think>", "</think>", "<|im_start|>", "<|im_end|>")
@@ -328,7 +337,13 @@ class GenerateGuidedAnswer:
                 material["already_known_clues"] = [
                     item for item in clue_ledger if item["status"] != "disclosed"
                 ]
-            if direct:
+            if incomplete:
+                # No submission to assess. Retain previously checked steps; the unfinished
+                # passage is visible only as an attributed observation for tutoring.
+                review = dict(verdict="uncertain", verified_prefix_count=len(active), reusable=[],
+                              first_unresolved_id="final_answer", diagnosis="The reply reached its output limit without a final answer.")
+                attempt["student_assessment_source"] = "completed_response_without_final_answer"
+            elif direct:
                 assessment = {"decision": "revise:final_answer", "reusable": [],
                               "diagnosis": "The submitted final value disagrees with the independent key. "
                                            "The learner supplied no derivation."}
@@ -351,19 +366,15 @@ class GenerateGuidedAnswer:
                     break
             try:
                 proposed_approaches = []
-                if not direct:
+                if not direct and not incomplete:
                     assessment = read_teacher_submission(coach)
                     if task_analysis and isinstance(assessment, dict):
                         proposed_approaches = assessment.pop("independent_approaches", None)
                         if not isinstance(proposed_approaches, list):
                             raise ValueError("student assessment is missing the independent approaches decision")
-                review = validated_review(
-                    assessment,
-                    submitted,
-                    answer_line,
-                    anchored=anchored,
-                    single_decision=single_decision,
-                )
+                if not incomplete:
+                    review = validated_review(
+                        assessment, submitted, answer_line, anchored=anchored, single_decision=single_decision)
                 count = review["verified_prefix_count"]
                 if not 0 <= count <= len(submitted) or (
                     review["verdict"] == "supported" and count != len(submitted)
@@ -376,7 +387,7 @@ class GenerateGuidedAnswer:
                 if ordered_evidence:
                     status = "awaiting_guidance"
                 break
-            if ordered_evidence and not direct:
+            if ordered_evidence and not direct and not incomplete:
                 resolved, problem = check_or_repair_student_findings(
                     self.request, attempt, material, assessment, version["submitted_ids"], schema["properties"]["reusable"])
                 if problem:
@@ -451,7 +462,7 @@ class GenerateGuidedAnswer:
                 and (not grounded or count == len(submitted))
             ):
                 if record_guided_reasoning and gold is not None:
-                    trace = student_reasoning_trace(attempts, question)
+                    trace = student_reasoning_trace(attempts, question, verified_truncated_only=True)
                     if contains_chat_control(trace):
                         issue = "guided_reasoning_contains_control_markers"
                         break
@@ -470,6 +481,9 @@ class GenerateGuidedAnswer:
                         else:
                             status, issue = "accepted", None
                             version["first_unresolved"] = None
+                            if any(a.get("truncated_observation", {}).get("repetition") for a in attempts):
+                                status, issue = "unverified", "repetitive_truncated_trajectory_requires_review"
+                                training_reasoning = student_reasoning_trace(attempts, question)
                         break
                     prefix = {"role": "assistant", "reasoning_content": trace, "content": ""}
                     formal = self.request("final_answer", index, [*final_task, prefix], None)
@@ -618,7 +632,8 @@ class GenerateGuidedAnswer:
                if status == "awaiting_guidance" else {}),
             **({"training_route": route} if direct_protocol and status == "accepted" else {}),
             **({"finalization": formal_history} if formal_history else {}),
-            **({"final_answer_provenance": final_provenance} if final_provenance and status == "accepted" else {}),
+            **({"final_answer_provenance": final_provenance} if final_provenance and (
+                status == "accepted" or issue == "repetitive_truncated_trajectory_requires_review") else {}),
             "verification": {
                 "answer_key_check": terminal_check["answer_matches"],
                 "explanation_review": (last.get("coach") or {}).get("verdict"),

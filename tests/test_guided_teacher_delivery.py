@@ -23,6 +23,34 @@ def test_bill_subtotal_is_distinct_from_explicit_final_total():
     assert not check["format_ok"] and not public
 
 
+def test_teacher_cannot_cite_private_steps_that_are_absent_from_the_question():
+    source = {"question": "Reconstruct the entire sequence from the position constraints.",
+              "gold": {"kind": "exact", "value": "E → C → B → D → A"}}
+    steps = {"archive.s1": "C is before D.", "archive.s2": "The unique order is E → C → B → D → A."}
+    submission = {"decision": "deliver", "reason": "", "conclusion": source["gold"]["value"],
+                  "evidence_ids": ["archive.s1"],
+                  "explanation": "This matches the final conclusion in archive.s2."}
+    original, original_public = inspect_teacher_delivery(submission, source, steps, "worked_solution")
+    assert original["format_ok"] and submission["explanation"] in original_public
+    check, public = inspect_teacher_delivery(submission, source, steps, "worked_solution", protect_evidence_ids=True)
+    assert check["issue"] == "teacher_final_contains_private_evidence_id" and public == ""
+
+
+def test_teacher_can_repeat_the_users_identifiers_without_matching_a_private_prefix():
+    source = {"question": "Read the public symbols archive.s1 and archive.s20. Return only archive.s20.",
+              "gold": {"kind": "exact", "value": "archive.s20"}}
+    steps = {"archive.s1": "The public symbols are printed on the label.",
+             "archive.s2": "The selected public symbol ends in 20."}
+    submission = {"decision": "deliver", "reason": "", "conclusion": "archive.s20",
+                  "evidence_ids": ["archive.s1"], "explanation": ""}
+    check, public = inspect_teacher_delivery(submission, source, steps, "final_only", protect_evidence_ids=True)
+    assert check["answer_matches"] and public == "archive.s20"
+    source["question"] = "In archive.s1, explain why the public symbol archive.s20 was selected."
+    submission["explanation"] = "The public label in archive.s1 specifies the symbol archive.s20."
+    check, public = inspect_teacher_delivery(submission, source, steps, "worked_solution", protect_evidence_ids=True)
+    assert check["format_ok"] and submission["explanation"] in public
+
+
 @pytest.mark.parametrize("teacher_answer,accepted,protocol", [
     ("5", True, "4.4.0"), ("5", True, "4.4.1"), ("1", False, "4.4.1"),
 ])
@@ -97,7 +125,7 @@ def test_same_local_model_separates_student_and_teacher_reasoning_and_resumes(tm
     source.write_text(json.dumps(case), encoding="utf8")
     sent = []
     endpoint = GuidedChatEndpoint("http://localhost/v1", "one-model", None, 32768, local=True,
-                                  context=98304, pool=SimpleNamespace(acquire=nullcontext))
+                                  context=98304, pool=SimpleNamespace(acquire=nullcontext), sampling="qwen3.5-0.8b")
 
     def http(url, body=None):
         if url.endswith("/slots"):
@@ -129,6 +157,11 @@ def test_same_local_model_separates_student_and_teacher_reasoning_and_resumes(tm
     summary = run()
     assert summary["counts"]["accepted"] == 1
     assert [req["chat_template_kwargs"]["enable_thinking"] for req in sent] == [False, True, True]
+    assert [req["presence_penalty"] for req in sent] == [2.0, 1.5, 1.5]
+    assert [req["top_p"] for req in sent] == [1.0, 0.95, 0.95]
+    assert all(req["temperature"] == 1.0 and req["top_k"] == 20
+               and req["min_p"] == 0 and req["repeat_penalty"] == 1.0
+               and "penalties" in req["samplers"] for req in sent)
     assert "reasoning_format" not in sent[0] and all(req["reasoning_format"] == "deepseek" for req in sent[1:])
     folder = next((root / "cases").iterdir())
     assessment = json.loads((folder / "001-coach.json").read_bytes())["response"]
@@ -138,3 +171,21 @@ def test_same_local_model_separates_student_and_teacher_reasoning_and_resumes(tm
     assert final["reasoning_content"] == "private teacher work"
     assert "private teacher work" not in (root / "accepted.jsonl").read_text("utf8")
     assert run() == summary and len(sent) == 3
+
+
+def test_native_q5_sampling_and_legacy_request_replay():
+    ep = GuidedChatEndpoint("http://localhost/v1", "qwen3.5-9b-q5-k-m", None, 32768,
+                            local=True, context=131072, pool=None)
+    messages = [{"role": "user", "content": "Explain the rule."}]
+    ep.configure_teacher_reasoning("4.6.0")
+    ep.configure_sampling("4.6.0")
+    old = ep.payload(messages, None)
+    assert list(old) == ["model", "messages", "max_tokens", "temperature", "stream",
+                         "chat_template_kwargs", "reasoning_format"]
+    assert old["temperature"] == 0 and "presence_penalty" not in old
+    ep.configure_teacher_reasoning("4.7.0")
+    ep.configure_sampling("4.7.0")
+    current = ep.payload(messages, None)
+    assert ep.sampling_profile == "qwen3.5-9b"
+    assert current["temperature"] == 1.0 and current["presence_penalty"] == 1.5
+    assert current["chat_template_kwargs"] == {"enable_thinking": True}

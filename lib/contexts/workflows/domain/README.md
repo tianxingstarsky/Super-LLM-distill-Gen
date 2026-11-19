@@ -197,3 +197,5 @@
 4.3 也可保留错误之后仍能从原题独立推出的解题方法。`checked_student_approaches` 定位完整学生片段和唯一题面引文，记录两个字符范围以及语义判断的来源。学生下一轮只接收自己已核准的方法原文。
 
 `guided_teacher_delivery.py` 处理教师的正式交付。结论和按原题要求呈现的解法属于公开答案。片段编号、依据不足的原因以及作者身份留在回执中。规则由 `application/compose_guided_final_answer.py` 调用。
+
+4.7 正式交付前会对照本次提供给教师的全部片段编号，检查公开解释和结论。用户题面已经出现的编号可以引用。教师引入私有编号时，校验返回 `teacher_final_contains_private_evidence_id`，原始响应保存在收据中。已冻结的 4.4–4.6 沿用原规则。相关回归见 `tests/test_guided_teacher_delivery.py`。

@@ -5,6 +5,7 @@ from lib.contexts.datasets.domain.control_text_projection import (
     mark_training_control_text, without_control_text_metadata, with_source_control_text,
 )
 from lib.contexts.datasets.domain.reasoning_import import adapt_reasoning_record
+from lib.contexts.datasets.domain.reasoning_repetition import assistant_target_repetition, repeated_reasoning_lines
 from lib.contexts.datasets.domain.training_control import (
     TRAINING_CONTROL_SCHEMA, TRAINING_EFFORTS, training_control_effort,
     validate_training_effort, with_training_control,

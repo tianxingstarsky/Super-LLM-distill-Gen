@@ -1,5 +1,9 @@
 # 工作流运行适配
 
+4.7 的本地 Qwen3.5 文本采样区分模型大小和思考开关。标准模型名自动识别；别名可用 `--student-sampling qwen3.5-0.8b --coach-sampling qwen3.5-9b` 指定，`server` 则沿用推理服务的采样。新任务把实际发送的温度、top-k、top-p、min-p、惩罚参数与采样器顺序记录在请求和冻结清单。服务自行选择的参数不会记为客户端实测。旧任务保留原采样，采样发生变化的请求不能复用原来的生成结果。
+
+0.8B 学生的非思考文本档使用温度 1、top-p 1、top-k 20、min-p 0、presence penalty 2；思考文本使用 top-p 0.95、presence penalty 1.5。9B 教师思考文本也用后一组。llama.cpp 的 `repeat_penalty` 保持 1，presence penalty 在最近 64 个 token 上生效。遇到重复时，可先对照收据中的模式和采样，再看是否正常生成 EOS、最终答案是否正确。[0.8B 模型卡](https://huggingface.co/Qwen/Qwen3.5-0.8B) · [9B 模型卡](https://huggingface.co/Qwen/Qwen3.5-9B)
+
 `guided_answer_records.py` 记录每一轮学生、教师拟稿、提示核查和最终答案的独立回执。`--first-pass-only` 可先收集首答，之后用 `--reuse-first-from` 校对模型、题目标识、请求正文和冻结清单，再复用实际首答。不同职责连接各自的本地服务，且共享全局并发额度。已发布给学生的提示、被扣下的草稿与学生最终学会的题数分别统计。
 
 本地推理先按服务报告的 `/slots` 申请跨进程会话槽，再申请全局额度。多个任务或模型别名指向同一服务时共享槽位。单槽教师排队期间，独立学生服务仍可使用剩余全局额度。对话生成与正式答案前缀续写采用相同顺序。

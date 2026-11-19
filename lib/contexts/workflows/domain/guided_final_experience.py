@@ -9,7 +9,7 @@ from .guided_answers import number
 
 
 FINAL_TEACHER_ROLE = "final_answer_teacher"
-FINAL_EXPERIENCE_VERSIONS = frozenset({"4.5.1"})
+FINAL_EXPERIENCE_VERSIONS = frozenset({"4.5.1", "4.6.0", "4.7.0"})
 
 
 def text_sha(text):

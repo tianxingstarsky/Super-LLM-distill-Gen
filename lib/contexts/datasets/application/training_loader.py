@@ -1,7 +1,7 @@
 """Lazily prepare one supervised assistant turn from each canonical prefix."""
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
 from typing import Any, Protocol
 
@@ -23,7 +23,8 @@ class TrainingTurnEncoder(Protocol):
 
 
 def iter_training_examples(records: Iterable[Mapping[str, Any]], encoder: TrainingTurnEncoder, *,
-                           default_effort: str | None = None) -> Iterator[dict[str, Any]]:
+                           default_effort: str | None = None,
+                           accept_target: Callable[[list[dict]], bool] | None = None) -> Iterator[dict[str, Any]]:
     """Yield encoded assistant turns without changing or collecting source rows.
 
     The explicit default is a read-only view for legacy rows lacking a control;
@@ -56,7 +57,10 @@ def iter_training_examples(records: Iterable[Mapping[str, Any]], encoder: Traini
             text_configuration = message.get("control_text_config", record.get("control_text_config"))
             if text_configuration is not None and not isinstance(text_configuration, Mapping):
                 raise ValueError("invalid_control_text_configuration")
-            encoded = encoder.encode_turn(deepcopy(messages[:message_index + 1]), efforts[message_index],
+            prefix = messages[:message_index + 1]
+            if accept_target is not None and not accept_target(prefix):
+                continue
+            encoded = encoder.encode_turn(deepcopy(prefix), efforts[message_index],
                                           tools=deepcopy(normalized.get("tools")),
                                           **({"control_text_config": deepcopy(text_configuration)}
                                              if text_configuration is not None else {}))

@@ -17,7 +17,7 @@ from lib.contexts.models.contracts import ModelQueueTimeout
 from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
-from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, uses_direct_first
+from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
 from ..domain.guided_final_experience import adopted_final_teacher_text
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
 from lib.io_utils import atomic_json
@@ -34,6 +34,15 @@ SUPPORTED_VERSIONS = {"3.0.0", "3.1.0", "3.2.0", "3.3.0", "3.4.0", "3.5.0"} | FI
 
 def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def guided_port_response(response, payload, role, template_version):
+    """Attach dispatch evidence to the use case after a completed call or authenticated replay."""
+    if (template_version in TRUNCATED_TUTORING_VERSIONS and role == "student"
+            and response.get("finish_reason") == "length"
+            and payload.get("chat_template_kwargs", {}).get("enable_thinking") is False):
+        return {**response, "completed_student_thinking_disabled": True}
+    return response
 
 
 def inputs(path, protocol_version=VERSION, trusted_step_receipts=frozenset()):
@@ -260,6 +269,10 @@ def run_guided_cases(
                 endpoints = {**endpoints, "coach": coach}
             prior_coach = frozen_config["endpoints"]["coach"] if frozen_config else None
             coach.configure_teacher_reasoning(template_version, prior_coach)
+        for role, ep in endpoints.items():
+            if isinstance(ep, GuidedChatEndpoint):
+                prior = frozen_config["endpoints"][role] if frozen_config else None
+                ep.configure_sampling(template_version, prior)
         capabilities = {role: ep.validate() for role, ep in endpoints.items()}
         capacities = {}
         role_servers = {}
@@ -355,7 +368,7 @@ def run_guided_cases(
                 if saved and saved["identity"] != identity:
                     raise ValueError("request differs from its saved checkpoint")
                 if saved.get("status") == "complete":
-                    return saved["response"]
+                    return guided_port_response(saved["response"], payload, role, template_version)
                 if saved and not retry_interrupted and not can_resume_admission(saved, binding, source["id"], role, index):
                     raise RuntimeError(
                         "request outcome unresolved; explicit retry required"
@@ -394,7 +407,7 @@ def run_guided_cases(
                             attempts=[*previous, {"status": "replayed", "new_model_calls": 0}],
                         ),
                     )
-                    return response
+                    return guided_port_response(response, payload, role, template_version)
                 event = dict(
                     identity=identity,
                     role=role,
@@ -430,7 +443,7 @@ def run_guided_cases(
                     "usage": response.get("usage", {}),
                 }
                 atomic_json(checkpoint, event)
-                return response
+                return guided_port_response(response, payload, role, template_version)
 
             try:
                 result = GenerateGuidedAnswer(request).run(

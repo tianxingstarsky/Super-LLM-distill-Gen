@@ -1,5 +1,7 @@
 # Local training adapters
 
+New full-language SFT runs screen assistant targets before tokenization. The preflight lists the held count and up to sixteen source lines, turn indices and character spans. Source JSONL stays intact. A training run freezes this selection in `full-sft-target-policy.json`. An older run with an existing model training identity keeps its original selection. Full-SFT checks run in `tests/test_full_sft_cli.py`.
+
 `filesystem.py` freezes source and model identities, reuses the datasets API for
 encoding, authenticates completed stage artifacts and commits receipts before
 advancing. Existing experiment manifests are not overwritten during recovery.

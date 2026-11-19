@@ -1,5 +1,7 @@
 # Dataset boundary
 
+`reasoning_repetition.py` measures repeated substantive lines for truncated guided drafts. Its training check requires consecutive repetitions of the same sequence of prose. It keeps character offsets for inspection and checks each normalized assistant target independently. Code fences, tables, standalone equations and requested repetitions in the visible answer are protected.
+
 `preferred_training_record` keeps raw reasoning by default because review,
 repair and candidate receipts also use it. Actual export writers opt into the
 v3 annotation view. `without_control_text_metadata` removes only program-owned

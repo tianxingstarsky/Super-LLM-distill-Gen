@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from contextlib import ExitStack
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -14,6 +15,23 @@ from lib.prompts.workflow_guided_answers import FINAL_DELIVERY
 
 MIN_CONTEXT = 90_000
 MIN_OUTPUT = 32_768
+SAMPLING_PROFILES = ("auto", "server", "qwen3.5-0.8b", "qwen3.5-9b")
+
+
+def qwen_text_sampling(profile, thinking):
+    """Qwen's published text sampling settings, using llama.cpp's parameter names."""
+    small_instruct = profile == "qwen3.5-0.8b" and not thinking
+    return {
+        "temperature": 1.0,
+        "top_p": 1.0 if small_instruct else 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 2.0 if small_instruct else 1.5,
+        "repeat_penalty": 1.0,
+        "repeat_last_n": 64,
+        "frequency_penalty": 0.0,
+        "samplers": ["penalties", "top_k", "top_p", "min_p", "temperature"],
+    }
 
 # These describe a requested answer surface. All values in that surface remain possible.
 DIRECT_ANSWER_GRAMMARS = {
@@ -50,6 +68,7 @@ class GuidedChatEndpoint:
         pool,
         thinking=None,
         slot_pool_factory=None,
+        sampling=None,
     ):
         self.url = url.rstrip("/")
         parts = urlsplit(self.url)
@@ -74,6 +93,9 @@ class GuidedChatEndpoint:
         self.requested_thinking = thinking
         self.thinking = bool(thinking)
         self.record_teacher_reasoning = False
+        self.requested_sampling = sampling
+        self.sampling_profile = None
+        self.sampling_parameters = {"temperature": 0}
         self.context = context
         self.slots = None
         self.headers = {"Content-Type": "application/json"}
@@ -136,7 +158,7 @@ class GuidedChatEndpoint:
             raise ValueError("generation cap leaves no prompt space")
         if self.local and self.slot_pool_factory is not None:
             self.slot_pool = self.slot_pool_factory(self.root, self.slots)
-        return dict(
+        spec = dict(
             url=self.url,
             model=self.model,
             context_tokens=self.context,
@@ -147,13 +169,37 @@ class GuidedChatEndpoint:
             enable_thinking=self.thinking if self.local else None,
             slots=self.slots,
         )
+        if self.sampling_profile is not None:
+            spec.update(sampling_profile=self.sampling_profile, sampling_parameters=self.sampling_parameters)
+        return spec
+
+    def configure_sampling(self, version, frozen_endpoint=None):
+        self.sampling_profile = None
+        self.sampling_parameters = {"temperature": 0}
+        if version != "4.7.0":
+            if self.requested_sampling is not None:
+                raise ValueError("explicit guided sampling profiles require protocol 4.7")
+            return
+        requested = self.requested_sampling or (frozen_endpoint or {}).get("sampling_profile") or "auto"
+        if not self.local and requested == "auto":
+            return
+        if requested not in SAMPLING_PROFILES:
+            raise ValueError("unknown guided sampling profile")
+        if requested == "auto":
+            # Arbitrary model aliases and derivatives can select a profile explicitly.
+            identified = re.fullmatch(r"(?:.*/)?(qwen3\.5-(?:0\.8b|9b))(?:[-.](?:q\d.*|bf16|gguf))?", self.model, re.I)
+            requested = identified.group(1).lower() if identified and self.local else "server"
+        if requested != "server" and not self.local:
+            raise ValueError("Qwen native sampling profiles require a llama.cpp endpoint")
+        self.sampling_profile = requested
+        self.sampling_parameters = {} if requested == "server" else qwen_text_sampling(requested, self.thinking)
 
     def payload(self, messages, schema):
         data = dict(
             model=self.model,
             messages=messages,
             max_tokens=self.cap,
-            temperature=0,
+            **self.sampling_parameters,
             stream=False,
         )
         if self.local:
@@ -200,7 +246,7 @@ class GuidedChatEndpoint:
         if not tokens or len(tokens) + self.cap > self.context:
             raise ValueError("the complete guided reasoning and answer reservation must fit the native slot")
         return {"model": self.model, "prompt": tokens, "n_predict": self.cap,
-                "temperature": 0, "cache_prompt": True, "stream": False}
+                **self.sampling_parameters, "cache_prompt": True, "stream": False}
 
     def _generate(self, path, data):
         # A full native server must not consume the global allowance while queuing.

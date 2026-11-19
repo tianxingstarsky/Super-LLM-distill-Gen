@@ -1397,6 +1397,62 @@ def test_length_limit_archives_only_declared_progress_and_attributes_this_occurr
         assert fact["previous_disclosure_ids"] == [clue["id"] for clue in row["disclosures"]]
 
 
+@pytest.mark.parametrize("repeating", [False, True])
+def test_completed_length_draft_returns_to_teaching_before_training_admission(repeating):
+    from lib.contexts.workflows.infrastructure.guided_answer_records import guided_port_response
+
+    premise = "four apples in each basket"
+    question = "There are three baskets and four apples in each basket. How many apples are there? Explain."
+    source = validate_source(dict(id="baskets", question=question, gold=dict(kind="number", value="12"),
+                                  answer_requirement="worked_solution", source_reasoning="Three groups of four give twelve."))
+    unsupported = "This condition is not met."
+    draft = (unsupported + "\n") * (48 if repeating else 1) + "I should check the count of"
+    hint = "Match the number of baskets to the amount in one basket."
+    solution = "Three groups of four give 3 × 4 = 12."
+    roles = []
+    def request(role, index, messages, schema):
+        roles.append(role)
+        if role == "student" and index == 1:
+            response = dict(content=draft, reasoning_content="", finish_reason="length")
+            return guided_port_response(response, {"chat_template_kwargs": {"enable_thinking": False}}, role, "4.6.0")
+        if role == "student":
+            assert unsupported not in str(messages) and hint in str(messages)
+            return dict(content=solution + "\nFinal answer: 12", reasoning_content="", finish_reason="stop")
+        packet = json.loads(messages[-1]["content"])
+        if role in {"disclosure_draft", "disclosure"}:
+            observation = packet["current_difficulty"]
+            assert observation["receipt"] == "001-student.json" and observation["submitted_answer_status"] == "not_checked"
+            assert all(draft[s["start"]:s["end"]] == s["text"] for s in observation["unverified_excerpts"])
+            assert sum(len(s["text"]) for s in observation["unverified_excerpts"]) <= 1200
+            assert packet["private_source_reference"]["attributed_source_reasoning"] == source["source_reasoning"]
+            assert unsupported not in str(packet["established_evidence"])
+        if role == "disclosure_draft":
+            value = dict(decision="offer", question_quote=premise, bridge=premise + ".", hint=hint,
+                         reason="Identify one group before multiplying.")
+        elif role == "disclosure":
+            value = dict(decision="release", citations=[dict(evidence_id="question", quote=premise)],
+                         bridge=packet["proposed_next_teacher_disclosure"]["bridge"], reason="The count per group is explicit.",
+                         pairing=dict(student_fit=True, evidence_support=True, history_fit="first"))
+        elif role == "coach":
+            value = dict(decision="supported", diagnosis="The product uses the stated sizes.", reusable=[],
+                         independent_approaches=[])
+        else:
+            assert role == "teacher_final_answer" and unsupported not in str(packet)
+            value = dict(decision="deliver", explanation=solution, conclusion="12", evidence_ids=["a2.s1"], reason="")
+        return dict(content=json.dumps(value), reasoning_content="", finish_reason="stop")
+    case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version="4.6.0")
+    assert roles == ["student", "disclosure_draft", "disclosure", "student", "coach", "teacher_final_answer"]
+    assert case["attempts"][0]["student"]["content"] == draft and draft in str(case["public_dialogue"][1]["content"])
+    assert case["verification"]["answer_key_check"] is True and case["final_answer_provenance"]["attempt"] == 2
+    assert case["messages"][-1]["content"].endswith("12")
+    trace = case["messages"][-1]["reasoning_content"]
+    assert case["status"] == ("unverified" if repeating else "accepted")
+    assert (unsupported in trace) == repeating and hint in trace and solution in trace
+    if repeating:
+        assert case["verification"]["issue"] == "repetitive_truncated_trajectory_requires_review"
+        assert case["attempts"][0]["truncated_observation"]["repetition"]["count"] == 48
+
+
 def test_length_limit_never_promotes_native_thinking_or_unchecked_statements():
     rule = {"id": "k-set", "kind": "finite_set", "source": "enumeration",
             "variable": "k", "values": [1, 4, 7], "meaning": "该变量的取值经过枚举核对。"}

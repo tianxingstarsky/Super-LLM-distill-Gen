@@ -1,5 +1,7 @@
 # Agent 功能与维护入口
 
+本地披露式师生流程由 `GenerateGuidedAnswer` 调度。`guided_llama.py` 按已冻结的角色、模型和思考开关决定采样；生成收据保存实际发包。4.6 支持教师从学生耗尽输出容量的首稿继续指导，4.7 为原版 Qwen3.5 接入分角色文本采样，并在正式答案中检查私有证据编号。[运行与采样说明](../../lib/contexts/workflows/infrastructure/README.md) · [训练数据的循环筛查](../../lib/contexts/training/infrastructure/README.md)
+
 原生 CoT 返工 v8 使用 DeepSeek Beta 前缀续写：`ContinueNativePrefix` 复用原推理与已有评审，`NativeFeedbackAdapter.continue_prefix` 绑定原作者，模型设施以空 `assistant.content`、`prefix=true` 和完整 `reasoning_content` 发送一次请求。评审意见保留 system 归属，原推理与本次新增推理分别存档，训练正文逐字组合；不调用反馈工具、不增加独立评审。新建且所有原生作者均固定为官方 DeepSeek Chat 的任务采用 v8，其他供应商及旧冻结任务保留原协议。实际工具历史不能经删除伪装成无工具续写。使用、验证与限制见 [Beta 原生续写](native-prefix-continuation-2026-11-15.md)。下文的 v7 及工具反馈段落记录历史协议，不覆盖 v8 接线。
 
 新版 Agent 数据制作由工作流的轨迹编辑作者处理，既有工具重放仍是另一条明确用途。Google 经验进入实际 CoT 编辑请求，流程建议与原执行分开，最终答案及工具证据由程序保留。范围与材料见 [Agent 轨迹优化](agent-trajectory-evolution-2026-11-03.md)。

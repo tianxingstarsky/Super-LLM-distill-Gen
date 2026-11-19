@@ -5,7 +5,8 @@ import unicodedata
 
 from .guided_answers import check_direct_answer, contains_chat_control, number
 
-TEACHER_REASONING_VERSIONS = frozenset({"4.5.0", "4.5.1"})
+TRUNCATED_TUTORING_VERSIONS = frozenset({"4.6.0", "4.7.0"})
+TEACHER_REASONING_VERSIONS = frozenset({"4.5.0", "4.5.1"}) | TRUNCATED_TUTORING_VERSIONS
 TEACHER_FINAL_VERSIONS = frozenset({"4.4.0", "4.4.1"}) | TEACHER_REASONING_VERSIONS
 
 _QUANTITY = r"[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:/\d+|[eE][+-]?\d+)?"
@@ -114,7 +115,24 @@ def _check_surface(conclusion, source):
     return check_direct_answer(conclusion, gold, include_mismatch=True)
 
 
-def inspect_teacher_delivery(proposed, source, reviewed_steps, form):
+def _discloses_private_evidence_id(public_text, question, reviewed_steps):
+    """Only an identifier already visible in the user's question may be cited publicly."""
+    public_text = unicodedata.normalize("NFKC", public_text).casefold()
+    question = unicodedata.normalize("NFKC", question).casefold()
+    for step_id in reviewed_steps:
+        literal = unicodedata.normalize("NFKC", step_id).casefold()
+        if not literal or literal not in public_text:
+            continue
+        # Segment identifiers are ASCII; Chinese words and sentence punctuation can touch them.
+        # A qualified name or a longer numbered identifier is a different literal.
+        token = re.compile(r"(?<![a-z0-9_])(?<![a-z0-9_][.-])" + re.escape(literal)
+                           + r"(?![a-z0-9_]|[.-][a-z0-9_])")
+        if token.search(public_text) and not token.search(question):
+            return True
+    return False
+
+
+def inspect_teacher_delivery(proposed, source, reviewed_steps, form, *, protect_evidence_ids=False):
     """Validate both public fields before joining them into the actual training target."""
     def reject(issue, *, match=None):
         return {"format_ok": False, "answer": None, "answer_matches": match, "issue": issue}, ""
@@ -137,6 +155,8 @@ def inspect_teacher_delivery(proposed, source, reviewed_steps, form):
         return reject("teacher_final_unbound_evidence")
     if any(contains_chat_control(s) or _PRIVATE.search(s) for s in (explanation, conclusion)):
         return reject("teacher_final_contains_private_material")
+    if protect_evidence_ids and _discloses_private_evidence_id(explanation + "\n" + conclusion, source["question"], reviewed_steps):
+        return reject("teacher_final_contains_private_evidence_id")
     check = _check_surface(conclusion, source)
     if not check or not check["format_ok"] or not check["answer_matches"]:
         return reject("teacher_final_conclusion_does_not_match_key", match=check and check["answer_matches"])

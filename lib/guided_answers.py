@@ -17,6 +17,10 @@ def main():
     cli.add_argument("--coach-model", help="Tutor used for disclosure and review; protocol 4.4 also uses it to write the final answer after a verified solution")
     cli.add_argument("--student-api-key-env")
     cli.add_argument("--coach-api-key-env")
+    for role in ("student", "coach"):
+        cli.add_argument(f"--{role}-sampling", choices=("auto", "server", "qwen3.5-0.8b", "qwen3.5-9b"),
+                         help="Local text sampling profile. Use the model size for opaque aliases. "
+                              "New runs auto-detect standard Qwen names and otherwise use server defaults.")
     cli.add_argument(
         "--coach-thinking",
         action=argparse.BooleanOptionalAction, default=None,

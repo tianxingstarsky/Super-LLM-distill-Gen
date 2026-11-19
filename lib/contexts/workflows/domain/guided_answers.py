@@ -5,6 +5,7 @@ import json
 import re
 import unicodedata
 
+from lib.contexts.datasets.contracts import repeated_reasoning_lines
 from lib.prompts.workflow_guided_answers import FINAL_DELIVERY_HINTS, HINTS
 from .guided_teaching_steps import validate_verified_steps
 
@@ -343,7 +344,29 @@ def check_direct_answer(text, gold, *, include_mismatch=False):
     return None
 
 
-def student_reasoning_trace(attempts, question):
+def truncated_student_observation(student, gold, attempt):
+    """Describe a completed but unfinished non-thinking draft without promoting its prose to evidence."""
+    text = student.get("content") or ""
+    if (not gold or student.get("completed_student_thinking_disabled") is not True
+            or student.get("finish_reason") != "length" or student.get("reasoning_content")
+            or not any(c.isalnum() for c in text) or contains_chat_control(text)
+            or answer_tail(text)[1] or check_direct_answer(text, gold, include_mismatch=True)):
+        return None
+    spans = [(0, len(text))] if len(text) <= 1200 else [(0, 600), (len(text) - 600, len(text))]
+    observation = {
+        "source_field": "student.content", "receipt": f"{attempt:03}-student.json",
+        "finish_reason": "length", "length_characters": len(text), "excerpted": len(spans) > 1,
+        "unverified_excerpts": [{"start": a, "end": b, "text": text[a:b]} for a, b in spans],
+    }
+    # Count recurring complete, substantive lines. An isolated repeated equation
+    # or an ordinary correction is insufficient to withhold the reviewed solution.
+    repetition = repeated_reasoning_lines(text)
+    if repetition:
+        observation["repetition"] = repetition
+    return observation
+
+
+def student_reasoning_trace(attempts, question, *, verified_truncated_only=False):
     """Project the actual unaided derivation or the chronological public solving dialogue."""
     if len(attempts) == 1:
         reply = attempts[0]["student"]["content"]
@@ -356,7 +379,11 @@ def student_reasoning_trace(attempts, question):
     for attempt in attempts:
         index = attempt["attempt"]
         label = f"我的第 {index} 次作答" if chinese else f"My attempt {index}"
-        blocks.append(label + "\n" + attempt["student"]["content"])
+        text = attempt["student"]["content"]
+        if verified_truncated_only and attempt.get("truncated_observation"):
+            text = "\n".join(f["text"] for f in attempt.get("program_confirmed", []))
+        if text:
+            blocks.append(label + "\n" + text)
         if "formal_answer" in attempt:
             label = "我当时给出的答复" if chinese else "The answer I gave at that point"
             blocks.append(label + "\n" + attempt["formal_answer"]["response"]["content"])
