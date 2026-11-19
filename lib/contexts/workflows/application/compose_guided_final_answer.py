@@ -5,13 +5,18 @@ import json
 
 from ..domain.guided_answers import assemble
 from ..domain.guided_teacher_delivery import inspect_teacher_delivery, requested_delivery
-from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, teacher_final_schema
+from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_NECESSITY, VERSION, teacher_final_schema
 
 
-def compose_guided_final_answer(request, source, index, segments, verified_conclusion, *, reasoning_trace=None):
+def compose_guided_final_answer(request, source, index, segments, verified_conclusion, *, reasoning_trace=None,
+                                protocol_version=VERSION):
     steps = {s["id"]: s["text"] for s in segments}
     form = requested_delivery(source)
     system = TEACHER_FINAL_ANSWER
+    if protocol_version == "4.4.1":
+        system += "\n\n" + TEACHER_FINAL_NECESSITY
+    elif protocol_version != "4.4.0":
+        raise ValueError("unsupported teacher final-answer protocol")
     if source.get("task_system"):
         system += "\n\nOriginal task system instruction:\n" + source["task_system"]
     materials = {

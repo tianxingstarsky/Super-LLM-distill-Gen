@@ -20,8 +20,10 @@ def test_bill_subtotal_is_distinct_from_explicit_final_total():
     assert not check["format_ok"] and not public
 
 
-@pytest.mark.parametrize("teacher_answer,accepted", [("5", True), ("1", False)])
-def test_same_reviewed_work_reaches_teacher_for_final_delivery(tmp_path, teacher_answer, accepted):
+@pytest.mark.parametrize("teacher_answer,accepted,protocol", [
+    ("5", True, "4.4.0"), ("5", True, "4.4.1"), ("1", False, "4.4.1"),
+])
+def test_same_reviewed_work_reaches_teacher_for_final_delivery(tmp_path, teacher_answer, accepted, protocol):
     question = "Add two and three and show why."
     instruction = "Use ordinary arithmetic."
     reasoning = "Combining two and three gives five."
@@ -62,9 +64,10 @@ def test_same_reviewed_work_reaches_teacher_for_final_delivery(tmp_path, teacher
     root = tmp_path / "run"
     endpoints = {name: Endpoint(name) for name in ("student", "coach")}
     summary = run_guided_cases(source, root, endpoints, {"version": "example"}, 1,
-                               workers=1, protocol_version="4.4.0")
+                               workers=1, protocol_version=protocol)
     assert [name for name, _ in calls] == ["student", "coach", "coach"]
     final_messages = calls[-1][1]["messages"]
+    assert ("the candidate attains" in final_messages[0]["content"]) == (protocol == "4.4.1")
     assert {"role": "user", "content": question} in final_messages
     assert any(turn["role"] == "system" and instruction in turn["content"] for turn in final_messages)
     assert any(reasoning in turn["content"] for turn in final_messages)

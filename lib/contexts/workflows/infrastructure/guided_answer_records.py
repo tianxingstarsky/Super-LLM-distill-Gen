@@ -16,12 +16,12 @@ from lib.contexts.models.contracts import ModelQueueTimeout
 from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
-from ..domain.guided_teacher_delivery import uses_direct_first
+from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, uses_direct_first
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0", "4.4.0"}
+PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0"} | TEACHER_FINAL_VERSIONS
 VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"} | PAIRED_DISCLOSURE_VERSIONS
 TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"} | VERIFIED_STEP_VERSIONS
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS
@@ -358,7 +358,7 @@ def run_guided_cases(
                 previous = saved.get("attempts", [])
                 replayed = None
                 if (reuse_first_from and role == "student" and index == 1
-                        and (template_version != "4.4.0" or first_direct)):
+                        and (template_version not in TEACHER_FINAL_VERSIONS or first_direct)):
                     replayed = replay_first(
                         reuse_first_from,
                         source["id"],

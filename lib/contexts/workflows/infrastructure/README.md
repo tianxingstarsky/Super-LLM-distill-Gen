@@ -4,7 +4,7 @@
 
 本地推理先按服务报告的 `/slots` 申请跨进程会话槽，再申请全局额度。多个任务或模型别名指向同一服务时共享槽位。单槽教师排队期间，独立学生服务仍可使用剩余全局额度。对话生成与正式答案前缀续写采用相同顺序。
 
-`guided_llama.py` 从本地服务读取真实上下文和会话容量。正式答案使用同一学生服务的原生模板与分词器，在闭合的思考标签后继续生成。核验对象是这次生成的正式答案。运行 `tests/test_guided_answers.py` 可检查续写、断点和导出。教师提示的独立审核进入 Google ReasoningBank 时记录为 `reviewed_teacher_disclosure`，其结果只用于教师经验。
+`guided_llama.py` 从本地服务读取真实上下文和会话容量。4.4 起，披露式推导完成后，教师读取用户原话、已核查的学生推导和答案键，交付符合题意的过程与结论。4.4.1 要求声称唯一、最早或最优时给出排除其他可能的关键依据。旧快照按原协议继续，包括用学生模板在闭合思考标签后续写答案的任务。核验对象是实际交付给用户的文本。运行 `tests/test_guided_teacher_delivery.py` 和 `tests/test_guided_answers.py` 可检查交付、断点和导出。教师提示的独立审核进入 Google ReasoningBank 时记录为 `reviewed_teacher_disclosure`，其结果只用于教师经验。
 
 4.1 的 `--verified-step-receipts` 接受操作者指定的独立校验器输出。清单使用 `guided-teaching-verification/v1` 及 `receipts` 摘要数组。使用前先核对校验器实际验证了哪些操作。任务保存规范化清单及其摘要，恢复和单独导出均核对冻结版本。教师选择操作的 ID 后，独立核查仍决定这一步是否适用于当前学生。学习记录保留被选中的实际操作文本。
 

@@ -1,10 +1,12 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.4.0"
+VERSION = "4.4.1"
 
 TEACHER_FINAL_ANSWER = """You are the answer author. Deliver a self-contained answer to the original user in the requested language, notation, units and order. The packet separates the user's question and instructions from the student's reviewed derivation and the private reference key. Use the deductions that actually support the result. Compose a clear, sufficient solution in your own words; the reader will see your public answer and must be able to follow its decisive inference. If the user requests the result alone, keep explanation empty and give precisely that result. Otherwise explain why the conclusion follows, without repeating the whole exploration. Honor an explicit request to show work even when a single number matches the key.
 
 Submit decision deliver, an explanation, and the actual public conclusion. The conclusion is the value, choice or ordered identifiers in the presentation the user requested, including required units. It will appear directly after the explanation. Do not put a second proposed answer, a private check, a grading note or a bare restatement of the key in the explanation. Cite the IDs of the reviewed student steps you used in evidence_ids; the IDs are private. Leave reason empty when delivering. If the accepted work conflicts with the task or key, or its evidence cannot support the requested answer, submit insufficient, leave the public fields empty, and describe the actual gap in reason. A matching key cannot supply a missing derivation."""
+
+TEACHER_FINAL_NECESSITY = """Match the strength of each public claim to its proof. Checking a candidate against the conditions establishes that it works. If the claim is that something is forced, unique, earliest or optimal, consider what other possibility the cited premises still allow. Show which conditions rule out the remaining alternatives, or give a bound that the candidate attains. Testing one alternative can expose a missing premise; ruling out one alternative settles the claim only if it exhausts what remains. Include the decisive link in the public explanation when the user wants reasons. If only a feasible example is requested, give one and show it satisfies the conditions."""
 
 
 def teacher_final_schema(step_ids):

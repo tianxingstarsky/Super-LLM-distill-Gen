@@ -191,7 +191,7 @@ API 一词豁免整个推理；无来源的数值要求仍拦截，未决也不�
 
 4.3 的学生按原题辨认所求对象、约束、信息边界和交付形式。教师用相同题意审查下一步提示。首答只交结果且核验正确的题继续分流到无思考样本。进入披露后，下一轮学生能看到已成立的前缀、独立发现和自己先前提出的可用方法。即使中间算错，后面一句独立成立的方法也可保留。原评审须指出学生原句所属片段、能独立支持它的唯一题面引文及依据。程序检查原文位置，在收据保存出处；私有评语不进入学生请求。方法是否足以推出结论仍需核验。
 
-逐轮学生原稿与实际发布的教师提示按顺序构成训练 `reasoning_content`；完成单轮独立推导时使用原稿推导部分。正式答案由学生接在关闭的 `</think>` 后另行交付。显式要求 `worked_solution` 的任务如果仅交付正确数值或标签，仍欠解释。已有任务按各自冻结版本续跑。回归入口为 `tests/test_guided_answers.py` 和 `tests/test_guided_student_approaches.py`。
+逐轮学生原稿与实际发布的教师提示按顺序构成训练 `reasoning_content`。完成单轮独立推导时使用原稿推导部分。4.3 由学生在闭合思考标签后续答。4.4 起，训练消息的 `content` 使用教师的正式交付。4.4.1 进一步要求教师说明哪些条件保证唯一、最早或最优，或给出可达到的界。仅需一个可行解的题，展示它符合条件即可。程序核对公开结论、输出格式及依据片段的归属。解释的语义正确性仍需另有证据。回归入口为 `tests/test_guided_answers.py`、`tests/test_guided_student_approaches.py` 和 `tests/test_guided_teacher_delivery.py`。
 
 `lib/prompts/workflow_guided_answers.py` 持有作答者、无答案来源补写和私有指导员的角色模板。`GenerateGuidedAnswer` 运行两种来源用例，共享状态、线索次序、原文段落身份和答案键判定由 `workflows/domain/guided_answers.py` 维护。组合根 `lib/bootstrap/guided_answers.py` 接入 llama-server 原生非思考模板、审核请求、逐调用收据和 JSONL 投影。
 

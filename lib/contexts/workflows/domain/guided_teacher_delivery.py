@@ -5,6 +5,7 @@ import unicodedata
 
 from .guided_answers import check_direct_answer, contains_chat_control, number
 
+TEACHER_FINAL_VERSIONS = frozenset({"4.4.0", "4.4.1"})
 
 _QUANTITY = r"[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:/\d+|[eE][+-]?\d+)?"
 _FIGURES = re.compile(r"(?<![\w.])(" + _QUANTITY + r")(?!\w|\.\d)", re.ASCII)
@@ -42,7 +43,7 @@ def requested_delivery(source):
 
 def uses_direct_first(source, protocol_version):
     return (source.get("answer_requirement") == "final_only"
-            and (protocol_version != "4.4.0" or requested_delivery(source) == "final_only"))
+            and (protocol_version not in TEACHER_FINAL_VERSIONS or requested_delivery(source) == "final_only"))
 
 
 def _words(text):
