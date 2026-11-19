@@ -19,7 +19,8 @@ from .guided_llama import DIRECT_ANSWER_GRAMMARS, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1", "4.2.0"}
+PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1"}
+VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"} | PAIRED_DISCLOSURE_VERSIONS
 TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"} | VERIFIED_STEP_VERSIONS
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS
 FINAL_CONTINUATION_VERSIONS = {"3.7.0"} | DIRECT_SYNTAX_VERSIONS
@@ -118,6 +119,31 @@ def replay_first(path, ident, payload, prior_binding):
     }
 
 
+def replay_matching_call(root, ident, role, index, payload, prior_binding):
+    relative = location(Path("."), ident) / f"{index:03}-{role}.json"
+    path = root / relative
+    if not path.exists():
+        return None
+    raw = path.read_bytes()
+    prior = json.loads(raw)
+    envelope = {"binding": prior_binding, "id": ident, "payload": prior["request"]}
+    if prior["identity"] != digest(envelope) or (prior["role"], prior["attempt"]) != (role, index):
+        raise ValueError("prior guided receipt does not match its original task and role")
+    wire = wire_body(payload)
+    if wire != wire_body(prior["request"]):
+        return None
+    if prior.get("origin"):
+        raise ValueError("matching receipt is itself a replay; use its original run for this call")
+    if prior["status"] != "complete" or prior["attempts"][-1]["status"] != "complete":
+        raise ValueError("identical prior call has no confirmed response")
+    return prior["response"], {
+        "kind": "replayed_matching_call", "source_binding": prior_binding,
+        "source_receipt": relative.as_posix(), "source_receipt_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_identity": prior["identity"], "wire_request_sha256": hashlib.sha256(wire).hexdigest(),
+        "response_sha256": digest(prior["response"]),
+    }
+
+
 def run_guided_cases(
     input_path,
     output,
@@ -133,6 +159,7 @@ def run_guided_cases(
     workers=4,
     reuse_first_from=None,
     verified_step_receipts=None,
+    reuse_matching_from=None,
 ):
     output.mkdir(parents=True, exist_ok=True)
     with FileLock(str(output / "run.lock"), timeout=0):
@@ -142,7 +169,7 @@ def run_guided_cases(
         if protocol_version and protocol_version != template_version:
             raise ValueError("the requested protocol differs from the frozen run")
         if until_correct is None:
-            until_correct = frozen_config.get("until_correct", False) if frozen_config else template_version == "4.2.0"
+            until_correct = frozen_config.get("until_correct", False) if frozen_config else template_version in PAIRED_DISCLOSURE_VERSIONS
         if until_correct and template_version not in TEACHER_DISCLOSURE_VERSIONS:
             raise ValueError("progress-based continuation requires guided protocol 3.9.0 or later")
         registry, trusted = verified_step_registry(output, verified_step_receipts, frozen_config)
@@ -212,6 +239,16 @@ def run_guided_cases(
             config["until_correct"] = until_correct
         if registry:
             config["verified_step_registry_id"] = digest(registry)
+        if reuse_matching_from:
+            if reuse_matching_from.resolve() == output.resolve():
+                raise ValueError("cross-run replay requires a different source run")
+            prior_bytes = (reuse_matching_from / "manifest.json").read_bytes()
+            prior = json.loads(prior_bytes)
+            for key in ("endpoints", "input_sha256", "experience", "verified_step_registry_id"):
+                if prior.get(key) != config.get(key):
+                    raise ValueError(f"cross-run replay requires the same {key}")
+            config["reuse_matching"] = {"source_binding": digest(prior),
+                                        "source_manifest_sha256": hashlib.sha256(prior_bytes).hexdigest()}
         if reuse_first_from:
             if reuse_first_from.resolve() == output.resolve():
                 raise ValueError(
@@ -270,13 +307,19 @@ def run_guided_cases(
                         "request outcome unresolved; explicit retry required"
                     )
                 previous = saved.get("attempts", [])
+                replayed = None
                 if reuse_first_from and role == "student" and index == 1:
-                    response, origin = replay_first(
+                    replayed = replay_first(
                         reuse_first_from,
                         source["id"],
                         payload,
                         config["reuse_first"]["source_binding"],
                     )
+                elif reuse_matching_from:
+                    replayed = replay_matching_call(reuse_matching_from, source["id"], role, index, payload,
+                                                    config["reuse_matching"]["source_binding"])
+                if replayed:
+                    response, origin = replayed
                     atomic_json(
                         checkpoint,
                         dict(
@@ -417,7 +460,9 @@ def export(input_path, output):
                     for item in event["attempts"]:
                         status = item["status"]
                         if status == "replayed":
-                            calls["replayed_first"] += 1
+                            kind = ("replayed_matching" if event.get("origin", {}).get("kind") == "replayed_matching_call"
+                                    else "replayed_first")
+                            calls[kind] = calls.get(kind, 0) + 1
                         elif status == "complete":
                             calls["new_completed"] += 1
                         elif status in {"interrupted", "pending"}:
@@ -466,7 +511,7 @@ def export(input_path, output):
                     },
                 )
                 for attempt in case["attempts"]:
-                    paired_protocol = manifest["template_version"] == "4.2.0"
+                    paired_protocol = manifest["template_version"] in PAIRED_DISCLOSURE_VERSIONS
                     delivery = disclosure_delivery(case, attempt, folder) if paired_protocol else None
                     for work in attempt.get("disclosure_work", []):
                         published = bool(work.get("validated_citations") and attempt.get("disclosure"))

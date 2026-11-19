@@ -183,3 +183,5 @@ CoT 协议 7 在生成中完成草稿推敲：联合生成只请求一次，原�
 `OptimizeNativeSft` 为冻结 `native_sft_review_evolution_version=1` 的普通指导式原生 SFT 执行一次同题重答。它认证首稿作者绑定，复用原问题、契约和已认证资料，将同次评审的候选通用经验与临时修正要求分别放入原生作者 SYSTEM 指令。原首稿和完整推理另行存档，不投喂为新的用户发言。实际作者请求与失败结果均有检查点；二稿保留全部本地校验，语义状态为 `not_assessed`，不再次购买评审，也不计入质量通过或饱和证据。旧配方及显式 `repair_inputs` 继续原合同。验证：`tests/test_native_sft_review_evolution_application.py`。
 
 `guided_experience.py` 将带金标的续写尝试投影到既有 Google ReasoningBank，依照实际时间顺序保留学生当时收到的公开信息。冻结的检索结果供后续答题方采用。
+
+`GenerateGuidedAnswer` 在 4.2.1 中通过 `repair_guided_student_evidence.py` 区分学生的推导错误和审查员的证据引用错误。审查引用自身、尚未出现的步骤或无效编号时，只向审查员提交一次修正请求。原始判决、引用错误、修正响应与对应学生轮次均保存。审查员无法证实这些发现时，任务进入 `awaiting_guidance`，可在原学生稿上继续工作。只有通过推导审查并核对金标的稿件才能进入正式答复阶段。

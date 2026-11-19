@@ -49,6 +49,9 @@ def main():
     cli.add_argument("--protocol-version", help="Pin a supported protocol when creating a new run")
     cli.add_argument("--verified-step-receipts", type=Path,
                      help="Trust teaching microsteps independently checked by the nominated source verifier. The run freezes its receipt registry.")
+    cli.add_argument("--reuse-matching-from", type=Path,
+                     help="Reuse completed calls from another run of the same input, experience and endpoints "
+                          "when the exact request bytes, role and checkpoint match")
     cli.add_argument("--until-correct", action=argparse.BooleanOptionalAction, default=None,
                      help="Continue while verifiable guidance is available (default for new 4.2 runs). "
                           "Use --no-until-correct for a bounded experiment")

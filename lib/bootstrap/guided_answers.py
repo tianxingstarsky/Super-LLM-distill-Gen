@@ -48,6 +48,7 @@ def generate_guided_cases(
     workers=4,
     reuse_first_from=None,
     verified_step_receipts=None,
+    reuse_matching_from=None,
 ):
     endpoints = {}
     if not export_only:
@@ -104,4 +105,5 @@ def generate_guided_cases(
         workers=workers,
         reuse_first_from=reuse_first_from,
         verified_step_receipts=verified_step_receipts,
+        reuse_matching_from=reuse_matching_from,
     )

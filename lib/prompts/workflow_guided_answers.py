@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.2.0"
+VERSION = "4.2.1"
 DISCLOSURE_AUTHOR = """You are the tutor writing your own next contribution to a learner's developing solution. Read your previous published hints in order. Use the problem and what the learner has actually established to decide what small piece is still missing. In bridge, explain in the learner's language how the previous step and its particular evidence bring the learner to this point. In hint, contribute just the next useful idea, fact or operation; leave its application to the learner. Where supplied, the private reference bounds how much may be disclosed and is not a script. When no reference is supplied, work from the cited problem and learner evidence. Do not announce the result, invent a premise, describe private review, or repeat a hint in new words. If asked to revise, address the recorded reason for withholding the draft by reducing the step or grounding it more carefully. Put a private explanation of your choice in reason. Return decision offer with both public fields, or insufficient with empty public fields when no justified next step is available."""
 
 
@@ -17,6 +17,10 @@ GROUNDED_AUTHOR_GUIDANCE = """When the learner submits only a candidate answer, 
 GROUNDED_HINT_REVIEW = """A learner who has not shown work can still test a condition from the problem. Judge whether the proposed public words give one feasible next action. Check the writer's question_quote for the particular relation or value needed. Merely repeating the candidate, restating the goal, quoting a topic word or praising an unverified guess does not establish a useful step. Reject a fabricated account of how the learner got a result, a false assertion or the disclosure of the solution. Do not withhold a grounded weak hint solely because the learner has not yet applied it. Distinguish multiple necessary facts from a single fact when the question permits a set."""
 
 GROUNDED_STUDENT_REVIEW = """Only the submitted final value is known when no derivation is present. Never infer the route used from a guess. For a reusable step name an independently checkable task premise, checked arithmetic, or an earlier supported step. Self-citations, future dependencies and circular support do not establish student work."""
+
+ORDERED_STUDENT_EVIDENCE = """Assess whether the actual solution is sound, including the reasoning that determines the final result. In your diagnosis, identify the decisive inference or the first actual error. Reusable entries describe independent findings worth retaining; prose headings and repeated restatements need no entries. For a finding use its segment_id. Its basis is the task premise ("question"), a verified calculation ("arithmetic"), or the one-based position of an earlier supported segment in ordered_segment_ids. List additional earlier dependencies as one-based positions. The finding under review cannot support itself. A matching final key alone cannot establish the derivation."""
+
+REPAIR_STUDENT_EVIDENCE = """You are correcting your private assessment's evidence references. Re-read the original problem and student work. Keep the previously judged boundary and diagnosis; repair the listed findings using only actual supporting premises, checked arithmetic or strictly earlier segments. Preserve the identity of each originally claimed finding. If the findings or the judgment cannot be justified, choose cannot_verify and explain why. This response is private and never instructs the student."""
 
 VERIFIED_STEP_AUTHOR = """Select the smallest useful next teaching operation from the supplied options, taking account of the learner's observed difficulty, their established work and the tutor's earlier published steps. The verifier checked the operation against the task; you judge whether it helps here. Selecting an ID publishes its original operation only if an independent reader approves. Return the selection and a private reason. If no offered option fits, you may write your own grounded continuation using offer plus bridge, hint and question_quote. When there is no defensible next move, return insufficient. Never attribute a premise from the task to the learner."""
 
@@ -143,7 +147,30 @@ ANCHORED_REVIEW = """You are the private solution tutor. Help the author build a
 SINGLE_DECISION_REVIEW = """You are the private tutor. Compare the learner's current solution with the task and the available evidence. A correct final number needs a sound derivation. Select one decision. Choose supported for a complete solution. For a demonstrated defect choose revise at the first affected segment. Where the evidence is inconclusive choose uncertain at that segment. Use final_answer for an issue limited to the final answer. Explain the judgment privately. A later independent finding can be saved by its segment ID, basis and dependencies. The program releases the next piece of information. In a task with no key, assess whether the requested deliverable is supported by the available material."""
 
 
-def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=False):
+def ordered_finding_schema(segment_ids):
+    if not segment_ids:
+        return {"const": []}
+    kinds = []
+    # A range is shared in form across references; the serialized contract is
+    # linear in the number of steps, even when a solution has thousands of lines.
+    for position, segment in enumerate(segment_ids):
+        earlier = {"type": "integer", "minimum": 1, "maximum": position}
+        roots = {"type": "string", "enum": ["question", "arithmetic"]}
+        fields = {"segment_id": {"const": segment},
+                  "basis_id": {"anyOf": [roots, earlier]} if position else roots,
+                  "depends_on": {"type": "array", "items": earlier} if position else {"const": []}}
+        kinds.append({"type": "object", "properties": fields, "required": list(fields),
+                      "additionalProperties": False})
+    return {"type": "array", "items": {"anyOf": kinds}}
+
+
+def repair_finding_schema(finding_schema):
+    fields = {"decision": {"type": "string", "enum": ["correct_evidence", "cannot_verify"]},
+              "reason": {"type": "string"}, "reusable": finding_schema}
+    return {"type": "object", "properties": fields, "required": list(fields), "additionalProperties": False}
+
+
+def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=False, ordered_evidence=False):
     ref = {
         "type": "string",
         "enum": [*segment_ids, *(["answer"] if has_answer else [])],
@@ -187,6 +214,9 @@ def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=Fa
             "enum": ["supported", *(f"{verdict}:{anchor}" for verdict in ("revise", "uncertain")
                                     for anchor in (*segment_ids, "final_answer"))],
         }
+    if ordered_evidence:
+        fields = {"decision": fields["decision"], "diagnosis": fields["diagnosis"],
+                  "reusable": ordered_finding_schema(segment_ids)}
     return {
         "type": "object",
         "additionalProperties": False,

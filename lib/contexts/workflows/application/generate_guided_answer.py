@@ -6,6 +6,7 @@ from functools import partial
 from .review_guided_disclosure import (
     author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
 )
+from .repair_guided_student_evidence import check_or_repair_student_findings
 
 from ..domain.guided_answers import (
     assemble,
@@ -29,6 +30,7 @@ from lib.prompts.workflow_guided_answers import (
     COACH,
     DIRECT_STUDENT,
     GROUNDED_STUDENT_REVIEW,
+    ORDERED_STUDENT_EVIDENCE,
     SINGLE_DECISION_REVIEW,
     review_schema,
     SOURCE_COMPLETION_STUDENT,
@@ -49,7 +51,8 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         skip_acquired = protocol_version != "3.0.0"
-        paired = protocol_version == "4.2.0"
+        ordered_evidence = protocol_version == "4.2.1"
+        paired = ordered_evidence or protocol_version == "4.2.0"
         show_outcome = paired or protocol_version == "4.1.1"
         allow_catalog = show_outcome or protocol_version == "4.1.0"
         grounded = allow_catalog or protocol_version == "4.0.0"
@@ -70,10 +73,12 @@ class GenerateGuidedAnswer:
         marked_finals = truncated_progress or protocol_version == "3.4.0"
         single_decision = marked_finals or protocol_version == "3.3.0"
         anchored = single_decision or protocol_version == "3.2.0"
-        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4", "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9", "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2"}[protocol_version]
+        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4", "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9", "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2", "4.2.1": "v4.2.1"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
+        if ordered_evidence:
+            tutor_instruction += "\n\n" + ORDERED_STUDENT_EVIDENCE
         mode = "answer_key" if gold is not None else "source_reasoning_only"
         attempts = []
         status = "quarantine"
@@ -300,20 +305,25 @@ class GenerateGuidedAnswer:
                                            "The learner supplied no derivation."}
                 attempt["student_assessment_source"] = "independent_answer_key"
             else:
+                if ordered_evidence:
+                    material["ordered_segment_ids"] = version["submitted_ids"]
+                schema = review_schema(version["submitted_ids"], bool(answer_line), anchored=anchored,
+                                       single_decision=single_decision, ordered_evidence=ordered_evidence)
                 coach = self.request(
                     "coach", index, [
                         {"role": "system", "content": tutor_instruction},
                         {"role": "user", "content": json.dumps(material, ensure_ascii=False)},
-                    ], review_schema(version["submitted_ids"], bool(answer_line),
-                                     anchored=anchored, single_decision=single_decision),
+                    ], schema,
                 )
                 attempt["coach_response"] = coach
                 if coach["finish_reason"] != "stop":
                     issue = "coach_incomplete"
                     break
             try:
+                if not direct:
+                    assessment = json.loads(coach["content"])
                 review = validated_review(
-                    assessment if direct else json.loads(coach["content"]),
+                    assessment,
                     submitted,
                     answer_line,
                     anchored=anchored,
@@ -328,7 +338,17 @@ class GenerateGuidedAnswer:
                     )
             except (ValueError, TypeError):
                 issue = "invalid_coach_assessment"
+                if ordered_evidence:
+                    status = "awaiting_guidance"
                 break
+            if ordered_evidence and not direct:
+                resolved, problem = check_or_repair_student_findings(
+                    self.request, attempt, material, assessment, version["submitted_ids"], schema["properties"]["reusable"])
+                if problem:
+                    status, issue = "awaiting_guidance", problem
+                    attempt["coach_evidence_repair"]["issue"] = issue
+                    break
+                review["reusable"] = resolved
             attempt["coach"] = review
             # A checked contradiction and a blanket "supported" ruling cannot jointly
             # authenticate new statements. Reuse only prior evidence on this conflict.

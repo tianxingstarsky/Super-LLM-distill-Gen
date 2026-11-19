@@ -212,6 +212,11 @@ def test_three_round_http_history_uses_only_published_clues_and_freezes_resume(
             different, tmp_path / "mismatch", **args, reuse_first_from=root
         )
         assert mismatch["counts"]["interrupted"] == 1 and len(calls) == 6
+        matching = generate_guided_cases(path, tmp_path / "all-matching", **args, reuse_matching_from=root)
+        assert matching["model_calls"]["new_completed"] == 0 and matching["model_calls"]["replayed_matching"] == 6
+        assert matching["counts"]["accepted"] == 1 and len(calls) == 6
+        with pytest.raises(ValueError, match="same input_sha256"):
+            generate_guided_cases(different, tmp_path / "wrong-source", **args, reuse_matching_from=root)
     finally:
         server.shutdown()
         server.server_close()
@@ -761,6 +766,79 @@ def test_reusable_steps_cannot_self_authenticate_or_form_a_cycle_in_a_judged_pre
                                segments, 3) == 3
     assert shared_findings([claim(2, "arithmetic")], segments, segments[:1], "The source says there are two groups.")[
         "a1.s2"]["evidence_level"] == "program_checked_arithmetic_identity"
+
+
+def test_private_judge_self_references_get_one_evidence_repair_and_never_become_learner_difficulties():
+    from jsonschema import Draft202012Validator
+    from lib.contexts.workflows.domain.guided_student_evidence import normalize_student_findings
+    from lib.prompts.workflow_guided_answers import ordered_finding_schema
+
+    task = validate_source(dict(id="dinner", question="Four meals cost $20 each. One appetizer costs $10. "
+                                "What is the bill with a 20% tip?", gold=dict(kind="number", value="108"),
+                                answer_requirement="final_only"))
+    # Eighteen actual solution segments reproduce the failure mode seen on the dinner receipt.
+    student = ("List the orders.\nThere are four meals.\nEach costs twenty dollars.\n"
+               "The meal subtotal is four times twenty.\nThat is eighty dollars.\nThere is one appetizer.\n"
+               "Its price is ten dollars.\nAdd it to the meal subtotal.\nThe pre-tip bill is ninety dollars.\n"
+               "The tip rate is twenty percent.\nTwenty percent is one fifth.\nUse the pre-tip bill as the base.\n"
+               "A fifth of ninety is eighteen.\nThe gratuity is eighteen dollars.\nInclude that sum in the total.\n"
+               "Ninety plus eighteen gives one hundred eight.\nThe bill includes the appetizer.\n"
+               "It also includes the gratuity.\nFinal answer: 108")
+    ids = [f"a1.s{i}" for i in range(1, 19)]
+    def finding(sid, basis, dependencies=()):
+        return dict(segment_id=sid, basis_id=basis, depends_on=list(dependencies))
+    old = [finding(sid, sid) for sid in ids]
+    fixed = [finding(sid, "question" if i == 0 else i) for i, sid in enumerate(ids)]
+    grammar = Draft202012Validator(ordered_finding_schema(ids))
+    assert grammar.is_valid(fixed) and not grammar.is_valid(old)
+    assert not grammar.is_valid([finding(ids[1], 2)]) and not grammar.is_valid([finding(ids[1], 3)])
+    assert not grammar.is_valid([finding(ids[0], "question", [2])])
+    assert not normalize_student_findings([finding(ids[2], 4), finding(ids[1], 1, [3])], ids)[0]
+    normalized, errors = normalize_student_findings([finding(ids[2], 1, [2])], ids)
+    assert not errors and normalized == [finding(ids[2], "a1.s1", ["a1.s2"])]
+
+    def run(mode):
+        events = []
+        def request(role, index, messages, schema):
+            events.append(role)
+            if role == "student":
+                content = student if mode != "bad_reasoning" else "Four times twenty is one hundred.\nFinal answer: 108"
+            elif role == "coach":
+                packet = json.loads(messages[-1]["content"])
+                assert packet["program_check"]["answer_matches"] is True
+                if mode == "bad_reasoning":
+                    content = dict(decision="revise:a1.s1", diagnosis="Four times twenty is eighty.", reusable=[])
+                else:
+                    assert packet["ordered_segment_ids"] == ids
+                    content = dict(decision="supported", diagnosis="The pre-tip subtotal is 90 and the tip is 18.",
+                                   reusable=old)
+                content = json.dumps(content)
+            elif role == "coach_evidence_repair":
+                p = json.loads(messages[-1]["content"])
+                assert len(p["evidence_protocol_errors"]) == 18 and p["prior_private_assessment"]["reusable"] == old
+                content = json.dumps(dict(decision="correct_evidence", reason="I traced these claims to their inputs.",
+                                          reusable={"fixed": fixed, "repeat": old, "discard": []}[mode]))
+            elif role == "disclosure_draft":
+                content = json.dumps(dict(decision="insufficient", bridge="", hint="", question_quote="",
+                                          reason="No new publishable clue was proposed."))
+            else:
+                assert role == "final_answer"
+                content = "108"
+            return dict(content=content, reasoning_content="", finish_reason="stop")
+        result = GenerateGuidedAnswer(request).run(task, {"version": "test"}, 2, protocol_version="4.2.1")
+        return result, events
+    case, events = run("fixed")
+    assert events == ["student", "coach", "coach_evidence_repair", "final_answer"] and case["status"] == "accepted"
+    assert case["attempts"][0]["coach"]["reusable"][-1]["basis_id"] == ids[-2]
+    assert json.loads(case["attempts"][0]["coach_response"]["content"])["reusable"] == old
+    assert student.split("\nFinal answer:")[0] == case["messages"][-1]["reasoning_content"]
+    for mode in ("repeat", "discard"):
+        case, events = run(mode)
+        assert case["status"] == "awaiting_guidance" and case["continuation"]["reason"].startswith(
+            ("invalid_coach_evidence", "coach_evidence_changed"))
+        assert events == ["student", "coach", "coach_evidence_repair"] and not case["disclosures"]
+    case, events = run("bad_reasoning")
+    assert events == ["student", "coach", "disclosure_draft"] and case["status"] != "accepted"
 
 
 def test_verified_source_operations_require_external_identity_and_independent_contextual_release():
