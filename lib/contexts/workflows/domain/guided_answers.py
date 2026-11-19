@@ -1,6 +1,7 @@
 """Source contracts, answer-key checks and disclosure rules for guided answers."""
 
 from fractions import Fraction
+import json
 import re
 import unicodedata
 
@@ -9,6 +10,13 @@ from .guided_teaching_steps import validate_verified_steps
 
 
 _PRIVATE_MARKERS = re.compile(r"</?think>|<\|im_(?:start|end)\|>", re.I)
+
+
+def read_teacher_submission(response):
+    evidence = response.get("teacher_reasoning")
+    if evidence is not None and evidence["structured_output"] != "valid":
+        raise ValueError("the teacher did not submit the requested JSON schema")
+    return json.loads(response["content"])
 
 
 def number(value):

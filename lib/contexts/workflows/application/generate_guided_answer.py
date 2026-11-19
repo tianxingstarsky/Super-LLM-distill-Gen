@@ -23,6 +23,7 @@ from ..domain.guided_answers import (
     inspect_answer,
     inspect_formal_answer,
     prior_clue_evidence,
+    read_teacher_submission,
     rooted_prefix_count,
     shared_findings,
     student_reasoning_trace,
@@ -85,7 +86,8 @@ class GenerateGuidedAnswer:
         protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4",
                     "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9",
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
-                    "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1"}[protocol_version]
+                    "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
+                    "4.5.0": "v4.5"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -350,7 +352,7 @@ class GenerateGuidedAnswer:
             try:
                 proposed_approaches = []
                 if not direct:
-                    assessment = json.loads(coach["content"])
+                    assessment = read_teacher_submission(coach)
                     if task_analysis and isinstance(assessment, dict):
                         proposed_approaches = assessment.pop("independent_approaches", None)
                         if not isinstance(proposed_approaches, list):

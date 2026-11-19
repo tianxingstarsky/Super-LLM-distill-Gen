@@ -3,8 +3,8 @@
 import hashlib
 import json
 
-from ..domain.guided_answers import assemble
-from ..domain.guided_teacher_delivery import inspect_teacher_delivery, requested_delivery
+from ..domain.guided_answers import assemble, read_teacher_submission
+from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, inspect_teacher_delivery, requested_delivery
 from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_NECESSITY, VERSION, teacher_final_schema
 
 
@@ -13,7 +13,7 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
     steps = {s["id"]: s["text"] for s in segments}
     form = requested_delivery(source)
     system = TEACHER_FINAL_ANSWER
-    if protocol_version == "4.4.1":
+    if protocol_version in TEACHER_FINAL_VERSIONS and protocol_version != "4.4.0":
         system += "\n\n" + TEACHER_FINAL_NECESSITY
     elif protocol_version != "4.4.0":
         raise ValueError("unsupported teacher final-answer protocol")
@@ -45,7 +45,7 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
     proposal = None
     if response["finish_reason"] == "stop":
         try:
-            proposal = json.loads(response["content"])
+            proposal = read_teacher_submission(response)
         except (ValueError, TypeError):
             pass
     check, public = inspect_teacher_delivery(proposal, source, steps, form)

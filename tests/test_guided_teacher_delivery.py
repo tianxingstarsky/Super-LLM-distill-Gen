@@ -1,8 +1,11 @@
 import json
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 
 from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
+from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
 from lib.contexts.workflows.domain.guided_teacher_delivery import inspect_teacher_delivery, requested_delivery
 
 
@@ -85,3 +88,53 @@ def test_same_reviewed_work_reaches_teacher_for_final_delivery(tmp_path, teacher
         assert record["messages"][-1]["content"].rstrip().endswith("5")
     else:
         assert not exported
+
+
+def test_same_local_model_separates_student_and_teacher_reasoning_and_resumes(tmp_path):
+    case = {"id": "sum", "question": "Add two and three and show why.",
+            "gold": {"kind": "number", "value": "5"}, "answer_requirement": "worked_solution"}
+    source = tmp_path / "source.jsonl"
+    source.write_text(json.dumps(case), encoding="utf8")
+    sent = []
+    endpoint = GuidedChatEndpoint("http://localhost/v1", "one-model", None, 32768, local=True,
+                                  context=98304, pool=SimpleNamespace(acquire=nullcontext))
+
+    def http(url, body=None):
+        if url.endswith("/slots"):
+            return [{"n_ctx": 98304}]
+        if url.endswith("/models"):
+            return {"data": [{"id": "one-model"}]}
+        if url.endswith("/apply-template"):
+            return {"prompt": "\n".join(m["content"] for m in body["messages"])}
+        if url.endswith("/tokenize"):
+            return {"tokens": [1, 2, 3]}
+        sent.append(body)
+        if "response_format" not in body:
+            msg = {"content": "Combining two and three gives five.\nFinal answer: 5"}
+        elif "independent_approaches" in body["response_format"]["json_schema"]["schema"]["properties"]:
+            msg = {"content": json.dumps({"decision": "supported", "diagnosis": "The sum is justified.",
+                                          "reusable": [], "independent_approaches": []})}
+        else:
+            msg = {"reasoning_content": "private teacher work",
+                   "content": json.dumps({"decision": "deliver", "explanation": "Combining the groups gives five.",
+                                          "conclusion": "5", "evidence_ids": ["a1.s1"], "reason": ""})}
+        return {"choices": [{"message": msg, "finish_reason": "stop"}], "model": "one-model"}
+
+    endpoint.http = http
+    root = tmp_path / "run"
+    def run():
+        return run_guided_cases(source, root, {"student": endpoint, "coach": endpoint},
+                                {"version": "example"}, 1, workers=1)
+
+    summary = run()
+    assert summary["counts"]["accepted"] == 1
+    assert [req["chat_template_kwargs"]["enable_thinking"] for req in sent] == [False, True, True]
+    assert "reasoning_format" not in sent[0] and all(req["reasoning_format"] == "deepseek" for req in sent[1:])
+    folder = next((root / "cases").iterdir())
+    assessment = json.loads((folder / "001-coach.json").read_bytes())["response"]
+    final = json.loads((folder / "001-teacher_final_answer.json").read_bytes())["response"]
+    assert not assessment["teacher_reasoning"]["observed"]
+    assert final["teacher_reasoning"]["observed"] and final["teacher_reasoning"]["structured_output"] == "valid"
+    assert final["reasoning_content"] == "private teacher work"
+    assert "private teacher work" not in (root / "accepted.jsonl").read_text("utf8")
+    assert run() == summary and len(sent) == 3

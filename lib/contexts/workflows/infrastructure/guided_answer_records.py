@@ -2,6 +2,7 @@
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack
+from copy import copy
 import hashlib
 import json
 import os
@@ -17,7 +18,7 @@ from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
 from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, uses_direct_first
-from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, wire_body
+from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
@@ -245,11 +246,19 @@ def run_guided_cases(
             raise ValueError("max_attempts must be positive")
         if type(workers) is not int or not 1 <= workers <= 4:
             raise ValueError("worker limit must be between one and four")
-        capabilities = {role: ep.validate() for role, ep in endpoints.items()}
         if template_version not in SUPPORTED_VERSIONS:
             raise ValueError(
                 "unsupported frozen generator version; use offline export or its original release"
             )
+        coach = endpoints["coach"]
+        if isinstance(coach, GuidedChatEndpoint):
+            if coach is endpoints["student"]:
+                # One server may serve both roles, but thinking is a per-role request setting.
+                coach = copy(coach)
+                endpoints = {**endpoints, "coach": coach}
+            prior_coach = frozen_config["endpoints"]["coach"] if frozen_config else None
+            coach.configure_teacher_reasoning(template_version, prior_coach)
+        capabilities = {role: ep.validate() for role, ep in endpoints.items()}
         capacities = {}
         role_servers = {}
         for role, spec in capabilities.items():

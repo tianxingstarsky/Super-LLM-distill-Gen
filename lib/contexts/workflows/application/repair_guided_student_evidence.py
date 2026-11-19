@@ -3,6 +3,7 @@
 import json
 
 from lib.prompts.workflow_guided_answers import REPAIR_STUDENT_EVIDENCE, repair_finding_schema
+from ..domain.guided_answers import read_teacher_submission
 from ..domain.guided_student_evidence import normalize_student_findings
 
 
@@ -24,7 +25,7 @@ def check_or_repair_student_findings(request, attempt, material, assessment, seg
     if response["finish_reason"] != "stop":
         return None, "coach_evidence_repair_incomplete"
     try:
-        repair = json.loads(response["content"])
+        repair = read_teacher_submission(response)
     except (ValueError, TypeError):
         return None, "invalid_coach_evidence_repair"
     audit["assessment"] = repair

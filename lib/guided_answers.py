@@ -19,8 +19,8 @@ def main():
     cli.add_argument("--coach-api-key-env")
     cli.add_argument(
         "--coach-thinking",
-        action="store_true",
-        help="Enable native reasoning for a local tutor",
+        action=argparse.BooleanOptionalAction, default=None,
+        help="Enable or disable native reasoning for every local teacher role. New runs default to on from 4.5; resumed runs use their frozen setting.",
     )
     cli.add_argument(
         "--context-tokens",

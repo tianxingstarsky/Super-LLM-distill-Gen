@@ -6,7 +6,10 @@ from contextlib import ExitStack
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from jsonschema import Draft202012Validator
+
 from lib.contexts.models.contracts import ModelQueueTimeout
+from ..domain.guided_teacher_delivery import TEACHER_REASONING_VERSIONS
 from lib.prompts.workflow_guided_answers import FINAL_DELIVERY
 
 MIN_CONTEXT = 90_000
@@ -45,7 +48,7 @@ class GuidedChatEndpoint:
         local,
         context,
         pool,
-        thinking=False,
+        thinking=None,
         slot_pool_factory=None,
     ):
         self.url = url.rstrip("/")
@@ -68,7 +71,9 @@ class GuidedChatEndpoint:
         self.root = self.url.removesuffix("/v1")
         self.model = model
         self.cap = output_cap
-        self.thinking = thinking
+        self.requested_thinking = thinking
+        self.thinking = bool(thinking)
+        self.record_teacher_reasoning = False
         self.context = context
         self.slots = None
         self.headers = {"Content-Type": "application/json"}
@@ -96,6 +101,18 @@ class GuidedChatEndpoint:
                          and url in {self.root + "/v1/chat/completions", self.root + "/completion"})
         with urlopen(request, timeout=None if loopback_chat else 3600) as response:
             return json.load(response)
+
+    def configure_teacher_reasoning(self, version, frozen_endpoint=None):
+        """Resolve a tutor's optional override only after the run version is known."""
+        self.record_teacher_reasoning = version in TEACHER_REASONING_VERSIONS
+        if self.record_teacher_reasoning and not self.local and self.requested_thinking is not None:
+            raise ValueError("the explicit native teacher thinking switch requires a llama.cpp endpoint")
+        if self.requested_thinking is not None:
+            self.thinking = self.requested_thinking
+        elif frozen_endpoint is not None:
+            self.thinking = bool(frozen_endpoint.get("enable_thinking"))
+        else:
+            self.thinking = self.local and self.record_teacher_reasoning
 
     def validate(self):
         if self.local:
@@ -141,6 +158,9 @@ class GuidedChatEndpoint:
         )
         if self.local:
             data["chat_template_kwargs"] = {"enable_thinking": self.thinking}
+            if self.record_teacher_reasoning and self.thinking:
+                # The native parser extracts the thinking channel before matching the JSON grammar.
+                data["reasoning_format"] = "deepseek"
         if schema:
             data["response_format"] = {
                 "type": "json_schema",
@@ -240,7 +260,7 @@ class GuidedChatEndpoint:
         thinking = msg.get("reasoning_content") or msg.get("reasoning") or ""
         if not isinstance(content, str) or not isinstance(thinking, str):
             raise ValueError("invalid text fields in model response")
-        return dict(
+        result = dict(
             content=content,
             reasoning_content=thinking,
             finish_reason=chosen.get("finish_reason"),
@@ -251,3 +271,20 @@ class GuidedChatEndpoint:
             estimated_prompt_tokens=prompt_count,
             max_tokens=self.cap,
         )
+        if self.record_teacher_reasoning:
+            form = data.get("response_format", {}).get("json_schema", {}).get("schema")
+            structured = "not_requested"
+            if form is not None:
+                try:
+                    submitted = json.loads(content)
+                except (ValueError, TypeError):
+                    structured = "invalid_json"
+                else:
+                    structured = "valid" if Draft202012Validator(form).is_valid(submitted) else "schema_mismatch"
+            field = next((k for k in ("reasoning_content", "reasoning") if msg.get(k)), None)
+            result["teacher_reasoning"] = {
+                "requested": data.get("chat_template_kwargs", {}).get("enable_thinking"),
+                "observed": bool(thinking.strip()), "source_field": field, "characters": len(thinking),
+                "structured_output": structured, "finish_reason": chosen.get("finish_reason"),
+            }
+        return result

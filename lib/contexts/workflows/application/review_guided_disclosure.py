@@ -8,7 +8,7 @@ from lib.prompts.workflow_guided_answers import (
     DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_review_schema, verified_choice_schema,
     verified_choice_review_schema, with_disclosure_pairing,
 )
-from ..domain.guided_answers import prior_clue_evidence
+from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
 from ..domain.guided_disclosure_text import checked_reviewer_pairing, locate_authored_task_citations, render_teacher_text
 from ..domain.guided_teaching_steps import checked_step_review, checked_step_selection
 from ..domain.guided_disclosure import (
@@ -68,7 +68,7 @@ def review_next_disclosure(request, source, attempt, retained, findings, disclos
         audit["issue"] = "disclosure_review_incomplete"
         return None, audit["issue"]
     try:
-        assessment = json.loads(response["content"])
+        assessment = read_teacher_submission(response)
         audit["assessment"] = assessment
         approved = checked_disclosure(assessment, evidence, previous_id, candidate, source["gold"])
     except (ValueError, TypeError) as exc:
@@ -151,7 +151,7 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
     if response["finish_reason"] != "stop":
         return None, "disclosure_review_incomplete"
     try:
-        assessment = json.loads(response["content"])
+        assessment = read_teacher_submission(response)
         entry["assessment"] = assessment
         checked = checked_reviewer_pairing(assessment, previous_id) if paired else assessment
         citations = checked_step_review(checked, step, evidence, previous_id)
@@ -211,7 +211,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             entry["issue"] = "disclosure_draft_incomplete"
             return None, entry["issue"]
         try:
-            proposal = json.loads(draft["content"])
+            proposal = read_teacher_submission(draft)
             entry["draft"] = proposal
             if not isinstance(proposal, dict):
                 raise ValueError("invalid_disclosure_draft")
@@ -275,7 +275,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                 entry["issue"] = "disclosure_review_incomplete"
                 return None, entry["issue"]
             try:
-                assessment = json.loads(response["content"])
+                assessment = read_teacher_submission(response)
                 entry["assessment"] = assessment
                 checked = checked_reviewer_pairing(assessment, previous_id) if paired else assessment
                 approved = checked_disclosure(checked, evidence, previous_id, candidate, source["gold"])

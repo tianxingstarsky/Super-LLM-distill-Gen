@@ -38,7 +38,7 @@ def generate_guided_cases(
     max_attempts=3,
     context_tokens=131072,
     max_tokens=32768,
-    coach_thinking=False,
+    coach_thinking=None,
     experience=None,
     export_only=False,
     first_pass_only=False,
