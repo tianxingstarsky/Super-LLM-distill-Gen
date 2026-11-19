@@ -51,8 +51,13 @@ def main():
         help="Frozen version and optional student instruction string; private coach uses the review protocol",
     )
     cli.add_argument("--export-only", action="store_true")
-    cli.add_argument("--first-pass-only", action="store_true",
-                     help="Run independent final-only student answers and checkpoint questions needing guidance")
+    phase = cli.add_mutually_exclusive_group()
+    phase.add_argument("--first-pass-only", action="store_true",
+                       help="Run independent final-only student answers and checkpoint questions needing guidance")
+    phase.add_argument("--prefetch-worked-first", nargs="?", type=int, const=True, default=False, metavar="N",
+                       help="Checkpoint the first student response for every keyed worked-solution question "
+                            "or just the first N in input order. "
+                            "Resume the same output without this flag to review and finish them.")
     cli.add_argument("--historical-first-from", type=Path,
                      help="Continue from a completed greedy local direct answer as historical input. "
                           "Sampling applies to new calls. Missing evidence stops the first pass.")
@@ -87,7 +92,7 @@ def main():
         )
     result = generate_guided_cases(source, output, **args)
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result["complete"] or result.get("first_pass_complete") else 2
+    return 0 if result.get("complete") or result.get("first_pass_complete") or result.get("prefetch_complete") else 2
 
 
 if __name__ == "__main__":

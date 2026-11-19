@@ -711,6 +711,63 @@ def test_unaided_direct_answers_export_without_buying_a_tutor_call(tmp_path):
         run_guided_cases(path, catalog_run, {}, {}, 2, export_only=True)
 
 
+def test_worked_prefetch_bounds_the_same_shard_and_preserves_inflight_and_truncated_receipts(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from filelock import Timeout
+    from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
+
+    path, output = tmp_path / "input.jsonl", tmp_path / "owned-shard"
+    gold = {"kind": "number", "value": "5"}
+    path.write_text("\n".join(json.dumps(row) for row in (
+        dict(id="direct", question="What is 2+3? Only return the number.", gold=gold, answer_requirement="final_only"),
+        dict(id="missing-key", question="Explain the published result.", source_reasoning="Original proof.", answer_requirement="worked_solution"),
+        dict(id="one", question="Explain why two plus three is five.", gold=gold, answer_requirement="worked_solution"),
+        dict(id="two", question="Explain why four plus one is five.", gold=gold, answer_requirement="worked_solution"),
+    )), "utf8")
+    started, release = Event(), Event()
+    calls = []
+    class Endpoint:
+        def validate(self):
+            return {"url":"http://localhost/v1","model":"student","slots":1,"enable_thinking":False}
+        def payload(self, messages, schema):
+            return {"messages":messages,"chat_template_kwargs":{"enable_thinking":False}}
+        def complete(self, payload):
+            calls.append(payload)
+            started.set()
+            assert release.wait(10)
+            return {"content":"I group the first two", "reasoning_content":"", "finish_reason":"length"}
+
+    ep = Endpoint()
+    def run(**options):
+        return run_guided_cases(path, output, {"student":ep,"coach":ep}, {"version":"test"}, 2,
+                                protocol_version="4.8.0", workers=1, **options)
+
+    with pytest.raises(ValueError, match="requires final_only"):
+        run(first_pass_only=True)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(run, prefetch_worked_first=1)
+        try:
+            assert started.wait(10)
+            checkpoint = next(output.glob("cases/*/001-student.json"))
+            pending = checkpoint.read_bytes()
+            assert json.loads(pending)["status"] == "pending"
+            with pytest.raises(Timeout):
+                run()
+            assert checkpoint.read_bytes() == pending and not list(output.glob("cases/*/interruption.json"))
+        finally:
+            release.set()
+        assert running.result() == {"prefetch_complete":True,"eligible_worked_questions":1,"unresolved_first_answers":[]}
+    manifest = (output/"manifest.json").read_bytes()
+    saved = checkpoint.read_bytes()
+    assert json.loads(saved)["response"]["finish_reason"] == "length" and len(calls) == 1
+    assert calls[0]["messages"][1]["content"] == "Explain why two plus three is five."
+    assert run(prefetch_worked_first=1)["prefetch_complete"] and len(calls) == 1
+    assert run(prefetch_worked_first=True)["eligible_worked_questions"] == 2 and len(calls) == 2
+    assert (output/"manifest.json").read_bytes() == manifest and checkpoint.read_bytes() == saved
+    assert not list(output.glob("cases/*/case.json")) and not list(output.glob("*.jsonl"))
+
+
 def test_direct_admission_does_not_strip_proofs_or_relabel_guided_and_incomplete_answers():
     from lib.contexts.workflows.domain.guided_answers import check_direct_answer
 
@@ -1782,9 +1839,15 @@ def test_guided_worked_solution_carries_a_grounded_method_through_review_to_the_
 
     monkeypatch.setattr(GuidedChatEndpoint, "http", serve)
     run = tmp_path / "guided"
-    summary = generate_guided_cases(source_file, run, student_url="http://localhost:8121/v1", student_model="student",
-                                    coach_url="http://localhost:8122/v1", coach_model="coach",
-                                    protocol_version="4.3.0", verified_step_receipts=registry, max_attempts=2)
+    config = dict(student_url="http://localhost:8121/v1", student_model="student",
+                  coach_url="http://localhost:8122/v1", coach_model="coach",
+                  protocol_version="4.3.0", verified_step_receipts=registry, max_attempts=2)
+    assert generate_guided_cases(source_file, run, **config, prefetch_worked_first=True)["prefetch_complete"]
+    checkpoint = next(run.glob("cases/*/001-student.json"))
+    first_response = checkpoint.read_bytes()
+    assert len(chats) == 1 and chats[0]["model"] == "student" and not (run / "accepted.jsonl").exists()
+    summary = generate_guided_cases(source_file, run, **config)
+    assert checkpoint.read_bytes() == first_response
     assert summary["accepted_by_route"]["guided_reasoning"] == 1
     assert [req["model"] for req in chats] == ["student", "coach", "coach", "coach", "student", "coach"]
     instructions = [req["messages"][0]["content"] for req in chats]

@@ -1,5 +1,7 @@
 # 工作流运行适配
 
+教师排队而学生模型有空槽时，可在计划运行的完整输入和输出目录上执行 `python -m lib.guided_answers … --prefetch-worked-first`。带数量（如 `--prefetch-worked-first 2`）只预取输入顺序中前两道有答案键的 `worked_solution` 题。原始响应直接存入各题的 `001-student.json`，包括因输出上限截断的回复。随后用相同配置和路径去掉该选项，正常流程读取已存首答、审核完整解释，必要时逐步指导。整份分片共用一把运行锁；当前分片执行时可预取另一个空闲分片。预取返回的 `prefetch_complete` 只表示选中题目的首答阶段已结束，合格记录由正常流程生成。
+
 4.8 的普通学生继续使用 `--student-model`。可用 `--continuation-model <较强的模型名>` 配置难题接管；独立 llama.cpp 服务另传 `--continuation-url <服务地址>`。教师负责披露、核查和正式交付；较强学生使用答题模式，复用原学生实际收到的消息。共用同一服务时，两种职责共享物理槽。检查 `case.json` 的 `attempts[].verified_stage` 看学生有何进展，`continuation_provenance.deliveries` 给出收件轮次、实际模型和对应请求文件。
 
 如果教师写出的末答与已经核准的结论冲突，`teacher_final_answer` 保存首稿，`teacher_final_correction` 保存同一教师的纠正请求与响应。`python -m lib.guided_experience --prepare-final-assessment` 默认选择该轮最后实际交付的版本。使用 `--original-delivery` 可指定首稿，分别学习失误和修正经验。

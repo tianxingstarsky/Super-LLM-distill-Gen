@@ -59,6 +59,7 @@ class GenerateGuidedAnswer:
         self.request = request
 
     def run(self, source, experience, max_attempts, *, protocol_version=VERSION, first_pass_only=False,
+            stop_after_first_student_receipt=False,
             until_correct=False, continuation_model=None, trusted_solution_receipts=()):
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
@@ -217,6 +218,10 @@ class GenerateGuidedAnswer:
                 if skip_acquired:
                     public.append(messages[-1])
             student = self.request(next_solver, index, messages, None)
+            if stop_after_first_student_receipt:
+                # The request port has durably recorded this exact response. Leave all
+                # interpretation, including truncated-output recovery, to the normal run.
+                return None
             attempt = dict(
                 attempt=index,
                 student=student,

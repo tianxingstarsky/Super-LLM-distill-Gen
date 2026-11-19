@@ -205,6 +205,7 @@ def run_guided_cases(
     *,
     export_only=False,
     first_pass_only=False,
+    prefetch_worked_first=False,
     protocol_version=None,
     until_correct=None,
     retry_interrupted=False,
@@ -215,6 +216,11 @@ def run_guided_cases(
     historical_first_from=None,
     historical_first_input=None,
 ):
+    prefetch_limit = prefetch_worked_first if type(prefetch_worked_first) is int else None
+    if type(prefetch_worked_first) not in (bool, int) or (prefetch_limit is not None and prefetch_limit < 1):
+        raise ValueError("worked first-answer prefetch count must be positive")
+    if prefetch_worked_first and (first_pass_only or export_only or retry_interrupted):
+        raise ValueError("worked first-answer prefetch cannot also export, run final-only admission or retry an unresolved request")
     output.mkdir(parents=True, exist_ok=True)
     with FileLock(str(output / "run.lock"), timeout=0):
         manifest = output / "manifest.json"
@@ -513,7 +519,8 @@ def run_guided_cases(
                     experience,
                     max_attempts,
                     protocol_version=template_version,
-                    first_pass_only=first_pass,
+                    first_pass_only=first_pass and not prefetch_worked_first,
+                    stop_after_first_student_receipt=bool(prefetch_worked_first),
                     until_correct=until_correct,
                     **({"continuation_model": stronger["model"] if stronger else None,
                         "trusted_solution_receipts": trusted}
@@ -545,14 +552,21 @@ def run_guided_cases(
 
         failed_first = set()
         def run_pass(first_pass):
+            scheduled = 0
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
                 pending = set()
                 for source in inputs(input_path, template_version, trusted):
-                    if first_pass and source.get("answer_requirement") != "final_only":
+                    if prefetch_worked_first:
+                        if prefetch_limit is not None and scheduled >= prefetch_limit:
+                            break
+                        if source.get("answer_requirement") != "worked_solution" or source["gold"] is None:
+                            continue
+                    elif first_pass and source.get("answer_requirement") != "final_only":
                         continue
                     if source["id"] in failed_first:
                         continue
                     pending.add(pool.submit(process, source, first_pass))
+                    scheduled += 1
                     if len(pending) == concurrency:
                         done, pending = wait(pending, return_when=FIRST_COMPLETED)
                         for item in done:
@@ -563,7 +577,12 @@ def run_guided_cases(
                     failed = item.result()
                     if first_pass and failed:
                         failed_first.add(failed)
+            return scheduled
 
+        if prefetch_worked_first:
+            eligible = run_pass(True)
+            return {"prefetch_complete": not failed_first, "eligible_worked_questions": eligible,
+                    "unresolved_first_answers": sorted(failed_first)}
         if has_direct_questions:
             run_pass(True)
             first_summary = export(input_path, output)
