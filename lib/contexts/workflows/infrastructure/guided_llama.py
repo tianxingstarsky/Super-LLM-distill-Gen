@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 from jsonschema import Draft202012Validator
 
 from lib.contexts.models.contracts import ModelQueueTimeout
-from ..domain.guided_teacher_delivery import TEACHER_REASONING_VERSIONS
+from ..domain.guided_teacher_delivery import QWEN_SAMPLING_VERSIONS, TEACHER_REASONING_VERSIONS
 from lib.prompts.workflow_guided_answers import FINAL_DELIVERY
 
 MIN_CONTEXT = 90_000
@@ -176,7 +176,7 @@ class GuidedChatEndpoint:
     def configure_sampling(self, version, frozen_endpoint=None):
         self.sampling_profile = None
         self.sampling_parameters = {"temperature": 0}
-        if version != "4.7.0":
+        if version not in QWEN_SAMPLING_VERSIONS:
             if self.requested_sampling is not None:
                 raise ValueError("explicit guided sampling profiles require protocol 4.7")
             return

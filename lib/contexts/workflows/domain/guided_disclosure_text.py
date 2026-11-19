@@ -92,6 +92,21 @@ def _unique_anchor_position(question, anchor):
     return positions[0] if len(positions) == 1 else None
 
 
+def locate_teacher_premise(question, submitted):
+    """Find a unique source span. Literal quotation marks in the task take precedence."""
+    if not isinstance(submitted, str):
+        raise ValueError("teacher_needs_a_specific_verbatim_task_premise")
+    quote = submitted
+    if quote not in question and (quote[:1], quote[-1:]) in (
+        ('"', '"'), ("“", "”"), ("„", "“"), ("«", "»"), ("『", "』"),
+    ):
+        quote = quote[1:-1]
+    span = _unique_anchor_position(question, quote)
+    if span is None or not quote.strip():
+        raise ValueError("teacher_needs_a_specific_verbatim_task_premise")
+    return {"quote": quote, "source_span": list(span)}
+
+
 def locate_authored_task_citations(citations, question, premise):
     anchor = _unique_anchor_position(question, premise)
     return [{**entry, "span": list(_quotation_position(question, entry["quote"], anchor))}

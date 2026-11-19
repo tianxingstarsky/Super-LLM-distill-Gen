@@ -3,6 +3,7 @@
 import re
 
 from .guided_answers import check_direct_answer, contains_chat_control, prior_clue_evidence, validate_public_guidance
+from .guided_disclosure_text import locate_teacher_premise
 from .guided_teaching_steps import verified_steps_digest
 
 
@@ -58,7 +59,7 @@ def checked_teacher_draft(proposal, gold, retained, findings, disclosed, *, ques
     return bridge, hint
 
 
-def checked_disclosure(review, evidence, previous_id, candidate, gold):
+def checked_disclosure(review, evidence, previous_id, candidate, gold, *, quoted_premises=False):
     """Return auditable citations and publishable wording for a released disclosure."""
     if (not isinstance(review, dict) or set(review) != {"decision", "citations", "bridge", "reason"}
         or review["decision"] not in ("release", "withhold") or not isinstance(review["citations"], list)
@@ -79,10 +80,14 @@ def checked_disclosure(review, evidence, previous_id, candidate, gold):
         ref, quote = item["evidence_id"], item["quote"]
         if not isinstance(ref, str) or ref not in evidence or not isinstance(quote, str) or not re.search(r"\w", quote):
             raise ValueError("unknown_or_empty_disclosure_citation")
+        if quoted_premises and ref == "question" and quote not in evidence[ref]["text"]:
+            quote = locate_teacher_premise(evidence[ref]["text"], quote)["quote"]
+            if not is_substantive_question_quote(quote):
+                raise ValueError("review_needs_a_specific_verbatim_task_premise")
         start = evidence[ref]["text"].find(quote)
         if start < 0:
             raise ValueError("disclosure_quote_not_in_evidence")
-        citations.append({**item, "span": [start, start + len(quote)]})
+        citations.append({**item, "quote": quote, "span": [start, start + len(quote)]})
         cited.add(ref)
     if not any(evidence[ref]["kind"] != "published_teacher_hint" for ref in cited):
         raise ValueError("disclosure_needs_a_task_or_established_finding")

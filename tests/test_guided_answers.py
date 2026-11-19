@@ -30,6 +30,84 @@ def test_list_numbers_stay_attached_and_never_become_evidence():
     assert review["verdict"] == "uncertain" and review["verified_prefix_count"] == 1
 
 
+def test_greedy_direct_history_is_not_a_new_sample_and_all_later_calls_use_new_sampling(tmp_path):
+    from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
+    from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
+
+    premise = "four apples in each basket"
+    question = "There are three baskets and four apples in each basket. Return only the total."
+    source = tmp_path / "input.jsonl"
+    source.write_text(json.dumps(dict(id="q", question=question, gold={"kind": "number", "value": "12"},
+                                     answer_requirement="final_only", direct_answer_syntax="number")))
+    original_input = tmp_path / "original-input.jsonl"
+    original_input.write_bytes(source.read_bytes())
+    sent = []
+    first_value = "8"
+    def run(directory, version, **options):
+        endpoint = GuidedChatEndpoint("http://localhost/v1", "qwen3.5-0.8b", None, 32768, local=True,
+                                      context=98304, pool=None)
+        endpoint.http = lambda url: [{"n_ctx": 98304}] if url.endswith("/slots") else {"data": [{"id": endpoint.model}]}
+        def complete(payload):
+            sent.append(payload)
+            if len(sent) == 1:
+                content = first_value
+            elif len(sent) == 2:
+                content = dict(decision="offer", question_quote=premise, bridge=premise + ".",
+                               hint="Match one basket to the stated group size.", reason="Use equal groups.")
+            elif len(sent) == 3:
+                packet = json.loads(payload["messages"][-1]["content"])
+                content = dict(decision="release", reason="The operation recovers the group size.",
+                               citations=[dict(evidence_id="question", quote=premise)],
+                               bridge=packet["proposed_next_teacher_disclosure"]["bridge"],
+                               pairing=dict(student_fit=True, evidence_support=True, history_fit="first"))
+            else:
+                content = ""  # Stop after observing the coached student's actual payload.
+            return dict(content=json.dumps(content) if isinstance(content, dict) else content,
+                        finish_reason="stop" if content else "length", reasoning_content="", model=endpoint.model,
+                        usage={"prompt_tokens": 20, "completion_tokens": 1})
+        endpoint.complete = complete
+        return run_guided_cases(source, directory, {"student": endpoint, "coach": endpoint},
+                                {"version": "test"}, 2, protocol_version=version, workers=1,
+                                until_correct=False, **options)
+    original, child = tmp_path / "old", tmp_path / "child"
+    assert run(original, "4.6.0", first_pass_only=True)["first_pass_complete"]
+    assert len(sent) == 1 and sent[0]["temperature"] == 0
+    summary = run(child, "4.7.0", historical_first_from=original)
+    assert summary["model_calls"]["historical_first_inputs"] == 1 and summary["model_calls"]["new_completed"] == 3
+    assert summary["historical_first_outcomes"]["new_sampling_first_answers"] == 0
+    assert summary["historical_first_usage"] == {"prompt_tokens": 20, "completion_tokens": 1}
+    assert [p["chat_template_kwargs"]["enable_thinking"] for p in sent] == [False, True, True, False]
+    assert [p["presence_penalty"] for p in sent[1:]] == [1.5, 1.5, 2.0]
+    folder = next((child / "cases").iterdir())
+    frozen = json.loads((folder / "001-student.json").read_bytes())
+    assert frozen["origin"]["kind"] == "historical_greedy_first" and frozen["request"] == sent[0]
+    assert frozen["origin"]["current_unsent_wire_sha256"] != frozen["origin"]["wire_request_sha256"]
+    assert json.loads((child / "quarantine.jsonl").read_bytes())["first_answer_origin"] == frozen["origin"]
+    assert run(child, "4.7.0") == summary and len(sent) == 4
+    source.write_bytes(original_input.read_bytes() + b"\n")
+    subset = tmp_path / "subset"
+    assert run(subset, "4.7.1", historical_first_from=original, historical_first_input=original_input,
+               first_pass_only=True)["first_pass_complete"] and len(sent) == 4
+    record = json.loads(next(subset.glob("cases/*/001-student.json")).read_bytes())
+    assert record["origin"]["original_input_record"]["line"] == 1
+    assert record["origin"]["original_input_record"]["original_line_sha256"] == hashlib.sha256(original_input.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="original input bytes differ"):
+        run(tmp_path / "unbound-input", "4.7.1", historical_first_from=original, historical_first_input=source,
+            first_pass_only=True)
+    source.write_text(source.read_text().replace("four apples", "five apples"))
+    mismatch = run(tmp_path / "different", "4.7.0", historical_first_from=original, historical_first_input=original_input)
+    assert mismatch["first_pass_complete"] is False and len(sent) == 4
+    first_value = "12"
+    sent.clear()
+    source.write_text(source.read_text().replace("five apples", "four apples"))
+    correct = tmp_path / "old-correct"
+    assert run(correct, "4.6.0", first_pass_only=True)["counts"]["accepted"] == 1
+    imported = run(tmp_path / "new-correct", "4.7.1", historical_first_from=correct)
+    assert len(sent) == 1 and imported["model_calls"]["new_completed"] == 0
+    assert imported["historical_first_outcomes"]["accepted_old_direct_answers"] == 1
+    assert imported["historical_first_outcomes"]["new_sampling_first_answers"] == 0
+
+
 def test_local_answer_continuation_emits_only_tokens_after_the_closed_thinking_block():
     from contextlib import nullcontext
     from types import SimpleNamespace
@@ -1029,7 +1107,7 @@ def test_freewritten_teacher_quote_is_checked_before_review_and_delivery():
     premise = "The first basket contains two red apples"
     source = validate_source(dict(id="baskets", question=question, gold=dict(kind="number", value="2"),
                                   answer_requirement="final_only"))
-    def run(bad):
+    def run(bad, version="4.2.0", citation=premise):
         delivered, reviewed = [], []
         def request(role, index, messages, schema):
             if role == "student" and index == 1:
@@ -1040,23 +1118,45 @@ def test_freewritten_teacher_quote_is_checked_before_review_and_delivery():
             packet = json.loads(messages[-1]["content"])
             if role in {"disclosure_draft", "disclosure_rewrite"}:
                 qualifier = '“there are eight red apples”' if bad else premise
-                value = dict(decision="offer", question_quote=premise, bridge=qualifier + ".",
+                value = dict(decision="offer", question_quote=citation, bridge=qualifier + ".",
                              hint="Mark only the apples of the requested colour.", reason="Count the relevant items.")
             else:
                 assert role == "disclosure" and packet["student_attempt"] == 1
                 candidate = packet["proposed_next_teacher_disclosure"]
                 reviewed.append(candidate["public_text"])
-                value = dict(decision="release", citations=[dict(evidence_id="question", quote=premise)],
+                value = dict(decision="release", citations=[dict(evidence_id="question", quote=citation)],
                              bridge=candidate["bridge"], reason="The action checks the colour the student must count.",
                              pairing=dict(student_fit=True, evidence_support=True, history_fit="first"))
             return dict(content=json.dumps(value), reasoning_content="", finish_reason="stop")
-        out = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version="4.2.0")
+        out = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version=version)
         return out, reviewed, delivered
     out, reviewed, delivered = run(False)
     assert reviewed == delivered == [out["disclosures"][0]["text"]]
     assert reviewed[0].startswith("“" + premise + "”.")
     out, reviewed, delivered = run(True)
     assert out["status"] == "awaiting_guidance" and reviewed == delivered == []
+    wrapped = '"' + premise + '"'
+    old, reviewed, delivered = run(False, "4.7.0", wrapped)
+    assert not old["disclosures"] and reviewed == delivered == []
+    current, reviewed, delivered = run(False, "4.7.1", wrapped)
+    assert reviewed == delivered == [current["disclosures"][0]["text"]]
+    draft = current["attempts"][0]["disclosure_work"][0]
+    assert draft["draft"]["question_quote"] == draft["assessment"]["citations"][0]["quote"] == wrapped
+    assert draft["question_premise"] == {"quote": premise, "source_span": [0, len(premise)]}
+    assert current["disclosures"][0]["citations"] == [
+        {"evidence_id": "question", "quote": premise, "span": [0, len(premise)]}]
+
+
+def test_teacher_premise_matches_literal_delimiters_first_and_only_unwraps_a_unique_verbatim_span():
+    from lib.contexts.workflows.domain.guided_disclosure_text import locate_teacher_premise
+    question = 'The signs read “do not enter” and do not enter. Pressure ≤ 12 kPa.'
+    for submitted, expected in [('“do not enter”', '“do not enter”'), ('"Pressure ≤ 12 kPa"', 'Pressure ≤ 12 kPa')]:
+        start = question.index(expected)
+        assert locate_teacher_premise(question, submitted) == {"quote": expected, "source_span": [start, start + len(expected)]}
+    for invalid in ('"do not enter"', '“do enter”', '"Pressure < 12 kPa"', '“Pressure ≤ 21 kPa”',
+                    '"pressure ≤ 12 kPa"', '“Pressure ≤ 12 kPa"', '“"Pressure ≤ 12 kPa"”', '""'):
+        with pytest.raises(ValueError, match="specific_verbatim_task_premise"):
+            locate_teacher_premise(question, invalid)
 
 
 def test_recommend_remaining_verified_steps_until_correct_with_paired_reviews_and_distinct_checkpoints():

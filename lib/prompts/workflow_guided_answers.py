@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.7.0"
+VERSION = "4.7.1"
 
 TEACHER_FINAL_ANSWER = """You are the answer author. Deliver a self-contained answer to the original user in the requested language, notation, units and order. The packet separates the user's question and instructions from the student's reviewed derivation and the private reference key. Use the deductions that actually support the result. Compose a clear, sufficient solution in your own words; the reader will see your public answer and must be able to follow its decisive inference. If the user requests the result alone, keep explanation empty and give precisely that result. Otherwise explain why the conclusion follows, without repeating the whole exploration. Honor an explicit request to show work even when a single number matches the key.
 

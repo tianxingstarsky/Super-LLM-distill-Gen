@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
-from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
+from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint, SAMPLING_PROFILES
 from lib.model_request_scheduler import SharedModelScheduler, model_pool_identity
 
 
@@ -51,6 +51,8 @@ def generate_guided_cases(
     reuse_first_from=None,
     verified_step_receipts=None,
     reuse_matching_from=None,
+    historical_first_from=None,
+    historical_first_input=None,
 ):
     endpoints = {}
     if not export_only:
@@ -110,4 +112,6 @@ def generate_guided_cases(
         reuse_first_from=reuse_first_from,
         verified_step_receipts=verified_step_receipts,
         reuse_matching_from=reuse_matching_from,
+        historical_first_from=historical_first_from,
+        historical_first_input=historical_first_input,
     )

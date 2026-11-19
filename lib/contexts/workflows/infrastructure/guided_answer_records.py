@@ -20,6 +20,10 @@ from ..domain.guided_answers import validate_source
 from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
 from ..domain.guided_final_experience import adopted_final_teacher_text
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
+from .guided_historical_answer import (
+    HISTORICAL_FIRST, checked_historical_answer, historical_source_manifest, historical_source_membership,
+    import_historical_answer,
+)
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
@@ -208,12 +212,19 @@ def run_guided_cases(
     reuse_first_from=None,
     verified_step_receipts=None,
     reuse_matching_from=None,
+    historical_first_from=None,
+    historical_first_input=None,
 ):
     output.mkdir(parents=True, exist_ok=True)
     with FileLock(str(output / "run.lock"), timeout=0):
         manifest = output / "manifest.json"
         frozen_config = read(manifest) if manifest.exists() else None
         template_version = frozen_config["template_version"] if frozen_config else (protocol_version or VERSION)
+        historical_mode = historical_first_from is not None or bool((frozen_config or {}).get("historical_first"))
+        if historical_first_input is not None and not historical_mode:
+            raise ValueError("the historical input file requires a historical source run")
+        if historical_mode and (reuse_first_from or reuse_matching_from):
+            raise ValueError("choose historical first answers or exact request replay")
         if protocol_version and protocol_version != template_version:
             raise ValueError("the requested protocol differs from the frozen run")
         if until_correct is None:
@@ -233,6 +244,8 @@ def run_guided_cases(
             seen.add(source["id"])
             if uses_direct_first(source, template_version):
                 has_direct_questions = True
+            elif historical_mode:
+                raise ValueError("historical first answers are supported only for explicit direct-first questions")
             elif first_pass_only:
                 raise ValueError("the independent first pass requires final_only on every input question and its delivery instructions")
         if not seen:
@@ -300,6 +313,34 @@ def run_guided_cases(
             config["until_correct"] = until_correct
         if registry:
             config["verified_step_registry_id"] = digest(registry)
+        historical_rows = None
+        if historical_mode:
+            archived_manifest = output / "historical-first-manifest.json"
+            if historical_first_from is not None and historical_first_from.resolve() == output.resolve():
+                raise ValueError("historical answers must come from a different frozen run")
+            prior_bytes = ((historical_first_from / "manifest.json") if historical_first_from else archived_manifest).read_bytes()
+            config["historical_first"] = historical_source_manifest(prior_bytes, config)
+            members_file = output / "historical-first-membership.json"
+            expected_members = (frozen_config or {}).get("historical_first", {}).get("source_membership_sha256")
+            if historical_first_input is not None or expected_members:
+                members = (historical_source_membership(historical_first_input, seen, config["historical_first"]["source_input_sha256"])
+                           if historical_first_input is not None else read(members_file))
+                checksum = digest(members)
+                if frozen_config and checksum != expected_members:
+                    raise ValueError("historical input membership differs from the frozen run")
+                if members_file.is_file() and digest(read(members_file)) != checksum:
+                    raise ValueError("archived historical input membership differs")
+                if not members_file.exists():
+                    atomic_json(members_file, members)
+                config["historical_first"]["source_membership_sha256"] = checksum
+                historical_rows = members["rows"]
+            if archived_manifest.exists():
+                if archived_manifest.read_bytes() != prior_bytes:
+                    raise ValueError("archived historical source manifest differs")
+            elif not frozen_config:
+                pending_manifest = archived_manifest.with_suffix(".pending")
+                pending_manifest.write_bytes(prior_bytes)
+                pending_manifest.replace(archived_manifest)
         if reuse_matching_from:
             if reuse_matching_from.resolve() == output.resolve():
                 raise ValueError("cross-run replay requires a different source run")
@@ -365,6 +406,19 @@ def run_guided_cases(
                     {"binding": binding, "id": source["id"], "payload": payload}
                 )
                 saved = read(checkpoint) if checkpoint.exists() else {}
+                if first_direct and historical_mode:
+                    history = config["historical_first"]
+                    if not saved:
+                        if historical_first_from is None:
+                            raise ValueError("missing frozen historical answer; supply its original run directory")
+                        saved = import_historical_answer(
+                            location(historical_first_from, source["id"]), source, payload, history, binding,
+                            same_input=history["source_input_sha256"] == source_sha,
+                            membership=historical_rows[source["id"]] if historical_rows is not None else None)
+                        atomic_json(checkpoint, saved)
+                    response = checked_historical_answer(saved, source, history, binding, proposed=payload,
+                                                         membership=historical_rows[source["id"]] if historical_rows is not None else None)
+                    return guided_port_response(response, saved["request"], role, template_version)
                 if saved and saved["identity"] != identity:
                     raise ValueError("request differs from its saved checkpoint")
                 if saved.get("status") == "complete":
@@ -471,6 +525,8 @@ def run_guided_cases(
                 if resumed_interruption:
                     interruption.unlink(missing_ok=True)
                 return
+            if historical_mode:
+                result["first_answer_origin"] = read(folder / "001-student.json")["origin"]
             atomic_json(
                 receipt, {**result, "binding": binding, "source_sha256": digest(source)}
             )
@@ -500,6 +556,10 @@ def run_guided_cases(
         if has_direct_questions:
             run_pass(True)
             first_summary = export(input_path, output)
+            if historical_mode and failed_first:
+                first_summary["first_pass_complete"] = False
+                atomic_json(output / "summary.json", first_summary)
+                return first_summary
             if first_pass_only:
                 first_summary["first_pass_complete"] = not failed_first
                 atomic_json(output / "summary.json", first_summary)
@@ -510,6 +570,17 @@ def run_guided_cases(
 
 def export(input_path, output):
     manifest = read(output / "manifest.json")
+    history = manifest.get("historical_first")
+    historical_rows = {}
+    if history:
+        raw = (output / "historical-first-manifest.json").read_bytes()
+        if hashlib.sha256(raw).hexdigest() != history["source_manifest_sha256"]:
+            raise ValueError("historical source manifest no longer matches the frozen run")
+        if "source_membership_sha256" in history:
+            members = read(output / "historical-first-membership.json")
+            if digest(members) != history["source_membership_sha256"]:
+                raise ValueError("historical input membership differs from the frozen run")
+            historical_rows = members["rows"]
     _, trusted = verified_step_registry(output, None, manifest)
     binding = digest(manifest)
     counts = dict(accepted=0, unverified=0, quarantine=0, interrupted=0, pending=0)
@@ -520,6 +591,9 @@ def export(input_path, output):
         accepted_routes["guided_reasoning"] = 0
         accepted_routes["unaided_reasoning"] = 0
     calls = dict(new_completed=0, replayed_first=0, interrupted_or_pending=0)
+    historical_tokens = {}
+    historical_outcomes = dict(accepted_old_direct_answers=0, accepted_after_new_student_turn=0,
+                               accepted_after_processing_old_derivation=0, new_sampling_first_answers=0)
     admission_timeouts = 0
     with TemporaryDirectory(dir=output) as temp:
         scratch = Path(temp)
@@ -542,8 +616,12 @@ def export(input_path, output):
             for source in inputs(input_path, manifest["template_version"], trusted):
                 folder = location(output, source["id"])
                 outstanding = {}
+                historical_origin = None
                 for cp in folder.glob("[0-9]*-*.json"):
                     event = read(cp)
+                    if history and cp.name == "001-student.json":
+                        checked_historical_answer(event, source, history, binding, membership=historical_rows.get(source["id"]))
+                        historical_origin = event["origin"]
                     if event["status"] != "complete":
                         serial, role = cp.stem.split("-", 1)
                         outstanding[cp.name] = can_resume_admission(event, binding, source["id"], role, int(serial))
@@ -551,6 +629,12 @@ def export(input_path, output):
                         status = item["status"]
                         if unsent_admission(item):
                             admission_timeouts += 1
+                        elif status == "historical_input" and event.get("origin", {}).get("kind") == HISTORICAL_FIRST:
+                            calls["historical_first_inputs"] = calls.get("historical_first_inputs", 0) + 1
+                            for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                                value = event["response"].get("usage", {}).get(field)
+                                if type(value) is int:
+                                    historical_tokens[field] = historical_tokens.get(field, 0) + value
                         elif status == "replayed":
                             kind = ("replayed_matching" if event.get("origin", {}).get("kind") == "replayed_matching_call"
                                     else "replayed_first")
@@ -575,6 +659,16 @@ def export(input_path, output):
                 ):
                     raise ValueError("case differs from its original source or run")
                 status = case["status"]
+                if "historical_first" in manifest:
+                    if historical_origin is None or case.get("first_answer_origin") != historical_origin:
+                        raise ValueError("case differs from its historical first-answer evidence")
+                    if status == "accepted":
+                        if case["training_route"] == "nonthinking_direct":
+                            historical_outcomes["accepted_old_direct_answers"] += 1
+                        elif len(case["attempts"]) > 1:
+                            historical_outcomes["accepted_after_new_student_turn"] += 1
+                        else:
+                            historical_outcomes["accepted_after_processing_old_derivation"] += 1
                 counts[status] += 1
                 if status == "accepted" and manifest["template_version"] in FIRST_ANSWER_VERSIONS:
                     accepted_routes[case["training_route"]] += 1
@@ -588,6 +682,7 @@ def export(input_path, output):
                     "answer_requirement",
                     "training_route",
                     "final_answer_provenance",
+                    "first_answer_origin",
                     "status",
                     "verification",
                     "answer",
@@ -658,6 +753,8 @@ def export(input_path, output):
         "counts": counts,
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
+        **({"historical_first_outcomes": historical_outcomes} if "historical_first" in manifest else {}),
+        **({"historical_first_usage": historical_tokens} if historical_tokens else {}),
         **({"admission_timeouts": admission_timeouts} if admission_timeouts else {}),
         "complete": counts["pending"] == counts["interrupted"] == counts.get("awaiting_capacity", 0) == 0,
     }

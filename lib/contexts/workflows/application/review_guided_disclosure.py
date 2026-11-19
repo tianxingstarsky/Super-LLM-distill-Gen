@@ -9,7 +9,9 @@ from lib.prompts.workflow_guided_answers import (
     verified_choice_review_schema, with_disclosure_pairing,
 )
 from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
-from ..domain.guided_disclosure_text import checked_reviewer_pairing, locate_authored_task_citations, render_teacher_text
+from ..domain.guided_disclosure_text import (
+    checked_reviewer_pairing, locate_authored_task_citations, locate_teacher_premise, render_teacher_text,
+)
 from ..domain.guided_teaching_steps import checked_step_review, checked_step_selection
 from ..domain.guided_disclosure import (
     checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote,
@@ -177,7 +179,7 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
 
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
-                           task_analysis=False):
+                           task_analysis=False, quoted_premises=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -227,6 +229,12 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             step = checked_step_selection(proposal, options) if options else None
             if options and proposal.get("decision") == "insufficient":
                 proposal = {"bridge": "", "hint": "", "question_quote": "", **proposal}
+            if quoted_premises and not step and proposal.get("decision") == "offer":
+                premise = locate_teacher_premise(source["question"], proposal.get("question_quote"))
+                if isinstance(proposal.get("hint"), str) and proposal["hint"].strip() == proposal["question_quote"]:
+                    raise ValueError("teacher_hint_only_repeats_task_premise")
+                entry["question_premise"] = premise
+                proposal = {**proposal, "question_quote": premise["quote"]}
             wording = None if step else checked_teacher_draft(proposal, source["gold"], retained, findings, disclosed,
                                                                question=source["question"] if grounded else None)
             if not step and wording is None:
@@ -287,7 +295,8 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                 assessment = read_teacher_submission(response)
                 entry["assessment"] = assessment
                 checked = checked_reviewer_pairing(assessment, previous_id) if paired else assessment
-                approved = checked_disclosure(checked, evidence, previous_id, candidate, source["gold"])
+                approved = checked_disclosure(checked, evidence, previous_id, candidate, source["gold"],
+                                              quoted_premises=quoted_premises)
                 if approved is None:
                     raise ValueError("teacher_disclosure_withheld")
                 if grounded and not any(c["evidence_id"] == "question" and is_substantive_question_quote(c["quote"])
@@ -314,7 +323,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
 
 
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
-                                   *, teacher_experience, tried, task_analysis=False):
+                                   *, teacher_experience, tried, task_analysis=False, quoted_premises=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation"):
         history = attempt["disclosure_work"] = []
@@ -323,6 +332,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
         approved, issue = author_next_disclosure(
             request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
             grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
+            quoted_premises=quoted_premises,
         )
         history = attempt["disclosure_work"]
         tried.update(entry["verified_operation"]["id"] for entry in history if "verified_operation" in entry)

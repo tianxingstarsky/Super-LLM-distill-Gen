@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from lib.bootstrap.guided_answers import generate_guided_cases
+from lib.bootstrap.guided_answers import SAMPLING_PROFILES, generate_guided_cases
 
 
 def main():
@@ -18,7 +18,7 @@ def main():
     cli.add_argument("--student-api-key-env")
     cli.add_argument("--coach-api-key-env")
     for role in ("student", "coach"):
-        cli.add_argument(f"--{role}-sampling", choices=("auto", "server", "qwen3.5-0.8b", "qwen3.5-9b"),
+        cli.add_argument(f"--{role}-sampling", choices=SAMPLING_PROFILES,
                          help="Local text sampling profile. Use the model size for opaque aliases. "
                               "New runs auto-detect standard Qwen names and otherwise use server defaults.")
     cli.add_argument(
@@ -50,6 +50,12 @@ def main():
     cli.add_argument("--export-only", action="store_true")
     cli.add_argument("--first-pass-only", action="store_true",
                      help="Run independent final-only student answers and checkpoint questions needing guidance")
+    cli.add_argument("--historical-first-from", type=Path,
+                     help="Continue from a completed greedy local direct answer as historical input. "
+                          "Sampling applies to new calls. Missing evidence stops the first pass.")
+    cli.add_argument("--historical-first-input", type=Path,
+                     help="Original full input JSONL for a subset of a historical first-pass run. "
+                          "Its file digest must match the source manifest.")
     cli.add_argument("--protocol-version", help="Pin a supported protocol when creating a new run")
     cli.add_argument("--verified-step-receipts", type=Path,
                      help="Trust teaching microsteps independently checked by the nominated source verifier. The run freezes its receipt registry.")

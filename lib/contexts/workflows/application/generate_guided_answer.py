@@ -77,7 +77,8 @@ class GenerateGuidedAnswer:
         tried_verified_steps = set()
         if paired:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
-                                  tried=tried_verified_steps, task_analysis=task_analysis)
+                                  tried=tried_verified_steps, task_analysis=task_analysis,
+                                  quoted_premises=protocol_version == "4.7.1")
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
         direct_protocol = record_guided_reasoning or protocol_version == "3.6.0"
         truncated_progress = direct_protocol or protocol_version == "3.5.0"
@@ -88,7 +89,8 @@ class GenerateGuidedAnswer:
                     "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9",
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
-                    "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7"}[protocol_version]
+                    "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
+                    "4.7.1": "v4.7.1"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW

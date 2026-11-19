@@ -52,7 +52,9 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
             proposal = read_teacher_submission(response)
         except (ValueError, TypeError):
             pass
-    check, public = inspect_teacher_delivery(proposal, source, steps, form, protect_evidence_ids=protocol_version == "4.7.0")
+    check, public = inspect_teacher_delivery(
+        proposal, source, steps, form, protect_evidence_ids=protocol_version in {"4.7.0", "4.7.1"}
+    )
     if response["finish_reason"] != "stop":
         check["issue"] = "teacher_final_incomplete"
     provenance = {"author": "teacher", "model": response.get("model"), "attempt": index,
