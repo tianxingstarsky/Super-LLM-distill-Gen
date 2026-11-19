@@ -5,6 +5,7 @@ import re
 import unicodedata
 
 from lib.prompts.workflow_guided_answers import FINAL_DELIVERY_HINTS, HINTS
+from .guided_teaching_steps import validate_verified_steps
 
 
 _PRIVATE_MARKERS = re.compile(r"</?think>|<\|im_(?:start|end)\|>", re.I)
@@ -30,7 +31,8 @@ def number(value):
         return None
 
 
-def validate_source(row, *, allow_answer_requirement=True, allow_task_system=True, allow_direct_syntax=True):
+def validate_source(row, *, allow_answer_requirement=True, allow_task_system=True, allow_direct_syntax=True,
+                    allow_verified_teaching_steps=False, trusted_step_receipts=None):
     if (
         not isinstance(row, dict)
         or not isinstance(row.get("id"), str)
@@ -132,6 +134,10 @@ def validate_source(row, *, allow_answer_requirement=True, allow_task_system=Tru
     public_texts = [hint["text"] for hint in hints] + [
         check["meaning"] for check in checks
     ]
+    verified = None
+    if allow_verified_teaching_steps and "verified_teaching_steps" in row:
+        verified = validate_verified_steps(row, trusted_step_receipts)
+        public_texts.extend(s["operation"] for s in verified["steps"])
     for visible in public_texts:
         validate_public_guidance(visible, gold)
     return {
@@ -145,6 +151,7 @@ def validate_source(row, *, allow_answer_requirement=True, allow_task_system=Tru
         **({"answer_requirement": requirement} if requirement is not None else {}),
         **({"direct_answer_syntax": syntax} if syntax is not None else {}),
         **({"progress_checks": checks} if checks else {}),
+        **({"verified_teaching_steps": verified} if verified else {}),
     }
 
 

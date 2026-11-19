@@ -30,6 +30,7 @@ def generate_guided_cases(
     retry_interrupted=False,
     workers=4,
     reuse_first_from=None,
+    verified_step_receipts=None,
 ):
     endpoints = {}
     if not export_only:
@@ -81,4 +82,5 @@ def generate_guided_cases(
         retry_interrupted=retry_interrupted,
         workers=workers,
         reuse_first_from=reuse_first_from,
+        verified_step_receipts=verified_step_receipts,
     )

@@ -45,6 +45,11 @@ def test_teacher_withheld_hint_feedback_is_about_the_draft():
     assert episode["status"] == "fail"
     assert json.loads(episode["action_list"][0])["assistant_action"]["content"] == "You identified every fact.\nLook for a rule."
     assert "Unjustified praise" in episode["feedback"]
+    selected = case["attempts"][0]["disclosure_work"][0]
+    selected.update(draft={"decision": "select:dependency", "reason": "Check the direction"},
+                    verified_operation={"id": "dependency", "operation": "What follows if the left item is chosen?"})
+    episode = recorded_episode(observed_teacher_disclosure(case, 1, 0))
+    assert json.loads(episode["action_list"][0])["assistant_action"]["content"] == selected["verified_operation"]["operation"]
 
 
 @pytest.fixture(scope="session", autouse=True)

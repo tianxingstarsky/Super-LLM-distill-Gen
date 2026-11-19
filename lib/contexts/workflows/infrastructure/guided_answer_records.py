@@ -5,6 +5,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore
@@ -18,7 +19,7 @@ from .guided_llama import DIRECT_ANSWER_GRAMMARS, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"}
+TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0", "4.1.0"}
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS
 FINAL_CONTINUATION_VERSIONS = {"3.7.0"} | DIRECT_SYNTAX_VERSIONS
 FIRST_ANSWER_VERSIONS = {"3.6.0"} | FINAL_CONTINUATION_VERSIONS
@@ -29,13 +30,33 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def inputs(path, protocol_version=VERSION):
+def inputs(path, protocol_version=VERSION, trusted_step_receipts=frozenset()):
+    verified_options = ({"allow_verified_teaching_steps": True, "trusted_step_receipts": trusted_step_receipts}
+                        if protocol_version == "4.1.0" else {})
     with path.open(encoding="utf-8-sig") as source:
         for line in source:
             if line.strip():
                 yield validate_source(json.loads(line), allow_answer_requirement=protocol_version in FIRST_ANSWER_VERSIONS,
                                       allow_task_system=protocol_version in FINAL_CONTINUATION_VERSIONS,
-                                      allow_direct_syntax=protocol_version in DIRECT_SYNTAX_VERSIONS)
+                                      allow_direct_syntax=protocol_version in DIRECT_SYNTAX_VERSIONS, **verified_options)
+
+
+def verified_step_registry(output, receipt_path, frozen_config):
+    """An explicitly supplied verifier registry grants trust; a row cannot grant trust to itself."""
+    archived = output / "verified-step-receipts.json"
+    pinned = (frozen_config or {}).get("verified_step_registry_id")
+    if not receipt_path and not pinned:
+        return None, frozenset()
+    registry = read(receipt_path or archived)
+    if not isinstance(registry, dict) or registry.get("schema") != "guided-teaching-verification/v1":
+        raise ValueError("unsupported teaching-step verifier receipt schema")
+    hashes = registry.get("receipts")
+    if not isinstance(hashes, list) or not hashes or not all(isinstance(h, str) and re.fullmatch("[0-9a-f]{64}", h) for h in hashes):
+        raise ValueError("teaching-step verification requires SHA-256 receipts")
+    canonical = {"schema": registry["schema"], "receipts": sorted(set(hashes))}
+    if frozen_config is not None and digest(canonical) != pinned:
+        raise ValueError("teaching-step verifier registry differs from the frozen run")
+    return canonical, frozenset(hashes)
 
 
 def location(root, ident):
@@ -86,6 +107,7 @@ def run_guided_cases(
     retry_interrupted=False,
     workers=4,
     reuse_first_from=None,
+    verified_step_receipts=None,
 ):
     output.mkdir(parents=True, exist_ok=True)
     with FileLock(str(output / "run.lock"), timeout=0):
@@ -96,11 +118,14 @@ def run_guided_cases(
             raise ValueError("the requested protocol differs from the frozen run")
         if until_correct and template_version not in TEACHER_DISCLOSURE_VERSIONS:
             raise ValueError("progress-based continuation requires guided protocol 3.9.0 or later")
+        registry, trusted = verified_step_registry(output, verified_step_receipts, frozen_config)
+        if registry and template_version != "4.1.0":
+            raise ValueError("verified teaching steps require guided protocol 4.1.0")
         with input_path.open("rb") as fp:
             source_sha = hashlib.file_digest(fp, "sha256").hexdigest()
         seen = set()
         has_direct_questions = False
-        for source in inputs(input_path, template_version):
+        for source in inputs(input_path, template_version, trusted):
             if source["id"] in seen:
                 raise ValueError("duplicate guided source id")
             seen.add(source["id"])
@@ -158,6 +183,8 @@ def run_guided_cases(
         )
         if template_version in TEACHER_DISCLOSURE_VERSIONS:
             config["until_correct"] = until_correct
+        if registry:
+            config["verified_step_registry_id"] = digest(registry)
         if reuse_first_from:
             if reuse_first_from.resolve() == output.resolve():
                 raise ValueError(
@@ -181,6 +208,8 @@ def run_guided_cases(
                 "configuration, input or experience differs from the frozen run"
             )
         if not manifest.exists():
+            if registry:
+                atomic_json(output / "verified-step-receipts.json", registry)
             atomic_json(manifest, config)
         binding = digest(config)
 
@@ -296,7 +325,7 @@ def run_guided_cases(
         def run_pass(first_pass):
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
                 pending = set()
-                for source in inputs(input_path, template_version):
+                for source in inputs(input_path, template_version, trusted):
                     if first_pass and source.get("answer_requirement") != "final_only":
                         continue
                     if source["id"] in failed_first:
@@ -326,6 +355,7 @@ def run_guided_cases(
 
 def export(input_path, output):
     manifest = read(output / "manifest.json")
+    _, trusted = verified_step_registry(output, None, manifest)
     binding = digest(manifest)
     counts = dict(accepted=0, unverified=0, quarantine=0, interrupted=0, pending=0)
     accepted_routes = dict(nonthinking_direct=0, reviewed_solution=0)
@@ -353,7 +383,7 @@ def export(input_path, output):
                     json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
                 )
 
-            for source in inputs(input_path, manifest["template_version"]):
+            for source in inputs(input_path, manifest["template_version"], trusted):
                 folder = location(output, source["id"])
                 for cp in folder.glob("[0-9]*-*.json"):
                     event = read(cp)
@@ -414,6 +444,7 @@ def export(input_path, output):
                             "id": case["id"], "case_archive": (folder / "case.json").relative_to(output).as_posix(),
                             "attempt": attempt["attempt"], "revision": work["revision"],
                             "draft": work.get("draft"), "assessment": work.get("assessment"),
+                            **({"verified_operation": work["verified_operation"]} if "verified_operation" in work else {}),
                             "validated_citations": work.get("validated_citations", []),
                             "issue": work.get("issue"),
                             "published": bool(work.get("validated_citations") and attempt.get("disclosure")),

@@ -57,7 +57,8 @@ def observed_teacher_disclosure(case, number, revision):
     prompt = {"task": "Give one justified next hint from what the learner can already establish.",
               "problem": case["question"], "earlier_published_hints": earlier}
     draft = item["draft"]
-    text = draft["bridge"] + "\n" + draft["hint"]
+    selection = item.get("verified_operation")
+    text = selection["operation"] if selection else draft["bridge"] + "\n" + draft["hint"]
     return {
         "id": f"{case['id']}-disclosure-{number}-{revision}", "guided_disclosure_projection_version": 1,
         "conversation": {"messages": [{"role":"user","content":json.dumps(prompt, ensure_ascii=False)},

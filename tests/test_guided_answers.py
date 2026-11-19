@@ -416,6 +416,27 @@ def test_unaided_direct_answers_export_without_buying_a_tutor_call(tmp_path):
         assert row["verification"] == {"answer_key_check": True, "explanation_review": None,
                                        "correctness": "unaided_direct_key_match", "issue": None}
     assert run_guided_cases(path, output, {}, {}, 2, export_only=True) == summary
+    from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
+    q = sources[0]
+    step = {"id": "identify", "kind": "operation", "quote": q["question"], "span": [0, len(q["question"])],
+            "operation": "Identify the unit of the requested count.", "verification": "PRIVATE independent certificate"}
+    receipt_id = verified_steps_digest(q["id"], q["question"], q["gold"], [step])
+    q["verified_teaching_steps"] = {"receipt_id": receipt_id, "steps": [step]}
+    path.write_text(json.dumps(q), encoding="utf8")
+    registry = tmp_path / "checked.json"
+    registry.write_text(json.dumps({"schema": "guided-teaching-verification/v1", "receipts": [receipt_id]}), encoding="utf8")
+    catalog_run = tmp_path / "guided-catalog"
+    with pytest.raises(ValueError, match="trusted independent"):
+        run_guided_cases(path, catalog_run, endpoints, {"version": "default"}, 2, protocol_version="4.1.0")
+    catalog = run_guided_cases(path, catalog_run, endpoints, {"version": "default"}, 2,
+                               protocol_version="4.1.0", verified_step_receipts=registry)
+    assert catalog["accepted_by_route"]["nonthinking_direct"] == 1 and "PRIVATE" not in str(actual[-1])
+    registry.unlink()
+    assert run_guided_cases(path, catalog_run, {}, {}, 2, export_only=True) == catalog
+    (catalog_run / "verified-step-receipts.json").write_text(json.dumps(
+        {"schema": "guided-teaching-verification/v1", "receipts": ["0" * 64]}), encoding="utf8")
+    with pytest.raises(ValueError, match="registry differs"):
+        run_guided_cases(path, catalog_run, {}, {}, 2, export_only=True)
 
 
 def test_direct_admission_does_not_strip_proofs_or_relabel_guided_and_incomplete_answers():
@@ -740,6 +761,80 @@ def test_reusable_steps_cannot_self_authenticate_or_form_a_cycle_in_a_judged_pre
                                segments, 3) == 3
     assert shared_findings([claim(2, "arithmetic")], segments, segments[:1], "The source says there are two groups.")[
         "a1.s2"]["evidence_level"] == "program_checked_arithmetic_identity"
+
+
+def test_verified_source_operations_require_external_identity_and_independent_contextual_release():
+    from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
+    question = "Projects A and D conflict. Each costs one unit. Which selection produces the greatest return?"
+    source = {"id": "portfolio", "question": question, "gold": {"kind": "exact", "value": "BC"},
+              "answer_requirement": "final_only"}
+    def step(sid, quote, operation):
+        start = question.index(quote)
+        return {"id": sid, "kind": "operation", "quote": quote, "span": [start, start + len(quote)],
+                "operation": operation, "verification": "Private independent exhaustive oracle evidence."}
+    ops = [step("conflict", "Projects A and D conflict.", "Check whether the proposed pair contains both named projects."),
+           step("cost", "Each costs one unit.", "Count the units used by the remaining projects.")]
+    def signed(operations):
+        digest = verified_steps_digest(source["id"], question, source["gold"], operations)
+        return {**source, "verified_teaching_steps": {"receipt_id": digest, "steps": operations}}, digest
+    row, digest = signed(ops)
+    assert "verified_teaching_steps" not in validate_source(row)
+    with pytest.raises(ValueError, match="trusted"):
+        validate_source(row, allow_verified_teaching_steps=True)
+    altered = {**row, "question": question + "!"}
+    with pytest.raises(ValueError, match="does not match"):
+        validate_source(altered, allow_verified_teaching_steps=True, trusted_step_receipts={digest})
+    for bad_step in ({**ops[0], "span": [1, 6]}, {**ops[0], "operation": "The answer is BC."}):
+        bad, bad_digest = signed([bad_step])
+        with pytest.raises(ValueError):
+            validate_source(bad, allow_verified_teaching_steps=True, trusted_step_receipts={bad_digest})
+    good = validate_source(row, allow_verified_teaching_steps=True, trusted_step_receipts={digest})
+
+    def run(previous_quote=True, withhold_first=False):
+        calls = []
+        def request(role, index, messages, schema):
+            calls.append((role, index))
+            if role == "student":
+                if index == 1:
+                    content = "AD"
+                else:
+                    view = json.loads(messages[-1]["content"].split("\n", 1)[1])
+                    assert "Private" not in messages[-1]["content"] and "task-span" not in messages[-1]["content"]
+                    assert view["new_clue"] == ops[index - 2]["operation"]
+                    content = ("These two projects conflict.\nI still select the pair.\nFinal answer: AD" if index == 2
+                               else "Rechecking the remaining candidates gives the eligible pair.\nFinal answer: BC")
+            elif role == "coach":
+                content = json.dumps({"decision": "revise:a2.s2" if index == 2 else "supported",
+                                      "reusable": [], "diagnosis": "Check the revised selection."})
+            elif role == "final_answer":
+                content = "BC"
+            else:
+                packet = json.loads(messages[-1]["content"])
+                assert "Private independent" not in messages[-1]["content"]
+                sid = ("conflict", "cost")[index - 1]
+                if role in ("disclosure_draft", "disclosure_rewrite"):
+                    assert sid in [op["id"] for op in packet["available_operations"]]
+                    if index == 2:
+                        assert len(packet["available_operations"]) == 1
+                        assert packet["ordered_previous_teacher_disclosures"][0]["text"] == ops[0]["operation"]
+                    content = json.dumps({"decision": "select:" + sid, "reason": "Apply the new constraint here."})
+                else:
+                    assert packet["proposed_next_teacher_disclosure"]["operation"] == ops[index - 1]["operation"]
+                    references = ["task-span:" + sid] + (["disclosed.1"] if index == 2 and previous_quote else [])
+                    content = json.dumps({"decision": "withhold" if withhold_first else "release",
+                                          "evidence_ids": references, "reason": "I checked this move against the current work."})
+            return {"content": content, "reasoning_content": "", "finish_reason": "stop"}
+        return GenerateGuidedAnswer(request).run(good, {"version": "initial"}, 3), calls
+    passed, events = run()
+    assert passed["status"] == "accepted" and [d["text"] for d in passed["disclosures"]] == [s["operation"] for s in ops]
+    assert [d["source_step_id"] for d in passed["disclosures"]] == ["conflict", "cost"]
+    assert passed["disclosures"][0]["citations"] == [{"evidence_id": "question", "quote": ops[0]["quote"],
+                                                      "span": ops[0]["span"]}]
+    assert events.count(("disclosure", 1)) == events.count(("disclosure", 2)) == 1
+    withheld, events = run(withhold_first=True)
+    assert not withheld["disclosures"] and ("student", 2) not in events and ("disclosure_recheck", 1) not in events
+    broken, _ = run(previous_quote=False)
+    assert len(broken["disclosures"]) == 1 and broken["status"] == "awaiting_guidance"
 
 
 def test_unaided_visible_derivation_becomes_thinking_and_only_real_corrections_change_its_route():

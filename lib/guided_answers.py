@@ -46,6 +46,8 @@ def main():
     cli.add_argument("--first-pass-only", action="store_true",
                      help="Run independent final-only student answers and checkpoint questions needing guidance")
     cli.add_argument("--protocol-version", help="Pin a supported protocol when creating a new run")
+    cli.add_argument("--verified-step-receipts", type=Path,
+                     help="Trust teaching microsteps independently checked by the nominated source verifier. The run freezes its receipt registry.")
     cli.add_argument("--until-correct", action="store_true",
                      help="Continue guided reasoning while it advances; preserve stalled cases for new evidence")
     cli.add_argument(

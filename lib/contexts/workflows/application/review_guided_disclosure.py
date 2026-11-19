@@ -4,9 +4,11 @@ import json
 
 from lib.prompts.workflow_guided_answers import (
     AUTHORED_DISCLOSURE_REVIEW, DISCLOSURE_AUTHOR, DISCLOSURE_REVIEW, GROUNDED_AUTHOR_GUIDANCE,
-    GROUNDED_HINT_REVIEW, disclosure_author_schema,
-    disclosure_review_schema,
+    GROUNDED_HINT_REVIEW, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
+    disclosure_review_schema, verified_choice_schema, verified_choice_review_schema,
 )
+from ..domain.guided_answers import prior_clue_evidence
+from ..domain.guided_teaching_steps import checked_step_review, checked_step_selection
 from ..domain.guided_disclosure import (
     checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote,
 )
@@ -67,8 +69,47 @@ def review_next_disclosure(request, source, attempt, retained, findings, disclos
     return {**candidate, **approved}, None
 
 
+def _review_verified_step(request, attempt, history, material, evidence, previous_id, reference, receipt, step):
+    entry = history[-1]
+    entry["verified_operation"] = {"id": step["id"], "receipt_id": receipt, "operation": step["operation"]}
+    if (entry["revision"] and history[0].get("verified_operation") == entry["verified_operation"]
+            and history[0].get("issue") == "teacher_disclosure_withheld"):
+        entry["reused_prior_review_revision"] = 0
+        return None, "unchanged_withheld_disclosure"
+    anchor = f"task-span:{step['id']}"
+    packet = {k: material[k] for k in ("established_evidence", "ordered_previous_teacher_disclosures",
+                                       "latest_disclosure_id", "current_difficulty", "private_reference_ceiling")}
+    if "task_instructions" in material:
+        packet["task_instructions"] = material["task_instructions"]
+    packet["proposed_next_teacher_disclosure"] = {
+        "step_id": step["id"], "operation": step["operation"], "kind": step["kind"],
+        "task_evidence_id": anchor, "quote": step["quote"], "span": step["span"],
+    }
+    reviewer = "disclosure_recheck" if entry["revision"] else "disclosure"
+    # Only catalogue IDs and the actual dialogue observations go into the model's context.
+    references = [anchor, *(ref for ref in evidence if ref != "question")]
+    response = request(reviewer, attempt["attempt"], [
+        {"role": "system", "content": VERIFIED_STEP_REVIEW}, {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}
+    ], verified_choice_review_schema(references))
+    entry["review_response"] = response
+    if response["finish_reason"] != "stop":
+        return None, "disclosure_review_incomplete"
+    try:
+        assessment = json.loads(response["content"])
+        entry["assessment"] = assessment
+        citations = checked_step_review(assessment, step, evidence, previous_id)
+    except (ValueError, TypeError) as exc:
+        return None, str(exc)
+    if citations is None:
+        return None, "teacher_disclosure_withheld"
+    entry["validated_citations"] = citations
+    return {**reference, "source": "verified_teaching_step", "source_step_id": step["id"],
+            "source_step_receipt": receipt, "kind": step["kind"], "text": step["operation"],
+            "candidate_text": step["operation"], "citations": citations}, None
+
+
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
-                           *, grounded=False):
+                           *, grounded=False, allow_catalog=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -80,6 +121,14 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
     if grounded:
         author_system += "\n\n" + GROUNDED_AUTHOR_GUIDANCE
         reviewer_system += "\n\n" + GROUNDED_HINT_REVIEW
+    catalog = source.get("verified_teaching_steps") if allow_catalog else None
+    known = {h.get("source_step_id") for h in disclosed}
+    options = {s["id"]: s for s in catalog["steps"] if s["id"] not in known
+               and not prior_clue_evidence({"text": s["operation"]}, retained, findings, disclosed)} if catalog else {}
+    if options:
+        author_system = VERIFIED_STEP_AUTHOR
+        material["available_operations"] = [
+            {k: step[k] for k in ("id", "kind", "quote", "span", "operation")} for step in options.values()]
     author_system += "\n\n" + teacher_experience if teacher_experience else ""
     for revision in range(2):
         entry = {"revision": revision, "private_reference": reference["text"], "latest_disclosure_id": previous_id}
@@ -88,7 +137,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         draft = request(role, attempt["attempt"], [
             {"role": "system", "content": author_system},
             {"role": "user", "content": json.dumps(material, ensure_ascii=False)},
-        ], disclosure_author_schema(grounded=grounded))
+        ], verified_choice_schema(options) if options else disclosure_author_schema(grounded=grounded))
         entry["draft_response"] = draft
         if draft["finish_reason"] != "stop":
             entry["issue"] = "disclosure_draft_incomplete"
@@ -96,19 +145,37 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         try:
             proposal = json.loads(draft["content"])
             entry["draft"] = proposal
-            wording = checked_teacher_draft(proposal, source["gold"], retained, findings, disclosed,
-                                            question=source["question"] if grounded else None)
-            if wording is None:
+            if not isinstance(proposal, dict):
+                raise ValueError("invalid_disclosure_draft")
+            step = checked_step_selection(proposal, options) if options else None
+            if options and proposal.get("decision") == "insufficient":
+                proposal = {"bridge": "", "hint": "", "question_quote": "", **proposal}
+            wording = None if step else checked_teacher_draft(proposal, source["gold"], retained, findings, disclosed,
+                                                               question=source["question"] if grounded else None)
+            if not step and wording is None:
                 entry["issue"] = "teacher_needs_more_evidence"
                 return None, entry["issue"]
         except (TypeError, ValueError) as exc:
             entry["issue"] = str(exc)
         else:
+            if step:
+                approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
+                                                        reference, catalog["receipt_id"], step)
+                if approved:
+                    return approved, None
+                entry["issue"] = issue
+                if revision or issue == "disclosure_review_incomplete":
+                    return None, issue
+                prior_assessment = entry.get("assessment")
+                material["requested_revision"] = {"prior_draft": proposal, "issue": issue,
+                                                  "private_reviewer_reason": prior_assessment.get("reason")
+                                                  if isinstance(prior_assessment, dict) else None}
+                continue
             bridge, hint = wording
             prior_review = history[0].get("assessment")
             if grounded and revision and isinstance(prior_review, dict) and prior_review.get("decision") == "withhold":
                 previous = history[0]["draft"]
-                if all(" ".join(proposal[k].split()) == " ".join(previous[k].split()) for k in ("hint", "bridge")):
+                if all(" ".join(proposal[k].split()) == " ".join(previous.get(k, "").split()) for k in ("hint", "bridge")):
                     entry["reused_prior_review_revision"] = history[0]["revision"]
                     entry["issue"] = "unchanged_withheld_disclosure"
                     return None, entry["issue"]

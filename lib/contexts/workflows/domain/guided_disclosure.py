@@ -3,6 +3,7 @@
 import re
 
 from .guided_answers import check_direct_answer, contains_chat_control, prior_clue_evidence, validate_public_guidance
+from .guided_teaching_steps import verified_steps_digest
 
 
 def disclosure_evidence(question, retained, findings, disclosed):
