@@ -202,7 +202,15 @@ JSONL 每行是一道题，`id` 是文件内唯一的字符串，`source` 保留
 
 指导员按学生原文段编号划定可保留前缀，程序可另外核验错误位置之后的独立发现。程序按清单顺序披露下一条线索。3.1 版遇到与已确认学生原文或既有披露完整匹配的清单项，会记录原作者和证据并继续寻找下一条。匹配仅规范 Unicode 组合形式和空白，保留符号、大小写和标点。没有题级线索的题目使用一般方法提醒。每轮实际发出的模型请求保存在逐调用收据中，`case.json` 的 `clue_ledger`、`draft_versions` 和 `shared_student_findings` 可追溯披露、撤回、复用及最终正文的原作者。
 
-同一输入和配置可在同一输出目录恢复。请求结果未明时使用 `--retry-interrupted` 显式重试。使用 `--export-only` 可离线重建 `accepted.jsonl`、`unverified.jsonl`、`quarantine.jsonl` 和逐轮 `feedback.jsonl`。有键题只有在程序核验答案且指导员确认正文成立时通过。无键补写即使通过正文审核也保留待核验状态。
+同一输入和配置可在同一输出目录恢复。请求结果未明时使用 `--retry-interrupted` 显式重试。使用 `--export-only` 可离线重建 `accepted.jsonl`、`unverified.jsonl`、`quarantine.jsonl` 和逐轮 `feedback.jsonl`。含解题过程的有键题在程序核验答案且指导员确认正文成立时通过。无键补写即使通过正文审核也保留待核验状态。
+
+对于只需数量、选项或确定文本的题，可加 `"answer_requirement":"final_only"`。3.6 的首轮只发题目和直接作答指令，关闭原生思考。程序将整份自然结束的回复与独立答案键比较，接受常见的答案标题或数学排版。需要单位时把完整值与单位登记为 `exact` 键。已验中的直接原答无需导师调用，训练记录标明 `nonthinking_direct` 并保留学生原文。证明、解释和多项要求的任务使用默认 `worked_solution`，继续核对完整推导。
+
+3.7 的 `unaided_reasoning` 取首稿中经核查的原始推导，以明确的终答标签作为边界。`guided_reasoning` 从实际发出的提示与学生的逐轮原稿重建带来源的思考轨迹。有键题在解答通过核查后，由同一学生模型从这条前缀继续生成终答。程序核对这次新答。终答有误时，剩余的学生轮次可以围绕原题所求的量、单位、选项或文字要求重新推导，再次尝试交付。训练样本的助手消息分别存储推导和新终答，源题可用 `task_system` 保留需要传给学习者的原始系统要求。对照 `case.json` 的 `finalization` 和各轮的 `formal_answer` 可找到服务回执和核验记录。
+
+3.9 将教师续写和教师稿审核放在 [review_guided_disclosure.py](../../lib/contexts/workflows/application/review_guided_disclosure.py)，公开证据身份、引文和发布校验归 [guided_disclosure.py](../../lib/contexts/workflows/domain/guided_disclosure.py)。写稿者看到此前已发布的教师文字、学生已成立的发现及当前困难，题源提示限定本次披露强度。审查者独立核对拟发文字和它与上一条提示的关系。被拒的原稿及理由只留作教师改进依据，学生只见已经通过的教师原文。正常发稿需要 `disclosure_draft` 与 `disclosure` 两份调用回执；若需返修，再产生 `disclosure_rewrite` 与 `disclosure_recheck`。同一轮中学生解答的评审另存 `coach`。
+
+4.0 对独立首答中可直接核对的错误值保留金标比对记录。教师可以从题设找一个可检验的条件来帮助学生；该次答错的数值或选项只标为学生的作答。教师拟稿的 `question_quote` 及独审引文都能定位到具体题面。已拒候选的公开文字如在重写时没有变化，使用原拒绝记录，收据标明 `reused_prior_review_revision`。学生步骤引用自身或后续步骤时，保留前缀止于该处，独立核实过的事实仍可复用。一份已经审过推导的解答可在闭合思考段后只交付约定的最终值，程序单独核对。冻结的 3.9 与更早任务继续使用各自的协议。
 
 3.2 版由指导员指定第一个无法成立的原文段。程序按段编号计算保留边界。可以为每题加入 `progress_checks`，如 `[{"id":"possible-k","kind":"finite_set","variable":"k","values":[1,4,7],"meaning":"k 表示序列中 1 的个数。","source":"独立枚举"}]`。只有学生以明确肯定的归属关系写出相同变量和完整整数集合时，程序才向下一轮投影其原文公式及审定含义。被撤回段里的其他说法留在档案，未命中的规则留在输入端。程序保存原稿段编号、字符偏移和当时已发布的线索编号。
 

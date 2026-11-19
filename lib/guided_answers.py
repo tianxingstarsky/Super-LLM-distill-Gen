@@ -43,6 +43,11 @@ def main():
         help="Frozen version and optional student instruction string; private coach uses the review protocol",
     )
     cli.add_argument("--export-only", action="store_true")
+    cli.add_argument("--first-pass-only", action="store_true",
+                     help="Run independent final-only student answers and checkpoint questions needing guidance")
+    cli.add_argument("--protocol-version", help="Pin a supported protocol when creating a new run")
+    cli.add_argument("--until-correct", action="store_true",
+                     help="Continue guided reasoning while it advances; preserve stalled cases for new evidence")
     cli.add_argument(
         "--reuse-first-from",
         type=Path,
@@ -62,7 +67,7 @@ def main():
         )
     result = generate_guided_cases(source, output, **args)
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result["complete"] else 2
+    return 0 if result["complete"] or result.get("first_pass_complete") else 2
 
 
 if __name__ == "__main__":

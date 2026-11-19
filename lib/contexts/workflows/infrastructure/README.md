@@ -1,5 +1,9 @@
 # 工作流运行适配
 
+`guided_answer_records.py` 记录每一轮学生、教师拟稿、提示核查和最终答案的独立回执。`--first-pass-only` 可先收集首答，之后用 `--reuse-first-from` 校对模型、题目标识、请求正文和冻结清单，再复用实际首答。不同职责连接各自的本地服务，且共享全局并发额度。已发布给学生的提示、被扣下的草稿与学生最终学会的题数分别统计。
+
+`guided_llama.py` 从本地服务读取真实上下文和会话容量。正式答案使用同一学生服务的原生模板与分词器，在闭合的思考标签后继续生成。核验对象是这次生成的正式答案。运行 `tests/test_guided_answers.py` 可检查续写、断点和导出。教师提示的独立审核进入 Google ReasoningBank 时记录为 `reviewed_teacher_disclosure`，其结果只用于教师经验。
+
 新建 v8 任务对“完整 STOP 但只有新增推理、没有答案”允许一次独立的 Beta 答案前缀收尾；直接复用已保存推理，最多两个生成阶段。截断或无推理不触发收尾，失败不循环，旧任务缺少开关时不追加调用。
 
 `NativeFeedbackAdapter.continue_prefix` 认证原节点、作者、配置和原消息前缀，通过 `CheckpointedReasoningAgent.prepared_prefix_turn` 复用共享准入、流式日志、使用量和检查点；请求使用 `ChatClient.chat` 的 Beta reasoning 模式，不调用 `tool_turn`。正常结束但无答案的付费响应也落入检查点，应用标记未完成，恢复不重新购买。完整实际 HTTP 正文须由诊断观察器保存，构造消息收据不能冒充最终 HTTP。验证：`test_native_prefix_adapter.py`。

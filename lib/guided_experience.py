@@ -13,6 +13,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", required=True, type=Path, help="Completed guided case.json")
     parser.add_argument("--attempt", required=True, type=int, help="One-based attempt number")
+    parser.add_argument("--role", choices=["student", "disclosure_teacher"], default="student")
+    parser.add_argument("--revision", type=int, default=0, help="Teacher draft index, starting at zero")
     parser.add_argument("--query", required=True, help="Skill needed in the next batch")
     parser.add_argument("--backend", required=True, help="Registered model service")
     parser.add_argument("--model", required=True)
@@ -29,7 +31,8 @@ def main():
     bank = google_reasoning_bank_application(binding, root=args.library)
     if args.embedding_cache:
         bank.bank = reasoning_bank_application(root=args.library, embedding_cache=args.embedding_cache)
-    result = learn_guided_experience(bank, case, args.attempt, args.query, args.parent)
+    result = learn_guided_experience(bank, case, args.attempt, args.query, args.parent,
+                                     role=args.role, revision=args.revision)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     atomic_json(args.output, result)
     print(json.dumps({"version": result["version"], "status": result["receipt"]["learning_status"]}))

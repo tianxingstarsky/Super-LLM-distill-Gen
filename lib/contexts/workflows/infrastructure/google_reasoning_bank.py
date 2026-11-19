@@ -47,7 +47,8 @@ def recorded_episode(observation, user_outcome=None):
         raise ValueError("reasoning_bank_no_observed_outcome")
     agent_trace = episode.get("agent_episode_projection_version") == 1 and episode.get("target") == "agent"
     guided_trace = episode.get("guided_answer_projection_version") == 1
-    chronological = agent_trace or guided_trace
+    teacher_draft = episode.get("guided_disclosure_projection_version") == 1
+    chronological = agent_trace or guided_trace or teacher_draft
     thoughts, actions = [], []
     assistant_indexes = [index for index, message in enumerate(messages) if message.get("role") == "assistant"]
     for position, index in enumerate(assistant_indexes):
@@ -68,12 +69,14 @@ def recorded_episode(observation, user_outcome=None):
         "think_list": thoughts, "action_list": actions,
         "status": "success" if check["keep"] else "fail",
         "assessment_source": {"kind": ("user_label" if user_outcome else
+                                       "reviewed_teacher_disclosure" if teacher_draft else
                                        "program_key_and_tutor" if guided_trace else "recorded_model_autoeval"),
                               "independently_verified": False},
         "feedback": "This is a fallible reviewer observation, not established truth.\n" + check.get("reason", ""),
         **({"agent_episode_projection_version": 1, "source_outcome": episode.get("source_outcome", "unknown")}
            if agent_trace else {}),
-        **({"guided_answer_projection_version": 1} if guided_trace else {})}
+        **({"guided_answer_projection_version": 1} if guided_trace else {}),
+        **({"guided_disclosure_projection_version": 1} if teacher_draft else {})}
 
 
 class GoogleReasoningBank:

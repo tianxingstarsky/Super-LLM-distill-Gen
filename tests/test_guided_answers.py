@@ -30,12 +30,45 @@ def test_list_numbers_stay_attached_and_never_become_evidence():
     assert review["verdict"] == "uncertain" and review["verified_prefix_count"] == 1
 
 
+def test_local_answer_continuation_emits_only_tokens_after_the_closed_thinking_block():
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
+
+    endpoint = GuidedChatEndpoint("http://localhost/v1", "student", None, 32768,
+                                  local=True, context=98304, pool=SimpleNamespace(acquire=nullcontext))
+    calls = []
+    messages = [{"role": "user", "content": "What is the sum?"},
+                {"role": "assistant", "reasoning_content": "The two amounts give seven.", "content": ""}]
+
+    def service(url, data):
+        calls.append((url, data))
+        if url.endswith("/apply-template"):
+            assert data["messages"][0]["role"] == "system" and data["messages"][1:] == messages[:-1]
+            assert data["chat_template_kwargs"]["enable_thinking"]
+            return {"prompt": "Question\nAssistant\n<think>\n"}
+        if url.endswith("/tokenize"):
+            assert data["content"] == "Question\nAssistant\n<think>\nThe two amounts give seven.\n</think>\n\n"
+            assert data["parse_special"] and not data["add_special"]
+            return {"tokens": [12, 13, 14]}
+        assert url.endswith("/completion") and data["prompt"] == [12, 13, 14]
+        return {"content": "7", "stop_type": "eos", "tokens_evaluated": 3, "tokens_predicted": 2}
+
+    endpoint.http = service
+    response = endpoint.complete(endpoint.final_answer_payload(messages))
+    assert response["content"] == "7" and response["reasoning_content"] == ""
+    assert response["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert len(calls) == 3
+
+
 def test_three_round_http_history_uses_only_published_clues_and_freezes_resume(
     tmp_path,
     monkeypatch,
 ):
     from lib.model_request_scheduler import SharedModelScheduler
 
+    # Exercise the frozen 3.6 chat protocol, including replay of its original wire body.
+    monkeypatch.setattr("lib.contexts.workflows.infrastructure.guided_answer_records.VERSION", "3.6.0")
     monkeypatch.setattr(
         "lib.bootstrap.guided_answers.SharedModelScheduler",
         lambda _root, identity, **kw: SharedModelScheduler(tmp_path, identity, **kw),
@@ -307,6 +340,7 @@ def test_answer_key_is_mandatory_for_acceptance_and_explanation_has_independent_
             validate_source({**case, "gold": {"kind": "number", "value": "5"}}),
             {"version": "v1"},
             3,
+            protocol_version="3.6.0",
         )["status"]
         == "accepted"
     )
@@ -343,6 +377,398 @@ def test_answer_key_is_mandatory_for_acceptance_and_explanation_has_independent_
     assert not inspect_answer("计算。\n**最终答案：**\n6\nFinal answer: 7", gold)[
         "format_ok"
     ]
+
+
+def test_unaided_direct_answers_export_without_buying_a_tutor_call(tmp_path):
+    from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
+
+    actual = []
+    responses = {"How many?": "Final answer: $\\boxed{5}$", "Which option?": "B",
+                 "Which route?": "A → D → E", "How many in total?": "The answer is **5**."}
+
+    class Endpoint:
+        def validate(self):
+            return {"url": "http://localhost:8080/v1", "model": "fixture", "slots": 4, "enable_thinking": False}
+
+        def payload(self, messages, schema):
+            assert schema is None and [m["role"] for m in messages] == ["system", "user"]
+            return {"messages": messages}
+
+        def complete(self, payload):
+            actual.append(payload)
+            return {"content": responses[payload["messages"][-1]["content"]], "finish_reason": "stop",
+                    "reasoning_content": ""}
+
+    path, output = tmp_path / "in.jsonl", tmp_path / "run"
+    sources = [dict(id=str(i), question=q, answer_requirement="final_only", source_reasoning="PRIVATE",
+                    gold={"kind": k, "value": v})
+               for i, (q, (k, v)) in enumerate(zip(responses, [("number", "5"), ("choice", "B"),
+                                                               ("exact", "A → D → E"), ("number", "5")]))]
+    path.write_text("\n".join(json.dumps(s) for s in sources), encoding="utf8")
+    endpoints = {"student": Endpoint(), "coach": Endpoint()}
+    summary = run_guided_cases(path, output, endpoints, {"version": "default"}, 2, workers=1)
+    assert summary["accepted_by_route"]["nonthinking_direct"] == sum(summary["accepted_by_route"].values()) == 4
+    assert summary["model_calls"]["new_completed"] == len(actual) == 4
+    assert all("PRIVATE" not in str(payload) for payload in actual)
+    for row in map(json.loads, (output / "accepted.jsonl").read_text("utf8").splitlines()):
+        assert row["training_route"] == "nonthinking_direct"
+        assert row["messages"][-1] == {"role": "assistant", "content": responses[row["question"]]}
+        assert row["verification"] == {"answer_key_check": True, "explanation_review": None,
+                                       "correctness": "unaided_direct_key_match", "issue": None}
+    assert run_guided_cases(path, output, {}, {}, 2, export_only=True) == summary
+
+
+def test_direct_admission_does_not_strip_proofs_or_relabel_guided_and_incomplete_answers():
+    from lib.contexts.workflows.domain.guided_answers import check_direct_answer
+
+    seed = {"id": "direct", "question": "What is two plus three?", "gold": {"kind": "number", "value": "5"},
+            "answer_requirement": "final_only"}
+    source = validate_source(seed)
+    assert "answer_requirement" not in validate_source(seed, allow_answer_requirement=False)
+    for wrong in ("Conflicting count: 3.\nFinal answer: 5", "4 or 5", "<think>secret</think>5", "5 if x>0"):
+        assert check_direct_answer(wrong, source["gold"]) is None
+
+    def attempt(replies, assessment, *, entry=source, version="3.6.0", first_pass_only=False):
+        calls = []
+        def send(role, index, messages, schema):
+            calls.append((role, messages))
+            if role == "student":
+                text, thinking, finish = replies[index - 1]
+                return {"content": text, "reasoning_content": thinking, "finish_reason": finish}
+            decision = assessment[index - 1]
+            return {"content": json.dumps({"decision": decision, "diagnosis": "Compare with the actual sum.",
+                                           "reusable": []}), "finish_reason": "stop"}
+        return GenerateGuidedAnswer(send).run(entry, {"version": "test"}, len(replies),
+                                              protocol_version=version, first_pass_only=first_pass_only), calls
+
+    for output in (("5", "hidden calculation", "stop"), ("5", "", "length")):
+        result, calls = attempt([output], [], first_pass_only=True)
+        assert result["status"] == "quarantine" and [r for r, _ in calls] == ["student"]
+    result, calls = attempt([("4", "", "stop")], [], first_pass_only=True)
+    assert result is None and [r for r, _ in calls] == ["student"]
+    for frozen, requirement in (("3.5.0", "final_only"), ("3.6.0", "worked_solution")):
+        result, calls = attempt([("Final answer: 5", "", "stop")], ["supported"],
+                                entry={**source, "answer_requirement": requirement}, version=frozen)
+        assert result["status"] == "quarantine" and [r for r, _ in calls] == ["student", "coach"]
+    worked = "Counting two items and three further items gives five.\nFinal answer: 5"
+    result, calls = attempt([("4", "", "stop"), (worked, "", "stop")], ["revise:a1.s1", "supported"])
+    assert result["training_route"] == "reviewed_solution" and result["messages"][-1]["content"] == worked
+    assert result["attempts"][0]["student"]["content"] == "4"
+    assert [r for r, _ in calls] == ["student", "coach", "student", "coach"]
+    assert calls[0][1][0]["content"] != calls[2][1][0]["content"]
+    assert [m["role"] for m in calls[2][1]] == ["system", "user", "tool"]
+
+
+def test_disclosed_attempts_form_the_native_reasoning_then_the_student_delivers_an_independent_answer():
+    source = validate_source({
+        "id": "guided", "question": "What is 2 plus 3?", "task_system": "Use Arabic numerals.",
+        "gold": {"kind": "number", "value": "5"}, "answer_requirement": "final_only",
+        "source_reasoning": "Private reference explanation.",
+        "disclosure_hints": [
+            {"id": "add", "source": "author", "text": "Combine the two groups."},
+            {"id": "unused", "source": "author", "text": "A private unused clue."},
+        ],
+    })
+    replies = ["4", "Adding two and three gives five.\nFinal answer: 5",
+               "The requested count is the combined total.\nFinal answer: 5"]
+
+    def run(formal_outputs, limit):
+        calls = []
+        def request(role, index, messages, schema):
+            calls.append((role, index, messages))
+            finish = "stop"
+            if role == "student":
+                content = replies[index - 1]
+            elif role == "coach":
+                content = json.dumps({"decision": "revise:a1.s1" if index == 1 else "supported",
+                                      "diagnosis": "Private tutor rationale.", "reusable": []})
+            else:
+                assert role == "final_answer" and schema is None
+                content, finish = formal_outputs[index - 2]
+            return {"content": content, "reasoning_content": "", "finish_reason": finish}
+        case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, limit, protocol_version="3.7.0")
+        return case, calls
+
+    case, calls = run([("7", "stop"), ("5", "stop")], 3)
+    assert [r for r, _, _ in calls] == ["student", "coach", "student", "coach", "final_answer",
+                                        "student", "coach", "final_answer"]
+    assistant = case["messages"][-1]
+    trace = assistant["reasoning_content"]
+    assert case["training_route"] == "guided_reasoning" and assistant["content"] == "5"
+    assert case["messages"][:-1] == [{"role": "system", "content": source["task_system"]},
+                                     {"role": "user", "content": source["question"]}]
+    assert [record["attempt"] for record in case["finalization"]] == [2, 3]
+    assert [record["check"]["answer_matches"] for record in case["finalization"]] == [False, True]
+    offsets = [trace.index(piece) for piece in ("\n4\n", "Combine the two groups.", replies[1], "\n7\n",
+                                                case["disclosures"][1]["text"], replies[2])]
+    assert offsets == sorted(offsets)
+    assert not any(s in trace for s in ("Private reference", "Private tutor", "private unused"))
+    assert calls[-1][2] == [*case["messages"][:-1], {"role": "assistant", "reasoning_content": trace,
+                                                     "content": ""}]
+    retry_view = json.loads(calls[5][2][-1]["content"].split("\n", 1)[1])
+    assert retry_view["your_last_formal_answer"] == "7" and retry_view["your_previous_conclusion"] == "5"
+    for bad, finish in (("5", "length"), ("</think>5", "stop")):
+        failed, _ = run([(bad, finish)], 2)
+        assert failed["status"] == "quarantine" and failed["verification"]["answer_key_check"] is False
+        assert failed["attempts"][-1]["formal_answer"]["response"]["content"] == bad
+    for last_value, status in (("5", "accepted"), ("8", "quarantine")):
+        late, _ = run([("7", "stop"), (last_value, "stop")], 2)
+        assert late["status"] == status and [a["attempt"] for a in late["finalization"]] == [2, 3]
+        assert late["finalization"][0]["granted_correction_round"] == 3
+        assert "granted_correction_round" not in late["finalization"][1]
+        assert late["attempts"][-1]["formal_answer"]["response"]["content"] == last_value
+
+
+def test_final_count_sentence_tracks_the_question_subject_unit_and_last_assertion():
+    from lib.contexts.workflows.domain.guided_answers import inspect_formal_answer
+
+    question = "社团有27人，13人参加读书会，16人参加观影，两个都参加的有7人。两项中恰好只参加一项的人数是多少？"
+    subject = "两项中恰好只参加一项的人数"
+    observed = "两项中恰好只参加一项的人数是 **15** 人。"
+    def check(content, *, direct=False):
+        return inspect_formal_answer({"content": content, "finish_reason": "stop", "reasoning_content": ""},
+                                     {"kind": "number", "value": "15"}, question, final_only=direct)
+    assert check("6 + 9 = 15。\n**结论：**\n" + observed)["answer_matches"] is True
+    assert check(observed, direct=True)["answer_matches"] is True
+    assert check("15")["answer_matches"] is True
+    assert check("14")["answer_matches"] is False
+    assert check("15。另有三组都没参加。")["answer_matches"] is not True
+    assert check("计算见上。\n" + subject + "是14人。")["answer_matches"] is False
+    for bad in (observed.replace("恰好只", "至少"), observed.replace("人。", "组。"), observed.replace("15", "14或15"),
+                "若条件变动，" + observed, observed + "\n该条件尚未确认。", "Final answer: 4\n" + observed,
+                subject + "是 **14** 人。\n" + observed):
+        assert check(bad)["answer_matches"] is not True
+
+
+def test_teacher_reviews_proposed_disclosure_and_its_connection_before_student_can_receive_it():
+    source = validate_source({"id": "hint", "question": "There are 2 red and 3 blue counters. How many in total?",
+                              "gold": {"kind": "number", "value": "5"}, "answer_requirement": "final_only",
+                              "source_reasoning": "Private gold derivation.",
+                              "disclosure_hints": [{"id": "merge", "kind": "idea", "source": "editor",
+                                                   "text": "Combine the two groups."}]})
+    bridge = "The two colours distinguish disjoint parts of one collection."
+    def run(fault=None):
+        calls = []
+        def request(role, index, messages, schema):
+            calls.append((role, index, messages))
+            if role == "student":
+                content = ("4", "Adding counts gives five.\nFinal answer: 5",
+                           "The combined quantity is in counters.\nFinal answer: 5")[index - 1]
+            elif role == "coach":
+                content = json.dumps({"decision": "revise:a1.s1" if index == 1 else "supported",
+                                      "diagnosis": "Private diagnosis of the student's draft.", "reusable": []})
+            elif role == "final_answer":
+                content = "7" if index == 2 else "5"
+            else:
+                assert role == "disclosure"
+                material = json.loads(messages[1]["content"])
+                assert "Private" not in messages[1]["content"] and "answer_key" not in messages[1]["content"]
+                assert [m["role"] for m in messages] == ["system", "user"]
+                citations = [{"evidence_id": "question", "quote": "2 red and 3 blue"}]
+                decision, shown = "release", bridge
+                if index == 2:
+                    history, = material["ordered_previous_teacher_disclosures"]
+                    assert material["latest_disclosure_id"] == history["evidence_id"] == "disclosed.1"
+                    assert history["text"] == bridge + "\nCombine the two groups."
+                    assert material["current_difficulty"]["observed_text_end"] == "7"
+                    if fault != "break_previous_link":
+                        citations.append({"evidence_id": "disclosed.1", "quote": "Combine the two groups."})
+                    shown = "Carry the combined count from that grouping into the quantity asked for."
+                if fault == "quote":
+                    citations[0]["quote"] = "not present"
+                if fault == "answer":
+                    shown = "The answer is 5."
+                if fault == "veto":
+                    decision, shown = "withhold", ""
+                content = json.dumps({"decision": decision, "citations": citations, "bridge": shown,
+                                      "reason": "Private assessment of the proposed hint."})
+            return {"content": content, "finish_reason": "stop", "reasoning_content": ""}
+        return GenerateGuidedAnswer(request).run(source, {"version": "test"}, 3, protocol_version="3.8.0"), calls
+
+    passed, calls = run()
+    assert passed["training_route"] == "guided_reasoning"
+    assert [r for r, _, _ in calls] == ["student", "coach", "disclosure", "student", "coach", "final_answer",
+                                        "disclosure", "student", "coach", "final_answer"]
+    first = passed["attempts"][0]["disclosure_review"]
+    ref, = first["validated_citations"]
+    assert source["question"][slice(*ref["span"])] == ref["quote"]
+    assert first["candidate"]["text"] != passed["disclosures"][0]["text"]
+    trace = passed["messages"][-1]["reasoning_content"]
+    assert bridge in trace and "Private" not in trace
+    for fault, count in (("quote", 0), ("answer", 0), ("veto", 0), ("break_previous_link", 1)):
+        failed, seen = run(fault)
+        assert failed["status"] == "quarantine" and len(failed["disclosures"]) == count
+        assert seen[-1][0] == "disclosure" and "disclosure" not in failed["attempts"][-1]
+        assert failed["attempts"][-1]["disclosure_review"]["issue"] == failed["verification"]["issue"]
+
+
+def test_direct_output_syntax_is_frozen_only_for_compatible_answer_only_sources():
+    row = {"id": "f", "question": "Which fact IDs?", "answer_requirement": "final_only",
+           "gold": {"kind": "exact", "value": "F02,F12"}, "direct_answer_syntax": "fact_ids"}
+    assert validate_source(row)["direct_answer_syntax"] == "fact_ids"
+    assert "direct_answer_syntax" not in validate_source(row, allow_direct_syntax=False)
+    for invalid in ({**row, "gold": {"kind": "exact", "value": "F02, F12"}},
+                    {**row, "direct_answer_syntax": "uppercase_letters"},
+                    {**row, "answer_requirement": "worked_solution"}):
+        with pytest.raises(ValueError, match="direct_answer_syntax"):
+            validate_source(invalid)
+
+
+def test_authored_disclosures_can_continue_after_source_hints_and_preserve_rejected_teacher_drafts():
+    source = validate_source({"id": "authored", "question": "Combine the two disjoint groups of two and three.",
+                              "gold": {"kind": "number", "value": "5"}, "answer_requirement": "final_only",
+                              "disclosure_hints": [{"id": "seed", "source": "curator",
+                                                   "text": "Try summing both disjoint groups."}]})
+    experience = {"version": "experience-test", "disclosure_teacher": "Teacher-only experience."}
+    def run(reject_again=False, stall=False):
+        roles = []
+        def request(role, index, messages, schema):
+            roles.append(role)
+            if role.startswith("disclosure"):
+                packet = json.loads(messages[-1]["content"])
+                if index == 2:
+                    assert packet["private_reference_ceiling"] is None
+                    assert packet["ordered_previous_teacher_disclosures"][-1]["evidence_id"] == "disclosed.1"
+                if role in ("disclosure_draft", "disclosure_rewrite"):
+                    assert experience["disclosure_teacher"] in messages[0]["content"]
+                    if role == "disclosure_rewrite":
+                        assert "too strong" in packet["requested_revision"]["private_reviewer_reason"]
+                    bridge = ("Disjoint groups have no member in common." if index == 1 else "The sets can be counted separately.")
+                    hint = ("Try tracking one group." if index == 1 else "Carry the second count into the sum.")
+                    if role == "disclosure_draft" and index == 1:
+                        hint = "Jump straight to the subtotal."
+                    result = {"decision": "offer", "bridge": bridge, "hint": hint, "reason": "A private draft basis."}
+                else:
+                    assert experience["disclosure_teacher"] not in messages[0]["content"]
+                    proposed = packet["proposed_next_teacher_disclosure"]
+                    citations = [{"evidence_id": "question", "quote": "disjoint groups"}]
+                    if index == 2:
+                        citations.append({"evidence_id": "disclosed.1", "quote": "tracking one group"})
+                    release = index > 1 or (role == "disclosure_recheck" and not reject_again)
+                    result = {"decision": "release" if release else "withhold", "citations": citations,
+                              "bridge": proposed["bridge"] if release else "",
+                              "reason": "The published fact supports the step." if release else "Too large: too strong."}
+                content = json.dumps(result)
+            elif role == "student":
+                assert experience["disclosure_teacher"] not in messages[0]["content"]
+                content = ("4", "The two groups do not overlap.\nI subtract.\nFinal answer: 4",
+                           "Adding the two groups now gives five.\nFinal answer: 5")[index - 1]
+            elif role == "coach":
+                decision = ("revise:a1.s1", "revise:a2.s1" if stall else "revise:a2.s2", "supported")[index - 1]
+                content = json.dumps({"decision": decision,
+                                      "diagnosis": "Assessing the student.", "reusable": []})
+            else:
+                assert role == "final_answer"
+                content = "5"
+            return {"finish_reason": "stop", "reasoning_content": "", "content": content}
+        return GenerateGuidedAnswer(request).run(source, experience, 1, protocol_version="3.9.0", until_correct=True), roles
+
+    case, roles = run()
+    assert case["training_route"] == "guided_reasoning" and len(case["disclosures"]) == 2
+    assert roles.count("disclosure_draft") == 2 and roles.count("disclosure_rewrite") == 1
+    assert case["clue_ledger"][-1]["bank_position"] is None
+    assert "Jump straight" not in case["messages"][-1]["reasoning_content"]
+    assert case["attempts"][0]["disclosure_work"][0]["assessment"]["decision"] == "withhold"
+    rejected, roles = run(reject_again=True)
+    assert rejected["status"] == "awaiting_guidance" and rejected["disclosures"] == []
+    assert [a["revision"] for a in rejected["attempts"][0]["disclosure_work"]] == [0, 1]
+    assert roles[-1] == "disclosure_recheck" and rejected["continuation"]["last_student_round"] == 1
+    stalled, roles = run(stall=True)
+    assert stalled["status"] == "awaiting_guidance"
+    assert stalled["continuation"]["reason"] == "no_new_verified_student_progress" and roles[-1] == "coach"
+
+
+def test_wrong_direct_value_stays_an_observation_and_unchanged_withheld_hint_is_not_reviewed_twice():
+    question = ("Facts: F01: Anne is quiet. F02: Anne is smart. F04: Erin is green. F05: Erin is smart. "
+                "Red, round people are quiet. Return all fact IDs whose withdrawal breaks the target.")
+    source = validate_source({"id": "withdrawal", "question": question, "answer_requirement": "final_only",
+                              "gold": {"kind": "exact", "value": "F04,F05"}, "direct_answer_syntax": "fact_ids"})
+    def run(release, quote="Red, round people are quiet."):
+        roles = []
+        def call(role, index, messages, schema):
+            roles.append(role)
+            if role == "student":
+                if index == 1:
+                    content = "F01,F03,F04,F05,F06,F07"
+                else:
+                    view = json.loads(messages[-1]["content"].split("\n", 1)[1])
+                    assert not view["retained_solution"] and not view["confirmed_findings_from_your_own_work"]
+                    assert "Look for the premises" in view["new_clue"]
+                    return {"content": "", "reasoning_content": "", "finish_reason": "length"}
+            else:
+                packet = json.loads(messages[-1]["content"])
+                assert [e["evidence_id"] for e in packet["established_evidence"]] == ["question"]
+                assert packet["current_difficulty"]["observed_text_end"] == "F01,F03,F04,F05,F06,F07"
+                if role in ("disclosure_draft", "disclosure_rewrite"):
+                    assert "question_quote" in schema["required"]
+                    data = {"decision": "offer", "bridge": "A rule ties two conditions to the target.",
+                            "hint": "Look for the premises of that rule.", "question_quote": quote,
+                            "reason": "The conditions can be examined even though no student reasoning was provided."}
+                else:
+                    assert role == "disclosure"
+                    data = {"decision": "release" if release else "withhold",
+                            "bridge": "A rule ties two conditions to the target." if release else "",
+                            "citations": [{"evidence_id": "question", "quote": quote}],
+                            "reason": "The quoted premises identify a local check." if release else "Needs a smaller action."}
+                content = json.dumps(data)
+            return {"content": content, "reasoning_content": "", "finish_reason": "stop"}
+        return GenerateGuidedAnswer(call).run(source, {"version": "initial"}, 2), roles
+    blocked, roles = run(False)
+    assert roles == ["student", "disclosure_draft", "disclosure", "disclosure_rewrite"]
+    attempt = blocked["attempts"][0]
+    assert attempt["check"]["answer_matches"] is False and attempt["check"]["issue"] == "answer_key_mismatch"
+    assert attempt["student_assessment_source"] == "independent_answer_key" and "coach_response" not in attempt
+    assert not blocked["retained_segments"] and not blocked["shared_student_findings"] and not blocked["disclosures"]
+    assert attempt["disclosure_work"][1]["reused_prior_review_revision"] == 0
+    published, roles = run(True)
+    assert len(published["disclosures"]) == 1 and roles == ["student", "disclosure_draft", "disclosure", "student"]
+    weak, roles = run(True, "the")
+    assert not weak["disclosures"] and "disclosure" not in roles
+
+
+def test_reusable_steps_cannot_self_authenticate_or_form_a_cycle_in_a_judged_prefix():
+    from lib.contexts.workflows.domain.guided_answers import rooted_prefix_count
+
+    segments = [{"id": f"a1.s{i}", "text": s} for i, s in enumerate(
+        ("The source says there are two groups.", "4 × 3 = 12.", "That makes twelve.", "Next."), 1)]
+    def claim(index, basis, dependencies=()):
+        return {"segment_id": f"a1.s{index}", "basis_id": basis, "depends_on": list(dependencies)}
+    assert rooted_prefix_count([claim(2, "a1.s2")], segments, 3) == 1
+    assert rooted_prefix_count([claim(3, "a1.s2"), claim(2, "a1.s3")], segments, 3) == 1
+    assert rooted_prefix_count([claim(2, "arithmetic", ["a1.s3"])], segments, 3) == 1
+    assert rooted_prefix_count([claim(1, "question"), claim(2, "arithmetic"), claim(3, "a1.s2", ["a1.s1"])],
+                               segments, 3) == 3
+    assert shared_findings([claim(2, "arithmetic")], segments, segments[:1], "The source says there are two groups.")[
+        "a1.s2"]["evidence_level"] == "program_checked_arithmetic_identity"
+
+
+def test_unaided_visible_derivation_becomes_thinking_and_only_real_corrections_change_its_route():
+    source = validate_source({"id": "self-solution", "question": "What is three plus four?",
+                              "answer_requirement": "final_only", "gold": {"kind": "number", "value": "7"}})
+    proof = "I add four to three to obtain seven."
+    def run(finals):
+        events = []
+        def request(role, index, messages, schema):
+            events.append((role, messages))
+            if role == "student":
+                text = (proof if index == 1 else "Checking the count again gives seven.") + "\nFinal answer: 7"
+            elif role == "coach":
+                text = json.dumps({"decision": "supported", "diagnosis": "Checked the addition.", "reusable": []})
+            else:
+                text = finals[index - 1]
+            return {"finish_reason": "stop", "reasoning_content": "", "content": text}
+        return GenerateGuidedAnswer(request).run(source, {"version": "test"}, len(finals), protocol_version="3.7.0"), events
+
+    case, events = run(["7"])
+    assert [r for r, _ in events] == ["student", "coach", "final_answer"]
+    assert case["training_route"] == "unaided_reasoning" and case["disclosures"] == []
+    assert events[-1][1][-1] == {"role": "assistant", "reasoning_content": proof, "content": ""}
+    assert case["messages"][-1] == {"role": "assistant", "reasoning_content": proof, "content": "7"}
+    corrected, events = run(["6", "7"])
+    assert corrected["training_route"] == "guided_reasoning" and len(corrected["disclosures"]) == 1
+    assert [event["attempt"] for event in corrected["finalization"]] == [1, 2]
+    assert "\n6\n" in corrected["messages"][-1]["reasoning_content"]
+    assert corrected["messages"][-1]["content"] == "7"
 
 
 def test_reasoning_only_source_receives_missing_natural_artifact_without_numeric_format():
@@ -493,7 +919,7 @@ def test_reviewed_set_survives_a_zero_prefix_with_its_source_and_no_unfound_chec
             )
         return {"content": content, "finish_reason": "stop", "reasoning_content": ""}
 
-    case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2)
+    case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version="3.5.0")
     assert (
         case["status"] == "accepted"
         and case["draft_versions"][0]["retained_after"] == []

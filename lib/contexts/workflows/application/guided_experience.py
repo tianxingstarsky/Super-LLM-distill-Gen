@@ -1,4 +1,6 @@
-"""Learn a reusable answering strategy from one observed guided attempt."""
+"""Use an observed student attempt or an independently reviewed teacher hint to learn a role-specific strategy."""
+
+import json
 
 
 def observed_attempt(case, number):
@@ -38,15 +40,47 @@ def observed_attempt(case, number):
             "review_observation": {"verdict": {"keep": match, "reason": reason}}}
 
 
-def learn_guided_experience(bank, case, attempt, query, parent_id=None):
-    observation = observed_attempt(case, attempt)
+def observed_teacher_disclosure(case, number, revision):
+    if not 1 <= number <= len(case["attempts"]):
+        raise ValueError("Select an actual student round")
+    work = case["attempts"][number - 1].get("disclosure_work", [])
+    if not 0 <= revision < len(work):
+        raise ValueError("Select a recorded teacher disclosure draft")
+    item = work[revision]
+    review = item.get("assessment") or {}
+    decision = review.get("decision")
+    if not item.get("draft") or decision not in ("release", "withhold"):
+        raise ValueError("The teacher draft has no substantive independent assessment")
+    if decision == "release" and not item.get("validated_citations"):
+        raise ValueError("The proposed release has no verified evidence")
+    earlier = [a["disclosure"]["text"] for a in case["attempts"][:number - 1] if a.get("disclosure")]
+    prompt = {"task": "Give one justified next hint from what the learner can already establish.",
+              "problem": case["question"], "earlier_published_hints": earlier}
+    draft = item["draft"]
+    text = draft["bridge"] + "\n" + draft["hint"]
+    return {
+        "id": f"{case['id']}-disclosure-{number}-{revision}", "guided_disclosure_projection_version": 1,
+        "conversation": {"messages": [{"role":"user","content":json.dumps(prompt, ensure_ascii=False)},
+                                      {"role":"assistant","content":text}]},
+        "review_observation": {"verdict": {"keep": decision == "release",
+            "reason": "Independent assessment of the teacher's hint. " + review["reason"]}},
+    }
+
+
+def learn_guided_experience(bank, case, attempt, query, parent_id=None, *, role="student", revision=0):
+    if role not in ("student", "disclosure_teacher"):
+        raise ValueError("Unknown guided experience role")
+    observation = (observed_teacher_disclosure(case, attempt, revision)
+                   if role == "disclosure_teacher" else observed_attempt(case, attempt))
     learned = bank.learn("reasoning", observation, parent_id=parent_id)
     identifier = parent_id if learned.get("status") == "no_update" else learned["id"]
     receipt = {"source_case": case["id"], "attempt": attempt, "parent": parent_id,
                "learning_status": learned["status"], "source_binding": case["binding"],
                "model_calls": learned["model_request_receipt"]}
+    if role == "disclosure_teacher":
+        receipt.update(role=role, disclosure_revision=revision, outcome_scope="quality_of_the_teacher_hint")
     if not identifier:
-        return {"version": "initial", "student": "", "receipt": receipt}
+        return {"version": "initial", role: "", "receipt": receipt}
     indexed = bank.bank.index_edition(identifier)
     if indexed["status"] != "indexed":
         raise ValueError(f"Could not prepare the learned rules for retrieval: {indexed['status']}")
@@ -57,5 +91,5 @@ def learn_guided_experience(bank, case, attempt, query, parent_id=None):
     for match in selected["matches"]:
         entry = match["entry"]
         rules.append("\n".join(filter(None, [entry["when"], entry["principle"], entry["avoid"]])))
-    return {"version": identifier, "student": "\n\n".join(rules),
+    return {"version": identifier, role: "\n\n".join(rules),
             "receipt": {**receipt, "selection": selected["receipt"]}}

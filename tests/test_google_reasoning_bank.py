@@ -8,7 +8,7 @@ import pytest
 from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_application
 from lib.bootstrap.reasoning_bank import reasoning_bank_application
 from lib.contexts.workflows.api import learn_guided_experience
-from lib.contexts.workflows.application.guided_experience import observed_attempt
+from lib.contexts.workflows.application.guided_experience import observed_attempt, observed_teacher_disclosure
 from lib.contexts.workflows.infrastructure.google_reasoning_bank import recorded_episode
 
 
@@ -34,6 +34,17 @@ def test_guided_learning_observes_only_feedback_available_at_selected_attempt():
     reset = recorded_episode(observed_attempt(case, 2))
     assert "boundary" in reset["query"] and len(reset["action_list"]) == 1
     assert "Six possibilities" not in str(reset)
+
+
+def test_teacher_withheld_hint_feedback_is_about_the_draft():
+    case = {"id": "history", "question": "Which facts support the conclusion?", "attempts": [
+        {"disclosure_work": [{"draft": {"bridge": "You identified every fact.", "hint": "Look for a rule."},
+                              "assessment": {"decision": "withhold", "reason": "Unjustified praise."}}]}]}
+    episode = recorded_episode(observed_teacher_disclosure(case, 1, 0))
+    assert episode["assessment_source"] == {"kind": "reviewed_teacher_disclosure", "independently_verified": False}
+    assert episode["status"] == "fail"
+    assert json.loads(episode["action_list"][0])["assistant_action"]["content"] == "You identified every fact.\nLook for a rule."
+    assert "Unjustified praise" in episode["feedback"]
 
 
 @pytest.fixture(scope="session", autouse=True)

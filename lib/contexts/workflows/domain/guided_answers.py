@@ -4,7 +4,7 @@ from fractions import Fraction
 import re
 import unicodedata
 
-from lib.prompts.workflow_guided_answers import HINTS
+from lib.prompts.workflow_guided_answers import FINAL_DELIVERY_HINTS, HINTS
 
 
 _PRIVATE_MARKERS = re.compile(r"</?think>|<\|im_(?:start|end)\|>", re.I)
@@ -30,7 +30,7 @@ def number(value):
         return None
 
 
-def validate_source(row):
+def validate_source(row, *, allow_answer_requirement=True, allow_task_system=True, allow_direct_syntax=True):
     if (
         not isinstance(row, dict)
         or not isinstance(row.get("id"), str)
@@ -58,6 +58,36 @@ def validate_source(row):
             raise ValueError("invalid exact rational answer key")
         if gold["kind"] == "choice" and not re.fullmatch(r"[A-Z]", gold["value"]):
             raise ValueError("choice answer key must be one uppercase letter")
+    requirement = row.get("answer_requirement") if allow_answer_requirement else None
+    task_system = row.get("task_system") if allow_task_system else None
+    if task_system is not None and (not isinstance(task_system, str) or not task_system.strip()):
+        raise ValueError("task_system must be a nonempty string")
+    if requirement is not None and requirement not in ("worked_solution", "final_only"):
+        raise ValueError("answer_requirement must be worked_solution or final_only")
+    if requirement == "final_only" and (not gold or len(gold["value"].strip().splitlines()) != 1):
+        raise ValueError("final_only requires an independent, single-line answer key")
+    syntax = row.get("direct_answer_syntax") if allow_direct_syntax else None
+    if syntax is not None:
+        if requirement != "final_only" or syntax not in (
+            "number", "uppercase_letters", "fact_ids", "keyed_rational", "distinct_letter_ids", "distinct_fact_ids",
+        ):
+            raise ValueError("direct_answer_syntax requires a supported final_only format")
+        if syntax in ("number", "keyed_rational"):
+            valid_syntax = gold["kind"] == "number"
+        elif syntax == "distinct_letter_ids":
+            value = gold["value"]
+            valid_syntax = (gold["kind"] in {"choice", "exact"} and re.fullmatch(r"[A-Z]{1,26}", value)
+                            and len(set(value)) == len(value))
+        elif syntax == "distinct_fact_ids":
+            value = gold["value"].split(",")
+            valid_syntax = (gold["kind"] == "exact" and len(set(value)) == len(value)
+                            and all(re.fullmatch(r"F[0-9]{2}", item) for item in value))
+        elif syntax == "uppercase_letters":
+            valid_syntax = gold["kind"] in {"choice", "exact"} and re.fullmatch(r"[A-Z]+", gold["value"])
+        else:
+            valid_syntax = gold["kind"] == "exact" and re.fullmatch(r"F[0-9]+(?:,F[0-9]+)*", gold["value"])
+        if not valid_syntax:
+            raise ValueError("the answer key is incompatible with its declared direct_answer_syntax")
     hints = row.get("disclosure_hints", [])
     if not isinstance(hints, list):
         raise ValueError("disclosure_hints must be an ordered list of reviewed clues")
@@ -103,29 +133,7 @@ def validate_source(row):
         check["meaning"] for check in checks
     ]
     for visible in public_texts:
-        text = unicodedata.normalize("NFKC", visible)
-        if re.search(
-            r"<\/?think>|<\|im_|\b(?:system prompt|hidden answer|answer key|round \d+|the answer is|final answer)\b|(?:标准答案|内部轮次|指导员|教练|第[\d一二三四五六七八九十]+轮|答案是)",
-            text,
-            re.I,
-        ):
-            raise ValueError("a reviewed hint discloses an answer or internal protocol")
-        if gold:
-            key = gold["value"].strip()
-            # A worked step may legitimately contain the same number or letter as the key.
-            # Reject a standalone answer or explicit instruction to give that result.
-            proposed = re.sub(
-                r"^(?:use (?:the )?value|return|enter|choose|select|应选|选项|取值为)\s*",
-                "",
-                text.strip().rstrip(".。!！"),
-                flags=re.I,
-            ).strip()
-            if gold["kind"] == "number":
-                leaked = number(proposed) == number(key)
-            else:
-                leaked = proposed.casefold() == key.casefold()
-            if leaked:
-                raise ValueError("a reviewed hint contains the supplied answer key")
+        validate_public_guidance(visible, gold)
     return {
         "id": row["id"],
         "question": row["question"],
@@ -133,8 +141,28 @@ def validate_source(row):
         "source_reasoning": reasoning,
         "source": row.get("source", {}),
         "disclosure_hints": hints,
+        **({"task_system": task_system} if task_system is not None else {}),
+        **({"answer_requirement": requirement} if requirement is not None else {}),
+        **({"direct_answer_syntax": syntax} if syntax is not None else {}),
         **({"progress_checks": checks} if checks else {}),
     }
+
+
+def validate_public_guidance(visible, gold):
+    text = unicodedata.normalize("NFKC", visible)
+    if re.search(
+        r"<\/?think>|<\|im_|\b(?:system prompt|hidden answer|answer key|round \d+|the answer is|final answer)\b|(?:标准答案|内部轮次|指导员|教练|第[\d一二三四五六七八九十]+轮|答案是)",
+        text, re.I,
+    ):
+        raise ValueError("a reviewed hint discloses an answer or internal protocol")
+    if gold:
+        # A worked step may legitimately contain the same number or letter as the key.
+        key = gold["value"].strip()
+        proposed = re.sub(r"^(?:use (?:the )?value|return|enter|choose|select|应选|选项|取值为)\s*", "",
+                          text.strip().rstrip(".。!！"), flags=re.I).strip()
+        leaked = number(proposed) == number(key) if gold["kind"] == "number" else proposed.casefold() == key.casefold()
+        if leaked:
+            raise ValueError("a reviewed hint contains the supplied answer key")
 
 
 def _code_fence(line, opened):
@@ -257,6 +285,146 @@ def inspect_answer(text, gold, *, parse_count_sentence=True, marked_finals=True,
             answer_matches=None,
             issue="private_or_template_markers",
         )
+    return _check_final_value(answer, gold, parse_count_sentence=parse_count_sentence,
+                              marked_finals=marked_finals, question=question)
+
+
+def check_direct_answer(text, gold, *, include_mismatch=False):
+    """Match the entire student's unaided reply, allowing an optional final-answer label."""
+    if not gold or contains_chat_control(text):
+        return None
+    raw = text.strip()
+    start, answer = answer_tail(raw)
+    if start is None:
+        answer = raw
+    elif start:
+        return None
+    if not answer or len(answer.splitlines()) != 1:
+        return None
+    check = _check_final_value(answer, gold, parse_count_sentence=False)
+    if check["answer_matches"]:
+        return check
+    # Unwrap presentation of one value only; never fish a correct token out of prose.
+    value = re.sub(r"^(?:the (?:final )?answer is\s+|(?:最终)?答案(?:是|为)\s*)", "", answer, flags=re.I)
+    value = value.removesuffix("。").removesuffix(".").strip()
+    value = re.sub(r"^(\*\*|__)(.+)\1$", r"\2", value)
+    for left, right in ((r"\(", r"\)"), (r"\[", r"\]"), ("$$", "$$"), ("$", "$")):
+        if value.startswith(left) and value.endswith(right):
+            value = value[len(left):-len(right)].strip()
+            break
+    boxed = re.fullmatch(r"\\boxed\{(.+)\}", value)
+    if boxed:
+        value = boxed[1]
+    check = _check_final_value(value, gold, parse_count_sentence=False)
+    if check["answer_matches"]:
+        return {**check, "answer_surface": answer}
+    if include_mismatch and (
+        number(value) is not None or re.fullmatch(r"[A-Za-z0-9_]+(?:[,./-][A-Za-z0-9_]+)*", value)
+        or (start == 0 and bool(value))
+    ):
+        # A bare submission is a proposed final, even when it is wrong.
+        # Keeping it out of the segment list prevents a judge from reusing it as a proof.
+        return {**check, "answer_surface": answer}
+    return None
+
+
+def student_reasoning_trace(attempts, question):
+    """Project the actual unaided derivation or the chronological public solving dialogue."""
+    if len(attempts) == 1:
+        reply = attempts[0]["student"]["content"]
+        terminal, _ = answer_tail(reply)
+        if terminal is None or not reply[:terminal].strip():
+            raise ValueError("reviewed unaided reasoning needs a separate derivation and final answer")
+        return reply[:terminal].rstrip()
+    chinese = bool(re.search(r"[\u4e00-\u9fff]", question))
+    blocks = []
+    for attempt in attempts:
+        index = attempt["attempt"]
+        label = f"我的第 {index} 次作答" if chinese else f"My attempt {index}"
+        blocks.append(label + "\n" + attempt["student"]["content"])
+        if "formal_answer" in attempt:
+            label = "我当时给出的答复" if chinese else "The answer I gave at that point"
+            blocks.append(label + "\n" + attempt["formal_answer"]["response"]["content"])
+        if attempt.get("disclosure"):
+            label = "收到的提示" if chinese else "Guidance I received"
+            blocks.append(label + "\n" + attempt["disclosure"]["text"])
+    return "\n\n".join(blocks)
+
+
+def formal_delivery_hint(question, kind, index):
+    chinese = bool(re.search(r"[\u4e00-\u9fff]", question))
+    return {"id": f"formal-answer-{index}", "kind": "idea", "source": "final_answer_key_check",
+            "text": FINAL_DELIVERY_HINTS[kind][int(chinese)]}
+
+
+def contains_chat_control(text):
+    return bool(_PRIVATE_MARKERS.search(text) or re.search(r"<\|[^<>\s]+\|>", text))
+
+
+def _question_count_conclusion(text, question, gold, *, final_only):
+    """Ground a Chinese terminal numerical assertion in the actual question's subject and unit."""
+    if gold["kind"] != "number":
+        return None
+    asked = unicodedata.normalize("NFKC", question).strip().rstrip("?？。")
+    asked = re.split(r"[。？！?！!；;\n]", asked)[-1].strip()
+    target = re.fullmatch(r"(.+?)(?:是|为|有|等于)?多少\s*([\u4e00-\u9fff]*)", asked)
+    if not target:
+        return None
+    subject, unit = target.groups()
+    if not unit:
+        for quantity, measure in (("人数", "人"), ("天数", "天"), ("件数", "件"), ("组数", "组"),
+                                  ("次数", "次"), ("份数", "份")):
+            if subject.endswith(quantity):
+                unit = measure
+                break
+    lines = [re.sub(r"(\*\*|__)(.+?)\1", r"\2", line).strip()
+             for line in unicodedata.normalize("NFKC", text).splitlines() if line.strip()]
+    if not lines or (final_only and len(lines) > 1) or any("```" in line or "~~~" in line for line in lines):
+        return None
+    # A second independently labelled final assertion would make the delivery ambiguous.
+    if any(re.match(r"^(?:#+\s*)?(?:final answer|最终答案|答案|结论)\s*[:：]\s*\S", line, re.I)
+           for line in lines[:-1]):
+        return None
+    statement = re.compile(r"(?:因此[，,]?|所以[，,]?)?\s*" + re.escape(subject.strip())
+                           + r"\s*(?:是|为|等于|共有|有)\s*"
+                             r"([+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:/\d+)?)"
+                             r"\s*([\u4e00-\u9fff]*)[。.！!]?$")
+    last = statement.fullmatch(lines[-1])
+    if not last or (last[2] and last[2] != unit):
+        return None
+    for line in lines[:-1]:
+        prior = statement.fullmatch(line)
+        if prior and (number(prior[1]) != number(last[1]) or (prior[2] and prior[2] != unit)):
+            return None
+    match = _check_final_value(last[1], gold, parse_count_sentence=False)
+    return {**match, "answer_surface": lines[-1]}
+
+
+def inspect_formal_answer(response, gold, question, *, final_only, allow_bare_delivery=True):
+    text = response["content"]
+    if response["finish_reason"] != "stop" or response.get("reasoning_content") or not text.strip():
+        issue = "formal_answer_incomplete_or_native_thinking"
+    elif contains_chat_control(text):
+        issue = "formal_answer_contains_control_markers"
+    else:
+        conclusion = _question_count_conclusion(text, question, gold, final_only=final_only)
+        if conclusion:
+            return conclusion
+        if allow_bare_delivery:
+            # The reviewed derivation was already supplied before the closed think block.
+            direct = check_direct_answer(text, gold, include_mismatch=True)
+            if direct:
+                return direct
+        if not final_only:
+            return inspect_answer(text, gold, question=question)
+        direct = check_direct_answer(text, gold)
+        if direct:
+            return direct
+        issue = "formal_answer_does_not_match_key"
+    return dict(format_ok=False, answer=None, answer_matches=False, issue=issue)
+
+
+def _check_final_value(answer, gold, *, parse_count_sentence, marked_finals=False, question=None):
     candidate = answer.strip("$").strip()
     if box := re.fullmatch(r"\\boxed\{(.+)\}", candidate):
         candidate = box[1]
@@ -455,6 +623,27 @@ def checked_truncated_progress(checks, text, attempt):
     return checked_progress(checks, pieces, text, truncated=True)
 
 
+def rooted_prefix_count(proposed, segments, count):
+    """A retained step cannot claim itself or a later proposition as its basis."""
+    positions = {s["id"]: i for i, s in enumerate(segments)}
+    for item in proposed:
+        if not isinstance(item, dict):
+            continue
+        sid, deps = item.get("segment_id"), item.get("depends_on")
+        pos = positions.get(sid) if isinstance(sid, str) else None
+        if pos is None or pos >= count:
+            continue
+        basis = item.get("basis_id")
+        if not isinstance(deps, list) or not isinstance(basis, str):
+            count = pos
+            continue
+        if basis not in {"question", "arithmetic"} and positions.get(basis, len(positions)) >= pos:
+            count = pos
+        if any(not isinstance(dep, str) or positions.get(dep, len(positions)) >= pos for dep in deps):
+            count = min(count, pos)
+    return count
+
+
 def shared_findings(proposed, segments, prefix, question, *, exclude_list_markers=False):
     """Only an authenticated student span is published. Unsupported proposals remain in the private review."""
     valid = {s["id"]: s["text"] for s in prefix}
@@ -555,7 +744,7 @@ def prior_clue_evidence(clue, retained, findings, disclosed):
 
     claim = normalized(clue["text"])
     for earlier in disclosed:
-        if normalized(earlier["text"]) == claim:
+        if normalized(earlier["text"]) == claim or normalized(earlier.get("candidate_text", "")) == claim:
             return {"status": "already_disclosed", "disclosure_id": earlier["id"]}
     for piece in retained:
         if normalized(piece["text"]) == claim:

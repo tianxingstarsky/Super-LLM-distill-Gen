@@ -5,8 +5,23 @@ import os
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from lib.prompts.workflow_guided_answers import FINAL_DELIVERY
+
 MIN_CONTEXT = 90_000
 MIN_OUTPUT = 32_768
+
+# These describe a requested answer surface. All values in that surface remain possible.
+DIRECT_ANSWER_GRAMMARS = {
+    "number": 'root ::= [+-]? [0-9]+ (("." [0-9]+) | ("/" [0-9]+))? ([eE] [+-]? [0-9]+)?',
+    "uppercase_letters": 'root ::= [A-Z]+',
+    "fact_ids": 'root ::= "F" [0-9]+ (",F" [0-9]+)*',
+    # A result made from distinct A–Z identifiers can contain at most 26 letters.
+    "distinct_letter_ids": 'root ::= [A-Z]{1,26}',
+    # The F00–F99 vocabulary has one hundred possible distinct identifiers.
+    "distinct_fact_ids": 'root ::= "F" [0-9]{2} (",F" [0-9]{2}){0,99}',
+    # The exact-rational verifier accepts up to 256 input characters and a two-digit exponent.
+    "keyed_rational": 'root ::= [+-]? [0-9]{1,256} (("." [0-9]{1,256}) | ("/" [0-9]{1,256}))? ([eE] [+-]? [0-9]{1,2})?',
+}
 
 
 def wire_body(value):
@@ -69,7 +84,7 @@ class GuidedChatEndpoint:
         # Native loopback chat sends its first response bytes after decoding.
         # A 32K generation on CPU can exceed an hour without a network fault.
         loopback_chat = (self.local and urlsplit(self.url).hostname in {"localhost", "127.0.0.1", "::1"}
-                         and url == self.root + "/v1/chat/completions")
+                         and url in {self.root + "/v1/chat/completions", self.root + "/completion"})
         with urlopen(request, timeout=None if loopback_chat else 3600) as response:
             return json.load(response)
 
@@ -126,7 +141,52 @@ class GuidedChatEndpoint:
             }
         return data
 
+    def final_answer_payload(self, messages):
+        """Freeze the native token prefix ending immediately after the program's thinking block."""
+        last = messages[-1]
+        if not self.local or last.get("role") != "assistant" or last.get("content") != "":
+            raise ValueError("answer continuation requires a local assistant reasoning prefix")
+        trace = last.get("reasoning_content")
+        if not isinstance(trace, str) or not trace.strip():
+            raise ValueError("missing guided reasoning before the final answer")
+        if any(mark in trace for mark in ("<think>", "</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>")):
+            raise ValueError("guided reasoning contains a chat control delimiter")
+        task = list(messages[:-1])
+        if task and task[0]["role"] == "system":
+            task[0] = {**task[0], "content": task[0]["content"] + "\n\n" + FINAL_DELIVERY}
+        else:
+            task.insert(0, {"role": "system", "content": FINAL_DELIVERY})
+        rendered = self.http(self.root + "/apply-template", {
+            "messages": task, "chat_template_kwargs": {"enable_thinking": True},
+            "add_generation_prompt": True,
+        })["prompt"]
+        if not rendered.endswith("<think>\n"):
+            raise ValueError("the local template did not open a native Qwen thinking block")
+        prefix = rendered + trace + "\n</think>\n\n"
+        tokens = self.http(self.root + "/tokenize", {
+            "content": prefix, "add_special": False, "parse_special": True,
+        })["tokens"]
+        if not tokens or len(tokens) + self.cap > self.context:
+            raise ValueError("the complete guided reasoning and answer reservation must fit the native slot")
+        return {"model": self.model, "prompt": tokens, "n_predict": self.cap,
+                "temperature": 0, "cache_prompt": True, "stream": False}
+
     def complete(self, data):
+        if "prompt" in data:
+            with self.pool.acquire():
+                raw = self.http(self.root + "/completion", data)
+            if raw.get("truncated") or raw.get("tokens_evaluated") != len(data["prompt"]):
+                raise ValueError("llama-server changed the supplied answer prefix")
+            if raw.get("stop_type") not in {"eos", "limit"} or not isinstance(raw.get("content"), str):
+                raise ValueError("unexpected llama-server answer continuation")
+            predicted = raw["tokens_predicted"]
+            return dict(content=raw["content"], reasoning_content="",
+                        finish_reason="stop" if raw["stop_type"] == "eos" else "length",
+                        usage=dict(prompt_tokens=len(data["prompt"]), completion_tokens=predicted,
+                                   total_tokens=len(data["prompt"]) + predicted),
+                        model=raw.get("model", self.model), context_tokens=self.context,
+                        estimated_prompt_tokens=len(data["prompt"]), max_tokens=self.cap,
+                        server_timing=raw.get("timings"), transport="llama.cpp/completion")
         prompt_count = None
         if self.local:
             rendered = self.http(
