@@ -17,6 +17,7 @@ from lib.contexts.models.contracts import ModelQueueTimeout
 from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
+from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_teacher_delivery import EVIDENCED_PROGRESS_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
 from ..domain.guided_final_experience import adopted_final_teacher_text
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
@@ -115,11 +116,42 @@ def capacity_stop(stop, outstanding, binding, ident):
             or stop.get("detail") == "request outcome unresolved; explicit retry required")
 
 
-def disclosure_delivery(case, attempt, folder):
+def _check_rendered_guidance(case, attempt, payload, previous, hint):
+    """Check the rendered tool frame against the ordered, reviewed guidance."""
+    view = {
+        "retained_solution": "",
+        "confirmed_findings_from_your_own_work": [],
+        "previously_disclosed_clues": previous,
+        "your_last_formal_answer": (attempt.get("formal_answer") or {}).get("response", {}).get("content"),
+        "new_clue": hint["text"],
+    }
+    language = str(case.get("source", {}).get("language") or "").lower()
+    chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in case["question"])
+    suffix = render_student_continuation(view, {}, chinese=chinese)
+    content = payload["messages"][-1]["content"]
+    if content == suffix:
+        return
+    if content.endswith("\n\n" + suffix):
+        # Only learner evidence may precede the known guidance sections.
+        prefix = content[:-(len(suffix) + 2)]
+        reserved = {"此前收到的提示", "上一次需要重新判断的答复", "本轮提示"} if chinese else {
+            "Earlier guidance", "Your previous answer to reconsider", "Next hint",
+        }
+        learner_sections = {"你已证实的步骤", "你已得到的结果和依据", "与题意相符、可继续尝试的思路"} if chinese else {
+            "Your established steps", "Results established in your work", "Approaches grounded in the question",
+        }
+        if (prefix.partition("\n")[0] in learner_sections
+                and all(section.partition("\n")[0] not in reserved for section in prefix.split("\n\n"))):
+            return
+    raise ValueError("student request differs from its reviewed disclosure history")
+
+
+def disclosure_delivery(case, attempt, folder, protocol_version=None):
     """Pair a published hint with the exact next student request and completed response."""
     hint = attempt.get("disclosure")
     if not hint:
         return None
+    protocol_version = protocol_version or str(case.get("protocol", "")).removeprefix("guided-draft-snapshot/v")
     index = attempt["attempt"] + 1
     filename = f"{index:03}-student.json"
     receipt = read(folder / filename)
@@ -129,12 +161,24 @@ def disclosure_delivery(case, attempt, folder):
         raise ValueError("next student response is not bound to the published disclosure")
     frame = payload["messages"][-1]
     prefix = "Continue the solution from this current view.\n"
-    if frame["role"] != "tool" or not frame["content"].startswith(prefix):
+    if frame["role"] != "tool":
         raise ValueError("next student request is missing its disclosure")
-    view = json.loads(frame["content"][len(prefix):])
     previous = [h["text"] for h in case["disclosures"][:hint["ordinal"] - 1]]
-    if view["new_clue"] != hint["text"] or view["previously_disclosed_clues"] != previous:
-        raise ValueError("student request differs from its reviewed disclosure history")
+    rendered_protocol = protocol_version in RENDERED_CONTINUATION_VERSIONS
+    if rendered_protocol:
+        attempts = case["attempts"]
+        if len(attempts) < index or attempts[index - 1]["student_request_messages"] != payload["messages"]:
+            raise ValueError("student request differs from the recorded continuation")
+    if frame["content"].startswith(prefix):
+        view = json.loads(frame["content"][len(prefix):])
+        if rendered_protocol and "complete_disclosure" not in view:
+            raise ValueError("next student request is missing its rendered disclosure")
+        if view["new_clue"] != hint["text"] or view["previously_disclosed_clues"] != previous:
+            raise ValueError("student request differs from its reviewed disclosure history")
+    elif rendered_protocol:
+        _check_rendered_guidance(case, attempt, payload, previous, hint)
+    else:
+        raise ValueError("next student request is missing its disclosure")
     return {"ordinal": hint["ordinal"], "student_attempt": index, "student_receipt": filename,
             "student_finish_reason": receipt["response"]["finish_reason"]}
 
@@ -272,7 +316,7 @@ def run_guided_cases(
         if export_only:
             if read(manifest)["input_sha256"] != source_sha:
                 raise ValueError("input differs from frozen guided run")
-            return export(input_path, output)
+            return export(input_path, output, selected=selected)
         if (
             not isinstance(experience, dict)
             or not isinstance(experience.get("version"), str)
@@ -636,14 +680,10 @@ def run_guided_cases(
                 atomic_json(output / "summary.json", first_summary)
                 return first_summary
         run_pass(False)
-        summary = export(input_path, output)
-        if selected is not None:
-            summary = {**summary, "selection_complete": all((location(output, ident) / "case.json").is_file() for ident in selected),
-                       "selected_case_count": len(selected)}
-        return summary
+        return export(input_path, output, selected=selected)
 
 
-def export(input_path, output):
+def export(input_path, output, *, selected=None):
     manifest = read(output / "manifest.json")
     history = manifest.get("historical_first")
     historical_rows = {}
@@ -787,7 +827,7 @@ def export(input_path, output):
                 )
                 for attempt in case["attempts"]:
                     paired_protocol = manifest["template_version"] in PAIRED_DISCLOSURE_VERSIONS
-                    delivery = disclosure_delivery(case, attempt, folder) if paired_protocol else None
+                    delivery = disclosure_delivery(case, attempt, folder, manifest["template_version"]) if paired_protocol else None
                     for work in attempt.get("disclosure_work", []):
                         published = bool(work.get("validated_citations") and attempt.get("disclosure"))
                         if paired_protocol:
@@ -847,4 +887,10 @@ def export(input_path, output):
         "complete": counts["pending"] == counts["interrupted"] == counts.get("awaiting_capacity", 0) == 0,
     }
     atomic_json(output / "summary.json", summary)
+    if selected is not None:
+        return {
+            **summary,
+            "selection_complete": all((location(output, ident) / "case.json").is_file() for ident in selected),
+            "selected_case_count": len(selected),
+        }
     return summary

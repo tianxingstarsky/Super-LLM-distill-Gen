@@ -799,6 +799,48 @@ def test_worked_prefetch_bounds_the_same_shard_and_preserves_inflight_and_trunca
     assert selected["selection_complete"] and not selected["complete"]
     assert selected["counts"]["accepted"] == 1 and selected["counts"]["pending"] == 3
     assert (output/"manifest.json").read_bytes() == manifest
+    assert run(export_only=True, case_ids=["direct"]) == selected
+
+
+@pytest.mark.parametrize("version", ["4.8.2", "4.8.3"])
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_export_authenticates_hints_in_rendered_student_messages(tmp_path, version, language):
+    from lib.contexts.workflows.domain.experience_evolution import digest
+    from lib.contexts.workflows.domain.guided_disclosure import render_student_continuation
+    from lib.contexts.workflows.infrastructure.guided_answer_records import disclosure_delivery
+
+    previous = "Use the number of drops per test."
+    current = "Subtract the eight positive tests from the total number tested."
+    hint = {"ordinal": 2, "text": current}
+    attempt = {"attempt": 2, "disclosure": hint}
+    case = {"id": "beakers", "binding": "frozen", "question": "How many tested negative?",
+            "source": {"language": language}, "disclosures": [{"text": previous}, hint],
+            "attempts": [{}, attempt, {}]}
+    view = {"retained_solution": "45 ÷ 3 = 15", "confirmed_findings_from_your_own_work": [],
+            "previously_disclosed_clues": [previous], "new_clue": current}
+
+    def record(delivered):
+        messages = [{"role": "tool", "content": delivered}]
+        payload = {"messages": messages}
+        case["attempts"][2]["student_request_messages"] = messages
+        receipt = {"identity": digest({"binding": "frozen", "id": "beakers", "payload": payload}),
+                   "status": "complete", "role": "student", "attempt": 3,
+                   "request": payload, "response": {"finish_reason": "stop"}}
+        (tmp_path / "003-student.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    rendered = render_student_continuation(view, {}, chinese=language == "zh")
+    record(rendered)
+    assert disclosure_delivery(case, attempt, tmp_path, version)["student_attempt"] == 3
+    for changed in (rendered.replace(previous, "Test every beaker."), rendered.replace(current, "Add eight.")):
+        record(changed)
+        with pytest.raises(ValueError, match="reviewed disclosure history"):
+            disclosure_delivery(case, attempt, tmp_path, version)
+    json_prefix = "Continue the solution from this current view.\n"
+    record(json_prefix + json.dumps(view))
+    with pytest.raises(ValueError, match="missing its rendered disclosure"):
+        disclosure_delivery(case, attempt, tmp_path, version)
+    record(json_prefix + json.dumps({**view, "complete_disclosure": "The verified solution."}))
+    assert disclosure_delivery(case, attempt, tmp_path, version)["student_attempt"] == 3
 
 
 def test_direct_admission_does_not_strip_proofs_or_relabel_guided_and_incomplete_answers():

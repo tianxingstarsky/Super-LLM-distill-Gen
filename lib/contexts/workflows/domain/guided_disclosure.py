@@ -7,6 +7,9 @@ from .guided_disclosure_text import locate_teacher_premise
 from .guided_teaching_steps import verified_steps_digest
 
 
+RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3"}
+
+
 def render_student_continuation(view, approaches, *, chinese):
     """Present the learner's own established work and the tutor's published hints with distinct authorship."""
     parts = []

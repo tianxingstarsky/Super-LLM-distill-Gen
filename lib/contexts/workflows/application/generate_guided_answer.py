@@ -8,7 +8,7 @@ from .review_guided_disclosure import (
     author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
-from ..domain.guided_disclosure import render_student_continuation
+from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_student_calculations import recovered_student_calculations
 from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
@@ -70,7 +70,7 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         continue_solution = protocol_version == "4.8.3"
-        carry_progress = continue_solution or protocol_version == "4.8.2"
+        carry_progress = protocol_version in RENDERED_CONTINUATION_VERSIONS
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
