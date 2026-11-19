@@ -1,10 +1,12 @@
 from contextlib import nullcontext
+import hashlib
 import json
 from types import SimpleNamespace
 
 import pytest
 
 from lib.contexts.workflows.domain.guided_answers import validate_source
+from lib.contexts.datasets.domain.trainer_formats import to_trl_sft
 from lib.contexts.workflows.domain.guided_teaching_steps import complete_solution_digest
 from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
 from lib.contexts.workflows.infrastructure.guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedChatEndpoint
@@ -15,8 +17,20 @@ def endpoint(model, port):
                               pool=SimpleNamespace(acquire=nullcontext))
 
 
-@pytest.mark.parametrize("handoff", [False, True])
-def test_native_final_receipt_follows_the_reviewed_solver_and_requested_format(tmp_path, monkeypatch, handoff):
+@pytest.mark.parametrize("version,override,frozen,expected", [
+    ("4.9.1", None, None, False), ("4.9.0", None, None, True),
+    ("4.9.1", True, None, True), ("4.9.0", False, None, False),
+    ("4.9.1", None, {"enable_thinking": True}, True), ("4.9.0", None, {"enable_thinking": False}, False),
+])
+def test_new_teacher_default_preserves_overrides_and_frozen_runs(version, override, frozen, expected):
+    ep = endpoint("tutor", 8122)
+    ep.requested_thinking = override
+    ep.configure_teacher_reasoning(version, frozen)
+    assert ep.thinking is expected and ep.record_teacher_reasoning
+
+
+@pytest.mark.parametrize("handoff,protocol", [(False, None), (True, "4.9.0"), (True, "4.9.1")])
+def test_native_final_receipt_follows_the_reviewed_solver_and_requested_format(tmp_path, monkeypatch, handoff, protocol):
     premise = "The six jobs are A, B, C, D, E and F"
     question = premise + (". Return only the number of jobs." if handoff else ". Show why the count is six.")
     task = {"id": "jobs", "question": question, "answer_requirement": "final_only", "direct_answer_syntax": "number",
@@ -80,11 +94,11 @@ def test_native_final_receipt_follows_the_reviewed_solver_and_requested_format(t
     monkeypatch.setattr(GuidedChatEndpoint, "http", serve)
     output = tmp_path / "run"
     options = dict(workers=1, until_correct=False, verified_step_receipts=registry)
-    if handoff:
-        options["protocol_version"] = "4.9.0"
+    if protocol:
+        options["protocol_version"] = protocol
     summary = run_guided_cases(source, output, endpoints, {"version": "test"}, 2, **options)
     assert summary["counts"]["accepted"] == 1
-    assert json.loads((output / "manifest.json").read_bytes())["template_version"] == "4.9.0"
+    assert json.loads((output / "manifest.json").read_bytes())["template_version"] == (protocol or "4.9.1")
     assert len(chats) == len(script) and len(finals) == 1
     solver = endpoints["continuation" if handoff else "student"]
     ep, body = finals[0]
@@ -109,6 +123,34 @@ def test_native_final_receipt_follows_the_reviewed_solver_and_requested_format(t
     assert not list(case_dir.glob("*-teacher_final_*.json"))
     assert run_guided_cases(source, output, endpoints, {"version": "test"}, 2, **options) == summary
     assert len(chats) == len(script) and len(finals) == 1
+    targets = output / "training-targets.jsonl"
+    if protocol == "4.9.0":
+        assert not targets.exists() and "training_target_file" not in row
+        return
+    training = json.loads(targets.read_bytes())
+    objective = "teacher_demonstration" if handoff else "independent_solution"
+    info = training["guided_training_target"]
+    assert summary["training_targets"]["by_objective"] == {objective: 1}
+    assert row["training_target_file"] == targets.name
+    with pytest.raises(ValueError, match="training-targets.jsonl"):
+        to_trl_sft(row)
+    assert info["case_archive"] == row["case_archive"] and info["independent_solution"] is (not handoff)
+    assert info["case_sha256"] == hashlib.sha256((output / row["case_archive"]).read_bytes()).hexdigest()
+    assert info["answer_author"] == author and info["answer_receipt"] == expected_file
+    assert training["messages"][-1]["content"] == public
+    if handoff:
+        assert info["reference_receipt"] == row["continuation_provenance"]["complete_disclosure_id"]
+        assert info["reference_author"] is None
+        assert training["messages"][-1]["reasoning_content"] == task["source_reasoning"]
+        assert wrong not in json.dumps(training, ensure_ascii=False)
+    else:
+        assert training["messages"][-1]["reasoning_content"] == solved
+        assert info["reasoning_spans"][0]["receipt"] == "001-student.json"
+    # A changed receipt cannot be re-exported as the archived solver's delivery.
+    receipt["response"]["content"] = "An unreviewed replacement"
+    (case_dir / expected_file).write_text(json.dumps(receipt), encoding="utf8")
+    with pytest.raises(ValueError, match="differs from its archived model receipt"):
+        run_guided_cases(source, output, {}, {}, 2, export_only=True)
 
 
 @pytest.mark.parametrize("reported,expected,origin", [

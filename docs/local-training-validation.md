@@ -5,11 +5,15 @@
 在配好下方独立训练环境后，从项目根目录运行。将三个参数替换为本机 Qwen3.5 模型目录、已核验的 UTF-8 `messages` JSONL 和独立训练工作目录。
 
 ```powershell
-python -m lib.cli train-sft --model path/to/qwen35 --sft path/to/accepted.jsonl --output .dataforge/native-sft
-python -m lib.cli train-sft --model path/to/qwen35 --sft path/to/accepted.jsonl --output .dataforge/native-sft --action run
+python -m lib.cli train-sft --model path/to/qwen35 --sft path/to/training-targets.jsonl --output .dataforge/native-sft
+python -m lib.cli train-sft --model path/to/qwen35 --sft path/to/training-targets.jsonl --output .dataforge/native-sft --action run
 ```
 
-第一条做 CPU 预检，输出源文件 SHA-256、实际助手轮数、带推理与仅答案的轮数、监督 token 数及最长输入。每行保留原始对话和已有 system。单轮或多轮对话中的每个助手轮都是一个训练目标。有独立 `reasoning_content` 的轮次监督推理、回答和结束标记。仅有答案的轮次屏蔽 Qwen 模板的空思考前缀，监督回答和结束标记。超过原生上下文或显式 `--max-length` 上限会报告源行号。指导生成导出的 `accepted.jsonl` 可以直接使用，标为 `unverified` 或 `quarantine` 的记录会在预检时被拒绝。
+第一条做 CPU 预检，输出源文件 SHA-256、实际助手轮数、带推理与仅答案的轮数、监督 token 数及最长输入。普通多轮对话中的每个助手轮都是一个训练目标。有独立 `reasoning_content` 的轮次监督推理、回答和结束标记。仅有答案的轮次屏蔽 Qwen 模板的空思考前缀，监督回答和结束标记。超过原生上下文或显式 `--max-length` 上限会报告源行号。预检拒绝 `unverified` 或 `quarantine` 记录。
+
+披露式教学协议 4.9.1 的训练输入是生成目录中的 `training-targets.jsonl`。每题只有一个受监督助手轮。独立首答使用学生实际答复；独立解题使用受审学生原稿中保留的推导。修正题把旧稿、当时的正式答复和公开提示写入带来源标识的题目上下文，以修正后的推导和核验的正式答复作为目标。给过完整解的题目归入 `teacher_demonstration`，使用由题源验证收据绑定的解法，并记录源解作者（已知时）和正式答复作者。接受的推导有审核和末答核对证据，逐句语义质量仍取决于这些审核。
+
+`summary.json` 的 `training_targets` 给出分目标数量和保留待处理的原因；训练预检的 `guided_targets_by_objective` 统计实际通过训练筛选的目标。归档 `accepted.jsonl`、各题 `case.json` 和模型请求收据保留完整旧稿、披露和交付历史。新协议归档标注训练文件，公共训练加载器会引导调用方读取投影。旧协议的导出和已冻结训练输入按原合同读取。需要重新导出 4.9.1 的投影时，使用原始题目文件、原运行目录和 `python -m lib.guided_answers --input path/to/tasks.jsonl --output path/to/run --export-only`，无需模型服务。
 
 第二条在 CUDA 上单次遍历目标并训练全部语言参数，视觉权重随包保留。默认梯度累积 8，学习率 `8e-6`，可用 `--gradient-accumulation`、`--learning-rate`、`--seed` 指定。运行期使用输出目录内的临时编码文件。训练和断点位于 `full-training/`，完成后 `model/` 包含可独立加载的模型和核验收据。按相同模型、来源、设置和输出路径重新运行会核对身份并复用已有进度。运行中可在 `full-training/` 创建 `STOP` 文件申请在检查点暂停，删除这个标记后使用同一命令继续。
 

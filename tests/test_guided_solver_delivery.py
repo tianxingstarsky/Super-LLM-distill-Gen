@@ -90,6 +90,7 @@ def test_invalid_or_misattributed_formal_delivery_cannot_be_accepted(reviewed_be
 
 
 def test_direct_correct_answer_needs_only_the_original_student_call():
+    from lib.contexts.workflows.domain.guided_training_targets import guided_training_target
     source = validate_source({"id": "jobs", "question": "There are six jobs. Return only the number of jobs.",
                               "gold": {"kind": "number", "value": "6"}, "answer_requirement": "final_only"})
     calls = []
@@ -103,6 +104,10 @@ def test_direct_correct_answer_needs_only_the_original_student_call():
     assert calls == ["student"]
     assert case["status"] == "accepted" and case["training_route"] == "nonthinking_direct"
     assert case["messages"][-1] == {"role": "assistant", "content": "6"}
+    row = guided_training_target({**case, "binding": "test", "source_sha256": "test"}, "cases/test/case.json", ())
+    assert row["messages"] == case["messages"]
+    assert row["guided_training_target"]["objective"] == "independent_answer"
+    assert row["guided_training_target"]["independent_solution"] is False
 
 
 @pytest.mark.parametrize("text,form,accepted", [
@@ -127,7 +132,8 @@ def test_solver_checks_the_requested_public_delivery(text, form, accepted):
         assert check["answer_matches"] is True and check["answer"] == "7"
 
 
-def test_tutored_solver_continuation_carries_only_the_public_solving_history():
+@pytest.fixture
+def tutored_beakers():
     source = validate_source({"id": "beakers", "question": BEAKER_QUESTION, "gold": {"kind": "number", "value": "7"},
                               "source_reasoning": PRIVATE_REFERENCE, "answer_requirement": "worked_solution"})
     premise = "Each test uses three drops of solution"
@@ -156,7 +162,12 @@ def test_tutored_solver_continuation_carries_only_the_public_solving_history():
                      "diagnosis": PRIVATE_REVIEW, "reusable": [], "independent_approaches": []}
         return response(value, "tutor-9b")
 
-    case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version="4.9.0")
+    case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version="4.9.1")
+    return case, calls, mistaken, hint
+
+
+def test_tutored_solver_continuation_carries_only_the_public_solving_history(tutored_beakers):
+    case, calls, mistaken, hint = tutored_beakers
     assert case["status"] == "accepted" and case["training_route"] == "guided_reasoning"
     assert [role for role, _, _ in calls] == [
         "student", "coach", "disclosure_draft", "disclosure", "student", "coach", "final_answer"]
@@ -165,3 +176,37 @@ def test_tutored_solver_continuation_carries_only_the_public_solving_history():
     assert PRIVATE_REVIEW not in final_prefix and PRIVATE_REFERENCE not in final_prefix
     assert case["messages"][-1] == {"role": "assistant", "content": BEAKER_FINAL, "reasoning_content": final_prefix}
     assert case["final_answer_provenance"]["receipt"] == "002-final_answer.json"
+
+
+def test_guided_correction_keeps_wrong_work_in_prompt_and_trains_only_the_reviewed_solution(tutored_beakers):
+    from lib.contexts.workflows.domain.guided_training_targets import guided_training_target
+
+    case, _, mistaken, hint = tutored_beakers
+    row = guided_training_target({**case, "binding": "test", "source_sha256": "test"}, "cases/test/case.json", ())
+    info = row["guided_training_target"]
+    assert info["objective"] == "guided_correction" and info["independent_solution"] is False
+    prompt, target = row["messages"]
+    assert prompt["role"] == "user" and mistaken in prompt["content"] and hint in prompt["content"]
+    assert target == {"role": "assistant", "reasoning_content": BEAKER_TRACE, "content": BEAKER_FINAL}
+    assert all(span["receipt"] == "002-student.json" for span in info["reasoning_spans"])
+    assert PRIVATE_REVIEW not in str(row["messages"]) and PRIVATE_REFERENCE not in str(row["messages"])
+
+
+def test_qwen_correction_labels_mask_wrong_draft_and_disclosure(tutored_beakers):
+    import os
+    from lib.bootstrap.datasets import qwen35_training_encoder
+    from lib.contexts.datasets.api import iter_training_examples
+    from lib.contexts.workflows.domain.guided_training_targets import guided_training_target
+
+    tokenizer_dir = os.environ.get("QWEN35_TEST_TOKENIZER")
+    if not tokenizer_dir:
+        pytest.skip("set QWEN35_TEST_TOKENIZER to a local Qwen3.5 tokenizer for token-level checks")
+    tokenizer = pytest.importorskip("transformers").AutoTokenizer.from_pretrained(tokenizer_dir, local_files_only=True)
+    case, _, mistaken, hint = tutored_beakers
+    row = guided_training_target({**case, "binding": "test", "source_sha256": "test"}, "cases/test/case.json", ())
+    encoder = qwen35_training_encoder(tokenizer)
+    (encoded,) = iter_training_examples([row], encoder, default_effort="high")
+    prompt = tokenizer.decode([v for v, label in zip(encoded["input_ids"], encoded["labels"]) if label == -100])
+    target = tokenizer.decode([label for label in encoded["labels"] if label != -100])
+    assert mistaken in prompt and hint in prompt and mistaken not in target and hint not in target
+    assert BEAKER_TRACE in target and BEAKER_FINAL in target

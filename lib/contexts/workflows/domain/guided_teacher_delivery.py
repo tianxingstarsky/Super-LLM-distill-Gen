@@ -7,7 +7,7 @@ from .guided_answers import answer_tail, check_direct_answer, contains_chat_cont
 from .guided_student_calculations import verified_equation_result
 
 STRICT_DELIVERY_VERSIONS = frozenset({"4.8.1", "4.8.2", "4.8.3"})
-SOLVER_FINAL_VERSIONS = frozenset({"4.9.0"})
+SOLVER_FINAL_VERSIONS = frozenset({"4.9.0", "4.9.1"})
 EVIDENCED_PROGRESS_VERSIONS = frozenset({"4.8.0"}) | STRICT_DELIVERY_VERSIONS | SOLVER_FINAL_VERSIONS
 QWEN_SAMPLING_VERSIONS = frozenset({"4.7.0", "4.7.1"}) | EVIDENCED_PROGRESS_VERSIONS
 TRUNCATED_TUTORING_VERSIONS = frozenset({"4.6.0"}) | QWEN_SAMPLING_VERSIONS

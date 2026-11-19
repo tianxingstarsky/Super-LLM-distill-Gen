@@ -5,6 +5,9 @@ import json
 from ..domain.guided_final_experience import (
     FINAL_TEACHER_ROLE, final_delivery_observation, final_teacher_edition, text_sha,
 )
+from ..domain.guided_student_calculations import asserted_arithmetic_errors
+from ..domain.guided_disclosure_text import locate_teacher_premise
+from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
 
 
 def observed_attempt(case, number):
@@ -18,7 +21,14 @@ def observed_attempt(case, number):
     match = check.get("answer_matches")
     if case.get("gold") is None or not isinstance(match, bool):
         raise ValueError("This attempt has no comparable reference answer")
-    if match and (not check.get("format_ok") or coach.get("verdict") != "supported"):
+    arithmetic_errors = attempt.get("arithmetic_errors")
+    quantities = attempt.get("quantity_findings")
+    # Previously saved reviews can be consumed by a new experience run. Evaluate
+    # the recorded prose as well as the marker produced by a current generation.
+    refuted_feedback = attempt.get("coach_feedback_check") or asserted_arithmetic_errors(
+        coach.get("diagnosis", ""), question=case.get("question", ""), check_result_expressions=True)
+    if (match and not arithmetic_errors and not quantities
+            and (refuted_feedback or not check.get("format_ok") or coach.get("verdict") != "supported")):
         raise ValueError("Matching the key alone does not establish a successful explanation")
     if "student_request_messages" in attempt:
         # Independent continuations saw only their current program snapshot.
@@ -39,14 +49,24 @@ def observed_attempt(case, number):
             raise ValueError("The public dialogue does not contain the selected attempt")
     reason = ("The program matched the reference answer; the tutor accepted the explanation."
               if match else "The program found that the final answer differs from the reference.")
+    if arithmetic_errors:
+        reason = "Exact arithmetic refutes an asserted equality in the student's own response: " + json.dumps(
+            arithmetic_errors, ensure_ascii=False)
+    if quantities:
+        findings = [item for segment in quantities.values() for item in segment]
+        quantity_reason = ("The proposed storage count disagrees with the stated conversion rate."
+                           if storage_quantity_issue(findings) == "quantity_contradiction"
+                           else "The proposed storage count requires a conversion rate that is missing.")
+        quantity_reason += " " + json.dumps(quantities, ensure_ascii=False)
+        reason = reason + " " + quantity_reason if arithmetic_errors else quantity_reason
     if attempt.get("solving_role"):
         reason += (f" The complete worked solution and answer were supplied. This was a continuation by "
                    f"{attempt['student'].get('model') or attempt['solving_role']}. Assess use of the supplied work.")
-    if coach.get("diagnosis"):
+    if coach.get("diagnosis") and not refuted_feedback:
         reason += " Tutor observation: " + coach["diagnosis"]
     return {"id": f"{case['id']}-attempt-{number}", "conversation": {"messages": messages},
             "guided_answer_projection_version": 1,
-            "review_observation": {"verdict": {"keep": match, "reason": reason}}}
+            "review_observation": {"verdict": {"keep": match and not arithmetic_errors and not quantities, "reason": reason}}}
 
 
 def observed_teacher_disclosure(case, number, revision):
@@ -56,8 +76,35 @@ def observed_teacher_disclosure(case, number, revision):
     if not 0 <= revision < len(work):
         raise ValueError("Select a recorded teacher disclosure draft")
     item = work[revision]
+    if item.get("proposed_by") == "program":
+        raise ValueError("A program nomination is not a teacher-authored or teacher-selected disclosure")
     review = item.get("assessment") or {}
     decision = review.get("decision")
+    reason = "Independent assessment of the teacher's hint. " + review.get("reason", "")
+    if item.get("issue") == "teacher_needs_a_specific_verbatim_task_premise":
+        claimed = (item.get("draft") or {}).get("question_quote")
+        if isinstance(claimed, str) and claimed.strip():
+            try:
+                locate_teacher_premise(case["question"], claimed)
+            except ValueError:
+                decision = "withhold"
+                reason = ("The tutor presented this text as a unique verbatim premise, but it cannot be located "
+                          "uniquely in the original question: " + json.dumps(claimed, ensure_ascii=False))
+    if item.get("issue") == "teacher_disclosure_arithmetic_contradiction":
+        # The author can learn from a refutation before an independent model call.
+        errors = asserted_arithmetic_errors(item.get("public_text", ""), question=case["question"])
+        if not errors or errors != item.get("arithmetic_errors"):
+            raise ValueError("Could not reproduce the recorded disclosure arithmetic error")
+        decision = "withhold"
+        reason = "Exact arithmetic refutes the proposed teacher hint: " + json.dumps(errors, ensure_ascii=False)
+    if item.get("issue") in {"teacher_disclosure_quantity_contradiction", "teacher_disclosure_quantity_conversion_unverified"}:
+        quantities = storage_quantity_findings(item.get("public_text", ""), question=case["question"],
+            quoted_spans=[q["public_span"] for q in item.get("question_quotations", [])])
+        if (not quantities or quantities != item.get("quantity_findings")
+                or item["issue"] != "teacher_disclosure_" + storage_quantity_issue(quantities)):
+            raise ValueError("Could not reproduce the recorded storage conversion finding")
+        decision = "withhold"
+        reason = "Storage conversion evidence for the proposed teacher hint: " + json.dumps(quantities, ensure_ascii=False)
     if not item.get("draft") or decision not in ("release", "withhold"):
         raise ValueError("The teacher draft has no substantive independent assessment")
     if decision == "release" and not item.get("validated_citations"):
@@ -72,8 +119,7 @@ def observed_teacher_disclosure(case, number, revision):
         "id": f"{case['id']}-disclosure-{number}-{revision}", "guided_disclosure_projection_version": 1,
         "conversation": {"messages": [{"role":"user","content":json.dumps(prompt, ensure_ascii=False)},
                                       {"role":"assistant","content":text}]},
-        "review_observation": {"verdict": {"keep": decision == "release",
-            "reason": "Independent assessment of the teacher's hint. " + review["reason"]}},
+        "review_observation": {"verdict": {"keep": decision == "release", "reason": reason}},
     }
 
 

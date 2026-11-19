@@ -17,6 +17,32 @@ from lib.contexts.workflows.domain.guided_answers import (
 )
 
 
+def test_tutor_retries_a_paraphrased_premise_by_selecting_from_the_actual_question():
+    from lib.contexts.workflows.application.guided_experience import observed_teacher_disclosure
+    from lib.contexts.workflows.application.review_guided_disclosure import author_next_disclosure
+
+    question = "One jar holds 0.75 liters. Three jars are full. How much liquid is there?"
+    source = {"question": question, "gold": {"kind": "number", "value": "2.25"}}
+    attempt = {"attempt": 1, "check": {"format_ok": True, "answer_matches": False},
+               "student": {"content": "3"}, "derivation_available": False}
+    def request(role, index, messages, schema):
+        if role == "disclosure_draft":
+            proposal = {"decision": "offer", "question_quote": "Each jar contains three quarters of a liter.",
+                        "bridge": "Work with one jar first.", "hint": "Find the amount in one jar.", "reason": "Use the unit rate."}
+        else:
+            assert role == "disclosure_rewrite"
+            choices = schema["anyOf"][0]["properties"]["question_quote"]["enum"]
+            assert "One jar holds 0.75 liters." in choices
+            assert json.loads(messages[-1]["content"])["requested_revision"]["verbatim_question_choices"] == choices
+            proposal = {"decision": "insufficient", "reason": "No usable next hint.", "question_quote": "", "bridge": "", "hint": ""}
+        return {"content": json.dumps(proposal), "finish_reason": "stop"}
+    _, issue = author_next_disclosure(request, source, attempt, [], {}, [], {"kind": "idea", "text": "",
+        "replaces_from": "final_answer"}, "", grounded=True, quoted_premises=True, check_arithmetic=True)
+    assert issue == "teacher_needs_more_evidence"
+    observation = observed_teacher_disclosure({"id": "jars", "question": question, "attempts": [attempt]}, 1, 0)
+    assert observation["review_observation"]["verdict"]["keep"] is False
+
+
 def test_list_numbers_stay_attached_and_never_become_evidence():
     text = "1. 连续的 1 最多有两个。\n2. 总数应为 1 模 3。\nFinal answer: 99"
     pieces, _ = draft_fragment(text, 1)

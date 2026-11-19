@@ -137,7 +137,7 @@ class GuidedChatEndpoint:
         elif frozen_endpoint is not None:
             self.thinking = bool(frozen_endpoint.get("enable_thinking"))
         else:
-            self.thinking = self.local and self.record_teacher_reasoning
+            self.thinking = self.local and self.record_teacher_reasoning and version != "4.9.1"
 
     def validate(self):
         if self.local:

@@ -13,8 +13,10 @@ from ..domain.guided_disclosure_text import (
     checked_reviewer_pairing, locate_authored_task_citations, locate_teacher_premise, render_teacher_text,
 )
 from ..domain.guided_teaching_steps import checked_step_review, checked_step_selection
+from ..domain.guided_student_calculations import asserted_arithmetic_errors
+from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
 from ..domain.guided_disclosure import (
-    checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote,
+    checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote, question_premise_choices,
 )
 
 
@@ -42,6 +44,15 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
                                "excerpted": len(observed) > 1200},
         "proposed_next_teacher_disclosure": {"kind": candidate["kind"], "text": candidate["text"]},
     }
+    if attempt.get("arithmetic_errors"):
+        material["current_difficulty"]["refuted_student_equations"] = attempt["arithmetic_errors"]
+    if attempt.get("coach_feedback_check"):
+        equations = attempt["coach_feedback_check"]["arithmetic_errors"]
+        material["private_review_check"] = {
+            "status": "refuted", "scope": "arithmetic_of_the_expression_only",
+            "evaluated_expressions": [{"expression": e["expression"], "value": e["values"][1]}
+                                      for e in equations if "expression" in e],
+        }
     calculation_context = []
     for finding in findings.values():
         if (finding.get("evidence_level") != "source_verified_student_calculation"
@@ -127,7 +138,7 @@ def _add_measured_outcome(material, source, attempt, retained, findings):
 
 
 def _review_verified_step(request, attempt, history, material, evidence, previous_id, reference, receipt, step,
-                          *, paired=False, recommended_index=None, task_analysis=False):
+                          *, paired=False, recommended_index=None, task_analysis=False, check_arithmetic=False):
     entry = history[-1]
     entry["verified_operation"] = {"id": step["id"], "receipt_id": receipt, "operation": step["operation"]}
     if (entry["revision"] and history[0].get("verified_operation") == entry["verified_operation"]
@@ -163,6 +174,9 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
         packet["proposed_next_teacher_disclosure"]["public_text"] = public_text
         entry.update(public_text=public_text, question_quotations=quotes,
                      review_checkpoint={"role": reviewer, "index": request_index, "student_attempt": attempt["attempt"]})
+        if check_arithmetic and (issue := _checked_disclosure_issue(entry, evidence["question"]["text"])):
+            entry.pop("review_checkpoint")
+            return None, issue
     # Only catalogue IDs and the actual dialogue observations go into the model's context.
     references = [anchor, *(ref for ref in evidence if ref != "question")]
     system = VERIFIED_STEP_REVIEW
@@ -198,7 +212,8 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
 
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
-                           task_analysis=False, quoted_premises=False, strict_author_decisions=False):
+                           task_analysis=False, quoted_premises=False, strict_author_decisions=False,
+                           check_arithmetic=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -218,6 +233,18 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             {k: step[k] for k in ("id", "kind", "quote", "span", "operation")} for step in options.values()]
     if show_outcome:
         _add_measured_outcome(material, source, attempt, retained, findings)
+        if check_arithmetic and source.get("source_reasoning") and source.get("gold"):
+            material["private_source_reference"] = {
+                "answer_key": source["gold"],
+                "attributed_source_reasoning": source["source_reasoning"],
+                "use": ("Compare the next inference with the original question. The supplied solution is a "
+                        "reference, not proof that every statement is sound. Use the smallest supported "
+                        "intermediate move. Keep the key and the remaining solution private."),
+            }
+        if check_arithmetic and attempt["student"]["content"].strip():
+            material["current_difficulty"]["student_wrote_a_response"] = True
+            if not attempt["check"]["format_ok"]:
+                material["current_difficulty"]["answer_format_issue"] = attempt["check"].get("issue")
         author_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
         reviewer_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
     if paired:
@@ -235,6 +262,11 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
     for revision in range(2):
         entry = {"revision": revision, "private_reference": reference["text"], "latest_disclosure_id": previous_id}
         history.append(entry)
+        if revision and check_arithmetic and quoted_premises:
+            choices = question_premise_choices(source["question"])
+            if choices:
+                material["requested_revision"]["verbatim_question_choices"] = choices
+                draft_schema = disclosure_draft_decision_schema(grounded=grounded, step_ids=options, premise_choices=choices)
         role = "disclosure_rewrite" if revision else "disclosure_draft"
         draft = request(role, attempt["attempt"], [
             {"role": "system", "content": author_system},
@@ -269,13 +301,15 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                 wording = (bridge_text, hint_text)
                 entry["public_text"], entry["question_quotations"] = render_teacher_text(
                     bridge_text + "\n" + hint_text, source["question"], proposal["question_quote"])
+                if check_arithmetic and (issue := _checked_disclosure_issue(entry, source["question"])):
+                    raise ValueError(issue)
         except (TypeError, ValueError) as exc:
             entry["issue"] = str(exc)
         else:
             if step:
                 approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
                                                         reference, catalog["receipt_id"], step, paired=paired,
-                                                        task_analysis=task_analysis)
+                                                        task_analysis=task_analysis, check_arithmetic=check_arithmetic)
                 if approved:
                     return approved, None
                 entry["issue"] = issue
@@ -343,11 +377,29 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         material["requested_revision"] = {"prior_draft": entry.get("draft"), "issue": entry["issue"],
                                           "private_reviewer_reason": assessment.get("reason")
                                           if isinstance(assessment, dict) else None}
+        if entry.get("arithmetic_errors"):
+            material["requested_revision"]["arithmetic_errors"] = entry["arithmetic_errors"]
+        if entry.get("quantity_findings"):
+            material["requested_revision"]["quantity_findings"] = entry["quantity_findings"]
+
+
+def _checked_disclosure_issue(entry, question):
+    quoted = [q["public_span"] for q in entry["question_quotations"]]
+    errors = asserted_arithmetic_errors(entry["public_text"], question=question, quoted_spans=quoted)
+    quantities = storage_quantity_findings(entry["public_text"], question=question, quoted_spans=quoted)
+    if quantities:
+        entry["quantity_findings"] = quantities
+    if errors:
+        entry["arithmetic_errors"] = errors
+        return "teacher_disclosure_arithmetic_contradiction"
+    if quantities:
+        return "teacher_disclosure_" + storage_quantity_issue(quantities)
+    return None
 
 
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
                                    *, teacher_experience, tried, task_analysis=False, quoted_premises=False,
-                                   strict_author_decisions=False):
+                                   strict_author_decisions=False, check_arithmetic=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation"):
         history = attempt["disclosure_work"] = []
@@ -356,7 +408,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
         approved, issue = author_next_disclosure(
             request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
             grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
-            quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions,
+            quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions, check_arithmetic=check_arithmetic,
         )
         history = attempt["disclosure_work"]
         tried.update(entry["verified_operation"]["id"] for entry in history if "verified_operation" in entry)
@@ -379,7 +431,8 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
         tried.add(step["id"])
         approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
                                                 reference, catalog["receipt_id"], step, paired=True,
-                                                recommended_index=ordinal, task_analysis=task_analysis)
+                                                recommended_index=ordinal, task_analysis=task_analysis,
+                                                check_arithmetic=check_arithmetic)
         if approved:
             return approved, None
         entry["issue"] = issue

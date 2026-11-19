@@ -7,7 +7,7 @@ from .guided_disclosure_text import locate_teacher_premise
 from .guided_teaching_steps import verified_steps_digest
 
 
-RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3", "4.9.0"}
+RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3", "4.9.0", "4.9.1"}
 
 
 def render_student_continuation(view, approaches, *, chinese):
@@ -54,6 +54,13 @@ def is_substantive_question_quote(quote):
     content = [t for t in tokens if t not in {"a", "an", "the", "of", "to", "in", "on", "by", "is",
                                                "it", "are", "and", "or", "for", "as", "at", "with"}]
     return len(set(content)) >= 2 or bool(re.search(r"[A-Za-z0-9]\s*(?:[=<>≠≤≥→]|->)\s*[A-Za-z0-9]", quote))
+
+
+def question_premise_choices(question):
+    """Offer uniquely locatable original sentences when the tutor misquotes a premise."""
+    sentences = re.split(r"(?<=[。！？])|(?<=[.!?])\s+|\n+", question)
+    return [s for raw in sentences if (s := raw.strip()) and question.count(s) == 1
+            and is_substantive_question_quote(s)]
 
 
 def checked_teacher_draft(proposal, gold, retained, findings, disclosed, *, question=None):

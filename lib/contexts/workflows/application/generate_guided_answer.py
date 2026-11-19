@@ -10,7 +10,8 @@ from .review_guided_disclosure import (
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
-from ..domain.guided_student_calculations import recovered_student_calculations
+from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
+from ..domain.guided_student_calculations import asserted_arithmetic_errors, recovered_student_calculations
 from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
 )
@@ -73,6 +74,7 @@ class GenerateGuidedAnswer:
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
+        check_arithmetic = protocol_version == "4.9.1"
         continue_solution = protocol_version == "4.8.3"
         carry_progress = protocol_version in RENDERED_CONTINUATION_VERSIONS
         language = str(source.get("source", {}).get("language") or "").lower()
@@ -104,7 +106,8 @@ class GenerateGuidedAnswer:
         if paired:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
-                                  quoted_premises=protocol_version == "4.7.1" or evidenced_progress)
+                                  quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
+                                  check_arithmetic=check_arithmetic)
             if continue_solution:
                 assess_hint = partial(assess_hint, strict_author_decisions=True)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
@@ -119,7 +122,7 @@ class GenerateGuidedAnswer:
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
-                    "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9"}[protocol_version]
+                    "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -418,6 +421,23 @@ class GenerateGuidedAnswer:
                 "number_of_ordered_segments": len(submitted),
                 "disclosed_guidance": list(disclosed),
             }
+            disputed_segments = set()
+            local_issue = None
+            if check_arithmetic and new_segments:
+                quantities = storage_quantity_findings(suffix, question=question)
+                for field, findings_to_bind in (("arithmetic_errors", asserted_arithmetic_errors(suffix, question=question)),
+                                                ("quantity_findings", quantities)):
+                    grouped = {}
+                    for finding in findings_to_bind:
+                        piece = next((s for s in new_segments
+                                      if s["start"] <= finding["span"][0] and finding["span"][1] <= s["end"]), None)
+                        if piece:
+                            grouped.setdefault(piece["id"], []).append(finding)
+                    if grouped:
+                        attempt[field] = material["program_check"][field] = grouped
+                        disputed_segments.update(grouped)
+                local_issue = ("checked_arithmetic_contradicts_supported" if attempt.get("arithmetic_errors")
+                               else storage_quantity_issue(quantities))
             if anchored:
                 material["confirmed_current_spans"] = [
                     {"segment_id": item["segment_id"], "source_span": item["source_span"],
@@ -488,7 +508,21 @@ class GenerateGuidedAnswer:
                 if ordered_evidence:
                     status = "awaiting_guidance"
                 break
-            if ordered_evidence and not direct and not incomplete:
+            feedback_errors = (asserted_arithmetic_errors(review["diagnosis"], question=question, check_result_expressions=True)
+                               if check_arithmetic and not direct and not incomplete else [])
+            if feedback_errors:
+                # Keep the original private submission in coach_response. Only the independent
+                # student evidence and previously certified prefix survive an unreliable review.
+                attempt["coach_feedback_check"] = {"status": "refuted", "field": "diagnosis",
+                                                   "arithmetic_errors": feedback_errors}
+                count = len(active)
+                anchor = new_segments[0]["id"] if new_segments else "final_answer"
+                review = {"verdict": "uncertain", "first_unresolved_id": anchor, "verified_prefix_count": count,
+                          "evidence_id": anchor, "evidence": new_segments[0]["text"] if new_segments else answer_line,
+                          "reusable": [], "diagnosis": "The tutor's stated arithmetic does not support this assessment."}
+                proposed_approaches, proposed_conflict = [], []
+                version["review_conflict"] = "refuted_teacher_feedback"
+            elif ordered_evidence and not direct and not incomplete:
                 resolved, problem = check_or_repair_student_findings(
                     self.request, attempt, material, assessment, version["submitted_ids"], schema["properties"]["reusable"])
                 if problem:
@@ -497,6 +531,15 @@ class GenerateGuidedAnswer:
                     break
                 review["reusable"] = resolved
             attempt["coach"] = review
+            if disputed_segments:
+                # Preserve the actual verdict and mark the first unsupported public claim.
+                first = next(n for n, s in enumerate(submitted) if s["id"] in disputed_segments)
+                count = min(count, first)
+                if review["verdict"] == "supported":
+                    version["review_conflict"] = local_issue
+                review["reusable"] = [item for item in review["reusable"] if item["segment_id"] not in disputed_segments]
+                proposed_approaches = [item for item in proposed_approaches
+                                       if isinstance(item, dict) and item.get("segment_id") not in disputed_segments]
             # A checked contradiction and a blanket "supported" ruling cannot jointly
             # authenticate new statements. Reuse only prior evidence on this conflict.
             if (
@@ -516,7 +559,8 @@ class GenerateGuidedAnswer:
             partial_review = evidenced_progress and (review["verdict"] != "supported" or bool(version.get("review_conflict"))
                                                      or repeated is not None)
             if partial_review:
-                version["review_anchor"] = review["first_unresolved_id"]
+                version["review_anchor"] = (submitted[count]["id"] if disputed_segments and count < len(submitted)
+                                            else review["first_unresolved_id"])
                 count, extracted = partial_review_evidence(review["reusable"], submitted, active, count, question)
             active = submitted[:count]
             if task_analysis:
@@ -633,6 +677,16 @@ class GenerateGuidedAnswer:
                     formal = self.request(role, index, [*final_task, prefix], None)
                     if solver_delivery:
                         formal_check = inspect_solver_delivery(formal, source, {s["id"]: s["text"] for s in active}, delivery_form)
+                        if check_arithmetic and formal_check["format_ok"]:
+                            errors = asserted_arithmetic_errors(formal["content"], question=question)
+                            if errors:
+                                formal_check.update(format_ok=False, issue="formal_answer_arithmetic_contradiction",
+                                                    arithmetic_errors=errors)
+                            quantities = storage_quantity_findings(formal["content"], question=question)
+                            if quantities:
+                                formal_check["quantity_findings"] = quantities
+                                if not errors:
+                                    formal_check.update(format_ok=False, issue="formal_answer_" + storage_quantity_issue(quantities))
                         if not student.get("model") or formal.get("model") != student["model"]:
                             formal_check = dict(format_ok=False, answer=None, answer_matches=None,
                                                 issue="formal_answer_model_unverified")
@@ -654,7 +708,8 @@ class GenerateGuidedAnswer:
                     if not (formal_check["format_ok"] and formal_check["answer_matches"] is True):
                         issue = formal_check["issue"]
                         version["first_unresolved"] = "formal_answer"
-                        if solver_delivery and (issue in {"formal_answer_model_unverified", "formal_answer_explanation_needs_review"}
+                        if solver_delivery and (issue in {"formal_answer_model_unverified", "formal_answer_explanation_needs_review",
+                                                         "formal_answer_quantity_conversion_unverified"}
                                 or formal["finish_reason"] != "stop" or not final_text.strip()
                                 or formal.get("reasoning_content") or contains_chat_control(final_text)):
                             status = "awaiting_guidance"

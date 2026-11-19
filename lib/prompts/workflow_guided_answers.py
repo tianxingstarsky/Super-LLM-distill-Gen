@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.9.0"
+VERSION = "4.9.1"
 
 STUDENT_REASONING_PROGRESS = (
     "State what you have established with the evidence for it. Use that result to work out "
@@ -111,7 +111,7 @@ def disclosure_author_schema(*, grounded=False):
     return {"type": "object", "additionalProperties": False, "required": list(fields), "properties": fields}
 
 
-def disclosure_draft_decision_schema(*, grounded, step_ids=()):
+def disclosure_draft_decision_schema(*, grounded, step_ids=(), premise_choices=()):
     """Decode the tutor's decision before allocating fields for public guidance."""
     text = {"type": "string", "minLength": 1}
     empty = {"const": ""}
@@ -127,6 +127,8 @@ def disclosure_draft_decision_schema(*, grounded, step_ids=()):
         branch({"const": "offer"}, text, public),
         branch({"const": "insufficient"}, empty, [] if choices else public),
     ]
+    if grounded and premise_choices:
+        branches[0]["properties"]["question_quote"] = {"type": "string", "enum": list(premise_choices)}
     if choices:
         branches.append(branch({"type": "string", "enum": choices}, empty, []))
     return {"anyOf": branches}

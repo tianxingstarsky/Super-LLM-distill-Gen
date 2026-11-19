@@ -240,6 +240,8 @@ def to_trl_sft(sample: Mapping[str, Any], *, annotate_controls: bool = True) -> 
     """Convert a complete text SFT/Agent record to TRL ``messages`` + ``tools``."""
     if not isinstance(sample, Mapping):
         raise ValueError("trl_sample_must_be_object")
+    if "training_target_file" in sample:
+        raise ValueError("guided archive contains raw tutoring history; use its training-targets.jsonl")
     if _has_media(sample):
         raise ValueError("trl_multimodal_content_unsupported")
     tools = _tool_schemas(sample.get("tools"))

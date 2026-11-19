@@ -715,7 +715,7 @@ def render_node_models(node, source_mode, workspace, bindings, endpoints, *,
                "同一模型可用于生成和评审。上下文与输出上限按角色保存，并发额度在全部节点与任务间共享。")
     if node == "sft":
         render_guided_answer_cli(bindings.get(node, {}).get("generation", {}), endpoints,
-                                 key=f"guided-answer-example:{workspace}")
+                                 key=f"guided-answer-example:{workspace}", reviewer=bindings.get(node, {}).get("jev"))
     _connect_service(node, workspace, roles, bindings, endpoints, backend_application)
     if bindings != previous:
         st.rerun()

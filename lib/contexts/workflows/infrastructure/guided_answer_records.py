@@ -23,6 +23,9 @@ from ..domain.guided_teacher_delivery import (
     TRUNCATED_TUTORING_VERSIONS, requested_delivery, uses_direct_first,
 )
 from ..domain.guided_final_experience import adopted_final_teacher_text
+from ..domain.guided_training_targets import (
+    GUIDED_TARGET_FILE, GUIDED_TARGET_SCHEMA, GUIDED_TARGET_VERSIONS, GuidedTargetHeld, guided_training_target,
+)
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
 from .guided_historical_answer import (
     HISTORICAL_FIRST, checked_historical_answer, historical_source_manifest, historical_source_membership,
@@ -640,6 +643,8 @@ def run_guided_cases(
                 return
             if historical_mode:
                 result["first_answer_origin"] = read(folder / "001-student.json")["origin"]
+            if template_version in GUIDED_TARGET_VERSIONS:
+                result["training_target_file"] = GUIDED_TARGET_FILE
             atomic_json(
                 receipt, {**result, "binding": binding, "source_sha256": digest(source)}
             )
@@ -695,6 +700,34 @@ def run_guided_cases(
         return export(input_path, output, selected=selected)
 
 
+def _target_receipts(case):
+    """Identify the original author, student input, and final response behind a projection."""
+    expected = {}
+    for attempt in case["attempts"]:
+        index = attempt["attempt"]
+        role = attempt.get("solving_role", "student")
+        expected[f"{index:03}-{role}.json"] = (role, index, attempt["student"], attempt["student_request_messages"])
+        if "coach_response" in attempt:
+            expected[f"{index:03}-coach.json"] = ("coach", index, attempt["coach_response"], None)
+        if "formal_answer" in attempt:
+            delivery = "strong_final_answer" if role == "strong_continuation" else "final_answer"
+            name = f"{index:03}-{delivery}.json"
+            if attempt["formal_answer"].get("provenance", {}).get("receipt") != name:
+                raise ValueError("solver delivery points to a different receipt")
+            expected[name] = (delivery, index, attempt["formal_answer"]["response"], None)
+    return expected
+
+
+def _check_target_receipt(event, expectation, case, protocol):
+    role, index, response, messages = expectation
+    payload = event["request"]
+    if (event["status"] != "complete" or event["attempt"] != index or event["role"] != role
+            or event["identity"] != digest({"binding": case["binding"], "id": case["id"], "payload": payload})
+            or guided_port_response(event["response"], payload, role, protocol) != response
+            or (messages is not None and payload.get("messages") != messages)):
+        raise ValueError("guided training case differs from its archived model receipt")
+
+
 def export(input_path, output, *, selected=None):
     manifest = read(output / "manifest.json")
     history = manifest.get("historical_first")
@@ -710,6 +743,8 @@ def export(input_path, output, *, selected=None):
             historical_rows = members["rows"]
     _, trusted = verified_step_registry(output, None, manifest)
     binding = digest(manifest)
+    project_targets = manifest["template_version"] in GUIDED_TARGET_VERSIONS
+    target_counts, target_holds = {}, {}
     counts = dict(accepted=0, unverified=0, quarantine=0, interrupted=0, pending=0)
     accepted_routes = dict(nonthinking_direct=0, reviewed_solution=0)
     if manifest["template_version"] in TEACHER_DISCLOSURE_VERSIONS:
@@ -733,6 +768,7 @@ def export(input_path, output, *, selected=None):
                     )
                 )
                 for name in ("accepted", "unverified", "quarantine", "feedback",
+                             *((Path(GUIDED_TARGET_FILE).stem,) if project_targets else ()),
                              *(("awaiting_guidance", "teacher_feedback") if "awaiting_guidance" in counts else ()))
             }
 
@@ -743,10 +779,16 @@ def export(input_path, output, *, selected=None):
 
             for source in inputs(input_path, manifest["template_version"], trusted):
                 folder = location(output, source["id"])
+                archive = folder / "case.json"
+                case_bytes = archive.read_bytes() if archive.is_file() else None
+                case = json.loads(case_bytes) if case_bytes is not None else None
+                expected = _target_receipts(case) if project_targets and case and case["status"] == "accepted" else {}
                 outstanding = {}
                 historical_origin = None
                 for cp in folder.glob("[0-9]*-*.json"):
                     event = read(cp)
+                    if cp.name in expected:
+                        _check_target_receipt(event, expected.pop(cp.name), case, manifest["template_version"])
                     if history and cp.name == "001-student.json":
                         checked_historical_answer(event, source, history, binding, membership=historical_rows.get(source["id"]))
                         historical_origin = event["origin"]
@@ -771,7 +813,9 @@ def export(input_path, output, *, selected=None):
                             calls["new_completed"] += 1
                         elif status in {"interrupted", "pending"}:
                             calls["interrupted_or_pending"] += 1
-                if not (folder / "case.json").exists():
+                if expected:
+                    raise ValueError("missing archived model receipt for guided training")
+                if case is None:
                     path = folder / "interruption.json"
                     stop = read(path) if path.exists() else {}
                     if capacity_stop(stop, outstanding, binding, source["id"]):
@@ -781,7 +825,6 @@ def export(input_path, output, *, selected=None):
                         if stop:
                             emit("quarantine", stop)
                     continue
-                case = read(folder / "case.json")
                 if case["binding"] != binding or case["source_sha256"] != digest(
                     source
                 ):
@@ -828,13 +871,30 @@ def export(input_path, output, *, selected=None):
                     "continuation",
                     "continuation_provenance",
                 )
+                archive_ref = archive.relative_to(output).as_posix()
+                target_info = {}
+                if project_targets and status == "accepted":
+                    if any(case.get(key) != value for key, value in source.items()):
+                        raise ValueError("guided training case differs from its frozen question or reference")
+                    target_info = {"training_target_file": GUIDED_TARGET_FILE}
+                    try:
+                        target = guided_training_target(case, archive_ref, trusted)
+                    except GuidedTargetHeld as hold:
+                        reason = str(hold)
+                        target_info["training_target_held"] = reason
+                        target_holds[reason] = target_holds.get(reason, 0) + 1
+                    else:
+                        target["guided_training_target"]["case_sha256"] = hashlib.sha256(case_bytes).hexdigest()
+                        target_info["training_target_sha256"] = digest(target)
+                        objective = target["guided_training_target"]["objective"]
+                        target_counts[objective] = target_counts.get(objective, 0) + 1
+                        emit(Path(GUIDED_TARGET_FILE).stem, target)
                 emit(
                     status,
                     {
                         **{key: case[key] for key in public_keys if key in case},
-                        "case_archive": (folder / "case.json")
-                        .relative_to(output)
-                        .as_posix(),
+                        "case_archive": archive_ref,
+                        **target_info,
                     },
                 )
                 for attempt in case["attempts"]:
@@ -853,7 +913,7 @@ def export(input_path, output, *, selected=None):
                             "validated_citations": work.get("validated_citations", []),
                             "issue": work.get("issue"),
                             "published": published,
-                            **({key: work[key] for key in ("review_checkpoint", "public_text", "question_quotations")
+                            **({key: work[key] for key in ("review_checkpoint", "public_text", "question_quotations", "arithmetic_errors")
                                 if key in work} if paired_protocol else {}),
                             **({"delivery": delivery} if paired_protocol and published else {}),
                             "experience_version": case["experience_version"],
@@ -892,6 +952,9 @@ def export(input_path, output, *, selected=None):
         "counts": counts,
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
+        **({"training_targets": {"schema": GUIDED_TARGET_SCHEMA, "file": GUIDED_TARGET_FILE,
+                                 "by_objective": target_counts, "held_by_reason": target_holds}}
+           if project_targets else {}),
         **({"accepted_after_full_disclosure": disclosed_outcomes} if manifest["template_version"] in EVIDENCED_PROGRESS_VERSIONS else {}),
         **({"historical_first_outcomes": historical_outcomes} if "historical_first" in manifest else {}),
         **({"historical_first_usage": historical_tokens} if historical_tokens else {}),

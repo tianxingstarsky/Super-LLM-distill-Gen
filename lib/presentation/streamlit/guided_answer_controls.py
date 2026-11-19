@@ -11,15 +11,20 @@ def _powershell_literal(text):
     return "'" + re.sub("['‘’‚‛]", lambda match: match[0] * 2, text) + "'"
 
 
-def render_guided_answer_cli(binding, endpoints, *, key):
+def _local_qwen(endpoint, model):
+    return (urlsplit(endpoint.get("base_url", "")).hostname in {"127.0.0.1", "localhost", "::1"}
+            and endpoint.get("api_format", "chat") == "chat"
+            and endpoint.get("model_info", {}).get(model, {}).get("reasoning_format") == "llama_cpp_qwen")
+
+
+def render_guided_answer_cli(binding, endpoints, *, key, reviewer=None):
     en = st.session_state.get("ui_language") == "en"
     with st.expander("Local guided training data (CLI)" if en else "本地指导训练资料（CLI）"):
         endpoint = endpoints.get(binding.get("backend"), {})
         model = binding.get("model", "")
         info = endpoint.get("model_info", {}).get(model, {})
         url = endpoint.get("base_url", "")
-        if (not model or urlsplit(url).hostname not in {"127.0.0.1", "localhost", "::1"}
-                or endpoint.get("api_format", "chat") != "chat" or info.get("reasoning_format") != "llama_cpp_qwen"):
+        if not model or not _local_qwen(endpoint, model):
             st.caption("Select a local llama.cpp service with the native Qwen chat template as the SFT generation model to build the command."
                        if en else "在 SFT 生成模型中选择本机 llama.cpp 的 Qwen 原生聊天模板服务，即可取得运行命令。")
             return
@@ -36,17 +41,35 @@ def render_guided_answer_cli(binding, endpoints, *, key):
         st.code(sample_line, language="json", wrap_lines=True)
         st.download_button("Download example JSONL" if en else "下载示例 JSONL", sample_line + "\n",
                            file_name="guided-example.jsonl", mime="application/x-ndjson", key=key)
-        st.caption("Run in PowerShell from the repository root with the project environment active. The selected model answers with thinking disabled and reviews in a separate request with thinking enabled."
-                   if en else "在项目根目录激活项目环境后，用 PowerShell 执行。所选模型关闭思考作答，再以独立请求开启思考担任指导员。")
+        student = (binding["backend"], model)
+        options = [(name, item) for name, ep in endpoints.items()
+                   for item in ep.get("model_info", {}) if _local_qwen(ep, item)]
+        preferred = ((reviewer or {}).get("backend"), (reviewer or {}).get("model"))
+        teacher = st.selectbox("Local tutor model" if en else "本机指导教师模型", options,
+                               index=options.index(preferred if preferred in options else student),
+                               format_func=lambda pair: " · ".join(pair), key=key + ":teacher")
+        teacher_thinking = st.checkbox("Enable native thinking for the tutor" if en else "启用指导教师原生思考",
+                                       value=False, key=key + ":thinking")
+        st.caption("Run in PowerShell from the repository root with the project environment active. The student answers with native thinking disabled."
+                   if en else "在项目根目录激活项目环境后，用 PowerShell 执行。学生关闭原生思考作答。")
         workers = min(4, max(1, int(info.get("max_concurrency") or 1)))
+        teacher_endpoint = endpoints[teacher[0]]
+        thinking_flag = "--coach-thinking" if teacher_thinking else "--no-coach-thinking"
         command = ["python -m lib.guided_answers", "--input guided-example.jsonl --output .dataforge/guided-example",
                    f"--student-url {_powershell_literal(url)} --student-model {_powershell_literal(model)}",
-                   f"--context-tokens {context} --max-tokens {output} --workers {workers} --coach-thinking"]
-        credential = endpoint.get("api_key", {}).get("source", "")
-        if credential.startswith("env:") or credential == "configs/backends.local.yaml":
-            name = credential.removeprefix("env:") if credential.startswith("env:") else "GUIDED_MODEL_API_KEY"
-            command.append(f"--student-api-key-env {_powershell_literal(name)} --coach-api-key-env {_powershell_literal(name)}")
-            st.caption(("Set the credential in this shell environment variable first: " if en else "运行前在当前终端设置凭据环境变量 ") + name)
+                   f"--coach-url {_powershell_literal(teacher_endpoint['base_url'])} --coach-model {_powershell_literal(teacher[1])}",
+                   f"--context-tokens {context} --max-tokens {output} --workers {workers} {thinking_flag}"]
+        variables = []
+        for role, ep in (("student", endpoint), ("coach", teacher_endpoint)):
+            credential = ep.get("api_key", {}).get("source", "")
+            if credential.startswith("env:") or credential == "configs/backends.local.yaml":
+                name = credential.removeprefix("env:") if credential.startswith("env:") else (
+                    "GUIDED_MODEL_API_KEY" if role == "student" or teacher[0] == student[0] else "GUIDED_TUTOR_API_KEY")
+                command.append(f"--{role}-api-key-env {_powershell_literal(name)}")
+                variables.append(name)
+        if variables:
+            st.caption(("Set these shell environment variables before running: " if en else "运行前在当前终端设置凭据环境变量 ")
+                       + ", ".join(dict.fromkeys(variables)))
         st.code(" `\n  ".join(command), language="powershell", wrap_lines=True)
-        st.caption("In the output directory, summary.json contains the counts and accepted.jsonl contains accepted records. Use a fresh output directory when changing the input or configuration."
-                   if en else "输出目录中的 summary.json 记录各类数量，accepted.jsonl 保存通过核验的训练记录。更换输入或配置时请使用新的输出目录。")
+        st.caption("Train from training-targets.jsonl. The output directory also contains summary.json with counts and accepted.jsonl with accepted case records. Use a fresh output directory when changing inputs or settings."
+                   if en else "训练时读取输出目录中的 training-targets.jsonl。summary.json 记录数量，accepted.jsonl 保存通过核验的案例档案。更换输入或配置时请使用新的输出目录。")

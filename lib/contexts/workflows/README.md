@@ -8,7 +8,7 @@
 
 从 3.5 起，学生可见正文因输出上限截断时，整题仍进入隔离。题目预先登记的 `finite_set` 规则可以核对正文中完整、肯定的变量取值集合，原文跨度、规则来源和轮次保存在该次尝试的 `program_confirmed` 中。再次写出同一结论时会关联最早确认的段落。其他小计和整段推导保存在原始回执中，截断不会触发新调用。
 
-从 3.6 起，可仅凭终答交付的有键题可在题源标记 `answer_requirement: "final_only"`。学生在独立首轮直接作答。程序核对完整回复，匹配后按 `training_route: "nonthinking_direct"` 保存原文，调用在此结束。有解答过程的正文或未命中的答案进入指导流程。经指导员核实的完整解答标为 `reviewed_solution`。两类合格记录均可从 `accepted.jsonl` 直接训练，数量见 `summary.json` 的 `accepted_by_route`。
+从 3.6 起，可仅凭终答交付的有键题可在题源标记 `answer_requirement: "final_only"`。学生在独立首轮直接作答。程序核对完整回复，匹配后按 `training_route: "nonthinking_direct"` 保存原文，调用在此结束。有解答过程的正文或未命中的答案进入指导流程。经指导员核实的完整解答标为 `reviewed_solution`。`summary.json` 的 `accepted_by_route` 统计通过案例。4.9.1 将独立解题、修正和教师示范的监督目标另存为 `training-targets.jsonl`；旧协议的 `accepted.jsonl` 格式保留。
 
 3.7 中，有键首稿带实际解题过程且通过审核时，`unaided_reasoning` 路线保留终答标签前的原文推导。实际收到过提示的题走 `guided_reasoning`，程序按时间编排学生每次作答、已发布提示以及此前交付失败的答案。两条路线均由原学生模型从思考结束位置续写正式回答。训练消息的 `reasoning_content` 保存已检查的推导或完整公开轨迹，`content` 保存新答案。新答的答案键须再次匹配。新答有误且尚有轮次时，学生携带自己的旧结论、交付原文及核对提示重新求解。个别正式请求的原稿和结束状态保存在每题归档中。可选的 `task_system` 保留原任务的系统约束。
 

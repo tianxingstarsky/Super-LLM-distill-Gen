@@ -42,16 +42,25 @@ def test_guided_command_uses_the_selected_local_sft_model_and_cli_source_contrac
         'base_url': 'http://localhost:8080/v1', 'models': [model],
         'model_capabilities': {model: {'manual': {'reasoning_format': 'llama_cpp_qwen'},
                                        'max_concurrency': 2}},
-    }}}
+    }, 'tutor': {'base_url': 'http://127.0.0.1:8081/v1', 'models': ['qwen-tutor'],
+                 'model_capabilities': {'qwen-tutor': {'manual': {'reasoning_format': 'llama_cpp_qwen'}}}}}}
     ui.session_state['workflow-node-bindings:demo'] = {
         'sft': {'generation': {'backend': 'local', 'model': model, **TOKEN_LIMITS}}}
     ui.run()
     assert not ui.exception
     command = next(item.value for item in ui.code if 'python -m lib.guided_answers' in item.value)
     assert "--student-url 'http://localhost:8080/v1' --student-model 'reader''s-qwen'" in command
-    assert '--context-tokens 131072 --max-tokens 32768 --workers 2 --coach-thinking' in command
+    assert '--context-tokens 131072 --max-tokens 32768 --workers 2 --no-coach-thinking' in command
+    assert "--coach-url 'http://localhost:8080/v1' --coach-model 'reader''s-qwen'" in command
+    assert any("training-targets.jsonl" in caption.value for caption in ui.caption)
     sample = next(item.value for item in ui.code if 'notebook-01' in item.value)
     assert validate_source(json.loads(sample))['gold'] == {'kind': 'number', 'value': '4'}
+    ui.selectbox(key='guided-answer-example:demo:teacher').set_value(('tutor', 'qwen-tutor'))
+    ui.checkbox(key='guided-answer-example:demo:thinking').check().run()
+    assert not ui.exception
+    command = next(item.value for item in ui.code if 'python -m lib.guided_answers' in item.value)
+    assert "--coach-url 'http://127.0.0.1:8081/v1' --coach-model 'qwen-tutor'" in command
+    assert "--workers 2 --coach-thinking" in command
 
 
 def _field(ui, label):

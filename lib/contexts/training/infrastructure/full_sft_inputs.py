@@ -121,6 +121,12 @@ def prepare_full_sft(model, sft, output, *, max_length, for_training, encoder_fa
                         mode = "thinking_turns" if turn["metadata"]["enable_thinking"] else "answer_only_turns"
                         report[mode] += 1
                         report["assistant_turns"] += 1
+                        if "guided_training_target" in row:
+                            info = row["guided_training_target"]
+                            if not isinstance(info, dict) or not isinstance(info.get("objective"), str):
+                                raise ValueError("guided training target must identify its objective")
+                            by_objective = report.setdefault("guided_targets_by_objective", {})
+                            by_objective[info["objective"]] = by_objective.get(info["objective"], 0) + 1
                         report["supervised_tokens"] += audit["supervised_tokens"]
                         report["maximum_input_tokens"] = max(report["maximum_input_tokens"], audit["input_tokens"])
                         if examples is not None:

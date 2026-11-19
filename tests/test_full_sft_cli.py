@@ -83,6 +83,15 @@ def test_native_sft_cli_preflight_and_explicit_run(tmp_path, monkeypatch, capsys
         args.func(args)
     assert len(calls) == 1
 
+    preflight = parser.parse_args([*command[:-1], str(tmp_path / "fresh")])
+    source.write_text(json.dumps({**plain, "training_target_file": "training-targets.jsonl"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="line 1.*training-targets.jsonl"):
+        preflight.func(preflight)
+    source.write_text(json.dumps({**plain, "status": "eligible",
+                                  "guided_training_target": {"objective": "independent_answer"}}), encoding="utf-8")
+    assert preflight.func(preflight) == 0
+    assert json.loads(capsys.readouterr().out)["guided_targets_by_objective"] == {"independent_answer": 1}
+
 
 def test_repetition_requires_a_recurring_prose_sequence_and_respects_requested_output():
     from lib.contexts.datasets.contracts import assistant_target_repetition
