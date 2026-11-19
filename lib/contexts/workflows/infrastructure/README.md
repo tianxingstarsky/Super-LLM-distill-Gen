@@ -1,5 +1,7 @@
 # 工作流运行适配
 
+更换教师后，在新输出目录使用 `--reuse-worked-first-from OLD_RUN`，可以接续同一分片中已有的独立解题首答。程序在旧分片空闲时冻结收据清单，逐题核对学生端点、请求正文和原始响应收据。旧分片尚未派发的题照常作答，已派发但结果不明的题记录中断。教师的指导和审核归属新运行。
+
 教师排队而学生模型有空槽时，可在计划运行的完整输入和输出目录上执行 `python -m lib.guided_answers … --prefetch-worked-first`。带数量（如 `--prefetch-worked-first 2`）只预取输入顺序中前两道有答案键的 `worked_solution` 题。原始响应直接存入各题的 `001-student.json`，包括因输出上限截断的回复。随后用相同配置和路径去掉该选项，正常流程读取已存首答、审核完整解释，必要时逐步指导。整份分片共用一把运行锁；当前分片执行时可预取另一个空闲分片。预取返回的 `prefetch_complete` 只表示选中题目的首答阶段已结束，合格记录由正常流程生成。
 
 4.8 的普通学生继续使用 `--student-model`。可用 `--continuation-model <较强的模型名>` 配置难题接管；独立 llama.cpp 服务另传 `--continuation-url <服务地址>`。教师负责披露、核查和正式交付；较强学生使用答题模式，复用原学生实际收到的消息。共用同一服务时，两种职责共享物理槽。检查 `case.json` 的 `attempts[].verified_stage` 看学生有何进展，`continuation_provenance.deliveries` 给出收件轮次、实际模型和对应请求文件。

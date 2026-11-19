@@ -139,10 +139,13 @@ def disclosure_delivery(case, attempt, folder):
             "student_finish_reason": receipt["response"]["finish_reason"]}
 
 
-def replay_first(path, ident, payload, prior_binding):
+def replay_first(path, ident, payload, prior_binding, *, expected_receipt_sha256=None):
     relative = location(Path("."), ident) / "001-student.json"
     receipt_bytes = (path / relative).read_bytes()
     prior = json.loads(receipt_bytes)
+    receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
+    if expected_receipt_sha256 is not None and (receipt_sha256 != expected_receipt_sha256 or prior.get("origin")):
+        raise ValueError("worked first answer must match its frozen original receipt")
     wire = wire_body(payload)
     identity = digest({"binding": prior_binding, "id": ident, "payload": payload})
     if (
@@ -162,7 +165,7 @@ def replay_first(path, ident, payload, prior_binding):
         "kind": "replayed_first",
         "source_binding": prior_binding,
         "source_receipt": relative.as_posix(),
-        "source_receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+        "source_receipt_sha256": receipt_sha256,
         "source_identity": identity,
         "wire_request_sha256": hashlib.sha256(wire).hexdigest(),
         "response_sha256": digest(prior["response"]),
@@ -211,6 +214,7 @@ def run_guided_cases(
     retry_interrupted=False,
     workers=4,
     reuse_first_from=None,
+    reuse_worked_first_from=None,
     verified_step_receipts=None,
     reuse_matching_from=None,
     historical_first_from=None,
@@ -229,7 +233,9 @@ def run_guided_cases(
         historical_mode = historical_first_from is not None or bool((frozen_config or {}).get("historical_first"))
         if historical_first_input is not None and not historical_mode:
             raise ValueError("the historical input file requires a historical source run")
-        if historical_mode and (reuse_first_from or reuse_matching_from):
+        if reuse_worked_first_from and (reuse_first_from or reuse_matching_from):
+            raise ValueError("worked first-answer replay requires a single source run")
+        if historical_mode and (reuse_first_from or reuse_worked_first_from or reuse_matching_from):
             raise ValueError("choose historical first answers or exact request replay")
         if protocol_version and protocol_version != template_version:
             raise ValueError("the requested protocol differs from the frozen run")
@@ -364,12 +370,13 @@ def run_guided_cases(
                     raise ValueError(f"cross-run replay requires the same {key}")
             config["reuse_matching"] = {"source_binding": digest(prior),
                                         "source_manifest_sha256": hashlib.sha256(prior_bytes).hexdigest()}
-        if reuse_first_from:
-            if reuse_first_from.resolve() == output.resolve():
+        prior_first_root = reuse_first_from or reuse_worked_first_from
+        if prior_first_root:
+            if prior_first_root.resolve() == output.resolve():
                 raise ValueError(
                     "the first-answer replay source must be a different frozen run"
                 )
-            prior_bytes = (reuse_first_from / "manifest.json").read_bytes()
+            prior_bytes = (prior_first_root / "manifest.json").read_bytes()
             prior_manifest = json.loads(prior_bytes)
             if (
                 prior_manifest.get("endpoints", {}).get("student")
@@ -378,10 +385,30 @@ def run_guided_cases(
                 raise ValueError(
                     "first-student replay requires the same endpoint, served model and generation capabilities"
                 )
-            config["reuse_first"] = {
+            replay_source = {
                 "source_binding": digest(prior_manifest),
                 "source_manifest_sha256": hashlib.sha256(prior_bytes).hexdigest(),
             }
+            if reuse_worked_first_from:
+                if prior_manifest.get("input_sha256") != source_sha:
+                    raise ValueError("worked first-answer replay requires the same input file")
+                previous = (frozen_config or {}).get("reuse_worked_first")
+                if previous:
+                    receipts = previous["receipts"]
+                else:
+                    receipts = {}
+                    with FileLock(str(prior_first_root / "run.lock"), timeout=0):
+                        for source in inputs(input_path, template_version, trusted):
+                            if source.get("answer_requirement") == "worked_solution" and source["gold"] is not None:
+                                first = location(prior_first_root, source["id"]) / "001-student.json"
+                                if first.is_file():
+                                    raw = first.read_bytes()
+                                    if not can_resume_admission(json.loads(raw), replay_source["source_binding"],
+                                                                source["id"], "student", 1):
+                                        receipts[source["id"]] = hashlib.sha256(raw).hexdigest()
+                config["reuse_worked_first"] = {**replay_source, "receipts": receipts}
+            else:
+                config["reuse_first"] = replay_source
         if frozen_config is not None and frozen_config != config:
             raise ValueError(
                 "configuration, input or experience differs from the frozen run"
@@ -457,6 +484,11 @@ def run_guided_cases(
                         payload,
                         config["reuse_first"]["source_binding"],
                     )
+                elif (reuse_worked_first_from and role == "student" and index == 1
+                      and source["id"] in config["reuse_worked_first"]["receipts"]):
+                    parent = config["reuse_worked_first"]
+                    replayed = replay_first(reuse_worked_first_from, source["id"], payload, parent["source_binding"],
+                                            expected_receipt_sha256=parent["receipts"][source["id"]])
                 elif reuse_matching_from:
                     replayed = replay_matching_call(reuse_matching_from, source["id"], role, index, payload,
                                                     config["reuse_matching"]["source_binding"])

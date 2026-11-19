@@ -763,7 +763,24 @@ def test_worked_prefetch_bounds_the_same_shard_and_preserves_inflight_and_trunca
     assert json.loads(saved)["response"]["finish_reason"] == "length" and len(calls) == 1
     assert calls[0]["messages"][1]["content"] == "Explain why two plus three is five."
     assert run(prefetch_worked_first=1)["prefetch_complete"] and len(calls) == 1
-    assert run(prefetch_worked_first=True)["eligible_worked_questions"] == 2 and len(calls) == 2
+    class ReplacementTeacher(Endpoint):
+        def validate(self):
+            return {**super().validate(), "model": "replacement-teacher"}
+
+    migrated = tmp_path / "replacement-run"
+    migration = dict(protocol_version="4.8.0", workers=1, reuse_worked_first_from=output,
+                     prefetch_worked_first=True)
+    endpoints = {"student": ep, "coach": ReplacementTeacher()}
+    assert run_guided_cases(path, migrated, endpoints, {"version":"test"}, 2, **migration)["prefetch_complete"]
+    assert len(calls) == 2 and "four plus one" in calls[-1]["messages"][1]["content"]
+    imported = migrated / checkpoint.relative_to(output)
+    replayed = json.loads(imported.read_bytes())
+    assert replayed["origin"]["source_receipt_sha256"] == hashlib.sha256(saved).hexdigest()
+    assert replayed["response"] == json.loads(saved)["response"]
+    assert not list(migrated.glob("cases/*/case.json"))
+    assert run_guided_cases(path, migrated, endpoints, {"version":"test"}, 2, **migration)["prefetch_complete"]
+    assert len(calls) == 2
+    assert run(prefetch_worked_first=True)["eligible_worked_questions"] == 2 and len(calls) == 3
     assert (output/"manifest.json").read_bytes() == manifest and checkpoint.read_bytes() == saved
     assert not list(output.glob("cases/*/case.json")) and not list(output.glob("*.jsonl"))
 

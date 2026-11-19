@@ -79,6 +79,11 @@ def main():
         help="Reuse the same case's byte-identical initial student request from the original run. Use --reuse-matching-from separately for other identical calls.",
     )
     cli.add_argument(
+        "--reuse-worked-first-from", type=Path,
+        help="When changing tutors, reuse original first student replies to keyed worked questions from "
+             "the same input shard. Questions without a prior request run normally.",
+    )
+    cli.add_argument(
         "--retry-interrupted",
         action="store_true",
         help="Reissue unresolved model calls; prior charges may exist",
