@@ -3,14 +3,17 @@
 import re
 import unicodedata
 
-from .guided_answers import check_direct_answer, contains_chat_control, number
+from .guided_answers import answer_tail, check_direct_answer, contains_chat_control, inspect_formal_answer, number
+from .guided_student_calculations import verified_equation_result
 
 STRICT_DELIVERY_VERSIONS = frozenset({"4.8.1", "4.8.2", "4.8.3"})
-EVIDENCED_PROGRESS_VERSIONS = frozenset({"4.8.0"}) | STRICT_DELIVERY_VERSIONS
+SOLVER_FINAL_VERSIONS = frozenset({"4.9.0"})
+EVIDENCED_PROGRESS_VERSIONS = frozenset({"4.8.0"}) | STRICT_DELIVERY_VERSIONS | SOLVER_FINAL_VERSIONS
 QWEN_SAMPLING_VERSIONS = frozenset({"4.7.0", "4.7.1"}) | EVIDENCED_PROGRESS_VERSIONS
 TRUNCATED_TUTORING_VERSIONS = frozenset({"4.6.0"}) | QWEN_SAMPLING_VERSIONS
 TEACHER_REASONING_VERSIONS = frozenset({"4.5.0", "4.5.1"}) | TRUNCATED_TUTORING_VERSIONS
-TEACHER_FINAL_VERSIONS = frozenset({"4.4.0", "4.4.1"}) | TEACHER_REASONING_VERSIONS
+GUIDED_DELIVERY_VERSIONS = frozenset({"4.4.0", "4.4.1"}) | TEACHER_REASONING_VERSIONS
+TEACHER_FINAL_VERSIONS = GUIDED_DELIVERY_VERSIONS - SOLVER_FINAL_VERSIONS
 
 _QUANTITY = r"[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:/\d+|[eE][+-]?\d+)?"
 _FIGURES = re.compile(r"(?<![\w.])(" + _QUANTITY + r")(?!\w|\.\d)", re.ASCII)
@@ -48,7 +51,7 @@ def requested_delivery(source):
 
 def uses_direct_first(source, protocol_version):
     return (source.get("answer_requirement") == "final_only"
-            and (protocol_version not in TEACHER_FINAL_VERSIONS or requested_delivery(source) == "final_only"))
+            and (protocol_version not in GUIDED_DELIVERY_VERSIONS or requested_delivery(source) == "final_only"))
 
 
 def _words(text):
@@ -133,6 +136,58 @@ def _discloses_private_evidence_id(public_text, question, reviewed_steps):
         if token.search(public_text) and not token.search(question):
             return True
     return False
+
+
+def inspect_solver_delivery(response, source, reviewed_steps, form):
+    """Check the solver's unedited public continuation, including task-specific presentation."""
+    def reject(issue, match=None):
+        return dict(format_ok=False, answer=None, answer_matches=match, issue=issue)
+
+    raw = response["content"]
+    if response["finish_reason"] != "stop" or response.get("reasoning_content") or not raw.strip():
+        return reject("formal_answer_incomplete_or_native_thinking")
+    if contains_chat_control(raw):
+        return reject("formal_answer_contains_control_markers")
+    if _PRIVATE.search(raw) or _discloses_private_evidence_id(raw, source["question"], reviewed_steps):
+        return reject("formal_answer_contains_private_material")
+    text = raw.strip()
+    if form == "final_only" and source.get("direct_answer_syntax"):
+        return _check_surface(text, source) or reject("formal_answer_wrong_requested_syntax")
+    start, conclusion = answer_tail(text)
+    if start is None:
+        explanation, _, conclusion = text.rpartition("\n")
+        if form == "worked_solution" and not explanation:
+            # A complete verified equation can itself be both working and result.
+            value = verified_equation_result(text.rstrip(".。"))
+            if value is not None and source["gold"]["kind"] == "number":
+                return check_direct_answer(str(value), source["gold"], include_mismatch=True)
+            boundary = re.search(r"\b(?:to get|which gives|which yields)\s+|(?:所以得到|因此得到)", text, re.I)
+            if boundary:
+                explanation, conclusion = text[:boundary.start()], text[boundary.end():]
+    else:
+        explanation = text[:start]
+    check = _check_surface(conclusion.strip().rstrip(".。"), source)
+    if check is None:
+        check = inspect_formal_answer(response, source["gold"], source["question"], final_only=form == "final_only",
+                                      require_explanation=form == "worked_solution")
+    if not check["format_ok"] or not check["answer_matches"]:
+        return check
+    if form == "final_only":
+        return reject("formal_answer_unrequested_explanation", True) if explanation.strip() else check
+    evidence = "\n".join(reviewed_steps.values())
+    figures = {number(m[1]) for m in _FIGURES.finditer(explanation)}
+    known_figures = {number(m[1]) for m in _FIGURES.finditer(evidence + "\n" + source["question"])}
+    # Evidence of an explanation is distinct from the keyed conclusion. Lexical
+    # silence can mean a valid paraphrase, so leave it for review.
+    if not explanation.strip() or check_direct_answer(explanation.strip(), source["gold"]):
+        return reject("formal_answer_missing_requested_explanation", True)
+    if not (_words(explanation) & _words(evidence) or figures & known_figures):
+        return reject("formal_answer_explanation_needs_review", True)
+    for clause in re.split(r"[\n。！？]|(?<=[.!?])\s+", explanation):
+        claim = clause.strip()
+        if _DECLARATION.match(claim) and _explicit_wrong_conclusion(claim, source["gold"]):
+            return reject("formal_answer_conflicting_conclusion", True)
+    return check
 
 
 def inspect_teacher_delivery(proposed, source, reviewed_steps, form, *, protect_evidence_ids=False):

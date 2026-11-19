@@ -1,5 +1,6 @@
 """Generate a visible solution, check it and request a directed revision when needed."""
 
+import hashlib
 import json
 from functools import partial
 
@@ -13,7 +14,10 @@ from ..domain.guided_student_calculations import recovered_student_calculations
 from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
 )
-from ..domain.guided_teacher_delivery import EVIDENCED_PROGRESS_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
+from ..domain.guided_teacher_delivery import (
+    EVIDENCED_PROGRESS_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS,
+    inspect_solver_delivery, requested_delivery, uses_direct_first,
+)
 from ..domain.guided_teaching_steps import certified_complete_disclosure
 
 from ..domain.guided_answers import (
@@ -78,7 +82,8 @@ class GenerateGuidedAnswer:
             raise ValueError("complete-disclosure teaching requires guided protocol 4.8")
         skip_acquired = protocol_version != "3.0.0"
         teacher_delivery = protocol_version in TEACHER_FINAL_VERSIONS
-        task_analysis = teacher_delivery or protocol_version == "4.3.0"
+        solver_delivery = protocol_version in SOLVER_FINAL_VERSIONS
+        task_analysis = teacher_delivery or solver_delivery or protocol_version == "4.3.0"
         ordered_evidence = task_analysis or protocol_version == "4.2.1"
         paired = ordered_evidence or protocol_version == "4.2.0"
         show_outcome = paired or protocol_version == "4.1.1"
@@ -114,7 +119,7 @@ class GenerateGuidedAnswer:
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
-                    "4.8.2": "v4.8.2", "4.8.3": "v4.8.3"}[protocol_version]
+                    "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -132,9 +137,10 @@ class GenerateGuidedAnswer:
         task_system = source.get("task_system") if record_guided_reasoning else None
         task_messages = [{"role": "system", "content": task_system}] if task_system else []
         task_messages.append({"role": "user", "content": question})
-        require_explanation = task_analysis and source.get("answer_requirement") == "worked_solution"
+        delivery_form = requested_delivery(source) if solver_delivery else source.get("answer_requirement")
+        require_explanation = task_analysis and delivery_form == "worked_solution"
         final_task = task_messages
-        if task_analysis and source.get("answer_requirement"):
+        if task_analysis and delivery_form:
             delivery = WORKED_ANSWER_DELIVERY if require_explanation else RESULT_ONLY_DELIVERY
             delivery_system = (task_system + "\n\n" if task_system else "") + delivery
             final_task = [{"role": "system", "content": delivery_system}, task_messages[-1]]
@@ -622,19 +628,37 @@ class GenerateGuidedAnswer:
                                 training_reasoning = student_reasoning_trace(attempts, question)
                         break
                     prefix = {"role": "assistant", "reasoning_content": trace, "content": ""}
-                    formal = self.request("final_answer", index, [*final_task, prefix], None)
-                    formal_check = inspect_formal_answer(
-                        formal, gold, question, final_only=source.get("answer_requirement") == "final_only",
-                        allow_bare_delivery=grounded,
-                        require_explanation=require_explanation,
-                    )
+                    role = "strong_final_answer" if solver_delivery and next_solver == "strong_continuation" else "final_answer"
+                    receipt = f"{index:03}-{role}.json"
+                    formal = self.request(role, index, [*final_task, prefix], None)
+                    if solver_delivery:
+                        formal_check = inspect_solver_delivery(formal, source, {s["id"]: s["text"] for s in active}, delivery_form)
+                        if not student.get("model") or formal.get("model") != student["model"]:
+                            formal_check = dict(format_ok=False, answer=None, answer_matches=None,
+                                                issue="formal_answer_model_unverified")
+                    else:
+                        formal_check = inspect_formal_answer(formal, gold, question, final_only=delivery_form == "final_only",
+                                                             allow_bare_delivery=grounded, require_explanation=require_explanation)
                     attempt["formal_answer"] = {"response": formal, "check": formal_check}
-                    formal_history.append({"attempt": index, "check": formal_check,
-                                           "receipt": f"{index:03}-final_answer.json"})
+                    formal_history.append({"attempt": index, "check": formal_check, "receipt": receipt})
+                    if solver_delivery:
+                        provenance = {"author": next_solver, "model": formal.get("model"), "attempt": index,
+                                      "receipt": receipt, "solver_receipt": f"{index:03}-{next_solver}.json",
+                                      "requested_delivery": delivery_form, "independent_explanation_review": False,
+                                      "solving_history_sha256": hashlib.sha256(trace.encode("utf-8")).hexdigest()}
+                        attempt["formal_answer"]["provenance"] = provenance
+                        formal_history[-1]["author"] = next_solver
+                        if formal_check["format_ok"] and formal_check["answer_matches"] is True:
+                            final_provenance = provenance
                     final_text = formal["content"]
                     if not (formal_check["format_ok"] and formal_check["answer_matches"] is True):
                         issue = formal_check["issue"]
                         version["first_unresolved"] = "formal_answer"
+                        if solver_delivery and (issue in {"formal_answer_model_unverified", "formal_answer_explanation_needs_review"}
+                                or formal["finish_reason"] != "stop" or not final_text.strip()
+                                or formal.get("reasoning_content") or contains_chat_control(final_text)):
+                            status = "awaiting_guidance"
+                            break
                         if (formal["finish_reason"] != "stop" or formal.get("reasoning_content")
                             or not final_text.strip() or contains_chat_control(final_text)):
                             break
@@ -668,6 +692,11 @@ class GenerateGuidedAnswer:
                         attempt["hint_to_student"] = disclosure["text"]
                         continue
                     training_reasoning = trace
+                    if solver_delivery and any(a.get("truncated_observation", {}).get("repetition") for a in attempts):
+                        status, issue = "unverified", "repetitive_truncated_trajectory_requires_review"
+                        training_reasoning = student_reasoning_trace(attempts, question)
+                        version["first_unresolved"] = None
+                        break
                 status = "accepted" if gold is not None else "unverified"
                 version["first_unresolved"] = None
                 issue = None
@@ -784,14 +813,14 @@ class GenerateGuidedAnswer:
                 )
         last = attempts[-1]
         terminal_check = last.get("formal_answer", {}).get("check", last["check"])
-        if final_provenance:
+        if teacher_delivery and final_provenance:
             terminal_check = last["teacher_final_answer"]["check"]
         route = "reviewed_solution"
         correctness = "unverified"
         if status == "accepted":
             if training_reasoning:
                 route = "guided_reasoning" if disclosed else "unaided_reasoning"
-                correctness = ("reviewed_student_solution_and_teacher_final_key_match" if final_provenance
+                correctness = ("reviewed_student_solution_and_teacher_final_key_match" if teacher_delivery and final_provenance
                                else "reviewed_solution_and_fresh_final_key_match")
             elif direct_match:
                 route, correctness = "nonthinking_direct", "unaided_direct_key_match"
@@ -812,7 +841,7 @@ class GenerateGuidedAnswer:
                 "first_disclosed_at": delivery_log[0]["attempt"], "reference_answer_disclosed": True,
                 "independent_solution": False, "solver_role": delivery_log[-1]["role"],
                 "solver_model": delivery_log[-1]["model"], "solver_round": delivery_log[-1]["attempt"],
-                "formal_answer_author": "teacher" if final_provenance else None, "deliveries": delivery_log}}
+                "formal_answer_author": final_provenance["author"] if final_provenance else None, "deliveries": delivery_log}}
                if delivery_log else {}),
             **({"final_answer_provenance": final_provenance} if final_provenance and (
                 status == "accepted" or issue == "repetitive_truncated_trajectory_requires_review") else {}),

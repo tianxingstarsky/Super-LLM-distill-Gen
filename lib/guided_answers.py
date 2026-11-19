@@ -17,7 +17,7 @@ def main():
     cli.add_argument("--student-url")
     cli.add_argument("--student-model")
     cli.add_argument("--coach-url")
-    cli.add_argument("--coach-model", help="Tutor used for disclosure and review; protocol 4.4 also uses it to write the final answer after a verified solution")
+    cli.add_argument("--coach-model", help="Tutor for disclosure and review. Protocols 4.4 to 4.8 also use it to write the final answer.")
     cli.add_argument("--student-api-key-env")
     cli.add_argument("--coach-api-key-env")
     cli.add_argument("--continuation-model", help="Optional stronger student for verified full-disclosure cases")
@@ -67,7 +67,7 @@ def main():
     cli.add_argument("--historical-first-input", type=Path,
                      help="Original full input JSONL for a subset of a historical first-pass run. "
                           "Its file digest must match the source manifest.")
-    cli.add_argument("--protocol-version", help="Pin a supported protocol when creating a new run")
+    cli.add_argument("--protocol-version", help="Pin a protocol for a new run. The default (4.9.0) lets the solver continue its own final answer. Existing runs use their manifest.")
     cli.add_argument("--verified-step-receipts", type=Path,
                      help="Trust teaching microsteps independently checked by the nominated source verifier. The run freezes its receipt registry.")
     cli.add_argument("--reuse-matching-from", type=Path,

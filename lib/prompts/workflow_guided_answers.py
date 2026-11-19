@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.8.2"
+VERSION = "4.9.0"
 
 STUDENT_REASONING_PROGRESS = (
     "State what you have established with the evidence for it. Use that result to work out "

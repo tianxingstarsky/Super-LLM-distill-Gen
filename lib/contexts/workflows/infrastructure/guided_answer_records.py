@@ -18,7 +18,10 @@ from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
-from ..domain.guided_teacher_delivery import EVIDENCED_PROGRESS_VERSIONS, TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
+from ..domain.guided_teacher_delivery import (
+    EVIDENCED_PROGRESS_VERSIONS, GUIDED_DELIVERY_VERSIONS, SOLVER_FINAL_VERSIONS,
+    TRUNCATED_TUTORING_VERSIONS, requested_delivery, uses_direct_first,
+)
 from ..domain.guided_final_experience import adopted_final_teacher_text
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
 from .guided_historical_answer import (
@@ -28,7 +31,7 @@ from .guided_historical_answer import (
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0"} | TEACHER_FINAL_VERSIONS
+PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0"} | GUIDED_DELIVERY_VERSIONS
 VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"} | PAIRED_DISCLOSURE_VERSIONS
 TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"} | VERIFIED_STEP_VERSIONS
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS
@@ -351,6 +354,8 @@ def run_guided_cases(
             coach.configure_teacher_reasoning(template_version, prior_coach)
         for role, ep in endpoints.items():
             if isinstance(ep, GuidedChatEndpoint):
+                if template_version in SOLVER_FINAL_VERSIONS and role in {"student", "continuation"} and not ep.local:
+                    raise ValueError(f"the {role} endpoint requires a native llama.cpp server for guided answer continuation")
                 prior = frozen_config["endpoints"][role] if frozen_config else None
                 ep.configure_sampling(template_version, prior)
         capabilities = {role: ep.validate() for role, ep in endpoints.items()}
@@ -485,14 +490,17 @@ def run_guided_cases(
                 nonlocal current_checkpoint, resumed_interruption
                 checkpoint = folder / f"{index:03}-{role}.json"
                 current_checkpoint = checkpoint.name
+                native_final = role in {"final_answer", "strong_final_answer"}
                 serving_role = {"student": "student", "final_answer": "student",
-                                "strong_continuation": "continuation"}.get(role, "coach")
+                                "strong_continuation": "continuation", "strong_final_answer": "continuation"}.get(role, "coach")
                 endpoint = endpoints[serving_role]
-                payload = (endpoint.final_answer_payload(messages) if role == "final_answer"
+                payload = (endpoint.final_answer_payload(messages) if native_final
                            else endpoint.payload(messages, schema))
                 syntax = source.get("direct_answer_syntax")
                 first_direct = role == "student" and index == 1 and uses_direct_first(source, template_version)
-                if syntax and (role == "final_answer" or first_direct):
+                final_grammar = native_final and (template_version not in SOLVER_FINAL_VERSIONS
+                                                  or requested_delivery(source) == "final_only")
+                if syntax and (first_direct or final_grammar):
                     payload["grammar"] = DIRECT_ANSWER_GRAMMARS[syntax]
                 identity = digest(
                     {"binding": binding, "id": source["id"], "payload": payload}
@@ -528,7 +536,7 @@ def run_guided_cases(
                 previous = saved.get("attempts", [])
                 replayed = None
                 if (reuse_first_from and role == "student" and index == 1
-                        and (template_version not in TEACHER_FINAL_VERSIONS or first_direct)):
+                        and (template_version not in GUIDED_DELIVERY_VERSIONS or first_direct)):
                     replayed = replay_first(
                         reuse_first_from,
                         source["id"],
@@ -543,6 +551,10 @@ def run_guided_cases(
                 elif reuse_matching_from:
                     replayed = replay_matching_call(reuse_matching_from, source["id"], role, index, payload,
                                                     config["reuse_matching"]["source_binding"])
+                    # Legacy native receipts may have copied the requested model into the response.
+                    if (replayed and native_final and template_version in SOLVER_FINAL_VERSIONS
+                            and not replayed[0].get("model_identity_source")):
+                        replayed = None
                 if replayed:
                     response, origin = replayed
                     atomic_json(

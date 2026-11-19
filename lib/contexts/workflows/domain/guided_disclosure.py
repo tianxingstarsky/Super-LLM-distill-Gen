@@ -7,7 +7,7 @@ from .guided_disclosure_text import locate_teacher_premise
 from .guided_teaching_steps import verified_steps_digest
 
 
-RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3"}
+RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3", "4.9.0"}
 
 
 def render_student_continuation(view, approaches, *, chinese):

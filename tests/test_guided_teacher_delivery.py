@@ -239,7 +239,7 @@ def test_same_local_model_separates_student_and_teacher_reasoning_and_resumes(tm
     root = tmp_path / "run"
     def run():
         return run_guided_cases(source, root, {"student": endpoint, "coach": endpoint},
-                                {"version": "example"}, 1, workers=1)
+                                {"version": "example"}, 1, workers=1, protocol_version="4.8.2")
 
     summary = run()
     assert summary["counts"]["accepted"] == 1

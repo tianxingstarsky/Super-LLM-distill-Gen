@@ -4,13 +4,14 @@ import json
 import os
 import re
 from contextlib import ExitStack
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from jsonschema import Draft202012Validator
 
 from lib.contexts.models.contracts import ModelQueueTimeout
-from ..domain.guided_teacher_delivery import QWEN_SAMPLING_VERSIONS, TEACHER_REASONING_VERSIONS
+from ..domain.guided_teacher_delivery import QWEN_SAMPLING_VERSIONS, SOLVER_FINAL_VERSIONS, TEACHER_REASONING_VERSIONS
 from lib.prompts.workflow_guided_answers import FINAL_DELIVERY
 
 MIN_CONTEXT = 90_000
@@ -94,6 +95,8 @@ class GuidedChatEndpoint:
         self.thinking = bool(thinking)
         self.record_teacher_reasoning = False
         self.requested_sampling = sampling
+        self.protocol_version = None
+        self.single_served_model = None
         self.sampling_profile = None
         self.sampling_parameters = {"temperature": 0}
         self.context = context
@@ -138,7 +141,12 @@ class GuidedChatEndpoint:
 
     def validate(self):
         if self.local:
-            slots = self.http(self.root + "/slots")
+            try:
+                slots = self.http(self.root + "/slots")
+            except HTTPError as error:
+                if self.protocol_version in SOLVER_FINAL_VERSIONS and error.code in (404, 405):
+                    raise ValueError("guided native generation requires a llama.cpp server exposing GET /slots") from error
+                raise
             if (
                 not isinstance(slots, list)
                 or not slots
@@ -150,8 +158,10 @@ class GuidedChatEndpoint:
             self.slots = len(slots)
             self.context = min(s["n_ctx"] for s in slots)
             models = self.http(self.root + "/v1/models")
-            if self.model not in {entry["id"] for entry in models["data"]}:
+            served_ids = {entry["id"] for entry in models["data"]}
+            if self.model not in served_ids:
                 raise ValueError("configured model is not served by llama-server")
+            self.single_served_model = self.model if served_ids == {self.model} else None
             if self.context < MIN_CONTEXT:
                 raise ValueError("native context per parallel slot is below 90000")
         if self.context <= self.cap:
@@ -174,6 +184,7 @@ class GuidedChatEndpoint:
         return spec
 
     def configure_sampling(self, version, frozen_endpoint=None):
+        self.protocol_version = version
         self.sampling_profile = None
         self.sampling_parameters = {"temperature": 0}
         if version not in QWEN_SAMPLING_VERSIONS:
@@ -233,7 +244,9 @@ class GuidedChatEndpoint:
             task[0] = {**task[0], "content": task[0]["content"] + "\n\n" + FINAL_DELIVERY}
         else:
             task.insert(0, {"role": "system", "content": FINAL_DELIVERY})
+        selection = {"model": self.model} if self.protocol_version in SOLVER_FINAL_VERSIONS else {}
         rendered = self.http(self.root + "/apply-template", {
+            **selection,
             "messages": task, "chat_template_kwargs": {"enable_thinking": True},
             "add_generation_prompt": True,
         })["prompt"]
@@ -241,7 +254,7 @@ class GuidedChatEndpoint:
             raise ValueError("the local template did not open a native Qwen thinking block")
         prefix = rendered + trace + "\n</think>\n\n"
         tokens = self.http(self.root + "/tokenize", {
-            "content": prefix, "add_special": False, "parse_special": True,
+            **selection, "content": prefix, "add_special": False, "parse_special": True,
         })["tokens"]
         if not tokens or len(tokens) + self.cap > self.context:
             raise ValueError("the complete guided reasoning and answer reservation must fit the native slot")
@@ -259,6 +272,16 @@ class GuidedChatEndpoint:
                 raise GuidedAdmissionTimeout(ModelQueueTimeout.code) from error
             return self.http(self.root + path, data)
 
+    def _response_model(self, raw, *, native=False):
+        if self.protocol_version not in SOLVER_FINAL_VERSIONS:
+            return {"model": raw.get("model", self.model) if native else raw.get("model")}
+        reported = raw.get("model")
+        if isinstance(reported, str) and reported.strip():
+            return {"model": reported, "model_identity_source": "response_model"}
+        if self.single_served_model:
+            return {"model": self.single_served_model, "model_identity_source": "single_served_model"}
+        return {"model": None, "model_identity_source": "unreported"}
+
     def complete(self, data):
         if "prompt" in data:
             raw = self._generate("/completion", data)
@@ -271,7 +294,7 @@ class GuidedChatEndpoint:
                         finish_reason="stop" if raw["stop_type"] == "eos" else "length",
                         usage=dict(prompt_tokens=len(data["prompt"]), completion_tokens=predicted,
                                    total_tokens=len(data["prompt"]) + predicted),
-                        model=raw.get("model", self.model), context_tokens=self.context,
+                        **self._response_model(raw, native=True), context_tokens=self.context,
                         estimated_prompt_tokens=len(data["prompt"]), max_tokens=self.cap,
                         server_timing=raw.get("timings"), transport="llama.cpp/completion")
         prompt_count = None
@@ -311,7 +334,7 @@ class GuidedChatEndpoint:
             reasoning_content=thinking,
             finish_reason=chosen.get("finish_reason"),
             usage=raw.get("usage", {}),
-            model=raw.get("model"),
+            **self._response_model(raw),
             response_id=raw.get("id"),
             context_tokens=self.context,
             estimated_prompt_tokens=prompt_count,

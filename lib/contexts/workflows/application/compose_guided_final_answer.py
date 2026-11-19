@@ -9,11 +9,11 @@ from ..domain.guided_final_experience import adopted_final_teacher_text
 from ..domain.guided_teacher_delivery import (
     QWEN_SAMPLING_VERSIONS, STRICT_DELIVERY_VERSIONS, TEACHER_FINAL_VERSIONS, inspect_teacher_delivery, requested_delivery,
 )
-from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_BY_DELIVERY, TEACHER_FINAL_NECESSITY, VERSION, teacher_final_schema
+from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_BY_DELIVERY, TEACHER_FINAL_NECESSITY, teacher_final_schema
 
 
 def compose_guided_final_answer(request, source, index, segments, verified_conclusion, *, reasoning_trace=None,
-                                protocol_version=VERSION, final_teacher_experience=None, correction=None):
+                                protocol_version="4.8.2", final_teacher_experience=None, correction=None):
     steps = {s["id"]: s["text"] for s in segments}
     form = requested_delivery(source)
     system = TEACHER_FINAL_ANSWER

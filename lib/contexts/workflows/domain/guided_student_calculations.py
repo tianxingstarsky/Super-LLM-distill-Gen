@@ -64,6 +64,12 @@ def _checked_equation(literal):
     return None
 
 
+def verified_equation_result(text):
+    """Return the computed value when a complete standalone equation checks out."""
+    equation = _checked_equation(text)
+    return equation[1] if equation else None
+
+
 def _student_equations(text):
     # Match a complete numeric island. Never start inside another expression,
     # a LaTeX command, or an alphanumeric token.

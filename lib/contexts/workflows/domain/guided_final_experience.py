@@ -6,11 +6,11 @@ import re
 
 from .experience_evolution import digest, validate_experience_text, validate_identifier
 from .guided_answers import number
-from .guided_teacher_delivery import QWEN_SAMPLING_VERSIONS
+from .guided_teacher_delivery import QWEN_SAMPLING_VERSIONS, TEACHER_FINAL_VERSIONS
 
 
 FINAL_TEACHER_ROLE = "final_answer_teacher"
-FINAL_EXPERIENCE_VERSIONS = frozenset({"4.5.1", "4.6.0"}) | QWEN_SAMPLING_VERSIONS
+FINAL_EXPERIENCE_VERSIONS = frozenset({"4.5.1", "4.6.0"}) | (QWEN_SAMPLING_VERSIONS & TEACHER_FINAL_VERSIONS)
 
 
 def text_sha(text):
