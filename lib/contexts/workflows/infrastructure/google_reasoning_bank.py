@@ -13,6 +13,7 @@ from filelock import FileLock
 
 from lib.contexts.workflows.domain.experience_evolution import FORMAT_VERSION, digest, validate_scope, validate_experience_text
 from lib.contexts.workflows.domain.reasoning_bank import memory_context_assignments
+from ..domain.guided_final_experience import FINAL_TEACHER_ROLE, is_final_teacher_edition
 from lib.io_utils import atomic_json
 
 
@@ -48,7 +49,10 @@ def recorded_episode(observation, user_outcome=None):
     agent_trace = episode.get("agent_episode_projection_version") == 1 and episode.get("target") == "agent"
     guided_trace = episode.get("guided_answer_projection_version") == 1
     teacher_draft = episode.get("guided_disclosure_projection_version") == 1
-    chronological = agent_trace or guided_trace or teacher_draft
+    teacher_final = episode.get("guided_final_projection_version") == 1
+    if teacher_final and user_outcome is not None:
+        raise ValueError("final_teacher_assessment_must_be_bound_to_the_recorded_proposal")
+    chronological = agent_trace or guided_trace or teacher_draft or teacher_final
     thoughts, actions = [], []
     assistant_indexes = [index for index, message in enumerate(messages) if message.get("role") == "assistant"]
     for position, index in enumerate(assistant_indexes):
@@ -68,11 +72,13 @@ def recorded_episode(observation, user_outcome=None):
     return {"id": episode["id"], "query": json.dumps(query, ensure_ascii=False),
         "think_list": thoughts, "action_list": actions,
         "status": "success" if check["keep"] else "fail",
-        "assessment_source": {"kind": ("user_label" if user_outcome else
+        "assessment_source": {"kind": ("reviewed_teacher_final_answer" if teacher_final else "user_label" if user_outcome else
                                        "reviewed_teacher_disclosure" if teacher_draft else
                                        "program_key_and_tutor" if guided_trace else "recorded_model_autoeval"),
-                              "independently_verified": False},
-        "feedback": "This is a fallible reviewer observation, not established truth.\n" + check.get("reason", ""),
+                              "independently_verified": teacher_final and episode["final_assessment"]["kind"] != "human"},
+        "feedback": (("Assessment of the teacher's public answer.\n" if teacher_final else
+                     "This is a fallible reviewer observation, not established truth.\n") + check.get("reason", "")),
+        **({"guided_final_projection_version": 1, "final_assessment": deepcopy(episode["final_assessment"])} if teacher_final else {}),
         **({"agent_episode_projection_version": 1, "source_outcome": episode.get("source_outcome", "unknown")}
            if agent_trace else {}),
         **({"guided_answer_projection_version": 1} if guided_trace else {}),
@@ -92,6 +98,9 @@ class GoogleReasoningBank:
         parent = self.repository.get_version(parent_id) if parent_id else None
         if parent and parent["scope"] != scope:
             raise ValueError("experience_evolution_parent_scope_mismatch")
+        final_teacher = episode.get("guided_final_projection_version") == 1
+        if parent and is_final_teacher_edition(parent) != final_teacher:
+            raise ValueError("final_teacher_experience_parent_role_mismatch")
         policy = self.inductor.policy_identity
         identity = {"scope": scope, "episode": episode, "binding": self.binding, "parent_id": parent_id}
         if policy:
@@ -110,7 +119,7 @@ class GoogleReasoningBank:
                         raise ValueError("reasoning_bank_learning_receipt_changed")
                     return saved
                 return self.repository.get_version(saved["edition_id"])
-            result = (self.inductor.induce(episode, generation_scope=scope,
+            result = (self.inductor.induce(episode, generation_scope=FINAL_TEACHER_ROLE if final_teacher else scope,
                 current_memory=parent["text"] if parent else "") if policy else self.inductor.induce(episode))
             raw_items = result["memory"]["memory_items"]
             if policy and "\n\n".join(raw_items).strip() == "<no-new-memory/>":

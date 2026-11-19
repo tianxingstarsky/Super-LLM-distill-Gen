@@ -9,6 +9,10 @@ from lib.bootstrap.google_reasoning_bank import google_reasoning_bank_applicatio
 from lib.bootstrap.reasoning_bank import reasoning_bank_application
 from lib.contexts.workflows.api import learn_guided_experience
 from lib.contexts.workflows.application.guided_experience import observed_attempt, observed_teacher_disclosure
+from lib.contexts.workflows.application.guided_experience import adopt_final_teacher_edition
+from lib.contexts.workflows.application.compose_guided_final_answer import compose_guided_final_answer
+from lib.contexts.workflows.domain.experience_evolution import digest
+from lib.contexts.workflows.domain.guided_final_experience import recorded_final_proposal
 from lib.contexts.workflows.infrastructure.google_reasoning_bank import recorded_episode
 
 
@@ -50,6 +54,64 @@ def test_teacher_withheld_hint_feedback_is_about_the_draft():
                     verified_operation={"id": "dependency", "operation": "What follows if the left item is chosen?"})
     episode = recorded_episode(observed_teacher_disclosure(case, 1, 0))
     assert json.loads(episode["action_list"][0])["assistant_action"]["content"] == selected["verified_operation"]["operation"]
+
+
+def test_final_teacher_observation_requires_bound_actual_answer_and_separate_adoption():
+    from lib.contexts.workflows.domain.guided_final_experience import final_delivery_observation
+    question = "What is twice three? Explain."
+    def packet(value):
+        return {"messages": [{"role":"system","content":"Write the teacher's formal answer."},
+                             {"role":"user", "content":question}, {"role":"tool","content":json.dumps({
+            "source":"workflow_verified_task_evidence", "independent_reference_key":{"kind":"number","value":value}})}]}
+    request = packet("6")
+    answer = {"decision":"deliver", "reason":"", "explanation":"Doubling three adds three to itself.",
+              "conclusion":"5", "evidence_ids":["s1"]}
+    response = {"content":json.dumps(answer), "reasoning_content":"Original teacher calculation.", "finish_reason":"stop"}
+    case = {"id":"twice", "question":question, "gold":{"kind":"number", "value":"6"}, "binding":"frozen",
+            "attempts":[{"attempt":1, "teacher_final_answer":{"response":response, "public_answer":""}}]}
+    receipt = {"identity":digest({"binding":"frozen","id":"twice","payload":request}), "role":"teacher_final_answer",
+               "request":request, "status":"complete", "attempt":1, "response":response}
+    visible, _, binding = recorded_final_proposal(case, 1, receipt)
+    check = {**binding, "kind":"wrong_final_value"}
+    observed = final_delivery_observation(case, 1, receipt, check)
+    episode = recorded_episode(observed)
+    assert episode["status"] == "fail" and json.loads(episode["action_list"][0])["assistant_action"]["content"] == visible
+    assert episode["assessment_source"] == {"kind":"reviewed_teacher_final_answer", "independently_verified":True}
+    with pytest.raises(ValueError, match="exact case"):
+        final_delivery_observation(case, 1, receipt, {**check, "public_answer_sha256":"wrong"})
+    case["gold"]["value"] = "5"
+    with pytest.raises(ValueError, match="must agree"):
+        final_delivery_observation(case, 1, receipt, check)
+    request = packet("5")
+    receipt = {**receipt, "request":request, "identity":digest({"binding":"frozen","id":"twice","payload":request})}
+    _, _, binding = recorded_final_proposal(case, 1, receipt)
+    check = {**binding,"kind":"wrong_final_value"}
+    with pytest.raises(ValueError, match="could not be reproduced"):
+        final_delivery_observation(case, 1, receipt, check)
+    manual = {**binding,"kind":"human","quote":"Doubling three","outcome":"failure",
+              "reason":"The explanation and conclusion disagree."}
+    marked = recorded_episode(final_delivery_observation(case, 1, receipt, manual))
+    assert marked["status"] == "fail" and not marked["assessment_source"]["independently_verified"]
+    rule = "Check what the last operation actually yields."
+    edition = {"id":"a"*32,"scope":"reasoning","sha256":"b"*64,"text":rule,"episodes":[marked],"parent_id":None}
+    bank = SimpleNamespace(learn=lambda *a, **k: {**edition,"status":"candidate","model_request_receipt":[]})
+    candidate = learn_guided_experience(bank, case, 1, role="final_answer_teacher", teacher_receipt=receipt, assessment=manual)
+    assert "final_answer_teacher" not in candidate
+    selected = adopt_final_teacher_edition(SimpleNamespace(get_version=lambda i: edition),edition["id"])
+    calls = []
+    def capture(role,index,messages,schema):
+        calls.append((role,messages,schema))
+        return response
+    def compose(version, experience):
+        compose_guided_final_answer(capture,case,1,[{"id":"s1","text":"Three plus three."}],"5",
+                                    protocol_version=version,final_teacher_experience=experience)
+    compose("4.5.0", selected)
+    compose("4.5.1", candidate)
+    compose("4.5.1", selected)
+    assert calls[0] == calls[1] and calls[0][1][1:] == calls[2][1][1:]
+    assert rule not in calls[0][1][0]["content"] and rule in calls[2][1][0]["content"]
+    with pytest.raises(ValueError, match="explicitly adopted"):
+        compose("4.5.1",{**selected,"final_answer_teacher":"Unadopted instruction"})
 
 
 @pytest.fixture(scope="session", autouse=True)

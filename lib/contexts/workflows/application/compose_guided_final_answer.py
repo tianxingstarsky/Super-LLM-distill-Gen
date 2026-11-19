@@ -4,12 +4,13 @@ import hashlib
 import json
 
 from ..domain.guided_answers import assemble, read_teacher_submission
+from ..domain.guided_final_experience import adopted_final_teacher_text
 from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, inspect_teacher_delivery, requested_delivery
 from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_NECESSITY, VERSION, teacher_final_schema
 
 
 def compose_guided_final_answer(request, source, index, segments, verified_conclusion, *, reasoning_trace=None,
-                                protocol_version=VERSION):
+                                protocol_version=VERSION, final_teacher_experience=None):
     steps = {s["id"]: s["text"] for s in segments}
     form = requested_delivery(source)
     system = TEACHER_FINAL_ANSWER
@@ -17,6 +18,9 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
         system += "\n\n" + TEACHER_FINAL_NECESSITY
     elif protocol_version != "4.4.0":
         raise ValueError("unsupported teacher final-answer protocol")
+    teacher_instruction = adopted_final_teacher_text(final_teacher_experience or {}, protocol_version)
+    if teacher_instruction:
+        system += "\n\n" + teacher_instruction
     if source.get("task_system"):
         system += "\n\nOriginal task system instruction:\n" + source["task_system"]
     materials = {

@@ -5,7 +5,7 @@ import unicodedata
 
 from .guided_answers import check_direct_answer, contains_chat_control, number
 
-TEACHER_REASONING_VERSIONS = frozenset({"4.5.0"})
+TEACHER_REASONING_VERSIONS = frozenset({"4.5.0", "4.5.1"})
 TEACHER_FINAL_VERSIONS = frozenset({"4.4.0", "4.4.1"}) | TEACHER_REASONING_VERSIONS
 
 _QUANTITY = r"[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:/\d+|[eE][+-]?\d+)?"

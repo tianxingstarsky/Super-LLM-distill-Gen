@@ -2,6 +2,10 @@
 
 import json
 
+from ..domain.guided_final_experience import (
+    FINAL_TEACHER_ROLE, final_delivery_observation, final_teacher_edition, text_sha,
+)
+
 
 def observed_attempt(case, number):
     if number < 1 or number > len(case["attempts"]):
@@ -68,7 +72,24 @@ def observed_teacher_disclosure(case, number, revision):
     }
 
 
-def learn_guided_experience(bank, case, attempt, query, parent_id=None, *, role="student", revision=0):
+def adopt_final_teacher_edition(experience_library, identifier):
+    edition = final_teacher_edition(experience_library.get_version(identifier))
+    # Adopt the immutable upstream edition itself. Looking up an ID needs no model or embedding.
+    adoption = {"role": FINAL_TEACHER_ROLE, "status": "adopted", "edition_id": identifier,
+                "edition_sha256": edition["sha256"], "parent_id": edition["parent_id"], "text_sha256": text_sha(edition["text"])}
+    return {"version": identifier, FINAL_TEACHER_ROLE: edition["text"], "final_answer_teacher_adoption": adoption}
+
+
+def learn_guided_experience(bank, case, attempt, query=None, parent_id=None, *, role="student", revision=0,
+                            teacher_receipt=None, assessment=None, replay_verifier=None):
+    if role == FINAL_TEACHER_ROLE:
+        observation = final_delivery_observation(case, attempt, teacher_receipt, assessment, replay_verifier=replay_verifier)
+        if parent_id:
+            final_teacher_edition(bank.experience.get_version(parent_id))
+        learned = bank.learn("reasoning", observation, parent_id=parent_id)
+        return {"version": learned.get("id") or parent_id or "initial", "receipt": {
+            "role": role, "learning_status": learned["status"], "parent": parent_id,
+            "assessment": observation["final_assessment"], "model_calls": learned["model_request_receipt"]}}
     if role not in ("student", "disclosure_teacher"):
         raise ValueError("Unknown guided experience role")
     observation = (observed_teacher_disclosure(case, attempt, revision)

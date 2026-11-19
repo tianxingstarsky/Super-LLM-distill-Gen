@@ -184,4 +184,14 @@ CoT 协议 7 在生成中完成草稿推敲：联合生成只请求一次，原�
 
 `guided_experience.py` 将带金标的续写尝试投影到既有 Google ReasoningBank，依照实际时间顺序保留学生当时收到的公开信息。冻结的检索结果供后续答题方采用。
 
+4.5.1 支持教师正式交付的专属经验。下面的命令从某一轮的 `case.json` 和同目录的 `NNN-teacher_final_answer.json` 生成绑定表，保留教师实际提出、随后可能被拦下的完整正文。在表内填写 `outcome`（`success` 或 `failure`）、正文原句 `quote` 与具体判断理由 `reason`。成功标签表示已经核查完整答案。保留模板中的题号、轮号、请求身份与正文摘要。
+
+```sh
+python -m lib.guided_experience --prepare-final-assessment --case RUN/cases/CASE/case.json --attempt 1 --output assessment.json
+python -m lib.guided_experience --role final_answer_teacher --case RUN/cases/CASE/case.json --attempt 1 --assessment assessment.json --backend BACKEND --model MODEL --library LIB --output candidate.json
+python -m lib.guided_experience --adopt-final-edition EDITION_ID --library LIB --output experience.json
+```
+
+第二步沿用 Google ReasoningBank 的提炼与调用收据。读完候选版本，再用它的 ID 执行第三步；采用只读取个人库中的不可变版本，无须模型或嵌入。将 `experience.json` 作为 `lib.guided_answers --experience` 的参数，选定的经验只进入教师交付正式答案的 system 消息。数值型题目可将表内 `kind` 设为 `wrong_final_value` 来重放“明确数值不同”的负例判定。键值相等时仍须另行检查解法。其他可信校验器可通过 `learn_guided_experience(..., replay_verifier=...)` 注入；检查器须对当前题和实际正文重新求值，并返回对应的题号、正文 SHA-256、检查器名称和版本摘要。
+
 `GenerateGuidedAnswer` 在 4.2.1 中通过 `repair_guided_student_evidence.py` 区分学生的推导错误和审查员的证据引用错误。审查引用自身、尚未出现的步骤或无效编号时，只向审查员提交一次修正请求。原始判决、引用错误、修正响应与对应学生轮次均保存。审查员无法证实这些发现时，任务进入 `awaiting_guidance`，可在原学生稿上继续工作。只有通过推导审查并核对金标的稿件才能进入正式答复阶段。

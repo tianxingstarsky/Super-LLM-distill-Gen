@@ -19,4 +19,5 @@ from .application.continue_native_feedback import ContinueNativeFeedback
 from .application.reasoning_bank import ReasoningBank
 from .application.optimize_native_sft import OptimizeNativeSft
 from .application.generate_guided_answer import GenerateGuidedAnswer
-from .application.guided_experience import learn_guided_experience
+from .application.guided_experience import adopt_final_teacher_edition, learn_guided_experience
+from .domain.guided_final_experience import recorded_final_proposal

@@ -18,6 +18,7 @@ from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
 from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, uses_direct_first
+from ..domain.guided_final_experience import adopted_final_teacher_text
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, GuidedChatEndpoint, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
@@ -242,6 +243,7 @@ def run_guided_cases(
             for role in ("student", "coach", "disclosure_teacher")
         ):
             raise ValueError("experience role instructions must be strings")
+        adopted_final_teacher_text(experience, template_version)
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         if type(workers) is not int or not 1 <= workers <= 4:

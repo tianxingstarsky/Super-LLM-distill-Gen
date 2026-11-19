@@ -87,7 +87,7 @@ class GenerateGuidedAnswer:
                     "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9",
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
-                    "4.5.0": "v4.5"}[protocol_version]
+                    "4.5.0": "v4.5", "4.5.1": "v4.5.1"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -458,7 +458,7 @@ class GenerateGuidedAnswer:
                     if teacher_delivery:
                         delivery = compose_guided_final_answer(
                             self.request, source, index, active, check.get("answer_surface") or check["answer"],
-                            reasoning_trace=trace, protocol_version=protocol_version)
+                            reasoning_trace=trace, protocol_version=protocol_version, final_teacher_experience=experience)
                         attempt["teacher_final_answer"] = delivery
                         final_provenance = delivery["provenance"]
                         formal_history.append({"attempt": index, "author": "teacher", "check": delivery["check"],

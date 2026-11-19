@@ -1,5 +1,6 @@
 """Index authenticated editions, retrieve relevant memories, freeze new tasks."""
 from typing import Protocol
+from ..domain.guided_final_experience import is_final_teacher_edition
 
 from ..domain.experience_evolution import digest, validate_identifier, validate_scope
 from ..domain.reasoning_bank import (
@@ -22,6 +23,8 @@ class ReasoningBank:
 
     def index_edition(self, edition_id):
         edition = self._port.get_edition(validate_identifier(edition_id))
+        if is_final_teacher_edition(edition):
+            raise ValueError("Adopt the final-answer teacher edition for its role instead of indexing it as general reasoning")
         if edition["scope"] == "review":
             raise ValueError("reasoning_bank_generation_scope_required")
         entries = entries_from_edition(edition)
