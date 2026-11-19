@@ -30,6 +30,134 @@ def test_list_numbers_stay_attached_and_never_become_evidence():
     assert review["verdict"] == "uncertain" and review["verified_prefix_count"] == 1
 
 
+@pytest.mark.parametrize("third_reply,expect_strong", [("There are five jobs.\nFinal answer: 5", True),
+                                                      (None, False),
+                                                      ("The six jobs are A, B, C, D, E and F.\nFinal answer: 5", True),
+                                                      ("I am still counting the jobs", False),
+                                                      ("The list has only five jobs.\nFinal answer: 6", True),
+                                                      ("The list appears incomplete.\nFinal answer: 6", False),
+                                                      ("I will cross off each distinct name once.\nFinal answer: 5", False)])
+def test_wrong_final_anchor_cannot_certify_a_draft_or_jump_over_full_help(third_reply, expect_strong):
+    from lib.contexts.workflows.domain.guided_teaching_steps import complete_solution_digest
+
+    question = "The six jobs are A, B, C, D, E and F. Return only the number of jobs."
+    proof = "Count each of the six distinct job names exactly once."
+    source = validate_source(dict(id="jobs", question=question, gold={"kind": "number", "value": "6"},
+                                  source_reasoning=proof, answer_requirement="final_only"))
+    quote = "The six jobs are A, B, C, D, E and F"
+    hint = "Cross off one name for each distinct job."
+    full = {"id": complete_solution_digest(source), "worked_solution": proof, "answer": "6"}
+    calls = []
+    progressing = bool(third_reply and third_reply.startswith("I will cross off"))
+    incorrect = "There are five jobs."
+    def request(role, index, messages, schema):
+        calls.append((role, index, messages))
+        model = "student" if role == "student" else "teacher"
+        if role == "student":
+            value = {1: "4", 2: incorrect + "\nFinal answer: 5", 3: third_reply,
+                     4: "2 + 2 = 4.\nFinal answer: 5", 5: "There are six distinct entries.\nFinal answer: 6"}[index]
+            if third_reply is None and index == 2:
+                value = "2 + 2 = 4.\nFinal answer: 5"
+        elif role == "strong_continuation":
+            assert index == 4 and messages == next(m for r, i, m in calls if (r, i) == ("student", 3))
+            model, value = "larger", "Counting each distinct job gives six.\nFinal answer: 6"
+        elif role == "coach":
+            solved = index == (5 if progressing else 4)
+            value = dict(decision="supported" if solved else "revise:final_answer", diagnosis="Check the count.",
+                         reusable=[], independent_approaches=[])
+            if "anchored_contradiction" in schema["properties"]:
+                assert not solved or index >= 4
+                assert full["worked_solution"] in messages[-1]["content"]
+                value["anchored_contradiction"] = []
+                if not solved:
+                    value["decision"] = "revise:a3.s1"
+                    if third_reply.startswith("The list has only five"):
+                        value["anchored_contradiction"] = [dict(student_quote="only five jobs", source="question",
+                            premise_quote=quote, incompatibility="The six listed distinct jobs contradict a total of five.")]
+            if progressing and index == 3:
+                value["independent_approaches"].append(dict(segment_id="a3.s1", question_quote=quote,
+                    justification="Crossing names off counts each stated job exactly once."))
+            if (progressing and index == 4) or (third_reply is None and index == 2):
+                value["reusable"].append(dict(segment_id=f"a{index}.s1", basis_id="arithmetic", depends_on=[]))
+            if index == 3 and third_reply.startswith(quote):
+                value["reusable"].append(dict(segment_id="a3.s1", basis_id="question", depends_on=[]))
+            if role == "coach" and index == 4 and expect_strong:
+                packet = json.loads(messages[-1]["content"])
+                assert not packet["retained_before"] and not packet["shared_student_findings"]
+        elif role == "disclosure_draft":
+            value = dict(decision="offer", question_quote=quote, bridge=quote + ".", hint=hint,
+                         reason="Check the membership of each name.")
+            if index == 2:
+                assert progressing
+                value = dict(decision="insufficient", question_quote="", bridge="", hint="",
+                             reason="The available strategy has already been supplied.")
+        elif role == "disclosure":
+            packet = json.loads(messages[-1]["content"])
+            value = dict(decision="release", citations=[dict(evidence_id="question", quote=quote)],
+                         bridge=packet["proposed_next_teacher_disclosure"]["bridge"],
+                         reason="This checks membership.", pairing=dict(student_fit=True, evidence_support=True, history_fit="first"))
+        else:
+            assert role == "teacher_final_answer"
+            value = dict(decision="deliver", evidence_ids=[f"a{index}.s1"], explanation="", conclusion="6", reason="")
+        return dict(content=value if isinstance(value, str) else json.dumps(value), finish_reason="stop",
+                    reasoning_content="", model=model)
+    out = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version="4.8.0",
+                                           trusted_solution_receipts={full["id"]}, continuation_model="larger", until_correct=progressing)
+    if third_reply is None:
+        assert out["status"] == "awaiting_guidance" and out["verification"]["issue"] == "bounded_guidance_pending"
+        assert out["attempts"][-1]["verified_stage"]["student_advanced"]
+        assert len(out["attempts"]) == 2 and "continuation_provenance" not in out
+        return
+    assert out["draft_versions"][1]["review_anchor"] == "final_answer"
+    assert out["draft_versions"][1]["retained_after"] == []
+    assert out["attempts"][1]["verified_stage"]["student_advanced"] is False
+    view = json.loads(out["attempts"][2]["student_request_messages"][-1]["content"].split("\n", 1)[1])
+    assert view["complete_disclosure"] == full and hint in view["new_clue"]
+    assert incorrect not in json.dumps(view) and not view["verified_prior_student_findings"]
+    assert out["continuation_provenance"]["independent_solution"] is False
+    assert [r for r, _, _ in calls].count("strong_continuation") == int(expect_strong)
+    if progressing:
+        assert ("disclosure_draft", 2) in [(r, i) for r,i,_ in calls]
+        stages = [a["verified_stage"] for a in out["attempts"]]
+        assert stages[2]["new_method_segments"] == ["a3.s1"] and stages[3]["new_fact_segments"] == ["a4.s1"]
+        assert out["status"] == "accepted" and out["continuation_provenance"]["solver_round"] == 5
+        assert len(out["continuation_provenance"]["deliveries"]) == 3
+    elif expect_strong:
+        assert out["status"] == "accepted" and out["continuation_provenance"]["solver_model"] == "larger"
+        assert full["worked_solution"] in out["messages"][-1]["reasoning_content"]
+        assert out["attempts"][2]["solver_input_evidence"] == out["attempts"][3]["solver_input_evidence"]
+        if third_reply.startswith(quote):
+            assert out["draft_versions"][2]["retained_after"] == ["a3.s1"]
+    else:
+        assert not out["attempts"][2]["verified_stage"]["comparable"] and out["status"] == "awaiting_guidance"
+    if third_reply.endswith("Final answer: 6"):
+        stage = out["attempts"][2]["verified_stage"]
+        assert stage["answer_key_match"] and stage["reference_answer_was_visible"] and not stage["student_advanced"]
+        if expect_strong:
+            error = out["attempts"][2]["reviewed_derivation_conflict"]
+            assert error["segment_id"] == "a3.s1" and question[slice(*error["premise_span"])] == quote
+
+
+def test_partial_progress_requires_grounded_claims_and_repeating_them_is_not_progress():
+    from lib.contexts.workflows.domain.guided_student_evidence import partial_review_evidence, verified_student_stage
+    q = "Do not assume there are five jobs. The duration increases by four."
+    segments, _ = draft_fragment("there are five jobs.\n4 + 5 = 9.\nAll tasks start at zero.", 1)
+    proposed = [dict(segment_id="a1.s1", basis_id="question", depends_on=[]),
+                dict(segment_id="a1.s2", basis_id="arithmetic", depends_on=[])]
+    kept, facts = partial_review_evidence(proposed, segments, [], 3, q)
+    assert kept == 0 and set(facts) == {"a1.s2"}
+    check = dict(format_ok=True, answer_matches=False)
+    a = verified_student_stage(check, facts, [], 1)
+    assert a["student_advanced"] and a["new_fact_segments"] == ["a1.s2"]
+    b = verified_student_stage(check, facts, [{"verified_stage": a}], 2)
+    assert b["state"] == "verified_partial" and b["student_advanced"] is False
+    method = dict(question_span=[34, 55], segment_id="a2.s1", text="Track the increase separately.")
+    c = verified_student_stage(check, {}, [], 1, approaches={"a2.s1": method})
+    rephrased = dict(method, text="Separately track the increase.", segment_id="a3.s1")
+    d = verified_student_stage(check, {}, [{"verified_stage": c}], 2, approaches={"a3.s1": rephrased})
+    assert c["new_method_segments"] == ["a2.s1"] and not d["student_advanced"] and not d["comparable"]
+
+
 def test_greedy_direct_history_is_not_a_new_sample_and_all_later_calls_use_new_sampling(tmp_path):
     from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
     from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint

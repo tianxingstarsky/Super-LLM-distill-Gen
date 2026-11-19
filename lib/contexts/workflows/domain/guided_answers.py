@@ -375,10 +375,19 @@ def student_reasoning_trace(attempts, question, *, verified_truncated_only=False
             raise ValueError("reviewed unaided reasoning needs a separate derivation and final answer")
         return reply[:terminal].rstrip()
     chinese = bool(re.search(r"[\u4e00-\u9fff]", question))
+    changed_solver = any(a.get("solving_role") == "strong_continuation" for a in attempts)
     blocks = []
     for attempt in attempts:
         index = attempt["attempt"]
         label = f"我的第 {index} 次作答" if chinese else f"My attempt {index}"
+        if full := attempt.get("received_complete_disclosure"):
+            reference_answer = full["answer"] if isinstance(full["answer"], str) else json.dumps(full["answer"], ensure_ascii=False)
+            caption = "已提供的完整参考解和答案" if chinese else "Complete worked solution and answer provided"
+            blocks.append(caption + "\n" + full["worked_solution"] + "\n" + reference_answer)
+        if changed_solver:
+            solver = ("接手续写者" if chinese else "Continuation solver") if attempt.get("solving_role") == "strong_continuation" else (
+                "先前学生" if chinese else "Earlier student")
+            label = f"{solver} · {index}"
         text = attempt["student"]["content"]
         if verified_truncated_only and attempt.get("truncated_observation"):
             text = "\n".join(f["text"] for f in attempt.get("program_confirmed", []))

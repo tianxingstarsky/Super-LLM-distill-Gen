@@ -17,7 +17,10 @@ def main():
     cli.add_argument("--coach-model", help="Tutor used for disclosure and review; protocol 4.4 also uses it to write the final answer after a verified solution")
     cli.add_argument("--student-api-key-env")
     cli.add_argument("--coach-api-key-env")
-    for role in ("student", "coach"):
+    cli.add_argument("--continuation-model", help="Optional stronger student for verified full-disclosure cases")
+    cli.add_argument("--continuation-url", help="Local llama.cpp endpoint for the stronger student; defaults to the tutor URL")
+    cli.add_argument("--continuation-api-key-env")
+    for role in ("student", "coach", "continuation"):
         cli.add_argument(f"--{role}-sampling", choices=SAMPLING_PROFILES,
                          help="Local text sampling profile. Use the model size for opaque aliases. "
                               "New runs auto-detect standard Qwen names and otherwise use server defaults.")

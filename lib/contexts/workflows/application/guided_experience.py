@@ -11,6 +11,8 @@ def observed_attempt(case, number):
     if number < 1 or number > len(case["attempts"]):
         raise ValueError("Select a recorded attempt, numbered from one")
     attempt = case["attempts"][number - 1]
+    if attempt.get("solving_role") == "strong_continuation":
+        raise ValueError("This round belongs to the continuation model. Select a round answered by the original student.")
     check = attempt["check"]
     coach = attempt.get("coach") or {}
     match = check.get("answer_matches")
@@ -37,6 +39,9 @@ def observed_attempt(case, number):
             raise ValueError("The public dialogue does not contain the selected attempt")
     reason = ("The program matched the reference answer; the tutor accepted the explanation."
               if match else "The program found that the final answer differs from the reference.")
+    if attempt.get("solving_role"):
+        reason += (f" The complete worked solution and answer were supplied. This was a continuation by "
+                   f"{attempt['student'].get('model') or attempt['solving_role']}. Assess use of the supplied work.")
     if coach.get("diagnosis"):
         reason += " Tutor observation: " + coach["diagnosis"]
     return {"id": f"{case['id']}-attempt-{number}", "conversation": {"messages": messages},
@@ -101,6 +106,9 @@ def learn_guided_experience(bank, case, attempt, query=None, parent_id=None, *, 
                "model_calls": learned["model_request_receipt"]}
     if role == "disclosure_teacher":
         receipt.update(role=role, disclosure_revision=revision, outcome_scope="quality_of_the_teacher_hint")
+    elif case["attempts"][attempt - 1].get("solving_role") == "student":
+        receipt.update(role=role, model=case["attempts"][attempt - 1]["student"].get("model"),
+                       outcome_scope="student_continuation_after_full_disclosure", independent_solution=False)
     if not identifier:
         return {"version": "initial", role: "", "receipt": receipt}
     indexed = bank.bank.index_edition(identifier)

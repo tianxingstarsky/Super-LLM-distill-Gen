@@ -1,5 +1,11 @@
 # 工作流运行适配
 
+4.8 的普通学生继续使用 `--student-model`。可用 `--continuation-model <较强的模型名>` 配置难题接管；独立 llama.cpp 服务另传 `--continuation-url <服务地址>`。教师负责披露、核查和正式交付；较强学生使用答题模式，复用原学生实际收到的消息。共用同一服务时，两种职责共享物理槽。检查 `case.json` 的 `attempts[].verified_stage` 看学生有何进展，`continuation_provenance.deliveries` 给出收件轮次、实际模型和对应请求文件。
+
+如果教师写出的末答与已经核准的结论冲突，`teacher_final_answer` 保存首稿，`teacher_final_correction` 保存同一教师的纠正请求与响应。`python -m lib.guided_experience --prepare-final-assessment` 默认选择该轮最后实际交付的版本。使用 `--original-delivery` 可指定首稿，分别学习失误和修正经验。
+
+普通的 `gold` 只认证末答。若题库的独立校验器还验证了完整解法，可以计算 `guided_teaching_steps.complete_solution_digest(source)` 并把摘要加入原有 `--verified-step-receipts` 清单。摘要绑定题号、用户原题、任务指令、交付要求、完整推导与答案键。逐条验证过的提示有各自的收据；它们不能代替整份解法的认证。校验器应在证明成立后签发摘要。只有学生实际收到认证的完整解法与结论后，才评估能否接管。此后的合格记录标为 `independent_solution=false`，适合训练如何利用已知依据完成推导。
+
 4.7 的可选参数 `--historical-first-from <旧运行目录>` 让显式只交结果的题目复用真实本机温度 0 首答。导入时认证原清单、题目标识、已完成的原始回执、模型及端点；用户话语、模板、语法和上下文容量均须匹配。旧首答的实际发包与费用单独记录，后续教师和学生请求使用新任务所选采样。相同输入文件可导入仅跑完独立首答的批次；抽取子集可用对应原案例的来源摘要或下述原输入文件验证。缺件会中止首答阶段，可补齐后从原目录续跑。输出中的 `historical_first_outcomes` 区分已答对的旧首答与经新学生续答才合格的题数，`historical_first_usage` 只包含历史用量。
 
 从只运行了首答的旧批次抽取子集时，加上 `--historical-first-input <原完整输入.jsonl>`。程序校对原清单的文件 SHA-256，按题号索引入选行，核对原题、独立答案键、任务指令、格式、推导、来源及既有提示。新任务可另外提供独立认证的教学微步。原输入的行号、摘要及出处随收据保存，恢复已导入的题目时可使用冻结副本。

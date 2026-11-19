@@ -3,7 +3,8 @@
 from collections import Counter
 import re
 
-from .guided_answers import contains_chat_control
+from .guided_answers import contains_chat_control, shared_findings
+from .experience_evolution import digest
 from .guided_disclosure import is_substantive_question_quote
 
 
@@ -13,12 +14,94 @@ _PRIVATE_REVIEW_REFERENCE = re.compile(
 )
 
 
-def checked_student_approaches(proposals, segments, first_unresolved_id, question):
+def partial_review_evidence(proposed, segments, existing_prefix, anchor_count, question):
+    """A revision location identifies where to work; only a grounded claim certifies a new step."""
+    count = min(len(existing_prefix), anchor_count)
+    found = shared_findings(proposed, segments, segments[:count], question, exclude_list_markers=True)
+    if any(item["evidence_level"] == "verbatim_question_fact" for item in found.values()):
+        # A substring can reverse the premise ("five jobs" inside "not five jobs").
+        # Preserve the whole source assertion and its qualifications.
+        clauses = {part.strip().rstrip(".。").strip() for part in re.split(r"(?<=[。！？])|(?<=[.!?])\s+|\n", question)}
+        found = {sid: item for sid, item in found.items() if item["evidence_level"] != "verbatim_question_fact"
+                 or (item["text"].strip().rstrip(".。").strip() in clauses and is_substantive_question_quote(item["text"]))}
+    # The prefix is contiguous. A useful finding beyond a gap remains independently usable.
+    while count < anchor_count and segments[count]["id"] in found:
+        count += 1
+    return count, found
+
+
+def checked_derivation_conflict(proposal, review, current_segments, question, worked_solution):
+    """Bind an independent reviewer's conflict to both texts; semantic judgment belongs to that reviewer."""
+    if not isinstance(proposal, list) or len(proposal) != 1 or review["verdict"] != "revise":
+        return None
+    subject = next((s for s in current_segments if s["id"] == review["first_unresolved_id"]), None)
+    item = proposal[0]
+    if not subject or not isinstance(item, dict) or set(item) != {"student_quote", "source", "premise_quote", "incompatibility"}:
+        return None
+    if not all(isinstance(v, str) and v.strip() for v in item.values()):
+        return None
+    source = {"question": question, "worked_solution": worked_solution}.get(item["source"], "")
+    quote, premise = item["student_quote"], item["premise_quote"]
+    if (not is_substantive_question_quote(quote) or not is_substantive_question_quote(premise)
+            or quote.casefold().strip(".。 ") == premise.casefold().strip(".。 ")
+            or subject["text"].count(quote) != 1 or source.count(premise) != 1):
+        return None
+    offset, origin = subject["start"] + subject["text"].index(quote), source.index(premise)
+    return {**item, "segment_id": subject["id"], "student_span": [offset, offset + len(quote)],
+            "premise_span": [origin, origin + len(premise)], "verification": "reviewer_paired_verbatim_contradiction"}
+
+
+def verified_student_stage(check, findings, prior_attempts, hints_received, *, supported=False, direct=False,
+                           approaches=None, unresolved_evidence=False, answer_shown=False):
+    """Describe observed student progress independently of how many clues were issued."""
+    facts = {}
+    for item in findings.values():
+        kind = item["evidence_level"]
+        if kind == "program_checked_reviewed_finite_set":
+            key = "check:" + item["check_id"]
+        elif kind == "program_checked_arithmetic_identity":
+            # Whitespace and typography do not make a repeated calculation new.
+            claim = re.sub(r"\s+", "", item["text"]).strip(".。").replace("×", "*").replace("÷", "/").replace("−", "-")
+            key = "arithmetic:" + digest(claim)
+        else:
+            continue
+        facts[key] = item["segment_id"]
+    prior = [a["verified_stage"] for a in prior_attempts if a.get("verified_stage", {}).get("assessed")]
+    seen = {key for earlier in prior for key in earlier["verified_fact_ids"]}
+    # The same grounded premise can be paraphrased indefinitely. Count a new
+    # grounding once; a changed approach using it may still be useful to the learner.
+    methods = {digest(item["question_span"]): item["segment_id"] for item in (approaches or {}).values()}
+    method_claims = {digest([item["question_span"], " ".join(item["text"].split())])
+                     for item in (approaches or {}).values()}
+    seen_methods = {key for earlier in prior for key in earlier.get("grounded_method_ids", ())}
+    new_methods = sorted(methods.keys() - seen_methods)
+    seen_claims = {key for earlier in prior for key in earlier.get("grounded_method_claims", ())}
+    changed_method = bool(method_claims - seen_claims) and not new_methods
+    unresolved_evidence = unresolved_evidence or changed_method
+    match = check.get("answer_matches") if check.get("format_ok") else None
+    complete = bool(supported and match is True)
+    fresh = sorted(facts.keys() - seen)
+    new_match = not answer_shown and match is True and not any(a["answer_key_match"] is True for a in prior)
+    new_solution = complete and not any(a["complete_student_solution"] for a in prior)
+    state = ("direct_key_match" if direct and match is True else "reviewed_solution" if complete
+             else "key_match_only" if match is True else "verified_partial" if facts else
+             "grounded_method" if methods else "unresolved")
+    return {"assessed": True, "comparable": not unresolved_evidence and (match is not None or bool(facts or methods)), "state": state,
+            "answer_key_match": match, "reference_answer_was_visible": answer_shown, "complete_student_solution": complete,
+            "hints_received": hints_received, "verified_fact_ids": sorted(facts), "new_fact_ids": fresh,
+            "new_fact_segments": [facts[key] for key in fresh],
+            "grounded_method_ids": sorted(methods), "grounded_method_claims": sorted(method_claims),
+            "new_method_segments": [methods[key] for key in new_methods],
+            "unresolved_review_evidence": unresolved_evidence,
+            "student_advanced": bool(fresh or new_methods or new_match or new_solution)}
+
+
+def checked_student_approaches(proposals, segments, first_unresolved_id, question, *, independent_positions=False):
     """Locate judge-certified student methods after a defect. Semantic support comes from the judge."""
     if not isinstance(proposals, list) or not isinstance(question, str):
         return {}
     positions = {piece["id"]: index for index, piece in enumerate(segments)}
-    if first_unresolved_id not in positions:
+    if not independent_positions and first_unresolved_id not in positions:
         return {}
     subjects = Counter(
         item["segment_id"] for item in proposals
@@ -30,7 +113,9 @@ def checked_student_approaches(proposals, segments, first_unresolved_id, questio
                 or not all(isinstance(value, str) and value.strip() for value in item.values())):
             continue
         sid, quote, reason = item["segment_id"], item["question_quote"], item["justification"]
-        if subjects[sid] != 1 or positions.get(sid, -1) <= positions[first_unresolved_id]:
+        if subjects[sid] != 1 or sid not in positions or sid == first_unresolved_id:
+            continue
+        if not independent_positions and positions[sid] <= positions[first_unresolved_id]:
             continue
         piece = segments[positions[sid]]
         text, start, end = piece.get("text"), piece.get("start"), piece.get("end")

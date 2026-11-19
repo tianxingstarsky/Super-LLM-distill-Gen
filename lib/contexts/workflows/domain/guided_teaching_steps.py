@@ -5,6 +5,27 @@ import json
 import re
 
 
+def complete_solution_digest(source):
+    """Identity for an independent verifier's full proof, distinct from individual teaching steps."""
+    identity = {key: source.get(key) for key in (
+        "id", "question", "task_system", "answer_requirement", "gold", "source_reasoning",
+    )}
+    identity["schema"] = "guided-complete-solution/v1"
+    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def certified_complete_disclosure(source, trusted_receipts):
+    proof = source.get("source_reasoning", "")
+    key = source.get("gold")
+    if not trusted_receipts or not key or not proof.strip() or proof.strip() == key["value"].strip():
+        return None
+    receipt = complete_solution_digest(source)
+    if receipt not in trusted_receipts:
+        return None
+    return {"id": receipt, "worked_solution": proof, "answer": key["value"]}
+
+
 def verified_steps_digest(source_id, question, gold, steps):
     identity = {"source_id": source_id, "question": question, "gold": gold, "steps": steps}
     encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)

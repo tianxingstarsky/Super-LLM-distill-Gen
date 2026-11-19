@@ -9,7 +9,7 @@ from .guided_answers import number
 
 
 FINAL_TEACHER_ROLE = "final_answer_teacher"
-FINAL_EXPERIENCE_VERSIONS = frozenset({"4.5.1", "4.6.0", "4.7.0", "4.7.1"})
+FINAL_EXPERIENCE_VERSIONS = frozenset({"4.5.1", "4.6.0", "4.7.0", "4.7.1", "4.8.0"})
 
 
 def text_sha(text):
@@ -22,14 +22,21 @@ def recorded_final_proposal(case, attempt, receipt):
     if not isinstance(receipt, dict):
         raise ValueError("The teacher final-answer request receipt is required")
     item = case["attempts"][attempt - 1]
-    delivery = item.get("teacher_final_answer") or {}
+    corrected = bool(item.get("previous_teacher_delivery"))
+    role = receipt.get("role")
+    if role == "teacher_final_correction" and corrected:
+        delivery = item["teacher_final_answer"]
+    elif role == "teacher_final_answer":
+        delivery = item.get("previous_teacher_delivery") or item.get("teacher_final_answer") or {}
+    else:
+        raise ValueError("The teacher's completed request, case and response must agree")
     request = receipt.get("request", {})
     identity = digest({"binding": case["binding"], "id": case["id"], "payload": request})
     response = receipt.get("response") or {}
     users = [m.get("content") for m in request.get("messages", []) if m.get("role") == "user"]
     systems = [m.get("content") for m in request.get("messages", []) if m.get("role") == "system"]
     materials = [json.loads(m["content"]) for m in request.get("messages", []) if m.get("role") == "tool"]
-    if (receipt.get("status") != "complete" or receipt.get("role") != "teacher_final_answer"
+    if (receipt.get("status") != "complete"
             or receipt.get("attempt") != attempt or item.get("attempt") != attempt
             or receipt.get("identity") != identity or response != delivery.get("response")
             or response.get("finish_reason") != "stop" or users != [case["question"]]
@@ -38,7 +45,9 @@ def recorded_final_proposal(case, attempt, receipt):
             or (not case.get("task_system") and "\n\nOriginal task system instruction:\n" in systems[0])
             or len(materials) != 1 or not isinstance(materials[0], dict)
             or materials[0].get("source") != "workflow_verified_task_evidence"
-            or materials[0].get("independent_reference_key") != case.get("gold")):
+            or materials[0].get("independent_reference_key") != case.get("gold")
+            or (role == "teacher_final_correction" and (not item.get("delivery_correction") or
+                materials[0].get("previous_delivery_check") != item["delivery_correction"]))):
         raise ValueError("The teacher's completed request, case and response must agree")
     proposed = json.loads(response["content"])
     if (not isinstance(proposed, dict) or proposed.get("decision") != "deliver"
@@ -90,7 +99,8 @@ def final_delivery_observation(case, attempt, receipt, assessment, *, replay_ver
         raise ValueError("Assessment requires a decision, reason and exact quotation from the teacher's answer")
     if decision["outcome"] == "success" and decision.get("scope") != "full_answer":
         raise ValueError("A checked conclusion alone does not establish a successful full answer")
-    return {"id": f"{case['id']}-teacher-final-{attempt}", "guided_final_projection_version": 1,
+    edition_suffix = "-correction" if receipt["role"] == "teacher_final_correction" else ""
+    return {"id": f"{case['id']}-teacher-final-{attempt}{edition_suffix}", "guided_final_projection_version": 1,
             "final_assessment": {**binding, "kind": kind, "outcome": decision["outcome"],
                                  "quote": decision["quote"], "reason": decision["reason"],
                                  "scope": decision.get("scope", "observed_defect"),

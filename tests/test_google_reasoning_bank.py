@@ -38,6 +38,9 @@ def test_guided_learning_observes_only_feedback_available_at_selected_attempt():
     reset = recorded_episode(observed_attempt(case, 2))
     assert "boundary" in reset["query"] and len(reset["action_list"]) == 1
     assert "Six possibilities" not in str(reset)
+    attempts[1]["solving_role"] = "strong_continuation"
+    with pytest.raises(ValueError, match="original student"):
+        learn_guided_experience(None, case, 2, "boundary checks", role="student")
 
 
 def test_teacher_withheld_hint_feedback_is_about_the_draft():

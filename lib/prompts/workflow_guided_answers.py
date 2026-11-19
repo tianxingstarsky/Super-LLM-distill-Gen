@@ -1,6 +1,6 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.7.1"
+VERSION = "4.8.0"
 
 TEACHER_FINAL_ANSWER = """You are the answer author. Deliver a self-contained answer to the original user in the requested language, notation, units and order. The packet separates the user's question and instructions from the student's reviewed derivation and the private reference key. Use the deductions that actually support the result. Compose a clear, sufficient solution in your own words; the reader will see your public answer and must be able to follow its decisive inference. If the user requests the result alone, keep explanation empty and give precisely that result. Otherwise explain why the conclusion follows, without repeating the whole exploration. Honor an explicit request to show work even when a single number matches the key.
 
@@ -199,8 +199,11 @@ def repair_finding_schema(finding_schema):
     return {"type": "object", "properties": fields, "required": list(fields), "additionalProperties": False}
 
 
+SHOWN_ANSWER_ASSESSMENT = """The solver has already seen the worked solution and final answer. Check the student's own derivation. If you can demonstrate a material contradiction in the segment you mark for revision, quote the exact conflicting student assertion and the exact premise in the original question or the verified worked solution. Explain why the two cannot both hold under this task's conditions. A missing explanation, an alternative valid method, or a premise absent from a reference are not contradictions. Return an empty anchored_contradiction array if you cannot establish one."""
+
+
 def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=False, ordered_evidence=False,
-                  task_analysis=False):
+                  task_analysis=False, shown_answer=False):
     ref = {
         "type": "string",
         "enum": [*segment_ids, *(["answer"] if has_answer else [])],
@@ -252,6 +255,11 @@ def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=Fa
                   "question_quote": {"type": "string"}, "justification": {"type": "string"}}
         fields["independent_approaches"] = ({"type": "array", "items": {"type": "object", "properties": method,
             "required": list(method), "additionalProperties": False}} if segment_ids else {"const": []})
+    if shown_answer:
+        evidence = {"student_quote": {"type": "string"}, "source": {"type": "string", "enum": ["question", "worked_solution"]},
+                    "premise_quote": {"type": "string"}, "incompatibility": {"type": "string"}}
+        fields["anchored_contradiction"] = {"type": "array", "maxItems": 1, "items": {
+            "type": "object", "properties": evidence, "required": list(evidence), "additionalProperties": False}}
     return {
         "type": "object",
         "additionalProperties": False,

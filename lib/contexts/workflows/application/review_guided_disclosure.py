@@ -51,6 +51,12 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
         }
     if source.get("task_system"):
         material["task_instructions"] = source["task_system"]
+    if attempt.get("verified_stage"):
+        stage = attempt["verified_stage"]
+        material["current_difficulty"]["student_progress"] = {
+            k: stage[k] for k in ("state", "comparable", "answer_key_match", "student_advanced", "new_fact_segments",
+                                  "new_method_segments", "unresolved_review_evidence")
+            if k in stage}
     if attempt.get("supported_student_approaches"):
         material["supported_student_approaches"] = [
             {"text": item["text"], "question_quote": item["question_quote"]}

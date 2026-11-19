@@ -35,6 +35,10 @@ def generate_guided_cases(
     coach_model=None,
     student_api_key_env=None,
     coach_api_key_env=None,
+    continuation_model=None,
+    continuation_url=None,
+    continuation_api_key_env=None,
+    continuation_sampling=None,
     max_attempts=3,
     context_tokens=131072,
     max_tokens=32768,
@@ -97,6 +101,18 @@ def generate_guided_cases(
             pool=pool,
             slot_pool_factory=slot_pool,
         )
+        if continuation_model:
+            if continuation_model == student_model:
+                raise ValueError("name a distinct continuation model")
+            url = continuation_url or coach_url
+            endpoints["continuation"] = GuidedChatEndpoint(
+                url, continuation_model, continuation_api_key_env or (coach_api_key_env if url == coach_url else None),
+                max_tokens, local=True, context=context_tokens, thinking=False,
+                sampling=continuation_sampling or (coach_sampling if continuation_model == (coach_model or student_model) else None),
+                pool=pool, slot_pool_factory=slot_pool,
+            )
+        elif continuation_url or continuation_api_key_env or continuation_sampling:
+            raise ValueError("a continuation endpoint requires its model name")
     return run_guided_cases(
         input_path,
         output,

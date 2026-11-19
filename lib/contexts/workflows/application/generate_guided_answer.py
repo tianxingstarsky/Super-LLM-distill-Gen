@@ -3,13 +3,16 @@
 import json
 from functools import partial
 
-from .compose_guided_final_answer import compose_guided_final_answer
+from .compose_guided_final_answer import compose_guided_final_answer, delivery_correction
 from .review_guided_disclosure import (
     author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
-from ..domain.guided_student_evidence import checked_student_approaches
+from ..domain.guided_student_evidence import (
+    checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
+)
 from ..domain.guided_teacher_delivery import TEACHER_FINAL_VERSIONS, TRUNCATED_TUTORING_VERSIONS, uses_direct_first
+from ..domain.guided_teaching_steps import certified_complete_disclosure
 
 from ..domain.guided_answers import (
     assemble,
@@ -37,6 +40,7 @@ from lib.prompts.workflow_guided_answers import (
     GROUNDED_STUDENT_REVIEW,
     ORDERED_STUDENT_EVIDENCE,
     REVIEW_TASK_ANALYSIS,
+    SHOWN_ANSWER_ASSESSMENT,
     RESULT_ONLY_DELIVERY,
     STUDENT_TASK_ANALYSIS,
     WORKED_ANSWER_DELIVERY,
@@ -55,10 +59,13 @@ class GenerateGuidedAnswer:
         self.request = request
 
     def run(self, source, experience, max_attempts, *, protocol_version=VERSION, first_pass_only=False,
-            until_correct=False):
+            until_correct=False, continuation_model=None, trusted_solution_receipts=()):
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
+        evidenced_progress = protocol_version == "4.8.0"
+        if (trusted_solution_receipts or continuation_model is not None) and not evidenced_progress:
+            raise ValueError("complete-disclosure teaching requires guided protocol 4.8")
         skip_acquired = protocol_version != "3.0.0"
         teacher_delivery = protocol_version in TEACHER_FINAL_VERSIONS
         task_analysis = teacher_delivery or protocol_version == "4.3.0"
@@ -78,7 +85,7 @@ class GenerateGuidedAnswer:
         if paired:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
                                   tried=tried_verified_steps, task_analysis=task_analysis,
-                                  quoted_premises=protocol_version == "4.7.1")
+                                  quoted_premises=protocol_version in {"4.7.1", "4.8.0"})
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
         direct_protocol = record_guided_reasoning or protocol_version == "3.6.0"
         truncated_progress = direct_protocol or protocol_version == "3.5.0"
@@ -90,7 +97,7 @@ class GenerateGuidedAnswer:
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
-                    "4.7.1": "v4.7.1"}[protocol_version]
+                    "4.7.1": "v4.7.1", "4.8.0": "v4.8"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -147,12 +154,24 @@ class GenerateGuidedAnswer:
         direct_match = None
         training_reasoning = ""
         formal_history = []
+        full_reference = certified_complete_disclosure(source, trusted_solution_receipts) if evidenced_progress else None
+        send_full = False
+        next_solver = "student"
+        delivery_log = []
+        last_full_input_evidence = None
         greatest_verified_prefix, stalled_rounds = 0, 0
         seen_findings = set()
         public = list(initial_messages)
         attempt_limit = max_attempts
         while len(attempts) < attempt_limit:
             index = len(attempts) + 1
+            if send_full:
+                if next_solver == "strong_continuation":
+                    # The continuation receives exactly the previous solver's input.
+                    # A finding made during that solver's subsequent reply was unseen.
+                    active, findings, approaches = last_full_input_evidence
+                else:
+                    last_full_input_evidence = (list(active), dict(findings), dict(approaches))
             messages = list(initial_messages)
             direct_first = index == 1 and direct_protocol and uses_direct_first(source, protocol_version)
             if direct_first:
@@ -178,6 +197,12 @@ class GenerateGuidedAnswer:
                 if attempts and "formal_answer" in attempts[-1]:
                     view["your_last_formal_answer"] = attempts[-1]["formal_answer"]["response"]["content"]
                     view["your_previous_conclusion"] = attempts[-1]["check"].get("answer_surface")
+                if send_full:
+                    view["complete_disclosure"] = full_reference
+                    view["complete_disclosure_source"] = "Independently verified worked solution and reference answer"
+                    view["verified_prior_student_findings"] = view.pop("confirmed_findings_from_your_own_work")
+                    if "supported_approaches_from_your_own_work" in view:
+                        view["supported_prior_student_approaches"] = view.pop("supported_approaches_from_your_own_work")
                 messages.append(
                     {
                         "role": "tool",
@@ -185,9 +210,13 @@ class GenerateGuidedAnswer:
                         + json.dumps(view, ensure_ascii=False),
                     }
                 )
+                if next_solver == "strong_continuation":
+                    # Only the solver changes. No new hint, private assessment or failed
+                    # student answer may be smuggled into this controlled continuation.
+                    messages = list(attempts[-1]["student_request_messages"])
                 if skip_acquired:
                     public.append(messages[-1])
-            student = self.request("student", index, messages, None)
+            student = self.request(next_solver, index, messages, None)
             attempt = dict(
                 attempt=index,
                 student=student,
@@ -196,6 +225,25 @@ class GenerateGuidedAnswer:
                 hint_to_student=None,
             )
             attempts.append(attempt)
+            if send_full:
+                attempt["solving_role"] = next_solver
+                attempt["solver_input_evidence"] = {
+                    "retained_ids": [s["id"] for s in active], "finding_ids": sorted(findings),
+                    "approach_ids": sorted(approaches)}
+                delivered = {"attempt": index, "role": next_solver, "model": student.get("model"),
+                             "receipt": f"{index:03}-{next_solver}.json", "complete_disclosure_id": full_reference["id"]}
+                if next_solver == "strong_continuation":
+                    delivered["requested_model"] = continuation_model
+                delivery_log.append(delivered)
+                if len(delivery_log) == 1:
+                    attempt["received_complete_disclosure"] = full_reference
+            if evidenced_progress:
+                attempt["verified_stage"] = {"assessed": False, "comparable": False, "state": "not_assessed",
+                                             "hints_received": len(disclosed), "student_advanced": None}
+            if next_solver == "strong_continuation" and student.get("model") != continuation_model:
+                status, issue = "awaiting_guidance", "continuation_model_unverified"
+                attempt["check"] = dict(format_ok=False, answer=None, answer_matches=None, issue=issue)
+                break
             incomplete = None
             if (
                 student["finish_reason"] != "stop"
@@ -218,7 +266,7 @@ class GenerateGuidedAnswer:
                         else:
                             findings[key] = item
                     attempt["program_confirmed"] = list(certified.values())
-                if protocol_version in TRUNCATED_TUTORING_VERSIONS:
+                if protocol_version in TRUNCATED_TUTORING_VERSIONS and next_solver == "student":
                     incomplete = truncated_student_observation(student, gold, index)
                 if not incomplete:
                     break
@@ -280,6 +328,8 @@ class GenerateGuidedAnswer:
             )
             versions.append(version)
             if direct_match:
+                if evidenced_progress:
+                    attempt["verified_stage"] = verified_student_stage(check, findings, attempts[:-1], len(disclosed), direct=True)
                 status, issue = "accepted", None
                 break
             if first_pass_only and direct_first:
@@ -334,6 +384,12 @@ class GenerateGuidedAnswer:
                     }
                     for item in additions.values()
                 ]
+            assess_shown_answer = send_full and check.get("answer_matches") is True
+            if send_full:
+                material["complete_reference_already_shown"] = {
+                    "id": full_reference["id"], "reference_answer_disclosed": True, "solver_role": next_solver}
+                if assess_shown_answer:
+                    material["complete_reference_already_shown"]["worked_solution"] = full_reference["worked_solution"]
             findings.update(additions)
             if skip_acquired:
                 material["already_known_clues"] = [
@@ -355,10 +411,10 @@ class GenerateGuidedAnswer:
                     material["ordered_segment_ids"] = version["submitted_ids"]
                 schema = review_schema(version["submitted_ids"], bool(answer_line), anchored=anchored,
                                        single_decision=single_decision, ordered_evidence=ordered_evidence,
-                                       task_analysis=task_analysis)
+                                       task_analysis=task_analysis, shown_answer=assess_shown_answer)
                 coach = self.request(
                     "coach", index, [
-                        {"role": "system", "content": tutor_instruction},
+                        {"role": "system", "content": tutor_instruction + ("\n\n" + SHOWN_ANSWER_ASSESSMENT if assess_shown_answer else "")},
                         {"role": "user", "content": json.dumps(material, ensure_ascii=False)},
                     ], schema,
                 )
@@ -368,8 +424,11 @@ class GenerateGuidedAnswer:
                     break
             try:
                 proposed_approaches = []
+                proposed_conflict = []
                 if not direct and not incomplete:
                     assessment = read_teacher_submission(coach)
+                    if assess_shown_answer and isinstance(assessment, dict):
+                        proposed_conflict = assessment.pop("anchored_contradiction", [])
                     if task_analysis and isinstance(assessment, dict):
                         proposed_approaches = assessment.pop("independent_approaches", None)
                         if not isinstance(proposed_approaches, list):
@@ -414,11 +473,20 @@ class GenerateGuidedAnswer:
                 if rooted < count:
                     version["unrooted_evidence_at"] = submitted[rooted]["id"]
                     count = rooted
+            partial_review = evidenced_progress and (review["verdict"] != "supported" or bool(version.get("review_conflict"))
+                                                     or repeated is not None)
+            if partial_review:
+                version["review_anchor"] = review["first_unresolved_id"]
+                count, extracted = partial_review_evidence(review["reusable"], submitted, active, count, question)
             active = submitted[:count]
             if task_analysis:
                 unresolved = submitted[count]["id"] if count < len(submitted) else None
+                current_approaches = {}
                 if not version.get("review_conflict"):
-                    approaches.update(checked_student_approaches(proposed_approaches, submitted, unresolved, question))
+                    approach_anchor = review["first_unresolved_id"] if partial_review else unresolved
+                    current_approaches = checked_student_approaches(
+                        proposed_approaches, submitted, approach_anchor, question, independent_positions=partial_review)
+                    approaches.update(current_approaches)
                 attempt["supported_student_approaches"] = list(approaches.values())
             active_ids = {s["id"] for s in active}
             findings = {
@@ -431,18 +499,39 @@ class GenerateGuidedAnswer:
                     or f["basis_id"] in active_ids
                 )
             }
-            extracted = shared_findings(review["reusable"], submitted, active, question,
-                                        exclude_list_markers=single_decision)
+            if not partial_review:
+                extracted = shared_findings(review["reusable"], submitted, active, question,
+                                            exclude_list_markers=single_decision)
             findings.update(extracted)
+            if evidenced_progress:
+                conflict = (checked_derivation_conflict(proposed_conflict, review, new_segments, question,
+                            full_reference["worked_solution"]) if proposed_conflict else None)
+                if conflict:
+                    attempt["reviewed_derivation_conflict"] = conflict
+                unidentified_support = (len(current_approaches) != len(proposed_approaches)
+                    or any(f["segment_id"] not in active_ids and f["segment_id"] not in extracted
+                           for f in review["reusable"]))
+                attempt["verified_stage"] = verified_student_stage(
+                    check, findings, attempts[:-1], len(disclosed),
+                    supported=review["verdict"] == "supported" and count == len(submitted) and not partial_review
+                              and (not send_full or bool(new_segments)),
+                    approaches=approaches, answer_shown=send_full, unresolved_evidence=partial_review and
+                    (unidentified_support or review["verdict"] == "uncertain" or bool(version.get("review_conflict"))
+                     or (assess_shown_answer and not conflict)))
             if until_correct:
                 current_findings = {f.get("check_id") or f["text"].strip() for f in findings.values()}
                 current_findings.update(item["text"].strip() for item in approaches.values())
                 grew = len(active) > greatest_verified_prefix or bool(current_findings - seen_findings)
-                if paired and index > 1 and attempts[-2].get("disclosure", {}).get("source_step_receipt"):
+                if evidenced_progress:
+                    grew = attempt["verified_stage"]["student_advanced"]
+                if paired and not evidenced_progress and index > 1 and attempts[-2].get("disclosure", {}).get("source_step_receipt"):
                     grew = True
                 greatest_verified_prefix = max(greatest_verified_prefix, len(active))
                 seen_findings.update(current_findings)
-                stalled_rounds = 0 if grew else stalled_rounds + int(index > 1)
+                if grew:
+                    stalled_rounds = 0
+                elif not evidenced_progress or attempt["verified_stage"]["comparable"]:
+                    stalled_rounds += int(index > 1)
                 if (paired and stalled_rounds >= max_attempts
                         and eligible_teaching_steps(source, active, findings, disclosed, tried_verified_steps)):
                     attempt["recommend_verified_operation"] = True
@@ -453,15 +542,15 @@ class GenerateGuidedAnswer:
                 withdrawn=[
                     s["id"] for s in submitted[count:] if s["id"] not in extracted and s["id"] not in approaches
                 ],
-                first_unresolved=submitted[count]["id"]
-                if count < len(submitted)
-                else "final_answer",
+                first_unresolved=(version["review_anchor"] if version.get("review_anchor") not in (None, "complete") else
+                                  (submitted[count]["id"] if count < len(submitted) else "final_answer")),
             )
             if (
                 check["format_ok"]
                 and check["answer_matches"] is not False
                 and review["verdict"] == "supported"
                 and (not grounded or count == len(submitted))
+                and (not send_full or bool(new_segments))
             ):
                 if record_guided_reasoning and gold is not None:
                     trace = student_reasoning_trace(attempts, question, verified_truncated_only=True)
@@ -469,9 +558,20 @@ class GenerateGuidedAnswer:
                         issue = "guided_reasoning_contains_control_markers"
                         break
                     if teacher_delivery:
+                        solved = check.get("answer_surface") or check["answer"]
                         delivery = compose_guided_final_answer(
-                            self.request, source, index, active, check.get("answer_surface") or check["answer"],
+                            self.request, source, index, active, solved,
                             reasoning_trace=trace, protocol_version=protocol_version, final_teacher_experience=experience)
+                        correction = delivery_correction(delivery, source, solved) if evidenced_progress else None
+                        if correction:
+                            attempt["previous_teacher_delivery"] = delivery
+                            attempt["delivery_correction"] = correction
+                            formal_history.append({"attempt": index, "author": "teacher", "check": delivery["check"],
+                                                   "receipt": delivery["provenance"]["receipt"]})
+                            trace += "\n\n" + correction["guidance"]
+                            delivery = compose_guided_final_answer(
+                                self.request, source, index, active, solved, reasoning_trace=trace,
+                                protocol_version=protocol_version, final_teacher_experience=experience, correction=correction)
                         attempt["teacher_final_answer"] = delivery
                         final_provenance = delivery["provenance"]
                         formal_history.append({"attempt": index, "author": "teacher", "check": delivery["check"],
@@ -539,8 +639,42 @@ class GenerateGuidedAnswer:
                 issue = None
                 break
             issue = check["issue"] or "explanation_requires_review"
+            if delivery_log:
+                stage = attempt["verified_stage"]
+                if next_solver == "strong_continuation":
+                    status, issue = "awaiting_guidance", "strong_continuation_unresolved"
+                    break
+                if (stage["comparable"] and (stage["answer_key_match"] is False or attempt.get("reviewed_derivation_conflict"))
+                        and not stage["student_advanced"]
+                        and student["finish_reason"] == "stop" and continuation_model):
+                    next_solver = "strong_continuation"
+                elif not stage["student_advanced"] or (not until_correct and len(delivery_log) >= max_attempts):
+                    status, issue = "awaiting_guidance", "complete_disclosure_needs_further_evidence"
+                    break
+                attempt_limit = max(attempt_limit, index + 1)
+                continue
+            if full_reference and disclosed and not until_correct and index == attempt_limit:
+                stage = attempt["verified_stage"]
+                remaining_steps = eligible_teaching_steps(source, active, findings, disclosed, tried_verified_steps)
+                if stage["student_advanced"] or not stage["comparable"] or remaining_steps or len(clue_ledger) < len(bank):
+                    status, issue = "awaiting_guidance", "bounded_guidance_pending"
+                    break
+                send_full = True
+                attempt_limit = max(attempt_limit, index + 1)
+                continue
             if until_correct and index == attempt_limit:
+                if (evidenced_progress and not attempt["verified_stage"]["comparable"]
+                        and not attempt["verified_stage"]["student_advanced"]):
+                    if eligible_teaching_steps(source, active, findings, disclosed, tried_verified_steps):
+                        attempt["recommend_verified_operation"] = True
+                    else:
+                        status, issue = "awaiting_guidance", "student_progress_not_comparable"
+                        break
                 if stalled_rounds >= max_attempts and not attempt.get("recommend_verified_operation"):
+                    if full_reference and disclosed:
+                        send_full = True
+                        attempt_limit = max(attempt_limit, index + 1)
+                        continue
                     status, issue = "awaiting_guidance", "no_new_verified_student_progress"
                     break
                 attempt_limit += 1
@@ -576,6 +710,12 @@ class GenerateGuidedAnswer:
                     disclosure, issue = assess_hint(
                         self.request, source, attempt, active, findings, disclosed, disclosure)
                     if disclosure is None:
+                        if (full_reference and disclosed and issue in {"teacher_needs_more_evidence",
+                                "verified_teaching_operations_exhausted", "teacher_disclosure_withheld",
+                                "unchanged_withheld_disclosure"}):
+                            send_full = True
+                            attempt_limit = max(attempt_limit, index + 1)
+                            continue
                         if authored_hints:
                             status = "awaiting_guidance"
                         break
@@ -634,6 +774,12 @@ class GenerateGuidedAnswer:
                if status == "awaiting_guidance" else {}),
             **({"training_route": route} if direct_protocol and status == "accepted" else {}),
             **({"finalization": formal_history} if formal_history else {}),
+            **({"continuation_provenance": {"complete_disclosure_id": full_reference["id"],
+                "first_disclosed_at": delivery_log[0]["attempt"], "reference_answer_disclosed": True,
+                "independent_solution": False, "solver_role": delivery_log[-1]["role"],
+                "solver_model": delivery_log[-1]["model"], "solver_round": delivery_log[-1]["attempt"],
+                "formal_answer_author": "teacher" if final_provenance else None, "deliveries": delivery_log}}
+               if delivery_log else {}),
             **({"final_answer_provenance": final_provenance} if final_provenance and (
                 status == "accepted" or issue == "repetitive_truncated_trajectory_requires_review") else {}),
             "verification": {

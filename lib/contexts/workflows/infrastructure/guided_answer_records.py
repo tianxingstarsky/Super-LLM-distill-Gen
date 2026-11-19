@@ -274,6 +274,10 @@ def run_guided_cases(
             raise ValueError(
                 "unsupported frozen generator version; use offline export or its original release"
             )
+        if "continuation" in endpoints and template_version != "4.8.0":
+            raise ValueError("a stronger continuation student requires guided protocol 4.8")
+        if frozen_config and endpoints.keys() != frozen_config["endpoints"].keys():
+            raise ValueError("configured roles differ from the frozen run endpoints")
         coach = endpoints["coach"]
         if isinstance(coach, GuidedChatEndpoint):
             if coach is endpoints["student"]:
@@ -287,6 +291,9 @@ def run_guided_cases(
                 prior = frozen_config["endpoints"][role] if frozen_config else None
                 ep.configure_sampling(template_version, prior)
         capabilities = {role: ep.validate() for role, ep in endpoints.items()}
+        stronger = capabilities.get("continuation")
+        if stronger and stronger["model"] == capabilities["student"]["model"]:
+            raise ValueError("the continuation student must name a distinct model")
         capacities = {}
         role_servers = {}
         for role, spec in capabilities.items():
@@ -394,7 +401,8 @@ def run_guided_cases(
                 nonlocal current_checkpoint, resumed_interruption
                 checkpoint = folder / f"{index:03}-{role}.json"
                 current_checkpoint = checkpoint.name
-                serving_role = "student" if role in ("student", "final_answer") else "coach"
+                serving_role = {"student": "student", "final_answer": "student",
+                                "strong_continuation": "continuation"}.get(role, "coach")
                 endpoint = endpoints[serving_role]
                 payload = (endpoint.final_answer_payload(messages) if role == "final_answer"
                            else endpoint.payload(messages, schema))
@@ -507,6 +515,9 @@ def run_guided_cases(
                     protocol_version=template_version,
                     first_pass_only=first_pass,
                     until_correct=until_correct,
+                    **({"continuation_model": stronger["model"] if stronger else None,
+                        "trusted_solution_receipts": trusted}
+                       if template_version == "4.8.0" else {}),
                 )
             except Exception as error:
                 atomic_json(
@@ -594,6 +605,7 @@ def export(input_path, output):
     historical_tokens = {}
     historical_outcomes = dict(accepted_old_direct_answers=0, accepted_after_new_student_turn=0,
                                accepted_after_processing_old_derivation=0, new_sampling_first_answers=0)
+    disclosed_outcomes = {"weak_student": 0, "strong_continuation": 0}
     admission_timeouts = 0
     with TemporaryDirectory(dir=output) as temp:
         scratch = Path(temp)
@@ -659,12 +671,19 @@ def export(input_path, output):
                 ):
                     raise ValueError("case differs from its original source or run")
                 status = case["status"]
+                provenance = case.get("continuation_provenance", {})
+                if status == "accepted" and provenance.get("reference_answer_disclosed"):
+                    solver = "strong_continuation" if provenance["solver_role"] == "strong_continuation" else "weak_student"
+                    disclosed_outcomes[solver] += 1
                 if "historical_first" in manifest:
                     if historical_origin is None or case.get("first_answer_origin") != historical_origin:
                         raise ValueError("case differs from its historical first-answer evidence")
                     if status == "accepted":
                         if case["training_route"] == "nonthinking_direct":
                             historical_outcomes["accepted_old_direct_answers"] += 1
+                        elif provenance.get("reference_answer_disclosed"):
+                            key = "accepted_with_disclosed_reference"
+                            historical_outcomes[key] = historical_outcomes.get(key, 0) + 1
                         elif len(case["attempts"]) > 1:
                             historical_outcomes["accepted_after_new_student_turn"] += 1
                         else:
@@ -691,6 +710,7 @@ def export(input_path, output):
                     "disclosures",
                     "shared_student_findings",
                     "continuation",
+                    "continuation_provenance",
                 )
                 emit(
                     status,
@@ -743,6 +763,9 @@ def export(input_path, output):
                             mode=case["mode"],
                             status=status,
                             experience_version=case["experience_version"],
+                            **({"verified_stage": attempt["verified_stage"]} if "verified_stage" in attempt else {}),
+                            **({"solving_role": attempt["solving_role"], "solver_model": attempt["student"].get("model")}
+                               if "solving_role" in attempt else {}),
                         ),
                     )
         for path in scratch.glob("*.jsonl"):
@@ -753,6 +776,7 @@ def export(input_path, output):
         "counts": counts,
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
+        **({"accepted_after_full_disclosure": disclosed_outcomes} if manifest["template_version"] == "4.8.0" else {}),
         **({"historical_first_outcomes": historical_outcomes} if "historical_first" in manifest else {}),
         **({"historical_first_usage": historical_tokens} if historical_tokens else {}),
         **({"admission_timeouts": admission_timeouts} if admission_timeouts else {}),

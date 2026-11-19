@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=Path, help="Guided case.json with the completed model call")
     parser.add_argument("--attempt", type=int, help="One-based attempt number")
+    parser.add_argument("--original-delivery", action="store_true", help="Assess the teacher's original delivery before its correction")
     parser.add_argument("--role", choices=["student", "disclosure_teacher", "final_answer_teacher"], default="student")
     parser.add_argument("--prepare-final-assessment", action="store_true", help="Save the actual proposed answer with its bound assessment form, without calling a model")
     parser.add_argument("--assessment", type=Path, help="Completed human assessment or independent verification specification")
@@ -42,7 +43,11 @@ def main():
     case = json.loads(args.case.read_text(encoding="utf-8-sig"))
     receipt = assessment = None
     if args.prepare_final_assessment or args.role == "final_answer_teacher":
-        receipt = json.loads((args.case.parent / f"{args.attempt:03}-teacher_final_answer.json").read_text(encoding="utf8"))
+        if not 1 <= args.attempt <= len(case["attempts"]):
+            parser.error("Select the actual teacher delivery round")
+        item = case["attempts"][args.attempt - 1]
+        stage = "teacher_final_correction" if item.get("previous_teacher_delivery") and not args.original_delivery else "teacher_final_answer"
+        receipt = json.loads((args.case.parent / f"{args.attempt:03}-{stage}.json").read_text(encoding="utf8"))
         if args.prepare_final_assessment:
             text, _, bound = recorded_final_proposal(case, args.attempt, receipt)
             atomic_json(args.output, {**bound, "kind":"human", "scope":"full_answer", "outcome":"", "quote":"", "reason":"",

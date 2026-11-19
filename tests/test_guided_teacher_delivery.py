@@ -7,6 +7,23 @@ import pytest
 from lib.contexts.workflows.infrastructure.guided_answer_records import run_guided_cases
 from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
 from lib.contexts.workflows.domain.guided_teacher_delivery import inspect_teacher_delivery, requested_delivery
+from lib.contexts.workflows.domain.guided_teaching_steps import (
+    certified_complete_disclosure, complete_solution_digest, verified_steps_digest,
+)
+
+
+def test_full_disclosure_needs_its_own_attestation_for_this_task_and_worked_solution():
+    source = {"id": "count", "question": "How many pairs are in six items?", "gold": {"kind": "number", "value": "3"},
+              "task_system": "Use disjoint pairs.", "source_reasoning": "Partition the six distinct items into pairs of two."}
+    step = verified_steps_digest(source["id"], source["question"], source["gold"], [])
+    assert certified_complete_disclosure(source, {step}) is None
+    receipt = complete_solution_digest(source)
+    assert certified_complete_disclosure(source, {receipt}) == {
+        "id": receipt, "worked_solution": source["source_reasoning"], "answer": "3"}
+    for change in ({"source_reasoning": "Pair every item with every other item."}, {"task_system": "Count all pairings."}):
+        assert certified_complete_disclosure({**source, **change}, {receipt}) is None
+    key_only = {**source, "source_reasoning": "3"}
+    assert certified_complete_disclosure(key_only, {complete_solution_digest(key_only)}) is None
 
 
 def test_bill_subtotal_is_distinct_from_explicit_final_total():
@@ -53,6 +70,7 @@ def test_teacher_can_repeat_the_users_identifiers_without_matching_a_private_pre
 
 @pytest.mark.parametrize("teacher_answer,accepted,protocol", [
     ("5", True, "4.4.0"), ("5", True, "4.4.1"), ("1", False, "4.4.1"),
+    ("1", True, "4.8.0"),
 ])
 def test_same_reviewed_work_reaches_teacher_for_final_delivery(tmp_path, teacher_answer, accepted, protocol):
     question = "Add two and three and show why."
@@ -88,17 +106,21 @@ def test_same_reviewed_work_reaches_teacher_for_final_delivery(tmp_path, teacher
                 text = json.dumps({"decision": "supported", "diagnosis": "The sum is justified.",
                                    "reusable": [], "independent_approaches": []})
             else:
+                correction = json.loads(payload["messages"][-1]["content"]).get("previous_delivery_check")
+                if correction:
+                    assert correction["previous_answer_author"] == "teacher" and correction["previous_conclusion"] == "1"
                 text = json.dumps({"decision": "deliver", "explanation": "Adding two and three gives five.",
-                                   "conclusion": teacher_answer, "evidence_ids": ["a1.s1"], "reason": ""})
+                                   "conclusion": "5" if correction else teacher_answer, "evidence_ids": ["a1.s1"], "reason": ""})
             return {"content": text, "model": self.name, "reasoning_content": "", "finish_reason": "stop"}
 
     root = tmp_path / "run"
     endpoints = {name: Endpoint(name) for name in ("student", "coach")}
     summary = run_guided_cases(source, root, endpoints, {"version": "example"}, 1,
                                workers=1, protocol_version=protocol)
-    assert [name for name, _ in calls] == ["student", "coach", "coach"]
+    corrected = protocol == "4.8.0"
+    assert [name for name, _ in calls] == ["student", "coach", "coach"] + (["coach"] if corrected else [])
     final_messages = calls[-1][1]["messages"]
-    assert ("the candidate attains" in final_messages[0]["content"]) == (protocol == "4.4.1")
+    assert ("the candidate attains" in final_messages[0]["content"]) == (protocol != "4.4.0")
     assert {"role": "user", "content": question} in final_messages
     assert any(turn["role"] == "system" and instruction in turn["content"] for turn in final_messages)
     assert any(reasoning in turn["content"] for turn in final_messages)
@@ -111,7 +133,18 @@ def test_same_reviewed_work_reaches_teacher_for_final_delivery(tmp_path, teacher
         record = json.loads(exported)
         assert record["final_answer_provenance"]["author"] == "teacher"
         assert record["final_answer_provenance"]["model"] == "coach"
-        assert record["messages"][-1]["reasoning_content"] == reasoning
+        if corrected:
+            from lib.contexts.workflows.api import recorded_final_proposal
+            assert (archive / "001-teacher_final_correction.json").is_file()
+            audit = json.loads((archive / "case.json").read_text("utf8"))
+            assert [f["check"]["answer_matches"] for f in audit["finalization"]] == [False, True]
+            observed_note = audit["attempts"][-1]["delivery_correction"]["guidance"]
+            assert record["messages"][-1]["reasoning_content"] == reasoning + "\n\n" + observed_note
+            for stage, value in (("teacher_final_answer", "1"), ("teacher_final_correction", "5")):
+                receipt = json.loads((archive / f"001-{stage}.json").read_text("utf8"))
+                assert recorded_final_proposal(audit, 1, receipt)[1]["conclusion"] == value
+        else:
+            assert record["messages"][-1]["reasoning_content"] == reasoning
         assert "Adding two and three gives five." in record["messages"][-1]["content"]
         assert record["messages"][-1]["content"].rstrip().endswith("5")
     else:
