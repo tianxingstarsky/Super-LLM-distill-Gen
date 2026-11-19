@@ -16,11 +16,12 @@ from lib.contexts.models.contracts import ModelQueueTimeout
 from ..application.generate_guided_answer import GenerateGuidedAnswer
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import validate_source
+from ..domain.guided_teacher_delivery import uses_direct_first
 from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0"}
+PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0", "4.4.0"}
 VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"} | PAIRED_DISCLOSURE_VERSIONS
 TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"} | VERIFIED_STEP_VERSIONS
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS
@@ -219,10 +220,10 @@ def run_guided_cases(
             if source["id"] in seen:
                 raise ValueError("duplicate guided source id")
             seen.add(source["id"])
-            if source.get("answer_requirement") == "final_only":
+            if uses_direct_first(source, template_version):
                 has_direct_questions = True
             elif first_pass_only:
-                raise ValueError("the independent first pass requires final_only on every input question")
+                raise ValueError("the independent first pass requires final_only on every input question and its delivery instructions")
         if not seen:
             raise ValueError("empty source file")
         if export_only:
@@ -333,7 +334,8 @@ def run_guided_cases(
                 payload = (endpoint.final_answer_payload(messages) if role == "final_answer"
                            else endpoint.payload(messages, schema))
                 syntax = source.get("direct_answer_syntax")
-                if syntax and (role == "final_answer" or (role == "student" and index == 1)):
+                first_direct = role == "student" and index == 1 and uses_direct_first(source, template_version)
+                if syntax and (role == "final_answer" or first_direct):
                     payload["grammar"] = DIRECT_ANSWER_GRAMMARS[syntax]
                 identity = digest(
                     {"binding": binding, "id": source["id"], "payload": payload}
@@ -355,7 +357,8 @@ def run_guided_cases(
                     )
                 previous = saved.get("attempts", [])
                 replayed = None
-                if reuse_first_from and role == "student" and index == 1:
+                if (reuse_first_from and role == "student" and index == 1
+                        and (template_version != "4.4.0" or first_direct)):
                     replayed = replay_first(
                         reuse_first_from,
                         source["id"],
@@ -560,6 +563,7 @@ def export(input_path, output):
                     "mode",
                     "answer_requirement",
                     "training_route",
+                    "final_answer_provenance",
                     "status",
                     "verification",
                     "answer",

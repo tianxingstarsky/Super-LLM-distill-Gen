@@ -195,3 +195,5 @@
 `guided_student_evidence.py` 检查审查员为学生推导填写的证据。4.2.1 审查请求为每个片段提供之前片段的序号范围，归档时把合法引用转换回该稿稳定的 `segment_id`。题面和已检查的算式也可作为独立依据。程序核对来源与先后顺序，审查员负责推导的语义判断。行为回归位于 `tests/test_guided_answers.py`。
 
 4.3 也可保留错误之后仍能从原题独立推出的解题方法。`checked_student_approaches` 定位完整学生片段和唯一题面引文，记录两个字符范围以及语义判断的来源。学生下一轮只接收自己已核准的方法原文。
+
+`guided_teacher_delivery.py` 处理教师的正式交付。结论和按原题要求呈现的解法属于公开答案。片段编号、依据不足的原因以及作者身份留在回执中。规则由 `application/compose_guided_final_answer.py` 调用。

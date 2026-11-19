@@ -14,7 +14,7 @@ def main():
     cli.add_argument("--student-url")
     cli.add_argument("--student-model")
     cli.add_argument("--coach-url")
-    cli.add_argument("--coach-model")
+    cli.add_argument("--coach-model", help="Tutor used for disclosure and review; protocol 4.4 also uses it to write the final answer after a verified solution")
     cli.add_argument("--student-api-key-env")
     cli.add_argument("--coach-api-key-env")
     cli.add_argument(
@@ -58,7 +58,7 @@ def main():
     cli.add_argument(
         "--reuse-first-from",
         type=Path,
-        help="Replay the same case's byte-identical initial student request from a previous guided run; all tutor calls are new",
+        help="Reuse the same case's byte-identical initial student request from the original run. Use --reuse-matching-from separately for other identical calls.",
     )
     cli.add_argument(
         "--retry-interrupted",

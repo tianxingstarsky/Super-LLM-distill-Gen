@@ -3,11 +3,13 @@
 import json
 from functools import partial
 
+from .compose_guided_final_answer import compose_guided_final_answer
 from .review_guided_disclosure import (
     author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
 from ..domain.guided_student_evidence import checked_student_approaches
+from ..domain.guided_teacher_delivery import uses_direct_first
 
 from ..domain.guided_answers import (
     assemble,
@@ -56,7 +58,8 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         skip_acquired = protocol_version != "3.0.0"
-        task_analysis = protocol_version == "4.3.0"
+        teacher_delivery = protocol_version == "4.4.0"
+        task_analysis = teacher_delivery or protocol_version == "4.3.0"
         ordered_evidence = task_analysis or protocol_version == "4.2.1"
         paired = ordered_evidence or protocol_version == "4.2.0"
         show_outcome = paired or protocol_version == "4.1.1"
@@ -82,7 +85,7 @@ class GenerateGuidedAnswer:
         protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4",
                     "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9",
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
-                    "4.2.1": "v4.2.1", "4.3.0": "v4.3"}[protocol_version]
+                    "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -135,6 +138,7 @@ class GenerateGuidedAnswer:
         findings = {}
         approaches = {}
         final_text = ""
+        final_provenance = None
         direct_match = None
         training_reasoning = ""
         formal_history = []
@@ -145,7 +149,7 @@ class GenerateGuidedAnswer:
         while len(attempts) < attempt_limit:
             index = len(attempts) + 1
             messages = list(initial_messages)
-            direct_first = index == 1 and direct_protocol and source.get("answer_requirement") == "final_only"
+            direct_first = index == 1 and direct_protocol and uses_direct_first(source, protocol_version)
             if direct_first:
                 messages[0] = {"role": "system", "content": DIRECT_STUDENT + student_experience + task_suffix}
             if disclosed:
@@ -449,6 +453,22 @@ class GenerateGuidedAnswer:
                     if contains_chat_control(trace):
                         issue = "guided_reasoning_contains_control_markers"
                         break
+                    if teacher_delivery:
+                        delivery = compose_guided_final_answer(
+                            self.request, source, index, active, check.get("answer_surface") or check["answer"],
+                            reasoning_trace=trace)
+                        attempt["teacher_final_answer"] = delivery
+                        final_provenance = delivery["provenance"]
+                        formal_history.append({"attempt": index, "author": "teacher", "check": delivery["check"],
+                                               "receipt": final_provenance["receipt"]})
+                        training_reasoning, final_text = trace, delivery["public_answer"]
+                        if not delivery["check"]["format_ok"]:
+                            status, issue = "awaiting_guidance", delivery["check"]["issue"]
+                            version["first_unresolved"] = "teacher_final_answer"
+                        else:
+                            status, issue = "accepted", None
+                            version["first_unresolved"] = None
+                        break
                     prefix = {"role": "assistant", "reasoning_content": trace, "content": ""}
                     formal = self.request("final_answer", index, [*final_task, prefix], None)
                     formal_check = inspect_formal_answer(
@@ -572,12 +592,15 @@ class GenerateGuidedAnswer:
                 )
         last = attempts[-1]
         terminal_check = last.get("formal_answer", {}).get("check", last["check"])
+        if final_provenance:
+            terminal_check = last["teacher_final_answer"]["check"]
         route = "reviewed_solution"
         correctness = "unverified"
         if status == "accepted":
             if training_reasoning:
                 route = "guided_reasoning" if disclosed else "unaided_reasoning"
-                correctness = "reviewed_solution_and_fresh_final_key_match"
+                correctness = ("reviewed_student_solution_and_teacher_final_key_match" if final_provenance
+                               else "reviewed_solution_and_fresh_final_key_match")
             elif direct_match:
                 route, correctness = "nonthinking_direct", "unaided_direct_key_match"
             else:
@@ -593,6 +616,7 @@ class GenerateGuidedAnswer:
                if status == "awaiting_guidance" else {}),
             **({"training_route": route} if direct_protocol and status == "accepted" else {}),
             **({"finalization": formal_history} if formal_history else {}),
+            **({"final_answer_provenance": final_provenance} if final_provenance and status == "accepted" else {}),
             "verification": {
                 "answer_key_check": terminal_check["answer_matches"],
                 "explanation_review": (last.get("coach") or {}).get("verdict"),
