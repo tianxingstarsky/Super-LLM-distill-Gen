@@ -208,7 +208,7 @@ def test_same_local_model_separates_student_and_teacher_reasoning_and_resumes(tm
         sent.append(body)
         if "response_format" not in body:
             msg = {"content": "Combining two and three gives five.\nFinal answer: 5"}
-        elif "independent_approaches" in body["response_format"]["json_schema"]["schema"]["properties"]:
+        elif "independent_approaches" in body["response_format"]["json_schema"]["schema"].get("properties", {}):
             msg = {"content": json.dumps({"decision": "supported", "diagnosis": "The sum is justified.",
                                           "reusable": [], "independent_approaches": []})}
         else:

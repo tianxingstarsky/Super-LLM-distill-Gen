@@ -1,6 +1,38 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.8.0"
+VERSION = "4.8.2"
+
+STUDENT_REASONING_PROGRESS = (
+    "State what you have established with the evidence for it. Use that result to work out "
+    "what is still open. If a check reveals a conflict, name the conflicting fact and revise the "
+    "affected step. When you try another approach, show what it settles or rules out."
+)
+
+STUDENT_REASONING_PROGRESS_ZH = (
+    "说清已经确定的结果和它成立的依据，接着用它解决还没弄清的部分。"
+    "复核时若发现矛盾，说清哪条事实与原判断冲突，修正受影响的那一步。"
+    "换一种思路时，写出它具体解决了什么，或排除了哪种可能。"
+)
+
+TUTOR_DISCLOSURE_PROGRESS = (
+    "Build on a result the learner has justified, or on a given fact if they have yet to establish "
+    "one. A direct statement with the calculation, observation or premise behind it can make a useful "
+    "bridge to the next hint. Leave the unresolved inference to the learner. If an earlier result needs to change, "
+    "point to the fact that conflicts with it so the learner can locate the mistake."
+)
+
+TUTOR_DISCLOSURE_PROGRESS_ZH = (
+    "从学生已经证实的结果接下去。如果学生还没得到可靠结果，就从题面的一条事实出发。"
+    "合适时直接陈述已有发现，带上支持它的算式、观察或题面条件，再给一个能帮学生推出下一步的提示。"
+    "如果先前的结果确实需要修改，指出与它冲突的事实，让学生自己定位错误。"
+)
+
+STUDENT_PROGRESS_REVIEW = (
+    "A wrong conclusion can follow a sound intermediate step. Record the learner's supported steps "
+    "in reusable, with the premise or earlier deduction that establishes each one. A useful approach "
+    "whose conclusion remains open belongs in independent_approaches. Leave either collection empty "
+    "when the learner's actual work does not support an entry."
+)
 
 TEACHER_FINAL_ANSWER = """You are the answer author. Deliver a self-contained answer to the original user in the requested language, notation, units and order. The packet separates the user's question and instructions from the student's reviewed derivation and the private reference key. Use the deductions that actually support the result. Compose a clear, sufficient solution in your own words; the reader will see your public answer and must be able to follow its decisive inference. If the user requests the result alone, keep explanation empty and give precisely that result. Otherwise explain why the conclusion follows, without repeating the whole exploration. Honor an explicit request to show work even when a single number matches the key.
 

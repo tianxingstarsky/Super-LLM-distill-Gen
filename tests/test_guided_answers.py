@@ -1286,6 +1286,49 @@ def test_verified_source_operations_require_external_identity_and_independent_co
         assert reviewed["status"] == "accepted"
 
 
+@pytest.mark.parametrize("protocol,carry", [("4.8.1", False), ("4.8.2", True)])
+def test_wrong_song_answer_preserves_only_the_students_checked_subtotal_for_tutor_and_next_student(protocol, carry):
+    quote = "Recording takes 12 minutes per song"
+    question = f"{quote}. There are 10 songs and 300 minutes in total. How much time remains? Show your work."
+    source = validate_source(dict(id="studio", question=question, gold=dict(kind="number", value="180"),
+                                  source_reasoning="Recording: <<12*10=120>>. Remaining: <<300-120=180>>.",
+                                  answer_requirement="worked_solution"))
+    hint = "Subtract the recording time from the total."
+    calls = {}
+    def request(role, index, messages, schema):
+        calls[role, index] = messages
+        if role == "student":
+            if index == 1:
+                reply = "Recording time: 10 * 12 = 120. The writing time is 120.\nFinal answer: 36"
+                return dict(content=reply, reasoning_content="", finish_reason="stop")
+            return dict(content="", reasoning_content="", finish_reason="length")
+        packet = json.loads(messages[-1]["content"])
+        if role == "coach":
+            reply = dict(decision="supported", diagnosis="No further work identified.", reusable=[], independent_approaches=[])
+        elif role == "disclosure_draft":
+            reply = dict(decision="offer", question_quote=quote, bridge=quote + ".", hint=hint, reason="Use the subtotal.")
+        else:
+            assert role == "disclosure"
+            reply = dict(decision="release", bridge=packet["proposed_next_teacher_disclosure"]["bridge"],
+                         citations=[dict(evidence_id="question", quote=quote)], reason="The time premise supports the hint.",
+                         pairing=dict(student_fit=True, evidence_support=True, history_fit="first"))
+        return dict(content=json.dumps(reply), reasoning_content="", finish_reason="stop")
+
+    case = GenerateGuidedAnswer(request).run(source, {"version": "test"}, 2, protocol_version=protocol)
+    teacher_packet = json.loads(calls["disclosure_draft", 1][-1]["content"])
+    facts = teacher_packet["established_evidence"]
+    if carry:
+        wording, = teacher_packet["learner_wording_for_interpretation"]
+        assert wording["learner_wording_through_equation"] == "Recording time: 10 * 12 = 120"
+    continuation = calls["student", 2][-1]["content"]
+    assert any(item["text"] == "10 * 12 = 120" for item in facts) is carry
+    assert ("10 * 12 = 120" in continuation) is carry
+    assert hint in continuation and "writing time is 120" not in continuation and "180" not in continuation
+    assert case["draft_versions"][0]["review_conflict"] == "program_check_contradicts_supported"
+    assert not case["attempts"][0]["verified_stage"]["complete_student_solution"]
+    assert bool(case["attempts"][0]["verified_stage"]["new_fact_segments"]) is carry
+
+
 def test_public_disclosure_quotes_are_paired_exact_and_separate_from_teacher_inferences():
     from lib.contexts.workflows.domain.guided_disclosure_text import locate_authored_task_citations, render_teacher_text
     question = 'The sign reads "left at dusk". 两组成员之间互不重叠。标签为“入口”。'

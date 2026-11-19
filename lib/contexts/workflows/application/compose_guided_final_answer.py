@@ -6,7 +6,9 @@ import re
 
 from ..domain.guided_answers import assemble, check_direct_answer, read_teacher_submission
 from ..domain.guided_final_experience import adopted_final_teacher_text
-from ..domain.guided_teacher_delivery import QWEN_SAMPLING_VERSIONS, TEACHER_FINAL_VERSIONS, inspect_teacher_delivery, requested_delivery
+from ..domain.guided_teacher_delivery import (
+    QWEN_SAMPLING_VERSIONS, STRICT_DELIVERY_VERSIONS, TEACHER_FINAL_VERSIONS, inspect_teacher_delivery, requested_delivery,
+)
 from lib.prompts.workflow_guided_answers import TEACHER_FINAL_ANSWER, TEACHER_FINAL_BY_DELIVERY, TEACHER_FINAL_NECESSITY, VERSION, teacher_final_schema
 
 
@@ -19,7 +21,7 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
         system += "\n\n" + TEACHER_FINAL_NECESSITY
     elif protocol_version != "4.4.0":
         raise ValueError("unsupported teacher final-answer protocol")
-    if protocol_version == "4.8.1":
+    if protocol_version in STRICT_DELIVERY_VERSIONS:
         system += "\n\n" + TEACHER_FINAL_BY_DELIVERY[form]
     teacher_instruction = adopted_final_teacher_text(final_teacher_experience or {}, protocol_version)
     if teacher_instruction:
@@ -51,7 +53,7 @@ def compose_guided_final_answer(request, source, index, segments, verified_concl
         {"role": "system", "content": system},
         {"role": "user", "content": source["question"]},
         {"role": "tool", "content": json.dumps(materials, ensure_ascii=False)},
-    ], teacher_final_schema(steps, form if protocol_version == "4.8.1" else None))
+    ], teacher_final_schema(steps, form if protocol_version in STRICT_DELIVERY_VERSIONS else None))
     proposal = None
     if response["finish_reason"] == "stop":
         try:

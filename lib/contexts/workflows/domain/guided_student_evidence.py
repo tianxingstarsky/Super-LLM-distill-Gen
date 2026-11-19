@@ -59,6 +59,8 @@ def verified_student_stage(check, findings, prior_attempts, hints_received, *, s
         kind = item["evidence_level"]
         if kind == "program_checked_reviewed_finite_set":
             key = "check:" + item["check_id"]
+        elif kind == "source_verified_student_calculation":
+            key = "calculation:" + item["calculation_key"]
         elif kind == "program_checked_arithmetic_identity":
             # Whitespace and typography do not make a repeated calculation new.
             claim = re.sub(r"\s+", "", item["text"]).strip(".。").replace("×", "*").replace("÷", "/").replace("−", "-")

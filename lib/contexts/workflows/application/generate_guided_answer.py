@@ -8,6 +8,8 @@ from .review_guided_disclosure import (
     author_next_disclosure, eligible_teaching_steps, review_next_disclosure, review_or_recommend_disclosure,
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
+from ..domain.guided_disclosure import render_student_continuation
+from ..domain.guided_student_calculations import recovered_student_calculations
 from ..domain.guided_student_evidence import (
     checked_derivation_conflict, checked_student_approaches, partial_review_evidence, verified_student_stage,
 )
@@ -43,6 +45,8 @@ from lib.prompts.workflow_guided_answers import (
     SHOWN_ANSWER_ASSESSMENT,
     RESULT_ONLY_DELIVERY,
     STUDENT_TASK_ANALYSIS,
+    STUDENT_PROGRESS_REVIEW, STUDENT_REASONING_PROGRESS, STUDENT_REASONING_PROGRESS_ZH,
+    TUTOR_DISCLOSURE_PROGRESS, TUTOR_DISCLOSURE_PROGRESS_ZH,
     WORKED_ANSWER_DELIVERY,
     SINGLE_DECISION_REVIEW,
     review_schema,
@@ -64,6 +68,9 @@ class GenerateGuidedAnswer:
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
+        carry_progress = protocol_version == "4.8.2"
+        language = str(source.get("source", {}).get("language") or "").lower()
+        chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
         if (trusted_solution_receipts or continuation_model is not None) and not evidenced_progress:
             raise ValueError("complete-disclosure teaching requires guided protocol 4.8")
@@ -79,12 +86,16 @@ class GenerateGuidedAnswer:
         if until_correct and not authored_hints:
             raise ValueError("until_correct requires a guided run with authored disclosure")
         review_disclosures = authored_hints or protocol_version == "3.8.0"
-        assess_hint = (partial(author_next_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
+        teacher_experience = experience.get("disclosure_teacher", "")
+        if carry_progress:
+            progress_instruction = TUTOR_DISCLOSURE_PROGRESS_ZH if chinese else TUTOR_DISCLOSURE_PROGRESS
+            teacher_experience = "\n\n".join(filter(None, (teacher_experience, progress_instruction)))
+        assess_hint = (partial(author_next_disclosure, teacher_experience=teacher_experience,
                                grounded=grounded, allow_catalog=allow_catalog, show_outcome=show_outcome)
                        if authored_hints else review_next_disclosure)
         tried_verified_steps = set()
         if paired:
-            assess_hint = partial(review_or_recommend_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
+            assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
@@ -98,7 +109,7 @@ class GenerateGuidedAnswer:
                     "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1", "4.2.0": "v4.2",
                     "4.2.1": "v4.2.1", "4.3.0": "v4.3", "4.4.0": "v4.4", "4.4.1": "v4.4.1",
                     "4.5.0": "v4.5", "4.5.1": "v4.5.1", "4.6.0": "v4.6", "4.7.0": "v4.7",
-                    "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1"}[protocol_version]
+                    "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1", "4.8.2": "v4.8.2"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -106,6 +117,8 @@ class GenerateGuidedAnswer:
             tutor_instruction += "\n\n" + ORDERED_STUDENT_EVIDENCE
         if task_analysis:
             tutor_instruction += "\n\n" + REVIEW_TASK_ANALYSIS
+        if carry_progress:
+            tutor_instruction += "\n\n" + STUDENT_PROGRESS_REVIEW
         mode = "answer_key" if gold is not None else "source_reasoning_only"
         attempts = []
         status = "quarantine"
@@ -124,6 +137,8 @@ class GenerateGuidedAnswer:
         system = STUDENT if gold is not None else SOURCE_COMPLETION_STUDENT
         if task_analysis:
             system += "\n\n" + STUDENT_TASK_ANALYSIS
+        if carry_progress:
+            system += "\n\n" + (STUDENT_REASONING_PROGRESS_ZH if chinese else STUDENT_REASONING_PROGRESS)
         system += student_experience + task_suffix
         initial_messages = [
             {"role": "system", "content": system},
@@ -204,13 +219,11 @@ class GenerateGuidedAnswer:
                     view["verified_prior_student_findings"] = view.pop("confirmed_findings_from_your_own_work")
                     if "supported_approaches_from_your_own_work" in view:
                         view["supported_prior_student_approaches"] = view.pop("supported_approaches_from_your_own_work")
-                messages.append(
-                    {
-                        "role": "tool",
-                        "content": "Continue the solution from this current view.\n"
-                        + json.dumps(view, ensure_ascii=False),
-                    }
-                )
+                if carry_progress and not send_full:
+                    continuation = render_student_continuation(view, approaches, chinese=chinese)
+                else:
+                    continuation = "Continue the solution from this current view.\n" + json.dumps(view, ensure_ascii=False)
+                messages.append({"role": "tool", "content": continuation})
                 if next_solver == "strong_continuation":
                     # Only the solver changes. No new hint, private assessment or failed
                     # student answer may be smuggled into this controlled continuation.
@@ -348,12 +361,24 @@ class GenerateGuidedAnswer:
                 if anchored
                 else {}
             )
+            if carry_progress and next_solver == "student" and not send_full:
+                pieces = new_segments
+                if incomplete:
+                    # The unfinished trailing line can still qualify or negate an equation.
+                    complete_lines = suffix[:suffix.rfind("\n") + 1]
+                    pieces, _ = draft_fragment(complete_lines, index)
+                for item in recovered_student_calculations(source, pieces, prior_hints=(h["text"] for h in disclosed)).values():
+                    certified["calculation:" + item["calculation_key"]] = item
             # Keep the original discovery when a later response repeats it.
             additions = {
                 key: item for key, item in certified.items() if key not in findings
             }
             for item in additions.values():
                 item["previous_disclosure_ids"] = [d["id"] for d in disclosed]
+                if carry_progress:
+                    item["source_attempt"] = index
+            if incomplete and carry_progress:
+                attempt["program_confirmed"].extend(additions.values())
             if anchored:
                 version["program_confirmed"] = list(additions.values())
             material = {
@@ -378,15 +403,8 @@ class GenerateGuidedAnswer:
             }
             if anchored:
                 material["confirmed_current_spans"] = [
-                    {
-                        key: item[key]
-                        for key in (
-                            "segment_id",
-                            "source_span",
-                            "meaning",
-                            "evidence_level",
-                        )
-                    }
+                    {"segment_id": item["segment_id"], "source_span": item["source_span"],
+                     "meaning": item.get("meaning", item["text"]), "evidence_level": item["evidence_level"]}
                     for item in additions.values()
                 ]
             assess_shown_answer = send_full and check.get("answer_matches") is True

@@ -7,6 +7,30 @@ from .guided_disclosure_text import locate_teacher_premise
 from .guided_teaching_steps import verified_steps_digest
 
 
+def render_student_continuation(view, approaches, *, chinese):
+    """Present the learner's own established work and the tutor's published hints with distinct authorship."""
+    parts = []
+    def section(english, mandarin, lines):
+        content = "\n".join(dict.fromkeys(text.strip() for text in lines if text and text.strip()))
+        if content:
+            parts.append((mandarin if chinese else english) + "\n" + content)
+
+    retained = view["retained_solution"].strip()
+    retained_lines = {line.strip() for line in retained.splitlines()}
+    section("Your established steps", "你已证实的步骤", [retained])
+    facts = view["confirmed_findings_from_your_own_work"]
+    meanings = {item["student_excerpt"]: item["reviewed_meaning"] for item in view.get("confirmed_meanings", ())}
+    section("Results established in your work", "你已得到的结果和依据",
+            [f"{fact} ({meanings[fact]})" if fact in meanings else fact
+             for fact in facts if fact.strip() not in retained_lines or fact in meanings])
+    section("Approaches grounded in the question", "与题意相符、可继续尝试的思路",
+            [f'{item["text"].strip()}\n“{item["question_quote"]}”' for item in approaches.values()])
+    section("Earlier guidance", "此前收到的提示", view["previously_disclosed_clues"])
+    section("Your previous answer to reconsider", "上一次需要重新判断的答复", [view.get("your_last_formal_answer")])
+    section("Next hint", "本轮提示", [view["new_clue"]])
+    return "\n\n".join(parts)
+
+
 def disclosure_evidence(question, retained, findings, disclosed):
     evidence = {"question": {"kind": "question", "text": question}}
     for piece in retained:

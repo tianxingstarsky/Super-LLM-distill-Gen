@@ -42,6 +42,19 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
                                "excerpted": len(observed) > 1200},
         "proposed_next_teacher_disclosure": {"kind": candidate["kind"], "text": candidate["text"]},
     }
+    calculation_context = []
+    for finding in findings.values():
+        if (finding.get("evidence_level") != "source_verified_student_calculation"
+                or finding["source_attempt"] != attempt["attempt"]):
+            continue
+        start, end = finding["source_span"]
+        student_text = attempt["student"]["content"]
+        # The equation is checked. Its surrounding units and interpretation are the learner's claims.
+        line_start = max(student_text.rfind("\n", 0, start) + 1, start - 160)
+        calculation_context.append({"evidence_id": finding["segment_id"], "checked_equation": finding["text"],
+                                    "learner_wording_through_equation": student_text[line_start:end]})
+    if calculation_context:
+        material["learner_wording_for_interpretation"] = calculation_context
     if attempt.get("truncated_observation"):
         material["current_difficulty"] = {"at": anchor, **attempt["truncated_observation"],
                                           "status": "output_limit_without_final_answer"}
