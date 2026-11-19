@@ -378,6 +378,7 @@ def test_answer_key_is_mandatory_for_acceptance_and_explanation_has_independent_
                     "decision": "supported",
                     "diagnosis": "The source supports the reasoning.",
                     "reusable": [],
+                    **({"independent_approaches": []} if "independent_approaches" in schema["properties"] else {}),
                 }
             )
         )
@@ -1179,6 +1180,7 @@ def test_reasoning_only_source_receives_missing_natural_artifact_without_numeric
                     "decision": "supported",
                     "diagnosis": "Delivers both artifacts.",
                     "reusable": [],
+                    "independent_approaches": [],
                 }
             )
         )
@@ -1434,3 +1436,134 @@ def test_only_native_loopback_chat_waits_for_the_full_decode(monkeypatch):
         endpoint.http(endpoint.root + "/slots")
         endpoint.http(base + "/chat/completions", {"messages": []})
     assert [timeout for _, timeout in received] == [3600, None, 3600, 3600, 3600, 3600]
+
+
+def test_guided_worked_solution_carries_a_grounded_method_through_review_to_the_export(tmp_path, monkeypatch):
+    from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
+    from lib.contexts.workflows.infrastructure.guided_llama import GuidedChatEndpoint
+    from lib.model_request_scheduler import SharedModelScheduler
+    from lib.prompts.workflow_guided_answers import REVIEW_TASK_ANALYSIS, STUDENT_TASK_ANALYSIS, TUTOR_TASK_ANALYSIS
+
+    question = "There are three baskets and four apples in each basket. How many apples are there? Explain your calculation."
+    gold = {"kind": "number", "value": "12"}
+    quote = "four apples in each basket"
+    task_instruction = "Use the same group size for every basket."
+    hint = "Match one group to its stated size before you count all the groups."
+    step = dict(id="size", kind="operation", quote=quote, span=[question.index(quote), question.index(quote) + len(quote)],
+                operation=hint, verification="Each of the three groups has the same stated size.")
+    receipt = verified_steps_digest("baskets", question, gold, [step])
+    source = dict(id="baskets", question=question, gold=gold, task_system=task_instruction,
+                  answer_requirement="worked_solution", verified_teaching_steps=dict(receipt_id=receipt, steps=[step]))
+    source_file, registry = tmp_path / "sources.jsonl", tmp_path / "verification.json"
+    source_file.write_text(json.dumps(source), "utf8")
+    registry.write_text(json.dumps({"schema": "guided-teaching-verification/v1", "receipts": [receipt]}), "utf8")
+    monkeypatch.setattr("lib.bootstrap.guided_answers.SharedModelScheduler",
+                        lambda _root, identity, **kw: SharedModelScheduler(tmp_path, identity, **kw))
+
+    method = "I can draw one group per basket."
+    mistaken = "I put ten apples in each basket."
+    private = "Private examiner note about the mistaken group size."
+    private_basis = "This plan follows from the number of baskets independently of the wrong count."
+    corrected = "Three groups of four give 3 × 4 = 12."
+    formal = "Each basket holds four apples, and there are three baskets. Multiplying 3 by 4 gives 12.\nFinal answer: 12"
+    proposal = dict(segment_id="a1.s2", question_quote="three baskets", justification=private_basis)
+    scripts = [
+        mistaken + "\n" + method + "\nFinal answer: 30",
+        dict(decision="revise:a1.s1", diagnosis=private, reusable=[], independent_approaches=[proposal]),
+        dict(decision="insufficient", reason="An independently verified operation would help here."),
+        dict(decision="release", reason="The proposed action corrects the wrong group size.",
+             evidence_ids=["task-span:size"], pairing=dict(student_fit=True, evidence_support=True, history_fit="first")),
+        corrected + "\nFinal answer: 12",
+        dict(decision="supported", diagnosis="The multiplication checks.", reusable=[], independent_approaches=[]),
+    ]
+    chats, final_prefixes = [], []
+
+    def serve(endpoint, url, body=None):
+        if url.endswith("/slots"):
+            return [{"n_ctx": 98304}]
+        if url.endswith("/models"):
+            return {"data": [{"id": endpoint.model}]}
+        if url.endswith("/apply-template"):
+            return {"prompt": "\n".join(m["content"] for m in body["messages"]) + "\nAssistant\n<think>\n"}
+        if url.endswith("/tokenize"):
+            return {"tokens": list(body["content"].encode("utf8"))}
+        if url.endswith("/completion"):
+            final_prefixes.append(bytes(body["prompt"]).decode("utf8"))
+            return dict(content=formal, stop_type="eos", tokens_evaluated=len(body["prompt"]), tokens_predicted=30)
+        assert url.endswith("/v1/chat/completions")
+        value = scripts[len(chats)]
+        chats.append(body)
+        return {"choices": [{"message": {"content": value if isinstance(value, str) else json.dumps(value)},
+                             "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(GuidedChatEndpoint, "http", serve)
+    run = tmp_path / "guided"
+    summary = generate_guided_cases(source_file, run, student_url="http://localhost:8121/v1", student_model="student",
+                                    coach_url="http://localhost:8122/v1", coach_model="coach",
+                                    protocol_version="4.3.0", verified_step_receipts=registry, max_attempts=2)
+    assert summary["accepted_by_route"]["guided_reasoning"] == 1
+    assert [req["model"] for req in chats] == ["student", "coach", "coach", "coach", "student", "coach"]
+    instructions = [req["messages"][0]["content"] for req in chats]
+    for idx in (0, 4):
+        assert STUDENT_TASK_ANALYSIS in instructions[idx] and task_instruction in instructions[idx]
+    for idx in (1, 5):
+        assert REVIEW_TASK_ANALYSIS in instructions[idx]
+        assert json.loads(chats[idx]["messages"][-1]["content"])["task_system"] == task_instruction
+    for idx in (2, 3):
+        assert TUTOR_TASK_ANALYSIS in instructions[idx]
+        packet = json.loads(chats[idx]["messages"][-1]["content"])
+        assert packet["task_instructions"] == task_instruction
+        assert packet["supported_student_approaches"] == [{"text": method + "\n", "question_quote": "three baskets"}]
+        assert mistaken not in json.dumps(packet["established_evidence"])
+    student_view = json.loads(chats[4]["messages"][-1]["content"].split("\n", 1)[1])
+    assert student_view["supported_approaches_from_your_own_work"] == [method + "\n"]
+    assert student_view["confirmed_findings_from_your_own_work"] == []
+    assert student_view["new_clue"] == hint
+    assert all(s not in str(chats[4]["messages"]) for s in (private, private_basis, mistaken, "30"))
+
+    case_dir = next((run / "cases").iterdir())
+    case = json.loads((case_dir / "case.json").read_bytes())
+    assert (case_dir / "001-disclosure_candidate_review.json").is_file()
+    public = json.loads((run / "accepted.jsonl").read_bytes())["messages"][-1]
+    assert case["messages"][-1] == public and public["content"] == formal
+    trace = public["reasoning_content"]
+    assert trace.index(mistaken) < trace.index(hint) < trace.index(corrected)
+    assert private not in trace and private_basis not in trace
+    assert len(final_prefixes) == 1 and final_prefixes[0].endswith("<think>\n" + trace + "\n</think>\n\n")
+
+
+def test_worked_delivery_requires_a_visible_explanation_after_closing_think_in_43():
+    from lib.prompts.workflow_guided_answers import REVIEW_TASK_ANALYSIS, STUDENT_TASK_ANALYSIS, WORKED_ANSWER_DELIVERY
+
+    source = validate_source({"id": "sum", "question": "Compute 2 + 3 and explain your answer.",
+                              "gold": {"kind": "number", "value": "5"}, "answer_requirement": "worked_solution"})
+
+    def run(version):
+        calls = {}
+        def send(role, index, messages, schema):
+            calls[role] = messages
+            if role == "student":
+                text = "Combining two and three yields five.\nFinal answer: 5"
+            elif role == "coach":
+                assessment = dict(decision="supported", diagnosis="Both the operation and result follow.", reusable=[])
+                if "independent_approaches" in schema["properties"]:
+                    assessment["independent_approaches"] = []
+                text = json.dumps(assessment)
+            else:
+                assert role == "final_answer"
+                text = "5"
+            return dict(content=text, reasoning_content="", finish_reason="stop")
+
+        case = GenerateGuidedAnswer(send).run(source, {"version": "test"}, 1, protocol_version=version)
+        return case, calls
+
+    new, calls = run("4.3.0")
+    assert new["status"] != "accepted" and new["answer"] == "5"
+    check = new["attempts"][0]["formal_answer"]["check"]
+    assert check["answer_matches"] and check["issue"] == "formal_answer_missing_requested_explanation"
+    assert WORKED_ANSWER_DELIVERY in calls["final_answer"][0]["content"]
+    old, calls = run("4.2.1")
+    assert old["status"] == "accepted" and old["messages"][-1]["content"] == "5"
+    assert STUDENT_TASK_ANALYSIS not in calls["student"][0]["content"]
+    assert REVIEW_TASK_ANALYSIS not in calls["coach"][0]["content"]
+    assert all(WORKED_ANSWER_DELIVERY not in m["content"] for m in calls["final_answer"])

@@ -53,7 +53,7 @@ def main():
                      help="Reuse completed calls from another run of the same input, experience and endpoints "
                           "when the exact request bytes, role and checkpoint match")
     cli.add_argument("--until-correct", action=argparse.BooleanOptionalAction, default=None,
-                     help="Continue while verifiable guidance is available (default for new 4.2 runs). "
+                     help="Continue while verifiable guidance is available (default since protocol 4.2). "
                           "Use --no-until-correct for a bounded experiment")
     cli.add_argument(
         "--reuse-first-from",

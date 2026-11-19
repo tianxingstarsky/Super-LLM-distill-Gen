@@ -407,7 +407,8 @@ def _question_count_conclusion(text, question, gold, *, final_only):
     return {**match, "answer_surface": lines[-1]}
 
 
-def inspect_formal_answer(response, gold, question, *, final_only, allow_bare_delivery=True):
+def inspect_formal_answer(response, gold, question, *, final_only, allow_bare_delivery=True,
+                          require_explanation=False):
     text = response["content"]
     if response["finish_reason"] != "stop" or response.get("reasoning_content") or not text.strip():
         issue = "formal_answer_incomplete_or_native_thinking"
@@ -415,6 +416,12 @@ def inspect_formal_answer(response, gold, question, *, final_only, allow_bare_de
         issue = "formal_answer_contains_control_markers"
     else:
         conclusion = _question_count_conclusion(text, question, gold, final_only=final_only)
+        if require_explanation:
+            bare = check_direct_answer(text, gold)
+            if not bare and len(text.strip().splitlines()) == 1:
+                bare = conclusion
+            if bare and bare["answer_matches"]:
+                return {**bare, "format_ok": False, "issue": "formal_answer_missing_requested_explanation"}
         if conclusion:
             return conclusion
         if allow_bare_delivery:

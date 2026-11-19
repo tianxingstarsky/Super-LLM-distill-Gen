@@ -4,7 +4,7 @@ import json
 
 from lib.prompts.workflow_guided_answers import (
     AUTHORED_DISCLOSURE_REVIEW, DISCLOSURE_AUTHOR, DISCLOSURE_REVIEW, GROUNDED_AUTHOR_GUIDANCE,
-    GROUNDED_HINT_REVIEW, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
+    GROUNDED_HINT_REVIEW, TUTOR_TASK_ANALYSIS, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
     DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_review_schema, verified_choice_schema,
     verified_choice_review_schema, with_disclosure_pairing,
 )
@@ -42,6 +42,17 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
     }
     if source.get("task_system"):
         material["task_instructions"] = source["task_system"]
+    if attempt.get("supported_student_approaches"):
+        material["supported_student_approaches"] = [
+            {"text": item["text"], "question_quote": item["question_quote"]}
+            for item in attempt["supported_student_approaches"]
+        ]
+    if "supported_student_approaches" in attempt and formal:
+        material["current_difficulty"].update(
+            formal_delivery_issue=formal["check"]["issue"],
+            formal_value_matches_key=formal["check"]["answer_matches"],
+            formal_format_ok=formal["check"]["format_ok"],
+        )
     return material, evidence, previous_id
 
 
@@ -88,7 +99,7 @@ def _add_measured_outcome(material, source, attempt, retained, findings):
 
 
 def _review_verified_step(request, attempt, history, material, evidence, previous_id, reference, receipt, step,
-                          *, paired=False, recommended_index=None):
+                          *, paired=False, recommended_index=None, task_analysis=False):
     entry = history[-1]
     entry["verified_operation"] = {"id": step["id"], "receipt_id": receipt, "operation": step["operation"]}
     if (entry["revision"] and history[0].get("verified_operation") == entry["verified_operation"]
@@ -100,6 +111,8 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
                                        "latest_disclosure_id", "current_difficulty", "private_reference_ceiling")}
     if "task_instructions" in material:
         packet["task_instructions"] = material["task_instructions"]
+    if "supported_student_approaches" in material:
+        packet["supported_student_approaches"] = material["supported_student_approaches"]
     packet["proposed_next_teacher_disclosure"] = {
         "step_id": step["id"], "operation": step["operation"], "kind": step["kind"],
         "task_evidence_id": anchor, "quote": step["quote"], "span": step["span"],
@@ -123,6 +136,8 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
     # Only catalogue IDs and the actual dialogue observations go into the model's context.
     references = [anchor, *(ref for ref in evidence if ref != "question")]
     system = VERIFIED_STEP_REVIEW
+    if task_analysis:
+        system += "\n\n" + TUTOR_TASK_ANALYSIS
     if "submitted_answer_status" in material["current_difficulty"]:
         system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
     schema = verified_choice_review_schema(references)
@@ -152,7 +167,8 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
 
 
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
-                           *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=()):
+                           *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
+                           task_analysis=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -178,6 +194,9 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         material["student_attempt"] = attempt["attempt"]
         author_system += "\n\n" + QUOTED_DISCLOSURE
         reviewer_system += "\n\n" + QUOTED_DISCLOSURE + "\n\n" + DISCLOSURE_PAIRING
+    if task_analysis:
+        author_system += "\n\n" + TUTOR_TASK_ANALYSIS
+        reviewer_system += "\n\n" + TUTOR_TASK_ANALYSIS
     author_system += "\n\n" + teacher_experience if teacher_experience else ""
     for revision in range(2):
         entry = {"revision": revision, "private_reference": reference["text"], "latest_disclosure_id": previous_id}
@@ -215,7 +234,8 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         else:
             if step:
                 approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
-                                                        reference, catalog["receipt_id"], step, paired=paired)
+                                                        reference, catalog["receipt_id"], step, paired=paired,
+                                                        task_analysis=task_analysis)
                 if approved:
                     return approved, None
                 entry["issue"] = issue
@@ -285,7 +305,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
 
 
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
-                                   *, teacher_experience, tried):
+                                   *, teacher_experience, tried, task_analysis=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation"):
         history = attempt["disclosure_work"] = []
@@ -293,7 +313,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
     else:
         approved, issue = author_next_disclosure(
             request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
-            grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried,
+            grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
         )
         history = attempt["disclosure_work"]
         tried.update(entry["verified_operation"]["id"] for entry in history if "verified_operation" in entry)
@@ -316,7 +336,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
         tried.add(step["id"])
         approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
                                                 reference, catalog["receipt_id"], step, paired=True,
-                                                recommended_index=ordinal)
+                                                recommended_index=ordinal, task_analysis=task_analysis)
         if approved:
             return approved, None
         entry["issue"] = issue

@@ -20,7 +20,7 @@ from .guided_llama import DIRECT_ANSWER_GRAMMARS, GuidedAdmissionTimeout, wire_b
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1"}
+PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0"}
 VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"} | PAIRED_DISCLOSURE_VERSIONS
 TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"} | VERIFIED_STEP_VERSIONS
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS

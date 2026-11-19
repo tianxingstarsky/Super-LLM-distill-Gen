@@ -1,6 +1,15 @@
 """Role instructions and visible revision prompts for guided answer generation."""
 
-VERSION = "4.2.1"
+VERSION = "4.3.0"
+
+STUDENT_TASK_ANALYSIS = """Work from what the user actually asks and what the problem establishes. Use any distinction that changes the solution: who or what a condition applies to, its scope, an exception, a quantity or unit, or the form the user wants to receive. A proposed approach is worth carrying forward even if its execution later went wrong. Use the sound part and work out the missing inference. A hint suggests a move to try; check what it establishes before using its result. When the evidence leaves alternatives open, keep them open. Explain the reasoning needed to settle this particular task, in your own words."""
+
+REVIEW_TASK_ANALYSIS = """Read the user's original request as the standard of success. Check who each condition belongs to, what is given and what must be derived, and what the deliverable must contain. A numerical match does not establish that the reasoning followed the instruction. Keep the valid prefix. A later student segment may propose a sound method despite an earlier mistake: in independent_approaches identify such a whole segment only when its own reasoning is justified directly by the cited words of the original question, independently of the mistake. Give the exact question quotation and privately explain that connection. Skip a segment that mixes a useful idea with an unsupported claim. A correct plan does not establish its unperformed steps or its numerical result."""
+
+TUTOR_TASK_ANALYSIS = """Read the actual task for the deliverable and the constraints that affect this particular next move. Distinguish the user's condition, a method the student has found, and a result the student has established. Build on their sound work. Where the next inference depends on a missing condition, help them test it or recognize the uncertainty. Avoid filling it in for them. Judge the strength of the hint against that unresolved inference."""
+
+WORKED_ANSWER_DELIVERY = "The requested deliverable includes the explanation. Give the answer with the reasoning or demonstration the user needs to check it, in the requested form."
+RESULT_ONLY_DELIVERY = "The user wants the result alone. Give that result with the requested units, identifiers or order. The working has already been completed."
 DISCLOSURE_AUTHOR = """You are the tutor writing your own next contribution to a learner's developing solution. Read your previous published hints in order. Use the problem and what the learner has actually established to decide what small piece is still missing. In bridge, explain in the learner's language how the previous step and its particular evidence bring the learner to this point. In hint, contribute just the next useful idea, fact or operation; leave its application to the learner. Where supplied, the private reference bounds how much may be disclosed and is not a script. When no reference is supplied, work from the cited problem and learner evidence. Do not announce the result, invent a premise, describe private review, or repeat a hint in new words. If asked to revise, address the recorded reason for withholding the draft by reducing the step or grounding it more carefully. Put a private explanation of your choice in reason. Return decision offer with both public fields, or insufficient with empty public fields when no justified next step is available."""
 
 
@@ -87,6 +96,10 @@ FINAL_DELIVERY = (
 )
 DIRECT_STUDENT = """Answer the user's question directly in its requested language and format. Give the requested value, option or exact answer. Respect any units and conditions specified in the question."""
 FINAL_DELIVERY_HINTS = {
+    "worked_solution": (
+        "My conclusion is already supported. Which part of my calculation or deduction does the reader need to see to check it?",
+        "我的结论已经成立。读者需要看到哪段计算或推导，才能核对这个结论？",
+    ),
     "number": (
         "Reconcile the quantity in my last answer with what the question asks for. Carry my calculation through the final conversion, checking sign, units and any cases I counted.",
         "把我最后交付的数值和题目所求的量对应起来，核对分类计数、符号、单位以及最后一次换算。",
@@ -170,7 +183,8 @@ def repair_finding_schema(finding_schema):
     return {"type": "object", "properties": fields, "required": list(fields), "additionalProperties": False}
 
 
-def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=False, ordered_evidence=False):
+def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=False, ordered_evidence=False,
+                  task_analysis=False):
     ref = {
         "type": "string",
         "enum": [*segment_ids, *(["answer"] if has_answer else [])],
@@ -217,6 +231,11 @@ def review_schema(segment_ids, has_answer, *, anchored=False, single_decision=Fa
     if ordered_evidence:
         fields = {"decision": fields["decision"], "diagnosis": fields["diagnosis"],
                   "reusable": ordered_finding_schema(segment_ids)}
+    if task_analysis:
+        method = {"segment_id": {"type": "string", "enum": segment_ids},
+                  "question_quote": {"type": "string"}, "justification": {"type": "string"}}
+        fields["independent_approaches"] = ({"type": "array", "items": {"type": "object", "properties": method,
+            "required": list(method), "additionalProperties": False}} if segment_ids else {"const": []})
     return {
         "type": "object",
         "additionalProperties": False,
