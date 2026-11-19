@@ -56,6 +56,65 @@ def test_list_numbers_stay_attached_and_never_become_evidence():
     assert review["verdict"] == "uncertain" and review["verified_prefix_count"] == 1
 
 
+@pytest.mark.parametrize("pin,worked,matched,has_operation,nominate,fit", [
+    (True, False, False, True, False, True),
+    (True, False, False, True, True, False),
+    (True, True, False, True, True, True),
+    (True, False, True, True, True, True),
+    (True, False, False, False, False, True),
+    (False, False, False, True, False, True),
+])
+def test_verified_bare_answer_action_requires_context_and_independent_pairing(pin, worked, matched, has_operation, nominate, fit):
+    from lib.contexts.workflows.application.review_guided_disclosure import review_or_recommend_disclosure
+    from lib.prompts.workflow_guided_answers import BARE_ANSWER_OPERATION_AUTHOR, BARE_ANSWER_OPERATION_REVIEW
+
+    premise = "from 1 PM to 4 PM every night"
+    question = f"James writes {premise}. How many hours does he write each night?"
+    operation = "Mark both endpoints on a timeline before counting the hours between them."
+    source = {"question": question, "gold": {"kind": "number", "value": "3"}}
+    if has_operation:
+        start = question.index(premise)
+        source["verified_teaching_steps"] = {"receipt_id": "verified", "steps": [
+            {"id": "duration", "kind": "operation", "quote": premise, "span": [start, start + len(premise)],
+             "operation": operation}]}
+    student_text = "3" if matched else "4"
+    if worked:
+        student_text = "I counted both endpoints and got 4."
+    attempt = {"attempt": 1, "check": {"format_ok": True, "answer_matches": matched},
+               "student": {"content": student_text}, "derivation_available": worked}
+    roles = []
+    enabled = pin and not worked and not matched and has_operation
+
+    def request(role, index, messages, schema):
+        roles.append(role)
+        system = messages[0]["content"]
+        if role == "disclosure_draft":
+            assert (BARE_ANSWER_OPERATION_AUTHOR in system) is enabled
+            choice = "insufficient" if nominate or not has_operation else "select:duration"
+            assessment = {"decision": choice, "reason": "Check the elapsed time."}
+            if not has_operation:
+                assessment.update(bridge="", hint="", question_quote="")
+        else:
+            assert (BARE_ANSWER_OPERATION_REVIEW in system) is enabled
+            packet = json.loads(messages[-1]["content"])
+            assert packet["proposed_next_teacher_disclosure"]["public_text"] == operation
+            assessment = {"decision": "release", "evidence_ids": ["task-span:duration"], "reason": "Check the interval.",
+                          "pairing": {"student_fit": fit, "evidence_support": True, "history_fit": "first"}}
+        return {"model": "tutor", "finish_reason": "stop", "content": json.dumps(assessment)}
+
+    published, issue = review_or_recommend_disclosure(
+        request, source, attempt, [], {}, [], {"kind": "idea", "text": "", "replaces_from": "final_answer"},
+        teacher_experience="", tried=set(), bare_answer_operations=pin)
+    review_role = "disclosure_candidate_review" if nominate else "disclosure"
+    assert roles == (["disclosure_draft", review_role] if has_operation else ["disclosure_draft"])
+    if has_operation and fit:
+        assert published["text"] == operation and issue is None
+    else:
+        assert published is None
+        if has_operation:
+            assert attempt["disclosure_work"][-1]["issue"] == "unconfirmed_disclosure_pairing"
+
+
 @pytest.mark.parametrize("third_reply,expect_strong", [("There are five jobs.\nFinal answer: 5", True),
                                                       (None, False),
                                                       ("The six jobs are A, B, C, D, E and F.\nFinal answer: 5", True),

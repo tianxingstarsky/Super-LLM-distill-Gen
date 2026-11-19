@@ -98,7 +98,9 @@ def test_native_final_receipt_follows_the_reviewed_solver_and_requested_format(t
         options["protocol_version"] = protocol
     summary = run_guided_cases(source, output, endpoints, {"version": "test"}, 2, **options)
     assert summary["counts"]["accepted"] == 1
-    assert json.loads((output / "manifest.json").read_bytes())["template_version"] == (protocol or "4.9.1")
+    manifest = json.loads((output / "manifest.json").read_bytes())
+    assert manifest["template_version"] == (protocol or "4.9.1")
+    assert manifest.get("bare_answer_operation_version") == (None if protocol == "4.9.0" else "task-grounded-operation/v1")
     assert len(chats) == len(script) and len(finals) == 1
     solver = endpoints["continuation" if handoff else "student"]
     ep, body = finals[0]
@@ -124,6 +126,17 @@ def test_native_final_receipt_follows_the_reviewed_solver_and_requested_format(t
     assert run_guided_cases(source, output, endpoints, {"version": "test"}, 2, **options) == summary
     assert len(chats) == len(script) and len(finals) == 1
     targets = output / "training-targets.jsonl"
+    if handoff and protocol == "4.9.1":
+        # A 4.9.1 run interrupted before its first request retains its original tutor contract.
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        del manifest["bare_answer_operation_version"]
+        (legacy / "manifest.json").write_text(json.dumps(manifest), encoding="utf8")
+        (legacy / "verified-step-receipts.json").write_bytes((output / "verified-step-receipts.json").read_bytes())
+        chats.clear()
+        finals.clear()
+        assert run_guided_cases(source, legacy, endpoints, {"version": "test"}, 2, **options)["complete"]
+        assert json.loads((legacy / "manifest.json").read_bytes()) == manifest
     if protocol == "4.9.0":
         assert not targets.exists() and "training_target_file" not in row
         return

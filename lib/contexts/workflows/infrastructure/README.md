@@ -32,6 +32,8 @@
 
 4.1 的 `--verified-step-receipts` 接受操作者指定的独立校验器输出。清单使用 `guided-teaching-verification/v1` 及 `receipts` 摘要数组。使用前先核对校验器实际验证了哪些操作。任务保存规范化清单及其摘要，恢复和单独导出均核对冻结版本。教师选择操作的 ID 后，独立核查仍决定这一步是否适用于当前学生。学习记录保留被选中的实际操作文本。
 
+带认证步骤清单的新 4.9.1 批次在 manifest 中冻结 `bare_answer_operation_version`。学生只交了经核验的错误末答时，教师可以从题面选择一项适用的认证操作，让学生自行完成。拟稿和独立配对审查分别判断操作的用途、依据及与已披露步骤的衔接。裸数本身只能证明末答错误。已有 4.9.1 清单缺少该字段时，恢复使用原来的角色提示。
+
 新建 v8 任务对“完整 STOP 但只有新增推理、没有答案”允许一次独立的 Beta 答案前缀收尾；直接复用已保存推理，最多两个生成阶段。截断或无推理不触发收尾，失败不循环，旧任务缺少开关时不追加调用。
 
 `NativeFeedbackAdapter.continue_prefix` 认证原节点、作者、配置和原消息前缀，通过 `CheckpointedReasoningAgent.prepared_prefix_turn` 复用共享准入、流式日志、使用量和检查点；请求使用 `ChatClient.chat` 的 Beta reasoning 模式，不调用 `tool_turn`。正常结束但无答案的付费响应也落入检查点，应用标记未完成，恢复不重新购买。完整实际 HTTP 正文须由诊断观察器保存，构造消息收据不能冒充最终 HTTP。验证：`test_native_prefix_adapter.py`。

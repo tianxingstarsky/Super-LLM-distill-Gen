@@ -70,7 +70,7 @@ class GenerateGuidedAnswer:
 
     def run(self, source, experience, max_attempts, *, protocol_version=VERSION, first_pass_only=False,
             stop_after_first_student_receipt=False,
-            until_correct=False, continuation_model=None, trusted_solution_receipts=()):
+            until_correct=False, continuation_model=None, trusted_solution_receipts=(), bare_answer_operations=False):
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
@@ -107,7 +107,8 @@ class GenerateGuidedAnswer:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
-                                  check_arithmetic=check_arithmetic)
+                                  check_arithmetic=check_arithmetic,
+                                  bare_answer_operations=protocol_version == "4.9.1" and bare_answer_operations)
             if continue_solution:
                 assess_hint = partial(assess_hint, strict_author_decisions=True)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"

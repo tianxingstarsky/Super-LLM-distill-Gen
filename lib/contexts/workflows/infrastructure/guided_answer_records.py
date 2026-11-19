@@ -32,7 +32,7 @@ from .guided_historical_answer import (
     import_historical_answer,
 )
 from lib.io_utils import atomic_json
-from lib.prompts.workflow_guided_answers import VERSION
+from lib.prompts.workflow_guided_answers import BARE_ANSWER_OPERATION_VERSION, VERSION
 
 PAIRED_DISCLOSURE_VERSIONS = {"4.2.0", "4.2.1", "4.3.0"} | GUIDED_DELIVERY_VERSIONS
 VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"} | PAIRED_DISCLOSURE_VERSIONS
@@ -391,6 +391,9 @@ def run_guided_cases(
             config["until_correct"] = until_correct
         if registry:
             config["verified_step_registry_id"] = digest(registry)
+            if (template_version == "4.9.1"
+                    and (frozen_config is None or "bare_answer_operation_version" in frozen_config)):
+                config["bare_answer_operation_version"] = BARE_ANSWER_OPERATION_VERSION
         historical_rows = None
         if historical_mode:
             archived_manifest = output / "historical-first-manifest.json"
@@ -620,6 +623,7 @@ def run_guided_cases(
                     first_pass_only=first_pass and not prefetch_worked_first,
                     stop_after_first_student_receipt=bool(prefetch_worked_first),
                     until_correct=until_correct,
+                    bare_answer_operations="bare_answer_operation_version" in config,
                     **({"continuation_model": stronger["model"] if stronger else None,
                         "trusted_solution_receipts": trusted}
                        if template_version in EVIDENCED_PROGRESS_VERSIONS else {}),

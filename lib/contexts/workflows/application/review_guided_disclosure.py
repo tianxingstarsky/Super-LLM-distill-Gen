@@ -3,6 +3,7 @@
 import json
 
 from lib.prompts.workflow_guided_answers import (
+    BARE_ANSWER_OPERATION_AUTHOR, BARE_ANSWER_OPERATION_REVIEW,
     AUTHORED_DISCLOSURE_REVIEW, DISCLOSURE_AUTHOR, DISCLOSURE_REVIEW, GROUNDED_AUTHOR_GUIDANCE,
     GROUNDED_HINT_REVIEW, TUTOR_TASK_ANALYSIS, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
     DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_draft_decision_schema, disclosure_review_schema, verified_choice_schema,
@@ -137,8 +138,14 @@ def _add_measured_outcome(material, source, attempt, retained, findings):
     )
 
 
+def _wrong_answer_without_work(material):
+    observed = material["current_difficulty"]
+    return observed.get("submitted_answer_status") == "incorrect" and observed.get("derivation_available") is False
+
+
 def _review_verified_step(request, attempt, history, material, evidence, previous_id, reference, receipt, step,
-                          *, paired=False, recommended_index=None, task_analysis=False, check_arithmetic=False):
+                          *, paired=False, recommended_index=None, task_analysis=False, check_arithmetic=False,
+                          bare_answer_operations=False):
     entry = history[-1]
     entry["verified_operation"] = {"id": step["id"], "receipt_id": receipt, "operation": step["operation"]}
     if (entry["revision"] and history[0].get("verified_operation") == entry["verified_operation"]
@@ -188,6 +195,8 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
     if paired:
         system += "\n\n" + QUOTED_DISCLOSURE + "\n\n" + DISCLOSURE_PAIRING
         schema = with_disclosure_pairing(schema)
+        if bare_answer_operations and step["kind"] == "operation" and _wrong_answer_without_work(material):
+            system += "\n\n" + BARE_ANSWER_OPERATION_REVIEW
     response = request(reviewer, request_index, [
         {"role": "system", "content": system}, {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}
     ], schema)
@@ -213,7 +222,7 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
                            task_analysis=False, quoted_premises=False, strict_author_decisions=False,
-                           check_arithmetic=False):
+                           check_arithmetic=False, bare_answer_operations=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -255,6 +264,9 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         author_system += "\n\n" + TUTOR_TASK_ANALYSIS
         reviewer_system += "\n\n" + TUTOR_TASK_ANALYSIS
     author_system += "\n\n" + teacher_experience if teacher_experience else ""
+    if (bare_answer_operations and _wrong_answer_without_work(material)
+            and any(step["kind"] == "operation" for step in options.values())):
+        author_system += "\n\n" + BARE_ANSWER_OPERATION_AUTHOR
     if strict_author_decisions:
         draft_schema = disclosure_draft_decision_schema(grounded=grounded, step_ids=options)
     else:
@@ -309,7 +321,8 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             if step:
                 approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
                                                         reference, catalog["receipt_id"], step, paired=paired,
-                                                        task_analysis=task_analysis, check_arithmetic=check_arithmetic)
+                                                        task_analysis=task_analysis, check_arithmetic=check_arithmetic,
+                                                        bare_answer_operations=bare_answer_operations)
                 if approved:
                     return approved, None
                 entry["issue"] = issue
@@ -399,7 +412,7 @@ def _checked_disclosure_issue(entry, question):
 
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
                                    *, teacher_experience, tried, task_analysis=False, quoted_premises=False,
-                                   strict_author_decisions=False, check_arithmetic=False):
+                                   strict_author_decisions=False, check_arithmetic=False, bare_answer_operations=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation"):
         history = attempt["disclosure_work"] = []
@@ -409,6 +422,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
             request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
             grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
             quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions, check_arithmetic=check_arithmetic,
+            bare_answer_operations=bare_answer_operations,
         )
         history = attempt["disclosure_work"]
         tried.update(entry["verified_operation"]["id"] for entry in history if "verified_operation" in entry)
@@ -432,7 +446,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
         approved, issue = _review_verified_step(request, attempt, history, material, evidence, previous_id,
                                                 reference, catalog["receipt_id"], step, paired=True,
                                                 recommended_index=ordinal, task_analysis=task_analysis,
-                                                check_arithmetic=check_arithmetic)
+                                                check_arithmetic=check_arithmetic, bare_answer_operations=bare_answer_operations)
         if approved:
             return approved, None
         entry["issue"] = issue
