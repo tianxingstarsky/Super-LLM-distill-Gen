@@ -19,7 +19,8 @@ from .guided_llama import DIRECT_ANSWER_GRAMMARS, wire_body
 from lib.io_utils import atomic_json
 from lib.prompts.workflow_guided_answers import VERSION
 
-TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0", "4.1.0"}
+VERIFIED_STEP_VERSIONS = {"4.1.0", "4.1.1"}
+TEACHER_DISCLOSURE_VERSIONS = {"3.9.0", "4.0.0"} | VERIFIED_STEP_VERSIONS
 DIRECT_SYNTAX_VERSIONS = {"3.8.0"} | TEACHER_DISCLOSURE_VERSIONS
 FINAL_CONTINUATION_VERSIONS = {"3.7.0"} | DIRECT_SYNTAX_VERSIONS
 FIRST_ANSWER_VERSIONS = {"3.6.0"} | FINAL_CONTINUATION_VERSIONS
@@ -32,7 +33,7 @@ def read(path):
 
 def inputs(path, protocol_version=VERSION, trusted_step_receipts=frozenset()):
     verified_options = ({"allow_verified_teaching_steps": True, "trusted_step_receipts": trusted_step_receipts}
-                        if protocol_version == "4.1.0" else {})
+                        if protocol_version in VERIFIED_STEP_VERSIONS else {})
     with path.open(encoding="utf-8-sig") as source:
         for line in source:
             if line.strip():
@@ -119,8 +120,8 @@ def run_guided_cases(
         if until_correct and template_version not in TEACHER_DISCLOSURE_VERSIONS:
             raise ValueError("progress-based continuation requires guided protocol 3.9.0 or later")
         registry, trusted = verified_step_registry(output, verified_step_receipts, frozen_config)
-        if registry and template_version != "4.1.0":
-            raise ValueError("verified teaching steps require guided protocol 4.1.0")
+        if registry and template_version not in VERIFIED_STEP_VERSIONS:
+            raise ValueError("verified teaching steps require a supported 4.1 protocol")
         with input_path.open("rb") as fp:
             source_sha = hashlib.file_digest(fp, "sha256").hexdigest()
         seen = set()

@@ -47,14 +47,15 @@ class GenerateGuidedAnswer:
             raise ValueError("max_attempts must be positive")
         question, gold = source["question"], source["gold"]
         skip_acquired = protocol_version != "3.0.0"
-        allow_catalog = protocol_version == "4.1.0"
+        show_outcome = protocol_version == "4.1.1"
+        allow_catalog = show_outcome or protocol_version == "4.1.0"
         grounded = allow_catalog or protocol_version == "4.0.0"
         authored_hints = grounded or protocol_version == "3.9.0"
         if until_correct and not authored_hints:
             raise ValueError("until_correct requires a guided run with authored disclosure")
         review_disclosures = authored_hints or protocol_version == "3.8.0"
         assess_hint = (partial(author_next_disclosure, teacher_experience=experience.get("disclosure_teacher", ""),
-                               grounded=grounded, allow_catalog=allow_catalog)
+                               grounded=grounded, allow_catalog=allow_catalog, show_outcome=show_outcome)
                        if authored_hints else review_next_disclosure)
         record_guided_reasoning = review_disclosures or protocol_version == "3.7.0"
         direct_protocol = record_guided_reasoning or protocol_version == "3.6.0"
@@ -62,7 +63,7 @@ class GenerateGuidedAnswer:
         marked_finals = truncated_progress or protocol_version == "3.4.0"
         single_decision = marked_finals or protocol_version == "3.3.0"
         anchored = single_decision or protocol_version == "3.2.0"
-        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4", "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9", "4.0.0": "v4.0", "4.1.0": "v4.1"}[protocol_version]
+        protocol = {"3.0.0": "v3", "3.1.0": "v3.1", "3.2.0": "v3.2", "3.3.0": "v3.3", "3.4.0": "v3.4", "3.5.0": "v3.5", "3.6.0": "v3.6", "3.7.0": "v3.7", "3.8.0": "v3.8", "3.9.0": "v3.9", "4.0.0": "v4.0", "4.1.0": "v4.1", "4.1.1": "v4.1.1"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -189,6 +190,8 @@ class GenerateGuidedAnswer:
                     if f["text"].strip() == piece["text"].strip()
                 ]
             submitted = [*active, *new_segments]
+            if show_outcome:
+                attempt["derivation_available"] = bool(active or new_segments and (answer_line or len(new_segments) > 1))
             text = assemble(submitted, answer_line)
             final_text = text
             check = direct or inspect_answer(text, gold, parse_count_sentence=skip_acquired,

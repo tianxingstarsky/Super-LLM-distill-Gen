@@ -790,7 +790,7 @@ def test_verified_source_operations_require_external_identity_and_independent_co
             validate_source(bad, allow_verified_teaching_steps=True, trusted_step_receipts={bad_digest})
     good = validate_source(row, allow_verified_teaching_steps=True, trusted_step_receipts={digest})
 
-    def run(previous_quote=True, withhold_first=False):
+    def run(previous_quote=True, withhold_first=False, version="4.1.1", second_result="AD"):
         calls = []
         def request(role, index, messages, schema):
             calls.append((role, index))
@@ -801,7 +801,8 @@ def test_verified_source_operations_require_external_identity_and_independent_co
                     view = json.loads(messages[-1]["content"].split("\n", 1)[1])
                     assert "Private" not in messages[-1]["content"] and "task-span" not in messages[-1]["content"]
                     assert view["new_clue"] == ops[index - 2]["operation"]
-                    content = ("These two projects conflict.\nI still select the pair.\nFinal answer: AD" if index == 2
+                    content = (("These two projects conflict.\nI still select the pair." +
+                                (f"\nFinal answer: {second_result}" if second_result else "")) if index == 2
                                else "Rechecking the remaining candidates gives the eligible pair.\nFinal answer: BC")
             elif role == "coach":
                 content = json.dumps({"decision": "revise:a2.s2" if index == 2 else "supported",
@@ -811,6 +812,14 @@ def test_verified_source_operations_require_external_identity_and_independent_co
             else:
                 packet = json.loads(messages[-1]["content"])
                 assert "Private independent" not in messages[-1]["content"]
+                difficulty = packet["current_difficulty"]
+                if version == "4.1.1":
+                    expected = {"AD": "incorrect", "BC": "correct", None: "not_checked"}
+                    assert difficulty["submitted_answer_status"] == ("incorrect" if index == 1 else expected[second_result])
+                    assert difficulty["derivation_available"] is (index > 1)
+                    assert "answer_key" not in packet and "BC" not in json.dumps(packet)
+                else:
+                    assert "submitted_answer_status" not in difficulty and "derivation_available" not in difficulty
                 sid = ("conflict", "cost")[index - 1]
                 if role in ("disclosure_draft", "disclosure_rewrite"):
                     assert sid in [op["id"] for op in packet["available_operations"]]
@@ -824,7 +833,7 @@ def test_verified_source_operations_require_external_identity_and_independent_co
                     content = json.dumps({"decision": "withhold" if withhold_first else "release",
                                           "evidence_ids": references, "reason": "I checked this move against the current work."})
             return {"content": content, "reasoning_content": "", "finish_reason": "stop"}
-        return GenerateGuidedAnswer(request).run(good, {"version": "initial"}, 3), calls
+        return GenerateGuidedAnswer(request).run(good, {"version": "initial"}, 3, protocol_version=version), calls
     passed, events = run()
     assert passed["status"] == "accepted" and [d["text"] for d in passed["disclosures"]] == [s["operation"] for s in ops]
     assert [d["source_step_id"] for d in passed["disclosures"]] == ["conflict", "cost"]
@@ -835,6 +844,11 @@ def test_verified_source_operations_require_external_identity_and_independent_co
     assert not withheld["disclosures"] and ("student", 2) not in events and ("disclosure_recheck", 1) not in events
     broken, _ = run(previous_quote=False)
     assert len(broken["disclosures"]) == 1 and broken["status"] == "awaiting_guidance"
+    frozen, _ = run(version="4.1.0")
+    assert frozen["status"] == "accepted"
+    for second in ("BC", None):
+        reviewed, _ = run(second_result=second)
+        assert reviewed["status"] == "accepted"
 
 
 def test_unaided_visible_derivation_becomes_thinking_and_only_real_corrections_change_its_route():

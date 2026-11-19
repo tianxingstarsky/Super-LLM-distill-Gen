@@ -4,7 +4,7 @@ import json
 
 from lib.prompts.workflow_guided_answers import (
     AUTHORED_DISCLOSURE_REVIEW, DISCLOSURE_AUTHOR, DISCLOSURE_REVIEW, GROUNDED_AUTHOR_GUIDANCE,
-    GROUNDED_HINT_REVIEW, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
+    GROUNDED_HINT_REVIEW, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
     disclosure_review_schema, verified_choice_schema, verified_choice_review_schema,
 )
 from ..domain.guided_answers import prior_clue_evidence
@@ -88,8 +88,11 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
     reviewer = "disclosure_recheck" if entry["revision"] else "disclosure"
     # Only catalogue IDs and the actual dialogue observations go into the model's context.
     references = [anchor, *(ref for ref in evidence if ref != "question")]
+    system = VERIFIED_STEP_REVIEW
+    if "submitted_answer_status" in material["current_difficulty"]:
+        system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
     response = request(reviewer, attempt["attempt"], [
-        {"role": "system", "content": VERIFIED_STEP_REVIEW}, {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}
+        {"role": "system", "content": system}, {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}
     ], verified_choice_review_schema(references))
     entry["review_response"] = response
     if response["finish_reason"] != "stop":
@@ -109,7 +112,7 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
 
 
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
-                           *, grounded=False, allow_catalog=False):
+                           *, grounded=False, allow_catalog=False, show_outcome=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -129,6 +132,15 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
         author_system = VERIFIED_STEP_AUTHOR
         material["available_operations"] = [
             {k: step[k] for k in ("id", "kind", "quote", "span", "operation")} for step in options.values()]
+    if show_outcome:
+        submission = attempt.get("formal_answer", {}).get("check", attempt["check"])
+        match = submission.get("answer_matches") if source["gold"] and submission.get("format_ok") else None
+        material["current_difficulty"].update(
+            submitted_answer_status={True: "correct", False: "incorrect", None: "not_checked"}[match],
+            derivation_available=bool(attempt["derivation_available"] or retained or findings),
+        )
+        author_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
+        reviewer_system += "\n\n" + VERIFIED_OUTCOME_CONTEXT
     author_system += "\n\n" + teacher_experience if teacher_experience else ""
     for revision in range(2):
         entry = {"revision": revision, "private_reference": reference["text"], "latest_disclosure_id": previous_id}
