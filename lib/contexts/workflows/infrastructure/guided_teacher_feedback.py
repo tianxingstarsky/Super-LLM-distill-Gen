@@ -136,11 +136,13 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                         student_excerpt={"tail": raw[-900:], "chars": len(raw), "sha256": digest(raw),
                                          "is_excerpt": len(raw) > 900})
                     event["category"] = outcome if origin == "teacher" else "program_disclosure"
-                    if protocol in {"4.10.3", "4.10.4", "4.10.5"} and not after.get("solving_role"):
+                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6"} and not after.get("solving_role"):
                         language = str(source.get("source", {}).get("language") or "").lower()
                         chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in source["question"])
-                        scoped = protocol == "4.10.5"
-                        target = local_step_target(source, hint, trusted, chinese=chinese, scoped=scoped)
+                        fixed_fields = protocol == "4.10.6"
+                        scoped = fixed_fields or protocol == "4.10.5"
+                        target = local_step_target(source, hint, trusted, chinese=chinese,
+                                                   scoped=scoped, fixed_fields=fixed_fields)
                         if target:
                             actual = (dispatched_local_guidance(receipt["request"], source, target, chinese)
                                       if scoped else receipt["request"]["messages"][-1]["content"])

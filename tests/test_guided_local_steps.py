@@ -1,10 +1,12 @@
 import json
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from lib.contexts.workflows.domain.guided_answers import validate_source
 from lib.contexts.workflows.domain.guided_local_steps import (
-    LOCAL_SUBMISSION_SCHEMA, check_local_step, dispatched_local_guidance, local_step_target, scoped_local_messages,
+    LOCAL_SUBMISSION_SCHEMA, check_local_step, dispatched_local_guidance, local_step_target, local_submission_schema,
+    scoped_local_messages,
 )
 from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
 from lib.contexts.workflows.infrastructure.guided_answer_records import location, run_guided_cases
@@ -36,6 +38,7 @@ def signed_source():
     ("4.10.3", 'Final answer: 4', "unverified"),
     ("4.10.5", '{"action":"report","values":["2","1","0"],"explanation":"This explanation was not independently checked."}', "verified_local_value"),
     ("4.10.5", '{"action":"blocked","difficulty":"I cannot tell which position changed."}', "blocked"),
+    ("4.10.6", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I claim the full count is one less."}', "verified_local_value"),
 ])
 def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, version, first_step, status):
     source, receipt = signed_source()
@@ -48,10 +51,15 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         inputs[role, index] = messages
         if role == "student":
             pair_report = ('{"action":"report","values":["10","01"],"explanation":"I tried both orders."}'
-                           if version == "4.10.5" else '["10","01"]')
+                           if version in {"4.10.5", "4.10.6"} else '["10","01"]')
             reply = {1: "8", 2: first_step, 3: pair_report, 4: solved}[index]
-            if version == "4.10.5" and index in (2, 3):
-                assert schema == LOCAL_SUBMISSION_SCHEMA
+            if version in {"4.10.5", "4.10.6"} and index in (2, 3):
+                if version == "4.10.6" and index == 2:
+                    form = schema["anyOf"][0]["properties"]["values"]
+                    assert form["required"] == ["position", "former_bit", "current_bit"]
+                    assert Draft202012Validator(schema).is_valid(json.loads(reply))
+                else:
+                    assert schema == LOCAL_SUBMISSION_SCHEMA
                 assert [m["role"] for m in messages] == ["system", "user"]
                 packet = json.loads(messages[-1]["content"])
                 assert packet["origin"] == "tutoring_program"
@@ -74,7 +82,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             packet = json.loads(messages[-1]["content"])["proposed_next_teacher_disclosure"]
             reply = dict(decision="release", bridge=packet["bridge"], citations=citations, reason="The hint applies.",
                          pairing=dict(evidence_support=True, student_fit=True, history_fit="first" if index == 1 else "continuous"))
-            if version == "4.10.5":
+            if version in {"4.10.5", "4.10.6"}:
                 del reply["bridge"]
         elif role == "coach":
             assert index == 4
@@ -122,6 +130,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
     for n in (2,3):
         attempt = case["attempts"][n-1]
         assert attempt["check"]["answer_matches"] is None and not attempt["verified_stage"]["complete_student_solution"]
+        assert not attempt["local_step"]["independent_derivation_checked"]
         assert "Final answer:" not in inputs["student",n][0]["content"]
     assert "Final answer:" in inputs["student",4][0]["content"]
     assert '["10","01"]' in inputs["student",4][-1]["content"]
@@ -196,14 +205,14 @@ def test_portfolio_substep_checks_the_selected_projects_hours_and_updated_cap():
           "and compare the sum with the new cap. This checks this resource alone.")
     gold = {"kind":"exact", "value":"EG"}
 
-    def target_for(text, operation):
+    def target_for(text, operation, *, named=False):
         start = text.index(quote)
         steps = [dict(id="updated-hours", kind="operation", operation=operation, quote=quote,
                       span=[start,start+len(quote)], verification="The named pair was checked against the cap.")]
         receipt = verified_steps_digest("trial", text, gold, steps)
         source = dict(id="trial", question=text, gold=gold, verified_teaching_steps={"receipt_id":receipt,"steps":steps})
         hint = {"text":operation, "source_step_id":"updated-hours", "source_step_receipt":receipt}
-        return local_step_target(source, hint, {receipt}, chinese=False)
+        return local_step_target(source, hint, {receipt}, chinese=False, scoped=named, fixed_fields=named)
 
     target = target_for(question, op)
     for content, status in [('["11","16","<"]', "verified_local_value"), ('["6","16","<"]', "local_value_mismatch"),
@@ -213,3 +222,24 @@ def test_portfolio_substep_checks_the_selected_projects_hours_and_updated_cap():
     assert target_for(question.replace("(cost, hours, benefit)", "(hours, cost, benefit)"), op) is None
     assert target_for(question, op.replace("E and G", "E and H")) is None
     assert target_for(question, "Now optimize the whole portfolio.") is None
+    named = target_for(question, op, named=True)
+    schema = local_submission_schema(named)
+    other = target_for(question.replace("G=(2, 8, 15)", "G=(2, 5, 15)"), op, named=True)
+    assert other["expected"] != named["expected"] and local_submission_schema(other) == schema
+    validator = Draft202012Validator(schema)
+    submitted = {"action":"report", "values":{"new_limit":16, "comparison":"<", "total_hours":11},
+                 "explanation":"I also claim the optimal portfolio is EG."}
+    for vals, valid, outcome in (
+            (submitted["values"], True, "verified_local_value"),
+            ({**submitted["values"], "total_hours":11.0}, True, "verified_local_value"),
+            ({**submitted["values"], "total_hours":12}, True, "local_value_mismatch"),
+            ({**submitted["values"], "new_limit":True}, False, "unverified"),
+            ({"new_limit":16, "comparison":"<"}, False, "unverified"),
+            (["total is 11, limit is 16, below"], False, "unverified")):
+        report = {**submitted, "values":vals}
+        assert validator.is_valid(report) is valid
+        action, facts = check_local_step(named, {"content":json.dumps(report), "finish_reason":"stop"}, 2, scoped=True)
+        assert action["status"] == outcome and not action["independent_derivation_checked"]
+        assert all("optimal" not in item["text"] for item in facts.values())
+    duplicate = json.dumps(submitted).replace('"new_limit": 16', '"new_limit": 16, "new_limit": 16')
+    assert check_local_step(named, {"content":duplicate,"finish_reason":"stop"}, 2, scoped=True)[0]["status"] == "unverified"

@@ -2,6 +2,7 @@
 
 import json
 import re
+from decimal import Decimal
 
 from .guided_answers import contains_chat_control
 from .guided_teaching_steps import verified_steps_digest
@@ -15,6 +16,23 @@ LOCAL_SUBMISSION_SCHEMA = {"anyOf": [
     {"type": "object", "additionalProperties": False, "required": ["action", "difficulty"],
      "properties": {"action": {"const": "blocked"}, "difficulty": {"type": "string"}}},
 ]}
+
+# Fields come from the operation itself. A set of allowed bit assignments has
+# unknown cardinality for the learner and keeps the open collection contract.
+_FIXED_VALUE_FIELDS = {
+    "fixed-position": {"position": "integer", "former_bit": "integer", "current_bit": "integer"},
+    "updated-hours": {"total_hours": "integer", "new_limit": "integer", "comparison": "string"},
+}
+
+
+def local_submission_schema(target):
+    fields = target.get("submission_fields")
+    if not fields:
+        return LOCAL_SUBMISSION_SCHEMA
+    report, blocked = LOCAL_SUBMISSION_SCHEMA["anyOf"]
+    values = {"type": "object", "additionalProperties": False, "required": list(fields),
+              "properties": {name: {"type": kind} for name, kind in fields.items()}}
+    return {"anyOf": [{**report, "properties": {**report["properties"], "values": values}}, blocked]}
 
 
 def scoped_local_messages(source, target, guidance, chinese, experience=""):
@@ -40,7 +58,7 @@ def dispatched_local_guidance(payload, source, target, chinese):
     expected = scoped_local_messages(source, target, guidance, chinese)
     contract = payload.get("response_format", {}).get("json_schema", {})
     if (messages[1] != expected[1] or not messages[0]["content"].endswith(expected[0]["content"])
-            or contract.get("schema") != LOCAL_SUBMISSION_SCHEMA or contract.get("strict") is not True
+            or contract.get("schema") != local_submission_schema(target) or contract.get("strict") is not True
             or payload["response_format"].get("type") != "json_schema"):
         raise ValueError("scoped local request differs from its original task, role or response schema")
     return guidance
@@ -75,7 +93,7 @@ def _trial_hours(question, operation, cap):
     return [str(total), cap, comparison]
 
 
-def local_step_target(source, disclosure, trusted, *, chinese, scoped=False):
+def local_step_target(source, disclosure, trusted, *, chinese, scoped=False, fixed_fields=False):
     catalogue = source.get("verified_teaching_steps")
     if not catalogue or not disclosure:
         return None
@@ -118,14 +136,27 @@ def local_step_target(source, disclosure, trusted, *, chinese, scoped=False):
             return None
     else:
         expected = list(match.groups())
+    fields = _FIXED_VALUE_FIELDS.get(step["id"]) if fixed_fields else None
+    if fields:
+        names = ", ".join(fields)
+        label += (f"。在 values 的各字段中分别提交：{names}。" if chinese else
+                  f". Submit each value separately in its named field in values: {names}.")
     return {"step_id": step["id"], "receipt": receipt, "question_quote": quote, "operation": step["operation"],
             "operation_already_in_hint": step["operation"] in disclosure["text"],
-            "request": label, "expected": expected}
+            "request": label, "expected": expected, **({"submission_fields": dict(fields)} if fields else {})}
 
 
-def _scoped_action(raw):
+def _distinct_members(pairs):
+    members = dict(pairs)
+    if len(members) != len(pairs):
+        raise ValueError("duplicate member in submitted local values")
+    return members
+
+
+def _scoped_action(raw, fields):
     """Read the field and its actual character range without treating the explanation as checked work."""
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(object_pairs_hook=_distinct_members if fields else None,
+                               parse_float=Decimal if fields else float)
     value = decoder.decode(raw)
     if not isinstance(value, dict):
         return None, 0, 0
@@ -148,10 +179,23 @@ def _scoped_action(raw):
     if set(value) == {"action", "difficulty"} and value["action"] == "blocked":
         return {"blocked": value["difficulty"]}, 0, 0
     if (set(value) != {"action", "values", "explanation"} or value["action"] != "report"
-            or not isinstance(value["explanation"], str) or not isinstance(value["values"], list)):
+            or not isinstance(value["explanation"], str)):
+        return None, 0, 0
+    submitted = value["values"]
+    if fields:
+        if not isinstance(submitted, dict) or submitted.keys() != fields.keys():
+            return None, 0, 0
+        for name, kind in fields.items():
+            part = submitted[name]
+            if kind == "integer" and not (type(part) is int or isinstance(part, Decimal) and part == part.to_integral_value()):
+                return None, 0, 0
+            if kind == "string" and not isinstance(part, str):
+                return None, 0, 0
+        submitted = [submitted[name] for name in fields]
+    elif not isinstance(submitted, list):
         return None, 0, 0
     start, end = members["values"]
-    return value["values"], start, end
+    return submitted, start, end
 
 
 def check_local_step(target, response, index, *, scoped=False):
@@ -167,7 +211,7 @@ def check_local_step(target, response, index, *, scoped=False):
     start = end - len(submission)
     try:
         if scoped:
-            action, start, end = _scoped_action(raw)
+            action, start, end = _scoped_action(raw, target.get("submission_fields"))
             submission = raw[start:end]
         else:
             action = json.loads(submission)
@@ -175,9 +219,12 @@ def check_local_step(target, response, index, *, scoped=False):
         return record, {}
     if isinstance(action, dict) and set(action) == {"blocked"} and isinstance(action["blocked"], str) and action["blocked"].strip():
         return {**record, "status": "blocked", "difficulty": action["blocked"]}, {}
-    if not isinstance(action, list) or not all(isinstance(v, str) for v in action):
+    fields = target.get("submission_fields")
+    if not isinstance(action, list) or not fields and not all(isinstance(v, str) for v in action):
         return record, {}
     expected = target["expected"]
+    if fields:
+        expected = [int(v) if kind == "integer" else v for kind, v in zip(fields.values(), expected)]
     matches = sorted(action) == sorted(expected) if target["step_id"] == "permitted-pair" else action == expected
     if not matches:
         return {**record, "status": "local_value_mismatch"}, {}

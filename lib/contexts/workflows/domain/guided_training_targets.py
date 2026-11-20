@@ -10,7 +10,7 @@ from .guided_teaching_steps import certified_complete_disclosure, certified_rule
 
 GUIDED_TARGET_FILE = "training-targets.jsonl"
 GUIDED_TARGET_SCHEMA = "guided-training-target/v1"
-GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3", "4.10.4", "4.10.5"})
+GUIDED_TARGET_VERSIONS = frozenset({"4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3", "4.10.4", "4.10.5", "4.10.6"})
 
 
 class GuidedTargetHeld(ValueError):
@@ -159,7 +159,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
         origin = case["final_answer_provenance"]
         role = last.get("solving_role", "student")
         strong_handoff = case.get("protocol") in {
-            "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5"} and role == "strong_continuation"
+            "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6"} and role == "strong_continuation"
         if (origin != formal["provenance"] or origin["author"] != role or not origin["model"]
                 or formal["response"].get("model") != origin["model"] or last["student"].get("model") != origin["model"]
                 or formal["response"]["content"] != answer or formal["check"]["format_ok"] is not True
@@ -176,7 +176,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
             reference = certified_complete_disclosure(case, trusted_solution_receipts)
         if staged:
             expected = certified_rule_prefixes(question, reference)
-            if (case.get("protocol") not in {"guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5"}
+            if (case.get("protocol") not in {"guided-draft-snapshot/v4.10.1", "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6"}
                     or len(staged) > len(expected)
                     or any(any(actual.get(k) != v for k, v in planned.items())
                            for actual, planned in zip(staged, expected))):
@@ -227,7 +227,7 @@ def guided_training_target(case, case_archive, trusted_solution_receipts, *, cal
         raise GuidedTargetHeld("chat_delimiter_in_training_text")
     messages = [{"role": "system", "content": case["task_system"]}] if case.get("task_system") else []
     if case.get("protocol") in {"guided-draft-snapshot/v4.10.0", "guided-draft-snapshot/v4.10.1",
-                                "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5"}:
+                                "guided-draft-snapshot/v4.10.2", "guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4", "guided-draft-snapshot/v4.10.5", "guided-draft-snapshot/v4.10.6"}:
         provenance["evidence_basis"] = {"independent_answer": "independent_answer_key",
                                         "teacher_demonstration": "verified_source_solution"}.get(
                                             objective, "answer_key_and_tutor_review")

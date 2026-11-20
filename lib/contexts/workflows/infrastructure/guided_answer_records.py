@@ -141,9 +141,11 @@ def _check_rendered_guidance(case, attempt, payload, previous, hint):
     chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in case["question"])
     suffix = render_student_continuation(view, {}, chinese=chinese)
     content = payload["messages"][-1]["content"]
-    scoped = case.get("protocol") == "guided-draft-snapshot/v4.10.5"
+    fixed_fields = case.get("protocol") == "guided-draft-snapshot/v4.10.6"
+    scoped = fixed_fields or case.get("protocol") == "guided-draft-snapshot/v4.10.5"
     if scoped or case.get("protocol") in {"guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4"}:
-        target = local_step_target(case, hint, {hint.get("source_step_receipt")}, chinese=chinese, scoped=scoped)
+        target = local_step_target(case, hint, {hint.get("source_step_receipt")}, chinese=chinese,
+                                   scoped=scoped, fixed_fields=fixed_fields)
         if target:
             if scoped:
                 content = dispatched_local_guidance(payload, case, target, chinese)
@@ -185,7 +187,7 @@ def disclosure_delivery(case, attempt, folder, protocol_version=None):
         raise ValueError("next student response is not bound to the published disclosure")
     frame = payload["messages"][-1]
     prefix = "Continue the solution from this current view.\n"
-    if frame["role"] != "tool" and not (protocol_version == "4.10.5" and frame["role"] == "user"):
+    if frame["role"] != "tool" and not (protocol_version in {"4.10.5", "4.10.6"} and frame["role"] == "user"):
         raise ValueError("next student request is missing its disclosure")
     previous = [h["text"] for h in case["disclosures"][:hint["ordinal"] - 1]]
     rendered_protocol = protocol_version in RENDERED_CONTINUATION_VERSIONS
