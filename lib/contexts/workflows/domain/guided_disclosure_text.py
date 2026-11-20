@@ -71,6 +71,36 @@ def _verbatim_runs(text, question, anchor):
     return merged
 
 
+def render_operation_aliases(proposal, question, operation_id):
+    """Replace only an explicit prose reference to the selected operation in the author's public fields."""
+    if proposal.get("decision") != "apply:" + operation_id or operation_id.casefold() in question.casefold():
+        return proposal, []
+    label = re.escape("`" + operation_id + "`")
+    reference = re.compile(
+        r"(?:\A|(?<=[。！？.!?]))[ ]*(?:(?:按照|根据)(?P<zh>[ ]*" + label +
+        r"[ ]*)(?=操作的(?:指引|要求))|(?i:(?:following|using|use|apply|according to) )(?P<en>(?i:the) +" +
+        label + r" +)(?=(?i:operation)\b))")
+    changes = []
+    result = dict(proposal)
+    for field in ("bridge", "hint"):
+        text = proposal.get(field)
+        # Leave code, quotations and multi-line formatting to the original strict wording check.
+        if (not isinstance(text, str) or
+                re.search(r"""[\r\n\t"'“”‘’「」『』«»\\{}]|\x60{2}|~{3}|//|/\*|\*/|^ {4}|^ *[>#]""", text)):
+            continue
+        def replace(match):
+            group = match.lastgroup
+            start, end = match.span(group)
+            if text[:start].count("`") % 2:
+                return match[0]
+            replacement = "这项" if group == "zh" else "this "
+            changes.append({"field": field, "span": [start, end], "original": text[start:end],
+                            "replacement": replacement})
+            return text[match.start():start] + replacement
+        result[field] = reference.sub(replace, text)
+    return result, changes
+
+
 def _source_ranges(question, value):
     return [(m.start(), m.start() + len(value)) for m in re.finditer("(?=" + re.escape(value) + ")", question)]
 
@@ -155,6 +185,13 @@ def render_teacher_text(text, question, anchor="", *, anchor_span=None):
         if not rendered[marker.end():].lstrip(" \t\n:：,，").startswith(("“", '"')):
             raise ValueError("attributed_task_wording_needs_a_verbatim_quotation")
     return rendered, quotes
+
+
+def render_authored_disclosure(bridge, hint, question, anchor):
+    bridge, _ = render_teacher_text(bridge, question, anchor)
+    hint, _ = render_teacher_text(hint, question, anchor)
+    public, quotes = render_teacher_text(bridge + "\n" + hint, question, anchor)
+    return bridge, hint, public, quotes
 
 
 def checked_reviewer_pairing(assessment, previous_id):

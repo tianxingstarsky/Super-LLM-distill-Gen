@@ -19,13 +19,15 @@ from ..application.guided_verified_delivery import validate_completed_calculatio
 from ..application.solve_guided_calculations import EXPRESSION_INPUT
 from ..domain.experience_evolution import digest
 from ..domain.reasoning_bank import no_new_memory
-from ..domain.guided_answers import validate_source
+from ..domain.guided_answers import read_teacher_submission, validate_source
 from ..domain.guided_behavior_prediction import (
     BEHAVIOR_VERSIONS, observe_prediction, place_student_guidance, prediction_due, prediction_guidance, prediction_messages,
     prediction_schema, prediction_visible,
 )
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
+from ..domain.guided_disclosure_text import checked_reviewer_pairing, locate_teacher_premise, render_authored_disclosure, render_operation_aliases
 from ..domain.guided_protocol_versions import (
+    PUBLIC_OPERATION_RENDERING_VERSIONS,
     ATTRIBUTED_TUTORING_VERSIONS, GUIDANCE_PLACEMENT_VERSIONS, SCOPED_SUBMISSION_VERSIONS, TYPED_SUBMISSION_VERSIONS, snapshot_version,
 )
 from ..domain.guided_local_steps import check_local_step, dispatched_local_guidance, local_public_reference, local_step_material, local_step_target
@@ -268,6 +270,84 @@ def _behavior_delivery(case, before, after, folder, student_receipt, trusted, en
                      "reported_model": receipt["response"].get("model"), "forecast": forecast,
                      "guidance_applied": guidance is not None, "student_guidance": guidance, "observation": observed,
                      **({"guidance_delivery": placement} if placement is not None else {})}, visible
+
+
+def verify_teacher_rendering(case, attempt, work, folder, trusted):
+    """Bind a display substitution to the author's native submission, signed operation and actual review."""
+    protocol = snapshot_version(case)
+    if protocol not in PUBLIC_OPERATION_RENDERING_VERSIONS:
+        return None
+    recorded = work.get("operation_aliases", [])
+    if not work.get("draft") or "draft_response" not in work:
+        if recorded or work.get("review_checkpoint") and work.get("proposed_by") != "program":
+            raise ValueError("missing original teacher draft for reviewed wording")
+        return None
+    number = attempt["attempt"]
+    revision = work["revision"]
+    author = "disclosure_rewrite" if revision else "disclosure_draft"
+    native = read(folder / f"{number:03}-{author}.json")
+    _check_target_receipt(native, (author, number, work["draft_response"], None), case, protocol)
+    raw = read_teacher_submission(native["response"])
+    if raw != work["draft"]:
+        raise ValueError("teacher draft differs from its model submission")
+    decision = raw.get("decision") if isinstance(raw, dict) else None
+    changes = []
+    if isinstance(decision, str) and decision.startswith("apply:"):
+        step_id = decision.removeprefix("apply:")
+        display, changes = render_operation_aliases(raw, case["question"], step_id)
+    if not changes and not recorded:
+        return None
+    if not changes:
+        raise ValueError("operation aliases differ from the original teacher wording")
+    catalog = case.get("verified_teaching_steps") or {}
+    reference = {"source_step_id": step_id, "source_step_receipt": catalog.get("receipt_id"), "text": ""}
+    language = (case.get("source") or {}).get("language")
+    chinese = (str(language).lower().startswith("zh") if language else
+               any("\u4e00" <= c <= "\u9fff" for c in case["question"]))
+    target = local_step_target(case, reference, trusted, chinese=chinese, scoped=True, fixed_fields=True)
+    if target is None:
+        if recorded:
+            raise ValueError("displayed operation lacks its trusted local task")
+        return None
+    if changes != recorded:
+        raise ValueError("operation aliases differ from the original teacher wording")
+    task = {k: target[k] for k in ("request", "submission_fields") if k in target}
+    offered = json.loads(native["request"]["messages"][-1]["content"])["available_operations"]
+    if not any(o["id"] == step_id and o.get("student_task") == task for o in offered):
+        raise ValueError("displayed operation was not offered to the author")
+    if "public_text" not in work and not work.get("review_checkpoint"):
+        return None  # An earlier validation withheld the wording.
+    anchor = locate_teacher_premise(case["question"], raw["question_quote"])["quote"]
+    bridge, hint, public, quotations = render_authored_disclosure(
+        display["bridge"].strip(), display["hint"].strip(), case["question"], anchor)
+    if public != work.get("public_text") or quotations != work.get("question_quotations"):
+        raise ValueError("recorded public wording differs from the rendered teacher draft")
+    checkpoint = work.get("review_checkpoint")
+    if checkpoint:
+        reviewer = "disclosure_recheck" if revision else "disclosure"
+        if checkpoint != {"role": reviewer, "index": number, "student_attempt": number}:
+            raise ValueError("rendered disclosure has an unbound reviewer")
+        review = read(folder / f"{number:03}-{reviewer}.json")
+        _check_target_receipt(review, (reviewer, number, work["review_response"], None), case, protocol)
+        proposal = json.loads(review["request"]["messages"][-1]["content"])["proposed_next_teacher_disclosure"]
+        applied = proposal.get("applied_operation") or {}
+        step = next(s for s in catalog["steps"] if s["id"] == step_id)
+        signed = {k: step[k] for k in ("id", "operation", "quote", "span")}
+        if (proposal.get("public_text") != public or proposal.get("bridge") != bridge or proposal.get("hint") != hint
+                or proposal.get("question_quote") != anchor or applied != {**signed, "student_task": task}):
+            raise ValueError("independent reviewer did not receive the rendered teacher wording and task")
+        if work.get("assessment") and work["assessment"] != read_teacher_submission(review["response"]):
+            raise ValueError("rendered teacher assessment differs from its reviewer response")
+    published = attempt.get("disclosure") or {}
+    if published and work.get("validated_citations") and checkpoint != published.get("review_checkpoint"):
+        raise ValueError("released operation wording lacks its independent review checkpoint")
+    if checkpoint and published.get("review_checkpoint") == checkpoint:
+        verdict = checked_reviewer_pairing(work.get("assessment"), work["latest_disclosure_id"])
+        if (verdict.get("decision") != "release" or not work.get("validated_citations") or published.get("text") != public
+                or published.get("bridge") != bridge or published.get("candidate_text") != hint
+                or published.get("source_step_id") != step_id or published.get("source_step_receipt") != target["receipt"]):
+            raise ValueError("published disclosure differs from the reviewed operation wording")
+    return public
 
 
 def disclosure_delivery(case, attempt, folder, protocol_version=None, *, trusted=(), endpoints=None, experience=None):
@@ -1237,6 +1317,7 @@ def export(input_path, output, *, selected=None):
                             totals = behavior_counts[key]
                             totals[level] = totals.get(level, 0) + 1
                     for work in attempt.get("disclosure_work", []):
+                        verify_teacher_rendering(case, attempt, work, folder, trusted)
                         published = bool(work.get("validated_citations") and attempt.get("disclosure"))
                         if paired_protocol:
                             reviewed = work.get("review_checkpoint")
@@ -1249,7 +1330,7 @@ def export(input_path, output, *, selected=None):
                             "validated_citations": work.get("validated_citations", []),
                             "issue": work.get("issue"),
                             "published": published,
-                            **({key: work[key] for key in ("review_checkpoint", "public_text", "question_quotations", "arithmetic_errors")
+                            **({key: work[key] for key in ("review_checkpoint", "public_text", "question_quotations", "arithmetic_errors", "operation_aliases")
                                 if key in work} if paired_protocol else {}),
                             **({"delivery": delivery} if paired_protocol and published else {}),
                             "experience_version": case["experience_version"],

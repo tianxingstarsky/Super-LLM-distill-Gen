@@ -69,7 +69,7 @@ def observed_attempt(case, number):
             "review_observation": {"verdict": {"keep": match and not arithmetic_errors and not quantities, "reason": reason}}}
 
 
-def observed_teacher_disclosure(case, number, revision):
+def observed_teacher_disclosure(case, number, revision, *, reviewed_public_text=None):
     if not 1 <= number <= len(case["attempts"]):
         raise ValueError("Select an actual student round")
     work = case["attempts"][number - 1].get("disclosure_work", [])
@@ -115,6 +115,10 @@ def observed_teacher_disclosure(case, number, revision):
     draft = item["draft"]
     selection = item.get("verified_operation")
     text = selection["operation"] if selection else draft["bridge"] + "\n" + draft["hint"]
+    if item.get("operation_aliases") or reviewed_public_text is not None:
+        if not isinstance(reviewed_public_text, str) or reviewed_public_text != item.get("public_text"):
+            raise ValueError("rendered teacher experience requires its verified public wording")
+        text = reviewed_public_text
     return {
         "id": f"{case['id']}-disclosure-{number}-{revision}", "guided_disclosure_projection_version": 1,
         "conversation": {"messages": [{"role":"user","content":json.dumps(prompt, ensure_ascii=False)},
@@ -132,7 +136,7 @@ def adopt_final_teacher_edition(experience_library, identifier):
 
 
 def learn_guided_experience(bank, case, attempt, query=None, parent_id=None, *, role="student", revision=0,
-                            teacher_receipt=None, assessment=None, replay_verifier=None):
+                            teacher_receipt=None, assessment=None, replay_verifier=None, reviewed_public_text=None):
     if role == FINAL_TEACHER_ROLE:
         observation = final_delivery_observation(case, attempt, teacher_receipt, assessment, replay_verifier=replay_verifier)
         if parent_id:
@@ -143,7 +147,7 @@ def learn_guided_experience(bank, case, attempt, query=None, parent_id=None, *, 
             "assessment": observation["final_assessment"], "model_calls": learned["model_request_receipt"]}}
     if role not in ("student", "disclosure_teacher"):
         raise ValueError("Unknown guided experience role")
-    observation = (observed_teacher_disclosure(case, attempt, revision)
+    observation = (observed_teacher_disclosure(case, attempt, revision, reviewed_public_text=reviewed_public_text)
                    if role == "disclosure_teacher" else observed_attempt(case, attempt))
     learned = bank.learn("reasoning", observation, parent_id=parent_id)
     identifier = parent_id if learned.get("status") == "no_update" else learned["id"]

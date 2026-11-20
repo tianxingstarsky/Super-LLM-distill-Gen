@@ -17,6 +17,7 @@ from ..domain.guided_behavior_prediction import (
 )
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation, resume_after_local_step
 from ..domain.guided_protocol_versions import (
+    PUBLIC_OPERATION_RENDERING_VERSIONS,
     ATTRIBUTED_TUTORING_VERSIONS, GUIDANCE_PLACEMENT_VERSIONS, TARGETED_HINT_REPAIR_VERSIONS,
     TEACHER_TASK_CONTRACT_VERSIONS, TYPED_SUBMISSION_VERSIONS,
 )
@@ -135,6 +136,7 @@ class GenerateGuidedAnswer:
                                   contextual_operations=contextual_operations, immutable_review=immutable_review,
                                   resolve_local_task=resolve_local_task if protocol_version in TEACHER_TASK_CONTRACT_VERSIONS else None,
                                   targeted_hint_repair=protocol_version in TARGETED_HINT_REPAIR_VERSIONS,
+                                  render_selected_operation=protocol_version in PUBLIC_OPERATION_RENDERING_VERSIONS,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
                                   check_arithmetic=check_arithmetic,
                                   bare_answer_operations=check_arithmetic and bare_answer_operations)

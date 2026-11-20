@@ -15,7 +15,8 @@ from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
 from ..domain.guided_protocol_versions import ATTRIBUTED_TUTORING_VERSIONS
 from ..domain.guided_behavior_prediction import prediction_feedback
 from ..domain.guided_disclosure_text import (
-    checked_reviewer_pairing, locate_authored_task_citations, locate_teacher_premise, render_teacher_text,
+    checked_reviewer_pairing, locate_authored_task_citations, locate_teacher_premise, render_authored_disclosure,
+    render_operation_aliases, render_teacher_text,
 )
 from ..domain.guided_teaching_steps import checked_step_review, checked_step_selection
 from ..domain.guided_student_calculations import asserted_arithmetic_errors
@@ -276,7 +277,8 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
                            task_analysis=False, quoted_premises=False, strict_author_decisions=False,
                            check_arithmetic=False, bare_answer_operations=False, contextual_operations=False,
-                           immutable_review=False, resolve_local_task=None, targeted_hint_repair=False):
+                           immutable_review=False, resolve_local_task=None, targeted_hint_repair=False,
+                           render_selected_operation=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -393,6 +395,10 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                     applied = options.get(decision.removeprefix("apply:"))
                     if applied is None:
                         raise ValueError("unknown_teaching_operation")
+                    if render_selected_operation and applied["id"] in student_tasks:
+                        proposal, aliases = render_operation_aliases(proposal, source["question"], applied["id"])
+                        if aliases:
+                            entry["operation_aliases"] = aliases
                     proposal = {**proposal, "decision": "offer"}
                 elif decision != "insufficient" and (decision != "offer" or focus_operation):
                     raise ValueError("expected_a_worked_disclosure")
@@ -417,11 +423,9 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                     check_authored_wording(*wording, source["question"],
                                            [s["id"] for s in (catalog or {}).get("steps", ())],
                                            source["gold"], source.get("direct_answer_syntax"))
-                bridge_text, _ = render_teacher_text(wording[0], source["question"], proposal["question_quote"])
-                hint_text, _ = render_teacher_text(wording[1], source["question"], proposal["question_quote"])
+                bridge_text, hint_text, entry["public_text"], entry["question_quotations"] = render_authored_disclosure(
+                    *wording, source["question"], proposal["question_quote"])
                 wording = (bridge_text, hint_text)
-                entry["public_text"], entry["question_quotations"] = render_teacher_text(
-                    bridge_text + "\n" + hint_text, source["question"], proposal["question_quote"])
                 if check_arithmetic and (issue := _checked_disclosure_issue(entry, source["question"])):
                     raise ValueError(issue)
         except (TypeError, ValueError) as exc:
@@ -431,6 +435,9 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                 for field, start, end in exc.spans:
                     raw = entry["draft"][field]
                     offset = len(raw) - len(raw.lstrip())
+                    for change in entry.get("operation_aliases", ()):
+                        if change["field"] == field and change["span"][0] < start + offset:
+                            offset += len(change["original"]) - len(change["replacement"])
                     start, end = start + offset, end + offset
                     matches.append({"field": field, "span": [start, end], "text": raw[start:end]})
                 entry["public_operation_matches"] = matches
@@ -547,7 +554,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
                                    *, teacher_experience, tried, task_analysis=False, quoted_premises=False,
                                    strict_author_decisions=False, check_arithmetic=False, bare_answer_operations=False,
                                    contextual_operations=False, immutable_review=False, resolve_local_task=None,
-                                   targeted_hint_repair=False):
+                                   targeted_hint_repair=False, render_selected_operation=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation") and not contextual_operations:
         history = attempt["disclosure_work"] = []
@@ -559,6 +566,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
             quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions, check_arithmetic=check_arithmetic,
             bare_answer_operations=bare_answer_operations, contextual_operations=contextual_operations,
             immutable_review=immutable_review, resolve_local_task=resolve_local_task, targeted_hint_repair=targeted_hint_repair,
+            render_selected_operation=render_selected_operation,
         )
         history = attempt["disclosure_work"]
         if contextual_operations:

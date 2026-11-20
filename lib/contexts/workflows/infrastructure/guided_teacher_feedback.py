@@ -18,7 +18,8 @@ from ..domain.guided_student_calculations import attributable_mixed_calculations
 from ..domain.guided_training_targets import GUIDED_TARGET_FILE
 from . import guided_answer_records
 from .guided_answer_records import (
-    disclosure_delivery, guided_port_response, inputs, location, read, replay_first, replay_matching_call, verified_step_registry,
+    disclosure_delivery, guided_port_response, inputs, location, read, replay_first, replay_matching_call,
+    verified_step_registry, verify_teacher_rendering,
 )
 
 
@@ -111,7 +112,8 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
             event["author"] = origin
             if item and origin == "teacher":
                 revision = item["revision"]
-                observation = observed_teacher_disclosure(case, number, revision)
+                public = verify_teacher_rendering(case, before, item, folder, trusted)
+                observation = observed_teacher_disclosure(case, number, revision, reviewed_public_text=public)
                 if (observation["review_observation"]["verdict"]["keep"] is not True
                         or item.get("public_text") not in {hint.get("candidate_text"), hint["text"]}):
                     raise ValueError(f"released teacher text differs from its reviewed proposal: {case['id']}/{number}")

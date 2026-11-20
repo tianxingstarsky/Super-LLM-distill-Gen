@@ -5,9 +5,11 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from lib.contexts.workflows.application.generate_guided_answer import GenerateGuidedAnswer
+from lib.contexts.workflows.application.guided_experience import observed_teacher_disclosure
 from lib.contexts.workflows.application.review_guided_disclosure import review_or_recommend_disclosure
 from lib.contexts.workflows.domain.experience_evolution import digest
 from lib.contexts.workflows.domain.guided_answers import validate_source
+from lib.contexts.workflows.domain.guided_disclosure_text import render_operation_aliases
 from lib.contexts.workflows.domain.guided_behavior_prediction import (
     observe_prediction, place_student_guidance, prediction_due, prediction_feedback, prediction_guidance, prediction_messages, prediction_schema,
 )
@@ -17,7 +19,7 @@ from lib.contexts.workflows.domain.guided_local_steps import (
 )
 from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
 from lib.contexts.workflows.domain.guided_training_targets import guided_training_target
-from lib.contexts.workflows.infrastructure.guided_answer_records import export, location, run_guided_cases
+from lib.contexts.workflows.infrastructure.guided_answer_records import export, location, run_guided_cases, verify_teacher_rendering
 from lib.contexts.workflows.infrastructure.guided_teacher_feedback import TeacherFeedbackStore
 
 
@@ -152,6 +154,26 @@ def test_repeated_private_operation_in_the_first_teacher_bridge_locates_only_the
     assert run(True, "```json{", corrected) == run(False, "```json{", corrected)
 
 
+def test_display_alias_only_rewrites_prose_about_a_selected_operation():
+    marker = "`fixed-position`"
+    en = f"Following the {marker} operation, inspect the changed location."
+    zh = f"按题面区分前后。按照 {marker} 操作的指引，记录这次变化。"
+    draft = dict(decision="apply:fixed-position", bridge=zh, hint=en, reason=marker, question_quote="a bit changes")
+    display, matches = render_operation_aliases(draft, "a bit changes", "fixed-position")
+    assert display == {**draft, "bridge": "按题面区分前后。按照这项操作的指引，记录这次变化。",
+                       "hint": "Following this operation, inspect the changed location."}
+    for match in matches:
+        assert draft[match["field"]][slice(*match["span"])] == match["original"]
+    assert len(matches) == 2
+    for field in (marker, "the label " + marker, en.replace(marker, "`permitted-pair`"), en.replace(marker, marker[1:-1]),
+                  "> " + en, "```\n" + en + "\n```", "    " + en, "“" + zh + "”", "`Example. " + en + "`"):
+        raw = {**draft, "bridge": field, "hint": "Check the premise."}
+        assert render_operation_aliases(raw, "a bit changes", "fixed-position") == (raw, [])
+    assert render_operation_aliases(draft, en, "fixed-position") == (draft, [])
+    free = {**draft, "decision": "offer"}
+    assert render_operation_aliases(free, "a bit changes", "fixed-position") == (free, [])
+
+
 def test_public_source_choices_and_unknown_outcome_preserve_legacy_forecast_semantics():
     visible = {"original_question":"Find the total.", "ordered_published_disclosures":[
         {"ordinal":1, "text":"List the allowed combinations before counting."}],
@@ -222,7 +244,7 @@ def test_selected_task_must_occupy_the_native_submission_field_to_omit_a_message
     assert place_student_guidance(highlight, messages, target, schema)[0] == highlight
 
 
-@pytest.mark.parametrize("version,first_step,status", [
+@pytest.mark.parametrize("protocol_version,first_step,status", [
     ("4.10.3", 'I read the changed slot in the question.\n["2","1","0"]', "verified_local_value"),
     ("4.10.3", '["2","0","1"]', "local_value_mismatch"),
     ("4.10.3", '{"blocked":"Which bit remains fixed?"}', "blocked"),
@@ -235,8 +257,11 @@ def test_selected_task_must_occupy_the_native_submission_field_to_omit_a_message
     ("4.10.9", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
     ("4.10.10", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
     ("4.10.11", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
+    ("4.10.13", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
 ])
-def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, version, first_step, status):
+def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, protocol_version, first_step, status):
+    # Later operation rendering inherits the same student and reviewer response fixtures.
+    version = "4.10.11" if protocol_version == "4.10.13" else protocol_version
     source, receipt = signed_source()
     steps = source["verified_teaching_steps"]["steps"]
     inputs = {}
@@ -305,6 +330,8 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
                     assert feedback["student_guidance"] is None
             reply = dict(decision="apply:"+step["id"], question_quote=step["quote"], bridge=step["quote"]+".",
                          hint=hints[index-1], reason="Use the selected constraint.")
+            if protocol_version == "4.10.13" and index == 1:
+                reply["bridge"] += " Following the `fixed-position` operation, label the changed slot."
         elif role == "disclosure":
             step = steps[index-1]
             citations = [dict(evidence_id="question", quote=step["quote"])]
@@ -355,7 +382,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
     input_path.write_text(json.dumps(source), encoding="utf-8")
     registry.write_text(json.dumps({"schema":"guided-teaching-verification/v1", "receipts":[receipt]}), encoding="utf-8")
     run_guided_cases(input_path, run, {"student":Endpoint("learner"), "coach":Endpoint("reviewer")},
-                     {"version":"test"}, 3, protocol_version=version, until_correct=True, verified_step_receipts=registry)
+                     {"version":"test"}, 3, protocol_version=protocol_version, until_correct=True, verified_step_receipts=registry)
     case_path = location(run,source["id"])/"case.json"
     case = json.loads(case_path.read_bytes())
     assert case["status"] == "accepted" and case["verification"]["answer_key_check"]
@@ -388,6 +415,38 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
     assert "continuation_provenance" not in case
     store = TeacherFeedbackStore(tmp_path/"feedback")
     observed = store.observe(run, input_path)
+    if protocol_version == "4.10.13":
+        first = case["attempts"][0]
+        work = first["disclosure_work"][0]
+        public = verify_teacher_rendering(case, first, work, case_path.parent, {receipt})
+        assert "Following this operation" in public and "fixed-position" not in public
+        assert json.loads(inputs["disclosure", 1][-1]["content"])["proposed_next_teacher_disclosure"]["public_text"] == public
+        assert json.loads(inputs["student", 2][1]["content"])["public_reference"]["quoted_teacher_disclosures"][0]["text"] == public
+        assert observed_teacher_disclosure(case, 1, 0, reviewed_public_text=public)["conversation"]["messages"][-1]["content"] == public
+        with pytest.raises(ValueError, match="verified public wording"):
+            observed_teacher_disclosure(case, 1, 0)
+        with pytest.raises(ValueError, match="trusted local task"):
+            verify_teacher_rendering(case, first, work, case_path.parent, set())
+        trace = work.pop("operation_aliases")
+        case_path.write_text(json.dumps(case), encoding="utf-8")
+        with pytest.raises(ValueError, match="aliases differ"):
+            export(input_path, run)
+        assert store.observe(run, input_path)["events"][0]["category"] == "unverified_receipt"
+        work["operation_aliases"] = trace
+        case_path.write_text(json.dumps(case), encoding="utf-8")
+        review_path = case_path.parent/"001-disclosure.json"
+        review_bytes = review_path.read_bytes()
+        review = json.loads(review_bytes)
+        message = review["request"]["messages"][-1]
+        packet = json.loads(message["content"])
+        packet["proposed_next_teacher_disclosure"]["public_text"] += "A different instruction."
+        message["content"] = json.dumps(packet)
+        review["identity"] = digest({"binding":case["binding"], "id":case["id"], "payload":review["request"]})
+        review_path.write_text(json.dumps(review), encoding="utf-8")
+        with pytest.raises(ValueError, match="independent reviewer did not receive"):
+            export(input_path, run)
+        assert store.observe(run, input_path)["events"][0]["category"] == "unverified_receipt"
+        review_path.write_bytes(review_bytes)
     assert observed["by_category"] == {"program_framed_local_response": 2}, observed
     assert [e["outcome"] for e in observed["events"]] == [status,"verified_local_value"]
     for event in observed["events"]:
