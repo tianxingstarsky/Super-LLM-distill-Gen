@@ -51,7 +51,7 @@ def fingerprint(receipt):
     return digest({"role": receipt["role"], "request": receipt["request"], "response": receipt["response"]})
 
 
-def teaching_events(case, folder, protocol, parents, experience, *, source, trusted, learner_model):
+def teaching_events(case, folder, protocol, parents, experience, *, source, trusted, learner_model, endpoints=None):
     for position, before in enumerate(case["attempts"]):
         number = before["attempt"]
         hint = before.get("disclosure")
@@ -107,7 +107,12 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                 if after.get("solving_role", "student") != "student":
                     event["category"] = "changed_solver"
                 else:
-                    disclosure_delivery(case, before, folder, protocol)
+                    delivery = disclosure_delivery(case, before, folder, protocol, trusted=trusted, endpoints=endpoints)
+                    behavior = delivery.get("behavior_prediction")
+                    if behavior:
+                        prediction = archive_receipt(folder, case["binding"], case["id"], "behavior_prediction",
+                            after["attempt"], after["behavior_prediction"]["response"], protocol, parents)
+                        refs["behavior_prediction"] = fingerprint(prediction)
                     for label, turn in (("previous_student", before), ("next_student", after)):
                         receipt = archive_receipt(folder, case["binding"], case["id"], "student",
                                                   turn["attempt"], turn["student"], protocol, parents)
@@ -136,15 +141,21 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                         student_excerpt={"tail": raw[-900:], "chars": len(raw), "sha256": digest(raw),
                                          "is_excerpt": len(raw) > 900})
                     event["category"] = outcome if origin == "teacher" else "program_disclosure"
-                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6"} and not after.get("solving_role"):
+                    if behavior:
+                        evidence["behavior_prediction"] = behavior
+                    guidance_applied = bool(behavior and behavior["guidance_applied"])
+                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7"} and not after.get("solving_role"):
                         language = str(source.get("source", {}).get("language") or "").lower()
                         chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in source["question"])
-                        fixed_fields = protocol == "4.10.6"
+                        fixed_fields = protocol in {"4.10.6", "4.10.7"}
                         scoped = fixed_fields or protocol == "4.10.5"
                         target = local_step_target(source, hint, trusted, chinese=chinese,
                                                    scoped=scoped, fixed_fields=fixed_fields)
                         if target:
-                            actual = (dispatched_local_guidance(receipt["request"], source, target, chinese)
+                            payload = receipt["request"]
+                            if guidance_applied:
+                                payload = {**payload, "messages": payload["messages"][:-1]}
+                            actual = (dispatched_local_guidance(payload, source, target, chinese)
                                       if scoped else receipt["request"]["messages"][-1]["content"])
                             if (not actual.startswith(local_step_material(target))
                                     or receipt["response"].get("model") != learner_model):
@@ -161,7 +172,7 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                                            or stage.get("unresolved_review_evidence") or after.get("reviewed_derivation_conflict")
                                            or after.get("coach_feedback_check")
                                            or (position + 2 == len(case["attempts"]) and case["status"] == "quarantine"))
-                    if (reproduced and incomplete_delivery and event["author"] == "teacher_authored"
+                    if (not guidance_applied and reproduced and incomplete_delivery and event["author"] == "teacher_authored"
                             and event["category"] != "program_framed_local_response" and not after.get("solving_role")
                             and not stage.get("reference_answer_was_visible") and after["student"]["finish_reason"] == "stop"
                             and receipt["response"].get("model_identity_source") in {"response_model", "single_served_model"}
@@ -181,7 +192,9 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                             evidence["attributable_intermediate_calculations"] = mixed
         ident = digest({"case": case["source_sha256"], "round": number, "hint": event["hint"],
                         "receipts": refs, "category": event["category"]})
-        yield {**event, "id": ident, "eligible": event["category"] in OBSERVED_REWARDS or event.get("learning_scope") == MIXED_INTERMEDIATE}
+        jointly_guided = (event["evidence"].get("behavior_prediction") or {}).get("guidance_applied")
+        yield {**event, "id": ident, "eligible": not jointly_guided and
+               (event["category"] in OBSERVED_REWARDS or event.get("learning_scope") == MIXED_INTERMEDIATE)}
 
 
 class TeacherFeedbackStore:
@@ -233,7 +246,8 @@ class TeacherFeedbackStore:
                             any(case.get(k) != source.get(k) for k in ("question", "gold", "source_reasoning", "source"))):
                         raise ValueError("case and original source/manifest differ")
                     observed = list(teaching_events(case, folder, protocol, parents, manifest["experience"],
-                                                    source=source, trusted=trust, learner_model=manifest["endpoints"]["student"]["model"]))
+                        source=source, trusted=trust, learner_model=manifest["endpoints"]["student"]["model"],
+                        endpoints=manifest["endpoints"]))
                 except (ValueError, KeyError, FileNotFoundError) as exc:
                     observed = [{"id": digest({"case": ident, "binding": binding, "unbound": str(exc)}),
                                  "case_id": ident, "eligible": False, "category": "unverified_receipt",

@@ -16,7 +16,7 @@ CONFIGS = Path(__file__).resolve().parents[1] / "configs"
 
 @pytest.fixture
 def run_ribbon(tmp_path, monkeypatch):
-    def run(readouts, *, worked=False, handoff=False, reported_continuation=None):
+    def run(readouts, *, worked=False, handoff=False, reported_continuation=None, protocol="4.10.0"):
         task = json.loads((CONFIGS / "guided-calculation-plan.example.jsonl").read_bytes())
         registry = CONFIGS / "guided-calculation-plan.receipts.json"
         if worked:
@@ -56,7 +56,7 @@ def run_ribbon(tmp_path, monkeypatch):
         if handoff:
             endpoints["continuation"] = endpoint("strong-reader", 8123)
         summary = run_guided_cases(source, output, endpoints, {"version": "test"}, 3, workers=1,
-                                   until_correct=False, protocol_version="4.10.0", verified_step_receipts=registry)
+                                   until_correct=False, protocol_version=protocol, verified_step_receipts=registry)
         assert len(sent) == len(script)
         assert all(packet["grammar"] == DIRECT_ANSWER_GRAMMARS["keyed_rational"] for packet in sent[2:])
         return source, output, summary, sent
@@ -64,10 +64,14 @@ def run_ribbon(tmp_path, monkeypatch):
     return run
 
 
-def test_wrong_readout_then_corrected_by_same_solver_preserves_both_receipts(run_ribbon):
-    source, output, summary, sent = run_ribbon([("6", "stop"), ("12", "stop")])
+@pytest.mark.parametrize("protocol", ["4.10.0", "4.10.7"])
+def test_wrong_readout_then_corrected_by_same_solver_preserves_both_receipts(run_ribbon, protocol):
+    source, output, summary, sent = run_ribbon([("6", "stop"), ("12", "stop")], protocol=protocol)
     assert summary["counts"]["accepted"] == 1
     receipt_folder = (output / json.loads((output / "accepted.jsonl").read_bytes())["case_archive"]).parent
+    if protocol == "4.10.7":
+        assert summary["behavior_predictions"]["observed_student_turns"] == 0
+        assert not list(receipt_folder.glob("*-behavior_prediction.json"))
     case = json.loads((receipt_folder / "case.json").read_bytes())
     delivery = case["calculation_tutoring"]["final_delivery"]
     assert delivery["prior"]["check"]["issue"] == "calculation_readout_mismatch"

@@ -17,7 +17,8 @@ def main():
     cli.add_argument("--student-url")
     cli.add_argument("--student-model")
     cli.add_argument("--coach-url")
-    cli.add_argument("--coach-model", help="Tutor for disclosure and review. Protocols 4.4 to 4.8 also use it to write the final answer.")
+    cli.add_argument("--coach-model", help="Tutor for disclosure and review. Protocol 4.10.7 also serves an independent "
+                     "learner behavior prediction on this local endpoint. Protocols 4.4 to 4.8 use it to write the final answer.")
     cli.add_argument("--student-api-key-env")
     cli.add_argument("--coach-api-key-env")
     cli.add_argument("--continuation-model", help="Optional stronger student for verified full-disclosure cases")
@@ -76,6 +77,7 @@ def main():
                      "4.10.4 reviews the author's public text with a private decision and evidence. "
                      "4.10.5 frames each supported local operation as a program request with a native report or blocked response. "
                      "4.10.6 requires typed fields for fixed-position and trial-hours reports. "
+                     "4.10.7 predicts the learner's next response from published material, sharing the local tutor endpoint. "
                      "Pin the same version in both arms of an experience comparison. Existing runs use their manifest.")
     cli.add_argument("--recover-context-from", type=Path, metavar="PARENT",
                      help="Finish selected cases stopped before a local chat dispatch exceeded its slot. "

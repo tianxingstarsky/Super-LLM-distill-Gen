@@ -12,7 +12,7 @@ from lib.contexts.workflows.domain.guided_local_steps import (
 )
 from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
 from lib.contexts.workflows.domain.guided_training_targets import guided_training_target
-from lib.contexts.workflows.infrastructure.guided_answer_records import location, run_guided_cases
+from lib.contexts.workflows.infrastructure.guided_answer_records import export, location, run_guided_cases
 from lib.contexts.workflows.infrastructure.guided_teacher_feedback import TeacherFeedbackStore
 
 
@@ -42,6 +42,7 @@ def signed_source():
     ("4.10.5", '{"action":"report","values":["2","1","0"],"explanation":"This explanation was not independently checked."}', "verified_local_value"),
     ("4.10.5", '{"action":"blocked","difficulty":"I cannot tell which position changed."}', "blocked"),
     ("4.10.6", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I claim the full count is one less."}', "verified_local_value"),
+    ("4.10.7", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
 ])
 def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, version, first_step, status):
     source, receipt = signed_source()
@@ -54,22 +55,27 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         inputs[role, index] = messages
         if role == "student":
             pair_report = ('{"action":"report","values":["10","01"],"explanation":"I tried both orders."}'
-                           if version in {"4.10.5", "4.10.6"} else '["10","01"]')
+                           if version in {"4.10.5", "4.10.6", "4.10.7"} else '["10","01"]')
             reply = {1: "8", 2: first_step, 3: pair_report, 4: solved}[index]
-            if version in {"4.10.5", "4.10.6"} and index in (2, 3):
-                if version == "4.10.6" and index == 2:
+            if version in {"4.10.5", "4.10.6", "4.10.7"} and index in (2, 3):
+                if version in {"4.10.6", "4.10.7"} and index == 2:
                     form = schema["anyOf"][0]["properties"]["values"]
                     assert form["required"] == ["position", "former_bit", "current_bit"]
                     assert Draft202012Validator(schema).is_valid(json.loads(reply))
                 else:
                     assert schema == LOCAL_SUBMISSION_SCHEMA
-                assert [m["role"] for m in messages] == ["system", "user"]
-                packet = json.loads(messages[-1]["content"])
+                applied = version == "4.10.7" and index == 2
+                assert [m["role"] for m in messages] == (["system", "user", "user"] if applied else ["system", "user"])
+                packet = json.loads(messages[1]["content"])
                 assert packet["origin"] == "tutoring_program"
                 assert packet["quoted_source_material"] == {"original_user_question": source["question"]}
                 assert packet["current_local_task"] in messages[0]["content"]
             else:
                 assert schema is None
+        elif role == "behavior_prediction":
+            reply = dict(action="report_local", outcome="local_values_verified", reason="PRIVATE_FORECAST_SENTINEL",
+                         direction="apply_latest_disclosure", source="disclosure.1") if index == 2 else dict(
+                             action="unknown", outcome="unknown", reason="PRIVATE_FORECAST_SENTINEL", direction="none", source="")
         elif role == "disclosure_draft":
             step = steps[index-1]
             if index == 2:
@@ -85,7 +91,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             packet = json.loads(messages[-1]["content"])["proposed_next_teacher_disclosure"]
             reply = dict(decision="release", bridge=packet["bridge"], citations=citations, reason="The hint applies.",
                          pairing=dict(evidence_support=True, student_fit=True, history_fit="first" if index == 1 else "continuous"))
-            if version in {"4.10.5", "4.10.6"}:
+            if version in {"4.10.5", "4.10.6", "4.10.7"}:
                 del reply["bridge"]
         elif role == "coach":
             assert index == 4
@@ -94,10 +100,13 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             assert role == "final_answer" and index == 4
             reply = "4"
         return dict(model="learner" if role in {"student","final_answer"} else "reviewer",
-                    content=reply if isinstance(reply, str) else json.dumps(reply), finish_reason="stop")
+                    content=reply if isinstance(reply, str) else json.dumps(reply), finish_reason="stop",
+                    **({"usage":{"prompt_tokens":19, "completion_tokens":5}} if role == "behavior_prediction" else {}))
 
-    calls = iter([("student",1), ("disclosure_draft",1), ("disclosure",1), ("student",2),
-                  ("disclosure_draft",2), ("disclosure",2), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
+    calls = iter([("student",1), ("disclosure_draft",1), ("disclosure",1),
+                  *([("behavior_prediction",2)] if version == "4.10.7" else []), ("student",2),
+                  ("disclosure_draft",2), ("disclosure",2),
+                  *([("behavior_prediction",3)] if version == "4.10.7" else []), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
 
     class Endpoint:
         def __init__(self, name):
@@ -153,6 +162,26 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         assert event["author"] == "teacher_authored" and local["task_author"] == "program"
         assert not event["eligible"] and not event["transfer_gain_supported"]
         assert bool(local["verified_submissions"]) is (local["status"] == "verified_local_value")
+    if version == "4.10.7":
+        summary = export(input_path, run)
+        assert summary["behavior_predictions"] == {"observed_student_turns":2, "guidance_applied":1,
+            "action_agreement":{"matched":1,"unknown":1}, "outcome_agreement":{"matched":1,"unknown":1}}
+        assert summary["usage_by_role"]["new"]["behavior_prediction"] == {
+            "responses":2,"usage_unreported":0,"prompt_tokens":38,"completion_tokens":10}
+        assert [event["evidence"]["behavior_prediction"]["guidance_applied"] for event in observed["events"]] == [True, False]
+        assert "PRIVATE_FORECAST_SENTINEL" not in (run/"training-targets.jsonl").read_text(encoding="utf8")
+        predict_path = case_path.parent/"002-behavior_prediction.json"
+        assert json.loads(predict_path.read_bytes())["role"] == "behavior_prediction"
+        # Completed checkpoints also survive a normal resume without drawing another response.
+        assert run_guided_cases(input_path, run, {"student":Endpoint("learner"), "coach":Endpoint("reviewer")},
+            {"version":"test"}, 3, verified_step_receipts=registry)["behavior_predictions"] == summary["behavior_predictions"]
+        archived = json.loads(case_path.read_bytes())
+        case["attempts"][1]["behavior_prediction"]["student_guidance"] = None
+        case_path.write_text(json.dumps(case), encoding="utf8")
+        with pytest.raises(ValueError, match="behavior prediction"):
+            export(input_path, run)
+        case = archived
+        case_path.write_text(json.dumps(case), encoding="utf8")
     if status == "verified_local_value":
         case["attempts"][1]["local_step"]["status"] = "blocked"
         case_path.write_text(json.dumps(case), encoding="utf-8")

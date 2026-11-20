@@ -20,8 +20,11 @@ from ..application.solve_guided_calculations import EXPRESSION_INPUT
 from ..domain.experience_evolution import digest
 from ..domain.reasoning_bank import no_new_memory
 from ..domain.guided_answers import validate_source
+from ..domain.guided_behavior_prediction import (
+    BEHAVIOR_PREDICTION_SCHEMA, observe_prediction, prediction_due, prediction_guidance, prediction_messages, prediction_visible,
+)
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
-from ..domain.guided_local_steps import dispatched_local_guidance, local_step_material, local_step_target
+from ..domain.guided_local_steps import check_local_step, dispatched_local_guidance, local_step_material, local_step_target
 from ..domain.guided_teacher_delivery import (
     CALCULATION_PLAN_VERSIONS, CHECKED_TUTOR_VERSIONS, EVIDENCED_PROGRESS_VERSIONS, GUIDED_DELIVERY_VERSIONS, SOLVER_FINAL_VERSIONS,
     TRUNCATED_TUTORING_VERSIONS, requested_delivery, uses_direct_first,
@@ -141,7 +144,7 @@ def _check_rendered_guidance(case, attempt, payload, previous, hint):
     chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in case["question"])
     suffix = render_student_continuation(view, {}, chinese=chinese)
     content = payload["messages"][-1]["content"]
-    fixed_fields = case.get("protocol") == "guided-draft-snapshot/v4.10.6"
+    fixed_fields = case.get("protocol") in {"guided-draft-snapshot/v4.10.6", "guided-draft-snapshot/v4.10.7"}
     scoped = fixed_fields or case.get("protocol") == "guided-draft-snapshot/v4.10.5"
     if scoped or case.get("protocol") in {"guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4"}:
         target = local_step_target(case, hint, {hint.get("source_step_receipt")}, chinese=chinese,
@@ -172,7 +175,78 @@ def _check_rendered_guidance(case, attempt, payload, previous, hint):
     raise ValueError("student request differs from its reviewed disclosure history")
 
 
-def disclosure_delivery(case, attempt, folder, protocol_version=None):
+def _behavior_delivery(case, before, after, folder, student_receipt, trusted, endpoints):
+    """Rebuild the predictor's public context and match its dispatch, adoption and subsequent observation."""
+    index, hint = after["attempt"], before["disclosure"]
+    disclosed = case["disclosures"][:hint["ordinal"]]
+    if not disclosed or disclosed[-1] != hint or hint.get("issued_after_attempt") != before["attempt"]:
+        raise ValueError("behavior prediction has no matching published disclosure")
+    frame = student_receipt["request"]["messages"][-1]
+    prefix = "Continue the solution from this current view.\n"
+    full_view = (frame.get("role") == "tool" and frame["content"].startswith(prefix)
+                 and bool(json.loads(frame["content"][len(prefix):]).get("complete_disclosure")))
+    if bool(after.get("solving_role")) != full_view:
+        raise ValueError("complete disclosure role differs from the dispatched student view")
+    due = prediction_due("4.10.7", before, disclosed, received_full=full_view,
+                         solver_role=after.get("solving_role", "student"))
+    record = after.get("behavior_prediction")
+    path = folder / f"{index:03}-behavior_prediction.json"
+    payload = student_receipt["request"]
+    if not due:
+        if record is not None or path.exists():
+            raise ValueError("unexpected behavior prediction outside a published tutoring turn")
+        return payload, None
+    if not isinstance(record, dict) or record.get("checkpoint") != {"role": "behavior_prediction", "attempt": index}:
+        raise ValueError("missing or mismatched behavior prediction checkpoint")
+    versions = case["draft_versions"][:index - 1]
+    prior = versions[-1]
+    if prior["attempt"] != before["attempt"] or record.get("disclosure_ordinal") != hint["ordinal"]:
+        raise ValueError("behavior prediction does not follow the bound disclosure")
+    segments = {s["id"]: s for version in versions for s in version["student_suffix"]}
+    retained = [segments[key] for key in prior["retained_after"]]
+    language = str(case.get("source", {}).get("language") or "").lower()
+    chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in case["question"])
+    target = local_step_target(case, hint, trusted, chinese=chinese, scoped=True, fixed_fields=True)
+    visible = prediction_visible(case["question"], disclosed, retained, prior["shared_findings"],
+                                 local_task=target["request"] if target else None)
+    if record.get("visible") != visible:
+        raise ValueError("behavior prediction context differs from the published work")
+    receipt = read(path)
+    _check_target_receipt(receipt, ("behavior_prediction", index, record["response"], prediction_messages(visible)), case, "4.10.7")
+    native = receipt["request"].get("response_format") or {}
+    if (native.get("type") != "json_schema" or native.get("json_schema") !=
+            {"name": "learner_behavior_prediction", "strict": True, "schema": BEHAVIOR_PREDICTION_SCHEMA}
+            or receipt["request"].get("model") != endpoints["coach"]["model"]):
+        raise ValueError("behavior prediction differs from its frozen model or submission schema")
+    forecast, guidance = prediction_guidance(receipt["response"], visible, chinese=chinese)
+    _check_target_receipt(student_receipt, ("student", index, after["student"], after["student_request_messages"]), case, "4.10.7")
+    # Identity failure or truncation may have ended this turn before the local checker ran.
+    if after.get("local_step") is not None:
+        if not target or check_local_step(target, student_receipt["response"], index, scoped=True)[0] != after["local_step"]:
+            raise ValueError("behavior outcome differs from the replayed local student submission")
+    elif (target and after["student"].get("finish_reason") == "stop" and after["student"]["content"].strip()
+          and after["student"].get("model") == endpoints["student"]["model"] and not after["student"].get("reasoning_content")):
+        raise ValueError("missing local learner outcome for a completed behavior prediction")
+    observed = observe_prediction(forecast, after, question=case["question"], gold=case.get("gold"),
+                                  expected_model=endpoints["student"]["model"])
+    if any(key not in record or record[key] != value for key, value in (
+            ("forecast", forecast), ("student_guidance", guidance), ("observation", observed))):
+        raise ValueError("behavior prediction, applied guidance or observed learner action differs from its receipt")
+    if guidance is not None:
+        if payload["messages"][-1] != guidance:
+            raise ValueError("the student did not receive the selected behavior guidance")
+        payload = {**payload, "messages": payload["messages"][:-1]}
+    if not target:
+        initial = case["attempts"][0]["student_request_messages"]
+        if (payload["messages"][0].get("role") != "system" or payload["messages"][1:-1] != initial[1:]
+                or payload["messages"][-1].get("role") != "tool"):
+            raise ValueError("unexpected material alongside the public behavior guidance")
+    return payload, {"receipt": path.name, "role": "behavior_prediction", "requested_model": receipt["request"]["model"],
+                     "reported_model": receipt["response"].get("model"), "forecast": forecast,
+                     "guidance_applied": guidance is not None, "student_guidance": guidance, "observation": observed}
+
+
+def disclosure_delivery(case, attempt, folder, protocol_version=None, *, trusted=(), endpoints=None):
     """Pair a published hint with the exact next student request and completed response."""
     hint = attempt.get("disclosure")
     if not hint:
@@ -185,16 +259,19 @@ def disclosure_delivery(case, attempt, folder, protocol_version=None):
     if (receipt["identity"] != digest({"binding": case["binding"], "id": case["id"], "payload": payload})
             or receipt["status"] != "complete" or receipt["role"] != "student" or receipt["attempt"] != index):
         raise ValueError("next student response is not bound to the published disclosure")
-    frame = payload["messages"][-1]
-    prefix = "Continue the solution from this current view.\n"
-    if frame["role"] != "tool" and not (protocol_version in {"4.10.5", "4.10.6"} and frame["role"] == "user"):
-        raise ValueError("next student request is missing its disclosure")
     previous = [h["text"] for h in case["disclosures"][:hint["ordinal"] - 1]]
     rendered_protocol = protocol_version in RENDERED_CONTINUATION_VERSIONS
     if rendered_protocol:
         attempts = case["attempts"]
         if len(attempts) < index or attempts[index - 1]["student_request_messages"] != payload["messages"]:
             raise ValueError("student request differs from the recorded continuation")
+    behavior = None
+    if protocol_version == "4.10.7":
+        payload, behavior = _behavior_delivery(case, attempt, case["attempts"][index - 1], folder, receipt, trusted, endpoints)
+    frame = payload["messages"][-1]
+    prefix = "Continue the solution from this current view.\n"
+    if frame["role"] != "tool" and not (protocol_version in {"4.10.5", "4.10.6", "4.10.7"} and frame["role"] == "user"):
+        raise ValueError("next student request is missing its disclosure")
     if frame["role"] == "tool" and frame["content"].startswith(prefix):
         view = json.loads(frame["content"][len(prefix):])
         if rendered_protocol and "complete_disclosure" not in view:
@@ -206,7 +283,8 @@ def disclosure_delivery(case, attempt, folder, protocol_version=None):
     else:
         raise ValueError("next student request is missing its disclosure")
     return {"ordinal": hint["ordinal"], "student_attempt": index, "student_receipt": filename,
-            "student_finish_reason": receipt["response"]["finish_reason"]}
+            "student_finish_reason": receipt["response"]["finish_reason"],
+            **({"behavior_prediction": behavior} if behavior is not None else {})}
 
 
 def replay_first(path, ident, payload, prior_binding, *, expected_receipt_sha256=None):
@@ -425,6 +503,8 @@ def run_guided_cases(
             raise ValueError("configured roles differ from the frozen run endpoints")
         coach = endpoints["coach"]
         if isinstance(coach, GuidedChatEndpoint):
+            if template_version == "4.10.7" and not coach.local:
+                raise ValueError("behavior prediction requires a local tutor endpoint")
             if coach is endpoints["student"]:
                 # One server may serve both roles, but thinking is a per-role request setting.
                 coach = copy(coach)
@@ -463,6 +543,9 @@ def run_guided_cases(
             experience=experience,
             endpoints=capabilities,
         )
+        if template_version == "4.10.7":
+            config["behavior_prediction"] = {"endpoint": "coach", "role": "behavior_prediction",
+                                             "checkpoint_index": "following_student_attempt"}
         if template_version in TEACHER_DISCLOSURE_VERSIONS:
             config["until_correct"] = until_correct
         if (template_version in CALCULATION_PLAN_VERSIONS
@@ -619,6 +702,8 @@ def run_guided_cases(
                 endpoint = endpoints[serving_role]
                 payload = (endpoint.final_answer_payload(messages) if native_final
                            else endpoint.payload(messages, schema))
+                if role == "behavior_prediction":
+                    payload["response_format"]["json_schema"]["name"] = "learner_behavior_prediction"
                 syntax = source.get("direct_answer_syntax")
                 first_direct = role == "student" and index == 1 and uses_direct_first(source, template_version)
                 final_grammar = native_final and (template_version not in SOLVER_FINAL_VERSIONS
@@ -916,6 +1001,7 @@ def export(input_path, output, *, selected=None):
     target_counts, target_holds, evidence_counts = {}, {}, {}
     calculation_operations, calculation_readers = {}, {}
     usage_by_role = {}
+    behavior_counts = {"observed_student_turns": 0, "guidance_applied": 0, "action_agreement": {}, "outcome_agreement": {}}
     counts = dict(accepted=0, unverified=0, quarantine=0, interrupted=0, pending=0)
     accepted_routes = dict(nonthinking_direct=0, reviewed_solution=0)
     if manifest["template_version"] in TEACHER_DISCLOSURE_VERSIONS:
@@ -1012,6 +1098,14 @@ def export(input_path, output, *, selected=None):
                     source
                 ):
                     raise ValueError("case differs from its original source or run")
+                if manifest["template_version"] == "4.10.7":
+                    predictions = {f"{a['attempt']:03}-behavior_prediction.json" for a in case["attempts"]
+                                   if "behavior_prediction" in a}
+                    if (any(case.get(key) != value for key, value in source.items())
+                            or predictions != {p.name for p in folder.glob("*-behavior_prediction.json")}
+                            or any("behavior_prediction" in a and (n == 0 or not case["attempts"][n - 1].get("disclosure"))
+                                   for n, a in enumerate(case["attempts"]))):
+                        raise ValueError("behavior predictions differ from the frozen source or published teaching turns")
                 status = case["status"]
                 provenance = case.get("continuation_provenance", {})
                 if status == "accepted" and provenance.get("reference_answer_disclosed"):
@@ -1099,7 +1193,16 @@ def export(input_path, output, *, selected=None):
                 )
                 for attempt in case["attempts"]:
                     paired_protocol = manifest["template_version"] in PAIRED_DISCLOSURE_VERSIONS
-                    delivery = disclosure_delivery(case, attempt, folder, manifest["template_version"]) if paired_protocol else None
+                    delivery = (disclosure_delivery(case, attempt, folder, manifest["template_version"],
+                                                    trusted=trusted, endpoints=manifest["endpoints"]) if paired_protocol else None)
+                    behavior = (delivery or {}).get("behavior_prediction")
+                    if behavior:
+                        behavior_counts["observed_student_turns"] += 1
+                        behavior_counts["guidance_applied"] += int(behavior["guidance_applied"])
+                        for key in ("action_agreement", "outcome_agreement"):
+                            level = behavior["observation"][key]
+                            totals = behavior_counts[key]
+                            totals[level] = totals.get(level, 0) + 1
                     for work in attempt.get("disclosure_work", []):
                         published = bool(work.get("validated_citations") and attempt.get("disclosure"))
                         if paired_protocol:
@@ -1139,6 +1242,7 @@ def export(input_path, output, *, selected=None):
                             mode=case["mode"],
                             status=status,
                             experience_version=case["experience_version"],
+                            **({"following_behavior_prediction": behavior} if behavior else {}),
                             **({"verified_stage": attempt["verified_stage"]} if "verified_stage" in attempt else {}),
                             **({"solving_role": attempt["solving_role"], "solver_model": attempt["student"].get("model")}
                                if "solving_role" in attempt else {}),
@@ -1153,6 +1257,7 @@ def export(input_path, output, *, selected=None):
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
         **({"usage_by_role": usage_by_role} if manifest["template_version"] in CALCULATION_PLAN_VERSIONS else {}),
+        **({"behavior_predictions": behavior_counts} if manifest["template_version"] == "4.10.7" else {}),
         **({"training_targets": {"schema": GUIDED_TARGET_SCHEMA, "file": GUIDED_TARGET_FILE,
                                  "by_objective": target_counts, "held_by_reason": target_holds,
                                  **({"by_evidence_basis": evidence_counts,
