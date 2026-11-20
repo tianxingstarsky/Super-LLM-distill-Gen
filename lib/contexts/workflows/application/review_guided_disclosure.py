@@ -8,7 +8,7 @@ from lib.prompts.workflow_guided_answers import (
     GROUNDED_HINT_REVIEW, TUTOR_TASK_ANALYSIS, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
     DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_draft_decision_schema, disclosure_review_schema, verified_choice_schema,
     verified_choice_review_schema, with_disclosure_pairing, worked_disclosure_schema,
-    PRIVATE_WORKED_REVIEW, PUBLIC_WORKED_WORDING, WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
+    PRIVATE_WORKED_REVIEW, PUBLIC_WORKED_WORDING, TUTOR_OBSERVATION_SOURCES, WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
 )
 from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
 from ..domain.guided_behavior_prediction import prediction_feedback
@@ -23,6 +23,29 @@ from ..domain.guided_disclosure import (
 )
 
 
+def _add_observed_submission(material, attempt, prediction):
+    """Give the tutor the learner's words and the checked categories, with separate provenance."""
+    difficulty = material["current_difficulty"]
+    student = attempt["student"]
+    text = student["content"]
+    spans = [(0, len(text))] if len(text) <= 1200 else [(0, 600), (len(text) - 600, len(text))]
+    difficulty["learner_submission"] = {
+        "author": "student", "attempt": attempt["attempt"], "source_field": "student.content",
+        "finish_reason": student.get("finish_reason"), "length_characters": len(text),
+        "excerpts": [{"start": start, "end": end, "text": text[start:end]} for start, end in spans],
+    }
+    observation = prediction["observation"]
+    difficulty["program_observation"] = {key: observation[key] for key in ("action", "outcome")}
+    forecast = prediction["forecast"]
+    material["prior_behavior_forecast"] = {
+        "author": "behavior_predictor", "published_disclosure_ordinal": prediction["disclosure_ordinal"],
+        "forecast": {key: forecast[key] for key in ("action", "outcome")} if forecast else None,
+        "program_comparison": {key: observation[key] for key in ("action_agreement", "outcome_agreement")},
+        "comparison_scope": "observable_action_and_outcome_categories_only",
+        "guidance_delivery": prediction["guidance_delivery"],
+    }
+
+
 def _review_material(source, attempt, retained, findings, disclosed, candidate):
     evidence = disclosure_evidence(source["question"], retained, findings, disclosed)
     check = attempt["check"]
@@ -33,8 +56,13 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
     previous_id = f"disclosed.{disclosed[-1]['ordinal']}" if disclosed else None
     anchor = candidate["replaces_from"]
     # A faulty student claim identifies the difficulty. It is never a valid premise.
-    observed = formal["response"]["content"] if formal else (
-        attempt.get("coach", {}).get("evidence") or attempt["student"]["content"])
+    prediction = attempt.get("behavior_prediction")
+    separate_sources = bool(prediction and prediction.get("protocol_version") == "4.10.10")
+    difficulty = {"at": anchor}
+    if not separate_sources:
+        observed = formal["response"]["content"] if formal else (
+            attempt.get("coach", {}).get("evidence") or attempt["student"]["content"])
+        difficulty.update(observed_text_end=observed[-1200:], excerpted=len(observed) > 1200)
     facts, history = [], []
     for ref, item in evidence.items():
         target = history if item["kind"] == "published_teacher_hint" else facts
@@ -43,8 +71,7 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
         "established_evidence": facts,
         "ordered_previous_teacher_disclosures": history,
         "latest_disclosure_id": previous_id,
-        "current_difficulty": {"at": anchor, "observed_text_end": observed[-1200:],
-                               "excerpted": len(observed) > 1200},
+        "current_difficulty": difficulty,
         "proposed_next_teacher_disclosure": {"kind": candidate["kind"], "text": candidate["text"]},
     }
     if attempt.get("arithmetic_errors"):
@@ -70,8 +97,13 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
     if calculation_context:
         material["learner_wording_for_interpretation"] = calculation_context
     if attempt.get("truncated_observation"):
-        material["current_difficulty"] = {"at": anchor, **attempt["truncated_observation"],
-                                          "status": "output_limit_without_final_answer"}
+        truncated = attempt["truncated_observation"]
+        if separate_sources:
+            difficulty["status"] = "output_limit_without_final_answer"
+            if "repetition" in truncated:
+                difficulty["repetition"] = truncated["repetition"]
+        else:
+            material["current_difficulty"] = {"at": anchor, **truncated, "status": "output_limit_without_final_answer"}
         material["private_source_reference"] = {
             "answer_key": source["gold"], "attributed_source_reasoning": source["source_reasoning"],
             "use": "Check the direction privately. Ground the next hint in the user's question and previously established facts.",
@@ -101,15 +133,20 @@ def _review_material(source, attempt, retained, findings, disclosed, candidate):
         # An ambiguous conclusion identifies a difficulty. It never establishes a premise.
         material["current_difficulty"]["latest_marked_student_candidate"] = candidate_observation
         material["current_difficulty"]["student_response_tail"] = attempt["student"]["content"][-600:]
-    if prediction := attempt.get("behavior_prediction"):
+    if separate_sources:
+        _add_observed_submission(material, attempt, prediction)
+    elif prediction:
         material["current_difficulty"]["behavior_prediction_feedback"] = prediction_feedback(prediction)
     return material, evidence, previous_id
 
 
 def review_next_disclosure(request, source, attempt, retained, findings, disclosed, candidate):
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, candidate)
+    system = DISCLOSURE_REVIEW
+    if "prior_behavior_forecast" in material:
+        system += "\n\n" + TUTOR_OBSERVATION_SOURCES
     response = request("disclosure", attempt["attempt"], [
-        {"role": "system", "content": DISCLOSURE_REVIEW},
+        {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(material, ensure_ascii=False)},
     ], disclosure_review_schema(list(evidence)))
     audit = {"candidate": dict(candidate), "latest_disclosure_id": previous_id, "response": response}
@@ -197,6 +234,9 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
     # Only catalogue IDs and the actual dialogue observations go into the model's context.
     references = [anchor, *(ref for ref in evidence if ref != "question")]
     system = VERIFIED_STEP_REVIEW
+    if "prior_behavior_forecast" in material:
+        packet["prior_behavior_forecast"] = material["prior_behavior_forecast"]
+        system += "\n\n" + TUTOR_OBSERVATION_SOURCES
     if task_analysis:
         system += "\n\n" + TUTOR_TASK_ANALYSIS
     if "submitted_answer_status" in material["current_difficulty"]:
@@ -257,6 +297,9 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
     if immutable_review:
         author_system += "\n\n" + PUBLIC_WORKED_WORDING
         reviewer_system = PRIVATE_WORKED_REVIEW
+    if "prior_behavior_forecast" in material:
+        author_system += "\n\n" + TUTOR_OBSERVATION_SOURCES
+        reviewer_system += "\n\n" + TUTOR_OBSERVATION_SOURCES
     if show_outcome:
         _add_measured_outcome(material, source, attempt, retained, findings)
         if check_arithmetic and source.get("source_reasoning") and source.get("gold"):
@@ -305,6 +348,14 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                     draft_schema = worked_disclosure_schema(options, require_operation=focus_operation, premise_choices=choices)
                 else:
                     draft_schema = disclosure_draft_decision_schema(grounded=grounded, step_ids=options, premise_choices=choices)
+        if revision and "prior_behavior_forecast" in material:
+            repair = material["requested_revision"]
+            prior_draft = repair.pop("prior_draft")
+            repair["previous_teacher_proposal"] = {
+                key: prior_draft[key] for key in ("decision", "bridge", "hint", "question_quote")
+                if isinstance(prior_draft, dict) and key in prior_draft}
+            if review_reason := repair.pop("private_reviewer_reason"):
+                repair["reviewer_feedback"] = {"author": "disclosure_reviewer", "reason": review_reason}
         role = "disclosure_rewrite" if revision else "disclosure_draft"
         draft = request(role, attempt["attempt"], [
             {"role": "system", "content": author_system},
