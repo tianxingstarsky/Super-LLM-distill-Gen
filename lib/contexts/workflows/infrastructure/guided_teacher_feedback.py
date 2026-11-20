@@ -144,10 +144,10 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                     if behavior:
                         evidence["behavior_prediction"] = behavior
                     guidance_applied = bool(behavior and behavior["guidance_applied"])
-                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7"} and not after.get("solving_role"):
+                    if protocol in {"4.10.3", "4.10.4", "4.10.5", "4.10.6", "4.10.7", "4.10.8"} and not after.get("solving_role"):
                         language = str(source.get("source", {}).get("language") or "").lower()
                         chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in source["question"])
-                        fixed_fields = protocol in {"4.10.6", "4.10.7"}
+                        fixed_fields = protocol in {"4.10.6", "4.10.7", "4.10.8"}
                         scoped = fixed_fields or protocol == "4.10.5"
                         target = local_step_target(source, hint, trusted, chinese=chinese,
                                                    scoped=scoped, fixed_fields=fixed_fields)

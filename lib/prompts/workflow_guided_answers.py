@@ -17,6 +17,20 @@ BEHAVIOR_PREDICTOR = (
     "quote only the selected, already visible source as guidance."
 )
 
+BEHAVIOR_PREDICTOR_4_10_8 = (
+    "Forecast the learner's next observable action from this public packet. If there is a current local task, "
+    "its signed submission fields govern this turn. A published hint may discuss work for a later turn. "
+    "Otherwise the learner may work on an intermediate part of the disclosure or submit a whole answer. "
+    "In reason, explain privately what the learner might do or misread, without solving the exercise. "
+    "An empty list of confirmed work means that no such evidence is available. A hint saying the learner has "
+    "already understood a step is the tutor's wording. Ground any claim about progress in confirmed student work. "
+    "Forecast the action separately from its result. Use unknown when the result cannot be predicted. "
+    "You may select grounded guidance even when the outcome is unknown. Choose exactly one ID from "
+    "available_guidance_sources, whose entries show the direction that each source selects. Choose the empty ID for none. "
+    "Only a program-rendered direction with its public evidence is delivered. Your reason remains an unverified "
+    "interpretation for the tutor."
+)
+
 LOCAL_STEP_STUDENT = (
     "The question supplies the setting. Work on the current tutoring step. You may explain your reasoning. "
     "On the last line submit this step's values as a JSON array of strings. If you need help, submit a JSON "

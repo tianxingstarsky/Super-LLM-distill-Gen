@@ -5,7 +5,9 @@ from jsonschema import Draft202012Validator
 
 from lib.contexts.workflows.application.generate_guided_answer import GenerateGuidedAnswer
 from lib.contexts.workflows.domain.guided_answers import validate_source
-from lib.contexts.workflows.domain.guided_behavior_prediction import prediction_due
+from lib.contexts.workflows.domain.guided_behavior_prediction import (
+    observe_prediction, prediction_due, prediction_feedback, prediction_guidance, prediction_messages, prediction_schema,
+)
 from lib.contexts.workflows.domain.guided_local_steps import (
     LOCAL_SUBMISSION_SCHEMA, check_local_step, dispatched_local_guidance, local_step_target, local_submission_schema,
     scoped_local_messages,
@@ -34,6 +36,50 @@ def signed_source():
     return validate_source(row, allow_verified_teaching_steps=True, trusted_step_receipts={receipt}), receipt
 
 
+def test_public_source_choices_and_unknown_outcome_preserve_legacy_forecast_semantics():
+    visible = {"original_question":"Find the total.", "ordered_published_disclosures":[
+        {"ordinal":1, "text":"List the allowed combinations before counting."}],
+        "confirmed_student_work":[], "current_local_task":"Report the position and its old and new settings."}
+    def response(action, source, *, legacy=False):
+        return {"model":"observer", "finish_reason":"stop", "content":json.dumps({"action":action,"outcome":"unknown",
+                "source":source, **({"direction":"apply_latest_disclosure"} if legacy else {}),
+                "reason":"The learner might list combinations next."})}
+    v7 = prediction_schema(visible, "4.10.7")
+    v8 = prediction_schema(visible, "4.10.8")
+    assert v7["properties"]["source"] == {"type":"string"}
+    assert v8["properties"]["source"]["enum"] == ["disclosure.1","local_task",""]
+    assert set(v8["properties"]["action"]["enum"]) == {"report_local","report_obstacle","unknown"}
+    assert json.loads(prediction_messages(visible)[1]["content"]) == visible
+    choices = json.loads(prediction_messages(visible, "4.10.8")[1]["content"])["available_guidance_sources"]
+    assert choices == {"disclosure.1":"apply_latest_disclosure","local_task":"check_submission_fields","":"none"}
+    # Shape of the real first forecast: it predicted the whole answer during a typed local report.
+    old = response("submit_answer", "<ordinal_1>", legacy=True)
+    assert prediction_guidance(old, visible, chinese=False) == (None, None)
+    assert not Draft202012Validator(v8).is_valid(json.loads(old["content"]))
+    feedback = prediction_feedback({"forecast":None, "response":response("submit_answer", "<ordinal_1>"), "protocol_version":"4.10.8",
+        "student_guidance":None, "observation":{}, "disclosure_ordinal":1})
+    assert feedback["forecast"] is None and feedback["predictor_interpretation"]["status"] == "unverified_interpretation"
+    eligible = response("report_local", "disclosure.1")
+    assert prediction_guidance(response("report_local","disclosure.1",legacy=True), visible, chinese=False)[1] is None
+    assert "direction" not in v8["properties"] and "direction" not in v8["required"]
+    forecast, sent = prediction_guidance(eligible, visible, chinese=False, protocol_version="4.10.8")
+    assert forecast["outcome"] == "unknown" and json.loads(sent["content"])["quoted_visible_evidence"] == visible["ordered_published_disclosures"][0]["text"]
+    assert prediction_guidance(response("report_local","<ordinal_1>"), visible, chinese=False, protocol_version="4.10.8")[1] is None
+    public = {**visible, "current_local_task":None, "confirmed_student_work":[{"id":"finding.1","text":"A checked intermediate."}]}
+    schema = prediction_schema(public, "4.10.8")
+    assert schema["properties"]["source"]["enum"] == ["disclosure.1","finding.1",""]
+    free = response("work_on_disclosure","disclosure.1")
+    assert Draft202012Validator(schema).is_valid(json.loads(free["content"]))
+    forecast, guide = prediction_guidance(free, public, chinese=False, protocol_version="4.10.8")
+    assert guide and forecast["action"] == "work_on_disclosure"
+    for content, actual in [("I will try enumerating the combinations.", "unknown"),
+                            ("I counted the four allowed arrangements.\nFinal answer: 4", "submit_answer")]:
+        observed = observe_prediction(forecast, {"student":{"content":content,"finish_reason":"stop","model":"learner"}},
+            expected_model="learner", question=public["original_question"], gold={"kind":"number","value":"4"})
+        assert observed["action"] == actual
+        assert observed["action_agreement"] == observed["outcome_agreement"] == "unknown"
+
+
 @pytest.mark.parametrize("version,first_step,status", [
     ("4.10.3", 'I read the changed slot in the question.\n["2","1","0"]', "verified_local_value"),
     ("4.10.3", '["2","0","1"]', "local_value_mismatch"),
@@ -43,6 +89,7 @@ def signed_source():
     ("4.10.5", '{"action":"blocked","difficulty":"I cannot tell which position changed."}', "blocked"),
     ("4.10.6", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I claim the full count is one less."}', "verified_local_value"),
     ("4.10.7", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
+    ("4.10.8", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
 ])
 def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, version, first_step, status):
     source, receipt = signed_source()
@@ -55,16 +102,16 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         inputs[role, index] = messages
         if role == "student":
             pair_report = ('{"action":"report","values":["10","01"],"explanation":"I tried both orders."}'
-                           if version in {"4.10.5", "4.10.6", "4.10.7"} else '["10","01"]')
+                           if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8"} else '["10","01"]')
             reply = {1: "8", 2: first_step, 3: pair_report, 4: solved}[index]
-            if version in {"4.10.5", "4.10.6", "4.10.7"} and index in (2, 3):
-                if version in {"4.10.6", "4.10.7"} and index == 2:
+            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8"} and index in (2, 3):
+                if version in {"4.10.6", "4.10.7", "4.10.8"} and index == 2:
                     form = schema["anyOf"][0]["properties"]["values"]
                     assert form["required"] == ["position", "former_bit", "current_bit"]
                     assert Draft202012Validator(schema).is_valid(json.loads(reply))
                 else:
                     assert schema == LOCAL_SUBMISSION_SCHEMA
-                applied = version == "4.10.7" and index == 2
+                applied = version in {"4.10.7", "4.10.8"} and index == 2
                 assert [m["role"] for m in messages] == (["system", "user", "user"] if applied else ["system", "user"])
                 packet = json.loads(messages[1]["content"])
                 assert packet["origin"] == "tutoring_program"
@@ -73,9 +120,12 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             else:
                 assert schema is None
         elif role == "behavior_prediction":
-            reply = dict(action="report_local", outcome="local_values_verified", reason="PRIVATE_FORECAST_SENTINEL",
+            reply = dict(action="report_local", outcome="unknown" if version == "4.10.8" else "local_values_verified", reason="PRIVATE_FORECAST_SENTINEL",
                          direction="apply_latest_disclosure", source="disclosure.1") if index == 2 else dict(
                              action="unknown", outcome="unknown", reason="PRIVATE_FORECAST_SENTINEL", direction="none", source="")
+            if version == "4.10.8":
+                del reply["direction"]
+                assert Draft202012Validator(schema).is_valid(reply)
         elif role == "disclosure_draft":
             step = steps[index-1]
             if index == 2:
@@ -91,7 +141,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             packet = json.loads(messages[-1]["content"])["proposed_next_teacher_disclosure"]
             reply = dict(decision="release", bridge=packet["bridge"], citations=citations, reason="The hint applies.",
                          pairing=dict(evidence_support=True, student_fit=True, history_fit="first" if index == 1 else "continuous"))
-            if version in {"4.10.5", "4.10.6", "4.10.7"}:
+            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8"}:
                 del reply["bridge"]
         elif role == "coach":
             assert index == 4
@@ -104,9 +154,9 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
                     **({"usage":{"prompt_tokens":19, "completion_tokens":5}} if role == "behavior_prediction" else {}))
 
     calls = iter([("student",1), ("disclosure_draft",1), ("disclosure",1),
-                  *([("behavior_prediction",2)] if version == "4.10.7" else []), ("student",2),
+                  *([("behavior_prediction",2)] if version in {"4.10.7", "4.10.8"} else []), ("student",2),
                   ("disclosure_draft",2), ("disclosure",2),
-                  *([("behavior_prediction",3)] if version == "4.10.7" else []), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
+                  *([("behavior_prediction",3)] if version in {"4.10.7", "4.10.8"} else []), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
 
     class Endpoint:
         def __init__(self, name):
@@ -162,10 +212,11 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         assert event["author"] == "teacher_authored" and local["task_author"] == "program"
         assert not event["eligible"] and not event["transfer_gain_supported"]
         assert bool(local["verified_submissions"]) is (local["status"] == "verified_local_value")
-    if version == "4.10.7":
+    if version in {"4.10.7", "4.10.8"}:
         summary = export(input_path, run)
         assert summary["behavior_predictions"] == {"observed_student_turns":2, "guidance_applied":1,
-            "action_agreement":{"matched":1,"unknown":1}, "outcome_agreement":{"matched":1,"unknown":1}}
+            "action_agreement":{"matched":1,"unknown":1},
+            "outcome_agreement":({"unknown":2} if version == "4.10.8" else {"matched":1,"unknown":1})}
         assert summary["usage_by_role"]["new"]["behavior_prediction"] == {
             "responses":2,"usage_unreported":0,"prompt_tokens":38,"completion_tokens":10}
         assert [event["evidence"]["behavior_prediction"]["guidance_applied"] for event in observed["events"]] == [True, False]

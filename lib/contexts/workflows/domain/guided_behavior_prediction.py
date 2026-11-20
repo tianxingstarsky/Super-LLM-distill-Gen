@@ -2,7 +2,7 @@
 
 import json
 
-from lib.prompts.workflow_guided_answers import BEHAVIOR_PREDICTOR
+from lib.prompts.workflow_guided_answers import BEHAVIOR_PREDICTOR, BEHAVIOR_PREDICTOR_4_10_8
 from .guided_answers import inspect_answer
 
 
@@ -23,8 +23,12 @@ BEHAVIOR_PREDICTION_SCHEMA = {"type": "object", "additionalProperties": False,
                    "source": {"type": "string"}}}
 
 
+BEHAVIOR_VERSIONS = {"4.10.7", "4.10.8"}
+_SOURCE_FIELDS = ["action", "outcome", "reason", "source"]
+
+
 def prediction_due(protocol_version, previous_attempt, disclosures, *, received_full=False, solver_role="student"):
-    if protocol_version != "4.10.7" or received_full or solver_role != "student" or not previous_attempt or not disclosures:
+    if protocol_version not in BEHAVIOR_VERSIONS or received_full or solver_role != "student" or not previous_attempt or not disclosures:
         return False
     latest = disclosures[-1]
     return previous_attempt.get("disclosure") == latest and latest["issued_after_attempt"] == previous_attempt["attempt"]
@@ -45,7 +49,36 @@ def prediction_visible(question, disclosures, retained, findings, *, local_task)
             "confirmed_student_work": work, "current_local_task": local_task}
 
 
-def prediction_messages(visible):
+def _guidance_sources(visible):
+    latest = visible["ordered_published_disclosures"][-1]
+    sources = {f"disclosure.{latest['ordinal']}": "apply_latest_disclosure"}
+    if visible["current_local_task"]:
+        sources["local_task"] = "check_submission_fields"
+    sources.update((item["id"], "continue_checked_work") for item in visible["confirmed_student_work"])
+    sources[""] = "none"
+    return sources
+
+
+def prediction_schema(visible, protocol_version):
+    if protocol_version == "4.10.7":
+        return BEHAVIOR_PREDICTION_SCHEMA
+    if protocol_version != "4.10.8":
+        raise ValueError("unsupported behavior prediction version")
+    sources = _guidance_sources(visible)
+    actions = ["report_local", "report_obstacle"] if visible["current_local_task"] else ["work_on_disclosure", "submit_answer"]
+    actions.append("unknown")
+    outcomes = dict.fromkeys(o for action in actions for o in _OUTCOMES.get(action, ("unknown",)))
+    properties = {"action": {"type": "string", "enum": actions}, "outcome": {"type": "string", "enum": list(outcomes)},
+                  "reason": {"type": "string"},
+                  "source": {"type": "string", "enum": list(sources)}}
+    return {**BEHAVIOR_PREDICTION_SCHEMA, "required": _SOURCE_FIELDS, "properties": properties}
+
+
+def prediction_messages(visible, protocol_version="4.10.7"):
+    if protocol_version == "4.10.8":
+        packet = {**visible, "available_guidance_sources": _guidance_sources(visible)}
+        return [{"role": "system", "content": BEHAVIOR_PREDICTOR_4_10_8},
+                {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}]
     return [{"role": "system", "content": BEHAVIOR_PREDICTOR},
             {"role": "user", "content": json.dumps(visible, ensure_ascii=False)}]
 
@@ -57,27 +90,37 @@ def _distinct_fields(pairs):
     return data
 
 
-def prediction_guidance(response, visible, *, chinese):
-    """Project the predictor's selection onto grounded directions. Its prose remains private."""
+def _submitted_prediction(response, protocol_version):
     if response.get("finish_reason") != "stop" or not response.get("model"):
-        return None, None
+        return None
     try:
         result = json.loads(response["content"], object_pairs_hook=_distinct_fields)
     except (ValueError, TypeError, KeyError):
-        return None, None
-    if (not isinstance(result, dict) or set(result) != set(BEHAVIOR_PREDICTION_SCHEMA["required"])
+        return None
+    fields = _SOURCE_FIELDS if protocol_version == "4.10.8" else BEHAVIOR_PREDICTION_SCHEMA["required"]
+    if (not isinstance(result, dict) or set(result) != set(fields)
             or not all(isinstance(v, str) for v in result.values()) or not result["reason"].strip()):
+        return None
+    return result
+
+
+def prediction_guidance(response, visible, *, chinese, protocol_version="4.10.7"):
+    """Project the predictor's selection onto grounded directions. Its prose remains private."""
+    result = _submitted_prediction(response, protocol_version)
+    if not result:
         return None, None
     action, outcome = result["action"], result["outcome"]
-    if (action not in _OUTCOMES or outcome not in (*_OUTCOMES[action], "unknown")
-            or result["direction"] not in (*_DIRECTIONS, "none")):
+    outcomes = {**_OUTCOMES, "work_on_disclosure": ("unknown",)} if protocol_version == "4.10.8" else _OUTCOMES
+    if (action not in outcomes or outcome not in (*outcomes[action], "unknown")
+            or (protocol_version == "4.10.7" and result["direction"] not in (*_DIRECTIONS, "none"))):
         return None, None
     forecast = {"action": action, "outcome": outcome, "reason": result["reason"]}
     local = visible["current_local_task"]
-    if ((action in {"report_local", "report_obstacle"} and not local) or (action == "submit_answer" and local)):
+    if ((action in {"report_local", "report_obstacle"} and not local) or (action in {"submit_answer", "work_on_disclosure"} and local)):
         return None, None
-    direction, ref = result["direction"], result["source"]
-    if outcome == "unknown" or direction not in _DIRECTIONS:
+    ref = result["source"]
+    direction = _guidance_sources(visible).get(ref) if protocol_version == "4.10.8" else result["direction"]
+    if direction not in _DIRECTIONS or (protocol_version == "4.10.7" and outcome == "unknown"):
         return forecast, None
     latest = visible["ordered_published_disclosures"][-1]
     if direction == "apply_latest_disclosure" and ref == f"disclosure.{latest['ordinal']}":
@@ -114,6 +157,10 @@ def observe_prediction(forecast, attempt, *, question, gold, expected_model=None
 
     def agreement(field, observed):
         predicted = (forecast or {}).get(field, "unknown")
+        # A delivered answer can include intermediate work. Without an independent check
+        # of that specific work, the delivery alone cannot establish or contradict it.
+        if field == "action" and predicted == "work_on_disclosure":
+            return "unknown"
         if "unknown" in (predicted, observed):
             return "unknown"
         return "matched" if predicted == observed else "mismatched"
@@ -124,9 +171,12 @@ def observe_prediction(forecast, attempt, *, question, gold, expected_model=None
 
 def prediction_feedback(record):
     forecast = record["forecast"]
+    interpretation = forecast
+    if not forecast and record.get("protocol_version") == "4.10.8":
+        interpretation = _submitted_prediction(record["response"], "4.10.8")
     return {"forecast": {k: forecast[k] for k in ("action", "outcome")} if forecast else None,
             "predictor_interpretation": {"author": "behavior_predictor", "status": "unverified_interpretation",
-                                         "text": forecast["reason"]} if forecast else None,
+                                         "text": interpretation["reason"]} if interpretation else None,
             "student_guidance": record["student_guidance"], "observed_student_submission": record["observation"],
             "agreement_scope": "observable_action_and_outcome_categories_only",
             "published_disclosure_ordinal": record["disclosure_ordinal"]}

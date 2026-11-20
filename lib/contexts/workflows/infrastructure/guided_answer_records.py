@@ -21,7 +21,7 @@ from ..domain.experience_evolution import digest
 from ..domain.reasoning_bank import no_new_memory
 from ..domain.guided_answers import validate_source
 from ..domain.guided_behavior_prediction import (
-    BEHAVIOR_PREDICTION_SCHEMA, observe_prediction, prediction_due, prediction_guidance, prediction_messages, prediction_visible,
+    BEHAVIOR_VERSIONS, observe_prediction, prediction_due, prediction_guidance, prediction_messages, prediction_schema, prediction_visible,
 )
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
 from ..domain.guided_local_steps import check_local_step, dispatched_local_guidance, local_step_material, local_step_target
@@ -144,7 +144,7 @@ def _check_rendered_guidance(case, attempt, payload, previous, hint):
     chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in case["question"])
     suffix = render_student_continuation(view, {}, chinese=chinese)
     content = payload["messages"][-1]["content"]
-    fixed_fields = case.get("protocol") in {"guided-draft-snapshot/v4.10.6", "guided-draft-snapshot/v4.10.7"}
+    fixed_fields = case.get("protocol") in {"guided-draft-snapshot/v4.10.6", "guided-draft-snapshot/v4.10.7", "guided-draft-snapshot/v4.10.8"}
     scoped = fixed_fields or case.get("protocol") == "guided-draft-snapshot/v4.10.5"
     if scoped or case.get("protocol") in {"guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4"}:
         target = local_step_target(case, hint, {hint.get("source_step_receipt")}, chinese=chinese,
@@ -175,7 +175,7 @@ def _check_rendered_guidance(case, attempt, payload, previous, hint):
     raise ValueError("student request differs from its reviewed disclosure history")
 
 
-def _behavior_delivery(case, before, after, folder, student_receipt, trusted, endpoints):
+def _behavior_delivery(case, before, after, folder, student_receipt, trusted, endpoints, protocol_version):
     """Rebuild the predictor's public context and match its dispatch, adoption and subsequent observation."""
     index, hint = after["attempt"], before["disclosure"]
     disclosed = case["disclosures"][:hint["ordinal"]]
@@ -187,7 +187,7 @@ def _behavior_delivery(case, before, after, folder, student_receipt, trusted, en
                  and bool(json.loads(frame["content"][len(prefix):]).get("complete_disclosure")))
     if bool(after.get("solving_role")) != full_view:
         raise ValueError("complete disclosure role differs from the dispatched student view")
-    due = prediction_due("4.10.7", before, disclosed, received_full=full_view,
+    due = prediction_due(protocol_version, before, disclosed, received_full=full_view,
                          solver_role=after.get("solving_role", "student"))
     record = after.get("behavior_prediction")
     path = folder / f"{index:03}-behavior_prediction.json"
@@ -198,6 +198,8 @@ def _behavior_delivery(case, before, after, folder, student_receipt, trusted, en
         return payload, None
     if not isinstance(record, dict) or record.get("checkpoint") != {"role": "behavior_prediction", "attempt": index}:
         raise ValueError("missing or mismatched behavior prediction checkpoint")
+    if record.get("protocol_version", "4.10.7") != protocol_version:
+        raise ValueError("behavior prediction differs from its frozen protocol")
     versions = case["draft_versions"][:index - 1]
     prior = versions[-1]
     if prior["attempt"] != before["attempt"] or record.get("disclosure_ordinal") != hint["ordinal"]:
@@ -212,14 +214,15 @@ def _behavior_delivery(case, before, after, folder, student_receipt, trusted, en
     if record.get("visible") != visible:
         raise ValueError("behavior prediction context differs from the published work")
     receipt = read(path)
-    _check_target_receipt(receipt, ("behavior_prediction", index, record["response"], prediction_messages(visible)), case, "4.10.7")
+    _check_target_receipt(receipt, ("behavior_prediction", index, record["response"], prediction_messages(visible, protocol_version)),
+                          case, protocol_version)
     native = receipt["request"].get("response_format") or {}
     if (native.get("type") != "json_schema" or native.get("json_schema") !=
-            {"name": "learner_behavior_prediction", "strict": True, "schema": BEHAVIOR_PREDICTION_SCHEMA}
+            {"name": "learner_behavior_prediction", "strict": True, "schema": prediction_schema(visible, protocol_version)}
             or receipt["request"].get("model") != endpoints["coach"]["model"]):
         raise ValueError("behavior prediction differs from its frozen model or submission schema")
-    forecast, guidance = prediction_guidance(receipt["response"], visible, chinese=chinese)
-    _check_target_receipt(student_receipt, ("student", index, after["student"], after["student_request_messages"]), case, "4.10.7")
+    forecast, guidance = prediction_guidance(receipt["response"], visible, chinese=chinese, protocol_version=protocol_version)
+    _check_target_receipt(student_receipt, ("student", index, after["student"], after["student_request_messages"]), case, protocol_version)
     # Identity failure or truncation may have ended this turn before the local checker ran.
     if after.get("local_step") is not None:
         if not target or check_local_step(target, student_receipt["response"], index, scoped=True)[0] != after["local_step"]:
@@ -266,11 +269,12 @@ def disclosure_delivery(case, attempt, folder, protocol_version=None, *, trusted
         if len(attempts) < index or attempts[index - 1]["student_request_messages"] != payload["messages"]:
             raise ValueError("student request differs from the recorded continuation")
     behavior = None
-    if protocol_version == "4.10.7":
-        payload, behavior = _behavior_delivery(case, attempt, case["attempts"][index - 1], folder, receipt, trusted, endpoints)
+    if protocol_version in BEHAVIOR_VERSIONS:
+        payload, behavior = _behavior_delivery(case, attempt, case["attempts"][index - 1], folder, receipt,
+                                              trusted, endpoints, protocol_version)
     frame = payload["messages"][-1]
     prefix = "Continue the solution from this current view.\n"
-    if frame["role"] != "tool" and not (protocol_version in {"4.10.5", "4.10.6", "4.10.7"} and frame["role"] == "user"):
+    if frame["role"] != "tool" and not (protocol_version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8"} and frame["role"] == "user"):
         raise ValueError("next student request is missing its disclosure")
     if frame["role"] == "tool" and frame["content"].startswith(prefix):
         view = json.loads(frame["content"][len(prefix):])
@@ -503,7 +507,7 @@ def run_guided_cases(
             raise ValueError("configured roles differ from the frozen run endpoints")
         coach = endpoints["coach"]
         if isinstance(coach, GuidedChatEndpoint):
-            if template_version == "4.10.7" and not coach.local:
+            if template_version in BEHAVIOR_VERSIONS and not coach.local:
                 raise ValueError("behavior prediction requires a local tutor endpoint")
             if coach is endpoints["student"]:
                 # One server may serve both roles, but thinking is a per-role request setting.
@@ -543,7 +547,7 @@ def run_guided_cases(
             experience=experience,
             endpoints=capabilities,
         )
-        if template_version == "4.10.7":
+        if template_version in BEHAVIOR_VERSIONS:
             config["behavior_prediction"] = {"endpoint": "coach", "role": "behavior_prediction",
                                              "checkpoint_index": "following_student_attempt"}
         if template_version in TEACHER_DISCLOSURE_VERSIONS:
@@ -1098,7 +1102,7 @@ def export(input_path, output, *, selected=None):
                     source
                 ):
                     raise ValueError("case differs from its original source or run")
-                if manifest["template_version"] == "4.10.7":
+                if manifest["template_version"] in BEHAVIOR_VERSIONS:
                     predictions = {f"{a['attempt']:03}-behavior_prediction.json" for a in case["attempts"]
                                    if "behavior_prediction" in a}
                     if (any(case.get(key) != value for key, value in source.items())
@@ -1257,7 +1261,7 @@ def export(input_path, output, *, selected=None):
         **({"accepted_by_route": accepted_routes} if manifest["template_version"] in FIRST_ANSWER_VERSIONS else {}),
         "model_calls": calls,
         **({"usage_by_role": usage_by_role} if manifest["template_version"] in CALCULATION_PLAN_VERSIONS else {}),
-        **({"behavior_predictions": behavior_counts} if manifest["template_version"] == "4.10.7" else {}),
+        **({"behavior_predictions": behavior_counts} if manifest["template_version"] in BEHAVIOR_VERSIONS else {}),
         **({"training_targets": {"schema": GUIDED_TARGET_SCHEMA, "file": GUIDED_TARGET_FILE,
                                  "by_objective": target_counts, "held_by_reason": target_holds,
                                  **({"by_evidence_basis": evidence_counts,
