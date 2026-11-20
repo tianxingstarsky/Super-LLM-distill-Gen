@@ -209,9 +209,9 @@ async function install(options, config) {
     archive, doctor: JSON.parse(report), start: {env: {DSH_HOME: home}, argv: [...command, '--profile', options.profile]}}
 }
 async function sdkProbe(config) {
-  const [{Context}, {default: SystemPrompt}, {default: ToolRuntime}, {default: SkillRegistry}, adapter] = await Promise.all([
+  const [{Context}, {default: SystemPrompt}, {default: ToolRuntime}, {default: SkillRegistry}, adapter, {bundledSkillNames}] = await Promise.all([
     import('@deepseek-ai/cordis'), import('@deepseek-ai/dsh-system-prompt'), import('@deepseek-ai/dsh-tools'),
-    import('@deepseek-ai/dsh-skill'), import('./index.mjs'),
+    import('@deepseek-ai/dsh-skill'), import('./index.mjs'), import('./skills.mjs'),
   ])
   const context = new Context()
   try {
@@ -223,7 +223,7 @@ async function sdkProbe(config) {
     const tools = context.tools.schemas().map(tool => tool.name)
     if (!['dataforge', 'dataforge_dispatch'].every(name => tools.includes(name))) fail('adapter_tools_not_registered')
     const skills = []
-    for (const name of ['dataforge', 'review-team']) {
+    for (const name of bundledSkillNames) {
       const skill = await context.skills.get(name)
       if (!skill?.content || skill.provider !== 'dataforge-bundled' || skill.content.startsWith('---')) fail('bundled_skill_not_registered')
       skills.push({name, provider: skill.provider, path: skill.path})

@@ -11,6 +11,7 @@ import uuid
 
 PACKAGE = Path(__file__).resolve().parent
 SKILL_NAME = "shujian-cube"
+TEACHER_SKILL = "disclosure-teacher"
 
 
 def inventory(folder: Path) -> dict[str, str]:
@@ -23,15 +24,20 @@ def inventory(folder: Path) -> dict[str, str]:
     return result
 
 
-def install(destination: Path, *, replace: bool = False) -> dict:
-    source = PACKAGE / "skills" / SKILL_NAME
+def install(destination: Path, *, replace: bool = False, skill: str = SKILL_NAME) -> dict:
+    if skill == SKILL_NAME:
+        source = PACKAGE / "skills" / skill
+    elif skill == TEACHER_SKILL:
+        source = PACKAGE.parent / "dsh-dataforge" / "skills" / skill
+    else:
+        raise ValueError(f"Unknown skill: {skill}")
     expected = inventory(source)
     if "SKILL.md" not in expected:
         raise ValueError("The package has no skill entrypoint")
     parent = destination.expanduser().resolve()
     if parent.is_relative_to(source.resolve()):
         raise ValueError("The destination must be outside the packaged skill")
-    target = parent / SKILL_NAME
+    target = parent / skill
     if target.is_symlink():
         raise ValueError("The destination skill is a symbolic link; choose another destination")
     if target.exists():
@@ -44,12 +50,12 @@ def install(destination: Path, *, replace: bool = False) -> dict:
     parent.mkdir(parents=True, exist_ok=True)
     backup = None
     with tempfile.TemporaryDirectory(prefix=".shujian-install-", dir=parent) as temporary:
-        staged = Path(temporary) / SKILL_NAME
+        staged = Path(temporary) / skill
         shutil.copytree(source, staged, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         if inventory(staged) != expected:
             raise ValueError("The copied skill does not match its source")
         if target.exists():
-            backup = parent / ".shujian-cube-backups" / uuid.uuid4().hex
+            backup = parent / f".{skill}-backups" / uuid.uuid4().hex
             backup.parent.mkdir(parents=True, exist_ok=True)
             target.rename(backup)
         try:
@@ -69,9 +75,11 @@ def main() -> int:
     parser.add_argument("--destination", type=Path, default=Path.home() / ".agents" / "skills",
                         help="Parent directory containing installed skills")
     parser.add_argument("--replace", action="store_true", help="Back up a different existing skill before replacement")
+    parser.add_argument("--skill", choices=(SKILL_NAME, TEACHER_SKILL), default=SKILL_NAME,
+                        help="Install the workflow controller or the local disclosure teacher guide from a checkout")
     args = parser.parse_args()
     try:
-        result = install(args.destination, replace=args.replace)
+        result = install(args.destination, replace=args.replace, skill=args.skill)
     except (OSError, ValueError) as error:
         parser.exit(1, f"Skill installation failed: {error}\n")
     print(json.dumps(result, ensure_ascii=False))

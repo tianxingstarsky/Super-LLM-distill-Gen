@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url'
 import {BUNDLED_SKILL_RANK} from '@deepseek-ai/dsh-skill'
 
 const provider = 'dataforge-bundled'
-const names = ['dataforge', 'review-team']
+export const bundledSkillNames = Object.freeze(['dataforge', 'disclosure-teacher', 'review-team'])
 
 async function definition(name, signal) {
   const path = fileURLToPath(new URL(`./skills/${name}/SKILL.md`, import.meta.url))
@@ -22,13 +22,13 @@ export function registerBundledSkills(registry) {
   return registry.registerProvider(() => ({
     name: provider,
     async list({signal} = {}) {
-      return Promise.all(names.map(async name => {
+      return Promise.all(bundledSkillNames.map(async name => {
         const {content: _content, ...summary} = await definition(name, signal)
         return {...summary, rank: BUNDLED_SKILL_RANK, locator: name}
       }))
     },
     async get(candidate, {signal} = {}) {
-      if (!names.includes(candidate.locator)) return undefined
+      if (!bundledSkillNames.includes(candidate.locator)) return undefined
       return definition(candidate.locator, signal)
     },
   }))

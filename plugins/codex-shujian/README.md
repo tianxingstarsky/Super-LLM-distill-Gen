@@ -1,7 +1,9 @@
 # ShuJian Cube for Codex
 
-This independent plugin contains one self-contained skill. It uses the existing
-`dataforge.control` v1 subprocess interface. It has no agent SDK, model client,
+The bundled `shujian-cube` skill uses the existing
+`dataforge.control` v1 subprocess interface. The checkout installer can also
+install the local disclosure teacher guide shared with DeepSeek Harness.
+The plugin has no agent SDK, model client,
 MCP server, or scheduler of its own. Updating this package does not modify saved
 product tasks, prompts, caches, or exports.
 
@@ -20,11 +22,15 @@ test, pass the **parent directory that holds skills**:
 python plugins/codex-shujian/install.py --destination /absolute/project/.agents/skills
 ```
 
+From a full repository checkout, pass `--skill disclosure-teacher` to install
+the local disclosure teacher guide. It uses recorded student outcomes to improve
+the guidance given in later runs. Invoke it as `$disclosure-teacher`.
+
 The installer copies only the packaged skill. It does not configure models,
 start the app, edit Codex settings, or run a generation request. Identical content
 returns `unchanged`. A different existing skill is left intact unless you pass
 `--replace`; replacement first saves the complete old directory in
-`.shujian-cube-backups` beside the skill.
+a sibling directory named `.<skill-name>-backups`.
 
 Codex normally detects local skills automatically. If the skill does not appear,
 restart Codex. Invoke `$shujian-cube` with the absolute product installation path.

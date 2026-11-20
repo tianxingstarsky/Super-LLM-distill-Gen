@@ -23,6 +23,13 @@ control = module("shujian_skill_control", PACKAGE / "skills/shujian-cube/scripts
 
 
 class InstallationTests(unittest.TestCase):
+    def test_teacher_skill_installs_the_same_instructions_as_the_harness_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            installed = Path(installer.install(Path(temporary), skill="disclosure-teacher")["skill_dir"])
+            source = PACKAGE.parent / "dsh-dataforge/skills/disclosure-teacher"
+            self.assertEqual(installer.inventory(installed), installer.inventory(source))
+            self.assertEqual(installed.name, "disclosure-teacher")
+
     def test_destination_cannot_recurse_into_the_packaged_skill(self):
         with self.assertRaisesRegex(ValueError, "outside the packaged skill"):
             installer.install(PACKAGE / "skills/shujian-cube/nested-skills")

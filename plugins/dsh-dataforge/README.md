@@ -51,7 +51,7 @@ Recheck the **installed** package and profile, using the source entry as a forwa
 node plugins/dsh-dataforge/setup.mjs doctor --home $harnessHome --profile dataforge --root $coreRoot --python $pythonPath
 ```
 
-Doctor checks exact SDK versions, persisted and installed isolated layout, absence of public SDK shadows, profile membership, and the requested project. It imports the installed package, registers tools and skills against the real official `ToolRuntime` and `SkillRegistry`, and sends only a read-only `capabilities` request to Python. It creates no Agent, sends no model prompt, and dispatches no job. Its report deliberately separates `official_sdk_registration`, `capabilities_verified`, and `host_boot_verified: false`: SDK registration is not proof of native host/session tool availability or live job ownership. Confirm the two tools and `/dataforge` / `/review-team` in a real host session before claiming end-to-end readiness. Native host startup errors remain blockers even when doctor passes.
+Doctor checks exact SDK versions, persisted and installed isolated layout, absence of public SDK shadows, profile membership, and the requested project. It imports the installed package, registers tools and skills against the real official `ToolRuntime` and `SkillRegistry`, and sends only a read-only `capabilities` request to Python. It creates no Agent, sends no model prompt, and dispatches no job. Its report deliberately separates `official_sdk_registration`, `capabilities_verified`, and `host_boot_verified: false`: SDK registration is not proof of native host/session tool availability or live job ownership. Confirm the two tools and `/dataforge`, `/disclosure-teacher`, and `/review-team` in a real host session before claiming end-to-end readiness. Native host startup errors remain blockers even when doctor passes.
 
 ### Migrate a 0.3.0 / 0.3.1 hoisted profile
 
@@ -72,7 +72,7 @@ Manual official installation is also supported in a **new** profile. Initialize 
 npm pack
 dsh --profile dataforge-manual --from-default-profile web --dump-config
 # Set nodeLinker: isolated in this new profile's pnpm-workspace.yaml.
-dsh plugin --profile dataforge-manual add /absolute/path/to/dsh-shujian-dataforge-0.3.5.tgz --config.node-linker=isolated --config.auto-install-peers=true
+dsh plugin --profile dataforge-manual add /absolute/path/to/dsh-shujian-dataforge-0.3.6.tgz --config.node-linker=isolated --config.auto-install-peers=true
 ```
 
 The explicit pnpm flag installs the declared SDK peers into this external profile even if the machine has disabled automatic peers. Installation alone and --dump-config do not prove that an entry module can load; the release is also checked by importing the installed profile package.
@@ -146,7 +146,7 @@ Create requests reserve an identity before creating a workflow. A completed crea
 
 ## Agent instructions
 
-The skills under `skills/` describe orchestration and review. Loading the adapter automatically registers the `dataforge-bundled` provider with the official `ctx.skills.registerProvider` API at `BUNDLED_SKILL_RANK` (600). The provider resolves resources beside the installed package, so it works outside this repository and needs no user skill-directory changes. Project, custom, and user skills keep their official higher priority. With `dsh-tool-skill` mounted, models can load `dataforge` and `review-team`, and users can invoke `/dataforge` and `/review-team`. They are adapter assets, not DataForge application settings. Generation and evaluation prompts remain configurable on the core's workflow nodes.
+The skills under `skills/` describe orchestration and review. Loading the adapter automatically registers the `dataforge-bundled` provider with the official `ctx.skills.registerProvider` API at `BUNDLED_SKILL_RANK` (600). The provider resolves resources beside the installed package, so it works outside this repository and needs no user skill-directory changes. Project, custom, and user skills keep their official higher priority. With `dsh-tool-skill` mounted, users and models can invoke `/dataforge`, `/review-team`, and `/disclosure-teacher`. They are adapter assets, not DataForge application settings. Generation and evaluation prompts remain configurable on the core's workflow nodes.
 
 Agent startup procedure:
 

@@ -10,7 +10,7 @@ test('installed package skills load through the official registry and respect lo
     new SkillRegistry(context, {})
     const dispose = registerBundledSkills(context.skills)
     const catalog = await context.skills.list()
-    assert.deepEqual(catalog.map(skill => skill.name), ['dataforge', 'review-team'])
+    assert.deepEqual(catalog.map(skill => skill.name), ['dataforge', 'disclosure-teacher', 'review-team'])
     const skill = await context.skills.get('dataforge')
     assert.equal(skill.provider, 'dataforge-bundled')
     assert.equal(skill.source, 'bundled')

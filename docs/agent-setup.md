@@ -77,7 +77,7 @@ node plugins/dsh-dataforge/setup.mjs doctor --home <DSH-home> --profile <profile
 Read the individual outcomes. SDK registration, the core connection, native
 session loading, and actual workflow execution are different checks. Do not turn
 an untested field into a pass. In a real host, confirm the `dataforge` and
-`dataforge_dispatch` tools and the `dataforge` and `review-team` skills.
+`dataforge_dispatch` tools and the `dataforge`, `disclosure-teacher`, and `review-team` skills.
 
 ## Codex
 
@@ -86,6 +86,15 @@ Install into an explicit project skill directory:
 ```text
 <app-python> plugins/codex-shujian/install.py --destination <project>/.agents/skills
 ```
+
+For a local guided-answer teacher that learns from student outcomes, install its
+skill from the same checkout and invoke `$disclosure-teacher` in Codex.
+
+```text
+<app-python> plugins/codex-shujian/install.py --skill disclosure-teacher --destination <project>/.agents/skills
+```
+
+In DeepSeek Harness the same guide is available as `/disclosure-teacher`.
 
 Without `--destination`, the installer uses `~/.agents/skills`. It preserves an
 existing different skill. Use its documented replacement option only when an
