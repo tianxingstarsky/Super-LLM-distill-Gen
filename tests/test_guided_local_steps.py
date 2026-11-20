@@ -6,7 +6,7 @@ from jsonschema import Draft202012Validator
 from lib.contexts.workflows.application.generate_guided_answer import GenerateGuidedAnswer
 from lib.contexts.workflows.domain.guided_answers import validate_source
 from lib.contexts.workflows.domain.guided_behavior_prediction import (
-    observe_prediction, prediction_due, prediction_feedback, prediction_guidance, prediction_messages, prediction_schema,
+    observe_prediction, place_student_guidance, prediction_due, prediction_feedback, prediction_guidance, prediction_messages, prediction_schema,
 )
 from lib.contexts.workflows.domain.guided_local_steps import (
     LOCAL_SUBMISSION_SCHEMA, check_local_step, dispatched_local_guidance, local_step_target, local_submission_schema,
@@ -80,6 +80,32 @@ def test_public_source_choices_and_unknown_outcome_preserve_legacy_forecast_sema
         assert observed["action_agreement"] == observed["outcome_agreement"] == "unknown"
 
 
+def test_selected_task_must_occupy_the_native_submission_field_to_omit_a_message():
+    source, receipt = signed_source()
+    hint = {"source_step_receipt": receipt, "source_step_id": "fixed-position", "text": "Read the changed slot."}
+    target = local_step_target(source, hint, {receipt}, chinese=False, scoped=True, fixed_fields=True)
+    visible = {"ordered_published_disclosures":[{"ordinal":1,"text":hint["text"]}], "current_local_task":target["request"],
+               "confirmed_student_work":[{"id":"finding.1","text":target["request"]}]}
+    response = {"model":"observer","finish_reason":"stop","content":json.dumps(
+        {"action":"unknown","outcome":"unknown","reason":"The learner might inspect the changed field.","source":"local_task"})}
+    _, guidance = prediction_guidance(response, visible, chinese=False, protocol_version="4.10.9")
+    messages = scoped_local_messages(source, target, target["request"], False)
+    schema = local_submission_schema(target)
+    appended, placement = place_student_guidance(guidance, messages, target, schema)
+    assert appended is None and placement["status"] == "already_in_current_request"
+    system, packet = placement["positions"]
+    assert messages[system["message_index"]]["content"][slice(*system["content_span"])] == target["request"]
+    assert json.loads(messages[packet["message_index"]]["content"])[packet["json_pointer"][1:]] == target["request"]
+    wrong = json.loads(messages[1]["content"])
+    wrong["current_local_task"] = "Different task"
+    for altered, form in [(messages, None), ([messages[0], {"role":"user","content": json.dumps(wrong)}], schema)]:
+        appended, placement = place_student_guidance(guidance, altered, target, form)
+        assert appended == guidance and placement["status"] == "appended"
+    selection = {**json.loads(response["content"]), "source":"finding.1"}
+    _, highlight = prediction_guidance({**response,"content":json.dumps(selection)}, visible, chinese=False, protocol_version="4.10.9")
+    assert place_student_guidance(highlight, messages, target, schema)[0] == highlight
+
+
 @pytest.mark.parametrize("version,first_step,status", [
     ("4.10.3", 'I read the changed slot in the question.\n["2","1","0"]', "verified_local_value"),
     ("4.10.3", '["2","0","1"]', "local_value_mismatch"),
@@ -90,6 +116,7 @@ def test_public_source_choices_and_unknown_outcome_preserve_legacy_forecast_sema
     ("4.10.6", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I claim the full count is one less."}', "verified_local_value"),
     ("4.10.7", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
     ("4.10.8", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
+    ("4.10.9", '{"action":"report","values":{"position":2,"former_bit":1,"current_bit":0},"explanation":"I kept the slot settings separate."}', "verified_local_value"),
 ])
 def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, version, first_step, status):
     source, receipt = signed_source()
@@ -102,16 +129,16 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         inputs[role, index] = messages
         if role == "student":
             pair_report = ('{"action":"report","values":["10","01"],"explanation":"I tried both orders."}'
-                           if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8"} else '["10","01"]')
+                           if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9"} else '["10","01"]')
             reply = {1: "8", 2: first_step, 3: pair_report, 4: solved}[index]
-            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8"} and index in (2, 3):
-                if version in {"4.10.6", "4.10.7", "4.10.8"} and index == 2:
+            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9"} and index in (2, 3):
+                if version in {"4.10.6", "4.10.7", "4.10.8", "4.10.9"} and index == 2:
                     form = schema["anyOf"][0]["properties"]["values"]
                     assert form["required"] == ["position", "former_bit", "current_bit"]
                     assert Draft202012Validator(schema).is_valid(json.loads(reply))
                 else:
                     assert schema == LOCAL_SUBMISSION_SCHEMA
-                applied = version in {"4.10.7", "4.10.8"} and index == 2
+                applied = (version in {"4.10.7", "4.10.8"} and index == 2) or (version == "4.10.9" and index == 3)
                 assert [m["role"] for m in messages] == (["system", "user", "user"] if applied else ["system", "user"])
                 packet = json.loads(messages[1]["content"])
                 assert packet["origin"] == "tutoring_program"
@@ -120,17 +147,23 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             else:
                 assert schema is None
         elif role == "behavior_prediction":
-            reply = dict(action="report_local", outcome="unknown" if version == "4.10.8" else "local_values_verified", reason="PRIVATE_FORECAST_SENTINEL",
+            reply = dict(action="report_local", outcome="unknown" if version in {"4.10.8", "4.10.9"} else "local_values_verified", reason="PRIVATE_FORECAST_SENTINEL",
                          direction="apply_latest_disclosure", source="disclosure.1") if index == 2 else dict(
                              action="unknown", outcome="unknown", reason="PRIVATE_FORECAST_SENTINEL", direction="none", source="")
-            if version == "4.10.8":
+            if version in {"4.10.8", "4.10.9"}:
                 del reply["direction"]
+                if version == "4.10.9":
+                    reply["source"] = "local_task" if index == 2 else "finding.1"
                 assert Draft202012Validator(schema).is_valid(reply)
         elif role == "disclosure_draft":
             step = steps[index-1]
             if index == 2:
                 packet = json.loads(messages[-1]["content"])
                 assert packet["current_difficulty"]["local_step"]["status"] == status
+                if version == "4.10.9":
+                    feedback = packet["current_difficulty"]["behavior_prediction_feedback"]
+                    assert feedback["guidance_delivery"]["status"] == "already_in_current_request"
+                    assert feedback["student_guidance"] is None
             reply = dict(decision="apply:"+step["id"], question_quote=step["quote"], bridge=step["quote"]+".",
                          hint=hints[index-1], reason="Use the selected constraint.")
         elif role == "disclosure":
@@ -141,7 +174,7 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
             packet = json.loads(messages[-1]["content"])["proposed_next_teacher_disclosure"]
             reply = dict(decision="release", bridge=packet["bridge"], citations=citations, reason="The hint applies.",
                          pairing=dict(evidence_support=True, student_fit=True, history_fit="first" if index == 1 else "continuous"))
-            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8"}:
+            if version in {"4.10.5", "4.10.6", "4.10.7", "4.10.8", "4.10.9"}:
                 del reply["bridge"]
         elif role == "coach":
             assert index == 4
@@ -154,9 +187,9 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
                     **({"usage":{"prompt_tokens":19, "completion_tokens":5}} if role == "behavior_prediction" else {}))
 
     calls = iter([("student",1), ("disclosure_draft",1), ("disclosure",1),
-                  *([("behavior_prediction",2)] if version in {"4.10.7", "4.10.8"} else []), ("student",2),
+                  *([("behavior_prediction",2)] if version in {"4.10.7", "4.10.8", "4.10.9"} else []), ("student",2),
                   ("disclosure_draft",2), ("disclosure",2),
-                  *([("behavior_prediction",3)] if version in {"4.10.7", "4.10.8"} else []), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
+                  *([("behavior_prediction",3)] if version in {"4.10.7", "4.10.8", "4.10.9"} else []), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
 
     class Endpoint:
         def __init__(self, name):
@@ -212,14 +245,16 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         assert event["author"] == "teacher_authored" and local["task_author"] == "program"
         assert not event["eligible"] and not event["transfer_gain_supported"]
         assert bool(local["verified_submissions"]) is (local["status"] == "verified_local_value")
-    if version in {"4.10.7", "4.10.8"}:
+    if version in {"4.10.7", "4.10.8", "4.10.9"}:
         summary = export(input_path, run)
         assert summary["behavior_predictions"] == {"observed_student_turns":2, "guidance_applied":1,
+            **({"by_guidance_delivery":{"already_in_current_request":1,"appended":1}} if version == "4.10.9" else {}),
             "action_agreement":{"matched":1,"unknown":1},
-            "outcome_agreement":({"unknown":2} if version == "4.10.8" else {"matched":1,"unknown":1})}
+            "outcome_agreement":({"unknown":2} if version in {"4.10.8", "4.10.9"} else {"matched":1,"unknown":1})}
         assert summary["usage_by_role"]["new"]["behavior_prediction"] == {
             "responses":2,"usage_unreported":0,"prompt_tokens":38,"completion_tokens":10}
-        assert [event["evidence"]["behavior_prediction"]["guidance_applied"] for event in observed["events"]] == [True, False]
+        assert [event["evidence"]["behavior_prediction"]["guidance_applied"] for event in observed["events"]] == (
+            [False, True] if version == "4.10.9" else [True, False])
         assert "PRIVATE_FORECAST_SENTINEL" not in (run/"training-targets.jsonl").read_text(encoding="utf8")
         predict_path = case_path.parent/"002-behavior_prediction.json"
         assert json.loads(predict_path.read_bytes())["role"] == "behavior_prediction"
@@ -227,9 +262,12 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp
         assert run_guided_cases(input_path, run, {"student":Endpoint("learner"), "coach":Endpoint("reviewer")},
             {"version":"test"}, 3, verified_step_receipts=registry)["behavior_predictions"] == summary["behavior_predictions"]
         archived = json.loads(case_path.read_bytes())
-        case["attempts"][1]["behavior_prediction"]["student_guidance"] = None
+        if version == "4.10.9":
+            case["attempts"][1]["behavior_prediction"]["guidance_delivery"]["positions"][1]["message_index"] = 2
+        else:
+            case["attempts"][1]["behavior_prediction"]["student_guidance"] = None
         case_path.write_text(json.dumps(case), encoding="utf8")
-        with pytest.raises(ValueError, match="behavior prediction"):
+        with pytest.raises(ValueError, match="behavior (prediction|guidance)"):
             export(input_path, run)
         case = archived
         case_path.write_text(json.dumps(case), encoding="utf8")

@@ -4,6 +4,7 @@ import json
 
 from lib.prompts.workflow_guided_answers import BEHAVIOR_PREDICTOR, BEHAVIOR_PREDICTOR_4_10_8
 from .guided_answers import inspect_answer
+from .guided_local_steps import local_submission_schema
 
 
 _OUTCOMES = {"report_local": ("local_values_verified", "local_values_mismatch"),
@@ -23,7 +24,8 @@ BEHAVIOR_PREDICTION_SCHEMA = {"type": "object", "additionalProperties": False,
                    "source": {"type": "string"}}}
 
 
-BEHAVIOR_VERSIONS = {"4.10.7", "4.10.8"}
+SOURCE_SELECTION_VERSIONS = {"4.10.8", "4.10.9"}
+BEHAVIOR_VERSIONS = {"4.10.7"} | SOURCE_SELECTION_VERSIONS
 _SOURCE_FIELDS = ["action", "outcome", "reason", "source"]
 
 
@@ -62,7 +64,7 @@ def _guidance_sources(visible):
 def prediction_schema(visible, protocol_version):
     if protocol_version == "4.10.7":
         return BEHAVIOR_PREDICTION_SCHEMA
-    if protocol_version != "4.10.8":
+    if protocol_version not in SOURCE_SELECTION_VERSIONS:
         raise ValueError("unsupported behavior prediction version")
     sources = _guidance_sources(visible)
     actions = ["report_local", "report_obstacle"] if visible["current_local_task"] else ["work_on_disclosure", "submit_answer"]
@@ -75,7 +77,7 @@ def prediction_schema(visible, protocol_version):
 
 
 def prediction_messages(visible, protocol_version="4.10.7"):
-    if protocol_version == "4.10.8":
+    if protocol_version in SOURCE_SELECTION_VERSIONS:
         packet = {**visible, "available_guidance_sources": _guidance_sources(visible)}
         return [{"role": "system", "content": BEHAVIOR_PREDICTOR_4_10_8},
                 {"role": "user", "content": json.dumps(packet, ensure_ascii=False)}]
@@ -97,7 +99,7 @@ def _submitted_prediction(response, protocol_version):
         result = json.loads(response["content"], object_pairs_hook=_distinct_fields)
     except (ValueError, TypeError, KeyError):
         return None
-    fields = _SOURCE_FIELDS if protocol_version == "4.10.8" else BEHAVIOR_PREDICTION_SCHEMA["required"]
+    fields = _SOURCE_FIELDS if protocol_version in SOURCE_SELECTION_VERSIONS else BEHAVIOR_PREDICTION_SCHEMA["required"]
     if (not isinstance(result, dict) or set(result) != set(fields)
             or not all(isinstance(v, str) for v in result.values()) or not result["reason"].strip()):
         return None
@@ -110,7 +112,7 @@ def prediction_guidance(response, visible, *, chinese, protocol_version="4.10.7"
     if not result:
         return None, None
     action, outcome = result["action"], result["outcome"]
-    outcomes = {**_OUTCOMES, "work_on_disclosure": ("unknown",)} if protocol_version == "4.10.8" else _OUTCOMES
+    outcomes = {**_OUTCOMES, "work_on_disclosure": ("unknown",)} if protocol_version in SOURCE_SELECTION_VERSIONS else _OUTCOMES
     if (action not in outcomes or outcome not in (*outcomes[action], "unknown")
             or (protocol_version == "4.10.7" and result["direction"] not in (*_DIRECTIONS, "none"))):
         return None, None
@@ -119,7 +121,7 @@ def prediction_guidance(response, visible, *, chinese, protocol_version="4.10.7"
     if ((action in {"report_local", "report_obstacle"} and not local) or (action in {"submit_answer", "work_on_disclosure"} and local)):
         return None, None
     ref = result["source"]
-    direction = _guidance_sources(visible).get(ref) if protocol_version == "4.10.8" else result["direction"]
+    direction = _guidance_sources(visible).get(ref) if protocol_version in SOURCE_SELECTION_VERSIONS else result["direction"]
     if direction not in _DIRECTIONS or (protocol_version == "4.10.7" and outcome == "unknown"):
         return forecast, None
     latest = visible["ordered_published_disclosures"][-1]
@@ -136,6 +138,32 @@ def prediction_guidance(response, visible, *, chinese, protocol_version="4.10.7"
     frame = {"origin": "behavior_predictor_guidance", "direction": direction, "source": ref,
              "quoted_visible_evidence": quote, "instruction": _DIRECTIONS[direction][1 if chinese else 0]}
     return forecast, {"role": "user", "content": json.dumps(frame, ensure_ascii=False)}
+
+
+def place_student_guidance(guidance, messages, target, schema):
+    """Locate the predictor's selected signed task in the already constructed student request."""
+    if guidance is None:
+        return None, {"status": "no_validated_selection"}
+    frame = json.loads(guidance["content"])
+    placement = {"status": "appended", "source": frame["source"], "direction": frame["direction"],
+                 "positions": [{"message_index": len(messages), "role": "user", "json_pointer": "/quoted_visible_evidence"}]}
+    if (frame["source"] != "local_task" or frame["direction"] != "check_submission_fields"
+            or not target or schema != local_submission_schema(target)
+            or [m["role"] for m in messages] != ["system", "user"]):
+        return guidance, placement
+    try:
+        packet = json.loads(messages[1]["content"], object_pairs_hook=_distinct_fields)
+    except (TypeError, ValueError):
+        return guidance, placement
+    instruction = target["request"]
+    system = messages[0]["content"]
+    if (not isinstance(packet, dict) or packet.get("origin") != "tutoring_program"
+            or packet.get("current_local_task") != instruction or frame["quoted_visible_evidence"] != instruction
+            or not system.endswith("\n\n" + instruction)):
+        return guidance, placement
+    return None, {**placement, "status": "already_in_current_request", "positions": [
+        {"message_index": 0, "role": "system", "content_span": [len(system) - len(instruction), len(system)]},
+        {"message_index": 1, "role": "user", "json_pointer": "/current_local_task"}]}
 
 
 def observe_prediction(forecast, attempt, *, question, gold, expected_model=None):
@@ -172,11 +200,12 @@ def observe_prediction(forecast, attempt, *, question, gold, expected_model=None
 def prediction_feedback(record):
     forecast = record["forecast"]
     interpretation = forecast
-    if not forecast and record.get("protocol_version") == "4.10.8":
-        interpretation = _submitted_prediction(record["response"], "4.10.8")
+    if not forecast and record.get("protocol_version") in SOURCE_SELECTION_VERSIONS:
+        interpretation = _submitted_prediction(record["response"], record["protocol_version"])
     return {"forecast": {k: forecast[k] for k in ("action", "outcome")} if forecast else None,
             "predictor_interpretation": {"author": "behavior_predictor", "status": "unverified_interpretation",
                                          "text": interpretation["reason"]} if interpretation else None,
             "student_guidance": record["student_guidance"], "observed_student_submission": record["observation"],
+            **({"guidance_delivery": record["guidance_delivery"]} if "guidance_delivery" in record else {}),
             "agreement_scope": "observable_action_and_outcome_categories_only",
             "published_disclosure_ordinal": record["disclosure_ordinal"]}

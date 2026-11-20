@@ -12,7 +12,7 @@ from .review_guided_disclosure import (
 )
 from .repair_guided_student_evidence import check_or_repair_student_findings
 from ..domain.guided_behavior_prediction import (
-    observe_prediction, prediction_due, prediction_guidance, prediction_schema,
+    SOURCE_SELECTION_VERSIONS, observe_prediction, place_student_guidance, prediction_due, prediction_guidance, prediction_schema,
     prediction_messages, prediction_visible,
 )
 from ..domain.guided_disclosure import RENDERED_CONTINUATION_VERSIONS, render_student_continuation
@@ -94,7 +94,7 @@ class GenerateGuidedAnswer:
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
-        fixed_fields = protocol_version in {"4.10.6", "4.10.7", "4.10.8"}
+        fixed_fields = protocol_version in {"4.10.6", "4.10.7", "4.10.8", "4.10.9"}
         scoped_local = fixed_fields or protocol_version == "4.10.5"
         immutable_review = scoped_local or protocol_version == "4.10.4"
         local_steps = immutable_review or protocol_version == "4.10.3"
@@ -147,7 +147,7 @@ class GenerateGuidedAnswer:
                     "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
                     "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2",
                     "4.10.3": "v4.10.3", "4.10.4": "v4.10.4", "4.10.5": "v4.10.5", "4.10.6": "v4.10.6",
-                    "4.10.7": "v4.10.7", "4.10.8": "v4.10.8"}[protocol_version]
+                    "4.10.7": "v4.10.7", "4.10.8": "v4.10.8", "4.10.9": "v4.10.9"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW
@@ -302,9 +302,13 @@ class GenerateGuidedAnswer:
                 response = self.request("behavior_prediction", index, prediction_messages(visible, protocol_version),
                                         prediction_schema(visible, protocol_version))
                 forecast, guidance = prediction_guidance(response, visible, chinese=chinese, protocol_version=protocol_version)
+                placement = None
+                if protocol_version == "4.10.9":
+                    guidance, placement = place_student_guidance(guidance, messages, local_target, submission_schema)
                 forecast_learner = expected_first_model or attempts[0]["student"].get("model")
                 prediction = {"checkpoint": {"role": "behavior_prediction", "attempt": index},
-                              **({"protocol_version": protocol_version} if protocol_version == "4.10.8" else {}),
+                              **({"protocol_version": protocol_version} if protocol_version in SOURCE_SELECTION_VERSIONS else {}),
+                              **({"guidance_delivery": placement} if placement is not None else {}),
                               "disclosure_ordinal": disclosed[-1]["ordinal"], "visible": visible, "response": response,
                               "forecast": forecast, "student_guidance": guidance}
                 if guidance:
