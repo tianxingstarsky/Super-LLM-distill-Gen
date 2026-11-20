@@ -2,11 +2,11 @@ import json
 
 import pytest
 
-from lib.contexts.workflows.application.generate_guided_answer import GenerateGuidedAnswer
 from lib.contexts.workflows.domain.guided_answers import validate_source
 from lib.contexts.workflows.domain.guided_local_steps import check_local_step, local_step_target
 from lib.contexts.workflows.domain.guided_teaching_steps import verified_steps_digest
-from lib.contexts.workflows.infrastructure.guided_answer_records import _check_rendered_guidance
+from lib.contexts.workflows.infrastructure.guided_answer_records import location, run_guided_cases
+from lib.contexts.workflows.infrastructure.guided_teacher_feedback import TeacherFeedbackStore
 
 
 def signed_source():
@@ -33,7 +33,7 @@ def signed_source():
     ('{"blocked":"Which bit remains fixed?"}', "blocked"),
     ('Final answer: 4', "unverified"),
 ])
-def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(first_step, status):
+def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(tmp_path, first_step, status):
     source, receipt = signed_source()
     steps = source["verified_teaching_steps"]["steps"]
     inputs = {}
@@ -68,8 +68,34 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(fir
         return dict(model="learner" if role in {"student","final_answer"} else "reviewer",
                     content=reply if isinstance(reply, str) else json.dumps(reply), finish_reason="stop")
 
-    case = GenerateGuidedAnswer(request).run(source, {"version":"test"}, 3, protocol_version="4.10.3",
-                                            until_correct=True, expected_first_model="learner", trusted_solution_receipts={receipt})
+    calls = iter([("student",1), ("disclosure_draft",1), ("disclosure",1), ("student",2),
+                  ("disclosure_draft",2), ("disclosure",2), ("student",3), ("student",4), ("coach",4), ("final_answer",4)])
+
+    class Endpoint:
+        def __init__(self, name):
+            self.name = name
+
+        def validate(self):
+            return {"model":self.name, "url":f"http://localhost/{self.name}", "slots":1, "enable_thinking":False}
+
+        def payload(self, messages, schema):
+            return {"messages":messages, "schema":schema, "model":self.name}
+
+        def final_answer_payload(self, messages):
+            return self.payload(messages, None)
+
+        def complete(self, payload):
+            role, index = next(calls)
+            assert self.name == ("learner" if role in {"student","final_answer"} else "reviewer")
+            return request(role, index, payload["messages"], payload["schema"])
+
+    input_path, registry, run = tmp_path/"source.jsonl", tmp_path/"registry.json", tmp_path/"run"
+    input_path.write_text(json.dumps(source), encoding="utf-8")
+    registry.write_text(json.dumps({"schema":"guided-teaching-verification/v1", "receipts":[receipt]}), encoding="utf-8")
+    run_guided_cases(input_path, run, {"student":Endpoint("learner"), "coach":Endpoint("reviewer")},
+                     {"version":"test"}, 3, protocol_version="4.10.3", until_correct=True, verified_step_receipts=registry)
+    case_path = location(run,source["id"])/"case.json"
+    case = json.loads(case_path.read_bytes())
     assert case["status"] == "accepted" and case["verification"]["answer_key_check"]
     assert [a["local_step"]["status"] for a in case["attempts"][1:3]] == [status,"verified_local_value"]
     assert case["attempts"][1]["student"]["content"] == first_step
@@ -77,8 +103,6 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(fir
         attempt = case["attempts"][n-1]
         assert attempt["check"]["answer_matches"] is None and not attempt["verified_stage"]["complete_student_solution"]
         assert "Final answer:" not in inputs["student",n][0]["content"]
-        prior = case["attempts"][n-2]
-        _check_rendered_guidance(case, prior, {"messages":inputs["student",n]}, [h["text"] for h in case["disclosures"][:n-2]], prior["disclosure"])
     assert "Final answer:" in inputs["student",4][0]["content"]
     assert '["10","01"]' in inputs["student",4][-1]["content"]
     fields = case["shared_student_findings"]
@@ -87,6 +111,19 @@ def test_local_reports_and_obstacles_flow_to_the_next_tutor_and_whole_answer(fir
         raw = case["attempts"][item["source_attempt"]-1]["student"]["content"]
         assert raw[slice(*item["source_span"])] == item["text"]
     assert "continuation_provenance" not in case
+    store = TeacherFeedbackStore(tmp_path/"feedback")
+    observed = store.observe(run, input_path)
+    assert observed["by_category"] == {"program_framed_local_response": 2}, observed
+    assert [e["outcome"] for e in observed["events"]] == [status,"verified_local_value"]
+    for event in observed["events"]:
+        local = event["evidence"]["local_operation"]
+        assert event["author"] == "teacher_authored" and local["task_author"] == "program"
+        assert not event["eligible"] and not event["transfer_gain_supported"]
+        assert bool(local["verified_submissions"]) is (local["status"] == "verified_local_value")
+    if status == "verified_local_value":
+        case["attempts"][1]["local_step"]["status"] = "blocked"
+        case_path.write_text(json.dumps(case), encoding="utf-8")
+        assert store.observe(run, input_path)["events"][0]["category"] == "unverified_receipt"
 
 
 def test_local_operation_needs_the_bound_source_and_a_matching_verifier():

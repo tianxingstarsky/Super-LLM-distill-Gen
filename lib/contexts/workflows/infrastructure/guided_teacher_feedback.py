@@ -10,6 +10,7 @@ from ..application.guided_experience import observed_teacher_disclosure
 from ..application.guided_teacher_feedback import OBSERVED_REWARDS, observed_followup
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import inspect_answer, read_teacher_submission
+from ..domain.guided_local_steps import check_local_step, local_step_material, local_step_target
 from ..domain.guided_student_calculations import recovered_student_calculations
 from ..domain.guided_training_targets import GUIDED_TARGET_FILE
 from .guided_answer_records import (
@@ -50,7 +51,7 @@ def fingerprint(receipt):
     return digest({"role": receipt["role"], "request": receipt["request"], "response": receipt["response"]})
 
 
-def teaching_events(case, folder, protocol, parents, experience):
+def teaching_events(case, folder, protocol, parents, experience, *, source, trusted, learner_model):
     for position, before in enumerate(case["attempts"]):
         number = before["attempt"]
         hint = before.get("disclosure")
@@ -135,6 +136,23 @@ def teaching_events(case, folder, protocol, parents, experience):
                         student_excerpt={"tail": raw[-900:], "chars": len(raw), "sha256": digest(raw),
                                          "is_excerpt": len(raw) > 900})
                     event["category"] = outcome if origin == "teacher" else "program_disclosure"
+                    if protocol in {"4.10.3", "4.10.4"} and not after.get("solving_role"):
+                        language = str(source.get("source", {}).get("language") or "").lower()
+                        chinese = language.startswith("zh") if language else any("\u4e00" <= c <= "\u9fff" for c in source["question"])
+                        target = local_step_target(source, hint, trusted, chinese=chinese)
+                        if target:
+                            actual = receipt["request"]["messages"][-1]
+                            if (actual["role"] != "tool" or not actual["content"].startswith(local_step_material(target))
+                                    or receipt["response"].get("model") != learner_model):
+                                raise ValueError("local reply lacks the original dispatched operation or verified learner")
+                            replay, facts = check_local_step(target, receipt["response"], after["attempt"])
+                            if after.get("local_step") != replay:
+                                raise ValueError("archived local outcome differs from the authenticated response")
+                            evidence["local_operation"] = {**replay, "task_author": "program",
+                                "verified_submissions": [{"text": f["text"], "source_span": f["source_span"]} for f in facts.values()]}
+                            event.update(category="program_framed_local_response", outcome=replay["status"])
+                        elif after.get("local_step"):
+                            raise ValueError("local reply lacks its independently attested source operation")
         ident = digest({"case": case["source_sha256"], "round": number, "hint": event["hint"],
                         "receipts": refs, "category": event["category"]})
         yield {**event, "id": ident, "eligible": event["category"] in OBSERVED_REWARDS}
@@ -188,7 +206,8 @@ class TeacherFeedbackStore:
                     if (case["binding"] != binding or case["source_sha256"] != digest(source) or case["id"] != ident or
                             any(case.get(k) != source.get(k) for k in ("question", "gold", "source_reasoning", "source"))):
                         raise ValueError("case and original source/manifest differ")
-                    observed = list(teaching_events(case, folder, protocol, parents, manifest["experience"]))
+                    observed = list(teaching_events(case, folder, protocol, parents, manifest["experience"],
+                                                    source=source, trusted=trust, learner_model=manifest["endpoints"]["student"]["model"]))
                 except (ValueError, KeyError, FileNotFoundError) as exc:
                     observed = [{"id": digest({"case": ident, "binding": binding, "unbound": str(exc)}),
                                  "case_id": ident, "eligible": False, "category": "unverified_receipt",
