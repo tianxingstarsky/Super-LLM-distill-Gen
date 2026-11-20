@@ -49,6 +49,7 @@ def observed_followup(before, after, *, certified_value, exposed_answer, replaye
 OBSERVED_REWARDS = {"newly_delivered_key_match", "new_program_checked_fact", "wrong_delivered_value",
                     "no_checkable_delivery"}
 POSITIVE_OUTCOMES = {"newly_delivered_key_match", "new_program_checked_fact"}
+MIXED_INTERMEDIATE = "checked_intermediate_in_mixed_reply"
 TEACHER_ACTION_VERSION = 3
 
 
@@ -56,7 +57,8 @@ def teacher_batch_episode(events):
     """Induce from one real action and its outcome, with separately attributed peer outcomes as context."""
     # The official single-trajectory algorithm needs an actual anchor. Other cases are separate
     # observations of the teaching policy, never fictitious turns in the anchor's task.
-    anchor, *peers = sorted(events, key=lambda row: row["outcome"] in POSITIVE_OUTCOMES)
+    anchor, *peers = sorted(events, key=lambda row: (row.get("learning_scope") == MIXED_INTERMEDIATE,
+                                                     row["outcome"] in POSITIVE_OUTCOMES))
     def action(row):
         properties = row["action_properties"]
         words = ["The tutor selected a previously checked operation and sent it to the learner."
@@ -67,8 +69,23 @@ def teacher_batch_episode(events):
             words.append("The learner had already received an earlier hint.")
         if properties["cites_learner_result"]:
             words.append("A citation in this hint pointed to the learner's earlier work.")
+        if row.get("learning_scope") == MIXED_INTERMEDIATE and properties["linked_to_verifiable_operation"]:
+            words.append("The written hint applied a task-checked operation.")
         return " ".join(words)
     def outcome(row):
+        if row.get("learning_scope") == MIXED_INTERMEDIATE:
+            evidence = row["evidence"]
+            if evidence.get("published_answer_matches_key") is False:
+                limitation = "The learner's submitted final value disagreed with the task key."
+            elif evidence.get("output_issue") == "private_or_template_markers":
+                limitation = "The public response contained a private or template marker and its final delivery was unverified."
+            else:
+                limitation = "The full response retained unresolved problems."
+            return ("The learner's next response contained a newly worked intermediate calculation. Its exact "
+                    "expression matches independently checked source arithmetic. Neither the numeric value nor "
+                    "the calculation was found in the earlier learner responses and published guidance. "
+                    + limitation + " Use both observations when considering a next hint. The tutor's causal effect "
+                    "and the learner's overall success remain unconfirmed.")
         return {"wrong_delivered_value": "The learner then submitted a definite answer. Its value disagreed with the task key.",
                 "no_checkable_delivery": "The learner then wrote a response, but did not deliver a formal answer that could be verified.",
                 "new_program_checked_fact": "The learner then supplied a new intermediate calculation checked against the task.",
@@ -84,7 +101,9 @@ def teacher_batch_episode(events):
     return {"id": "teacher-followup-" + digest([e["id"] for e in events]),
             "guided_teacher_followup_projection_version": 1, "teacher_action_features_version": TEACHER_ACTION_VERSION,
             "conversation": {"messages": messages},
-            "review_observation": {"verdict": {"keep": anchor["outcome"] in POSITIVE_OUTCOMES,
+            **({"teacher_followup_assessment_scope": "whole_delivery_unconfirmed_with_checked_intermediate"}
+               if anchor.get("learning_scope") == MIXED_INTERMEDIATE else {}),
+            "review_observation": {"verdict": {"keep": anchor.get("learning_scope") != MIXED_INTERMEDIATE and anchor["outcome"] in POSITIVE_OUTCOMES,
                 "reason": outcome(anchor) + " Whether an alternative hint would help will be tested separately."}}}
 
 

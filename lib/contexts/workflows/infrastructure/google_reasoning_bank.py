@@ -76,7 +76,9 @@ def recorded_episode(observation, user_outcome=None):
         "assessment_source": {"kind": ("reviewed_teacher_final_answer" if teacher_final else "user_label" if user_outcome else
                                        "observed_student_followup" if teacher_followup else "reviewed_teacher_disclosure" if teacher_draft else
                                        "program_key_and_tutor" if guided_trace else "recorded_model_autoeval"),
-                              "independently_verified": teacher_final and episode["final_assessment"]["kind"] != "human"},
+                              "independently_verified": teacher_final and episode["final_assessment"]["kind"] != "human",
+                              **({"scope": episode["teacher_followup_assessment_scope"]}
+                                 if teacher_followup and "teacher_followup_assessment_scope" in episode else {})},
         "feedback": (("Assessment of the teacher's public answer.\n" if teacher_final else
                      "This is a fallible reviewer observation, not established truth.\n") + check.get("reason", "")),
         **({"guided_final_projection_version": 1, "final_assessment": deepcopy(episode["final_assessment"])} if teacher_final else {}),

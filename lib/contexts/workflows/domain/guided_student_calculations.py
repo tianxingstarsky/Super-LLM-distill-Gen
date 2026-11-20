@@ -310,3 +310,51 @@ def recovered_student_calculations(source, pieces, *, prior_hints=(), pair_resul
                     found[sid]["text"] += " " + quantity["unit"]
             break
     return found
+
+
+def attributable_mixed_calculations(text, findings, archived, prior_texts, attempt):
+    """Verify the exact saved learner span and rule out earlier exposure of its value."""
+    quantities = re.compile(r"(?<![A-Za-z0-9.])[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
+                            r"(?:/\d+|[eE][+-]?\d+)?(?![A-Za-z0-9])")
+    seen = {number(m[0]) for prior in prior_texts for m in quantities.finditer(prior)}
+    previous_findings = {f.get("calculation_key") for f in archived if isinstance(f.get("source_attempt"), int)
+                         and f["source_attempt"] < attempt}
+    for prior in prior_texts:
+        for match in _MATH_RUN.finditer(prior):
+            math = _normalized_equation(re.sub(_UNIT, " ", match[0]))
+            for side in math.split("="):
+                checked = _expression_value(side.strip().rstrip(".").strip(), require_operation=True)
+                if checked:
+                    previous_findings.add(digest(checked[1]))
+    saved = {f.get("calculation_key"): f for f in archived if f.get("source_attempt") == attempt
+             and f.get("author") == "student" and f.get("evidence_level") == "source_verified_student_calculation"}
+    exclusions = [m.span() for m in _QUOTED.finditer(text)]
+    exclusions.extend(m.span() for m in re.finditer(r"(?is)<think>.*?(?:</think>|\Z)|(?P<fence>`{3,}|~{3,}).*?(?:(?P=fence)|\Z)", text))
+    attribution = re.compile(r"\b(?:the )?(?:teacher|tutor|problem|hint|reference|source)\s+(?:said|says|states?|gave|gives)\b"
+                             r"|^\s*(?:quote|hint|teacher|tutor|reference|引文|教师|老师|提示)\s*[:：]", re.I)
+    qualifiers = (_NONASSERTION, _MENTION, _ATTRIBUTED_CALCULATION, attribution)
+    verified = []
+    for finding in findings:
+        key = finding["calculation_key"]
+        prior = saved.get(key)
+        if not prior or key in previous_findings:
+            continue
+        provenance = ("source_span", "student_quote", "source_calculation_span", "source_calculation_quote")
+        if any(prior.get(field) != finding[field] for field in provenance):
+            continue
+        start, end = finding["source_span"]
+        if text[start:end] != finding["student_quote"] or any(lo < end and start < hi for lo, hi in exclusions):
+            continue
+        line_start = text.rfind("\n", 0, start) + 1
+        line_end = text.find("\n", end)
+        line = text[line_start:len(text) if line_end < 0 else line_end]
+        lead = text[:line_start].rstrip().rsplit("\n", 1)[-1]
+        if (line.lstrip().startswith(">") or "`" in line or contains_chat_control(line)
+                or any(pattern.search(line) for pattern in qualifiers)
+                or (lead.endswith((":", "：", ",", "，")) and any(pattern.search(lead) for pattern in qualifiers))):
+            continue
+        value = verified_equation_result(finding["student_quote"])
+        if value is not None and value not in seen:
+            verified.append({"calculation_key": key, "source_attempt": attempt,
+                             **{field: finding[field] for field in provenance}})
+    return verified

@@ -7,11 +7,11 @@ from contextlib import closing
 from filelock import FileLock
 
 from ..application.guided_experience import observed_teacher_disclosure
-from ..application.guided_teacher_feedback import OBSERVED_REWARDS, observed_followup
+from ..application.guided_teacher_feedback import MIXED_INTERMEDIATE, OBSERVED_REWARDS, observed_followup
 from ..domain.experience_evolution import digest
 from ..domain.guided_answers import inspect_answer, read_teacher_submission
 from ..domain.guided_local_steps import check_local_step, dispatched_local_guidance, local_step_material, local_step_target
-from ..domain.guided_student_calculations import recovered_student_calculations
+from ..domain.guided_student_calculations import attributable_mixed_calculations, recovered_student_calculations
 from ..domain.guided_training_targets import GUIDED_TARGET_FILE
 from .guided_answer_records import (
     disclosure_delivery, guided_port_response, inputs, location, read, replay_first, replay_matching_call, verified_step_registry,
@@ -155,9 +155,31 @@ def teaching_events(case, folder, protocol, parents, experience, *, source, trus
                             event.update(category="program_framed_local_response", outcome=replay["status"])
                         elif after.get("local_step"):
                             raise ValueError("local reply lacks its independently attested source operation")
+                    incomplete_delivery = (matched is False or not after["check"].get("format_ok")
+                                           or stage.get("unresolved_review_evidence") or after.get("reviewed_derivation_conflict")
+                                           or after.get("coach_feedback_check")
+                                           or (position + 2 == len(case["attempts"]) and case["status"] == "quarantine"))
+                    if (reproduced and incomplete_delivery and event["author"] == "teacher_authored"
+                            and event["category"] != "program_framed_local_response" and not after.get("solving_role")
+                            and not stage.get("reference_answer_was_visible") and after["student"]["finish_reason"] == "stop"
+                            and receipt["response"].get("model_identity_source") in {"response_model", "single_served_model"}
+                            and receipt["response"].get("model") == learner_model):
+                        seen_texts = [source["question"], *(m["content"] for m in receipt["request"]["messages"] if m["role"] != "system")]
+                        seen_texts.extend(h["text"] for h in case["disclosures"][:hint["ordinal"]])
+                        seen_texts.append(before["student"]["content"])
+                        for earlier in case["attempts"][:position]:
+                            earlier_call = archive_receipt(folder, case["binding"], case["id"], "student", earlier["attempt"],
+                                                           earlier["student"], protocol, parents)
+                            seen_texts.append(earlier_call["response"]["content"])
+                        mixed = attributable_mixed_calculations(raw,
+                            (f for f in calculations.values() if "calculation:" + f["calculation_key"] in reproduced),
+                            case.get("shared_student_findings", []), seen_texts, after["attempt"])
+                        if mixed:
+                            event["learning_scope"] = MIXED_INTERMEDIATE
+                            evidence["attributable_intermediate_calculations"] = mixed
         ident = digest({"case": case["source_sha256"], "round": number, "hint": event["hint"],
                         "receipts": refs, "category": event["category"]})
-        yield {**event, "id": ident, "eligible": event["category"] in OBSERVED_REWARDS}
+        yield {**event, "id": ident, "eligible": event["category"] in OBSERVED_REWARDS or event.get("learning_scope") == MIXED_INTERMEDIATE}
 
 
 class TeacherFeedbackStore:
@@ -221,7 +243,7 @@ class TeacherFeedbackStore:
                         supported_delivery = (event["round"] + 1 == len(case["attempts"]) and case["status"] == "accepted"
                             and exported.get("case_binding") == binding and exported.get("source_sha256") == case["source_sha256"]
                             and exported.get("objective") not in {"teacher_demonstration", "calculation_demonstration"})
-                        record["transfer_gain_supported"] = bool(event["eligible"] and (
+                        record["transfer_gain_supported"] = bool(event.get("learning_scope") != MIXED_INTERMEDIATE and event["eligible"] and (
                             evidence.get("replayed_new_calculations") or
                             (record["category"] == "newly_delivered_key_match" and (
                                 source.get("answer_requirement") == "final_only" or supported_delivery))))
@@ -236,8 +258,8 @@ class TeacherFeedbackStore:
                     count = db.execute("INSERT OR IGNORE INTO events VALUES(?,?,?,?,NULL)", (event["id"],
                         event["eligible"], event["category"], json.dumps(record, ensure_ascii=False))).rowcount
                     if not count and event.get("action_properties"):
-                        db.execute("UPDATE events SET record=? WHERE id=? AND json_extract(record,'$.run_binding')=?",
-                                   (json.dumps(record, ensure_ascii=False), event["id"], binding))
+                        db.execute("UPDATE events SET eligible=?, record=? WHERE id=? AND json_extract(record,'$.run_binding')=?",
+                                   (event["eligible"], json.dumps(record, ensure_ascii=False), event["id"], binding))
                     events.append({**record, "new": bool(count)})
             if selected - found:
                 raise ValueError("case absent from frozen input: " + ", ".join(sorted(selected - found)))
@@ -278,7 +300,8 @@ class TeacherFeedbackStore:
                 pairs.append({"id": new["case_id"], "old": control["category"], "new": new["category"],
                               "old_gain_supported": bool(control.get("transfer_gain_supported")),
                               "new_gain_supported": bool(new.get("transfer_gain_supported")),
-                              "comparable": control["eligible"] and new["eligible"]})
+                              "comparable": control["eligible"] and new["eligible"] and
+                              all(r.get("learning_scope") != MIXED_INTERMEDIATE for r in (control, new))})
         for ident in sorted(cohort - {p["id"] for p in pairs}):
             pairs.append({"id": ident, "comparable": False, "old": None, "new": None})
         return pairs
