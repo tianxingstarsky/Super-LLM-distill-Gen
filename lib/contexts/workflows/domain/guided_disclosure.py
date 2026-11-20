@@ -7,7 +7,7 @@ from .guided_disclosure_text import locate_teacher_premise
 from .guided_teaching_steps import verified_steps_digest
 
 
-RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3", "4.9.0", "4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3"}
+RENDERED_CONTINUATION_VERSIONS = {"4.8.2", "4.8.3", "4.9.0", "4.9.1", "4.10.0", "4.10.1", "4.10.2", "4.10.3", "4.10.4"}
 
 
 def render_student_continuation(view, approaches, *, chinese):
@@ -93,17 +93,50 @@ def checked_teacher_draft(proposal, gold, retained, findings, disclosed, *, ques
     return bridge, hint
 
 
-def checked_disclosure(review, evidence, previous_id, candidate, gold, *, quoted_premises=False):
+def check_authored_wording(bridge, hint, question, operation_ids, gold, answer_syntax):
+    """Keep private operation IDs, broken response framing and undisclosed answer lists out of a hint."""
+    public = bridge + "\n" + hint
+    for part in (bridge, hint):
+        if re.fullmatch(r"\s*(?:`{3,}|~{3,})\s*(?:json)?\s*[\[{]?\s*", part, re.I):
+            raise ValueError("teacher_public_field_is_response_markup")
+    for identifier in operation_ids:
+        token = r"(?<![\w-])" + re.escape(identifier) + r"(?![\w-])"
+        if re.search(r"(?:apply|select):" + re.escape(identifier) + r"(?![\w-])", public, re.I):
+            raise ValueError("teacher_public_text_contains_operation_id")
+        opaque_identifier = "_" in identifier or "-" in identifier
+        if opaque_identifier and re.search(token, public, re.I) and not re.search(token, question, re.I):
+            raise ValueError("teacher_public_text_contains_operation_id")
+    if not gold or answer_syntax not in {"fact_ids", "distinct_fact_ids", "distinct_letter_ids"}:
+        return
+    if answer_syntax == "distinct_letter_ids":
+        identifier = r"(?<![A-Za-z0-9])[A-Z](?![A-Za-z0-9])"
+        answer_ids = set(gold["value"])
+    else:
+        identifier = r"(?<![A-Za-z0-9])F\d+(?![A-Za-z0-9])"
+        answer_ids = set(gold["value"].split(","))
+    separator = r"(?:\s*[,，、/]\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+|\s*[和与或]\s*)"
+    enumeration = re.compile(identifier + "(?:" + separator + identifier + ")+")
+    def names_answer(text):
+        return any(set(re.findall(identifier, group[0])) == answer_ids for group in enumeration.finditer(text))
+    if names_answer(public) and not names_answer(question):
+        raise ValueError("teacher_public_text_names_complete_target_selection")
+
+
+def checked_disclosure(review, evidence, previous_id, candidate, gold, *, quoted_premises=False, authored_bridge=None):
     """Return auditable citations and publishable wording for a released disclosure."""
-    if (not isinstance(review, dict) or set(review) != {"decision", "citations", "bridge", "reason"}
+    fields = {"decision", "citations", "reason"}
+    if authored_bridge is None:
+        fields.add("bridge")
+    if (not isinstance(review, dict) or set(review) != fields
         or review["decision"] not in ("release", "withhold") or not isinstance(review["citations"], list)
-        or not isinstance(review["bridge"], str) or not isinstance(review["reason"], str) or not review["reason"].strip()):
+        or (authored_bridge is None and not isinstance(review["bridge"], str))
+        or not isinstance(review["reason"], str) or not review["reason"].strip()):
         raise ValueError("invalid_disclosure_assessment")
     if review["decision"] == "withhold":
-        if review["bridge"].strip():
+        if authored_bridge is None and review["bridge"].strip():
             raise ValueError("withheld_disclosure_has_public_text")
         return None
-    bridge = review["bridge"].strip()
+    bridge = review["bridge"].strip() if authored_bridge is None else authored_bridge
     if not bridge or contains_chat_control(bridge) or bridge == candidate["text"].strip():
         raise ValueError("missing_or_invalid_disclosure_bridge")
     citations = []

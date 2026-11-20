@@ -14,6 +14,91 @@ def reply(text, model):
             "finish_reason": "stop", "reasoning_content": ""}
 
 
+@pytest.mark.parametrize("verdict,extra,expected", [
+    ("release", {}, None),
+    ("withhold", {}, "teacher_disclosure_withheld"),
+    ("release", {"bridge": "The reviewer supplies their own explanation."}, "invalid_disclosure_assessment"),
+])
+def test_private_review_cannot_edit_or_publish_a_withheld_authored_intermediate(verdict, extra, expected):
+    premise = "Each home needs a slab of concrete that is 100 feet by 100 feet by .5 feet."
+    source = {"question": premise + " Concrete weighs 150 pounds per cubic foot and costs $.02 per pound."
+              " What is the total concrete cost for three homes?",
+              "gold": {"kind": "number", "value": "45000"}, "source_reasoning": ""}
+    attempt = {"attempt": 1, "check": {"format_ok": True, "answer_matches": False},
+               "student": {"content": "695"}, "derivation_available": False}
+    bridge = "One slab has volume 100 × 100 × 0.5 = 5000 cubic feet."
+    hint = "Which conversion turns that volume into a weight?"
+    decisions = []
+    def request(role, index, messages, schema):
+        packet = json.loads(messages[-1]["content"])
+        if role in {"disclosure_draft", "disclosure_rewrite"}:
+            return reply({"decision": "offer", "bridge": bridge if role == "disclosure_draft" else bridge + " This is per slab.",
+                          "hint": hint, "reason": "Work out volume before calculating weight.", "question_quote": premise}, "coach")
+        assert set(schema["required"]) == set(schema["properties"]) == {"decision", "citations", "reason", "pairing"}
+        assert schema["additionalProperties"] is False
+        decisions.append(packet["proposed_next_teacher_disclosure"]["public_text"])
+        return reply({"decision": verdict, "reason": "The next conversion remains open.",
+                      "citations": [{"evidence_id": "question", "quote": premise}],
+                      "pairing": {"student_fit": True, "evidence_support": True, "history_fit": "first"}, **extra}, "coach")
+    result, issue = review_or_recommend_disclosure(
+        request, source, attempt, [], {}, [], {"kind": "idea", "text": "", "replaces_from": "final_answer"},
+        teacher_experience="", tried=set(), contextual_operations=True, immutable_review=True, check_arithmetic=True)
+    assert issue == expected
+    if expected:
+        assert not result and len(decisions) == 2
+    else:
+        assert decisions == [result["text"]] == [bridge + "\n" + hint]
+        assert result["bridge"] == bridge
+        assert "bridge" not in attempt["disclosure_work"][0]["assessment"]
+
+
+def test_private_review_rejects_observed_public_protocol_and_complete_fact_selection():
+    from lib.contexts.workflows.domain.guided_disclosure import check_authored_wording
+    premise = "Consider deleting exactly one original fact at a time."
+    selection = {"kind": "exact", "value": "F01,F04"}
+    def check(bridge, hint):
+        check_authored_wording(bridge, hint, premise, ["action_a"], selection, "distinct_fact_ids")
+    with pytest.raises(ValueError, match="contains_operation_id"):
+        check("Applying action_a gives the volume.", "Which quantity comes next?")
+    with pytest.raises(ValueError, match="response_markup"):
+        check("```json{", "Trace which rules conclude blue.")
+    with pytest.raises(ValueError, match="complete_target_selection"):
+        check("Trace which rules conclude blue.", "Check if removing F04 or F01 breaks the chain.")
+    check("Trace which rules conclude blue.", "Compare F01, F04 and F06 in separate trials.")
+
+
+@pytest.mark.parametrize("version,expects_bridge", [("4.10.3", True), ("4.10.4", False)])
+def test_frozen_protocol_selects_review_contract_and_withholds_the_draft(version, expects_bridge):
+    premise = "A slab is 100 feet by 100 feet by .5 feet."
+    source = validate_source({"id": "foundation", "question": premise + " Concrete weighs 150 pounds per cubic foot. "
+                              "What is the weight of the slab? Give only the numerical result.",
+                              "gold": {"kind": "number", "value": "750000"}, "answer_requirement": "final_only"})
+    roles = []
+    def request(role, index, messages, schema):
+        roles.append(role)
+        if role == "student":
+            assert index == 1
+            return reply("695", "solver")
+        if role == "disclosure_draft":
+            return reply({"decision": "offer", "question_quote": premise, "bridge": "Consider one slab.",
+                          "hint": "The measured volume is 5000. Find the next conversion.",
+                          "reason": "Give the volume and leave the density conversion."}, "coach")
+        if role == "disclosure_rewrite":
+            return reply({"decision": "insufficient", "reason": "No new justified step.",
+                          "question_quote": "", "bridge": "", "hint": ""}, "coach")
+        assert role == "disclosure"
+        assert ("bridge" in schema["properties"]) is expects_bridge
+        return reply({"decision": "withhold", "reason": "The units for that volume are missing.",
+                      "citations": [{"evidence_id": "question", "quote": premise}],
+                      "pairing": {"student_fit": True, "evidence_support": False, "history_fit": "first"},
+                      **({"bridge": ""} if expects_bridge else {})}, "coach")
+    case = GenerateGuidedAnswer(request).run(source, {"version": "initial"}, 2, protocol_version=version)
+    assert roles == ["student", "disclosure_draft", "disclosure", "disclosure_rewrite"]
+    assert case["attempts"][0]["disclosure_work"][0]["issue"] == "teacher_disclosure_withheld"
+    assert not case["disclosures"]
+    assert all("5000" not in m["content"] for m in case["public_dialogue"])
+
+
 def test_shopping_check_refutes_teacher_approval_despite_the_correct_final_value():
     # gsm8k train 4954, original verification sentence from a wrongly approved student response.
     question = ("Jangshe spent $610 on 7 pieces of clothing. One piece was $49 and another piece was $81. "

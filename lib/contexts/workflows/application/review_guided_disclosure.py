@@ -8,7 +8,7 @@ from lib.prompts.workflow_guided_answers import (
     GROUNDED_HINT_REVIEW, TUTOR_TASK_ANALYSIS, VERIFIED_OUTCOME_CONTEXT, VERIFIED_STEP_AUTHOR, VERIFIED_STEP_REVIEW, disclosure_author_schema,
     DISCLOSURE_PAIRING, QUOTED_DISCLOSURE, disclosure_draft_decision_schema, disclosure_review_schema, verified_choice_schema,
     verified_choice_review_schema, with_disclosure_pairing, worked_disclosure_schema,
-    WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
+    PRIVATE_WORKED_REVIEW, PUBLIC_WORKED_WORDING, WORKED_DISCLOSURE_AUTHOR, WORKED_DISCLOSURE_REVIEW,
 )
 from ..domain.guided_answers import prior_clue_evidence, read_teacher_submission
 from ..domain.guided_disclosure_text import (
@@ -18,7 +18,7 @@ from ..domain.guided_teaching_steps import checked_step_review, checked_step_sel
 from ..domain.guided_student_calculations import asserted_arithmetic_errors
 from ..domain.guided_quantity_scope import storage_quantity_findings, storage_quantity_issue
 from ..domain.guided_disclosure import (
-    checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote, question_premise_choices,
+    check_authored_wording, checked_disclosure, checked_teacher_draft, disclosure_evidence, is_substantive_question_quote, question_premise_choices,
 )
 
 
@@ -229,7 +229,8 @@ def _review_verified_step(request, attempt, history, material, evidence, previou
 def author_next_disclosure(request, source, attempt, retained, findings, disclosed, reference, teacher_experience,
                            *, grounded=False, allow_catalog=False, show_outcome=False, paired=False, tried=(),
                            task_analysis=False, quoted_premises=False, strict_author_decisions=False,
-                           check_arithmetic=False, bare_answer_operations=False, contextual_operations=False):
+                           check_arithmetic=False, bare_answer_operations=False, contextual_operations=False,
+                           immutable_review=False):
     """Draft and independently review one publishable teacher continuation, with one bounded repair."""
     material, evidence, previous_id = _review_material(source, attempt, retained, findings, disclosed, reference)
     ceiling = material.pop("proposed_next_teacher_disclosure")
@@ -250,6 +251,9 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
     if contextual_operations:
         author_system = WORKED_DISCLOSURE_AUTHOR
         reviewer_system = WORKED_DISCLOSURE_REVIEW
+    if immutable_review:
+        author_system += "\n\n" + PUBLIC_WORKED_WORDING
+        reviewer_system = PRIVATE_WORKED_REVIEW
     if show_outcome:
         _add_measured_outcome(material, source, attempt, retained, findings)
         if check_arithmetic and source.get("source_reasoning") and source.get("gold"):
@@ -339,6 +343,10 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                     return None, entry["issue"]
                 raise ValueError("try_applying_an_available_operation_to_its_task_premise")
             if paired and wording:
+                if immutable_review:
+                    check_authored_wording(*wording, source["question"],
+                                           [s["id"] for s in (catalog or {}).get("steps", ())],
+                                           source["gold"], source.get("direct_answer_syntax"))
                 bridge_text, _ = render_teacher_text(wording[0], source["question"], proposal["question_quote"])
                 hint_text, _ = render_teacher_text(wording[1], source["question"], proposal["question_quote"])
                 wording = (bridge_text, hint_text)
@@ -382,7 +390,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
             if grounded:
                 packet["proposed_next_teacher_disclosure"]["question_quote"] = proposal["question_quote"]
             reviewer = "disclosure_recheck" if revision else "disclosure"
-            schema = disclosure_review_schema(list(evidence))
+            schema = disclosure_review_schema(list(evidence), authored_wording=immutable_review)
             if paired:
                 packet["proposed_next_teacher_disclosure"]["public_text"] = entry["public_text"]
                 entry["review_checkpoint"] = {"role": reviewer, "index": attempt["attempt"],
@@ -401,7 +409,7 @@ def author_next_disclosure(request, source, attempt, retained, findings, disclos
                 entry["assessment"] = assessment
                 checked = checked_reviewer_pairing(assessment, previous_id) if paired else assessment
                 approved = checked_disclosure(checked, evidence, previous_id, candidate, source["gold"],
-                                              quoted_premises=quoted_premises)
+                                              quoted_premises=quoted_premises, authored_bridge=bridge if immutable_review else None)
                 if approved is None:
                     raise ValueError("teacher_disclosure_withheld")
                 if grounded and not any(c["evidence_id"] == "question" and is_substantive_question_quote(c["quote"])
@@ -450,7 +458,7 @@ def _checked_disclosure_issue(entry, question):
 def review_or_recommend_disclosure(request, source, attempt, retained, findings, disclosed, reference,
                                    *, teacher_experience, tried, task_analysis=False, quoted_premises=False,
                                    strict_author_decisions=False, check_arithmetic=False, bare_answer_operations=False,
-                                   contextual_operations=False):
+                                   contextual_operations=False, immutable_review=False):
     """Try each remaining externally verified possibility at most once, still requiring independent release."""
     if attempt.get("recommend_verified_operation") and not contextual_operations:
         history = attempt["disclosure_work"] = []
@@ -461,6 +469,7 @@ def review_or_recommend_disclosure(request, source, attempt, retained, findings,
             grounded=True, allow_catalog=True, show_outcome=True, paired=True, tried=tried, task_analysis=task_analysis,
             quoted_premises=quoted_premises, strict_author_decisions=strict_author_decisions, check_arithmetic=check_arithmetic,
             bare_answer_operations=bare_answer_operations, contextual_operations=contextual_operations,
+            immutable_review=immutable_review,
         )
         history = attempt["disclosure_work"]
         if contextual_operations:

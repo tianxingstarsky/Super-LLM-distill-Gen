@@ -88,7 +88,8 @@ class GenerateGuidedAnswer:
         language = str(source.get("source", {}).get("language") or "").lower()
         chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in question)
         evidenced_progress = protocol_version in EVIDENCED_PROGRESS_VERSIONS
-        local_steps = protocol_version == "4.10.3"
+        immutable_review = protocol_version == "4.10.4"
+        local_steps = immutable_review or protocol_version == "4.10.3"
         delivery_handoff = local_steps or protocol_version == "4.10.2"
         contextual_operations = delivery_handoff or protocol_version == "4.10.1"
         if (trusted_solution_receipts or continuation_model is not None) and not evidenced_progress:
@@ -117,7 +118,7 @@ class GenerateGuidedAnswer:
         if paired:
             assess_hint = partial(review_or_recommend_disclosure, teacher_experience=teacher_experience,
                                   tried=tried_verified_steps, task_analysis=task_analysis,
-                                  contextual_operations=contextual_operations,
+                                  contextual_operations=contextual_operations, immutable_review=immutable_review,
                                   quoted_premises=protocol_version == "4.7.1" or evidenced_progress,
                                   check_arithmetic=check_arithmetic,
                                   bare_answer_operations=check_arithmetic and bare_answer_operations)
@@ -137,7 +138,7 @@ class GenerateGuidedAnswer:
                     "4.7.1": "v4.7.1", "4.8.0": "v4.8", "4.8.1": "v4.8.1",
                     "4.8.2": "v4.8.2", "4.8.3": "v4.8.3", "4.9.0": "v4.9", "4.9.1": "v4.9.1",
                     "4.10.0": "v4.10.0", "4.10.1": "v4.10.1", "4.10.2": "v4.10.2",
-                    "4.10.3": "v4.10.3"}[protocol_version]
+                    "4.10.3": "v4.10.3", "4.10.4": "v4.10.4"}[protocol_version]
         tutor_instruction = SINGLE_DECISION_REVIEW if single_decision else ANCHORED_REVIEW if anchored else COACH
         if grounded:
             tutor_instruction += "\n\n" + GROUNDED_STUDENT_REVIEW

@@ -141,7 +141,7 @@ def _check_rendered_guidance(case, attempt, payload, previous, hint):
     chinese = language.startswith("zh") if language else any("\u4e00" <= ch <= "\u9fff" for ch in case["question"])
     suffix = render_student_continuation(view, {}, chinese=chinese)
     content = payload["messages"][-1]["content"]
-    if case.get("protocol") == "guided-draft-snapshot/v4.10.3":
+    if case.get("protocol") in {"guided-draft-snapshot/v4.10.3", "guided-draft-snapshot/v4.10.4"}:
         target = local_step_target(case, hint, {hint.get("source_step_receipt")}, chinese=chinese)
         if target:
             frame = local_step_material(target)

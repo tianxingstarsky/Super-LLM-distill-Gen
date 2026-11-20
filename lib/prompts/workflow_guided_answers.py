@@ -164,6 +164,10 @@ WORKED_DISCLOSURE_AUTHOR = """You are tutoring the learner on this particular pr
 
 WORKED_DISCLOSURE_REVIEW = """You independently review the tutor's proposed public explanation. Read the bridge and hint together with the original question, established student findings and the last published disclosure. Can the learner tell which part of the problem is being worked out? Check the local inference against the evidence, including quantities, subjects and conditions. Does it actually establish something the next turn can use? A well-supported intermediate result is a legitimate disclosure. Withhold unsupported claims, a leap to the final answer, repetition, or a generic instruction with no worked application. A failed student attempt does not itself invalidate the next explanation. For release, copy the tutor's bridge exactly, cite a specific exact premise from the question, and cite the latest published disclosure when one exists. Keep the review rationale private. For withhold, identify the concrete defect."""
 
+PRIVATE_WORKED_REVIEW = """You independently decide whether to publish the author's exact public_text. Check the local result and why it follows from evidence available to the learner. Giving a supported intermediate result is appropriate even when the learner's only previous response was a wrong guess. Check that some meaningful inference, computation or decision remains for the learner. Withhold unsupported claims, inaccurate attribution to the learner, private operation identifiers, broken response markup, and text that gives the requested conclusion or singles out the complete correct selection. Cite the precise task evidence and the latest published hint when one exists. Record your decision, evidence, private rationale and pairing. The system will publish the reviewed author's text on release."""
+
+PUBLIC_WORKED_WORDING = """Write the reasoning the learner can use directly. Carry out a grounded intermediate inference in your own words and connect it to work that remains. Keep catalogue identifiers inside the private decision field. The learner-facing bridge and hint must be readable without the catalogue or review. Keep a complete target value or selection private, including when suggesting candidates for the learner to test."""
+
 
 GROUNDED_AUTHOR_GUIDANCE = """When the learner submits only a candidate answer, you know what was submitted, not how it was obtained. A missing derivation does not prevent you from teaching from the problem. Look for one relation, condition or operation in the original task that the learner can test next. In question_quote copy the exact clause or data expression supporting your suggestion. In bridge connect that evidence to what can actually be checked; in hint leave the check or local calculation for the learner. If one choice violates an explicit condition, start with that comparison rather than asking for an entire solution. If the source of an error is unknown, leave it unknown. A wrong guess is not an established intermediate result. Praise only a finding identified as established and consistent with your evidence. Offer a small, useful next action whenever these materials support one. Insufficient means no defensible next action can be found; in that case leave question_quote, bridge and hint empty. When revising, change the actual public suggestion in response to the defect."""
 
@@ -233,8 +237,8 @@ DISCLOSURE_REVIEW = """You are the private reviewer of the tutor's proposed next
 For release, cite an exact substantive span from the question or one established student finding by ID. If a previous disclosure exists, also cite an exact span from the most recent disclosure. In bridge, explain to the learner, in the language of the task, how that particular earlier information leads to the proposed step and what it still leaves to resolve. The program will display this bridge followed by the proposed hint exactly as written. Keep private assessments and artifact IDs in citations and reason. Put a specific private justification in reason. For withhold, explain the defect in reason and leave bridge empty. Never treat the proposed hint or the student's erroneous answer as its own evidence."""
 
 
-def disclosure_review_schema(evidence_ids):
-    return {
+def disclosure_review_schema(evidence_ids, *, authored_wording=False):
+    schema = {
         "type": "object", "additionalProperties": False,
         "required": ["decision", "citations", "bridge", "reason"],
         "properties": {
@@ -246,6 +250,12 @@ def disclosure_review_schema(evidence_ids):
             "bridge": {"type": "string"}, "reason": {"type": "string"},
         },
     }
+    if authored_wording:
+        del schema["properties"]["bridge"]
+        schema["required"].remove("bridge")
+    return schema
+
+
 FINAL_DELIVERY = (
     "Deliver the final answer to the user's question in the requested language and format. "
     "Use the conclusion reached in the completed reasoning. For a question asking for a value, "
